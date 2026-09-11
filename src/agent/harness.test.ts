@@ -218,7 +218,7 @@ describe("littlebox agent", () => {
   test("an edit after the model's own validate_capsule makes that result stale", async () => {
     const secondEdit = {
       name: "edit",
-      arguments: { path: "/workspace/index.html", old_string: "guest", new_string: "invitado" },
+      arguments: { path: "/workspace/index.html", old_string: "Guest", new_string: "invitado" },
     };
     const gate = stubValidator(passing);
     const { agent, events } = agentFor(
@@ -230,7 +230,7 @@ describe("littlebox agent", () => {
 
     // Once for the model's own call, once for the hard gate on the newer workspace.
     expect(gate.seen).toHaveLength(2);
-    expect(gate.seen[0]["index.html"]).toContain("guest");
+    expect(gate.seen[0]["index.html"]).toContain("Guest");
     expect(gate.seen[1]["index.html"]).toContain("invitado");
     expect(events.filter((event) => event.type === "validation")).toHaveLength(2);
     expect(agent.proposal()?.changedFiles).toEqual(["styles.css", "index.html"]);

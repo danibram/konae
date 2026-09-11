@@ -981,14 +981,18 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
     let mut response = Json(json!({"result": {"ok": true}})).into_response();
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_str(&format!("{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
-            app_cookie_name(&state),
-            if app_cookie_name(&state).starts_with("__Host-") { "; Secure" } else { "" }
-        )).unwrap(),
-    );
     response
+        .headers_mut()
+        .insert(header::SET_COOKIE, cleared_app_cookie(&state));
+    response
+}
+
+/// The `Set-Cookie` value that removes the app session cookie from the browser.
+fn cleared_app_cookie(state: &AppState) -> HeaderValue {
+    let name = app_cookie_name(state);
+    let secure = if name.starts_with("__Host-") { "; Secure" } else { "" };
+    HeaderValue::from_str(&format!("{name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}"))
+        .unwrap()
 }
 
 async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Response {

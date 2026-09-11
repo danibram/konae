@@ -582,6 +582,7 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
             rpc_error(Value::Null, -32600, "A request ID is required.")
         };
     }
+    let mut clear_cookie = false;
     let result = match method {
         "initialize" => Ok(
             json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"littlebox","version":"0.1.0"},"instructions":"Use project-scoped credentials. Source and builds stay on your computer. Use platform_describe for the workflow."}),
@@ -655,10 +656,19 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
                         Some(id) => owned_project(&state, owner, id, scope).map(|_| ()),
                         None => owner.require(scope, None),
                     };
+                    // Check the first accepted scope the credential holds, so a
+                    // refusal names the project grant rather than a scope it never had.
+                    let held = |accepted: &[&'static str]| {
+                        accepted
+                            .iter()
+                            .copied()
+                            .find(|wanted| owner.scopes.iter().any(|s| s == wanted))
+                            .unwrap_or(accepted[0])
+                    };
                     if name == "transfer_cancel" {
-                        authorize("read").or_else(|_| authorize("publish")).or_else(|_| authorize("write"))
+                        authorize(held(&["read", "publish", "write"]))
                     } else if scope == "publish" {
-                        authorize("publish").or_else(|_| authorize("write"))
+                        authorize(held(&["publish", "write"]))
                     } else {
                         authorize(scope)
                     }
@@ -681,6 +691,10 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
             if !runtime {
                 audit(&state, &principal, name, &arguments, app.as_deref(), previous_mode, &result);
             }
+            // The session row is gone; the browser must drop its cookie too.
+            if runtime && name == "auth_logout" && result.is_ok() {
+                clear_cookie = true;
+            }
             match result {
                 Ok(value) => Ok(
                     json!({"content":[{"type":"text","text":serde_json::to_string(&value).unwrap()}],"structuredContent":{"result":value},"isError":false}),
@@ -701,6 +715,11 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if clear_cookie {
+        response
+            .headers_mut()
+            .insert(header::SET_COOKIE, super::cleared_app_cookie(&state));
+    }
     response
 }
 
