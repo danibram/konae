@@ -27,6 +27,13 @@ describe("runtime handshake", () => {
     expect(bridge).toMatch(/\n\s*connect\(\);\n/);
   });
 
+  test("failures are cleared per document, not per connect", () => {
+    // hello and load both connect the same document; clearing on each wiped a
+    // top-level throw. preview-document.test.ts pins the behavior.
+    expect(bridge).toContain("documentStarted(iframe.srcdoc);");
+    expect(bridge).not.toContain("clearPreviewErrors()");
+  });
+
   test("the app greets its host and accepts a replacement port", () => {
     expect(source).toContain("type: 'hello'");
     // Refusing a second port would strand the app on a closed one.

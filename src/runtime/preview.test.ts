@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { renderDeployment } from "../../kernel-server/html";
 import { cloneStarter } from "../lib/starter";
 import { createHostedArtifact } from "./artifact";
 import { createPreviewDocument } from "./preview";
@@ -12,7 +11,7 @@ const project = cloneStarter();
  * compare what a Capsule can actually call in each place.
  */
 function sdkSurfaceOf(html: string): string[] {
-  const source = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  const source = html.match(/<script data-littlebox-runtime>([\s\S]*?)<\/script>/)?.[1];
   if (!source) throw new Error("no bootstrap script in the document");
 
   const host: Record<string, any> = {};
@@ -61,14 +60,7 @@ describe("preview document", () => {
    * moment it was published — and nothing in the pipeline reads app.js to warn.
    */
   test("offers a Capsule exactly the SDK a Deployment offers", () => {
-    const deployment = {
-      id: "dep_1",
-      projectName: project.name,
-      files: project.files,
-    } as Parameters<typeof renderDeployment>[0];
-
     const preview = sdkSurfaceOf(createPreviewDocument(project));
-    expect(preview).toEqual(sdkSurfaceOf(renderDeployment(deployment)));
     expect(preview).toEqual(sdkSurfaceOf(createHostedArtifact({ body: "", styles: "", script: "" }).files["index.html"]));
     expect(preview).toEqual(["actions.call", "auth.session", "auth.signIn", "auth.signOut", "files.list", "files.upload"]);
   });
@@ -79,5 +71,26 @@ describe("preview document", () => {
       files: { ...project.files, "app.js": "const html = '</script><img onerror=alert(1)>';" },
     };
     expect(createPreviewDocument(hostile)).not.toContain("</script><img");
+  });
+
+  /**
+   * The bug this pins: the preview wrapped the compiled module in try { }. esbuild
+   * can emit a top-level `export { x }`, which is a SyntaxError inside a block, so
+   * the app was dead in the preview and fine once published; and a startup throw
+   * was caught locally, so preview_errors never heard of it.
+   */
+  test("emits the compiled module exactly as a Deployment does", () => {
+    const script = "const x = 1;\nif (!document.querySelector('#app')) throw new Error('boom');\nexport { x };";
+    const body = "<main id=app></main>";
+    const styles = "main { color: red }";
+    const preview = createPreviewDocument({ ...project, files: { ...project.files, "index.html": body, "styles.css": styles, "app.js": script } });
+    const deployed = createHostedArtifact({ body, styles, script }).files["index.html"];
+
+    const moduleOf = (html: string) => html.match(/<script type="module">([\s\S]*?)<\/script>/)?.[1];
+    expect(moduleOf(preview)).toBe(script);
+    expect(moduleOf(deployed)).toBe(script);
+    expect(() => new Bun.Transpiler({ loader: "js" }).transformSync(moduleOf(preview)!)).not.toThrow();
+    const withoutRuntime = (html: string) => html.replace(/<script data-littlebox-runtime>[\s\S]*?<\/script>/, "");
+    expect(withoutRuntime(preview)).toBe(withoutRuntime(deployed));
   });
 });

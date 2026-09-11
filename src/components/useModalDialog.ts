@@ -22,9 +22,41 @@ type Options = {
  * operating the editor behind a backdrop that says it is unreachable — so the
  * behaviour lives here, once, rather than in each dialog that remembers to.
  */
+/** Open dialogs, newest last. Only the topmost one answers a key that reached the document. */
+const openDialogs: object[] = [];
+
 export function useModalDialog({ open = true, onClose, initialFocus }: Options): ModalDialog {
   const ref = useRef<HTMLElement>(null);
   const restore = useRef<HTMLElement | null>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+
+  // Focus can still fall out of the dialog, for example when the focused
+  // control is removed or disabled. Escape and Tab then reach the document
+  // instead of the dialog, so the topmost dialog listens there too.
+  useEffect(() => {
+    if (!open) return;
+    const token = {};
+    openDialogs.push(token);
+    const onDocumentKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || openDialogs.at(-1) !== token) return;
+      const dialog = ref.current;
+      if (!dialog || (event.target instanceof Node && dialog.contains(event.target))) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close.current();
+      } else if (event.key === "Tab") {
+        const focusable = focusableElements(dialog);
+        event.preventDefault();
+        (event.shiftKey ? focusable.at(-1) : focusable[0])?.focus();
+      }
+    };
+    document.addEventListener("keydown", onDocumentKey);
+    return () => {
+      document.removeEventListener("keydown", onDocumentKey);
+      openDialogs.splice(openDialogs.indexOf(token), 1);
+    };
+  }, [open]);
 
   useEffect(() => {
     const restoreFocus = () => {

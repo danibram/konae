@@ -1,0 +1,5 @@
+{"version":1,"actions":{
+ "entries.list":{"kind":"query","access":"authenticated","statement":"SELECT id, body, mood, created_at FROM entries WHERE user_id = ?1 ORDER BY created_at DESC LIMIT 200","bindings":[{"source":"actor","field":"id"}]},
+ "entries.create":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO entries(user_id, body, mood, created_at) VALUES(?1, ?2, ?3, ?4)","bindings":[{"source":"actor","field":"id"},{"source":"input","key":"body","type":"string","maxLength":2000},{"source":"input","key":"mood","type":"string","maxLength":20},{"source":"kernel","field":"now"}]},
+ "entries.delete":{"kind":"mutation","access":"authenticated","statement":"DELETE FROM entries WHERE id = ?1 AND user_id = ?2","bindings":[{"source":"input","key":"id","type":"number"},{"source":"actor","field":"id"}]}
+}}

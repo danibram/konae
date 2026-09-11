@@ -6,14 +6,15 @@
   "scripts": {
     "dev": "vite --config vite.config.ts",
     "dev:local": "bun run scripts/dev-local.ts",
-    "kernel": "bun run kernel-server/index.ts",
+    "kernel": "LITTLEBOX_DATA_DIR=${LITTLEBOX_DATA_DIR:-data/kernel-local} LITTLEBOX_BUN_PATH=${LITTLEBOX_BUN_PATH:-$(command -v bun)} cargo run --manifest-path kernel-rs/Cargo.toml",
     "dev:stack": "docker compose up --build",
     "build": "tsc -b && vite build --config vite.config.ts",
     "preview": "vite preview",
     "test": "bun test",
     "test:e2e": "playwright test",
     "test:e2e:minio": "playwright test --config playwright.minio.config.ts",
-    "test:e2e:local": "playwright test --config playwright.local.config.ts"
+    "test:e2e:local": "playwright test --config playwright.local.config.ts",
+    "littlebox": "bun run scripts/littlebox.ts"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
@@ -33,11 +34,13 @@
     "sql.js": "^1.12.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/sql.js": "^1.4.9",
     "@vitejs/plugin-react": "^4.3.4",
     "drizzle-kit": "0.31.10",
+    "esbuild": "0.25.12",
     "playwright": "1.62.1",
     "typescript": "^5.7.2",
     "vite": "^6.0.5"

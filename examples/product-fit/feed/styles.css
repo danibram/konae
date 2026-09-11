@@ -1,0 +1,3 @@
+:root{font-family:ui-monospace,Menlo,monospace;background:#0b0f14;color:#d6e2f0}*{box-sizing:border-box}body{margin:0}.wrap{max-width:680px;margin:0 auto;padding:40px 20px}
+h1{font-size:22px}#state.ok{color:#5be39a}#state.bad{color:#ff7a7a}.muted{color:#7f8da0;font-size:13px}code{color:#ffd166}
+.list{list-style:none;padding:0}.list li{border-left:3px solid #2b3a4e;padding:8px 12px;margin:10px 0}.list li.open{border-color:#ff7a7a}.list time{color:#7f8da0;font-size:12px;display:block}

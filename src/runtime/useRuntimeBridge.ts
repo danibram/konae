@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
-import type { RuntimeRequest, RuntimeResponse } from "../lib/types";
+import { handlePreviewMcp, type PreviewMcpRequest } from "../mcp/preview";
 import { MiniAppRuntimeHost } from "./host";
+import { previewDocumentTracker } from "./preview-document";
 
 /**
  * Takes the element, not a ref object: the preview mounts after the editor
@@ -22,7 +23,7 @@ export function useRuntimeBridge(
   }
 
   useEffect(() => {
-    hostRef.current.setSchema(schema);
+    void hostRef.current.setSchema(schema);
   }, [schema]);
 
   useEffect(() => {
@@ -32,43 +33,29 @@ export function useRuntimeBridge(
   useEffect(() => {
     if (!iframe) return;
     let activePort: MessagePort | null = null;
+    const documentStarted = previewDocumentTracker(hostRef.current);
 
     const connect = () => {
       activePort?.close();
       const channel = new MessageChannel();
+      const capability = crypto.randomUUID();
       const host = hostRef.current;
-      // A fresh document is starting: failures from the previous one are history.
-      host.clearPreviewErrors();
+      // `hello` and `load` both connect the same document. Only a new document
+      // (a changed srcdoc, or a new iframe, which runs this effect again)
+      // makes the previous failures history.
+      documentStarted(iframe.srcdoc);
       activePort = channel.port1;
 
-      activePort.onmessage = async (event: MessageEvent<RuntimeRequest>) => {
+      const port = activePort;
+      activePort.onmessage = async (event: MessageEvent<PreviewMcpRequest>) => {
         const request = event.data;
-        if (!request || request.channel !== "littlebox-runtime" || request.type !== "request") return;
-
-        let response: RuntimeResponse;
-        try {
-          const result = await host.handle(request.method, request.payload);
-          response = {
-            channel: "littlebox-runtime",
-            type: "response",
-            requestId: request.requestId,
-            ok: true,
-            result,
-          };
-        } catch (error) {
-          response = {
-            channel: "littlebox-runtime",
-            type: "response",
-            requestId: request.requestId,
-            ok: false,
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-        activePort?.postMessage(response);
+        if (!request || request.jsonrpc !== "2.0" || typeof request.method !== "string") return;
+        const response = await handlePreviewMcp(host, request, capability);
+        if (response) port.postMessage(response);
       };
       activePort.start();
       iframe.contentWindow?.postMessage(
-        { channel: "littlebox-runtime", type: "connect" },
+        { channel: "littlebox-runtime", type: "connect", capability },
         "*",
         [channel.port2],
       );

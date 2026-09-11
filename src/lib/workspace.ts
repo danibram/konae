@@ -86,10 +86,13 @@ function normalizeProjects(projects: MiniAppProject[]) {
   return projects.flatMap((project) => {
     if (!project?.id || seen.has(project.id)) return [];
     seen.add(project.id);
-    return [{
+    const refreshed = refreshUneditedSeed({
       ...project,
       files: { ...starter.files, ...project.files },
-      directories: project.directories ?? directoriesForFiles(project.files ?? {}),
+    });
+    return [{
+      ...refreshed,
+      directories: project.directories ?? directoriesForFiles(refreshed.files ?? {}),
       databaseModel: project.databaseModel ?? legacyDatabaseModel(project.files?.["schema.sql"] ?? ""),
       manifest: normalizeManifest(project.manifest),
     }];
@@ -101,6 +104,103 @@ function legacyDatabaseModel(schema: string) {
     ? starterDatabaseModelSource
     : `import { sqliteTable } from "drizzle-orm/sqlite-core";\n\n// Legacy schema.sql requires conversion before its first managed migration.\nvoid sqliteTable;\n`;
   return { source, acceptedSource: source, revision: "legacy-baseline" };
+}
+
+function refreshUneditedSeed(project: MiniAppProject): MiniAppProject {
+  const architectureHtml = project.files["index.html"] ?? "";
+  const architectureStyle = project.files["styles.css"] ?? "";
+  const architectureScript = project.files["app.js"] ?? "";
+  if (project.id === architectureProjectId && (architectureHtml.includes("mapa del sistema") || architectureHtml.includes("REGLA BASE") || architectureHtml.includes("KERNEL ONLINE") || architectureHtml.includes("kernel that decides") || architectureHtml.includes("Dos caminos") || architectureHtml.includes("declared-actions") || architectureHtml.includes("De código") || architectureHtml.includes("Sólo los campos") || architectureHtml.includes("runtime no disponible") || architectureHtml.includes("frame-ancestors") || !architectureHtml.includes('data-map="leaves"') || architectureStyle.includes("opacity: 0") || architectureScript.includes("localhost:8080") || architectureHtml.includes("database stays on the server") || architectureHtml.includes("SIMULADOR") || architectureHtml.includes("Keep SQLite") || architectureHtml.includes("SQLite and files") || !architectureHtml.includes('data-lead="same-app"') || !architectureHtml.includes('data-lead="edit-files"'))) {
+    const seed = cloneArchitectureProject().files;
+    return { ...project, files: { ...project.files, "index.html": seed["index.html"], "styles.css": seed["styles.css"], "app.js": seed["app.js"] } };
+  }
+  const html = project.files["index.html"] ?? "";
+  const css = project.files["styles.css"] ?? "";
+  const script = project.files["app.js"] ?? "";
+  const previousStarter = project.id === "app_tiny_tasks"
+    && html.includes('class="identity">guest')
+    && !css.includes("prefers-color-scheme")
+    && script.includes("identity.textContent = session.name;");
+  if (!previousStarter && project.id === "app_tiny_tasks") {
+    let nextHtml = html;
+    let nextScript = script;
+    let changed = false;
+    if (nextHtml.includes("Things worth") || nextHtml.includes("MY QUIET LIST") || nextHtml.includes("My quiet list")) {
+      nextHtml = nextHtml
+        .replace(/<p class="eyebrow">[^<]*<\/p>/, '<p class="eyebrow">Shared list</p>')
+        .replace(/<h1>[\s\S]*?<\/h1>/, "<h1>Tiny Tasks</h1>");
+      changed = true;
+    }
+    if (nextHtml.includes("stops at 100") && !nextHtml.includes("list-limit")) {
+      nextHtml = nextHtml.replace(/<span id="count">[^<]*<\/span>/, '<span id="count"></span>');
+      nextHtml = nextHtml.replaceAll("Nothing here yet. Anyone with this link sees the same list. The list stops at 100 rows.", "Nothing here yet. Anyone with this link sees the same list.");
+      nextHtml = nextHtml.replace(
+        '<section class="file-shelf">',
+        '<p class="list-limit">The list stops at 100 rows.</p>\n  <section class="file-shelf">',
+      );
+      if (!nextHtml.includes("list-limit")) {
+        nextHtml = nextHtml.replace("</section>", '<p class="list-limit">The list stops at 100 rows.</p></section>');
+      }
+      changed = true;
+    }
+    const limitedCount = "count.textContent = tasks.length + (tasks.length === 1 ? ' item' : ' items') + '. The list stops at 100 rows.';";
+    const plainCount = "count.textContent = tasks.length + (tasks.length === 1 ? ' item' : ' items');";
+    if (nextScript.includes(limitedCount)) {
+      nextScript = nextScript.replace(limitedCount, plainCount);
+      changed = true;
+    }
+    if (nextScript.includes("Nothing here yet. Anyone with this link sees the same list. The list stops at 100 rows.")) {
+      nextScript = nextScript.replaceAll(
+        "Nothing here yet. Anyone with this link sees the same list. The list stops at 100 rows.",
+        "Nothing here yet. Anyone with this link sees the same list.",
+      );
+      changed = true;
+    }
+    let nextCss = css;
+    if (css.includes("prefers-color-scheme: dark") && (css.includes("box-shadow: 6px 6px 0 #000") || css.includes("box-shadow: 6px 6px 0 #f3efe5"))) {
+      nextCss = css.replace("box-shadow: 6px 6px 0 #000", "border-color: #f3efe5; box-shadow: 4px 4px 0 #0a0c10").replace("box-shadow: 6px 6px 0 #f3efe5", "border-color: #f3efe5; box-shadow: 4px 4px 0 #0a0c10");
+      if (!nextCss.includes(".composer input { color: #f3efe5; }")) {
+        nextCss = nextCss.replace(
+          ".composer { box-shadow: 6px 6px 0 #f3efe5; }",
+          ".composer { box-shadow: 6px 6px 0 #f3efe5; }\n  .composer input { color: #f3efe5; }\n  .composer input::placeholder { color: #d9d4c8; }",
+        );
+      }
+      nextCss = nextCss.replace(".empty, .task small { color: #b7b3a6; }", ".empty, .task small, .section-label { color: #f3efe5; }");
+      changed = true;
+    }
+    if (nextCss.includes(".composer button") && !nextCss.includes("background: #c8f34a; color: #171910;")) {
+      nextCss = nextCss.replace(
+        /\.composer button \{[^}]*\}/,
+        ".composer button { border: 0; background: #c8f34a; color: #171910; font-size: 25px; cursor: pointer; }",
+      );
+      changed = true;
+    }
+    if (nextCss.includes(".section-label label") && !nextCss.includes("background: #c8f34a; cursor: pointer; padding: 2px 6px;")) {
+      nextCss = nextCss.replace(
+        /\.section-label label \{[^}]*\}/,
+        ".section-label label { color: #171910; background: #c8f34a; cursor: pointer; padding: 2px 6px; }",
+      );
+      changed = true;
+    }
+    if (!nextCss.includes(".list-limit")) {
+      nextCss = nextCss.replace(".empty {", ".list-limit { margin: 8px 0 0; font-size: 13px; line-height: 1.4; }\n.empty {");
+      changed = true;
+    }
+    if (changed) {
+      return { ...project, files: { ...project.files, "index.html": nextHtml, "app.js": nextScript, "styles.css": nextCss } };
+    }
+  }
+  if (!previousStarter) return project;
+  const seed = cloneStarter();
+  return {
+    ...project,
+    files: {
+      ...project.files,
+      "index.html": seed.files["index.html"],
+      "styles.css": seed.files["styles.css"],
+      "app.js": seed.files["app.js"],
+    },
+  };
 }
 
 function includeSeedProjects(projects: MiniAppProject[]) {

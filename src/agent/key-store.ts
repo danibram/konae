@@ -17,18 +17,19 @@ export function isAgentKeyName(name: string) {
   return name.startsWith(keyNamespace);
 }
 
-export function createAgentKeyStore(storage: KeyStorage = localStorage): AgentKeyStore {
+export function createAgentKeyStore(storage: KeyStorage = localStorage, ownerId?: string): AgentKeyStore {
+  const keyName = (provider: ProviderId) => ownerId ? `${keyNamespace}owner:${encodeURIComponent(ownerId)}:${provider}` : agentKeyName(provider);
   return {
     getKey(provider) {
-      const stored = read(storage, agentKeyName(provider));
+      const stored = read(storage, keyName(provider));
       return stored && stored.length > 0 ? stored : null;
     },
     setKey(provider, key) {
       const trimmed = key.trim();
-      write(storage, agentKeyName(provider), trimmed.length > 0 ? trimmed : null);
+      write(storage, keyName(provider), trimmed.length > 0 ? trimmed : null);
     },
     clearKey(provider) {
-      write(storage, agentKeyName(provider), null);
+      write(storage, keyName(provider), null);
     },
   };
 }

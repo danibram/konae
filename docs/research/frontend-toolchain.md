@@ -1,20 +1,20 @@
-# Entorno frontend completo para Littlebox: npm, TypeScript, Vite, esbuild y estáticos
+# Full frontend environment for Littlebox: npm, TypeScript, Vite, esbuild and static output
 
-**Fecha:** 2026-08-15  
-**Estado:** investigación y propuesta de arquitectura  
-**Fuentes:** documentación, especificaciones y repositorios oficiales
+**Date:** 2026-08-15  
+**Status:** research and architecture proposal  
+**Sources:** official documentation, specifications and repositories
 
-## Recomendación ejecutiva
+## Executive recommendation
 
-Sí, encaja muy bien con Littlebox, con una condición: **Node debe existir en el plano de desarrollo y build, no en el runtime publicado de cada mini-app**. Un Project puede parecer un proyecto frontend normal —árbol de ficheros, `package.json`, lockfile, TypeScript, Vite, esbuild y dependencias npm—, compilarse en un entorno efímero y producir un artefacto estático. El Deployment sigue siendo un bundle inmutable servido por el Kernel, sin proceso, VM o contenedor por aplicación. Esto conserva la regla económica de `docs/architecture.md`: coste marginal de compute prácticamente nulo cuando la app está ociosa.
+Yes, this fits Littlebox well, on one condition. **Node must exist in the development and build plane, never in the published runtime of each mini-app**. A Project can look like a normal frontend project, with a file tree, `package.json`, lockfile, TypeScript, Vite, esbuild and npm dependencies, get compiled in an ephemeral environment and produce a static artifact. The Deployment stays an immutable bundle served by the Kernel, with no process, VM or container per application. This keeps the cost rule from `docs/architecture.md`, where an idle app has a near-zero marginal compute cost.
 
-No implementaría un selector rígido «compilador = Vite/esbuild». Modelaría un contrato de build pequeño:
+I would not implement a rigid "compiler = Vite/esbuild" selector. I would model a small build contract:
 
 ```ts
 type StaticBuildSpec = {
   runtime: "node";
-  runtimeVersion: string;       // versión fijada por la imagen de build
-  packageManager: "npm";       // npm primero; pnpm/Bun después
+  runtimeVersion: string;       // version pinned by the build image
+  packageManager: "npm";       // npm first; pnpm/Bun later
   installCommand: "npm ci";
   buildCommand: "npm run build";
   outputDirectory: "dist";
@@ -22,155 +22,154 @@ type StaticBuildSpec = {
 };
 ```
 
-Vite, esbuild, React, Vue, Svelte, Astro en modo estático, etc. pasan a ser dependencias y presets del Project. La plataforma solo exige que el comando termine correctamente y deje estáticos válidos en el directorio declarado. Vite usa `index.html` como entrada y genera por defecto un bundle apto para hosting estático en `dist`, justo el contrato que necesitamos ([Vite: production build](https://vite.dev/guide/build)).
+Vite, esbuild, React, Vue, Svelte, Astro in static mode and similar tools become dependencies and presets of the Project. The platform only requires the command to finish successfully and leave valid static files in the declared directory. Vite uses `index.html` as its entry and by default generates a bundle ready for static hosting in `dist`, which is exactly the contract we need ([Vite: production build](https://vite.dev/guide/build)).
 
-La arquitectura que recomiendo es:
+The architecture I recommend is:
 
-1. **Build canónico en servidor dentro de un sandbox fuerte** para Preview estable y Deployment. Es la única salida autorizada para publicar.
-2. **Preview inicial del MVP desde el último artefacto construido**, con builds cortos y debounced; evita construir un IDE remoto antes de validar el producto.
-3. **WebContainer opcional en el navegador en una segunda fase** para terminal, `npm install`, Vite dev server y HMR instantáneo, pero nunca como única fuente del artefacto publicado.
-4. **Sandpack o `esbuild-wasm` solo como aceleradores/presets restringidos**, no como base del entorno «casi Node».
-5. **Cloudflare Sandbox SDK como candidato managed especialmente coherente con la dirección actual del repo**, detrás de un `BuildRunner` portable. Su documentación lo plantea expresamente para código no confiable, IDEs y CI/builds; cada sandbox corre en su propia VM con filesystem, procesos, red y cuotas aislados ([overview](https://developers.cloudflare.com/sandbox/), [security model](https://developers.cloudflare.com/sandbox/concepts/security/)). Para self-hosting, gVisor/`runsc` ofrece una frontera OCI que intercepta syscalls y reduce la superficie directa sobre el kernel host, a cambio de cierta incompatibilidad y overhead ([gVisor overview](https://gvisor.dev/docs/), [security model](https://gvisor.dev/docs/architecture_guide/security/)).
+1. **Canonical server build inside a strong sandbox** for the stable Preview and the Deployment. It is the only output allowed to publish.
+2. **Initial MVP Preview from the last built artifact**, with short, debounced builds. This avoids building a remote IDE before the product is validated.
+3. **Optional in-browser WebContainer in a second phase** for a terminal, `npm install`, the Vite dev server and instant HMR, but never as the only source of the published artifact.
+4. **Sandpack or `esbuild-wasm` only as restricted accelerators or presets**, never as the base of the "almost Node" environment.
+5. **Cloudflare Sandbox SDK as a managed candidate that fits the current direction of the repo well**, behind a portable `BuildRunner`. Its documentation targets untrusted code, IDEs and CI/builds explicitly, and each sandbox runs in its own VM with isolated filesystem, processes, network and quotas ([overview](https://developers.cloudflare.com/sandbox/), [security model](https://developers.cloudflare.com/sandbox/concepts/security/)). For self-hosting, gVisor/`runsc` offers an OCI boundary that intercepts syscalls and shrinks the direct surface against the host kernel, at the price of some incompatibility and overhead ([gVisor overview](https://gvisor.dev/docs/), [security model](https://gvisor.dev/docs/architecture_guide/security/)).
 
-## Qué existe hoy y qué falta
+## What exists today and what is missing
 
-El repo ya usa TypeScript, React y Vite para construir **el editor** (`package.json`, `vite.config.ts`), pero las mini-apps generadas no son proyectos Vite:
+The repo already uses TypeScript, React and Vite to build **the editor** (`package.json`, `vite.config.ts`), but the generated mini-apps are not Vite projects:
 
-- `src/lib/types.ts` limita `ProjectFile` a `index.html`, `styles.css`, `app.js`, `schema.sql` y `actions.json`.
-- `src/lib/workspace.ts` guarda el Project completo en `localStorage`.
-- `src/runtime/preview.ts` concatena HTML, CSS, el SDK y `app.js` en un `srcdoc`; no resuelve imports ni assets.
-- `kernel-server/html.ts` repite esa concatenación al publicar.
-- `kernel-server/store.ts` persiste fuentes en `deployment.json`; no hay artefacto de build ni servidor de rutas estáticas.
-- El Deployment actual solo sirve `/`; no puede servir chunks con hash, imágenes, fuentes, sourcemaps ni rutas multipágina.
-- El Validation Gate y las herramientas del agente conocen una lista cerrada de ficheros. No pueden crear `src/App.tsx`, `package.json`, `tsconfig.json` o un árbol arbitrario.
+- `src/lib/types.ts` limits `ProjectFile` to `index.html`, `styles.css`, `app.js`, `schema.sql` and `actions.json`.
+- `src/lib/workspace.ts` stores the whole Project in `localStorage`.
+- `src/runtime/preview.ts` concatenates HTML, CSS, the SDK and `app.js` into a `srcdoc`. It does not resolve imports or assets.
+- The former Bun kernel server, since replaced by the Rust Kernel in `kernel-rs/`, repeated that concatenation at publish time and persisted sources in `deployment.json`. There was no build artifact and no static route server.
+- The current Deployment only serves `/`. It cannot serve hashed chunks, images, fonts, sourcemaps or multi-page routes.
+- The Validation Gate and the agent tools know a closed list of files. They cannot create `src/App.tsx`, `package.json`, `tsconfig.json` or an arbitrary tree.
 
-La buena noticia es que los límites de seguridad ya están bien orientados: preview en iframe sandboxed, canal privado, Kernel propietario de auth/data/actions, y Deployment inmutable. El cambio principal es insertar un **Build Plane** entre fuentes y Preview/Deployment, no rediseñar el Runtime Interface.
+The good news is that the security boundaries already point the right way, with the preview in a sandboxed iframe, a private channel, a Kernel that owns auth/data/actions, and an immutable Deployment. The main change is to insert a **Build Plane** between sources and Preview/Deployment. The Runtime Interface does not need a redesign.
 
-## Comparación de arquitecturas
+## Architecture comparison
 
-| Alternativa | Compatibilidad frontend | npm/lockfile real | Vite/plugins/HMR | Build canónico | Coste de plataforma | Límite decisivo |
+| Alternative | Frontend compatibility | Real npm/lockfile | Vite/plugins/HMR | Canonical build | Platform cost | Deciding limit |
 | --- | --- | --- | --- | --- | --- | --- |
-| Node/Bun en sandbox servidor | Muy alta | Sí | Sí | Sí | Medio/alto durante build | Hay que operar aislamiento, cuotas, egress y caches |
-| StackBlitz WebContainers | Alta para frontend JS/WASM | Sí; npm, pnpm y yarn | Sí | No por sí solo | Compute en cliente | Requisitos de navegador, dependencia del engine alojado, sin addons nativos |
-| CodeSandbox Sandpack | Buena para templates soportados | Dependencias npm, pero no un workspace Node general | Preview/HMR del bundler; no equivalencia general con Vite | No | Bajo | Es un bundler/preview, no una máquina Node completa |
-| `esbuild-wasm` propio | Buena para TS/JS/CSS simples | No; hay que construir resolver/registry/VFS | No ejecuta Vite ni sus plugins | Solo para un preset propio | Bajo | Mucha infraestructura propia y menor compatibilidad |
+| Node/Bun in a server sandbox | Very high | Yes | Yes | Yes | Medium/high during build | Isolation, quotas, egress and caches must be operated |
+| StackBlitz WebContainers | High for JS/WASM frontend | Yes; npm, pnpm and yarn | Yes | Not on its own | Client-side compute | Browser requirements, dependency on the hosted engine, no native addons |
+| CodeSandbox Sandpack | Good for supported templates | npm dependencies, but not a general Node workspace | Bundler preview/HMR; no general equivalence with Vite | No | Low | It is a bundler/preview, not a full Node machine |
+| Own `esbuild-wasm` | Good for simple TS/JS/CSS | No; a resolver/registry/VFS must be built | Does not run Vite or its plugins | Only for an in-house preset | Low | A lot of in-house infrastructure and lower compatibility |
 
-### 1. Build host/server aislado
+### 1. Isolated build host/server
 
-Es la opción más compatible y la que puede producir un resultado repetible y auditable. Un runner Linux efímero puede ejecutar el package manager real, `tsc`, Vite, esbuild, PostCSS y plugins. Vite también ofrece API JavaScript programática, aunque conviene invocar el script normal del Project para conservar el mismo contrato que fuera de Littlebox ([Vite JavaScript API](https://vite.dev/guide/api-javascript.html)).
+This is the most compatible option and the one that can produce a repeatable, auditable result. An ephemeral Linux runner can run the real package manager, `tsc`, Vite, esbuild, PostCSS and plugins. Vite also offers a programmatic JavaScript API, but it is better to invoke the Project's normal script so the contract stays the same as outside Littlebox ([Vite JavaScript API](https://vite.dev/guide/api-javascript.html)).
 
-Ventajas:
+Advantages:
 
-- La misma snapshot produce Preview estable y Deployment.
-- Podemos fijar imagen, Node, npm, arquitectura, variables y límites.
-- Soporta paquetes que usan filesystem, procesos hijos o binarios nativos, siempre que la imagen y la política los permitan.
-- El navegador no necesita descargar todo `node_modules` ni compilar.
-- Los logs y errores quedan asociados a un `Build` auditable.
+- The same snapshot produces the stable Preview and the Deployment.
+- We can pin the image, Node, npm, architecture, variables and limits.
+- It supports packages that use the filesystem, child processes or native binaries, as long as the image and the policy allow them.
+- The browser does not need to download all of `node_modules` or compile anything.
+- Logs and errors stay attached to an auditable `Build`.
 
-Costes y riesgos:
+Costs and risks:
 
-- `npm ci` y `npm run build` ejecutan código. Limitar el nombre del comando no convierte el build en seguro: el script del Project, la configuración Vite, los plugins y los lifecycle scripts son código arbitrario. npm permite desactivar scripts con `ignore-scripts` y las versiones recientes permiten una allowlist de install scripts, pero eso es defensa adicional, no una frontera de aislamiento ([npm ci](https://docs.npmjs.com/cli/v11/commands/npm-ci/), [npm scripts](https://docs.npmjs.com/cli/v11/using-npm/scripts/)).
-- Un contenedor Docker normal no basta sin endurecimiento: por defecto no tiene límites de recursos y puede consumir lo que el scheduler del host permita ([Docker resource constraints](https://docs.docker.com/engine/containers/resource_constraints/)). La imagen debe ejecutarse sin privilegios, con límites de CPU, memoria, PIDs, disco y tiempo, sin Docker socket ni mounts host, más seccomp y una frontera como VM/gVisor. Docker describe su perfil seccomp como una allowlist moderadamente protectora, no como aislamiento total de código hostil ([Docker seccomp](https://docs.docker.com/engine/security/seccomp/)).
-- Hace falta cola, cancelación, observabilidad, GC y control de concurrencia.
+- `npm ci` and `npm run build` execute code. Restricting the command name does not make the build safe, because the Project script, the Vite config, the plugins and the lifecycle scripts are all arbitrary code. npm can disable scripts with `ignore-scripts`, and recent versions support an allowlist of install scripts, but that is an extra defense layer, not an isolation boundary ([npm ci](https://docs.npmjs.com/cli/v11/commands/npm-ci/), [npm scripts](https://docs.npmjs.com/cli/v11/using-npm/scripts/)).
+- A plain Docker container is not enough without hardening. By default it has no resource limits and can consume whatever the host scheduler allows ([Docker resource constraints](https://docs.docker.com/engine/containers/resource_constraints/)). The image must run unprivileged, with CPU, memory, PID, disk and time limits, without the Docker socket or host mounts, plus seccomp and a boundary such as a VM or gVisor. Docker describes its seccomp profile as a moderately protective allowlist, not as full isolation from hostile code ([Docker seccomp](https://docs.docker.com/engine/security/seccomp/)).
+- It needs a queue, cancellation, observability, GC and concurrency control.
 
-**Veredicto:** debe ser la autoridad de publicación. Para el camino managed, Cloudflare Sandbox es hoy una opción concreta muy alineada: full Linux, ejecución de Node, preview de servicios y aislamiento por VM ([Sandbox overview](https://developers.cloudflare.com/sandbox/), [expose services](https://developers.cloudflare.com/sandbox/guides/expose-services/)). Es un producto reciente y ya ha tenido cambios de API, por lo que no debe filtrarse al dominio: el Kernel habla con `BuildRunner`, y el adapter decide si usa Cloudflare, gVisor/Kubernetes o microVMs. Firecracker es otra referencia de aislamiento multi-tenant mediante microVMs KVM ligeras, pero operarla directamente es bastante más infraestructura ([Firecracker](https://firecracker-microvm.github.io/)).
+This must be the publishing authority. For the managed path, Cloudflare Sandbox is today a concrete and well-aligned option, with full Linux, Node execution, service previews and per-VM isolation ([Sandbox overview](https://developers.cloudflare.com/sandbox/), [expose services](https://developers.cloudflare.com/sandbox/guides/expose-services/)). It is a recent product and its API has already changed, so it must not leak into the domain. The Kernel talks to `BuildRunner`, and the adapter decides whether to use Cloudflare, gVisor/Kubernetes or microVMs. Firecracker is another reference for multi-tenant isolation with lightweight KVM microVMs, but operating it directly takes considerably more infrastructure ([Firecracker](https://firecracker-microvm.github.io/)).
 
 ### 2. WebContainers / StackBlitz
 
-WebContainers ejecuta un runtime Node dentro de la pestaña. Su API expone filesystem, procesos, `spawn`, puertos de preview y export del filesystem; la documentación muestra literalmente `npm install`, `npm run dev` y la exportación de `dist` como ZIP ([API](https://webcontainers.io/api), [quickstart](https://webcontainers.io/guides/quickstart)). Es la experiencia que más se aproxima a «un VS Code web local» sin pagar compute de servidor.
+WebContainers runs a Node runtime inside the browser tab. Its API exposes a filesystem, processes, `spawn`, preview ports and filesystem export. The documentation literally shows `npm install`, `npm run dev` and exporting `dist` as a ZIP ([API](https://webcontainers.io/api), [quickstart](https://webcontainers.io/guides/quickstart)). It is the closest experience to "a local VS Code on the web" without paying for server compute.
 
-Ventajas:
+Advantages:
 
-- Terminal, package managers y Vite dev server reales en el navegador.
-- HMR y latencia de edición excelentes tras el arranque.
-- El código generado no se ejecuta en nuestra infraestructura.
-- La misma API puede montar la snapshot, ejecutar install/build y exportar `dist`.
+- A real terminal, package managers and Vite dev server in the browser.
+- Excellent HMR and edit latency after boot.
+- The generated code does not run on our infrastructure.
+- The same API can mount the snapshot, run install/build and export `dist`.
 
-Límites:
+Limits:
 
-- Requiere `SharedArrayBuffer`, HTTPS y aislamiento cross-origin con COOP/COEP en producción ([quickstart](https://webcontainers.io/guides/quickstart)). Esto es una decisión de cabeceras para todo el editor y puede bloquear recursos cross-origin que no envíen políticas compatibles.
-- Solo se puede bootear una instancia concurrente y el arranque es costoso ([API](https://webcontainers.io/api)).
-- Cookies/storage de terceros, Service Workers y configuración del navegador pueden impedir que funcione; StackBlitz documenta esas dependencias y diferencias entre Chromium, Firefox y Safari ([browser configuration](https://webcontainers.io/guides/browser-config), [browser support](https://webcontainers.io/guides/browser-support)).
-- Puede agotar la memoria de la pestaña y no admite addons nativos C/C++ salvo que exista alternativa WebAssembly ([troubleshooting](https://webcontainers.io/guides/troubleshooting)). Esto afecta a paquetes como transformadores de imagen o módulos nativos, aunque el frontend habitual suele tener alternativas JS/WASM.
-- Hay dependencia de proveedor: la implementación del runtime se aloja en StackBlitz y está versionada separadamente del cliente; el uso comercial productivo requiere revisar su licencia/plan y el API permite configurar la clave correspondiente ([API support](https://webcontainers.io/guides/api-support), [commercial usage](https://webcontainers.io/enterprise), [API](https://webcontainers.io/api)).
-- Un build hecho únicamente en el portátil del usuario no es una autoridad fiable para deploy: puede cerrarse la pestaña, alterarse el artefacto o variar el navegador. El servidor debe volver a construir, o como mínimo verificar dentro de una frontera confiable.
+- It requires `SharedArrayBuffer`, HTTPS and cross-origin isolation with COOP/COEP in production ([quickstart](https://webcontainers.io/guides/quickstart)). This is a header decision for the whole editor and can block cross-origin resources that do not send compatible policies.
+- Only one concurrent instance can boot, and booting is expensive ([API](https://webcontainers.io/api)).
+- Third-party cookies/storage, Service Workers and browser settings can stop it from working. StackBlitz documents those dependencies and the differences between Chromium, Firefox and Safari ([browser configuration](https://webcontainers.io/guides/browser-config), [browser support](https://webcontainers.io/guides/browser-support)).
+- It can exhaust the tab's memory and does not support native C/C++ addons unless a WebAssembly alternative exists ([troubleshooting](https://webcontainers.io/guides/troubleshooting)). This affects packages such as image transformers or native modules, although typical frontend code usually has JS/WASM alternatives.
+- It creates a vendor dependency. StackBlitz hosts the runtime implementation and versions it separately from the client. Commercial production use requires reviewing its license/plan, and the API lets you configure the matching key ([API support](https://webcontainers.io/guides/api-support), [commercial usage](https://webcontainers.io/enterprise), [API](https://webcontainers.io/api)).
+- A build made only on the user's laptop is not a trustworthy authority for deploy. The tab can close, the artifact can be altered or the browser can vary. The server must rebuild, or at least verify inside a trusted boundary.
 
-**Veredicto:** excelente Fase 2 para desarrollo interactivo; mala única infraestructura de publicación. Debe tener fallback a remote build/preview.
+This is an excellent Phase 2 for interactive development and a poor sole publishing infrastructure. It must fall back to remote build/preview.
 
-### 3. Sandpack / bundler de CodeSandbox
+### 3. Sandpack / CodeSandbox bundler
 
-Sandpack es una interfaz sobre el bundler de CodeSandbox. Recibe ficheros, template y dependencias npm/GitHub, ejecuta la transpilación/evaluación en un iframe y actualiza el preview en caliente ([Sandpack Client](https://sandpack.codesandbox.io/docs/advanced-usage/client), [usage](https://sandpack.codesandbox.io/docs/getting-started/usage)). La implementación distingue un runtime de bundler, un modo Nodebox y un servidor estático, pero su contrato principal sigue siendo una experiencia de sandbox, no ejecutar cualquier proyecto Vite sin adaptación ([Sandpack Client](https://sandpack.codesandbox.io/docs/advanced-usage/client)).
+Sandpack is an interface over the CodeSandbox bundler. It receives files, a template and npm/GitHub dependencies, runs transpilation and evaluation in an iframe and hot-updates the preview ([Sandpack Client](https://sandpack.codesandbox.io/docs/advanced-usage/client), [usage](https://sandpack.codesandbox.io/docs/getting-started/usage)). The implementation distinguishes a bundler runtime, a Nodebox mode and a static server, but its main contract is still a sandbox experience. It does not aim to run any Vite project without adaptation ([Sandpack Client](https://sandpack.codesandbox.io/docs/advanced-usage/client)).
 
-Ventajas:
+Advantages:
 
-- Integración React muy rápida y UI de editor/preview ya resuelta.
-- Templates para React, Vue, Svelte, Angular, Solid y vanilla.
-- Dependencias declarativas y hot update.
-- El bundler puede self-hostearse; CodeSandbox explica que separarlo en otro subdominio evita que el código evaluado toque las cookies del host y permite workers, code splitting y cache offline ([hosting the bundler](https://sandpack.codesandbox.io/docs/guides/hosting-the-bundler)).
+- Very fast React integration with the editor/preview UI already built.
+- Templates for React, Vue, Svelte, Angular, Solid and vanilla.
+- Declarative dependencies and hot updates.
+- The bundler can be self-hosted. CodeSandbox explains that putting it on a separate subdomain keeps evaluated code away from the host's cookies and enables workers, code splitting and offline caching ([hosting the bundler](https://sandpack.codesandbox.io/docs/guides/hosting-the-bundler)).
 
-Límites:
+Limits:
 
-- No promete equivalencia con CLI Vite, su grafo de plugins ni cualquier script npm.
-- Su API normal acepta un mapa `dependency -> version`; no es un build congelado gobernado por el lockfile del Project.
-- Los paquetes privados requieren proxy/registry adicional y CodeSandbox advierte que sus tokens deben permanecer fuera del cliente ([hosting the bundler](https://sandpack.codesandbox.io/docs/guides/hosting-the-bundler)).
-- Añade otra implementación de preview que puede divergir de producción.
-- Nodebox usa polyfills y no tiene paridad completa con Node: no admite addons N-API nativos salvo alternativas WASM, sockets nativos ni varias APIs, y su documentación señala restricciones comerciales para templates que lo usan ([Sandpack FAQ](https://sandpack.codesandbox.io/docs/resources/faq)).
+- It does not promise equivalence with the Vite CLI, its plugin graph or arbitrary npm scripts.
+- Its normal API accepts a `dependency -> version` map. That is not a frozen build governed by the Project's lockfile.
+- Private packages need an extra proxy/registry, and CodeSandbox warns that their tokens must stay out of the client ([hosting the bundler](https://sandpack.codesandbox.io/docs/guides/hosting-the-bundler)).
+- It adds another preview implementation that can diverge from production.
+- Nodebox uses polyfills and lacks full parity with Node. It does not support native N-API addons except through WASM alternatives, native sockets or several APIs, and its documentation notes commercial restrictions for templates that use it ([Sandpack FAQ](https://sandpack.codesandbox.io/docs/resources/faq)).
 
-**Veredicto:** útil si Littlebox decide ofrecer un modo «playground curado» separado. No lo elegiría como núcleo de un entorno compatible con Vite.
+It is useful if Littlebox decides to offer a separate "curated playground" mode. I would not choose it as the core of a Vite-compatible environment.
 
-### 4. `esbuild-wasm` en navegador
+### 4. `esbuild-wasm` in the browser
 
-La API oficial de esbuild funciona en el navegador mediante `esbuild-wasm`, tras `initialize()` con la URL del binario WASM, y ejecuta las operaciones asíncronas en un Web Worker ([esbuild browser API](https://esbuild.github.io/api/#running-in-the-browser)). Puede transpilar TypeScript/JSX y hacer bundles con mucha menos infraestructura que un Node virtual.
+The official esbuild API works in the browser through `esbuild-wasm`, after `initialize()` with the URL of the WASM binary, and runs asynchronous operations in a Web Worker ([esbuild browser API](https://esbuild.github.io/api/#running-in-the-browser)). It can transpile TypeScript/JSX and produce bundles with far less infrastructure than a virtual Node.
 
-Pero esbuild no instala paquetes. Para soportar `import "react"` tendríamos que implementar:
+But esbuild does not install packages. To support `import "react"` we would have to implement:
 
-- filesystem virtual;
-- resolución compatible con `package.json`/`exports`;
-- descarga desde registry/CDN;
-- lockfile e integridad;
-- loaders de CSS/assets;
-- caché y deduplicación;
-- plugins y mensajes de error;
-- ejecución segura del resultado.
+- a virtual filesystem;
+- resolution compatible with `package.json`/`exports`;
+- downloads from a registry/CDN;
+- lockfile and integrity;
+- CSS/asset loaders;
+- caching and deduplication;
+- plugins and error messages;
+- safe execution of the result.
 
-La propia documentación dice que la versión WASM puede ser un orden de magnitud más lenta que el binario nativo y excluye algunas funciones, como el servidor local; está pensada principalmente para el navegador cuando no hay otra opción ([esbuild getting started](https://esbuild.github.io/getting-started/#wasm)). Tampoco ejecuta el ecosistema de plugins Vite ni convierte el browser en Node.
+The documentation itself says the WASM version can be an order of magnitude slower than the native binary and leaves out some features, such as the local server. It is intended mainly for the browser when there is no other option ([esbuild getting started](https://esbuild.github.io/getting-started/#wasm)). It also does not run the Vite plugin ecosystem or turn the browser into Node.
 
-**Veredicto:** muy bueno para feedback local de sintaxis/transpilación o un preset ultrarrápido sin paquetes complejos. No construiría sobre él el package manager de Littlebox.
+It is very good for local syntax/transpilation feedback or an ultra-fast preset without complex packages. I would not build the Littlebox package manager on top of it.
 
-## Arquitectura objetivo
+## Target architecture
 
 ```mermaid
 flowchart LR
-  E["Editor + agente"] --> S["Project snapshot inmutable"]
+  E["Editor + agent"] --> S["Immutable project snapshot"]
   S --> Q["Build coordinator"]
-  Q --> R["BuildRunner aislado y efímero"]
-  R -->|"npm ci + typecheck + build"| V["Validador de output"]
-  V --> A["Artifact store content-addressed"]
-  A --> P["Preview origin separado"]
-  A --> D["Deployment inmutable"]
+  Q --> R["Isolated, ephemeral BuildRunner"]
+  R -->|"npm ci + typecheck + build"| V["Output validator"]
+  V --> A["Content-addressed artifact store"]
+  A --> P["Separate preview origin"]
+  A --> D["Immutable deployment"]
   D --> K["Kernel static server"]
   K --> RI["Runtime Interface: auth/actions/files"]
-  E -. "Fase 2: edición/HMR" .-> W["WebContainer local"]
-  W -. "nunca publica directamente" .-> Q
+  E -. "Phase 2: editing/HMR" .-> W["Local WebContainer"]
+  W -. "never publishes directly" .-> Q
 ```
 
-### Nuevas entidades
+### New entities
 
 **ProjectSource**  
-Árbol de ficheros editable y versionado. Debe dejar de ser `Record<ProjectFile, string>` y aceptar rutas normalizadas, texto y referencias a blobs binarios. `node_modules`, `dist` y caches nunca forman parte de la fuente.
+Editable, versioned file tree. It must stop being `Record<ProjectFile, string>` and accept normalized paths, text and references to binary blobs. `node_modules`, `dist` and caches are never part of the source.
 
 **ProjectSnapshot**  
-Copia inmutable entregada al Validation Gate/build. Incluye hash de cada fichero, manifest, build spec y actor. El agente edita un workspace desechable; aplicar genera una nueva snapshot reversible, preservando el modelo de `CONTEXT.md`.
+Immutable copy handed to the Validation Gate/build. It includes a hash of each file, the manifest, the build spec and the actor. The agent edits a disposable workspace, and applying it creates a new reversible snapshot, keeping the model in `CONTEXT.md`.
 
 **Build**  
-Intento sobre una snapshot concreta: estado, runner/toolchain, timestamps, logs acotados, exit code, diagnósticos, métricas y artifact resultante. Un Build fallido nunca cambia el Preview bueno anterior ni un Deployment.
+An attempt on a specific snapshot, with its state, runner/toolchain, timestamps, bounded logs, exit code, diagnostics, metrics and resulting artifact. A failed Build never changes the previous good Preview or a Deployment.
 
 **BuildArtifact**  
-Manifest de ficheros estáticos, hashes, tamaños, MIME, entry HTML y metadata de toolchain. Los bytes pueden vivir comprimidos en object storage o desduplicados por hash.
+Manifest of static files, hashes, sizes, MIME types, entry HTML and toolchain metadata. The bytes can live compressed in object storage or deduplicated by hash.
 
 ```ts
 type BuildArtifact = {
-  id: string;                 // sha256 del manifest canónico
+  id: string;                 // sha256 of the canonical manifest
   sourceSnapshotId: string;
   toolchainImageDigest: string;
   files: Array<{
@@ -185,9 +184,9 @@ type BuildArtifact = {
 ```
 
 **Deployment**  
-Referencia inmutable a `artifactId` más schema/actions/manifest de capacidades. Ya no contiene el source frontend como fichero ejecutable. El source puede conservarse en el plano Admin para export/eject, pero no se sirve al visitante.
+Immutable reference to an `artifactId` plus the schema/actions/capability manifest. It no longer contains the frontend source as an executable file. The source can be kept in the Admin plane for export/eject, but it is not served to visitors.
 
-### Capsule v2 propuesta
+### Proposed Capsule v2
 
 ```text
 project/
@@ -206,9 +205,9 @@ project/
     └── actions.json
 ```
 
-`littlebox/` es control/capability source y se excluye siempre del directorio público. El frontend importa un paquete tipado `@littlebox/sdk` o usa un módulo virtual proporcionado por el preset. El build genera llamadas al Runtime Interface del mismo hostname, pero jamás incluye SQL, credenciales o capacidades Admin.
+`littlebox/` is control/capability source and is always excluded from the public directory. The frontend imports a typed `@littlebox/sdk` package or uses a virtual module provided by the preset. The build generates calls to the Runtime Interface on the same hostname, but never includes SQL, credentials or Admin capabilities.
 
-El manifest puede declarar:
+The manifest can declare:
 
 ```json
 {
@@ -224,85 +223,85 @@ El manifest puede declarar:
 }
 ```
 
-El preset crea starters y defaults; no debe esconder el contrato. Un Project exportado tiene que poder compilar fuera de Littlebox con los mismos comandos.
+The preset creates starters and defaults, and it must not hide the contract. An exported Project has to compile outside Littlebox with the same commands.
 
-## Pipeline de build canónico
+## Canonical build pipeline
 
-1. **Congelar snapshot.** Normalizar rutas Unicode, separadores y permisos; rechazar rutas absolutas, `..`, NUL, symlinks, sockets y device files. Aplicar límites de número de ficheros, tamaño individual y tamaño total.
-2. **Validar manifest/package.** Solo un package manager y un lockfile. En MVP, exigir `package-lock.json`, `packageManager: npm@<versión fijada>` si se usa ese campo, y scripts conocidos `build`/`typecheck`.
-3. **Resolver cache key.** Hash de snapshot, lockfile, BuildSpec, imagen por digest, versión del SDK/preset y política de entorno. No usar tags móviles como `node:latest`.
-4. **Crear sandbox efímero.** Usuario no root, root filesystem read-only, workspace y tmp con cuota, CPU/memoria/PIDs/disco limitados, sin mounts del host, sin sockets privilegiados, sin secretos y con timeout duro.
-5. **Instalar.** `npm ci` exige lockfile, falla si no coincide con `package.json`, no lo reescribe y realiza una instalación limpia ([npm ci](https://docs.npmjs.com/cli/v11/commands/npm-ci/)). El lockfile describe el árbol exacto y contiene URL resuelta e integridad del artefacto, por lo que debe versionarse con la fuente ([package-lock.json](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/)).
-6. **Comprobar tipos.** Ejecutar `npm run typecheck`, normalmente `tsc --noEmit`. Vite transpila `.ts` pero no hace type checking; su documentación recomienda separar `tsc --noEmit` del build de producción ([Vite TypeScript](https://vite.dev/guide/features#typescript)).
-7. **Construir.** `npm run build`. Capturar stdout/stderr con límites y separar diagnósticos estructurables de logs.
-8. **Validar `dist`.** Resolver físicamente cada ruta; rechazar symlinks, escapes, nombres reservados `/_littlebox`, archivos ocultos no permitidos, HTML/JS excesivos, cantidad/tamaño total fuera de cuota y MIME peligroso. Requerir `index.html`.
-9. **Generar artifact manifest.** Hash por fichero, tamaños, MIME, entrypoint y provenance mínima. Subir primero los blobs y confirmar el manifest al final para que un build parcial nunca sea visible.
-10. **Destruir sandbox.** También en cancelación/timeout. Cloudflare advierte que un timeout de `exec()` corta la conexión pero no mata el proceso; hay que destruir el sandbox o borrar la sesión explícitamente ([execute commands](https://developers.cloudflare.com/sandbox/guides/execute-commands/)).
-11. **Promover.** Actualizar el alias de Preview únicamente tras validación; Deploy crea una referencia inmutable al artifact.
+1. **Freeze the snapshot.** Normalize Unicode paths, separators and permissions. Reject absolute paths, `..`, NUL, symlinks, sockets and device files. Apply limits on file count, individual size and total size.
+2. **Validate the manifest/package.** Only one package manager and one lockfile. In the MVP, require `package-lock.json`, `packageManager: npm@<pinned version>` if that field is used, and the known scripts `build`/`typecheck`.
+3. **Resolve the cache key.** Hash of the snapshot, lockfile, BuildSpec, image by digest, SDK/preset version and environment policy. Do not use moving tags such as `node:latest`.
+4. **Create an ephemeral sandbox.** Non-root user, read-only root filesystem, workspace and tmp with quotas, limited CPU/memory/PIDs/disk, no host mounts, no privileged sockets, no secrets and a hard timeout.
+5. **Install.** `npm ci` requires a lockfile, fails if it does not match `package.json`, does not rewrite it and performs a clean install ([npm ci](https://docs.npmjs.com/cli/v11/commands/npm-ci/)). The lockfile describes the exact tree and contains the resolved URL and integrity of each artifact, so it must be versioned with the source ([package-lock.json](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/)).
+6. **Check types.** Run `npm run typecheck`, usually `tsc --noEmit`. Vite transpiles `.ts` but does not type check, and its documentation recommends separating `tsc --noEmit` from the production build ([Vite TypeScript](https://vite.dev/guide/features#typescript)).
+7. **Build.** `npm run build`. Capture stdout/stderr with limits and separate structured diagnostics from logs.
+8. **Validate `dist`.** Resolve each path physically. Reject symlinks, escapes, the reserved `/_littlebox` names, disallowed hidden files, oversized HTML/JS, file count or total size over quota and dangerous MIME types. Require `index.html`.
+9. **Generate the artifact manifest.** Hash per file, sizes, MIME types, entrypoint and minimal provenance. Upload the blobs first and commit the manifest last so a partial build is never visible.
+10. **Destroy the sandbox.** Also on cancellation or timeout. Cloudflare warns that an `exec()` timeout cuts the connection but does not kill the process, so the sandbox must be destroyed or the session deleted explicitly ([execute commands](https://developers.cloudflare.com/sandbox/guides/execute-commands/)).
+11. **Promote.** Update the Preview alias only after validation. Deploy creates an immutable reference to the artifact.
 
-### Dos niveles de compatibilidad
+### Two compatibility levels
 
-Conviene ofrecerlos de forma explícita:
+It is worth offering them explicitly:
 
-- **Preset soportado:** Littlebox controla la configuración Vite/esbuild, desactiva `configFile`, fija plugins y genera los scripts. Es el camino más predecible para starters y para el agente.
-- **Modo avanzado:** se acepta `vite.config.*`, plugins y scripts propios. Vite transforma y carga su fichero de configuración como código y los plugins se instalan como dependencias del Project, de modo que este modo necesita el sandbox fuerte y puede fallar por incompatibilidades legítimas ([Vite config](https://vite.dev/config/), [Vite plugins](https://vite.dev/guide/using-plugins.html)).
+- With a supported preset, Littlebox controls the Vite/esbuild configuration, disables `configFile`, pins plugins and generates the scripts. It is the most predictable path for starters and for the agent.
+- Advanced mode accepts `vite.config.*`, custom plugins and custom scripts. Vite transforms and loads its config file as code, and plugins are installed as Project dependencies, so this mode needs the strong sandbox and can fail for legitimate incompatibilities ([Vite config](https://vite.dev/config/), [Vite plugins](https://vite.dev/guide/using-plugins.html)).
 
-Ambos producen exactamente el mismo `BuildArtifact`. «Soportado» describe el nivel de garantía y asistencia, no un formato de Deployment distinto.
+Both produce exactly the same `BuildArtifact`. "Supported" describes the level of guarantee and assistance, not a different Deployment format.
 
-## Dependencias npm, lockfiles y otros package managers
+## npm dependencies, lockfiles and other package managers
 
-### Regla de reproducibilidad
+### Reproducibility rule
 
-`package.json` expresa intención; el lockfile es parte de la fuente y expresa resolución. Un lockfile permite reinstalar el mismo árbol, pero **no garantiza por sí solo un bundle bit a bit idéntico**: install/build scripts pueden leer hora, red, arquitectura o variables. Por eso la cache key también incluye imagen, runtime, manager, configuración y política, y el build debe quedarse sin red después de instalar.
+`package.json` expresses intent. The lockfile is part of the source and expresses resolution. A lockfile lets you reinstall the same tree, but **it does not by itself guarantee a bit-for-bit identical bundle**, because install/build scripts can read the time, network, architecture or variables. That is why the cache key also includes the image, runtime, manager, configuration and policy, and why the build must lose network access after install.
 
 MVP:
 
-- npm únicamente;
-- `package-lock.json` obligatorio y en sync;
-- versiones exactas en los starters para Vite, TypeScript y plugins;
-- dependencias solo del registry npm HTTPS; rechazar inicialmente `git:`, `github:`, `file:`, directorios y tarballs arbitrarios;
-- paquetes públicos; private registry después;
-- install scripts deshabilitados por defecto o allowlist revisada para los pocos paquetes que realmente los necesiten. npm documenta tanto `ignore-scripts` como políticas `allowScripts`/`strict-allow-scripts` ([npm ci options](https://docs.npmjs.com/cli/v11/commands/npm-ci/)). Incluso con allowlist, el sandbox sigue siendo obligatorio porque `npm run build` es código del usuario.
+- npm only;
+- `package-lock.json` required and in sync;
+- exact versions in the starters for Vite, TypeScript and plugins;
+- dependencies only from the HTTPS npm registry; initially reject `git:`, `github:`, `file:`, directories and arbitrary tarballs;
+- public packages; private registry later;
+- install scripts disabled by default, or a reviewed allowlist for the few packages that really need them. npm documents both `ignore-scripts` and the `allowScripts`/`strict-allow-scripts` policies ([npm ci options](https://docs.npmjs.com/cli/v11/commands/npm-ci/)). Even with an allowlist, the sandbox is still mandatory because `npm run build` is user code.
 
-Fase posterior:
+Later phase:
 
-- adapter `PackageManager` para `pnpm install --frozen-lockfile` y `bun install --frozen-lockfile`/`bun ci`;
-- exigir exactamente un lockfile coherente con el manager declarado;
-- fijar también la versión del manager. El campo `packageManager` identifica manager y versión, pero su soporte histórico mediante Corepack ha sido experimental; es más seguro que la imagen de build lleve explícitamente las versiones admitidas ([Node Corepack docs](https://nodejs.org/download/release/latest-v20.x/docs/api/corepack.html)).
-- Bun usa `bun.lock`, recomienda versionarlo y ofrece `--frozen-lockfile`/`bun ci`; por defecto no ejecuta lifecycle scripts arbitrarios de dependencias salvo paquetes de confianza, lo que puede ser una opción interesante sin sustituir el sandbox ([Bun lockfile](https://bun.sh/docs/pm/lockfile), [Bun install](https://bun.sh/docs/pm/cli/install)).
+- a `PackageManager` adapter for `pnpm install --frozen-lockfile` and `bun install --frozen-lockfile`/`bun ci`;
+- require exactly one lockfile consistent with the declared manager;
+- pin the manager version too. The `packageManager` field identifies the manager and version, but its historical support through Corepack has been experimental. It is safer for the build image to ship the allowed versions explicitly ([Node Corepack docs](https://nodejs.org/download/release/latest-v20.x/docs/api/corepack.html)).
+- Bun uses `bun.lock`, recommends versioning it and offers `--frozen-lockfile`/`bun ci`. By default it does not run arbitrary dependency lifecycle scripts except for trusted packages, which can be an interesting option that still does not replace the sandbox ([Bun lockfile](https://bun.sh/docs/pm/lockfile), [Bun install](https://bun.sh/docs/pm/cli/install)).
 
-No migraría silenciosamente un lockfile a otro durante deploy. La salida debe corresponder al manager que el Project declara y el export debe conservarlo.
+I would not silently migrate one lockfile to another during deploy. The output must match the manager the Project declares, and export must keep it.
 
-### Cache en tres niveles
+### Three cache levels
 
-**1. Cache de tarballs/metadata del package manager**  
-Compartida entre runners, content-addressed y sin credenciales. npm usa `_cacache`, verifica integridad al insertar y extraer, y vuelve a descargar contenido corrupto ([npm cache](https://docs.npmjs.com/cli/v8/commands/npm-cache/)). Puede montarse como cache de rendimiento; nunca como fuente autoritativa.
+**1. Package manager tarball/metadata cache**  
+Shared between runners, content-addressed and free of credentials. npm uses `_cacache`, verifies integrity on insert and extract, and re-downloads corrupt content ([npm cache](https://docs.npmjs.com/cli/v8/commands/npm-cache/)). It can be mounted as a performance cache, never as an authoritative source.
 
-**2. Cache de dependencias por lockfile**  
-Clave: `manager version + runtime + OS/arch + lock hash + install policy`. Es válido reutilizar capas o cache mounts, pero no un `node_modules` escribible compartido entre tenants. Docker recomienda separar package files de source y usar cache mounts para no reinstalar todo cuando solo cambia código ([Docker build cache](https://docs.docker.com/build/cache/optimize/)). Para código hostil, el árbol final debe copiarse o reconstruirse dentro del sandbox de ese build.
+**2. Per-lockfile dependency cache**  
+The key is `manager version + runtime + OS/arch + lock hash + install policy`. Reusing layers or cache mounts is fine, but a writable `node_modules` shared between tenants is not. Docker recommends separating package files from source and using cache mounts so that a code-only change does not reinstall everything ([Docker build cache](https://docs.docker.com/build/cache/optimize/)). For hostile code, the final tree must be copied or rebuilt inside that build's sandbox.
 
-**3. Cache de artifact completo**  
-Clave exacta del Build. Un hit evita crear sandbox. Solo se promueven artifacts ya validados; los fallos pueden cachearse pocos minutos para evitar loops del agente, nunca indefinidamente.
+**3. Full artifact cache**  
+Exact Build key. A hit avoids creating a sandbox. Only validated artifacts get promoted. Failures can be cached for a few minutes to avoid agent loops, never indefinitely.
 
-En estáticos publicados:
+For published static files:
 
-- assets con nombre hash: `Cache-Control: public, max-age=31536000, immutable` y ETag por contenido;
-- HTML de un hostname de Deployment inmutable también puede cachearse agresivamente; un alias mutable de Preview debe usar `no-cache` o TTL corto;
-- `/_littlebox/*` nunca comparte la cache de assets y conserva las políticas privadas del Kernel.
+- hashed-name assets get `Cache-Control: public, max-age=31536000, immutable` and a content ETag;
+- HTML on an immutable Deployment hostname can also be cached aggressively, while a mutable Preview alias must use `no-cache` or a short TTL;
+- `/_littlebox/*` never shares the asset cache and keeps the Kernel's private policies.
 
-Vite ya usa el lockfile y configuración para invalidar su prebundle de desarrollo y sirve dependencias con cache HTTP inmutable versionada ([Vite dependency pre-bundling](https://vite.dev/guide/dep-pre-bundling.html)). Ese cache pertenece a una sesión de desarrollo, no al Artifact Store.
+Vite already uses the lockfile and config to invalidate its development prebundle and serves dependencies with versioned immutable HTTP caching ([Vite dependency pre-bundling](https://vite.dev/guide/dep-pre-bundling.html)). That cache belongs to a development session, not to the Artifact Store.
 
-## TypeScript y experiencia de IDE
+## TypeScript and IDE experience
 
-Hay tres niveles distintos que no deben confundirse:
+There are three separate levels that must not be confused:
 
-1. **Transpilación rápida:** Vite/esbuild convierten TS/TSX a JS.
-2. **Type checking canónico:** `tsc --noEmit` en el Build.
-3. **Inteligencia interactiva:** completions, hover, definición y diagnósticos en el editor.
+1. Fast transpilation, where Vite/esbuild convert TS/TSX to JS.
+2. Canonical type checking, with `tsc --noEmit` in the Build.
+3. Interactive intelligence, meaning completions, hover, go-to-definition and diagnostics in the editor.
 
-El MVP puede entregar 1 y 2 y pintar los diagnósticos del build sobre CodeMirror. Después se puede ejecutar el TypeScript Language Service en un Worker del editor, alimentado por el Project tree y los `.d.ts` de las dependencias. El Language Service oficial está diseñado como un programa longevo, incremental y bajo demanda; el host aporta el conjunto de ficheros y snapshots/versiones ([TypeScript Language Service API](https://github.com/microsoft/TypeScript/wiki/Using-the-Language-Service-API)). No es obligatorio cambiar a Monaco: CodeMirror puede consumir diagnósticos/completions propios. Monaco ya trae workers de TypeScript/JavaScript si se prefiere una integración más completa, pero aumentaría bundle y complejidad ([Monaco ESM integration](https://github.com/microsoft/monaco-editor/blob/main/docs/integrate-esm.md)).
+The MVP can deliver 1 and 2 and paint the build diagnostics over CodeMirror. Later, the TypeScript Language Service can run in an editor Worker, fed by the Project tree and the dependencies' `.d.ts` files. The official Language Service is designed as a long-lived, incremental, on-demand program, and the host supplies the file set and snapshots/versions ([TypeScript Language Service API](https://github.com/microsoft/TypeScript/wiki/Using-the-Language-Service-API)). Switching to Monaco is not required, since CodeMirror can consume custom diagnostics/completions. Monaco already ships TypeScript/JavaScript workers if a fuller integration is preferred, but it would grow the bundle and the complexity ([Monaco ESM integration](https://github.com/microsoft/monaco-editor/blob/main/docs/integrate-esm.md)).
 
-`@littlebox/sdk` debe incluir tipos y ser parte del starter, por ejemplo:
+`@littlebox/sdk` must include types and be part of the starter, for example:
 
 ```ts
 import { actions, auth, files } from "@littlebox/sdk";
@@ -310,173 +309,173 @@ import { actions, auth, files } from "@littlebox/sdk";
 const tasks = await actions.call("tasks.list");
 ```
 
-Idealmente los tipos de `actions.call` se generan de `littlebox/actions.json`, de modo que renombrar una acción rompa typecheck antes de deploy. El SDK compilado solo conoce nombres y contratos públicos; SQL continúa server-side.
+Ideally the `actions.call` types are generated from `littlebox/actions.json`, so renaming an action breaks typecheck before deploy. The compiled SDK only knows public names and contracts. SQL stays server-side.
 
-## Vite, esbuild y generación estática
+## Vite, esbuild and static generation
 
-### Vite como preset principal
+### Vite as the main preset
 
-Vite encaja como starter porque:
+Vite fits as a starter because:
 
-- `index.html` forma parte del grafo y referencia módulos/estilos de forma natural ([Vite getting started](https://vite.dev/guide/));
-- `vite build` produce un bundle para hosting estático en `dist` ([production build](https://vite.dev/guide/build));
-- resuelve assets, CSS, imports, chunks y rutas base;
-- ofrece HMR y plugins de framework durante desarrollo.
+- `index.html` is part of the graph and references modules/styles naturally ([Vite getting started](https://vite.dev/guide/));
+- `vite build` produces a bundle for static hosting in `dist` ([production build](https://vite.dev/guide/build));
+- it resolves assets, CSS, imports, chunks and base paths;
+- it offers HMR and framework plugins during development.
 
-No se debe asumir que «soportar Vite» significa acoplarse a esbuild. El repo usa Vite 6 hoy, mientras que las versiones actuales de Vite han cambiado piezas internas del pipeline. Littlebox debe tratar `vite` como dependencia versionada por el Project y el output estático como interfaz estable. `esbuild` se soporta además como herramienta/preset independiente.
+Do not assume that "supporting Vite" means coupling to esbuild. The repo uses Vite 6 today, while current Vite versions have changed internal parts of the pipeline. Littlebox must treat `vite` as a dependency versioned by the Project and the static output as the stable interface. `esbuild` is also supported as an independent tool/preset.
 
-En concreto, Vite 8 sustituyó el pipeline interno anterior por Rolldown/Oxc; esto refuerza que Littlebox no debe depender de las tripas del bundler ni instalar una versión global móvil ([Vite 8 announcement](https://vite.dev/blog/announcing-vite8)).
+Specifically, Vite 8 replaced the previous internal pipeline with Rolldown/Oxc. This confirms that Littlebox must not depend on bundler internals or install a moving global version ([Vite 8 announcement](https://vite.dev/blog/announcing-vite8)).
 
-Configuración recomendada para starter:
+Recommended starter configuration:
 
-- `base: "/"`, porque cada Deployment ocupa la raíz de su hostname; o `base: "./"` si se quiere que el ZIP exportado abra desde cualquier prefijo. Vite reescribe las URLs de assets según `base` ([Vite public base path](https://vite.dev/guide/build#public-base-path)).
+- `base: "/"`, because each Deployment owns the root of its hostname; or `base: "./"` if the exported ZIP should open from any prefix. Vite rewrites asset URLs according to `base` ([Vite public base path](https://vite.dev/guide/build#public-base-path)).
 - `build.outDir: "dist"`.
-- sourcemaps desactivados en público por defecto; guardarlos como artifact Admin privado si se quieren stack traces.
-- `tsc --noEmit && vite build` o scripts separados `typecheck`/`build` ejecutados ambos por el runner.
-- un plugin o post-proceso **propiedad de la plataforma** que asegure el cliente `/_littlebox/runtime.js` en HTML sin inline secrets.
+- sourcemaps disabled in public by default; store them as a private Admin artifact if stack traces are wanted.
+- `tsc --noEmit && vite build`, or separate `typecheck`/`build` scripts that the runner executes both of.
+- a **platform-owned** plugin or post-process that ensures the `/_littlebox/runtime.js` client is in the HTML without inline secrets.
 
-### esbuild como preset pequeño
+### esbuild as a small preset
 
-Para mini-apps que no necesitan Vite, un starter puede usar la API/CLI nativa de esbuild con `bundle`, `platform: "browser"`, `format: "esm"`, `sourcemap` en preview y `minify` en producción. El bundler produce browser output por defecto y soporta TS/JSX/loaders/plugins ([esbuild getting started](https://esbuild.github.io/getting-started/), [API](https://esbuild.github.io/api/)). Es más simple y rápido, pero Littlebox tendría que generar/copiar `index.html` y assets. No intentaría emular Vite encima.
+For mini-apps that do not need Vite, a starter can use the native esbuild API/CLI with `bundle`, `platform: "browser"`, `format: "esm"`, `sourcemap` in preview and `minify` in production. The bundler produces browser output by default and supports TS/JSX/loaders/plugins ([esbuild getting started](https://esbuild.github.io/getting-started/), [API](https://esbuild.github.io/api/)). It is simpler and faster, but Littlebox would have to generate/copy `index.html` and assets. I would not try to emulate Vite on top of it.
 
-### Qué significa «estático»
+### What "static" means
 
-Se admite cualquier framework cuyo comando termine en un directorio de HTML/CSS/JS/assets cerrado:
+Any framework is accepted if its command ends in a closed directory of HTML/CSS/JS/assets:
 
-- SPA Vite;
-- multipágina;
-- SSG que ejecuta Node solo durante build y emite estáticos;
-- web workers y WASM como assets, sujetos a CSP/MIME/cuotas.
+- Vite SPA;
+- multi-page;
+- SSG that runs Node only during build and emits static files;
+- web workers and WASM as assets, subject to CSP/MIME/quotas.
 
-No se admite en el runtime estático:
+The static runtime does not accept:
 
-- SSR que necesita un proceso Node por request;
-- API routes arbitrarias;
-- cron/background workers del framework;
-- acceso directo a filesystem/database desde server code generado.
+- SSR that needs a Node process per request;
+- arbitrary API routes;
+- framework cron/background workers;
+- direct filesystem/database access from generated server code.
 
-Esas capacidades deben mapearse a Server Actions/Kernel, o ir al adapter de escape hatch Railway/Docker descrito en la investigación de hosting. `vite preview` tampoco es servidor de producción; Vite lo documenta solo para comprobar localmente el build ([static deploy guide](https://vite.dev/guide/static-deploy.html)).
+Those capabilities must map to Server Actions/Kernel, or go to the Railway/Docker escape hatch adapter described in the hosting research. `vite preview` is not a production server either. Vite documents it only for checking the build locally ([static deploy guide](https://vite.dev/guide/static-deploy.html)).
 
-## Seguridad: requisitos no negociables
+## Security: non-negotiable requirements
 
 ### Build sandbox
 
-- Frontera por Build o tenant, no ejecución dentro del proceso del Kernel.
-- Imagen por digest, usuario no root, capabilities eliminadas, filesystem base read-only.
-- Workspace temporal nuevo; sin `/var/run/docker.sock`, home del host, repositorio del control plane ni metadata cloud.
-- CPU, memoria, PIDs, disco, bytes de logs, wall clock y número de procesos limitados. Docker no aplica esos límites por defecto ([resource constraints](https://docs.docker.com/engine/containers/resource_constraints/)).
-- Cancelar y destruir; no confiar solo en timeout de la conexión.
-- Sin variables del control plane ni token npm. Para private packages, un proxy externo inyecta credenciales upstream sin entregarlas al sandbox. Cloudflare Sandbox permite bloquear Internet, allowlisting por hostname e inyectar auth desde un outbound handler confiable ([outbound traffic](https://developers.cloudflare.com/sandbox/guides/outbound-traffic/)).
-- Egress en dos fases: install solo a registry/proxy permitido; typecheck/build sin red. DNS, IPs privadas, loopback, metadata endpoints y protocolos no HTTP bloqueados.
-- Node Permission Model no sustituye esta frontera: la documentación oficial lo llama un «seat belt» para código confiable y dice explícitamente que código malicioso puede eludirlo ([Node permissions](https://nodejs.org/api/permissions.html)).
+- A boundary per Build or tenant, never execution inside the Kernel process.
+- Image by digest, non-root user, dropped capabilities, read-only base filesystem.
+- A fresh temporary workspace; no `/var/run/docker.sock`, host home directory, control plane repository or cloud metadata.
+- Limited CPU, memory, PIDs, disk, log bytes, wall clock and process count. Docker does not apply those limits by default ([resource constraints](https://docs.docker.com/engine/containers/resource_constraints/)).
+- Cancel and destroy; do not rely only on the connection timeout.
+- No control plane variables or npm token. For private packages, an external proxy injects upstream credentials without handing them to the sandbox. Cloudflare Sandbox can block the Internet, allowlist by hostname and inject auth from a trusted outbound handler ([outbound traffic](https://developers.cloudflare.com/sandbox/guides/outbound-traffic/)).
+- Two-phase egress, where install only reaches the allowed registry/proxy and typecheck/build run without network. DNS, private IPs, loopback, metadata endpoints and non-HTTP protocols are blocked.
+- The Node Permission Model does not replace this boundary. The official documentation calls it a "seat belt" for trusted code and says explicitly that malicious code can bypass it ([Node permissions](https://nodejs.org/api/permissions.html)).
 
 ### Supply chain
 
-- Lockfile obligatorio, integridad verificada y toolchain fijado.
-- Rechazar dependencias desde Git/URL/file en MVP.
-- Allowlist de lifecycle scripts y reporte visible cuando alguno se omite.
-- `npm audit`/firmas/provenance como señal y política configurable, no como falsa garantía. npm permite verificar firmas y attestations con `npm audit signatures` ([npm provenance](https://docs.npmjs.com/viewing-package-provenance/)).
-- Registrar árbol de dependencias/licencias/SBOM en el Build para export y respuesta a incidentes.
-- Nunca confiar en que un paquete es seguro solo porque está cacheado o firmado; la firma prueba origen/integridad, no comportamiento.
+- Mandatory lockfile, verified integrity and pinned toolchain.
+- Reject dependencies from Git/URL/file in the MVP.
+- Allowlist for lifecycle scripts and a visible report when one is skipped.
+- `npm audit`/signatures/provenance as a signal and a configurable policy, not as a false guarantee. npm can verify signatures and attestations with `npm audit signatures` ([npm provenance](https://docs.npmjs.com/viewing-package-provenance/)).
+- Record the dependency tree, licenses and SBOM in the Build for export and incident response.
+- Never trust a package just because it is cached or signed. A signature proves origin and integrity, not behavior.
 
-### Preview y navegador
+### Preview and browser
 
-- Servir el preview compilado desde un origen separado del editor, idealmente `preview-token.preview.littlebox.test/app/`, nunca desde el mismo origen con credenciales Admin.
-- Iframe con permisos mínimos. El estándar HTML explica que `sandbox` crea un origen opaco por defecto y que combinar `allow-scripts` + `allow-same-origin` en contenido same-origin permite retirar el sandbox; el preview debe ser cross-origin y solo recuperar capacidades imprescindibles ([HTML Standard](https://html.spec.whatwg.org/multipage/iframe-embed-object.html#attr-iframe-sandbox)).
-- Canal/runtime autenticado y ligado a `projectId + snapshotId + previewId`; no aceptar IDs suministrados como autoridad.
-- URL de preview corta, revocable y con TTL. Una URL aleatoria es una bearer capability y puede filtrarse en logs/referrers.
-- Host-only cookies y ninguna cookie del editor en el dominio de preview.
-- CSP, `Permissions-Policy`, `nosniff`, `Referrer-Policy` y límites de navegación/download/popups. Las dependencias que exijan `unsafe-eval`, WebAssembly o workers deben declararlo y pasar una política explícita; no relajar globalmente el editor.
+- Serve the compiled preview from an origin separate from the editor, ideally `preview-token.preview.littlebox.test/app/`, never from the same origin with Admin credentials.
+- Iframe with minimal permissions. The HTML Standard explains that `sandbox` creates an opaque origin by default and that combining `allow-scripts` + `allow-same-origin` on same-origin content lets the content remove the sandbox. The preview must be cross-origin and only regain the capabilities it truly needs ([HTML Standard](https://html.spec.whatwg.org/multipage/iframe-embed-object.html#attr-iframe-sandbox)).
+- An authenticated channel/runtime bound to `projectId + snapshotId + previewId`; do not accept supplied IDs as authority.
+- A short, revocable preview URL with a TTL. A random URL is a bearer capability and can leak through logs/referrers.
+- Host-only cookies and no editor cookie on the preview domain.
+- CSP, `Permissions-Policy`, `nosniff`, `Referrer-Policy` and limits on navigation/downloads/popups. Dependencies that require `unsafe-eval`, WebAssembly or workers must declare it and pass an explicit policy; do not relax the editor globally.
 
-### Artifact y static server
+### Artifact and static server
 
-- Canonicalizar y comprobar que cada path queda dentro de `dist`; no seguir symlinks.
-- MIME desde extensión/lista confiable, nunca desde metadata del usuario.
-- `index.html` no puede sobrescribir `/_littlebox/*`.
-- Límite de archivos, tamaño total, tamaño HTML/JS y profundidad de rutas.
-- HTML se sirve como HTML; uploads de usuario siguen en el Blob Interface con la política restrictiva actual, no mezclados con assets de build.
-- Para SPA, fallback a `index.html` solo en requests de navegación `GET/HEAD` que acepten HTML; un asset inexistente debe devolver 404.
-- Runtime SDK como fichero externo first-party con hash/version, no concatenado dentro de JS arbitrario. El SDK llama a actions/auth/files del mismo Deployment hostname.
+- Canonicalize and check that every path stays inside `dist`; do not follow symlinks.
+- MIME type from the extension or a trusted list, never from user metadata.
+- `index.html` cannot overwrite `/_littlebox/*`.
+- Limits on file count, total size, HTML/JS size and route depth.
+- HTML is served as HTML. User uploads stay in the Blob Interface with the current restrictive policy, separate from build assets.
+- For SPAs, fall back to `index.html` only on `GET/HEAD` navigation requests that accept HTML. A missing asset must return 404.
+- Runtime SDK as an external first-party file with a hash/version, not concatenated into arbitrary JS. The SDK calls actions/auth/files on the same Deployment hostname.
 
-## Fases recomendadas
+## Recommended phases
 
-### Fase 0 — contrato y modelo de datos
+### Phase 0, contract and data model
 
-- ADR: Build Plane separado del Kernel Runtime.
-- `ProjectSource` como file tree, snapshots y operaciones de agente por path.
-- Capsule v2, `BuildSpec`, `Build`, `BuildArtifact` y `artifactId` en Deployment.
-- Persistencia fuera de `localStorage` para fuentes grandes: IndexedDB como cache local y Admin API/object storage como autoridad. Nunca persistir `node_modules`.
-- Migrador Capsule v1 → v2 que genere un starter vanilla Vite sin cambiar schema/actions.
+- ADR for a Build Plane separate from the Kernel Runtime.
+- `ProjectSource` as a file tree, snapshots and path-based agent operations.
+- Capsule v2, `BuildSpec`, `Build`, `BuildArtifact` and `artifactId` in the Deployment.
+- Persistence outside `localStorage` for large sources, with IndexedDB as a local cache and the Admin API/object storage as the authority. Never persist `node_modules`.
+- A Capsule v1 → v2 migrator that generates a vanilla Vite starter without changing schema/actions.
 
-**Criterio de salida:** un Project v2 se puede exportar, ejecutar fuera de Littlebox y volver a importar sin pérdida.
+The phase is done when a v2 Project can be exported, run outside Littlebox and imported again without loss.
 
-### Fase 1 — MVP estático canónico
+### Phase 1, canonical static MVP
 
-- npm únicamente; `package-lock.json` obligatorio.
-- Dos starters: `vite-vanilla-ts` y `vite-react-ts`; opcional `esbuild-vanilla-ts`.
-- Runner efímero con `npm ci`, `tsc --noEmit`, `npm run build` y `dist` validado.
-- Preview del último build bueno en origen separado; botón Build y auto-build con debounce/cancelación.
-- Logs, diagnósticos clicables por fichero/línea y estado claro «source dirty / build running / preview at snapshot X».
-- Kernel sirve árboles estáticos y SPA fallback; Deployment referencia artifact.
-- Cuotas conservadoras: build corto, pocos cientos de MiB, límites de source/output/log y baja concurrencia por usuario.
-- Adapter local Docker solo para desarrollo propio/trusted code; no exponer ese runner básico a builds públicos. Para multi-tenant, usar Cloudflare Sandbox, gVisor o microVM antes de abrir el producto.
+- npm only; `package-lock.json` required.
+- Two starters, `vite-vanilla-ts` and `vite-react-ts`, with an optional `esbuild-vanilla-ts`.
+- Ephemeral runner with `npm ci`, `tsc --noEmit`, `npm run build` and a validated `dist`.
+- Preview of the last good build on a separate origin; a Build button and auto-build with debounce/cancellation.
+- Logs, diagnostics clickable by file/line and a clear "source dirty / build running / preview at snapshot X" state.
+- The Kernel serves static trees and the SPA fallback; the Deployment references an artifact.
+- Conservative quotas, with short builds, a few hundred MiB, source/output/log limits and low per-user concurrency.
+- A local Docker adapter only for in-house development and trusted code. Do not expose that basic runner to public builds. For multi-tenant use, adopt Cloudflare Sandbox, gVisor or microVMs before opening the product.
 
-**Criterio de salida:** React+TS con una dependencia npm se edita, typecheckea, previsualiza, publica y exporta; el Deployment sigue sin proceso propio.
+The phase is done when React+TS with one npm dependency can be edited, typechecked, previewed, published and exported, and the Deployment still has no process of its own.
 
-### Fase 2 — experiencia casi IDE
+### Phase 2, near-IDE experience
 
-- TypeScript Language Service en Worker y tipos de dependencias/SDK.
-- Sesión de dev remota con Vite HMR **o** WebContainer local con fallback remoto.
-- Terminal restringida a sesión de Project, árbol de ficheros, rename/delete, búsqueda y consola de preview.
-- Sincronización incremental de fuentes al dev session; el Deploy aún reconstruye canónicamente.
-- Caches de dependency/artifact y workers calientes medidos.
-- Si la sesión es remota, un gateway owner-only publica el puerto Vite y su WebSocket HMR en un hostname efímero; nunca se expone directamente el puerto del contenedor. Al dormir o destruir la sesión, se revoca la URL. Cloudflare Sandbox soporta servicios/preview URLs y documenta su carácter de capability compartible ([expose services](https://developers.cloudflare.com/sandbox/guides/expose-services/), [security model](https://developers.cloudflare.com/sandbox/concepts/security/)).
+- TypeScript Language Service in a Worker, with dependency/SDK types.
+- A remote dev session with Vite HMR **or** a local WebContainer with remote fallback.
+- A terminal restricted to the Project session, a file tree, rename/delete, search and a preview console.
+- Incremental source sync to the dev session; Deploy still rebuilds canonically.
+- Dependency/artifact caches and measured warm workers.
+- If the session is remote, an owner-only gateway publishes the Vite port and its HMR WebSocket on an ephemeral hostname. The container port is never exposed directly. When the session sleeps or is destroyed, the URL is revoked. Cloudflare Sandbox supports services/preview URLs and documents that they behave as shareable capabilities ([expose services](https://developers.cloudflare.com/sandbox/guides/expose-services/), [security model](https://developers.cloudflare.com/sandbox/concepts/security/)).
 
-**Criterio de salida:** feedback de edición subsegundo en el camino normal y build canónico idéntico al contrato exportado.
+The phase is done when edit feedback is sub-second on the normal path and the canonical build is identical to the exported contract.
 
-### Fase 3 — ecosistema
+### Phase 3, ecosystem
 
-- pnpm y Bun como adapters con lockfile frozen; no conversión silenciosa.
-- Más presets estáticos: Vue, Svelte, Preact, Astro static.
-- Private packages mediante registry proxy y credenciales fuera del sandbox.
-- Tests/lint opcionales, sourcemaps privados, SBOM/licencias, dependency UI y políticas de organización.
-- Multipágina, workers/WASM y CSP por capabilities declaradas.
+- pnpm and Bun as adapters with a frozen lockfile; no silent conversion.
+- More static presets, such as Vue, Svelte, Preact and Astro static.
+- Private packages through a registry proxy with credentials kept outside the sandbox.
+- Optional tests/lint, private sourcemaps, SBOM/licenses, a dependency UI and organization policies.
+- Multi-page, workers/WASM and CSP driven by declared capabilities.
 
-### Fase 4 — completo sin romper el producto
+### Phase 4, complete without breaking the product
 
-- Colaboración, snapshots/branches, remote cache distribuido, builds paralelos y preview shareable con ACL.
-- Compatibilidad con monorepos solo si existe una necesidad real; es fácil multiplicar el coste y superficie del agente.
-- Escape hatch de runtime servidor detrás de otro `DeployTarget`, claramente separado de la categoría «mini-app estática» y con precio/cuotas propios.
+- Collaboration, snapshots/branches, a distributed remote cache, parallel builds and shareable previews with ACLs.
+- Monorepo support only if there is a real need, since it can easily multiply cost and the agent's surface.
+- A server runtime escape hatch behind another `DeployTarget`, clearly separate from the "static mini-app" category and with its own pricing/quotas.
 
-## Riesgos y decisiones abiertas
+## Risks and open decisions
 
-| Riesgo | Impacto | Mitigación/decisión |
+| Risk | Impact | Mitigation/decision |
 | --- | --- | --- |
-| Supply-chain y scripts npm | ejecución arbitraria y exfiltración | sandbox fuerte, no secrets, egress allowlist, lockfile, scripts aprobados |
-| Coste/latencia de `npm ci` | preview lento y caro | cache de tarballs/deps, runners warm, artifact cache, WebContainer opcional |
-| Divergencia dev/deploy | «funciona en preview» pero no publicado | misma snapshot/BuildSpec; server build siempre autoritativo |
-| Lock-in de Cloudflare/StackBlitz | migración o pricing | `BuildRunner` portable; WebContainer opcional; artifact estándar |
-| Plugins/config Vite ilimitados | incompatibilidad/abuso | sandbox; presets soportados; logs claros; no prometer cada plugin |
-| Browser WebContainer | usuarios bloqueados por COOP/COEP/cookies/memoria | feature detection y fallback remoto |
-| `localStorage` | límite/tamaño/corrupción de proyectos npm | source store versionado + IndexedDB cache; excluir deps/output |
-| Artifact malicioso | XSS contra editor/usuarios | origen separado, iframe/CSP, cookies separadas, output validation |
-| Static-only vs frameworks full-stack | expectativas erróneas | contrato explícito: SSG sí, SSR/API Node no; Server Actions como backend |
-| Producto Sandbox SDK joven | churn operativo | adapter, versión fijada, integration tests, alternativa gVisor/microVM |
+| Supply chain and npm scripts | arbitrary execution and exfiltration | strong sandbox, no secrets, egress allowlist, lockfile, approved scripts |
+| Cost/latency of `npm ci` | slow and expensive preview | tarball/deps cache, warm runners, artifact cache, optional WebContainer |
+| Dev/deploy divergence | "works in preview" but not when published | same snapshot/BuildSpec; server build always authoritative |
+| Cloudflare/StackBlitz lock-in | migration or pricing | portable `BuildRunner`; optional WebContainer; standard artifact |
+| Unbounded Vite plugins/config | incompatibility/abuse | sandbox; supported presets; clear logs; do not promise every plugin |
+| Browser WebContainer | users blocked by COOP/COEP/cookies/memory | feature detection and remote fallback |
+| `localStorage` | limits/size/corruption for npm projects | versioned source store + IndexedDB cache; exclude deps/output |
+| Malicious artifact | XSS against the editor/users | separate origin, iframe/CSP, separate cookies, output validation |
+| Static-only vs full-stack frameworks | wrong expectations | explicit contract: SSG yes, SSR/Node API no; Server Actions as the backend |
+| Young Sandbox SDK product | operational churn | adapter, pinned version, integration tests, gVisor/microVM alternative |
 
-## Decisión propuesta
+## Proposed decision
 
-Construiría primero **un Build Plane estático y autoritativo**, no un IDE completo. La secuencia correcta es hacer que un Project Vite+TypeScript+npm produzca un artifact seguro, versionado y desplegable; después mejorar la latencia con HMR, WebContainers o sesiones remotas.
+I would first build **a static, authoritative Build Plane**, not a full IDE. The right sequence is to make a Vite+TypeScript+npm Project produce a safe, versioned, deployable artifact, and then improve latency with HMR, WebContainers or remote sessions.
 
-La frontera conceptual queda limpia:
+The conceptual boundary stays clean:
 
 ```text
 Project source + lockfile
-        ↓ build efímero aislado
+        ↓ isolated ephemeral build
 Static Artifact + manifest
-        ↓ referencia inmutable
+        ↓ immutable reference
 Deployment + Kernel capabilities
 ```
 
-Esto permite ofrecer una experiencia frontend muy cercana a Node sin convertir cada mini-app en un servicio Node. Vite sería el preset recomendado; esbuild, un preset pequeño y una herramienta directa; WebContainers, el acelerador de DX; Sandpack, una opción de playground restringido. El servidor sandboxed seguiría siendo la verdad de publicación.
+This makes it possible to offer a frontend experience very close to Node without turning each mini-app into a Node service. Vite would be the recommended preset; esbuild, a small preset and a direct tool; WebContainers, the DX accelerator; Sandpack, a restricted playground option. The sandboxed server would remain the source of truth for publishing.
 
-Mi valoración: es una evolución natural del producto y abre muchísimo el rango de apps que un agente puede generar, pero el valor no está en «meter un compilador». Está en introducir correctamente **snapshot → build aislado → artifact validado → deployment estático**, conservando la separación de seguridad que Littlebox ya tiene.
+My assessment is that this is a natural evolution of the product and widens the range of apps an agent can generate a great deal. Adding a compiler is the small part. The value lies in introducing **snapshot → isolated build → validated artifact → static deployment** correctly, while keeping the security separation Littlebox already has.

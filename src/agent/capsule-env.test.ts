@@ -27,6 +27,74 @@ describe("capsule paths", () => {
     expect(capsuleFileFor("/workspace")).toBeNull();
     expect(capsuleFileFor("")).toBeNull();
   });
+
+  /**
+   * The bug this pins: only containment was checked, so the agent could create
+   * names the project tree refuses and a file nested under an existing file,
+   * which the export then fails to write.
+   */
+  test("refuses names the project tree refuses and files nested under a file", async () => {
+    expect(capsuleFileFor("/workspace/a\u0001b.js")).toBeNull();
+    expect(capsuleFileFor(`/workspace/${"d/".repeat(130)}f.js`)).toBeNull();
+
+    const space = workspace();
+    for (const path of ["/workspace/a\u0001b.js", `/workspace/${"d/".repeat(130)}f.js`]) {
+      expect((await space.env.writeFile(path, "x")).ok).toBe(false);
+    }
+    const nested = await space.env.writeFile("/workspace/app.js/x.js", "x");
+    expect(nested.ok).toBe(false);
+    if (!nested.ok) {
+      expect(nested.error.code).toBe("not_directory");
+      expect(nested.error.message).toContain("/workspace/app.js is a file");
+    }
+    expect((await space.env.appendFile("/workspace/app.js/deeper/x.js", "x")).ok).toBe(false);
+    expect((await space.env.createDir("/workspace/app.js/sub")).ok).toBe(false);
+    expect(Object.keys(space.serialize().files).sort()).toEqual(Object.keys(seed).sort());
+  });
+});
+
+describe("capsule reserved paths", () => {
+  /**
+   * The bug this pins: the agent could write /workspace/schema.ts or
+   * /workspace/schema.ts/x.js, a merged proposal put it in the project, and
+   * the export then used it in place of the real database model. Case variants
+   * such as App.js overwrote the real file on a case-insensitive filesystem.
+   */
+  test("refuses protected paths that are not Capsule files, in any case", async () => {
+    const space = workspace();
+    for (const path of [
+      "/workspace/schema.ts",
+      "/workspace/schema.ts/x.js",
+      "/workspace/SCHEMA.TS",
+      "/workspace/App.js",
+      "/workspace/Index.html",
+      "/workspace/actions.JSON/x.json",
+    ]) {
+      const written = await space.env.writeFile(path, "x");
+      expect({ path, ok: written.ok }).toEqual({ path, ok: false });
+      // actions.JSON/x.json sits under the existing actions.json, so that one is refused as not_directory.
+      if (!written.ok) expect(["permission_denied", "not_directory"]).toContain(written.error.code);
+      expect((await space.env.appendFile(path, "x")).ok).toBe(false);
+      expect((await space.env.createDir(path)).ok).toBe(false);
+    }
+    expect(Object.keys(space.serialize().files).sort()).toEqual(Object.keys(seed).sort());
+    expect(space.changedFiles()).toEqual([]);
+
+    // The five Capsule files and ordinary nested files stay writable.
+    expect((await space.env.writeFile("/workspace/app.js", "x")).ok).toBe(true);
+    expect((await space.env.writeFile("/workspace/src/schema.ts", "x")).ok).toBe(true);
+  });
+
+  test("refuses a new path that differs from an existing one only by case", async () => {
+    const space = createCapsuleWorkspace({ ...seed, "src/Label.js": "l" });
+    const clash = await space.env.writeFile("/workspace/src/label.js", "x");
+    expect(clash.ok).toBe(false);
+    if (!clash.ok) expect(clash.error.message).toContain("/workspace/src/Label.js already exists");
+    expect((await space.env.writeFile("/workspace/SRC", "x")).ok).toBe(false);
+    expect((await space.env.writeFile("/workspace/src/Label.js", "y")).ok).toBe(true);
+    expect(space.files["src/Label.js"]).toBe("y");
+    expect(space.files["src/label.js"]).toBeUndefined();
+  });
 });
 
 describe("capsule filesystem", () => {

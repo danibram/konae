@@ -21,7 +21,11 @@ const MAX_EMAIL_BYTES: usize = 254;
 const PASSWORD_HASH_ITERATIONS: u32 = 600_000;
 const PASSWORD_HASH_BYTES: usize = 32;
 const PASSWORD_SALT_BYTES: usize = 16;
-const DUMMY_PASSWORD_HASH: &str = "pbkdf2-sha256$600000$6c6974746c65626f782d64756d6d792d73616c74$0000000000000000000000000000000000000000000000000000000000000000";
+/// Each identity database may grow to this size. Writes past it fail with
+/// "database or disk is full".
+pub const MAX_IDENTITY_DATABASE_BYTES: u64 = 64 * 1024 * 1024;
+// The salt must be PASSWORD_SALT_BYTES long so unknown emails pay for the full KDF.
+const DUMMY_PASSWORD_HASH: &str = "pbkdf2-sha256$600000$6c6974746c65626f782d64756d6d7921$0000000000000000000000000000000000000000000000000000000000000000";
 
 /// One app's password and session store. The caller must pass that app's own
 /// identity database path and resolve the app before authenticating a cookie.
@@ -111,14 +115,27 @@ impl AuthService {
     }
 
     /// Creates a member account and immediately issues its session.
-    /// Open signup is for the personal local prototype and is not production-ready.
+    /// The caller enforces the app's signup policy before calling this.
+    #[cfg(test)]
     pub fn signup(&self, email: &str, password: &str) -> Result<AuthSession, AuthError> {
-        let email = normalize_email(email)?;
-        validate_password(password)?;
-        let password_hash = hash_password(password)?;
+        let account = NewAccount::prepare(email, password)?;
+        self.create_account(account)
+    }
+
+    /// Checks credentials without revealing whether the email exists.
+    pub fn login(&self, email: &str, password: &str) -> Result<AuthSession, AuthError> {
+        let stored = self.find_login(email, password)?;
+        let user = check_password(password, stored)?;
+        self.start_session(user)
+    }
+
+    /// Stores an account whose password was hashed by `NewAccount::prepare`,
+    /// and issues its first session. The UNIQUE email column decides races
+    /// between two signups for one address.
+    pub fn create_account(&self, account: NewAccount) -> Result<AuthSession, AuthError> {
         let user = AuthUser {
             user_id: Uuid::new_v4().to_string(),
-            name: email.clone(),
+            name: account.email.clone(),
             role: "member".into(),
         };
         let mut connection = self.connection()?;
@@ -127,7 +144,7 @@ impl AuthService {
             .execute(
                 "INSERT OR IGNORE INTO app_users (id, email, password_hash, role, created_at)
              VALUES (?1, ?2, ?3, 'member', ?4)",
-                params![user.user_id, email, password_hash, now_seconds()],
+                params![user.user_id, account.email, account.password_hash, now_seconds()],
             )
             .map_err(AuthError::Storage)?;
         if inserted == 0 {
@@ -138,8 +155,9 @@ impl AuthService {
         Ok(session)
     }
 
-    /// Checks credentials without revealing whether the email exists.
-    pub fn login(&self, email: &str, password: &str) -> Result<AuthSession, AuthError> {
+    /// Reads the stored login for an email. Malformed input reads nothing and
+    /// fails as wrong credentials, so it reveals nothing either.
+    pub fn find_login(&self, email: &str, password: &str) -> Result<Option<StoredLogin>, AuthError> {
         let email = normalize_email(email).map_err(|_| AuthError::InvalidCredentials)?;
         validate_password(password).map_err(|_| AuthError::InvalidCredentials)?;
         let connection = self.connection()?;
@@ -148,19 +166,34 @@ impl AuthService {
             [&email],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
         ).optional().map_err(AuthError::Storage)?;
-        let Some((user_id, email, password_hash, role)) = record else {
-            let _ = verify_password(password, DUMMY_PASSWORD_HASH);
-            return Err(AuthError::InvalidCredentials);
-        };
-        verify_password(password, &password_hash)?;
-        issue_session(
-            &connection,
-            AuthUser {
+        Ok(record.map(|(user_id, email, password_hash, role)| StoredLogin {
+            user: AuthUser {
                 user_id,
                 name: email,
                 role,
             },
-        )
+            password_hash,
+        }))
+    }
+
+    /// Issues a session for a user whose password was checked. Fails as wrong
+    /// credentials if the user was deleted since the check.
+    pub fn start_session(&self, user: AuthUser) -> Result<AuthSession, AuthError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(AuthError::Storage)?;
+        let exists: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM app_users WHERE id = ?1)",
+                [&user.user_id],
+                |row| row.get(0),
+            )
+            .map_err(AuthError::Storage)?;
+        if !exists {
+            return Err(AuthError::InvalidCredentials);
+        }
+        let session = issue_session(&transaction, user)?;
+        transaction.commit().map_err(AuthError::Storage)?;
+        Ok(session)
     }
 
     /// Resolves a token only inside this app's identity database.
@@ -228,8 +261,52 @@ impl AuthService {
         connection
             .execute_batch("PRAGMA foreign_keys = ON;")
             .map_err(AuthError::Storage)?;
+        // SQLite keeps this per connection, so every connection sets it.
+        let page_size: u64 = connection
+            .query_row("PRAGMA page_size", [], |row| row.get(0))
+            .map_err(AuthError::Storage)?;
+        let pages = (MAX_IDENTITY_DATABASE_BYTES / page_size.max(1)).max(1);
+        connection
+            .query_row(&format!("PRAGMA max_page_count = {pages}"), [], |_| Ok(()))
+            .map_err(AuthError::Storage)?;
         Ok(connection)
     }
+}
+
+/// A signup whose input passed validation and whose password is hashed.
+/// Hashing is slow, so callers prepare this before taking any lock.
+pub struct NewAccount {
+    email: String,
+    password_hash: String,
+}
+
+impl NewAccount {
+    pub fn prepare(email: &str, password: &str) -> Result<Self, AuthError> {
+        let email = normalize_email(email)?;
+        validate_password(password)?;
+        Ok(Self {
+            email,
+            password_hash: hash_password(password)?,
+        })
+    }
+}
+
+/// A user record read for a login, before the password check.
+pub struct StoredLogin {
+    user: AuthUser,
+    password_hash: String,
+}
+
+/// Runs the password check. Unknown emails check against a dummy hash, so
+/// they take as long as known ones. This is the slow step; run it without
+/// holding a lock.
+pub fn check_password(password: &str, stored: Option<StoredLogin>) -> Result<AuthUser, AuthError> {
+    let Some(stored) = stored else {
+        let _ = verify_password(password, DUMMY_PASSWORD_HASH);
+        return Err(AuthError::InvalidCredentials);
+    };
+    verify_password(password, &stored.password_hash)?;
+    Ok(stored.user)
 }
 
 fn issue_session(connection: &Connection, user: AuthUser) -> Result<AuthSession, AuthError> {
@@ -252,7 +329,7 @@ fn issue_session(connection: &Connection, user: AuthUser) -> Result<AuthSession,
     })
 }
 
-fn normalize_email(email: &str) -> Result<String, AuthError> {
+pub(crate) fn normalize_email(email: &str) -> Result<String, AuthError> {
     let email = email.trim();
     let Some((local, domain)) = email.split_once('@') else {
         return Err(AuthError::InvalidEmail);
@@ -269,7 +346,7 @@ fn normalize_email(email: &str) -> Result<String, AuthError> {
     Ok(email.to_lowercase())
 }
 
-fn validate_password(password: &str) -> Result<(), AuthError> {
+pub(crate) fn validate_password(password: &str) -> Result<(), AuthError> {
     if !(MIN_PASSWORD_BYTES..=MAX_PASSWORD_BYTES).contains(&password.len()) {
         return Err(AuthError::WeakPassword);
     }
@@ -438,6 +515,38 @@ mod tests {
         assert!(matches!(
             auth.signup("PERSON@example.test", "another correct password"),
             Err(AuthError::EmailTaken)
+        ));
+    }
+
+    #[test]
+    fn identity_databases_are_capped() {
+        let app = TempDb::new();
+        let auth = app.service();
+        let connection = auth.connection().unwrap();
+        let page_size: u64 = connection.query_row("PRAGMA page_size", [], |row| row.get(0)).unwrap();
+        let pages: u64 = connection.query_row("PRAGMA max_page_count", [], |row| row.get(0)).unwrap();
+        assert_eq!(pages * page_size, MAX_IDENTITY_DATABASE_BYTES);
+    }
+
+    #[test]
+    fn a_session_is_refused_for_a_user_deleted_after_the_password_check() {
+        let app = TempDb::new();
+        let auth = app.service();
+        auth.signup("gone@example.test", "correct horse battery").unwrap();
+        let stored = auth.find_login("gone@example.test", "correct horse battery").unwrap();
+        let user = check_password("correct horse battery", stored).unwrap();
+        auth.connection().unwrap().execute("DELETE FROM app_users", []).unwrap();
+        assert!(matches!(auth.start_session(user), Err(AuthError::InvalidCredentials)));
+        assert!(matches!(check_password("correct horse battery", None), Err(AuthError::InvalidCredentials)));
+    }
+
+    #[test]
+    fn dummy_hash_runs_the_full_kdf() {
+        // PasswordHash would mean verify_password rejected the encoding before
+        // deriving, which makes unknown emails answer faster than known ones.
+        assert!(matches!(
+            verify_password("correct horse battery", DUMMY_PASSWORD_HASH),
+            Err(AuthError::InvalidCredentials)
         ));
     }
 }

@@ -1,17 +1,15 @@
 import { expect, test } from "playwright/test";
 
 test.beforeEach(async ({ page }) => {
+  const response = await page.request.post("/_littlebox/owner/signup", { data: { email: `owner-${crypto.randomUUID()}@example.test`, password: "Owner-test-password-2026", setupKey: "local-development-key" } });
+  expect(response.ok()).toBe(true);
   await page.addInitScript(() => localStorage.clear());
 });
 
 test("builds a multi-file app in the browser, deploys it to MinIO, and persists its data", async ({ page }) => {
-  const storage = await page.request.post("/_littlebox/admin/storage/test", {
-    headers: { "x-littlebox-admin-key": "local-development-key" },
-  });
+  const storage = await page.request.post("/mcp", { data: { jsonrpc: "2.0", id: "storage", method: "tools/call", params: { name: "storage_test", arguments: {} } } });
   expect(storage.ok()).toBe(true);
-  await expect(storage.json()).resolves.toMatchObject({
-    result: { ok: true, adapter: "s3-compatible", bucket: "littlebox-apps" },
-  });
+  expect((await storage.json()).result.structuredContent.result).toMatchObject({ ok: true, adapter: "s3-compatible", bucket: "littlebox-apps" });
 
   await page.goto("/projects");
 
@@ -35,7 +33,7 @@ test("builds a multi-file app in the browser, deploys it to MinIO, and persists 
   const appSource = await appEditor.inputValue();
   await appEditor.fill(
     `import { emptyLabel } from './src/features/empty-label.js';\n${appSource.replace(
-      "'<div class=\"empty\">Nothing here. Lovely.</div>'",
+      "'<div class=\"empty\">Nothing here yet. Anyone with this link sees the same list.</div>'",
       "'<div class=\"empty\">' + emptyLabel + '</div>'",
     )}`,
   );
@@ -51,6 +49,7 @@ test("builds a multi-file app in the browser, deploys it to MinIO, and persists 
   const deploymentUrl = await publishedUrl.getAttribute("href");
   expect(deploymentUrl).toMatch(/^http:\/\/minio-tasks-[a-f0-9]{6}\.localhost:8080$/);
 
+  // The tasks starter declares anonymous actions, so a public app works without signing in.
   await page.goto(deploymentUrl!);
   await expect(page.getByText("No tasks stored in MinIO yet.")).toBeVisible();
   await page.getByPlaceholder(/Add one small thing/).fill("Ship the S3 build");

@@ -386,6 +386,23 @@ describe("littlebox agent", () => {
   });
 
   /**
+   * The bug this pins: only the five original Capsule files were compared, so a
+   * hand edit to a nested source file looked like no change and the model kept
+   * working from its stale copy.
+   */
+  test("a nested source file changed outside the agent also re-seeds the capsule", async () => {
+    const { agent, harness } = agentFor([call(cssEdit), say("Hecho."), say("Y esto.")]);
+
+    await agent.send("ponlo azul");
+    const proposal = agent.proposal();
+    agent.reseed({ ...proposal!.files });
+    agent.reseed({ ...proposal!.files, "src/lib/helper.ts": "export const byHand = true;" });
+
+    await agent.send("y ahora otra cosa");
+    expect(harness.requests[harness.requests.length - 1].lastMessage).toContain("export const byHand = true;");
+  });
+
+  /**
    * The bug this pins: `reseed` moved the workspace but not the session's copy of
    * the Project, so a discard restored the pre-Apply Capsule and the next run
    * proposed the old file back over the applied one — with a passing gate.

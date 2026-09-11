@@ -31,6 +31,7 @@ export type PanelRender = {
 
 type Props = {
   layout: LayoutState;
+  compact?: boolean;
   onLayoutChange: (layout: LayoutState) => void;
   panels: PanelRender[];
 };
@@ -57,7 +58,7 @@ export function focusPanelTab(panel: PanelId): void {
  * joins it, onto its tab strip places it at that position, and onto an edge
  * splits. The shell never looks inside a panel.
  */
-export function WorkbenchLayout({ layout, onLayoutChange, panels }: Props) {
+export function WorkbenchLayout({ layout, compact = false, onLayoutChange, panels }: Props) {
   const [dragging, setDragging] = useState<PanelId | null>(null);
   const [target, setTarget] = useState<DropTarget | null>(null);
   const byId = new Map(panels.map((panel) => [panel.id, panel]));
@@ -121,6 +122,7 @@ export function WorkbenchLayout({ layout, onLayoutChange, panels }: Props) {
         return;
       }
       if (event.key === "Delete" || event.key === "Backspace") {
+        if (compact) return;
         event.preventDefault();
         onLayoutChange(closePanel(layout, members[index]));
         // Focus cannot stay on the tab that just went away.
@@ -168,7 +170,7 @@ export function WorkbenchLayout({ layout, onLayoutChange, panels }: Props) {
                 role="presentation"
                 data-panel={panel}
                 className={`tab tab-${panel} ${isActive ? "active" : ""} ${dragging === panel ? "is-dragging" : ""}`}
-                draggable
+                draggable={!compact}
                 onDragStart={(event) => {
                   event.dataTransfer.effectAllowed = "move";
                   // Firefox refuses to start a drag without payload.

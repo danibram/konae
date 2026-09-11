@@ -12,7 +12,11 @@ export async function buildProjectInBrowser(project: MiniAppProject): Promise<Bu
 }
 
 export async function compileProjectInBrowser(project: MiniAppProject): Promise<{ body: string; styles: string; script: string }> {
-  initialized ??= esbuild.initialize({ wasmURL: wasmUrl, worker: true });
+  // A failed start (a wasm fetch that dropped, say) is not cached, or every later build would fail too.
+  initialized ??= esbuild.initialize({ wasmURL: wasmUrl, worker: true }).catch((error) => {
+    initialized = undefined;
+    throw error;
+  });
   await initialized;
   const entrypoint = project.files["src/main.ts"] !== undefined ? "src/main.ts" : "app.js";
   const result = await esbuild.build({

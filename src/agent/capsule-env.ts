@@ -1,6 +1,7 @@
 import { ExecutionError, FileError, err, ok } from "@earendil-works/pi-agent-core";
 import type { FileInfo, FileKind, ShellExecOptions } from "@earendil-works/pi-agent-core";
 import type { ProjectFile } from "../lib/types";
+import { directoriesForFiles, existingDirectory, existingFile, fileAncestor, normalizeProjectPath, reservedPathConflict } from "../lib/project-files";
 import type {
   CapsuleFiles,
   CapsuleMutation,
@@ -27,12 +28,17 @@ export function capsulePathFor(file: ProjectFile): string {
   return `${capsuleRoot}/${file}`;
 }
 
-/** Resolve an agent-supplied path to a safe file inside the Capsule, or null. */
+/**
+ * Resolve an agent-supplied path to a safe file inside the Capsule, or null.
+ * The name must also be one the project tree accepts (no control characters,
+ * at most 240 characters), or the agent could write a file the editor, the
+ * build and the export all refuse.
+ */
 export function capsuleFileFor(path: string): ProjectFile | null {
   const normalized = normalizePath(path);
   if (!normalized || !normalized.startsWith(`${capsuleRoot}/`)) return null;
   const name = normalized.slice(capsuleRoot.length + 1);
-  return name && !name.endsWith("/") ? name : null;
+  return name && normalizeProjectPath(name) === name ? name : null;
 }
 
 export function createCapsuleWorkspace(seed: CapsuleFiles): CapsuleWorkspace {
@@ -126,6 +132,32 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
     const unsupported = <T>(message: string, path?: string) =>
       err<T, FileError>(new FileError("not_supported", message, path));
 
+    /**
+     * Why the agent may not write `file`, or null. The protected project paths
+     * other than the five Capsule files (schema.ts, anything inside a protected
+     * file, and case variants such as App.js) are refused: a merged proposal
+     * lands them in the project, and the export would then write them over the
+     * real files. A new path that differs from an existing one only by case is
+     * refused too, because a case-insensitive filesystem stores both as one.
+     */
+    const refusedWrite = <T>(file: ProjectFile) => {
+      const path = capsulePathFor(file);
+      const blocking = fileAncestor(workspace.current, file);
+      if (blocking) {
+        return err<T, FileError>(new FileError("not_directory", `${capsulePathFor(blocking)} is a file, so it cannot contain ${path}.`, path));
+      }
+      const reserved = capsuleFileNames.includes(file) ? null : reservedPathConflict(file);
+      if (reserved) {
+        return err<T, FileError>(new FileError("permission_denied", `${path} is reserved: ${capsulePathFor(reserved)} is a protected project file. Choose another name.`, path));
+      }
+      if (typeof workspace.current[file] === "string") return null;
+      const taken = existingFile(workspace.current, file) ?? existingDirectory(directoriesForFiles(workspace.current), file);
+      if (taken) {
+        return err<T, FileError>(new FileError("permission_denied", `${capsulePathFor(taken)} already exists and differs from ${path} only by case. Use ${capsulePathFor(taken)} or another name.`, path));
+      }
+      return null;
+    };
+
     /** Locate a path that must already exist. The error branch is assignable to any `Result`. */
     const locateFile = (path: string, signal?: AbortSignal): Result<ProjectFile, FileError> => {
       const stop = stopped<ProjectFile>(signal);
@@ -188,7 +220,13 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
         if (stop) return stop;
         const located = workspace.locate(path);
         if (!located) return invalid<void>(path);
-        if (!located.file) return unsupported<void>(`${located.path} is a directory.`, located.path);
+        if (!located.file) {
+          return located.kind === "directory"
+            ? unsupported<void>(`${located.path} is a directory.`, located.path)
+            : unsupported<void>(`${located.path} is not a usable file path inside ${capsuleRoot}.`, located.path);
+        }
+        const blocked = refusedWrite<void>(located.file);
+        if (blocked) return blocked;
         workspace.write(located.file, asText(content));
         return ok<void, FileError>(undefined);
       },
@@ -198,7 +236,13 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
         if (stop) return stop;
         const located = workspace.locate(path);
         if (!located) return invalid<void>(path);
-        if (!located.file) return unsupported<void>(`${located.path} is a directory.`, located.path);
+        if (!located.file) {
+          return located.kind === "directory"
+            ? unsupported<void>(`${located.path} is a directory.`, located.path)
+            : unsupported<void>(`${located.path} is not a usable file path inside ${capsuleRoot}.`, located.path);
+        }
+        const blocked = refusedWrite<void>(located.file);
+        if (blocked) return blocked;
         workspace.write(located.file, (workspace.current[located.file] ?? "") + asText(content));
         return ok<void, FileError>(undefined);
       },
@@ -273,9 +317,13 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
         const located = workspace.locate(path);
         if (!located) return invalid<void>(path);
         if (located.kind === "directory") return ok<void, FileError>(undefined);
-        return located.path.startsWith(`${capsuleRoot}/`)
-          ? ok<void, FileError>(undefined)
-          : unsupported<void>("Directories must stay inside /workspace.", located.path);
+        if (located.kind === "file") {
+          return err<void, FileError>(new FileError("not_directory", `${located.path} is a file.`, located.path));
+        }
+        if (!located.path.startsWith(`${capsuleRoot}/`)) {
+          return unsupported<void>("Directories must stay inside /workspace.", located.path);
+        }
+        return located.file ? refusedWrite<void>(located.file) ?? ok<void, FileError>(undefined) : invalid<void>(path);
       },
 
       async remove(path, options) {

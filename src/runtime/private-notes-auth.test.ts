@@ -64,7 +64,7 @@ describe("private notes preview auth", () => {
     await host.handle("auth.signOut", {});
     unsubscribe();
 
-    expect(observed).toEqual(["Local guest", "Alice", "Local guest"]);
+    expect(observed).toEqual(["Anonymous", "Alice", "Anonymous"]);
     expect(host.getPreviewActor()).toBe("guest");
   });
 });

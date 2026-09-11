@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "actions": {
+    "items.list": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT id,title,user_id,created_at FROM items ORDER BY id DESC LIMIT 50",
+      "bindings": []
+    },
+    "items.add": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "statement": "INSERT INTO items(title,user_id,created_at) VALUES(?1,'anon',?2)",
+      "bindings": [
+        {
+          "source": "input",
+          "key": "title",
+          "type": "string",
+          "maxLength": 200
+        },
+        {
+          "source": "kernel",
+          "field": "now"
+        }
+      ]
+    },
+    "items.mine": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT id,title FROM items WHERE user_id=?1 LIMIT 50",
+      "bindings": [
+        {
+          "source": "actor",
+          "field": "id"
+        }
+      ]
+    },
+    "items.optional": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT id,title FROM items WHERE (?1 IS NULL OR title LIKE '%' || ?1 || '%') LIMIT 20",
+      "bindings": [
+        {
+          "source": "input",
+          "key": "q",
+          "type": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "items.jsonin": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT id,title FROM items WHERE id IN (SELECT value FROM json_each(?1)) LIMIT 100",
+      "bindings": [
+        {
+          "source": "input",
+          "key": "ids",
+          "type": "string"
+        }
+      ]
+    }
+  }
+}

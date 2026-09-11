@@ -3,8 +3,21 @@
    nothing outside this file styles what this panel renders. Only .spin and the
    shared custom properties come from the shell. */
 
-.messages { padding: 10px 12px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
-.message { display: flex; gap: 7px; max-width: 88%; font-size: 10px; line-height: 1.45; }
+.messages {
+  padding: 10px 12px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(100%, 42rem);
+  margin: 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  justify-content: flex-start;
+}
+.group-page > .prompt-box.prompt-box { flex: 0 0 auto; min-height: 0; overflow: visible; }
+.group-page > .messages.agent-thread { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.message { display: flex; gap: 7px; max-width: 88%; font-size: 13px; line-height: 1.45; }
 .message p { margin: 0; padding: 7px 9px; background: #e7e4da; border: 1px solid #cfcbc0; }
 .message.user { align-self: flex-end; }
 .message.user p { background: var(--ink); color: white; border-color: var(--ink); }
@@ -15,18 +28,18 @@
 .thinking i:nth-child(2) { animation-delay: .15s; }
 .thinking i:nth-child(3) { animation-delay: .3s; }
 
-.prompt-box { margin: 0 10px 10px; border: 1px solid var(--ink); background: white; box-shadow: 3px 3px 0 var(--ink); }
-.prompt-box textarea { width: 100%; border: 0; resize: none; padding: 9px 10px 3px; outline: 0; color: var(--ink); font-size: 10px; }
-.prompt-box > div { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 6px 9px; color: var(--muted); font-size: 8px; }
+.prompt-box { margin: 14px 14px 0; border: 1px solid var(--ink); background: white; box-shadow: 3px 3px 0 var(--ink); }
+.prompt-box textarea { width: 100%; border: 0; resize: none; padding: 9px 10px 3px; outline: 0; color: var(--ink); font-size: 13px; }
+.prompt-box > div { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 6px 9px; color: var(--muted); font-size: 11px; }
 
 .agent-thread-empty { padding: 12px; border: 1px dashed var(--line); background: #ede9df; }
-.agent-thread-empty p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.55; }
+.agent-thread-empty p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .agent-thread-empty p + p { margin-top: 7px; }
 
 .agent-caret { display: inline-block; width: 6px; height: 11px; margin-left: 2px; translate: 0 1px; background: var(--orange); animation: agent-blink .9s steps(2) infinite; }
 
 .agent-tool-strip { display: flex; flex-wrap: wrap; gap: 5px; }
-.agent-tool-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 4px 7px; border: 1px solid #c3c0b6; background: #f6f3ea; font: 7px "JetBrains Mono Variable"; }
+.agent-tool-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 4px 7px; border: 1px solid #c3c0b6; background: #f6f3ea; font: 10px "JetBrains Mono Variable"; }
 .agent-tool-chip strong { font-weight: 700; }
 .agent-tool-chip small { overflow: hidden; max-width: 150px; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .agent-tool-chip.running { border-color: var(--line); background: #eeebe1; }
@@ -34,7 +47,7 @@
 .agent-tool-chip.ok > svg:last-child { color: #55801a; }
 .agent-tool-chip.fail { border-color: #b04c39; background: #f5d9d0; color: #7f3325; }
 
-.agent-error { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 9px 10px; border-left: 3px solid #b53824; background: #f0d8d0; color: #6f2418; font-size: 9px; line-height: 1.45; }
+.agent-error { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 9px 10px; border-left: 3px solid #b53824; background: #f0d8d0; color: #6f2418; font-size: 12px; line-height: 1.45; }
 .agent-error span { overflow-wrap: anywhere; }
 .agent-error button { border: 0; background: transparent; color: inherit; display: grid; cursor: pointer; }
 
@@ -42,18 +55,18 @@
 .agent-proposal.validated { background: #e7f0d1; }
 .agent-proposal.blocked { background: #f2ddd6; }
 .agent-proposal-files { display: flex; flex-wrap: wrap; gap: 5px; }
-.agent-file-chip { padding: 4px 6px; border: 1px solid var(--ink); background: #fffdf7; font: 7px "JetBrains Mono Variable"; }
-.agent-proposal-state { grid-column: 1; display: flex; align-items: center; gap: 6px; margin: 0; overflow-wrap: anywhere; color: #4a4c44; font-size: 9px; line-height: 1.4; }
-.agent-proposal-state em { padding: 2px 4px; border: 1px solid currentColor; font: normal 7px "JetBrains Mono Variable"; letter-spacing: .08em; }
+.agent-file-chip { padding: 4px 6px; border: 1px solid var(--ink); background: #fffdf7; font: 10px "JetBrains Mono Variable"; }
+.agent-proposal-state { grid-column: 1; display: flex; align-items: center; gap: 6px; margin: 0; overflow-wrap: anywhere; color: #4a4c44; font-size: 12px; line-height: 1.4; }
+.agent-proposal-state em { padding: 2px 4px; border: 1px solid currentColor; font: normal 10px "JetBrains Mono Variable"; letter-spacing: .08em; }
 .agent-proposal.blocked .agent-proposal-state { color: #7f3325; }
 .agent-proposal.validated .agent-proposal-state { color: #4a6a18; }
 .agent-proposal-actions { grid-row: 1 / span 2; grid-column: 2; display: flex; align-items: center; gap: 6px; }
-.agent-proposal-actions button { height: 29px; display: flex; align-items: center; gap: 5px; padding: 0 10px; border: 1px solid var(--ink); background: transparent; font-size: 9px; font-weight: 750; cursor: pointer; }
+.agent-proposal-actions button { height: 29px; display: flex; align-items: center; gap: 5px; padding: 0 10px; border: 1px solid var(--ink); background: transparent; font-size: 12px; font-weight: 750; cursor: pointer; }
 .agent-discard { white-space: nowrap; color: #7f3325; border-color: #7f3325; }
-.agent-apply { background: var(--acid); box-shadow: 3px 3px 0 var(--ink); }
+.agent-apply, .agent-thread-empty .agent-apply { border: 1px solid var(--ink); background: var(--acid); color: var(--ink); box-shadow: 3px 3px 0 var(--ink); min-height: 36px; padding: 0 14px; }
 .agent-apply:disabled { opacity: .42; box-shadow: none; cursor: not-allowed; }
 
-.agent-stop { height: 27px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--ink); background: #f2efe5; font-size: 8px; font-weight: 750; cursor: pointer; }
+.agent-stop { height: 27px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--ink); background: #f2efe5; font-size: 11px; font-weight: 750; cursor: pointer; }
 .agent-stop:hover { background: var(--ink); color: #f2efe5; }
 
 @keyframes agent-blink { to { opacity: 0; } }
@@ -62,8 +75,13 @@
 /* Every control in the composer names itself. A rule for "any button in the
    prompt box" would out-specify each of them and paint them all as the send
    square — which is exactly what used to happen to the Stop button. */
-.agent-send { width: 27px; height: 27px; display: grid; place-items: center; border: 0; background: var(--orange); color: white; cursor: pointer; }
-.agent-send:disabled { opacity: .35; }
+.agent-send { width: 27px; height: 27px; display: grid; place-items: center; border: 1px solid var(--ink); background: var(--acid); color: var(--ink); box-shadow: 2px 2px 0 var(--ink); cursor: pointer; }
+.agent-send:disabled {
+  opacity: 0.4;
+  background: #f4f2ea;
+  box-shadow: none;
+  cursor: not-allowed;
+}
 
 .agent-model-chip {
   height: 22px;
@@ -75,9 +93,121 @@
   border: 1px solid var(--line);
   background: #f5f2e9;
   color: var(--muted);
-  font: 7px "JetBrains Mono Variable", monospace;
+  font: 10px "JetBrains Mono Variable", monospace;
   letter-spacing: .06em;
   cursor: pointer;
 }
 .agent-model-chip:hover { border-color: var(--ink); color: var(--ink); }
+.agent-model-chip.is-connect { height: 34px; padding: 0 12px; background: #c8f34a; color: #171910; border-color: #171910; box-shadow: 2px 2px 0 #171910; font: 700 13px "Satoshi Variable", sans-serif; letter-spacing: 0; }
+.prompt-box:has(.is-connect) .agent-send { background: #f4f2ea; box-shadow: none; }
 .agent-model-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.agent-thread-empty {
+  border: 1px solid var(--line);
+  margin: 12px;
+  padding: 20px 16px;
+  background: var(--paper);
+}
+.agent-empty-mark { display: grid; place-items: center; width: 40px; height: 40px; margin-bottom: 18px; background: var(--orange); color: var(--ink); border: 1px solid var(--ink); }
+.agent-thread-empty h2 { margin: 0 0 10px; font-family: var(--ds-font, sans-serif); font-style: normal; font-size: 22px; line-height: 1.2; font-weight: 650; letter-spacing: -.03em; color: var(--ink); overflow-wrap: anywhere; }
+.agent-thread-empty p { max-width: 43ch; font-size: 13px; line-height: 1.6; }
+.agent-connect {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  margin: 20px 0 16px;
+  padding: 0 12px;
+  border: 1px solid var(--ink);
+  background: var(--acid);
+  color: #171910;
+  box-shadow: 2px 2px 0 var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.agent-connect > svg:last-child { rotate: 45deg; margin-left: 12px; }
+.agent-thread-empty .agent-empty-note { font-size: 12px; }
+.prompt-box { margin: 14px 14px 0; }
+.prompt-box textarea { min-height: 60px; padding: 12px 12px 4px; font-size: 13px; }
+.prompt-box:focus-within { outline: 2px solid var(--acid); outline-offset: 2px; }
+.prompt-box > div { padding: 6px 10px 10px; }
+.agent-model-chip { height: 28px; font-size: 10px; }
+.agent-send { width: 34px; height: 34px; }
+.message { font-size: 13px; line-height: 1.6; }
+.message p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-avatar { width: 28px; height: 28px; flex-basis: 28px; }
+.agent-proposal { gap: 10px; }
+.agent-proposal-actions { flex-wrap: wrap; }
+
+.agent-thread-empty { text-align: left; align-items: stretch; }
+.agent-examples-label {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font: 700 11px "JetBrains Mono Variable", monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.agent-examples { display: grid; gap: 8px; margin-top: 8px; justify-items: stretch; }
+.agent-examples button { width: 100%; padding: 10px 12px; border: 1px solid #171910; background: #fffdf7; color: #171910; text-align: left; box-shadow: 3px 3px 0 #171910; font: 650 14px/1.35 "Satoshi Variable", sans-serif; cursor: pointer; }
+.group-page > .agent-connect-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  overflow: auto;
+}
+.agent-connect-step {
+  width: min(28rem, 100%);
+  margin: 24px 16px;
+  padding: 28px 20px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  box-shadow: 4px 4px 0 var(--ink);
+}
+.agent-connect-step .agent-connect {
+  width: 100%;
+  justify-content: center;
+  margin: 20px 0 12px;
+  min-height: 44px;
+  font: 700 15px "Satoshi Variable", sans-serif;
+}
+.gate-refuse-example {
+  margin-top: 20px;
+  padding: 12px 14px;
+  border-left: 3px solid #ad4937;
+  background: #f0d8d0;
+  color: #6f2418;
+  text-align: left;
+}
+.gate-refuse-example strong {
+  display: block;
+  margin-bottom: 4px;
+  font: 750 12px "Satoshi Variable", sans-serif;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.gate-refuse-example p {
+  margin: 0;
+  max-width: none;
+  color: inherit;
+  font: 500 13px/1.45 "Satoshi Variable", sans-serif;
+}
+@media (max-width: 900px) {
+  .agent-thread-empty { max-width: 560px; padding: 32px 16px; margin: 0 auto; }
+  .agent-connect-step { max-width: none; margin: 16px; }
+  .agent-thread-empty h2 { font-size: 22px; }
+  .agent-thread-empty p { font-size: 14px; }
+}
+@media (prefers-color-scheme: dark) {
+  .agent-thread-empty, .agent-connect-step { background: #1c1f28; border-color: #f4f2ea; box-shadow: 4px 4px 0 #0a0c10; }
+  .agent-thread-empty h2, .agent-thread-empty p, .agent-examples-label { color: #f4f2ea; }
+  .agent-connect { color: #171910; background: var(--acid); border-color: #171910; }
+  .gate-refuse-example { background: #3a221c; color: #f5d9d0; border-left-color: #ad4937; }
+  .agent-examples button { background: #1c1f28; color: #f4f2ea; border-color: #f4f2ea; box-shadow: 3px 3px 0 #f4f2ea; }
+  .prompt-box { background: #14161c; border-color: #f4f2ea; box-shadow: 3px 3px 0 #0a0c10; }
+  .prompt-box textarea { background: transparent; color: #f4f2ea; }
+  .prompt-box textarea::placeholder { color: #c7cbbd; }
+  .prompt-box > div { color: #c7cbbd; }
+}

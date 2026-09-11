@@ -23,10 +23,16 @@ describe("system prompt", () => {
       "validate_capsule",
       "At most 50 actions",
       '"source": "actor"',
+      '"nullable": true',
+      "mutation statements using RETURNING fail validation",
+      "top-level LIMIT",
+      "name each new action as personal or shared",
     ]) {
       expect(prompt).toContain(fragment);
     }
     expect(prompt).toContain("public deployment");
+    // The Kernel refuses to deploy "granted", so the prompt must not offer it.
+    expect(prompt).not.toContain('"granted"');
   });
 });
 

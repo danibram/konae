@@ -1,0 +1,5 @@
+{"version":1,"actions":{
+ "incidents.recent":{"kind":"query","access":"anonymous","statement":"SELECT id, title, body, started_at, resolved_at FROM incidents ORDER BY started_at DESC LIMIT 50","bindings":[]},
+ "incidents.since":{"kind":"query","access":"anonymous","statement":"SELECT id, title, body, started_at, resolved_at FROM incidents WHERE started_at > ?1 ORDER BY started_at DESC LIMIT 50","bindings":[{"source":"input","key":"since","type":"number"}]},
+ "pings.receive":{"kind":"mutation","access":"anonymous","statement":"INSERT INTO pings(source, payload, received_at) VALUES(?1, ?2, ?3)","bindings":[{"source":"input","key":"source","type":"string","maxLength":80},{"source":"input","key":"payload","type":"string","maxLength":4000},{"source":"kernel","field":"now"}]}
+}}

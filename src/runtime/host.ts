@@ -17,6 +17,8 @@ export type StoredFile = {
   size: number;
   url: string;
   createdAt: number;
+  visibility?: "private" | "public";
+  ownerId?: string;
 };
 
 /** A table as the studio sidebar knows it: name, shape and size — never contents. */
@@ -110,7 +112,7 @@ function base64ToBytes(value: string): Uint8Array {
 }
 
 export type PreviewFailure = {
-  kind: "error" | "unhandledrejection";
+  kind: "error" | "unhandledrejection" | "actions" | "schema";
   message: string;
   stack: string;
   count: number;
@@ -118,31 +120,111 @@ export type PreviewFailure = {
 
 const previewErrorLimit = 20;
 
+/** Why the preview is not running the files as written. Null when it is. */
+export type RuntimeDiagnostics = {
+  actionsError: string | null;
+  schemaError: string | null;
+};
+
+const emptyActionProgram: ServerActionProgram = { version: 1, actions: {} };
+
 export class MiniAppRuntimeHost {
   private previewActor: PreviewActor = "guest";
   private readonly sessionListeners = new Set<(session: RuntimeSession) => void>();
   private previewFailures: PreviewFailure[] = [];
+  private readonly diagnosticListeners = new Set<(diagnostics: RuntimeDiagnostics) => void>();
   private dbPromise: Promise<Database>;
-  private schema: string;
-  private actionProgram: ServerActionProgram;
+  /** The schema.sql the editor holds now, whether or not it ran. */
+  private requestedSchema: string;
+  /** The last schema.sql that ran without error. Only this one makes setSchema a no-op. */
+  private appliedSchema: string | null = null;
+  private schemaFailure: string | null = null;
+  private actionProgram: ServerActionProgram = emptyActionProgram;
+  private actionsFailure: string | null = null;
 
+  /**
+   * Never throws on bad Capsule files: the host is built during render, and a
+   * throw there would take the whole editor down with it, on every reload. A
+   * broken actions.json or schema.sql is reported through `diagnostics()`.
+   */
   constructor(private readonly appId: string, schema: string, actions: string) {
-    this.schema = schema;
-    this.actionProgram = parseServerActionSource(actions);
+    this.requestedSchema = schema;
+    this.setActions(actions);
     this.dbPromise = this.openDatabase();
   }
 
-  setSchema(schema: string) {
-    if (schema === this.schema) return;
-    this.schema = schema;
-    void this.dbPromise.then((db) => {
-      db.run(schema);
-      this.persist(db);
-    });
+  /** Resolves once the schema has run or its failure is recorded. Never rejects. */
+  setSchema(schema: string): Promise<void> {
+    if (schema === this.requestedSchema && schema === this.appliedSchema) return Promise.resolve();
+    this.requestedSchema = schema;
+    return this.dbPromise.then(
+      (db) => this.applySchema(db, schema),
+      (error) => this.recordSchemaFailure(schema, error),
+    );
   }
 
+  /**
+   * Keeps the last program that parsed when the new source does not, so the
+   * preview stays usable while the owner or the agent fixes the file.
+   */
   setActions(actions: string) {
-    this.actionProgram = parseServerActionSource(actions);
+    try {
+      this.actionProgram = parseServerActionSource(actions);
+      this.setDiagnostics({ actionsError: null });
+    } catch (error) {
+      this.setDiagnostics({ actionsError: describeError(error) });
+    }
+  }
+
+  get actionsError(): string | null {
+    return this.actionsFailure;
+  }
+
+  get schemaError(): string | null {
+    return this.schemaFailure;
+  }
+
+  diagnostics(): RuntimeDiagnostics {
+    return { actionsError: this.actionsFailure, schemaError: this.schemaFailure };
+  }
+
+  subscribeDiagnostics(listener: (diagnostics: RuntimeDiagnostics) => void) {
+    this.diagnosticListeners.add(listener);
+    listener(this.diagnostics());
+    return () => {
+      this.diagnosticListeners.delete(listener);
+    };
+  }
+
+  private setDiagnostics(change: Partial<RuntimeDiagnostics>) {
+    const actionsError = change.actionsError === undefined ? this.actionsFailure : change.actionsError;
+    const schemaError = change.schemaError === undefined ? this.schemaFailure : change.schemaError;
+    if (actionsError === this.actionsFailure && schemaError === this.schemaFailure) return;
+    this.actionsFailure = actionsError;
+    this.schemaFailure = schemaError;
+    const diagnostics = this.diagnostics();
+    for (const listener of this.diagnosticListeners) listener(diagnostics);
+  }
+
+  private applySchema(db: Database, schema: string) {
+    try {
+      db.run(schema);
+    } catch (error) {
+      this.recordSchemaFailure(schema, error);
+      return;
+    }
+    this.appliedSchema = schema;
+    if (schema === this.requestedSchema) this.setDiagnostics({ schemaError: null });
+    try {
+      this.persist(db);
+    } catch {
+      // The schema only adds structure, and it runs again on the next open.
+    }
+  }
+
+  private recordSchemaFailure(schema: string, error: unknown) {
+    // A newer schema may already be on its way; its own result is the one to show.
+    if (schema === this.requestedSchema) this.setDiagnostics({ schemaError: `schema.sql failed: ${describeError(error)}` });
   }
 
   /**
@@ -166,7 +248,7 @@ export class MiniAppRuntimeHost {
       case "files.upload":
         return this.upload(payload);
       case "files.list":
-        return this.readFiles();
+        return this.visibleFiles();
       case "runtime.ready":
         return { ready: true };
       case "preview.error":
@@ -275,8 +357,22 @@ export class MiniAppRuntimeHost {
     return { recorded: true };
   }
 
+  /**
+   * What the running preview threw, led by the Capsule files the host could not
+   * load. Those come from `diagnostics()`, not the failure list, so a reconnect
+   * clearing the list cannot hide that actions.json or schema.sql is broken.
+   */
   previewErrors(): PreviewFailure[] {
-    return this.previewFailures.map((failure) => ({ ...failure }));
+    const fileFailures: PreviewFailure[] = [];
+    if (this.actionsFailure) {
+      // After a reload with a broken file there was never a valid program to fall back on.
+      const fallback = this.actionProgram === emptyActionProgram
+        ? "so the preview has no server actions until it is fixed"
+        : "so the preview still runs the last valid one";
+      fileFailures.push({ kind: "actions", message: `actions.json is invalid, ${fallback}: ${this.actionsFailure}`, stack: "", count: 1 });
+    }
+    if (this.schemaFailure) fileFailures.push({ kind: "schema", message: this.schemaFailure, stack: "", count: 1 });
+    return [...fileFailures, ...this.previewFailures.map((failure) => ({ ...failure }))];
   }
 
   /** Called when a fresh document is about to run, so stale failures never mislead. */
@@ -314,7 +410,7 @@ export class MiniAppRuntimeHost {
       Object.fromEntries(columns.map((column, index) => [column, values[index]])),
     );
     const changes = db.getRowsModified();
-    this.persist(db);
+    await this.persistOrRevert(db);
 
     return {
       columns,
@@ -365,7 +461,7 @@ export class MiniAppRuntimeHost {
       `UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(columnName)} = ? WHERE rowid = ?`,
       [value, rowId],
     );
-    this.persist(db);
+    await this.persistOrRevert(db);
   }
 
   async insertRow(tableName: string, values: Record<string, SqlValue>) {
@@ -381,14 +477,14 @@ export class MiniAppRuntimeHost {
         names.map((name) => values[name] ?? null),
       );
     }
-    this.persist(db);
+    await this.persistOrRevert(db);
   }
 
   async deleteRow(tableName: string, rowId: SqlValue) {
     const db = await this.dbPromise;
     this.describeTable(db, tableName);
     db.run(`DELETE FROM ${quoteIdentifier(tableName)} WHERE rowid = ?`, [rowId]);
-    this.persist(db);
+    await this.persistOrRevert(db);
   }
 
   getFiles(): StoredFile[] {
@@ -423,20 +519,27 @@ export class MiniAppRuntimeHost {
     this.dbPromise = this.openDatabase(true);
   }
 
+  /** Resolves with a usable database even when schema.sql fails; the failure goes to `diagnostics()`. */
   private async openDatabase(ignoreStored = false): Promise<Database> {
     const SQL = await loadSqlJs();
     const stored = ignoreStored ? null : localStorage.getItem(this.databaseKey);
     const db = stored ? new SQL.Database(base64ToBytes(stored)) : new SQL.Database();
-    db.run(this.schema);
-    this.persist(db);
+    this.appliedSchema = null;
+    this.applySchema(db, this.requestedSchema);
     return db;
   }
 
+  /**
+   * The signed-out session has the Kernel's shape, so an app that checks it
+   * behaves the same in the preview and once published. The "guest" actor is
+   * the editor's name for that state and never reaches the app.
+   */
   private getRuntimeSession(): RuntimeSession {
+    if (this.previewActor === "guest") return { userId: "anonymous", name: "Anonymous", role: "anonymous" };
     return {
       userId: `${this.previewActor}_${this.appId}`,
-      name: this.previewActor === "guest" ? "Local guest" : this.previewActor === "alice" ? "Alice" : "Bob",
-      role: this.previewActor === "guest" ? "guest" : "member",
+      name: this.previewActor === "alice" ? "Alice" : "Bob",
+      role: "member",
     };
   }
 
@@ -465,6 +568,9 @@ export class MiniAppRuntimeHost {
     if (!payload || typeof payload !== "object" || !("name" in payload)) throw new Error("A server action name is required.");
     const request = payload as { name: unknown; input?: unknown };
     const declaration = this.actionProgram.actions[String(request.name)];
+    if (!declaration && this.actionsFailure) {
+      throw new Error(`Server action not declared: ${String(request.name)}. actions.json is invalid: ${this.actionsFailure}`);
+    }
     if (declaration && declaration.access !== "anonymous" && this.previewActor === "guest") {
       throw new Error("authentication-required");
     }
@@ -490,7 +596,7 @@ export class MiniAppRuntimeHost {
       assertRuntimeDatabaseWithinLimits(this.databaseAllocatedBytes(db));
       db.run("RELEASE littlebox_runtime_write");
       released = true;
-      this.persist(db);
+      await this.persistOrRevert(db);
       return { changes, lastInsertId };
     } catch (error) {
       if (!released) {
@@ -526,6 +632,28 @@ export class MiniAppRuntimeHost {
     return pageCount * pageSize;
   }
 
+  /**
+   * Persist a change already made in memory, or undo it. sql.js can only export
+   * by closing and reopening the database, which ends any open savepoint, so the
+   * write cannot be held open across the save. If the save fails (a full
+   * localStorage quota, say), the in-memory database is replaced by the last
+   * stored copy: a write the app was told failed must not be visible either.
+   */
+  private async persistOrRevert(db: Database) {
+    try {
+      this.persist(db);
+    } catch (error) {
+      const SQL = await loadSqlJs();
+      const stored = localStorage.getItem(this.databaseKey);
+      const restored = stored ? new SQL.Database(base64ToBytes(stored)) : new SQL.Database();
+      // The stored copy can predate a schema change whose own save failed.
+      this.applySchema(restored, this.requestedSchema);
+      this.dbPromise = Promise.resolve(restored);
+      db.close();
+      throw error;
+    }
+  }
+
   private persist(db: Database, exported?: Uint8Array) {
     const bytes = exported ?? db.export();
     assertRuntimeDatabaseWithinLimits(bytes);
@@ -555,6 +683,7 @@ export class MiniAppRuntimeHost {
   }
 
   private upload(payload: unknown): StoredFile {
+    if (this.previewActor === "guest") throw new Error("authentication-required");
     if (!payload || typeof payload !== "object") throw new Error("Invalid file.");
     const candidate = payload as Record<string, unknown>;
     const url = String(candidate.dataUrl ?? "");
@@ -568,10 +697,28 @@ export class MiniAppRuntimeHost {
       size,
       url,
       createdAt: Date.now(),
+      visibility: candidate.visibility === "public" ? "public" : "private",
+      ownerId: `${this.previewActor}_${this.appId}`,
     };
     const files = this.readFiles();
     localStorage.setItem(this.filesKey, JSON.stringify([file, ...files]));
     return file;
+  }
+
+  private visibleFiles(): StoredFile[] {
+    const session = this.getRuntimeSession();
+    const actor = session.role === "anonymous" ? null : session.userId;
+    return this.readFiles().flatMap((file) => {
+      const visibility = file.visibility === "public" ? "public" : "private";
+      const readable = visibility === "public" || (actor !== null && file.ownerId === actor);
+      if (!readable) return [];
+      if (file.ownerId !== actor) {
+        const rest = { ...file };
+        delete rest.ownerId;
+        return [{ ...rest, visibility }];
+      }
+      return [{ ...file, visibility }];
+    });
   }
 
   private readFiles(): StoredFile[] {
@@ -612,6 +759,10 @@ export class MiniAppRuntimeHost {
   private get databaseBackupsKey() {
     return `littlebox:database-backups:${this.appId}`;
   }
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function quoteIdentifier(value: string): string {

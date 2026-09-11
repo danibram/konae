@@ -1,0 +1,4 @@
+{"version":1,"actions":{
+ "pieces.list":{"kind":"query","access":"anonymous","statement":"SELECT id, title, body, file_id, image_data, created_at FROM pieces ORDER BY created_at DESC LIMIT 100","bindings":[]},
+ "pieces.create":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO pieces(author_id, title, body, file_id, image_data, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6)","bindings":[{"source":"actor","field":"id"},{"source":"input","key":"title","type":"string","maxLength":80},{"source":"input","key":"body","type":"string","maxLength":2000},{"source":"input","key":"fileId","type":"string","maxLength":40},{"source":"input","key":"imageData","type":"string","maxLength":100000},{"source":"kernel","field":"now"}]}
+}}

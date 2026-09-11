@@ -1,0 +1,13 @@
+<main class="wrap">
+  <header><h1>Daybook</h1><div id="who" class="who"></div></header>
+  <section id="gate" hidden><p>A private journal. Only you can read your entries.</p><button id="signin">Sign in or create an account</button></section>
+  <section id="app" hidden>
+    <form id="compose">
+      <div class="moods" id="moods"></div>
+      <textarea id="body" rows="4" placeholder="What happened today?" required maxlength="2000"></textarea>
+      <div class="row"><span id="chars" class="muted">0 / 2000</span><button type="submit">Save entry</button></div>
+    </form>
+    <p id="status" class="muted" role="status"></p>
+    <ol id="entries" class="entries"></ol>
+  </section>
+</main>

@@ -42,8 +42,9 @@ export async function statementsFor(acceptedSource: string, candidateSource: str
 }
 
 export async function snapshotFromSource(source: string, label: string): Promise<unknown> {
-  // The static guard still runs here: it is cheap, it catches honest mistakes
-  // early, and it is defence in depth — never the containment itself.
+  // The syntax allowlist catches honest mistakes early. On a reachable Kernel
+  // the process that imports the model has already dropped to a uid that
+  // cannot read /data. A loopback Kernel may run this as itself.
   assertConstrainedModel(source, label);
 
   const result = await build({

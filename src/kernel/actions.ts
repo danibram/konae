@@ -1,9 +1,11 @@
 import type { RuntimeActionDeclaration } from "../deployments/manifest";
+import { unboundedQueryReason } from "../lib/query-bound";
 import { assertRuntimeSql, validateRuntimeParams } from "../runtime/security";
+import { sqlTokens } from "../lib/sql-tokens";
 
 type ActionBinding =
-  | { source: "input"; key: string; type: "string"; maxLength?: number }
-  | { source: "input"; key: string; type: "number" | "boolean" }
+  | { source: "input"; key: string; type: "string"; maxLength?: number; nullable?: boolean }
+  | { source: "input"; key: string; type: "number" | "boolean"; nullable?: boolean }
   | { source: "actor"; field: "id" }
   | { source: "kernel"; field: "now" }
   | { source: "literal"; value: string | number | null };
@@ -68,10 +70,28 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
   if (!value || typeof value !== "object") throw new Error(`Invalid server action: ${name}`);
   const candidate = value as Record<string, unknown>;
   const kind = candidate.kind === "query" || candidate.kind === "mutation" ? candidate.kind : null;
-  const access = candidate.access === "anonymous" || candidate.access === "authenticated" || candidate.access === "granted" ? candidate.access : null;
+  if (candidate.access === "granted") {
+    // Reserved for per-grant access; the Kernel refuses to deploy it until grants exist.
+    throw new Error(`Action ${name} uses "access": "granted", which the Kernel does not support yet. Use "anonymous" or "authenticated".`);
+  }
+  const access = candidate.access === "anonymous" || candidate.access === "authenticated" ? candidate.access : null;
   if (!kind || !access || typeof candidate.statement !== "string") throw new Error(`Invalid server action: ${name}`);
   assertRuntimeSql(kind === "query" ? "query" : "execute", candidate.statement);
   assertSingleStatement(candidate.statement);
+  const tokens = sqlTokens(candidate.statement);
+  if (kind === "mutation" && tokens.some((token, index) => {
+    const previous = tokens[index - 1];
+    const parameter = previous?.kind === "symbol" && [":", "@", "$"].includes(previous.text);
+    return token.kind === "word" && token.depth === 0 && token.text.toUpperCase() === "RETURNING" && !parameter;
+  })) {
+    throw new Error(`Action ${name} cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.`);
+  }
+  if (kind === "query") {
+    const reason = unboundedQueryReason(candidate.statement);
+    if (reason) {
+      throw new Error(`Action ${name} ${reason} Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.`);
+    }
+  }
   if (!Array.isArray(candidate.bindings)) throw new Error(`Action ${name} requires a bindings array.`);
   const bindings = candidate.bindings.map((binding, index) => parseBinding(name, index, binding));
   return { name, kind, access, statement: candidate.statement.trim(), bindings };
@@ -80,13 +100,17 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
 function parseBinding(actionName: string, index: number, value: unknown): ActionBinding {
   if (!value || typeof value !== "object") throw new Error(`Invalid binding ${index} in ${actionName}.`);
   const binding = value as Record<string, unknown>;
+  if (binding.nullable !== undefined && (typeof binding.nullable !== "boolean" || binding.source !== "input")) {
+    throw new Error(`Invalid nullable option in ${actionName}.`);
+  }
   if (binding.source === "input" && typeof binding.key === "string") {
+    const nullable = typeof binding.nullable === "boolean" ? binding.nullable : undefined;
     if (binding.type === "string") {
       const maxLength = binding.maxLength === undefined ? 10_000 : Number(binding.maxLength);
       if (!Number.isInteger(maxLength) || maxLength < 1 || maxLength > 100_000) throw new Error(`Invalid maxLength in ${actionName}.`);
-      return { source: "input", key: binding.key, type: "string", maxLength };
+      return { source: "input", key: binding.key, type: "string", maxLength, ...(nullable === undefined ? {} : { nullable }) };
     }
-    if (binding.type === "number" || binding.type === "boolean") return { source: "input", key: binding.key, type: binding.type };
+    if (binding.type === "number" || binding.type === "boolean") return { source: "input", key: binding.key, type: binding.type, ...(nullable === undefined ? {} : { nullable }) };
   }
   if (binding.source === "actor" && binding.field === "id") return { source: "actor", field: "id" };
   if (binding.source === "kernel" && binding.field === "now") return { source: "kernel", field: "now" };
@@ -104,6 +128,7 @@ function resolveBinding(binding: ActionBinding, input: Record<string, unknown>, 
     return context.actorId;
   }
   const value = input[binding.key];
+  if (binding.nullable && (value === undefined || value === null)) return null;
   if (binding.type === "string") {
     if (typeof value !== "string" || !value.trim()) throw new Error(`${binding.key} must be a non-empty string.`);
     if (value.length > (binding.maxLength ?? 10_000)) throw new Error(`${binding.key} is too long.`);

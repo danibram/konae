@@ -17,7 +17,7 @@ export function buildSystemPrompt(project: MiniAppProject): string {
 /workspace/index.html — body markup only. No <html>, <head> or <body> element, and no <style> or <script> tag: the host injects styles.css into <style> and app.js into a script tag.
 /workspace/styles.css — global styling. Plain CSS.
 /workspace/app.js — the default JavaScript entrypoint. It may import relative .js, .jsx, .ts, .tsx, .json and .css files.
-/workspace/schema.sql — the SQLite schema. It is re-run on every database open, against the owner's real data, so every statement must be idempotent and must only build: CREATE TABLE IF NOT EXISTS, CREATE INDEX IF NOT EXISTS. DROP, DELETE, UPDATE and ALTER are refused by the gate — they would destroy live rows.
+/workspace/schema.sql — the SQLite schema. It is re-run on every database open, against the owner's real data, so every statement must be idempotent and must only build. It may contain only CREATE TABLE IF NOT EXISTS and CREATE [UNIQUE] INDEX IF NOT EXISTS, the same allowlist the Kernel enforces at deploy. Every other statement is refused by the gate, including INSERT, PRAGMA, BEGIN/COMMIT, triggers, views and CREATE TABLE ... AS. SQL functions are fine in a CHECK, an index expression, a partial index or a generated column, except load_extension, readfile, writefile and fts3_tokenizer.
 /workspace/actions.json — the Server Actions: the only place SQL may live.
 
 The Project may contain any number of nested source files and directories. Use write with a new path inside /workspace to create a file, then import it with a relative path. If /workspace/src/main.ts exists, the browser compiler uses it instead of app.js. Bare package imports and build plugins are unavailable. Keep any font or icon already referenced by styles.css; do not add new network dependencies.
@@ -33,7 +33,7 @@ actions.json format:
   "actions": {
     "<group>.<verb>": {
       "kind": "query" | "mutation",
-      "access": "anonymous" | "authenticated" | "granted",
+      "access": "anonymous" | "authenticated",
       "statement": "<one SQL statement with ? placeholders>",
       "bindings": [ ... ]
     }
@@ -52,22 +52,26 @@ Rules the Validation Gate checks for you:
   { "source": "kernel", "field": "now" }  — server time in milliseconds
   { "source": "literal", "value": 0 }
 - Inputs are typed and validated. A "string" input must be non-empty; a "number" must be finite.
+- For an optional filter or nullable field, add "nullable": true to its input binding. Omitted values and explicit null bind as SQL NULL; supplied values still follow the declared type. Pass null for an empty search box.
+- Mutations return { changes, lastInsertId }. Read changed rows with a separate query; mutation statements using RETURNING fail validation.
+- A query that reads rows needs a top-level LIMIT. The Validation Gate and the Kernel both refuse one that does not, including after the app is exported. A LIMIT inside a string, a comment or a subquery does not count. A query that only returns a total (count, sum, avg, min or max) with no GROUP BY, and a query that does not read a table, are the exceptions. LIMIT does not raise the 1000-row runtime cap.
 - schema.sql must run twice on the same database without failing, because the runtime re-runs it on every database open.
-- schema.sql may only create structure and seed rows. Never reach for DROP TABLE to "reset" it: that is the owner's data, and the gate refuses it.
+- schema.sql may only contain CREATE TABLE IF NOT EXISTS and CREATE [UNIQUE] INDEX IF NOT EXISTS. No INSERT, PRAGMA, BEGIN/COMMIT, triggers or views: the Kernel refuses them at deploy. Never reach for DROP TABLE to "reset" it: that is the owner's data. Rows come from server actions, not from schema.sql.
 
 Rules the gate cannot check, so they are on you. A passing validation says nothing about these:
 - Every action authorizes its caller before touching data. Use "access": "anonymous" only for data that may be read or written by any visitor. Rows owned by a person need { "source": "actor", "field": "id" } in both the write and the read, plus "access": "authenticated".
-- Queries must stay bounded: add an explicit LIMIT. The runtime rejects a query that returns more than 1000 rows, in the published app rather than here.
+- An uploaded file is private to the signed-in user. Pass { visibility: "public" } only when every visitor of a public app may read those bytes. The gate does not guess this from a column name: a shared board and a private journal can both store user_id. In the final paragraph, name each new action as personal or shared.
 
 # The miniapp SDK, the only host surface
 
-const session = await miniapp.auth.session();          // { userId, name, role }
+const session = await miniapp.auth.session();          // { userId, name, role }; role is "anonymous" when signed out
 await miniapp.auth.signIn();                          // published login page, preview selects Alice
 await miniapp.auth.signOut();                         // revoke this app session
 const rows = await miniapp.actions.call("tasks.list");  // array of row objects
 await miniapp.actions.call("tasks.create", { title });  // { changes, lastInsertId }
-const stored = await miniapp.files.upload(file);        // File from an <input type="file">
-const files = await miniapp.files.list();               // [{ id, name, type, size, url, createdAt }]
+const stored = await miniapp.files.upload(file);        // private to the signed-in user
+const shared = await miniapp.files.upload(file, { visibility: "public" });
+const files = await miniapp.files.list();               // that user's private files, plus public files
 
 There is nothing else: no fetch to other origins, no localStorage contract, no miniapp.db. A query action returns the rows of its SELECT; a mutation action returns { changes, lastInsertId }. Column names in the result are exactly the ones the SELECT projects, so alias any expression you read in app.js.
 

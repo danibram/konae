@@ -20,7 +20,7 @@ export function applyLocalAgentEdit(project: MiniAppProject, prompt: string): Ag
       .replaceAll("#d7e6b7", "#b9d7ef");
     return {
       project: next,
-      message: "He cambiado el acento a azul tinta y he ajustado el halo del fondo para mantener el contraste.",
+      message: "Proposed change to styles.css: the accent becomes ink blue. Nothing is saved until you apply it.",
       changedFiles: ["styles.css"],
     };
   }
@@ -29,7 +29,7 @@ export function applyLocalAgentEdit(project: MiniAppProject, prompt: string): Ag
     next.files["styles.css"] += `\n\n/* Agent edit: dark workshop */\n:root { background: #191a17; color: #eeeade; }\nbody { background: radial-gradient(circle at 90% 8%, #33402c 0 18%, transparent 38%), #191a17; }\n.composer { background: #252620; box-shadow: 6px 6px 0 #e8e4d8; }\n.composer input { color: #eeeade; }\n.identity, .task button { border-color: #eeeade; }`;
     return {
       project: next,
-      message: "He añadido un modo oscuro editorial sin tocar la estructura ni los datos.",
+      message: "Proposed change to styles.css: a dark theme. Nothing is saved until you apply it.",
       changedFiles: ["styles.css"],
     };
   }
@@ -42,14 +42,14 @@ export function applyLocalAgentEdit(project: MiniAppProject, prompt: string): Ag
     next.files["styles.css"] += "\n.composer { grid-template-columns: 1fr 150px 52px; } .composer input[type=date] { border-left: 1px solid #c9c5b9; }";
     return {
       project: next,
-      message: "He añadido el control visual para fechas. En el siguiente paso conectaría la columna `due_at` con una migración segura.",
+      message: "Proposed change to index.html and styles.css: a due date field. Nothing is saved until you apply it. Storing the date needs a due_at column.",
       changedFiles: ["index.html", "styles.css"],
     };
   }
 
   return {
     project: next,
-    message: "He analizado el cambio. Este prototipo local ya entiende cambios de color azul, modo oscuro y añadir fechas. El siguiente adaptador conectará este mismo flujo a un modelo real.",
+    message: "The demo can propose a blue accent, a dark theme, or a date field. Connect a model in Agent settings for anything else.",
     changedFiles: [],
   };
 }

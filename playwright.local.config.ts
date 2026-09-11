@@ -20,8 +20,8 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: `LITTLEBOX_DATA_DIR='${dataRoot}' LITTLEBOX_EDITOR_PORT=${editorPort} LITTLEBOX_KERNEL_PORT=${kernelPort} bun run dev:local`,
-    url: `${baseURL}/projects`,
+    command: `LITTLEBOX_TRUSTED_PROXIES=127.0.0.1 LITTLEBOX_DATA_DIR='${dataRoot}' LITTLEBOX_EDITOR_PORT=${editorPort} LITTLEBOX_KERNEL_PORT=${kernelPort} bun run dev:local`,
+    url: `${baseURL}/_littlebox/health`,
     reuseExistingServer: Boolean(process.env.LITTLEBOX_EDITOR_URL) && !process.env.CI,
     timeout: 120_000,
   },

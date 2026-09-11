@@ -10,24 +10,23 @@ The **Littlebox Kernel** owns product security semantics. Infrastructure provide
 
 ```text
 mini-app/
-├── littlebox.manifest.json
 ├── index.html
 ├── styles.css
-├── app.js
+├── app.js            # or src/main.ts
 ├── src/
 │   └── feature.ts
-├── schema.sql
+├── schema.ts
 └── actions.json
 ```
 
-The editor stores an arbitrary source tree in one exportable JSON object. The browser compiles `app.js` or `src/main.ts` and its relative imports with WebAssembly. Its versioned manifest contains deployment visibility, declared runtime actions and capability policies, but never SQL implementations, credentials or administrative grants.
+The editor stores an arbitrary source tree in one exportable JSON object, together with the Drizzle Database Model shown as `schema.ts`. The browser compiles `app.js`, or `src/main.ts` when it exists, and its relative imports with WebAssembly. The Project record also carries a versioned manifest (`CapsuleManifest` in `src/deployments/manifest.ts`) with deployment visibility, declared runtime actions and capability policies, but never SQL implementations, credentials or administrative grants. The manifest is a field of the Project, not a file in the tree. External Projects keep it in `littlebox.json`.
 
 ## Current local topology
 
 ```mermaid
 flowchart LR
   E["Editor + local agent"] --> P["sandboxed iframe"]
-  P -->|"private MessageChannel"| H["browser runtime host"]
+  P -->|"private MessageChannel"| H["browser MCP runtime host"]
   H --> D["SQLite WASM"]
   H --> A["local auth session"]
   H --> F["local file store"]
@@ -35,7 +34,7 @@ flowchart LR
   F --> L
 ```
 
-The iframe has `allow-scripts` but not same-origin access. Generated code cannot read the editor's storage or credentials directly. Each preview receives one private MessageChannel; runtime requests are no longer accepted through the page's global message listener.
+The iframe has `allow-scripts` but not same-origin access. Generated code cannot read the editor's storage or credentials directly. Each preview receives one private MessageChannel and an ephemeral preview credential. The app uses MCP tool calls over that channel. The global message listener only establishes the channel.
 
 This is a development boundary, not yet a hardened hostile-code sandbox. Hosted execution must add quotas, statement validation, capability grants, CSP, audit logs and infrastructure-enforced tenant isolation.
 
@@ -46,15 +45,17 @@ flowchart LR
   V["visitor"] --> RI["Kernel runtime interface"]
   RI --> K["Littlebox Kernel"]
   K -->|"public: allow shell"| C["published bundle"]
-  K -->|"private: require Kernel grant"| C
+  K -->|"private: require app login"| C
   C --> B["browser mini-app"]
   B -->|"named server actions"| RI
   K --> DB["isolated SQLite working file"]
-  K --> S3["S3 artifacts + SQLite generations"]
+  K --> S3["S3: artifacts + deployment.json"]
   O["project owner"] --> E["editor + agent"]
   E --> AI["Kernel admin interface"]
   AI --> K
 ```
+
+S3 holds static Build Artifacts and a copy of each `deployment.json`. SQLite databases, auth databases, uploads and backups stay on the Kernel's data directory; the Kernel does not replicate them to S3 yet. At startup the Kernel can restore a database from a `databases/<id>/head.json` generation in the data bucket, but nothing writes those heads today, so a Deployment recovered from S3 on a fresh volume starts with an empty database.
 
 The Docker development stack uses Nginx only for hostname routing: `editor.localhost` reaches Vite and the Kernel Admin Interface, while every other `*.localhost` hostname reaches the Rust Kernel Runtime Interface. MinIO provides the same S3 operations used with hosted providers. Nginx and MinIO do not make authorization decisions.
 
@@ -65,11 +66,13 @@ Deployment visibility and data authorization are deliberately independent:
 | Deployment | Who can open the app shell | Who can read data |
 | --- | --- | --- |
 | Public | Anyone | Only actors allowed by each server action |
-| Private | Explicitly granted actors | Only actors allowed by each server action |
+| Private | Signed-in app accounts, created under the Deployment's signup policy | Only actors allowed by each server action |
 
-A public deployment may contain private user records. Public means its HTML, CSS and JavaScript are public; it never means the database is public. A private deployment additionally protects the application shell, but still requires per-action authorization because authenticated users need not share the same data.
+On a public Deployment a signed-out visitor may call the actions declared `anonymous`, and may list and read files marked public. Uploads, private files, and authenticated actions require an app session. On a private Deployment nothing loads or runs without a login. Each Deployment's signup policy (Open, Allowlist or Closed) decides who can create an app account; public Deployments start Open and private ones start Closed.
 
-Blob access in Capsule v1 follows shell visibility: blobs belonging to a public Deployment can be read by its visitors, while a private Deployment requires a grant before list, upload or read. Per-actor private blobs in a public app require a future declared file-action policy and must not be stored through the public v1 file capability.
+A public deployment may contain private user records. Public means its HTML, CSS and JavaScript are public; it never means the database is public. A private deployment also protects the application shell, but still requires per-action authorization because authenticated users need not share the same data.
+
+An upload is private to the uploading app user unless the upload sets visibility to public. Another account cannot read a private file. On a public Deployment, visitors can read public files. On a private Deployment, any signed-in app user can read public files. There is no HTTP download path.
 
 ### Database boundary
 
@@ -116,7 +119,7 @@ Adapters do not receive authority to make access decisions. The Kernel passes th
 ## Provider adapters
 
 - A managed adapter may use Workers, D1/libSQL and R2/S3.
-- A self-hosted adapter may use one Bun/Node process, SQLite files and local disk or S3.
+- The self-hosted adapter is the Rust Kernel in `kernel-rs/`: one process with SQLite files and local disk, plus optional S3 for artifacts. It spawns Bun only to derive schema migrations.
 - A Railway adapter may provide a shared Node runtime and an escape hatch for applications that need Docker or unrestricted server packages.
 
 All adapters implement the same Kernel seams. Provider identity products may optionally protect infrastructure administration, but they are never the application session or grant authority. The exported unit must eventually contain source, manifest, migrations, a standard SQLite file and its blobs. Provider-specific identifiers must not appear in application code.
@@ -125,15 +128,20 @@ All adapters implement the same Kernel seams. Provider identity products may opt
 
 Before accepting untrusted public apps:
 
-1. Replace browser-supplied SQL with declared server actions; the current local SQL subset is only a preview-development bridge.
-2. Bind every request server-side to deployment, deploy version, actor and capability grant. Never trust browser-supplied identifiers.
-3. Enforce per-app request, CPU, row, statement, database and blob quotas.
-4. For remote object-store adapters, upload blobs with short-lived signed URLs and validate MIME/magic bytes. The current local adapter streams bounded multipart files to isolated disk.
-5. Make previews expire and garbage-collect all associated data.
-6. Keep system apps signed and privileged; user apps can only call granted capabilities.
-7. Serve owner SQL, migrations, backups and export from the Kernel Admin Interface with audit logs.
-8. Require authenticated deployment grants before serving private app shells, while keeping data authorization action-specific in both visibility modes.
+1. Bind every request server-side to deployment, deploy version, actor and capability grant. Never trust browser-supplied identifiers.
+2. Enforce per-app request, CPU, row, statement, database and blob quotas.
+3. Validate uploaded blobs by MIME type and magic bytes. Uploads already arrive through chunked, checksummed `files_upload` transfers and land in the Deployment's directory on the Kernel volume.
+4. Make previews expire and garbage-collect all associated data.
+5. Keep system apps signed and privileged; user apps can only call granted capabilities.
+6. Serve owner SQL, migrations, backups and export from the Kernel Admin Interface with audit logs.
+7. Support explicit `granted` actions and deployment grants. Private shells already require a login, and the signup policy limits who can create one; data authorization stays action-specific in both visibility modes.
+
+Published apps no longer send SQL: they call declared server actions, and the browser preview's SQL runs only against its local `sql.js` database.
 
 ## Local bootstrap boundary
 
-The current Docker editor authenticates Admin Interface requests with a development key injected at build time. That is acceptable only on a developer machine. A shared or internet-facing installation must exchange it for a Kernel-issued owner session, origin/CSRF checks, TLS, rate limiting, audit records and explicit Project Owner grants. Runtime sessions are already separate and can never authorize Admin Interface calls.
+The editor authenticates MCP administration with an HttpOnly owner session. External agents use OAuth with PKCE or delegated credentials whose scope, project grants, expiry and revocation the Kernel checks. Runtime MCP uses the Deployment's separate app identity store. Runtime sessions never authorize administrative tools.
+
+The installation key permits owner registration and remains outside the editor bundle. The first owner claims legacy Deployments. Each later owner starts with a separate project registry. Native development binds to localhost; the Docker gateway preserves Host and routes MCP, authorization and login to the Kernel.
+
+MCP is the operation protocol under [ADR-0008](./adr/0008-authenticated-mcp-is-the-platform-operation-protocol.md). The old operation routes return HTTP 410. File and artifact transfers use authenticated tools with bounded chunks and checksums. Login, OAuth discovery and static documents retain their HTTP routes. [The MCP guide](./mcp.md) describes the implemented tools and limits.

@@ -51,6 +51,8 @@ process.on("SIGINT", () => stop(0));
 process.on("SIGTERM", () => stop(0));
 
 const kernelEnv = {
+  LITTLEBOX_BUN_PATH: process.execPath,
+  LITTLEBOX_SOURCE_ROOT: root,
   ...process.env,
   LITTLEBOX_KERNEL_PORT: kernelPort,
   LITTLEBOX_DATA_DIR: dataRoot,

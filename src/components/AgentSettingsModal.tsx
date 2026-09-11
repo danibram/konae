@@ -1,8 +1,8 @@
-import { Check, KeyRound, Settings2, X } from "lucide-react";
+import { Check, KeyRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { defaultModelIdFor, isCustomModelId, keyState, PROVIDERS, resolveProvider } from "../agent/catalog";
 import type { AgentKeyStore, AgentSessionConfig, ProviderConfig, ProviderId } from "../agent/contracts";
-import { useModalDialog } from "./useModalDialog";
+import { Button, Dialog, Input, Select } from "./ui";
 import "./agent-settings.css";
 
 type Props = {
@@ -37,7 +37,6 @@ export function AgentSettingsModal({
   const [keyVersion, setKeyVersion] = useState(0);
   const [editingKey, setEditingKey] = useState(false);
   const firstFieldRef = useRef<HTMLSelectElement>(null);
-  const dialog = useModalDialog({ open, onClose, initialFocus: firstFieldRef });
 
   const provider = resolveProvider(providers, sessionConfig.provider);
   const hasKey = useMemo(
@@ -74,40 +73,22 @@ export function AgentSettingsModal({
   if (!open) return null;
 
   return (
-    <div className="modal-backdrop agent-settings-backdrop" role="presentation" onClick={onClose}>
-      <section
-        className="agent-settings"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Agent settings"
-        ref={dialog.ref}
-        onKeyDown={dialog.onKeyDown}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="agent-settings-head">
-          <span className="agent-settings-mark"><Settings2 size={14} /></span>
-          <div>
-            <p className="eyebrow">BUILDER AGENT</p>
-            <strong>Model &amp; provider</strong>
-          </div>
-          <button className="agent-settings-close" aria-label="Close settings" onClick={onClose}><X size={15} /></button>
-        </header>
-
+    <Dialog open={open} title="Connect a model" description="The key stays in this browser." onClose={onClose} initialFocus={firstFieldRef} className="agent-settings">
         <div className="agent-settings-body">
           <label className="agent-field">
-            <span>PROVIDER</span>
-            <select
+            <span>Provider</span>
+            <Select
               ref={firstFieldRef}
               value={provider.id}
               onChange={(event) => changeProvider(event.target.value as ProviderId)}
             >
               {providers.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-            </select>
+            </Select>
           </label>
 
           <label className="agent-field">
-            <span>MODEL</span>
-            <select
+            <span>Model</span>
+            <Select
               value={customModel ? customOption : sessionConfig.modelId}
               onChange={(event) => onSessionConfigChange({
                 ...sessionConfig,
@@ -116,13 +97,13 @@ export function AgentSettingsModal({
             >
               {provider.defaultModels.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
               {provider.supportsCustomModelId && <option value={customOption}>Custom model id…</option>}
-            </select>
+            </Select>
           </label>
 
           {customModel && provider.supportsCustomModelId && (
             <label className="agent-field">
-              <span>MODEL ID</span>
-              <input
+              <span>Model ID</span>
+              <Input
                 value={sessionConfig.modelId}
                 placeholder={defaultModelIdFor(provider)}
                 spellCheck={false}
@@ -133,39 +114,37 @@ export function AgentSettingsModal({
 
           <div className={`agent-settings-key ${key}`}>
             <KeyRound size={13} />
-            {key === "not-needed" && <span>Key held by the Littlebox Kernel — nothing to store here.</span>}
+            {key === "not-needed" && <span>The Littlebox Kernel holds the key.</span>}
             {key === "stored" && !editingKey && (
               <>
                 <span><Check size={12} /> Key stored for {provider.label}</span>
-                <button onClick={() => setEditingKey(true)}>Change</button>
-                <button onClick={() => { keyStore.clearKey(provider.id); setKeyVersion((version) => version + 1); onKeyStoreChange?.(); }}>Forget</button>
+                <Button onClick={() => setEditingKey(true)}>Change</Button>
+                <Button onClick={() => { keyStore.clearKey(provider.id); setKeyVersion((version) => version + 1); onKeyStoreChange?.(); }}>Forget</Button>
               </>
             )}
             {(key === "missing" || editingKey) && (
               <>
                 <label className="sr-only" htmlFor="agent-key">{provider.label} API key</label>
-                <input
+                <Input
                   id="agent-key"
                   type="password"
                   value={keyDraft}
-                  placeholder={`${provider.label} API key — stays in this browser`}
+                  placeholder={`${provider.label} API key`}
                   autoComplete="off"
                   spellCheck={false}
                   onChange={(event) => setKeyDraft(event.target.value)}
                   onKeyDown={(event) => { if (event.key === "Enter") saveKey(); }}
                 />
-                <button className="primary" disabled={!keyDraft.trim()} onClick={saveKey}>Save</button>
-                {editingKey && <button onClick={() => { setEditingKey(false); setKeyDraft(""); }}>Cancel</button>}
+                <Button variant="primary" disabled={!keyDraft.trim()} onClick={saveKey}>Save</Button>
+                {editingKey && <Button onClick={() => { setEditingKey(false); setKeyDraft(""); }}>Cancel</Button>}
               </>
             )}
           </div>
 
           <p className="agent-settings-note">
-            The key is kept in this browser's local storage and sent only to {provider.label}. Prompts carry the
-            contents of the five Capsule files so the agent can edit them.
+            It is sent only to {provider.label}.
           </p>
         </div>
-      </section>
-    </div>
+    </Dialog>
   );
 }

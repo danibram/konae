@@ -40,16 +40,17 @@ export function SqlEditor({ value, schema, onChange, onExecute }: Props) {
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
           }),
+          // The dark reading surface matches the code editor; popups use the design tokens.
           EditorView.theme({
-            "&": { height: "100%", backgroundColor: "#24251f", color: "#e8e6dc", fontSize: "11px" },
-            ".cm-content": { caretColor: "#c8f135", fontFamily: "JetBrains Mono Variable, monospace", padding: "12px 0" },
+            "&": { height: "100%", backgroundColor: "#20232b", color: "#dce0e9", fontSize: "11px" },
+            ".cm-content": { caretColor: "#a4abff", fontFamily: "var(--ds-mono)", padding: "12px 0" },
             ".cm-line": { padding: "0 10px" },
-            ".cm-gutters": { backgroundColor: "#20211c", color: "#62645c", borderRight: "1px solid #383a32" },
-            ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "#2d2f28" },
-            ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "#4e6035 !important" },
-            ".cm-cursor": { borderLeftColor: "#c8f135" },
-            ".cm-tooltip": { backgroundColor: "#f1efe7", color: "#24251f", border: "1px solid #24251f" },
-            ".cm-tooltip-autocomplete ul li[aria-selected]": { backgroundColor: "#c8f135", color: "#24251f" },
+            ".cm-gutters": { backgroundColor: "#1b1e25", color: "#858c9c", borderRight: "1px solid #2a2e39" },
+            ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "#272b35" },
+            ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "#3b4170 !important" },
+            ".cm-cursor": { borderLeftColor: "#a4abff" },
+            ".cm-tooltip": { backgroundColor: "var(--ds-surface)", color: "var(--ds-text)", border: "1px solid var(--ds-border)", borderRadius: "var(--ds-radius-sm)" },
+            ".cm-tooltip-autocomplete ul li[aria-selected]": { backgroundColor: "var(--ds-accent)", color: "#ffffff" },
           }),
         ],
       }),

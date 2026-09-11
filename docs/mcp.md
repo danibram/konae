@@ -1,0 +1,139 @@
+# Develop with authenticated MCP
+
+Littlebox exposes its operations through MCP over Streamable HTTP. The editor, the app SDK and external agents use that protocol. The supported revision is `2025-11-25`.
+
+## Startup and owner account
+
+```sh
+bun install
+bun run dev:local
+```
+
+Open the editor and go to **Platform access**. The direct link is `http://localhost:4173/_littlebox/owner/login`. To create an owner, enter an email, a password and the installation key that the operator provides. In the default local environment that key is `local-development-key`; `LITTLEBOX_ADMIN_KEY` sets it. The first account claims the Deployments from the earlier prototype.
+
+Each owner administers their own projects. The page creates read-only or read, edit and publish tokens, optionally limited to specific projects, and lists and revokes active credentials. A token's secret appears only once. Tokens from this page expire after 24 hours; `token_create` accepts any subset of `read`, `write` and `publish` and a lifetime of up to 30 days.
+
+The installation key does not authenticate MCP tools and is not included in the editor bundle. The server listens on `127.0.0.1` by default. The Kernel refuses to start on a non-loopback address, or with a `LITTLEBOX_PUBLIC_ORIGIN` whose host is not `localhost`, a `*.localhost` name or a loopback IP, while the installation key is unset or still `local-development-key`, unless `LITTLEBOX_ALLOW_DEFAULT_KEY=1`. For a remote installation, configure the installation key, the HTTPS origin and the proxy before listening on another interface.
+
+## Connect an agent
+
+Configure the endpoint `http://localhost:4173/mcp` in your MCP client. Clients with OAuth can discover the server and open the consent screen in the browser. The flow uses PKCE S256 and single-use codes. OAuth tokens last one hour; when one expires, the client must authorize again. The server issues no refresh tokens.
+
+Clients that support headers can also use a delegated token.
+
+```http
+Authorization: Bearer YOUR_TOKEN
+```
+
+Call `platform_describe` and `projects_list` after connecting. An agent needs filesystem and local execution tools to create files and build an app. The MCP server does not read paths on the user's machine.
+
+If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_MCP_ORIGIN` to its public origin, without a path. The proxy must preserve `Host`. Owner signup answers on that host too, so the Kernel refuses to start with the default setup key when this host is not local. Browser calls to the editor and to the runtime use their own origin; there is no open CORS.
+
+## Tools
+
+| Group | Tools |
+| --- | --- |
+| Discovery | `platform_describe`, `platform_guide`, `session_inspect`, `projects_list`, `project_inspect` |
+| Projects | `project_create` |
+| Owner schema and data | `schema_plan`, `database_execute`, `database_export`, `project_export`, `storage_test` |
+| Publishing | `release_plan`, `release_apply` |
+| Signup policy | `signup_policy_read`, `signup_policy_set` |
+| Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
+| Credentials from the owner session | `tokens_list`, `token_create`, `token_revoke` |
+| App runtime | `auth_session`, `auth_logout`, `actions_invoke`, `files_list`, `files_upload`, `files_read` and transfers |
+
+The catalog depends on the credentials. The Kernel checks the permission again on execution. A token limited to projects cannot create other projects. For `schema_plan`, that token must pass a `projectId` it has access to. Reading the signup policy needs the `read` scope; changing it needs the `publish` scope.
+
+`project_create` returns a template and an External identity by default. Later sources stay in the user's folder; `project_inspect` returns metadata and the Deployment, without claiming to synchronize that code with the editor.
+
+## Signup policy
+
+Each Deployment has a signup policy that decides who may create an app account:
+
+- Open: anyone can create an account.
+- Allowlist: only exact emails or `@domain` entries can create an account, up to 100 entries. A domain entry matches that exact domain, not its subdomains.
+- Closed: no new accounts.
+
+Public Deployments start Open. Private Deployments start Closed, so the owner decides who may join before anyone can sign in. A Deployment record written before signup policies existed gets the same default from its visibility. Republishing keeps the current policy, except that republishing a public app as private turns Open into Closed. The owner changes it in the editor's Auth panel or with the admin MCP tools above. A tighter policy blocks new accounts only; existing accounts can still sign in. A refused signup gets the same answer whether signup is closed or the address is not listed.
+
+Littlebox does not verify email addresses, so whoever signs up first with a listed address or an address in a listed domain gets that account. Use Closed for apps that hold private data.
+
+## Local development cycle
+
+From this repository, set `LITTLEBOX_MCP_TOKEN` to a credential that can create and publish projects.
+
+```sh
+bun run littlebox -- init --dir /tmp/my-app --name "My app" --url http://localhost:4173
+bun run littlebox -- dev --dir /tmp/my-app --port 8796
+```
+
+`dev` compiles and starts the Rust Kernel with data under `/tmp/my-app/.littlebox/dev-data`. It generates a separate development identity, removes the remote configuration from its environment and publishes the build to that local Kernel. That Deployment is private, so `dev` then sets its signup policy to Open and you can create test accounts. It prints the URL and rebuilds when the sources change. Reload the app to see the new build. When the command exits, the Kernel stops and the data stays in that folder.
+
+The Runtime Actor creates its account inside the local app. That account is neither the owner's nor a production account. The SDK injected into the build offers the usual calls.
+
+```js
+const user = await miniapp.auth.session();
+const items = await miniapp.actions.call("items.list");
+const files = await miniapp.files.list();
+```
+
+Without a session, `miniapp.auth.session()` returns an anonymous state so the app can show a sign-in button. On a public app, a signed-out visitor may call actions declared with `"access": "anonymous"`, and may list and read files uploaded with visibility `public`. Uploads, private files, and actions declared `authenticated` require sign-in. On a private app, visitors must sign in before the app loads, and nothing runs without a session.
+
+Signed-out visitors may call `actions_invoke` 30 times per 10 seconds per client address and Deployment, and each signed-in app user 120 times per 10 seconds. Further calls return a tool error with the text `rate-limited` and a `Retry-After` header. The Kernel uses the socket peer address and reads `X-Forwarded-For` only from peers listed in `LITTLEBOX_TRUSTED_PROXIES`. Such a proxy must append the address it received the request from, never forward the client's header unchanged. Owner calls are audited. For app users the Kernel records only a signed-in `files_upload` that stores a new file. Failed uploads, receipt replays, action calls, reads and session checks write no audit row, so app users cannot grow the shared audit table at will.
+
+A file is private to the app user who uploaded it unless that upload set `visibility` to `public`. Only that user can list or read a private file. On a public app, a signed-out visitor can list and read public files. On a private app, any signed-in user of that app can read public files, and private files stay with the uploader. Files stored before this rule have no owner and stay unreadable to app users. A portable export still includes every file for the owner. The URLs the SDK returns are Blob URLs created after an MCP download. The app never receives an HTTP download path. Each visitor's downloads use a transfer bound to that client address, so anonymous callers do not share one transfer bucket.
+
+Input bindings in `actions.json` require a value by default. Add `"nullable": true` to a string, number or boolean input binding to bind an omitted value or explicit `null` as SQL `NULL`. Supplied values still follow the declared type and length limit, and empty strings remain invalid. A search action can use the same parameter for its optional filter.
+
+```json
+{
+  "kind": "query",
+  "access": "authenticated",
+  "statement": "SELECT id, title FROM notes WHERE user_id = ?1 AND (?2 IS NULL OR title LIKE '%' || ?2 || '%') LIMIT 100",
+  "bindings": [
+    { "source": "actor", "field": "id" },
+    { "source": "input", "key": "q", "type": "string", "maxLength": 100, "nullable": true }
+  ]
+}
+```
+
+Calling this action with `{}` returns the actor's rows up to the limit; `{ "q": "trip" }` filters them. Mutation actions return `{ "changes", "lastInsertId" }`. They cannot use SQL `RETURNING`; publication and the Validation Gate reject it. Use a separate query to read the changed rows.
+
+## Build and publish
+
+```sh
+bun run littlebox -- build --dir /tmp/my-app
+bun run littlebox -- publish --dir /tmp/my-app
+```
+
+The build lives in `.littlebox/artifact.json`. Publishing transfers it over MCP, validates a plan against the project revision and applies it. The tool saves the plan and the receipt in `.littlebox`. The Kernel rejects a stale plan. Repeating a plan that was already applied returns its receipt. `publish` deploys as private unless `littlebox.json` sets `project.manifest.visibility` to `"public"`. A republish keeps the URL and database and stops serving files that the new artifact no longer contains.
+
+There is also `bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173`. It reads `LITTLEBOX_EMAIL` and `LITTLEBOX_PASSWORD` from the environment, obtains a 24-hour credential and stores it with `0600` permissions in `.littlebox/credentials.json`. `LITTLEBOX_SETUP_KEY` lets it create the account if it does not exist yet. The command adds `.littlebox/` to `.gitignore`; do not copy credentials into the frontend.
+
+## Transfers and limits
+
+The client starts a transfer by declaring the size and SHA-256. Chunks are at most 64 KiB and use base64. The server accepts identical retries at the same offset and rejects different content. Completing a transfer verifies size and hash and makes its bytes immutable.
+
+Owner transfers expire after one hour and each owner credential can hold eight. App user transfers expire after 10 minutes and each app user can hold two. Owners share a pool of 128 per installation, and app users share a pool of 32 per Deployment. An app's files are at most 2 MiB each and the Deployment has a 20 MiB quota. An administrative transfer can be up to 32 MiB; a full publishing payload must fit in 26 MB and its artifact in 16 MiB. A project allows up to 100 actions. Queries limit rows, response size and execution time. Each app database is capped at 256 MiB.
+
+App login and signup accept 10 attempts per minute per client address, and 5 per minute for one email address from one client address, counted separately for each Deployment. Wrong passwords also count against the email address across all clients: after 100 failures in an hour, every login for that email waits, including a correct one. A successful login never uses up that count, and one client address adds at most 20 failures per hour to it, so pausing an account takes failures from at least five addresses. `/_littlebox/owner/login` and `/_littlebox/owner/signup` have the same limits. Further attempts get HTTP 429 with `Retry-After`. Each identity database is capped at 64 MiB.
+
+A release's `schema.sql` may only create tables and indexes, and must be safe to run twice. CHECK constraints, expression and partial indexes and generated columns may call SQL functions, except `load_extension`, `readfile`, `writefile`, `edit` and `fts3_tokenizer`, which app actions cannot call either.
+
+`/oauth/register` accepts 10 registrations per client address per hour; IPv6 clients share one bucket per /48. It holds at most 1000 clients that have not reached consent, and at that cap a new registration replaces the oldest of them. Unconsented clients expire after one hour. A client that reached consent expires after 30 days without a new token once it holds no live credential.
+
+The audit log in `mcp.sqlite` records each owner tool call with its project or Deployment. `release_apply` records the project and the Deployment it produced, and `signup_policy_set` records the old and new mode.
+
+`transfer_status` lets a client resume an upload from the last offset. Cancel transfers you no longer need. The SDK checks the checksum of downloads and releases its temporary transfers.
+
+## Status and compatibility
+
+The official SDK checks connection, listing and MCP calls, as well as the OAuth flow with registration and PKCE. The browser tests cover publishing, republishing, migrations, restore and export.
+
+The self-hosted export includes the Kernel, its MCP and OAuth modules, and a deploy script that uses authenticated MCP. The platform image includes Bun and the Drizzle tooling. The minimal self-hosted kit supports administrative SQL and migrations supplied by its owner; it does not include the tool that derives Drizzle models.
+
+`project_export` includes `initialSignupPolicy` with `{ "mode": "open" | "allowlist" | "closed", "allowlist": [...] }` alongside the portable database, accounts and files. It captures `visibility` under the same project lock, so exporters use the snapshot's visibility even if an earlier project inspection or editor copy differs. A release may import that policy only on its first Deployment. The Kernel validates and installs the policy before serving that Deployment, so a public app exported with Closed signup never opens registration during import. Republishing cannot override the policy through initial state. Older exports without these fields use the inspected Deployment's visibility or the editor's current project and the normal signup defaults.
+
+The editor preview still stores its test data in the browser, including uploads, which it keeps as data URLs in local storage. It uses MCP over a MessageChannel with an ephemeral preview credential. The registry of published projects and the credentials live in the Kernel.
+
+Remote development environments, teams with Workspace membership and immutable artifact history are outside this release. Publishing keeps the project's URL and database, matching the Kernel's current behavior. S3 holds Deployment records and artifacts only. Databases, app accounts and files live on the Kernel volume and are lost with it; a Kernel started on a fresh volume serves each Deployment with an empty database and no accounts, and logs a warning for each one.

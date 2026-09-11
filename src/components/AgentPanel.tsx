@@ -19,6 +19,7 @@ import type { AgentSessionConfig } from "../agent/contracts";
 import { validationSummary, type ToolChip } from "./agent-thread-state";
 import type { AgentThread } from "./useAgentThread";
 import "./agent-panel.css";
+import { Textarea } from "./ui";
 
 type Props = {
   thread: AgentThread;
@@ -38,25 +39,74 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings }: Props) {
 
   useEffect(() => {
     const element = threadRef.current;
-    if (element) element.scrollTop = element.scrollHeight;
+    if (element) element.scrollTop = state.messages.length > 0 || state.tools.length > 0 ? element.scrollHeight : 0;
   }, [state.messages, state.tools, footer.kind]);
 
   const model = sessionConfig.modelId || "no model";
+  const needsConnect = !live && state.messages.length === 0;
+
+  if (needsConnect) {
+    return (
+      <div className="messages agent-thread agent-connect-panel" ref={threadRef} aria-live="polite">
+        <div className="agent-thread-empty agent-connect-step">
+          <span className="agent-empty-mark"><Settings2 size={22} /></span>
+          <h2>Connect a model to change this app.</h2>
+          <p>Describe what should change in plain words. The model edits the files; you apply the change after you see it.</p>
+          <button type="button" className="agent-connect" onClick={onOpenSettings}>
+            Connect a model
+          </button>
+          <p className="agent-empty-note">Your key stays in this browser. Pick a change. It waits here until the model is connected.</p>
+          <ExamplePrompts onPick={thread.setDraft} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
+      <div className="prompt-box">
+        <Textarea aria-label="Message to agent"
+          value={thread.draft}
+          rows={2}
+          placeholder={blocker || "Describe the app."}
+          onChange={(event) => thread.setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.shiftKey) return;
+            event.preventDefault();
+            if (!thread.draft.trim()) return;
+            if (!live) { onOpenSettings(); return; }
+            void thread.submit();
+          }}
+        />
+        <div>
+          <button className={`agent-model-chip ${live ? "" : "is-connect"}`} onClick={onOpenSettings} title="Agent settings">
+            <Settings2 size={11} />
+            <span>{blocker || (live ? `${provider.label} · ${model}` : "Connect a model")}</span>
+          </button>
+          {running
+            ? <button className="agent-stop" onClick={thread.interrupt}><Square size={11} /> Stop</button>
+            : live && (
+              <button
+                className="agent-send"
+                aria-label="Send"
+                title={blocker}
+                disabled={running || !thread.draft.trim() || blocker.length > 0}
+                onClick={() => { void thread.submit(); }}
+              >
+                <ArrowUp size={15} />
+              </button>
+            )}
+        </div>
+      </div>
       <div className="messages agent-thread" ref={threadRef} aria-live="polite" aria-busy={running}>
         {state.messages.length === 0 && (
           <div className="agent-thread-empty">
-            <p>
-              Describe a change and the agent edits a disposable copy of your project files. Nothing reaches the
-              project until the Validation Gate passes.
-            </p>
-            <p>
-              {live
-                ? `${provider.label} answers with your key, stored in this browser.`
-                : "No provider key yet — the offline demo answers a few scripted changes. Open settings to connect a model."}
-            </p>
+            <span className="agent-empty-mark"><Sparkles size={22} /></span>
+            <h2>What should change?</h2>
+            <p>Describe it in one sentence. You apply the change after you see it.</p>
+            <p className="agent-examples-label">Try asking</p>
+            <ExamplePrompts onPick={thread.setDraft} />
+            <p className="agent-empty-note">{provider.label} uses your key, saved in this browser.</p>
           </div>
         )}
         {state.messages.map((message) => (
@@ -80,13 +130,23 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings }: Props) {
         )}
       </div>
 
+      {thread.demoPending && (
+        <div className="agent-proposal validated">
+          <p className="agent-proposal-state"><ShieldCheck size={13} /> Review this change, then apply it. The files stay as they are until you do.</p>
+          <div className="agent-proposal-actions">
+            <button className="agent-discard" onClick={thread.discardDemo}>Undo</button>
+            <button className="agent-apply" onClick={thread.applyDemo}><Send size={12} /> Apply</button>
+          </div>
+        </div>
+      )}
+
       {footer.kind !== "empty" && (
         <div className={`agent-proposal ${footer.kind}`}>
           <div className="agent-proposal-files">
             {footer.changedFiles.map((file) => <span key={file} className="agent-file-chip">{file}</span>)}
           </div>
           <p className="agent-proposal-state">
-            {footer.kind === "validated" && <><ShieldCheck size={13} /> {validationSummary(footer.checked)}</>}
+            {footer.kind === "validated" && <><ShieldCheck size={13} /> {validationSummary(footer.checked)}{footer.changedFiles.includes("actions.json") ? " This list stops at 100 rows." : ""}</>}
             {footer.kind === "unvalidated" && <><Loader2 size={13} className="spin" /> Waiting for the Validation Gate.</>}
             {footer.kind === "blocked" && <><CircleAlert size={13} /> <em>{footer.stage}</em> {footer.message}</>}
           </p>
@@ -99,39 +159,23 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings }: Props) {
         </div>
       )}
 
-      <div className="prompt-box">
-        <textarea aria-label="Message to agent"
-          value={thread.draft}
-          rows={2}
-          placeholder={blocker || "Describe a change…"}
-          onChange={(event) => thread.setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" || event.shiftKey) return;
-            event.preventDefault();
-            void thread.submit();
-          }}
-        />
-        <div>
-          <button className="agent-model-chip" onClick={onOpenSettings} title="Agent settings">
-            <Settings2 size={11} />
-            <span>{blocker || (live ? `${provider.label} · ${model}` : "Offline demo")}</span>
-          </button>
-          {running
-            ? <button className="agent-stop" onClick={thread.interrupt}><Square size={11} /> Stop</button>
-            : (
-              <button
-                className="agent-send"
-                aria-label="Send"
-                title={blocker}
-                disabled={!thread.canSend}
-                onClick={() => void thread.submit()}
-              >
-                <ArrowUp size={15} />
-              </button>
-            )}
-        </div>
-      </div>
     </>
+  );
+}
+
+const examplePrompts = [
+  "Let anyone with the link add a row.",
+  "Stop the list at 100 rows.",
+  "Ask for a name before the app opens.",
+];
+
+function ExamplePrompts({ onPick }: { onPick: (sentence: string) => void }) {
+  return (
+    <div className="agent-examples">
+      {examplePrompts.map((sentence) => (
+        <button key={sentence} type="button" onClick={() => onPick(sentence)}>{sentence}</button>
+      ))}
+    </div>
   );
 }
 

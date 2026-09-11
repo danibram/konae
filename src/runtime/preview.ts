@@ -1,4 +1,5 @@
 import type { MiniAppProject } from "../lib/types";
+import { renderCapsuleDocument } from "./artifact";
 
 const runtimeClient = String.raw`
 (() => {
@@ -8,18 +9,20 @@ const runtimeClient = String.raw`
   let connectRuntime;
   const runtimeReady = new Promise((resolve) => { connectRuntime = resolve; });
 
+  let capability;
+  const methods = { 'actions.invoke': 'actions_invoke', 'auth.session': 'auth_session', 'auth.signIn': 'preview_sign_in', 'auth.signOut': 'auth_logout', 'files.list': 'files_list', 'files.upload': 'preview_files_upload', 'runtime.ready': 'preview_ready', 'preview.error': 'preview_error' };
+  function rpc(method, params = {}) {
+    return new Promise((resolve, reject) => {
+      const id = 'req_' + (++sequence);
+      pending.set(id, { resolve, reject });
+      runtimePort.postMessage({ jsonrpc: '2.0', id, method, params: { ...params, _meta: { 'littlebox/capability': capability } } });
+    });
+  }
   function request(method, payload) {
-    return runtimeReady.then(() => new Promise((resolve, reject) => {
-      const requestId = 'req_' + (++sequence);
-      pending.set(requestId, { resolve, reject });
-      runtimePort.postMessage({
-        channel: 'littlebox-runtime',
-        type: 'request',
-        requestId,
-        method,
-        payload
-      });
-    }));
+    return runtimeReady.then(() => rpc('tools/call', { name: methods[method], arguments: payload || {} })).then(result => {
+      if (result.isError) throw new Error(result.content?.[0]?.text || 'Preview tool failed');
+      return result.structuredContent.result;
+    });
   }
 
   addEventListener('message', (event) => {
@@ -30,16 +33,20 @@ const runtimeClient = String.raw`
     // missed handshake, and refusing it would strand the app on a dead one.
     if (runtimePort) runtimePort.close();
     runtimePort = event.ports[0];
+    capability = message.capability;
     runtimePort.onmessage = ({ data: response }) => {
-      if (!response || response.channel !== 'littlebox-runtime' || response.type !== 'response') return;
-      const handler = pending.get(response.requestId);
+      if (!response || response.jsonrpc !== '2.0') return;
+      const handler = pending.get(response.id);
       if (!handler) return;
-      pending.delete(response.requestId);
-      if (response.ok) handler.resolve(response.result);
-      else handler.reject(new Error(response.error || 'Runtime call failed'));
+      pending.delete(response.id);
+      if (response.error) handler.reject(new Error(response.error.message || 'Preview MCP failed'));
+      else handler.resolve(response.result);
     };
     runtimePort.start();
-    connectRuntime();
+    rpc('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'littlebox-preview-app', version: '0.1.0' } }).then(() => {
+      runtimePort.postMessage({ jsonrpc: '2.0', method: 'notifications/initialized', params: { _meta: { 'littlebox/capability': capability } } });
+      connectRuntime();
+    }).catch(() => {});
   });
 
   /**
@@ -92,14 +99,15 @@ const runtimeClient = String.raw`
     },
     files: {
       list: () => request('files.list'),
-      upload: (file) => new Promise((resolve, reject) => {
+      upload: (file, options) => new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onerror = () => reject(reader.error);
         reader.onload = () => request('files.upload', {
           name: file.name,
           type: file.type,
           size: file.size,
-          dataUrl: reader.result
+          dataUrl: reader.result,
+          visibility: options && options.visibility === 'public' ? 'public' : 'private'
         }).then(resolve, reject);
         reader.readAsDataURL(file);
       })
@@ -107,37 +115,17 @@ const runtimeClient = String.raw`
   };
 })();`;
 
-function escapeInlineScript(value: string): string {
-  return value.replaceAll("</script", "<\\/script");
-}
-
 /**
- * The preview must run a Capsule exactly as a Deployment does — same module
- * semantics, same error handling — or an app can work in one and be dead in the
- * other. Keep this shape in step with the Kernel's renderDeployment.
+ * The preview must run a Capsule exactly as a Deployment does, same module
+ * semantics and same error handling, or an app can work in one and be dead in
+ * the other. Both go through renderCapsuleDocument; only the SDK transport
+ * differs.
  */
 export function createPreviewDocument(project: MiniAppProject): string {
-  const code = escapeInlineScript(project.files["app.js"]);
-  return `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>${project.files["styles.css"]}</style>
-  </head>
-  <body>
-    ${project.files["index.html"]}
-    <script>${runtimeClient}</script>
-    <script type="module">
-      try {
-        ${code}
-      } catch (error) {
-        const pre = document.createElement('pre');
-        pre.style.cssText = 'margin:20px;padding:16px;background:#3b1717;color:#ffdede;white-space:pre-wrap';
-        pre.textContent = error.stack || error.message;
-        document.body.append(pre);
-      }
-    </script>
-  </body>
-</html>`;
+  return renderCapsuleDocument({
+    body: project.files["index.html"] ?? "",
+    styles: project.files["styles.css"] ?? "",
+    script: project.files["app.js"] ?? "",
+    runtime: runtimeClient,
+  });
 }

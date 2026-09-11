@@ -1,6 +1,6 @@
 import type { Database, SqlJsStatic } from "sql.js";
 import { parseServerActionSource, resolveServerAction, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
-import { firstSqlKeyword } from "../runtime/security";
+import { sqlStatementTokens, sqlWordsOf, type SqlToken } from "../lib/sql-tokens";
 import type {
   CapsuleFiles,
   CapsuleValidator,
@@ -41,8 +41,10 @@ export function createCapsuleValidator(loadSql: SqlJsLoader = loadBrowserSqlJs):
  * 1. `schema`   — schema.sql must execute on a fresh database, twice: the
  *                 runtime re-runs it on every database open, so a
  *                 non-idempotent statement kills the app on the next load. It
- *                 must also only build, never destroy: it is the one file that
- *                 runs against the owner's live data.
+ *                 may only hold CREATE TABLE and CREATE [UNIQUE] INDEX, the
+ *                 same allowlist the Kernel's schema authorizer enforces at
+ *                 deploy: it is the one file that runs against the owner's
+ *                 live data.
  * 2. `actions`  — actions.json must parse, every binding must resolve, and every
  *                 statement must prepare against the schema it declares.
  * 3. `migration`— only when the live database could be read: schema.sql must
@@ -66,6 +68,21 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     let clone: Database | undefined;
 
     try {
+      // Read before running: sql.js lacks some refused functions, and "no such
+      // function" would hide the reason the Kernel gives.
+      const refused = refusedStatements(files["schema.sql"]);
+      if (refused.length > 0) {
+        return failure({
+          stage: "schema",
+          message: `schema.sql may only create tables and indexes, but it contains ${refused.join(", ")}.`,
+          detail:
+            "The Kernel applies schema.sql with an authorizer that allows CREATE TABLE and CREATE [UNIQUE] INDEX and nothing else, " +
+            "and refuses the functions that load extensions or read and write host files, so any of these fails at deploy. schema.sql is also re-run against the owner's live database on every open, so a " +
+            "statement that writes rows would rewrite real data each time. Use CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS, " +
+            "and leave data changes to server actions.",
+        });
+      }
+
       fresh = new SQL.Database();
       try {
         fresh.run(files["schema.sql"]);
@@ -84,19 +101,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
         return failure({
           stage: "schema",
           message: "schema.sql is not idempotent: it fails when it is run a second time.",
-          detail: `${describe(error)} — schema.sql runs again on every database open, so use CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS and never ALTER an existing table here.`,
-        });
-      }
-
-      const destructive = destructiveStatements(fresh, files["schema.sql"]);
-      if (destructive.length > 0) {
-        return failure({
-          stage: "schema",
-          message: `schema.sql may only create structure and seed rows, but it starts a statement with ${destructive.join(", ")}.`,
-          detail:
-            "schema.sql is re-run against the owner's live database on every open, so a statement that removes or rewrites what is " +
-            "already there deletes real data. The migration stage cannot catch it either: that runs on a copy. Express the change as " +
-            "CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS, and leave data changes to server actions.",
+          detail: `${describe(error)}. schema.sql runs again on every database open, so use CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS and never ALTER an existing table here.`,
         });
       }
       checked.push("schema");
@@ -156,31 +161,88 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
 }
 
 /**
- * Statements schema.sql is not allowed to contain, by their leading keyword.
- * An allowlist rather than a denylist: this file runs against real data, so a
- * keyword nobody thought about must be refused, not waved through.
+ * What schema.sql may not run, named for the error. The allowlist matches the
+ * Kernel's schema authorizer (kernel-rs/src/main.rs, `apply_additive_schema`):
+ * CREATE TABLE and CREATE [UNIQUE] INDEX, nothing else. INSERT, PRAGMA and
+ * transaction statements run fine in sql.js but are refused at deploy. SQL
+ * functions are allowed (a CHECK, an index expression, a partial index, a
+ * generated column), except the ones that reach outside the database. The
+ * script is split by the tokenizer rather than by preparing each statement:
+ * preparing a second CREATE TABLE fails once the table exists, and a naive
+ * split on ";" would cut a trigger body in half.
  */
-const schemaKeywords = new Set(["CREATE", "INSERT", "PRAGMA", "BEGIN", "COMMIT", "END", "SAVEPOINT", "RELEASE"]);
-
-/**
- * The leading keywords of any statement schema.sql may not run. SQLite itself
- * splits the script — a naive split on ";" would cut a trigger body in half and
- * read its UPDATE as a top-level statement.
- */
-function destructiveStatements(fresh: Database, schema: string): string[] {
+function refusedStatements(schema: string): string[] {
   const found = new Set<string>();
-  try {
-    for (const statement of fresh.iterateStatements(schema)) {
-      const keyword = firstSqlKeyword(statement.getSQL());
-      statement.free();
-      if (keyword && !schemaKeywords.has(keyword)) found.add(keyword);
+  for (const tokens of sqlStatementTokens(schema)) {
+    const words = sqlWordsOf(tokens);
+    if (words.length === 0) {
+      found.add("a statement that is not CREATE TABLE or CREATE INDEX");
+      continue;
     }
-  } catch {
-    // The script already ran twice, so it parses; if this walk cannot repeat that
-    // it says nothing about the statements, and inventing an error would be worse.
-    return [];
+    const refused = words[0] === "CREATE" ? refusedCreate(tokens, words) : words[0];
+    if (refused) found.add(refused);
+    for (const name of refusedFunctions(tokens)) found.add(`${name}()`);
   }
   return [...found];
+}
+
+/**
+ * Functions the Kernel's authorizer refuses by name: they load native code or
+ * read and write files on the host. sql.js does not ship most of them, so the
+ * gate has to name them rather than wait for the statement to fail.
+ */
+const refusedFunctionNames = new Set(["load_extension", "readfile", "writefile", "fts3_tokenizer"]);
+
+/** The refused functions `tokens` call. A quoted name still calls the function. */
+function refusedFunctions(tokens: SqlToken[]): string[] {
+  const found: string[] = [];
+  tokens.forEach((token, index) => {
+    if (token.kind !== "word" && token.kind !== "identifier") return;
+    const next = tokens[index + 1];
+    const name = token.text.toLowerCase();
+    if (next?.kind === "symbol" && next.text === "(" && refusedFunctionNames.has(name)) found.push(name);
+  });
+  return found;
+}
+
+/**
+ * The CREATE forms the Kernel will not deploy. A trigger or a view passes
+ * sql.js but fails the authorizer, and a trigger could delete rows whenever
+ * something writes to its table. CREATE TABLE ... AS (a SELECT, a VALUES list
+ * or a WITH query) copies rows into the new table, which the authorizer
+ * refuses as an INSERT. TEMP objects are a different authorizer action and are
+ * refused too, whether the statement says TEMP or names the temp schema.
+ */
+function refusedCreate(tokens: SqlToken[], words: string[]): string | null {
+  const object = words[1] === "UNIQUE" ? words[2] : words[1];
+  if (object !== "INDEX" && object !== "TABLE") return `CREATE ${words[1] ?? ""}`.trim();
+
+  const start = tokens.findIndex((token) => token.kind === "word" && token.text.toUpperCase() === object);
+  let index = start + 1;
+  // IF NOT EXISTS
+  if (isWord(tokens[index], "IF")) index += 3;
+  const schema = tokens[index + 1]?.kind === "symbol" && (tokens[index + 1] as { text: string }).text === "." ? nameOf(tokens[index]) : null;
+  if (schema && ["temp", "temporary"].includes(schema.toLowerCase())) return `CREATE ${object} ${schema}.*`;
+  if (object === "INDEX") return null;
+
+  // The column list opens with the first top-level "(". An AS before it is a
+  // CREATE TABLE ... AS query; GENERATED ALWAYS AS sits inside the list.
+  const outer = tokens[start].depth;
+  for (let at = index; at < tokens.length; at += 1) {
+    const token = tokens[at];
+    if (token.depth !== outer) continue;
+    if (token.kind === "symbol" && token.text === "(") return null;
+    if (isWord(token, "AS")) return "CREATE TABLE ... AS";
+  }
+  return null;
+}
+
+function isWord(token: SqlToken | undefined, word: string): boolean {
+  return token?.kind === "word" && token.text.toUpperCase() === word;
+}
+
+function nameOf(token: SqlToken | undefined): string | null {
+  return token && (token.kind === "word" || token.kind === "identifier") ? token.text : null;
 }
 
 function checkActions(db: Database, program: ServerActionProgram, stage: "actions" | "migration"): ValidationError[] {

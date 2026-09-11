@@ -1,6 +1,7 @@
+import deployScript from "./export-scripts/deploy.mjs?raw";
 import { createTar, normalizeArchivePath, type TarEntry } from "./tar";
 import { normalizeProjectPath } from "./project-files";
-import type { BuildArtifact } from "../runtime/artifact";
+import { runtimeScriptAttribute, type BuildArtifact } from "../runtime/artifact";
 import type { MiniAppProject } from "./types";
 import type { PortableProjectState } from "../deployments/client";
 
@@ -18,9 +19,29 @@ COPY kernel-rs/src ./src
 RUN cargo build --release --locked
 
 FROM debian:bookworm-slim
+RUN groupadd --system --gid 10001 littlebox \\
+  && useradd --system --uid 10001 --gid littlebox --home-dir /data --no-create-home --shell /usr/sbin/nologin littlebox \\
+  && mkdir -p /data \\
+  && chown littlebox:littlebox /data \\
+  && chmod 0700 /data
 COPY --from=build /src/target/release/littlebox-kernel /usr/local/bin/littlebox-kernel
+COPY entrypoint.sh /usr/local/bin/littlebox-entrypoint
+RUN chmod 755 /usr/local/bin/littlebox-entrypoint
+ENV LITTLEBOX_BIND=0.0.0.0 LITTLEBOX_DATA_DIR=/data
 EXPOSE 8787
-ENTRYPOINT ["littlebox-kernel"]
+ENTRYPOINT ["/usr/local/bin/littlebox-entrypoint"]
+`;
+
+const entrypoint = `#!/bin/sh
+set -eu
+if [ "$(id -u)" = 0 ]; then
+  mkdir -p /data
+  chown littlebox:littlebox /data
+  chmod 0700 /data
+  export HOME=/data
+  exec setpriv --reuid=littlebox --regid=littlebox --init-groups --inh-caps=-all -- /usr/local/bin/littlebox-kernel
+fi
+exec /usr/local/bin/littlebox-kernel
 `;
 
 const composeFile = `services:
@@ -31,12 +52,13 @@ const composeFile = `services:
     env_file:
       - .env
     environment:
+      LITTLEBOX_BIND: "0.0.0.0"
       LITTLEBOX_KERNEL_PORT: "8787"
       LITTLEBOX_DATA_DIR: /data
       LITTLEBOX_PUBLIC_ORIGIN: http://localhost:\u0024{LITTLEBOX_PORT:-8787}
       LITTLEBOX_HOST_SUFFIX: localhost
     ports:
-      - "\u0024{LITTLEBOX_PORT:-8787}:8787"
+      - "127.0.0.1:\u0024{LITTLEBOX_PORT:-8787}:8787"
     volumes:
       - ./data:/data
 `;
@@ -76,7 +98,7 @@ const result = await build({
 const script = result.outputFiles.find((file) => file.path.endsWith('.js'))?.text;
 if (!script) throw new Error('The app build did not produce JavaScript.');
 const importedCss = result.outputFiles.find((file) => file.path.endsWith('.css'))?.text ?? '';
-const runtimeTag = artifactTemplate.files['index.html'].match(/<script>[\\s\\S]*?<\\/script>/)?.[0];
+const runtimeTag = artifactTemplate.files['index.html'].match(/<script data-littlebox-runtime>[\\s\\S]*?<\\/script>/)?.[0];
 if (!runtimeTag) throw new Error('The exported artifact does not contain the Littlebox runtime.');
 const body = await readOptional(path.join(root, 'app/index.html')) ?? '<main id=app></main>';
 const sourceStyles = await readOptional(path.join(root, 'app/styles.css')) ?? '';
@@ -96,78 +118,6 @@ async function readOptional(file) {
 }
 `;
 
-const deployScript = `import { readFile, readdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-
-const root = process.cwd();
-const envText = await readFile(path.join(root, '.env'), 'utf8');
-const env = Object.fromEntries(envText.split(/\\r?\\n/).filter((line) => line && !line.startsWith('#')).map((line) => {
-  const split = line.indexOf('=');
-  return [line.slice(0, split), line.slice(split + 1)];
-}));
-const port = env.LITTLEBOX_PORT || '8787';
-const project = JSON.parse(await readFile(path.join(root, 'littlebox/project.json'), 'utf8'));
-const artifact = JSON.parse(await readFile(path.join(root, 'littlebox/artifact.json'), 'utf8'));
-const files = await readProjectFiles(path.join(root, 'app'));
-const stateMarkerPath = path.join(root, 'littlebox/deployment.json');
-let portableStatePending = true;
-try {
-  const previous = JSON.parse(await readFile(stateMarkerPath, 'utf8'));
-  portableStatePending = previous.projectId !== project.id || previous.port !== port;
-} catch (error) {
-  if (error.code !== 'ENOENT') throw error;
-}
-const payload = {
-  project: { id: project.id, name: project.name, slug: project.slug, files, manifest: project.manifest },
-  visibility: project.manifest.visibility || 'public',
-  artifact,
-};
-if (portableStatePending) {
-  try {
-    payload.initialDatabase = (await readFile(path.join(root, 'littlebox/initial-database.sqlite'))).toString('base64');
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
-  for (const [field, filename] of [['initialIdentity', 'initial-identity.sqlite'], ['initialFiles', 'initial-files.portable']]) {
-    try {
-      payload[field] = (await readFile(path.join(root, 'littlebox', filename))).toString('base64');
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
-  }
-}
-let response = await fetch('http://127.0.0.1:' + port + '/_littlebox/admin/deploy', {
-  method: 'POST',
-  headers: { 'content-type': 'application/json', 'x-littlebox-admin-key': env.LITTLEBOX_ADMIN_KEY },
-  body: JSON.stringify(payload),
-});
-let body = await response.json().catch(() => ({}));
-if (response.status === 409 && body.error === 'Portable state can only be imported on the first deployment.'
-    && ('initialDatabase' in payload || 'initialIdentity' in payload || 'initialFiles' in payload)) {
-  delete payload.initialDatabase;
-  delete payload.initialIdentity;
-  delete payload.initialFiles;
-  response = await fetch('http://127.0.0.1:' + port + '/_littlebox/admin/deploy', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-littlebox-admin-key': env.LITTLEBOX_ADMIN_KEY },
-    body: JSON.stringify(payload),
-  });
-  body = await response.json().catch(() => ({}));
-}
-if (!response.ok || !body.result?.url) throw new Error(body.error || 'Kernel deployment failed.');
-await writeFile(stateMarkerPath, JSON.stringify({ projectId: project.id, port, deploymentId: body.result.id }, null, 2) + '\\n');
-console.log('App ready at ' + body.result.url);
-
-async function readProjectFiles(directory, prefix = '') {
-  const result = {};
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const relative = prefix ? prefix + '/' + entry.name : entry.name;
-    if (entry.isDirectory()) Object.assign(result, await readProjectFiles(path.join(directory, entry.name), relative));
-    else if (entry.isFile()) result[relative] = await readFile(path.join(directory, entry.name), 'utf8');
-  }
-  return result;
-}
-`;
 
 const startScript = `#!/bin/sh
 set -eu
@@ -226,15 +176,32 @@ Install Node.js 20 or newer, npm, Docker, and curl before starting.
 
 ## Start
 
-Run \u0060./start.sh\u0060. The script installs the pinned build tool, rebuilds the app, starts the Kernel, and loads the app. It creates \u0060.env\u0060 with a local admin key the first time it runs. Open the URL printed by the script.
+Run \u0060./start.sh\u0060. The script installs the pinned build tool, rebuilds the app, starts the Kernel, and loads the app. It creates \u0060.env\u0060 with a local admin key the first time it runs. Open the URL printed by the script. Docker publishes the Kernel only on 127.0.0.1, and the process drops to the unprivileged user \u0060littlebox\u0060 after locking \u0060data/\u0060 to that user.
 
 Edit the files under \u0060app/\u0060, then run \u0060npm run build\u0060 and \u0060npm run deploy\u0060. The Kernel serves the new artifact at the same local app URL.
 
 Run \u0060docker compose down\u0060 to stop the Kernel. The app database and its backups remain under \u0060data/\u0060.
 
+## Run without Docker
+
+Install Rust 1.91 or newer as well. Create \u0060.env\u0060 from \u0060.env.example\u0060 with a long random \u0060LITTLEBOX_ADMIN_KEY\u0060, then start the Kernel from this folder:
+
+\u0060\u0060\u0060sh
+npm install
+npm run build
+set -a; . ./.env; set +a
+LITTLEBOX_DATA_DIR=data LITTLEBOX_KERNEL_PORT=\u0024{LITTLEBOX_PORT:-8787} LITTLEBOX_PUBLIC_ORIGIN=http://localhost:\u0024{LITTLEBOX_PORT:-8787} cargo run --release --locked --manifest-path kernel-rs/Cargo.toml
+\u0060\u0060\u0060
+
+When it answers on \u0060/_littlebox/health\u0060, run \u0060npm run deploy\u0060 in a second terminal. The database lives under \u0060data/\u0060 here too.
+
+## Changing the database
+
+\u0060app/schema.ts\u0060 is the Database Model the Littlebox editor used to plan migrations. This export has no migration generator, so editing it changes nothing. Change \u0060app/schema.sql\u0060 instead, and only in ways the Kernel accepts on every deploy: new tables and indexes with \u0060IF NOT EXISTS\u0060. Back up \u0060data/\u0060 before any change to an existing table.
+
 Keep \u0060.env\u0060 private. It contains the owner key for this local Kernel. The exported app source and static artifact contain no Littlebox-hosted credentials.
 
-The optional \u0060littlebox/initial-database.sqlite\u0060, \u0060littlebox/initial-identity.sqlite\u0060, and \u0060littlebox/initial-files.portable\u0060 files hold portable app state supplied during export. User password hashes and file attachments transfer with the app, while the target Kernel starts new sessions.
+The optional \u0060littlebox/initial-database.sqlite\u0060, \u0060littlebox/initial-identity.sqlite\u0060, \u0060littlebox/initial-files.portable\u0060 and \u0060littlebox/initial-signup-policy.json\u0060 files hold portable app state supplied during export. User password hashes, file attachments and the signup policy transfer with the app, while the target Kernel starts new sessions. The first deployment imports this state; later deployments keep the target's current state.
 `;
 
 export function buildProjectExport(
@@ -246,7 +213,14 @@ export function buildProjectExport(
   if (artifact.version !== 1 || artifact.entrypoint !== "index.html" || !artifact.files["index.html"]) {
     throw new Error("The export requires a valid version 1 Build Artifact.");
   }
+  // scripts/build.mjs finds the runtime by this marker; without it every rebuild would fail.
+  if (!artifact.files["index.html"].includes(`<script ${runtimeScriptAttribute}>`)) {
+    throw new Error("The Build Artifact does not mark its Littlebox runtime script. Rebuild the project before exporting.");
+  }
   const portableState = state instanceof Uint8Array ? { initialDatabase: state } : state;
+  if (portableState?.visibility !== undefined && portableState.visibility !== "public" && portableState.visibility !== "private") {
+    throw new Error("The portable snapshot has invalid visibility.");
+  }
   validatePortableBytes("SQLite snapshot", portableState?.initialDatabase, maxPortableDatabaseBytes);
   validatePortableBytes("Auth database", portableState?.initialIdentity, maxPortableIdentityBytes);
   validatePortableBytes("File data", portableState?.initialFiles, maxPortableFilesBytes);
@@ -271,9 +245,10 @@ export function buildProjectExport(
   const entries: TarEntry[] = [
     { path: "README.md", contents: readme },
     { path: "Dockerfile", contents: dockerfile },
+    { path: "entrypoint.sh", contents: entrypoint, mode: 0o755 },
     { path: "compose.yaml", contents: composeFile },
     { path: ".env.example", contents: "LITTLEBOX_PORT=8787\nLITTLEBOX_ADMIN_KEY=replace-me\n" },
-    { path: ".gitignore", contents: ".env\ndata/\n" },
+    { path: ".gitignore", contents: ".env\ndata/\nnode_modules/\nlittlebox/initial-*\n" },
     { path: "package.json", contents: packageManifest },
     { path: "scripts/build.mjs", contents: buildScript },
     { path: "scripts/deploy.mjs", contents: deployScript },
@@ -282,13 +257,14 @@ export function buildProjectExport(
       id: project.id,
       name: project.name,
       slug: project.slug,
-      manifest: project.manifest,
+      manifest: portableState?.visibility ? { ...project.manifest, visibility: portableState.visibility } : project.manifest,
       databaseModel: project.databaseModel,
     }, null, 2) },
     { path: "littlebox/artifact.json", contents: JSON.stringify(normalizedArtifact, null, 2) },
-    ...(portableState?.initialDatabase ? [{ path: "littlebox/initial-database.sqlite", contents: portableState.initialDatabase }] : []),
-    ...(portableState?.initialIdentity ? [{ path: "littlebox/initial-identity.sqlite", contents: portableState.initialIdentity }] : []),
-    ...(portableState?.initialFiles ? [{ path: "littlebox/initial-files.portable", contents: portableState.initialFiles }] : []),
+    ...(portableState?.initialDatabase ? [{ path: "littlebox/initial-database.sqlite", contents: portableState.initialDatabase, mode: 0o600 }] : []),
+    ...(portableState?.initialIdentity ? [{ path: "littlebox/initial-identity.sqlite", contents: portableState.initialIdentity, mode: 0o600 }] : []),
+    ...(portableState?.initialFiles ? [{ path: "littlebox/initial-files.portable", contents: portableState.initialFiles, mode: 0o600 }] : []),
+    ...(portableState?.initialSignupPolicy ? [{ path: "littlebox/initial-signup-policy.json", contents: JSON.stringify(portableState.initialSignupPolicy), mode: 0o600 }] : []),
     ...files,
     ...kernelFiles.map((file) => ({ path: safeProjectPath(file.path), contents: file.contents })),
   ];

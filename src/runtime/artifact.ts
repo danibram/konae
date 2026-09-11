@@ -4,33 +4,10 @@ export type BuildArtifact = {
   files: Record<string, string>;
 };
 
-const hostedRuntime = String.raw`(() => {
-  async function call(path, init) {
-    const response = await fetch(path, { ...init, credentials: 'same-origin', headers: { 'content-type': 'application/json', ...(init && init.headers) } });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || 'Littlebox Kernel request failed');
-    return body.result;
-  }
-  window.miniapp = {
-    actions: { call: (name, input = {}) => call('/_littlebox/actions/' + encodeURIComponent(name), { method: 'POST', body: JSON.stringify(input) }) },
-    auth: {
-      session: () => call('/_littlebox/session'),
-      signIn: () => { window.location.assign('/_littlebox/login'); },
-      signOut: () => call('/_littlebox/auth/logout', { method: 'POST', body: '{}' })
-    },
-    files: {
-      list: () => call('/_littlebox/files'),
-      upload: (file) => new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(reader.error);
-        reader.onload = () => call('/_littlebox/files', {
-          method: 'POST', body: JSON.stringify({ name: file.name, type: file.type, size: file.size, dataUrl: reader.result })
-        }).then(resolve, reject);
-        reader.readAsDataURL(file);
-      })
-    }
-  };
-})();`;
+import hostedRuntime from "../mcp/runtime.js?raw";
+
+/** The attribute that marks the SDK script, so tools that rebuild a document can find it. */
+export const runtimeScriptAttribute = "data-littlebox-runtime";
 
 export function createHostedArtifact(input: {
   body: string;
@@ -45,11 +22,27 @@ export function createHostedArtifact(input: {
     version: 1,
     entrypoint: "index.html",
     files: {
-      "index.html": `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${deploymentMeta}<style>${input.styles}</style></head>
-<body>${input.body}<script>${hostedRuntime}</script><script type="module">${escapeInlineScript(input.script)}</script></body></html>`,
+      "index.html": renderCapsuleDocument({ ...input, head: deploymentMeta, runtime: hostedRuntime }),
     },
   };
+}
+
+/**
+ * The one document shape a Capsule runs in, shared by the preview and every
+ * Deployment. The compiled module is emitted as is: esbuild output may end in a
+ * top-level `export`, which is only legal at module scope, and a startup throw
+ * must reach the runtime's window error reporting instead of a local catch.
+ */
+export function renderCapsuleDocument(input: {
+  body: string;
+  styles: string;
+  script: string;
+  runtime: string;
+  head?: string;
+}): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${input.head ?? ""}<style>${input.styles}</style></head>
+<body>${input.body}<script ${runtimeScriptAttribute}>${escapeInlineScript(input.runtime)}</script><script type="module">${escapeInlineScript(input.script)}</script></body></html>`;
 }
 
 function escapeInlineScript(value: string) {

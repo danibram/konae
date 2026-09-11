@@ -49,11 +49,24 @@ describe("workspace project registry", () => {
     expect(architecture?.manifest.runtime.database.actions).toEqual([]);
   });
 
+  test("refreshes an unedited starter when its copy still hides the guest and stays light", () => {
+    const stale = cloneStarter();
+    stale.files["index.html"] = stale.files["index.html"].replace('class="identity">Guest', 'class="identity">guest');
+    stale.files["styles.css"] = ":root { color-scheme: light; }";
+    stale.files["app.js"] = stale.files["app.js"].replace("identity.textContent = session.role === 'anonymous' ? 'Guest' : session.name;", "identity.textContent = session.name;");
+    const storage = memoryStorage({ "littlebox:projects": JSON.stringify([stale]) });
+    const loaded = loadWorkspaceState(storage).projects.find((project) => project.id === stale.id);
+    expect(loaded?.files["app.js"]).toContain("Nothing here yet");
+    expect(loaded?.files["index.html"]).toContain(">Guest<");
+    expect(loaded?.files["styles.css"]).toContain("prefers-color-scheme");
+    expect(loaded?.files["app.js"]).toContain("Guest");
+  });
+
   test("resets architecture to its own source instead of the starter app", () => {
     const architecture = loadWorkspaceState(memoryStorage()).projects.find((project) => project.id === architectureProjectId);
     expect(architecture).toBeDefined();
     const reset = resetWorkspaceProject({ ...architecture!, files: { ...architecture!.files, "index.html": "changed" } });
-    expect(reset.files["index.html"]).toContain("mapa del sistema");
+    expect(reset.files["index.html"]).toContain("system map");
     expect(reset.files["index.html"]).not.toContain("task-form");
   });
 

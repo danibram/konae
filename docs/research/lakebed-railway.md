@@ -1,202 +1,202 @@
-# Lakebed en Railway: qué es y qué aprender para el mini-app builder
+# Lakebed on Railway: what it is and what to learn for the mini-app builder
 
-_Investigación cerrada el 13 de agosto de 2026. Se han usado únicamente artefactos publicados por Lakebed/Theo y documentación oficial de Railway. Cuando una conclusión se deduce de esos artefactos, se marca como inferencia._
+_Research closed on 13 August 2026. It uses only artifacts published by Lakebed/Theo and official Railway documentation. When a conclusion is deduced from those artifacts, it is marked as an inference._
 
-## Resumen ejecutivo
+## Executive summary
 
-Lakebed no es «SQLite alojado en Railway» ni un template que levante un contenedor por aplicación. Es un runtime **agent-native** para pequeñas aplicaciones TypeScript, llamadas _capsules_, que compila una superficie deliberadamente limitada y despliega cada app como un **tenant lógico** dentro de una plataforma compartida. La web lo identifica como producto en **alpha** y el paquete oficial lo describe como «Agent-native CLI and runtime for building and deploying Lakebed capsules» ([lakebed.dev](https://lakebed.dev/), [`lakebed@0.0.29`](https://unpkg.com/lakebed@0.0.29/package.json)).
+Lakebed is neither "SQLite hosted on Railway" nor a template that starts one container per application. It is an **agent-native** runtime for small TypeScript applications, called _capsules_, that compiles a deliberately limited surface and deploys each app as a **logical tenant** inside a shared platform. The website labels the product **alpha**, and the official package describes it as "Agent-native CLI and runtime for building and deploying Lakebed capsules" ([lakebed.dev](https://lakebed.dev/), [`lakebed@0.0.29`](https://unpkg.com/lakebed@0.0.29/package.json)).
 
-La identidad exacta verificable es:
+The exact identity we can verify is:
 
-- producto y documentación: [lakebed.dev](https://lakebed.dev/) y [docs.lakebed.dev](https://docs.lakebed.dev/);
-- paquete público: [`lakebed@0.0.29` en npm/UNPKG](https://unpkg.com/lakebed@0.0.29/package.json);
-- repositorio declarado por el propio `package.json`: [`github.com/pingdotgg/lakebed`](https://github.com/pingdotgg/lakebed), subdirectorio `packages/lakebed` ([metadatos publicados](https://unpkg.com/lakebed@0.0.29/package.json)). Ese repositorio devuelve 404 sin credenciales en la fecha de esta investigación, por lo que **no es correcto presentarlo como repositorio público ni completamente auditable**.
+- product and documentation: [lakebed.dev](https://lakebed.dev/) and [docs.lakebed.dev](https://docs.lakebed.dev/);
+- public package: [`lakebed@0.0.29` on npm/UNPKG](https://unpkg.com/lakebed@0.0.29/package.json);
+- repository declared by the package's own `package.json`: [`github.com/pingdotgg/lakebed`](https://github.com/pingdotgg/lakebed), subdirectory `packages/lakebed` ([published metadata](https://unpkg.com/lakebed@0.0.29/package.json)). That repository returns 404 without credentials as of this research, so **it is not correct to present it as a public or fully auditable repository**.
 
-El namespace `pingdotgg` y el perfil oficial de Theo —que se presenta como CEO de Ping.gg y creador del T3 Stack— permiten describirlo prudentemente como un proyecto de Ping.gg asociado a Theo ([perfil oficial `t3dotgg`](https://github.com/t3dotgg)). No hay evidencia primaria de que Lakebed sea parte del T3 Stack ni use su arquitectura; no deben confundirse.
+The `pingdotgg` namespace and Theo's official profile, which presents him as CEO of Ping.gg and creator of the T3 Stack, allow us to describe it cautiously as a Ping.gg project associated with Theo ([official `t3dotgg` profile](https://github.com/t3dotgg)). There is no primary evidence that Lakebed is part of the T3 Stack or uses its architecture; the two should not be confused.
 
-La idea más valiosa para nosotros no es su implementación, sino su unidad de producto: una app restringida, barata y multitenant, con `deploy → URL temporal → claim`, auth, base de datos, realtime y objetos como primitivas de plataforma. Para nuestro objetivo mantendría esa experiencia, pero con contratos portables —SQL over HTTP, blobs, auth y deploy— y una implementación inicial en Cloudflare. Railway quedaría como _build plane_ y escape hatch para código que necesite Node/Docker, no como un servicio y volumen por mini-app.
+The most valuable idea for us is its product unit rather than its implementation: a restricted, cheap, multi-tenant app, with `deploy → temporary URL → claim`, and auth, database, realtime and objects as platform primitives. For our goal I would keep that experience, but with portable contracts (SQL over HTTP, blobs, auth and deploy) and an initial implementation on Cloudflare. Railway would remain a _build plane_ and escape hatch for code that needs Node/Docker, not a service and volume per mini-app.
 
-## Qué construye Lakebed
+## What Lakebed builds
 
-Una capsule tiene una forma mínima: `server/index.ts`, `client/index.tsx`, código compartido opcional y variables de servidor. El servidor importa una API propia de `lakebed/server`; el cliente usa Preact y `lakebed/client`. El flujo principal es `npx lakebed new`, `npx lakebed dev` y `npx lakebed deploy` ([documentación oficial](https://docs.lakebed.dev/), [README incluido en el paquete](https://app.unpkg.com/lakebed%400.0.25/files/README.md)).
+A capsule has a minimal shape: `server/index.ts`, `client/index.tsx`, optional shared code and server variables. The server imports Lakebed's own API from `lakebed/server`; the client uses Preact and `lakebed/client`. The main flow is `npx lakebed new`, `npx lakebed dev` and `npx lakebed deploy` ([official documentation](https://docs.lakebed.dev/), [README included in the package](https://app.unpkg.com/lakebed%400.0.25/files/README.md)).
 
-No pretende ejecutar cualquier repositorio generado por un agente. La documentación excluye imports npm arbitrarios, built-ins de Node, ficheros CSS y configuración libre de Tailwind/PostCSS; el estilo se expresa con clases Tailwind. El paquete publicado depende de `esbuild`, `preact` y `ws`, coherente con un bundle pequeño, interfaz reactiva y canal WebSocket ([referencia oficial](https://docs.lakebed.dev/reference/), [`package.json`](https://unpkg.com/lakebed@0.0.29/package.json)).
+It does not try to run any repository an agent generates. The documentation excludes arbitrary npm imports, Node built-ins, CSS files and free-form Tailwind/PostCSS configuration; styling is expressed with Tailwind classes. The published package depends on `esbuild`, `preact` and `ws`, which is consistent with a small bundle, a reactive interface and a WebSocket channel ([official reference](https://docs.lakebed.dev/reference/), [`package.json`](https://unpkg.com/lakebed@0.0.29/package.json)).
 
-Ésta es la topología que se puede reconstruir de los artefactos publicados:
+This is the topology that can be reconstructed from the published artifacts:
 
 ```mermaid
 flowchart LR
-  A["CLI / agente"] -->|"bundle + manifest"| C["control plane Lakebed"]
-  B["navegador Preact"] -->|"HTTP + WebSocket"| R["runner compartido"]
+  A["CLI / agent"] -->|"bundle + manifest"| C["Lakebed control plane"]
+  B["Preact browser"] -->|"HTTP + WebSocket"| R["shared runner"]
   C --> R
-  R --> P["PostgreSQL compartido\nestado lógico por deploy"]
-  B -->|"bytes vía runner"| O["bucket S3-compatible"]
+  R --> P["shared PostgreSQL\nlogical state per deploy"]
+  B -->|"bytes via runner"| O["S3-compatible bucket"]
   R --> O
-  D["dashboard de desarrollador"] --> C
+  D["developer dashboard"] --> C
 ```
 
-El README publicado expone entradas separadas para servicio alojado, dashboard y runner, configuración de dominio wildcard y runner respaldado por PostgreSQL. También documenta un tratamiento específico de las cabeceras de IP cuando el tráfico llega desde el edge proxy de Railway. Esto demuestra que el software publicado está preparado para Railway; **no demuestra por sí solo la topología exacta de producción ni que cada capsule sea un servicio Railway** ([README oficial publicado](https://app.unpkg.com/lakebed%400.0.25/files/README.md)).
+The published README exposes separate entry points for the hosted service, dashboard and runner, wildcard domain configuration and a PostgreSQL-backed runner. It also documents specific handling of IP headers when traffic arrives from Railway's edge proxy. This shows that the published software is prepared for Railway; **on its own it does not show the exact production topology, nor that each capsule is a Railway service** ([official published README](https://app.unpkg.com/lakebed%400.0.25/files/README.md)).
 
-## Datos: no es SQLite/libSQL
+## The data layer is not SQLite or libSQL
 
-Lakebed ofrece una API de tablas asíncrona propia, no SQL. El modelo soporta campos tipados e índices declarados; las relaciones se representan mediante IDs y las relaciones muchos-a-muchos con tablas de unión. No expone joins SQL: el acceso relacionado se resuelve con recorridos acotados en la aplicación ([Database API](https://docs.lakebed.dev/database/)).
+Lakebed offers its own asynchronous table API, not SQL. The model supports typed fields and declared indexes; relations are represented through IDs, and many-to-many relations through join tables. It exposes no SQL joins; related data is fetched through bounded traversals in the application ([Database API](https://docs.lakebed.dev/database/)).
 
-La semántica transaccional está bastante cuidada:
+The transactional semantics are carefully designed:
 
-- cada query obtiene un snapshot de solo lectura repetible;
-- una mutation o endpoint confirma filas e índices de forma atómica, con _read-your-writes_;
-- un error, timeout o exceso de cuota revierte toda la operación;
-- en la versión actual, las escrituras se serializan por deploy.
+- each query gets a repeatable read-only snapshot;
+- a mutation or endpoint commits rows and indexes atomically, with _read-your-writes_;
+- an error, timeout or quota overrun rolls back the whole operation;
+- in the current version, writes are serialized per deploy.
 
-La documentación dice que la codificación canónica se comparte entre ejecución en memoria, runtime de fuentes y ejecución en PostgreSQL; el README habla explícitamente de runners respaldados por PostgreSQL ([Database API](https://docs.lakebed.dev/database/), [README publicado](https://app.unpkg.com/lakebed%400.0.25/files/README.md)). Por tanto:
+The documentation says the canonical encoding is shared between in-memory execution, the source runtime and PostgreSQL execution; the README talks explicitly about PostgreSQL-backed runners ([Database API](https://docs.lakebed.dev/database/), [published README](https://app.unpkg.com/lakebed%400.0.25/files/README.md)). Therefore:
 
-- **no hay SQLite, libSQL ni Lake como motor de persistencia publicado**;
-- «SQLite over HTTP» no describe Lakebed;
-- `db export` produce JSON, no un fichero SQLite portable. Además, cada página de un export paginado es un snapshot separado, no una única fotografía point-in-time ([Database API](https://docs.lakebed.dev/database/)).
+- **there is no SQLite, libSQL or Lake as a published persistence engine**;
+- "SQLite over HTTP" does not describe Lakebed;
+- `db export` produces JSON, not a portable SQLite file. Each page of a paginated export is also a separate snapshot, not a single point-in-time picture ([Database API](https://docs.lakebed.dev/database/)).
 
-**Inferencia arquitectónica:** todo apunta a un PostgreSQL compartido con aislamiento lógico por `deployId`, porque la unidad de serialización, cuota, limpieza y despliegue es el deploy y no aparece ningún aprovisionamiento de base de datos por capsule. El esquema físico no es público, así que no debe afirmarse si usa schemas, tablas compartidas o bases separadas.
+**Architectural inference.** Everything points to a shared PostgreSQL with logical isolation by `deployId`, because the deploy is the unit of serialization, quota, cleanup and deployment, and no per-capsule database provisioning appears anywhere. The physical schema is not public, so we should not claim whether it uses schemas, shared tables or separate databases.
 
-Para nuestro producto, la API de Lakebed es atractiva por su sencillez para agentes, pero es una mala base de portabilidad: es una abstracción documental propietaria sobre PostgreSQL. Conviene dar al agente un SDK pequeño, pero implementarlo sobre **SQL estándar/SQLite over HTTP**, mantener migraciones explícitas y ofrecer export de base de datos completo.
+For our product, Lakebed's API is attractive because it is simple for agents, but it is a poor base for portability, because it is a proprietary document abstraction over PostgreSQL. We should give the agent a small SDK, but implement it on **standard SQL/SQLite over HTTP**, keep explicit migrations and offer a complete database export.
 
-## HTTP, realtime y caché
+## HTTP, realtime and cache
 
-El servidor puede declarar endpoints HTTP relativos a la app y leer método, URL, cabeceras, query y cuerpo como texto, JSON o bytes. Las queries del cliente son reactivas; las mutations publican cambios a suscriptores y la documentación contempla suscripciones WebSocket. La dependencia `ws` publicada refuerza esa lectura ([referencia oficial](https://docs.lakebed.dev/reference/), [`package.json`](https://unpkg.com/lakebed@0.0.29/package.json)).
+The server can declare HTTP endpoints relative to the app and read the method, URL, headers, query and body as text, JSON or bytes. Client queries are reactive; mutations publish changes to subscribers, and the documentation covers WebSocket subscriptions. The published `ws` dependency supports that reading ([official reference](https://docs.lakebed.dev/reference/), [`package.json`](https://unpkg.com/lakebed@0.0.29/package.json)).
 
-No hay una API general de caché de aplicación documentada. La política explícita encontrada es para objetos públicos: `Cache-Control: public, max-age=3600` ([Object storage](https://docs.lakebed.dev/storage/)). Sería incorrecto equiparar esto con KV, Cache API o un CDN programable. El realtime continuo también importa en Railway: conexiones WebSocket, conexiones a base de datos o telemetría pueden impedir que un servicio entre en reposo ([Railway Serverless](https://docs.railway.com/deployments/serverless)).
+There is no documented general application cache API. The only explicit policy found is for public objects, `Cache-Control: public, max-age=3600` ([Object storage](https://docs.lakebed.dev/storage/)). Treating this as equivalent to KV, the Cache API or a programmable CDN would be wrong. Continuous realtime also matters on Railway, because WebSocket connections, database connections or telemetry can keep a service from sleeping ([Railway Serverless](https://docs.railway.com/deployments/serverless)).
 
-## Assets y object storage
+## Assets and object storage
 
-Lakebed incorpora almacenamiento de objetos detrás del mismo origen de la app. Expone rutas HTTP para subir, leer objetos públicos o privados y borrar. El runner conduce los bytes entre navegador y un bucket compatible con S3; la documentación recalca que no pasan por handlers de la capsule ([Object storage](https://docs.lakebed.dev/storage/)).
+Lakebed includes object storage behind the app's own origin. It exposes HTTP routes to upload, read public or private objects, and delete. The runner moves the bytes between the browser and an S3-compatible bucket; the documentation stresses that they do not pass through capsule handlers ([Object storage](https://docs.lakebed.dev/storage/)).
 
-Propiedades relevantes:
+Relevant properties:
 
-- los objetos públicos usan IDs no adivinables como capability URL y caché pública de una hora;
-- los privados requieren un usuario autenticado del mismo deploy, pero «privado» no significa automáticamente propietario del fichero: la app controla a quién revela la clave;
-- subir o borrar exige una cuenta Google real con email verificado; invitados no pueden hacerlo;
-- se guarda uploader, email y timestamp como metadatos;
-- se bloquean HTML/JavaScript y tipos o magic bytes ejecutables; las respuestas añaden `nosniff`, CSP y descarga como attachment;
-- límite publicado: 5 MiB por fichero y 100 MiB totales por desarrollador entre sus deploys;
-- no hay multipart, resumable uploads, transforms de imagen, listado público ni API `ctx.storage` de servidor.
+- public objects use unguessable IDs as capability URLs and a one-hour public cache;
+- private objects require an authenticated user of the same deploy, but "private" does not automatically mean owner of the file, since the app decides who it reveals the key to;
+- uploading or deleting requires a real Google account with a verified email; guests cannot do it;
+- uploader, email and timestamp are stored as metadata;
+- HTML/JavaScript and executable types or magic bytes are blocked; responses add `nosniff`, CSP and download as attachment;
+- published limit: 5 MiB per file and 100 MiB total per developer across their deploys;
+- there is no multipart, resumable uploads, image transforms, public listing or server-side `ctx.storage` API.
 
-En local el object store es efímero/en memoria; alojado utiliza el bucket administrado ([Object storage](https://docs.lakebed.dev/storage/)). Es una buena experiencia de producto, pero para nuestra implementación usaría R2/S3 con URLs firmadas para que los bytes no atraviesen el runner. También haría explícitas las políticas por objeto —owner, público, capability o grants— en vez de considerar «cualquier usuario autenticado del deploy» suficiente.
+Locally the object store is ephemeral/in-memory; when hosted it uses the managed bucket ([Object storage](https://docs.lakebed.dev/storage/)). It is a good product experience, but for our implementation I would use R2/S3 with signed URLs so the bytes do not go through the runner. I would also make per-object policies explicit (owner, public, capability or grants) instead of treating "any authenticated user of the deploy" as sufficient.
 
-## Auth y secretos
+## Auth and secrets
 
-La auth es una primitiva de plataforma. Hay sesión invitada y login Google sin configuración de la app; el servidor recibe un `userId` opaco, estable e inmutable. La documentación insiste correctamente en no usar email como clave de autorización. Los tokens quedan ligados al origen exacto y las revocaciones afectan tanto requests como suscripciones activas ([Auth](https://docs.lakebed.dev/auth/)).
+Auth is a platform primitive. There is a guest session and Google login with no app configuration; the server receives an opaque, stable and immutable `userId`. The documentation rightly insists on not using email as an authorization key. Tokens are bound to the exact origin, and revocations affect both requests and active subscriptions ([Auth](https://docs.lakebed.dev/auth/)).
 
-La aplicación sigue siendo responsable de la autorización de datos: debe filtrar por `ctx.auth.userId` y volver a comprobar ownership en mutations. Lakebed no promete row-level security automática. De igual forma, una clave de objeto privado debe guardarse y revelarse según reglas de la propia app ([Auth](https://docs.lakebed.dev/auth/), [Object storage](https://docs.lakebed.dev/storage/)).
+The application is still responsible for data authorization. It must filter by `ctx.auth.userId` and recheck ownership in mutations. Lakebed does not promise automatic row-level security. Likewise, a private object key must be stored and revealed according to the app's own rules ([Auth](https://docs.lakebed.dev/auth/), [Object storage](https://docs.lakebed.dev/storage/)).
 
-El control de desarrollador usa GitHub OAuth y cookies de sesión, según las variables de configuración publicadas. Los secretos de servidor solo existen en deploys reclamados; los despliegues anónimos no tienen variables ni salida de red. En runners PostgreSQL, el README exige una clave de cifrado para esos valores ([README publicado](https://app.unpkg.com/lakebed%400.0.25/files/README.md)).
+Developer access uses GitHub OAuth and session cookies, according to the published configuration variables. Server secrets exist only in claimed deploys; anonymous deploys have no variables and no network egress. On PostgreSQL runners, the README requires an encryption key for those values ([published README](https://app.unpkg.com/lakebed%400.0.25/files/README.md)).
 
-Hay una señal de churn importante: el README de una versión publicada menciona el broker anterior, mientras la documentación actual dice que auth es first-party. Debemos tomar como vigente la documentación actual y considerar el cambio evidencia de madurez temprana, no describir el producto actual con el proveedor antiguo ([Auth actual](https://docs.lakebed.dev/auth/), [README versionado](https://app.unpkg.com/lakebed%400.0.25/files/README.md)).
+There is a significant churn signal. The README of one published version mentions the previous broker, while the current documentation says auth is first-party. We should treat the current documentation as authoritative and read the change as evidence of early maturity, not describe the current product with the old provider ([current Auth](https://docs.lakebed.dev/auth/), [versioned README](https://app.unpkg.com/lakebed%400.0.25/files/README.md)).
 
-## Despliegue, claim y Railway
+## Deployment, claim and Railway
 
-El flujo de Lakebed permite desplegar anónimamente y reclamar después la app. Un deploy reclamado conserva su identidad, aparece en el dashboard y puede recibir un subdominio; `lakebed.json` guarda el identificador de deploy. Los anónimos caducan y sus datos se eliminan tras un periodo de retención; los reclamados no caducan, aunque mantienen límites de recursos ([documentación](https://docs.lakebed.dev/), [README publicado](https://app.unpkg.com/lakebed%400.0.25/files/README.md)).
+Lakebed's flow lets you deploy anonymously and claim the app later. A claimed deploy keeps its identity, appears in the dashboard and can receive a subdomain; `lakebed.json` stores the deploy identifier. Anonymous deploys expire and their data is deleted after a retention period; claimed ones do not expire, although they keep resource limits ([documentation](https://docs.lakebed.dev/), [published README](https://app.unpkg.com/lakebed%400.0.25/files/README.md)).
 
-El README publica defaults de protección para altas anónimas —50 por cliente y día y 5.000 globales—, límites de requests/mutations y limpieza de deploys no reclamados. También configura un dominio base wildcard para dirigir cada slug al runner ([README publicado](https://app.unpkg.com/lakebed%400.0.25/files/README.md)). Esto respalda la conclusión de que una capsule es un artefacto/tenant del runtime compartido, **no un proyecto Railway aprovisionado por app**.
+The README publishes protection defaults for anonymous sign-ups (50 per client per day and 5,000 globally), request/mutation limits and cleanup of unclaimed deploys. It also configures a wildcard base domain that routes each slug to the runner ([published README](https://app.unpkg.com/lakebed%400.0.25/files/README.md)). This supports the conclusion that a capsule is an artifact/tenant of the shared runtime, **not a Railway project provisioned per app**.
 
-No se ha localizado un **template público oficial de Lakebed en Railway** ni un manifiesto público con tamaños/topología. Por ello no se puede dar una URL de template ni calcular un coste exacto de Lakebed. Railway sí permite templates multi-servicio con repos privados o imágenes Docker privadas, variables, red y volúmenes; el deploy puede quedar ligado al source o eyectarse ([Templates](https://docs.railway.com/templates), [crear un template](https://docs.railway.com/templates/create), [desplegar/eject](https://docs.railway.com/templates/deploy)). Esa capacidad serviría para distribuir un fork o runtime propio, pero no prueba que Lakebed ofrezca uno.
+We found no **official public Lakebed template on Railway** and no public manifest with sizes/topology. So we cannot give a template URL or calculate an exact cost for Lakebed. Railway does allow multi-service templates with private repos or private Docker images, variables, networking and volumes; the deploy can stay tied to the source or be ejected ([Templates](https://docs.railway.com/templates), [create a template](https://docs.railway.com/templates/create), [deploy/eject](https://docs.railway.com/templates/deploy)). That capability would work for distributing a fork or our own runtime, but it does not prove that Lakebed offers one.
 
-Railway también expone una API GraphQL para automatizar proyectos, servicios y deployments ([Public API](https://docs.railway.com/integrations/api)). No parece participar en el hot path de cada `lakebed deploy`: la estrategia publicada es cargar un artefacto en la plataforma ya desplegada.
+Railway also exposes a GraphQL API to automate projects, services and deployments ([Public API](https://docs.railway.com/integrations/api)). It does not seem to take part in the hot path of each `lakebed deploy`; the published strategy is to upload an artifact to the already deployed platform.
 
-## Aislamiento multitenant y seguridad
+## Multi-tenant isolation and security
 
-El aislamiento visible es principalmente **lógico y de runtime**:
+The visible isolation is mainly **logical and at the runtime level**:
 
-- cada app tiene `deployId`, estado, artefactos, slug, logs, secretos y cuotas propios;
-- el código ejecuta en un «restricted source runtime», sin Node ni paquetes npm arbitrarios;
-- los deploys anónimos tampoco pueden hacer outbound fetch;
-- la auth está ligada a origen y deploy;
-- los límites y la limpieza se aplican por deploy/usuario.
+- each app has its own `deployId`, state, artifacts, slug, logs, secrets and quotas;
+- code runs in a "restricted source runtime", with no Node and no arbitrary npm packages;
+- anonymous deploys cannot make outbound fetches either;
+- auth is bound to origin and deploy;
+- limits and cleanup apply per deploy/user.
 
-Estas restricciones reducen mucho la superficie y son precisamente lo que permite compartir runners. No son equivalentes a una VM, isolate o contenedor dedicado con un modelo de sandbox publicado. El código del repositorio no es auditable públicamente y no se ha encontrado una especificación formal de seguridad. Por tanto, no usaría este mismo grado de aislamiento para ejecutar código arbitrario generado con npm, acceso de red o Node completo.
+These restrictions shrink the surface a lot, and they are exactly what makes shared runners possible. They are not equivalent to a VM, isolate or dedicated container with a published sandbox model. The repository code is not publicly auditable and we found no formal security specification. So I would not use this same level of isolation to run arbitrary generated code with npm, network access or full Node.
 
-Para nuestra alpha, un lenguaje/runtime restringido sobre Workers puede seguir este patrón. Cuando aceptemos código de servidor arbitrario o alcancemos un número alto de tenants, la separación debe ser una propiedad de la infraestructura —por ejemplo Workers for Platforms, isolates/sandboxes o contenedores— y no solo una lista de imports permitidos.
+For our alpha, a restricted language/runtime on Workers can follow this pattern. Once we accept arbitrary server code or reach a high number of tenants, the infrastructure must enforce separation, for example with Workers for Platforms, isolates, sandboxes or containers. A list of allowed imports is not enough.
 
-## Costes y límites
+## Costs and limits
 
-El coste marginal por capsule de Lakebed puede acercarse a cero en idle porque comparte runner, PostgreSQL y bucket. Eso es una **inferencia del modelo**, no un precio publicado. No se ha encontrado tarifa pública, SLA ni garantía de capacidad de Lakebed.
+Lakebed's marginal cost per capsule can approach zero when idle because it shares runner, PostgreSQL and bucket. That is an **inference from the model**, not a published price. We found no public pricing, SLA or capacity guarantee for Lakebed.
 
-Para quien opere una arquitectura parecida en Railway, los precios oficiales actuales son:
+For anyone running a similar architecture on Railway, the current official prices are:
 
-| Concepto | Precio oficial | Implicación |
+| Item | Official price | Implication |
 |---|---:|---|
-| Free | $0, con $1/mes de crédito de recursos | útil para prueba, insuficiente para prometer plataforma |
-| Hobby | mínimo $5/mes, $5 incluidos | suelo razonable de prototipo |
-| Pro | mínimo $20/mes, $20 incluidos | equipo/producción temprana |
-| RAM | $10/GB-mes | runners y Postgres always-on dominan el idle |
-| CPU | $20/vCPU-mes | cobro por uso medido |
-| Egress | $0.05/GB | relevante si el runner sirve bytes |
-| Volumen | $0.15/GB-mes | necesario para Postgres persistente |
-| Object storage | $0.015/GB-mes, egress gratis | preferible para assets |
+| Free | $0, with $1/month of resource credit | useful for testing, not enough to promise a platform |
+| Hobby | $5/month minimum, $5 included | reasonable floor for a prototype |
+| Pro | $20/month minimum, $20 included | team/early production |
+| RAM | $10/GB-month | always-on runners and Postgres dominate idle cost |
+| CPU | $20/vCPU-month | billed by measured usage |
+| Egress | $0.05/GB | relevant if the runner serves bytes |
+| Volume | $0.15/GB-month | needed for persistent Postgres |
+| Object storage | $0.015/GB-month, free egress | preferable for assets |
 
-Fuentes: [planes de Railway](https://docs.railway.com/pricing/plans) y [pricing de recursos](https://railway.com/pricing). Un servicio de 0,5 GB que permaneciera activo todo el mes consumiría aproximadamente $5 solo en RAM, antes de CPU; es una aproximación lineal a partir de la tarifa, no el coste observado de Lakebed.
+Sources: [Railway plans](https://docs.railway.com/pricing/plans) and [resource pricing](https://railway.com/pricing). A 0.5 GB service that stayed active all month would use about $5 in RAM alone, before CPU; this is a linear approximation from the rate, not Lakebed's observed cost.
 
-Railway puede dormir un servicio después de diez minutos sin tráfico saliente, pero WebSockets, conexiones a DB o telemetría pueden impedirlo y el primer request paga cold start ([Serverless](https://docs.railway.com/deployments/serverless)). Tampoco conviene usar un volumen SQLite por app: Railway admite un volumen por servicio, los servicios con volumen no pueden replicarse y el despliegue implica downtime ([Volumes](https://docs.railway.com/volumes/reference)). Un diseño «servicio + volumen por mini-app» destruye la ventaja económica de Lakebed.
+Railway can put a service to sleep after ten minutes without outbound traffic, but WebSockets, DB connections or telemetry can prevent it, and the first request pays a cold start ([Serverless](https://docs.railway.com/deployments/serverless)). A SQLite volume per app is also a bad fit. Railway allows one volume per service, services with a volume cannot be replicated, and deploys involve downtime ([Volumes](https://docs.railway.com/volumes/reference)). A "service + volume per mini-app" design destroys Lakebed's economic advantage.
 
-Límites de Lakebed verificables: 5 MiB/objeto y 100 MiB de objetos por desarrollador; los defaults del paquete `0.0.29` limitan además a 1 MiB tanto el artefacto como el estado y a 10.000 requests por deploy y día. Hay también cuotas de mutations y caducidad de previews no reclamadas. Los deploys reclamados dejan de caducar, pero no pierden las cuotas ([Object storage](https://docs.lakebed.dev/storage/), [paquete `0.0.29`](https://unpkg.com/browse/lakebed@0.0.29/), [README operativo versionado](https://app.unpkg.com/lakebed%400.0.25/files/README.md)).
+Verifiable Lakebed limits are 5 MiB per object and 100 MiB of objects per developer. The defaults of package `0.0.29` also cap both the artifact and the state at 1 MiB, and requests at 10,000 per deploy per day. There are also mutation quotas and expiry for unclaimed previews. Claimed deploys stop expiring, but keep their quotas ([Object storage](https://docs.lakebed.dev/storage/), [package `0.0.29`](https://unpkg.com/browse/lakebed@0.0.29/), [versioned operational README](https://app.unpkg.com/lakebed%400.0.25/files/README.md)).
 
-## Licencia y madurez
+## License and maturity
 
-- La portada dice explícitamente **alpha** ([lakebed.dev](https://lakebed.dev/)).
-- El paquete vigente inspeccionado es `0.0.29`, todavía en serie `0.0.x`; una versión publicada muy reciente lo describía como prototipo público temprano ([`0.0.29`](https://unpkg.com/lakebed@0.0.29/package.json), [README `0.0.25`](https://app.unpkg.com/lakebed%400.0.25/files/README.md)).
-- `0.0.29` declara licencia **MIT**, mientras `0.0.25` declaraba `UNLICENSED`: la apertura es reciente y el cambio entre snapshots refuerza la señal de churn ([metadatos `0.0.29`](https://unpkg.com/lakebed@0.0.29/package.json), [metadatos `0.0.25`](https://app.unpkg.com/lakebed%400.0.25/files/package.json)). El código incluido en el paquete MIT puede estudiarse y reutilizarse conforme a esa licencia; el backend completo no es auditable públicamente mientras el repo siga inaccesible.
-- El repositorio declarado no es accesible públicamente sin credenciales ([repo declarado](https://github.com/pingdotgg/lakebed)).
-- Auth y otras superficies siguen cambiando; no hay precio/SLA público identificado.
+- The home page explicitly says **alpha** ([lakebed.dev](https://lakebed.dev/)).
+- The current package inspected is `0.0.29`, still in the `0.0.x` series; a very recent published version described it as an early public prototype ([`0.0.29`](https://unpkg.com/lakebed@0.0.29/package.json), [README `0.0.25`](https://app.unpkg.com/lakebed%400.0.25/files/README.md)).
+- `0.0.29` declares an **MIT** license, while `0.0.25` declared `UNLICENSED`. The opening is recent, and the change between snapshots adds to the churn signal ([`0.0.29` metadata](https://unpkg.com/lakebed@0.0.29/package.json), [`0.0.25` metadata](https://app.unpkg.com/lakebed%400.0.25/files/package.json)). The code included in the MIT package can be studied and reused under that license; the full backend is not publicly auditable while the repo stays inaccessible.
+- The declared repository is not publicly accessible without credentials ([declared repo](https://github.com/pingdotgg/lakebed)).
+- Auth and other surfaces keep changing; we found no public pricing/SLA.
 
-Conclusión: es una referencia excelente de producto y DX, pero una dependencia de alto riesgo para basar nuestra plataforma. Podemos aprender de sus contratos visibles y, si interesa, del código distribuido bajo MIT, pero no asumir que el paquete contiene toda la plataforma ni depender del hosted alpha para una oferta propia.
+In short, it is an excellent product and DX reference, but a high-risk dependency to build our platform on. We can learn from its visible contracts and, if useful, from the code distributed under MIT, but we should not assume the package contains the whole platform or depend on the hosted alpha for our own offering.
 
-## Qué reutilizar conceptualmente
+## What to reuse conceptually
 
-1. **Capsule estrecha para el agente.** Un árbol mínimo y una API pequeña producen código más predecible que aceptar cualquier framework.
-2. **Deploy anónimo → claim.** Crear URL inmediata y reclamarla después elimina onboarding del camino creativo. En Cloudflare, implementarlo con deployments temporales y OAuth; token manual solo como fallback.
-3. **Tenant lógico, no infraestructura por app.** Bundle + manifiesto + recursos lógicos compartidos conserva coste idle bajo.
-4. **Manifest pequeño y artefactos versionados.** Guardar solo `deployId`, hashes y versión del runtime; tokens de CI limitados al deploy.
-5. **Auth como primitive.** ID opaco estable, origen exacto, revocación en HTTP y realtime; autorización de negocio explícita en código.
-6. **Previews con TTL y garbage collection.** Cuotas de creación, requests, mutations, estado y objetos desde el primer día.
-7. **Object API en el origen de la app.** Mantener una interfaz HTTP homogénea, aunque debajo use R2/S3 y URLs firmadas.
-8. **Introspección para agentes.** Logs, manifest, esquema y export deben ser legibles por CLI sin dashboard obligatorio.
+1. Give the agent a narrow capsule. A minimal tree and a small API produce more predictable code than accepting any framework.
+2. Use anonymous deploy, then claim. Creating an immediate URL and claiming it later removes onboarding from the creative path. On Cloudflare, implement it with temporary deployments and OAuth, with a manual token only as a fallback.
+3. Use logical tenants, not per-app infrastructure. A bundle, a manifest and shared logical resources keep idle cost low.
+4. Keep a small manifest and versioned artifacts. Store only `deployId`, hashes and the runtime version, with CI tokens scoped to the deploy.
+5. Treat auth as a primitive. Use a stable opaque ID, exact origin binding and revocation over HTTP and realtime, with business authorization explicit in code.
+6. Give previews a TTL and garbage collection. Apply quotas on creation, requests, mutations, state and objects from day one.
+7. Serve the object API on the app's origin. Keep a uniform HTTP interface, even if R2/S3 and signed URLs sit underneath.
+8. Build introspection for agents. Logs, manifest, schema and export should be readable from the CLI without requiring the dashboard.
 
-## Qué evitar
+## What to avoid
 
-1. **Copiar a ciegas la plataforma:** el paquete actual es MIT, pero el repo/backend completo no es público; cualquier reutilización debe limitarse al artefacto licenciado y conservar atribución/licencia.
-2. **Inventar otra base propietaria:** nuestro requisito es SQLite over HTTP; usar SQL, migraciones y export estándar, no una API documental irreversible.
-3. **Confundir restricción con sandbox fuerte:** permitir npm/Node arbitrario exige aislamiento infraestructural.
-4. **Bytes atravesando el runner:** R2/S3 firmado reduce CPU, egress y superficie de fallo.
-5. **«Privado» igual a «usuario autenticado»:** modelar ownership y grants por objeto.
-6. **Una instancia Railway por app:** el idle de RAM/volúmenes y sus limitaciones de réplica no escala económicamente.
-7. **Acoplar identidad, dominio, DB y objetos al proveedor:** todo debe tener export y adaptador.
-8. **Prometer consistencia/export no existente:** una exportación paginada debe declarar su semántica o producir un snapshot real.
+1. Copying the platform blindly. The current package is MIT, but the full repo/backend is not public; any reuse must stay within the licensed artifact and keep the attribution/license.
+2. Inventing another proprietary database. Our requirement is SQLite over HTTP, so we should use SQL, migrations and a standard export, not an irreversible document API.
+3. Mistaking restriction for a strong sandbox. Allowing arbitrary npm/Node requires infrastructure-level isolation.
+4. Bytes going through the runner. Signed R2/S3 URLs reduce CPU, egress and failure surface.
+5. Equating "private" with "authenticated user". Model ownership and grants per object.
+6. One Railway instance per app. Idle RAM/volume cost and the replication limits do not scale economically.
+7. Tying identity, domain, DB and objects to the provider. Everything needs an export and an adapter.
+8. Promising consistency or exports that do not exist. A paginated export must declare its semantics or produce a real snapshot.
 
-## Camino recomendado para nuestro mini-app builder
+## Recommended path for our mini-app builder
 
-### Fase 1 — alpha Cloudflare, código restringido
+### Phase 1, Cloudflare alpha with restricted code
 
-- Definir una capsule inspirada en Lakebed: UI + handlers + esquema/migraciones + assets, sin npm arbitrario.
-- Runtime compartido en Workers Paid; assets estáticos/R2, D1 como SQLite real, KV para routing/configuración y Durable Objects solo donde hagan falta presencia, colas o WebSockets.
-- Crear deploy temporal sin cuenta, límites agresivos y TTL; claim con OAuth de Cloudflare o cuenta propia. Para BYO Cloudflare, preferir OAuth y transferencia/claim temporal; aceptar API token manual solo como fallback, con scopes mínimos y cifrado.
-- Mantener SQL over HTTP como contrato público. El agente puede recibir helpers sencillos, pero las migraciones y export siguen siendo SQL/SQLite.
-- No superar artificialmente el modelo: código generado validado, imports permitidos y egress controlado. En esta fase, el plan Workers Paid normal permite validar producto con un coste base bajo y un máximo operativo de 500 Workers.
+- Define a capsule inspired by Lakebed: UI + handlers + schema/migrations + assets, with no arbitrary npm.
+- Shared runtime on Workers Paid; static assets/R2, D1 as real SQLite, KV for routing/configuration and Durable Objects only where presence, queues or WebSockets need them.
+- Create a temporary deploy without an account, with aggressive limits and a TTL; claim through Cloudflare OAuth or our own account. For BYO Cloudflare, prefer OAuth and a temporary transfer/claim; accept a manual API token only as a fallback, with minimum scopes and encryption.
+- Keep SQL over HTTP as the public contract. The agent can get simple helpers, but migrations and export stay SQL/SQLite.
+- Do not stretch the model artificially: validated generated code, allowed imports and controlled egress. In this phase, the plain Workers Paid plan lets us validate the product at a low base cost with an operational maximum of 500 Workers.
 
-### Fase 2 — aislamiento y escala
+### Phase 2, isolation and scale
 
-- Pasar a Workers for Platforms cuando aceptemos código arbitrario o la escala/aislamiento rebase el modelo de hasta 500 Workers.
-- Separar formalmente cuatro contratos: `DeployAdapter`, `SqlHttpAdapter`, `BlobAdapter` y `AuthAdapter`.
-- Añadir bundle portable, export transaccional de DB, export de objetos/manifiesto y dominio desacoplado.
-- Medir coste por tenant y aplicar cuotas por request, CPU, almacenamiento, egress y realtime.
+- Move to Workers for Platforms when we accept arbitrary code or when scale or isolation needs outgrow the model of up to 500 Workers.
+- Formally separate four contracts: `DeployAdapter`, `SqlHttpAdapter`, `BlobAdapter` and `AuthAdapter`.
+- Add a portable bundle, a transactional DB export, an object/manifest export and a decoupled domain.
+- Measure cost per tenant and apply quotas on requests, CPU, storage, egress and realtime.
 
-### Papel de Railway
+### Role of Railway
 
-Usarlo como **build plane/escape hatch**, no como runtime por defecto:
+Use it as a **build plane/escape hatch**, not as the default runtime:
 
-- builds pesados, herramientas nativas, previews Docker o apps incompatibles con Workers;
-- un runner compartido y multitenant si necesitamos compatibilidad Node controlada;
-- Postgres de control/metadata si D1 no cubre el plano central;
-- plantillas o API para desplegar componentes grandes, nunca un volumen SQLite por mini-app.
+- heavy builds, native tools, Docker previews or apps incompatible with Workers;
+- a shared, multi-tenant runner if we need controlled Node compatibility;
+- control/metadata Postgres if D1 does not cover the central plane;
+- templates or the API to deploy large components, never a SQLite volume per mini-app.
 
-La lección central de Lakebed es que el coste bajo no viene de elegir Railway frente a Cloudflare, sino de **no aprovisionar una máquina por aplicación**. Cloudflare ofrece una ejecución más natural para tenants pequeños y ociosos; Railway es valioso donde realmente necesitamos procesos, Docker o build tooling.
+The central lesson from Lakebed is that low cost comes from **not provisioning a machine per application**, not from choosing Railway over Cloudflare. Cloudflare offers a more natural execution model for small, idle tenants; Railway is valuable where we actually need processes, Docker or build tooling.
 
-## Decisión
+## Decision
 
-Tomaría Lakebed como benchmark de experiencia y modelo económico, no como base técnica. Construiría una primera versión Cloudflare con la misma sensación de inmediatez —capsule restringida, deploy anónimo, claim, auth, DB, realtime y objetos—, preservando desde el inicio SQL/SQLite y contratos de portabilidad. Railway quedaría detrás de `DeployAdapter` para cargas incompatibles o un build plane compartido. Así obtenemos el beneficio importante de Lakebed —coste marginal mínimo por app— sin heredar su base de datos propietaria, un backend no auditable públicamente ni dependencia del hosted alpha.
+I would take Lakebed as a benchmark for experience and economic model, not as a technical base. I would build a first Cloudflare version with the same sense of immediacy (restricted capsule, anonymous deploy, claim, auth, DB, realtime and objects) while keeping SQL/SQLite and portability contracts from the start. Railway would sit behind `DeployAdapter` for incompatible workloads or a shared build plane. That way we get Lakebed's main benefit, minimal marginal cost per app, without inheriting its proprietary database, a backend that is not publicly auditable, or a dependency on the hosted alpha.

@@ -62,7 +62,7 @@ const privateNotesIndex = `
     <h1 id="landing-title">Your notes,<br><em>your space.</em></h1>
     <p class="intro">Sign in to keep a private list that belongs to you.</p>
     <p id="landing-status" class="status" role="status" aria-live="polite"></p>
-    <button id="sign-in" class="primary">Sign in</button>
+    <button id="sign-in" class="primary" disabled>Sign in</button>
   </section>
 
   <section id="notes-app" class="notes-app" hidden aria-labelledby="notes-title">
@@ -90,16 +90,17 @@ const privateNotesIndex = `
 
 const privateNotesStyles = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Manrope:wght@500;600;700&display=swap');
-:root { color-scheme: light; font-family: Manrope, sans-serif; background: #f3efe5; color: #24251f; }
+:root { color-scheme: light dark; font-family: Manrope, sans-serif; background: #f3efe5; color: #24251f; }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 90% 8%, #d7e6b7 0 18%, transparent 38%), #f3efe5; }
 .notes-shell { width: min(680px, calc(100% - 40px)); margin: 0 auto; padding: 64px 0; }
 .landing { min-height: 72vh; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
 .eyebrow, .section-label { font-size: 11px; letter-spacing: .18em; font-weight: 700; }
-h1 { font-family: 'DM Serif Display', serif; font-size: clamp(52px, 9vw, 84px); line-height: .84; letter-spacing: -.045em; margin: 14px 0 28px; font-weight: 400; }
+h1 { font-family: 'DM Serif Display', serif; font-size: clamp(32px, 7vw, 56px); line-height: .9; letter-spacing: -.045em; margin: 8px 0 16px; font-weight: 400; }
 h1 em { color: #e65337; }
 .intro { max-width: 350px; color: #77756c; line-height: 1.7; margin: 0 0 24px; }
 .primary { min-height: 46px; border: 1px solid #24251f; padding: 10px 18px; background: #e65337; color: white; font: inherit; font-weight: 700; cursor: pointer; box-shadow: 4px 4px 0 #24251f; }
+.primary:disabled { opacity: .55; cursor: progress; }
 .notes-app header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
 .account { display: flex; align-items: center; gap: 10px; font-size: 12px; font-weight: 700; }
 .quiet { border: 1px solid #24251f; padding: 8px 11px; background: #fffdf8; font: inherit; font-size: 11px; cursor: pointer; }
@@ -115,6 +116,14 @@ h1 em { color: #e65337; }
 .empty { font-family: 'DM Serif Display', serif; font-size: 28px; color: #77756c; padding: 48px 4px; }
 [hidden] { display: none !important; }
 @media (max-width: 520px) { .notes-shell { padding-top: 36px; } .notes-app header { display: block; } .account { justify-content: space-between; margin: -10px 0 30px; } }
+@media (prefers-color-scheme: dark) {
+  :root { background: #1c1b17; color: #f3efe5; }
+  body { background: #1c1b17; }
+  .composer, .quiet { background: #2a2822; color: inherit; border-color: #f3efe5; }
+  .composer { box-shadow: 6px 6px 0 #000; }
+  .note, .section-label { border-color: #5c594f; }
+  .intro, .note small, .empty { color: #b7b3a6; }
+}
 `;
 
 const privateNotesApp = `
@@ -160,13 +169,16 @@ async function showCurrentSession() {
   }
 }
 
-document.querySelector('#sign-in').addEventListener('click', async () => {
+const signInButton = document.querySelector('#sign-in');
+signInButton.addEventListener('click', async () => {
   try {
     status.textContent = '';
     await miniapp.auth.signIn();
     await showCurrentSession();
   } catch (error) { showError(error); }
 });
+// The button renders before this module runs; it stays disabled until a click can do something.
+signInButton.disabled = false;
 
 document.querySelector('#sign-out').addEventListener('click', async () => {
   try {

@@ -2,7 +2,7 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentEvent, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { clampThinkingLevel, type Models } from "@earendil-works/pi-ai";
 import type { MiniAppProject, ProjectFile } from "../lib/types";
-import { capsuleFileFor, capsuleFileNames, createCapsuleWorkspace } from "./capsule-env";
+import { capsuleFileFor, createCapsuleWorkspace } from "./capsule-env";
 import type {
   AgentKeyStore,
   AgentProposal,
@@ -465,13 +465,21 @@ function systemPromptFor(project: MiniAppProject, config: AgentSessionConfig): s
   return append ? `${buildSystemPrompt(project)}\n\n# Project instructions\n\n${append}` : buildSystemPrompt(project);
 }
 
-/** Identity of a Capsule's contents: a validation is only current for one of these. */
+/**
+ * Identity of a Capsule's contents: a validation is only current for one of
+ * these. Every file counts, nested source files included, and a missing file
+ * differs from an empty one.
+ */
 function signatureOf(files: CapsuleFiles): string {
-  return capsuleFileNames.map((file) => `${file}:${(files[file] ?? "").length}:${files[file] ?? ""}`).join("\n");
+  return JSON.stringify(Object.keys(files).sort().map((file) => [file, files[file]]));
 }
 
 function sameFiles(left: CapsuleFiles, right: CapsuleFiles): boolean {
-  return capsuleFileNames.every((file) => (left[file] ?? "") === (right[file] ?? ""));
+  const names = new Set([...Object.keys(left), ...Object.keys(right)]);
+  for (const file of names) {
+    if (Object.hasOwn(left, file) !== Object.hasOwn(right, file) || left[file] !== right[file]) return false;
+  }
+  return true;
 }
 
 /** Tool chip detail: the Capsule file the call is about, if it names one. */

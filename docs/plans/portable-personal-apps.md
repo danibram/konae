@@ -1,128 +1,128 @@
-# Prototipos con un mini kernel portable
+# Prototypes with a portable mini kernel
 
-Propuesta revisada el 11 de octubre de 2026. No cambia los ADR aceptados ni implementa funciones nuevas.
+Proposal revised on October 11, 2026. It does not change the accepted ADRs or implement new features.
 
-## Objetivo y recomendación
+## Goal and recommendation
 
-El usuario describe una app al agente, prueba el resultado en el navegador y publica una URL pública. La app puede tener login, zonas internas y datos privados. Cada app tiene su propia base, usuarios y permisos. El creador puede seguir usando Littlebox, autoalojar el mismo mini kernel o sustituir sus capacidades por código propio.
+The user describes an app to the agent, tries the result in the browser and publishes a public URL. The app can have login, internal areas and private data. Each app has its own database, users and permissions. The creator can keep using Littlebox, self-host the same mini kernel or replace its capabilities with their own code.
 
-Recomiendo un kernel compartido que ejecute acciones sobre una SQLite activa por app y entorno, guardada en un volumen persistente. El frontend es un artefacto estático. Los backups y la exportación materializan la base como objetos portables. El almacén de objetos admite filesystem, S3 y posteriormente GCS sin intervenir en cada escritura.
+I recommend a shared kernel that runs actions on one active SQLite per app and environment, stored on a persistent volume. The frontend is a static artifact. Backups and export materialize the database as portable objects. The object store supports filesystem, S3 and later GCS, without taking part in each write.
 
-El formato portable de la base y su ejecución son decisiones distintas. Una SQLite puede exportarse como un objeto y, mientras está activa, recibir transacciones normales del kernel. No hace falta subirla en cada mutación ni convertir el almacenamiento de objetos en el coordinador de transacciones.
+The portable database format and how the database runs are separate decisions. A SQLite can be exported as an object and, while it is active, receive normal kernel transactions. There is no need to upload it on every mutation or to turn object storage into the transaction coordinator.
 
-## Crítica de las opciones
+## Critique of the options
 
-Los criterios son tiempo hasta el primer prototipo, carga de operación, facilidad de desarrollo para el agente y coste de salir de Littlebox.
+The criteria are time to the first prototype, operational load, ease of development for the agent and the cost of leaving Littlebox.
 
-| Opción | Qué resuelve | Qué complica | Decisión |
+| Option | What it solves | What it complicates | Decision |
 | --- | --- | --- | --- |
-| SQLite activa y backups separados | Escrituras normales, kernel pequeño y exportación de un archivo estándar | Requiere volumen persistente; perderlo puede perder cambios posteriores al backup | Elegir para v1 |
-| SQLite activa y replicación incremental | Reduce el retraso de la copia remota sin subir toda la base por escritura | Añade gestión del log, restauración y monitorización | Evaluar cuando exista una necesidad de recuperación medida |
-| Snapshot completo y head remoto por mutación | Hace del object store la autoridad de cada estado confirmado | Coste proporcional al tamaño de la DB, latencia remota e incertidumbre al confirmar | Descartar para este producto inicial |
-| Backend arbitrario por app | Permite cualquier código y librería de servidor | Procesos, aislamiento, dependencias y despliegues por app | Reservar como salida externa |
-| Base pública descargada en el navegador | Permite servir un dataset de lectura con archivos estáticos | No impone permisos por fila sobre los datos descargados ni coordina usuarios que escriben | Solo para datasets deliberadamente públicos |
+| Active SQLite with separate backups | Normal writes, a small kernel and export as a standard file | Requires a persistent volume; losing it can lose changes made after the backup | Choose for v1 |
+| Active SQLite with incremental replication | Reduces the remote copy lag without uploading the whole database per write | Adds log management, restore and monitoring | Evaluate when a measured recovery need exists |
+| Full snapshot and remote head per mutation | Makes the object store the authority for every committed state | Cost proportional to DB size, remote latency and uncertainty on commit | Discard for this initial product |
+| Arbitrary backend per app | Allows any server code and library | Processes, isolation, dependencies and deployments per app | Reserve as an external exit |
+| Public database downloaded in the browser | Serves a read-only dataset with static files | Does not enforce row-level permissions on downloaded data or coordinate users who write | Only for deliberately public datasets |
 
-La primera opción tiene límites reales. Una máquina caída deja temporalmente indisponibles las acciones y el login. Un disco perdido exige restaurar. Una app con consultas lentas puede consumir recursos compartidos. Estos límites se afrontan con backups verificables, límites de consulta y una instancia responsable por base; no con un protocolo distribuido en la primera versión.
+The first option has real limits. A machine going down makes actions and login temporarily unavailable. A lost disk requires a restore. An app with slow queries can consume shared resources. These limits are handled with verifiable backups, query limits and one responsible instance per database, not with a distributed protocol in the first version.
 
-La replicación incremental puede apoyarse en herramientas existentes. Litestream replica cambios de SQLite en segundo plano y mantiene material de recuperación. No convierte la aplicación en un sistema de múltiples escritores ni garantiza por sí solo que todo commit local ya esté en el destino remoto. [Funcionamiento de Litestream](https://litestream.io/how-it-works/).
+Incremental replication can rely on existing tools. Litestream replicates SQLite changes in the background and keeps recovery material. It does not turn the application into a multi-writer system, and on its own it does not guarantee that every local commit is already at the remote destination. [How Litestream works](https://litestream.io/how-it-works/).
 
-## Camino de una petición
+## Path of a request
 
 ```text
-Navegador -> acción + input -> kernel compartido -> SQLite de esa app
+Browser -> action + input -> shared kernel -> SQLite for that app
                                   |
-                                  +-> sesión y permisos de esa app
+                                  +-> session and permissions for that app
 
-Servidor estático / CDN -> HTML, JS, CSS y assets
-Proceso de backup -> snapshot consistente -> filesystem / S3 / GCS
+Static server / CDN -> HTML, JS, CSS and assets
+Backup process -> consistent snapshot -> filesystem / S3 / GCS
 ```
 
-1. El navegador envía un nombre de acción y sus parámetros.
-2. El kernel resuelve la app desde el dominio o una ruta configurada y el usuario desde su sesión.
-3. Comprueba la declaración, permisos, input y límites.
-4. Ejecuta SQL parametrizado dentro de una transacción de la base correspondiente.
-5. Responde después del commit. No espera a S3 ni copia toda la base.
+1. The browser sends an action name and its parameters.
+2. The kernel resolves the app from the domain or a configured route, and the user from their session.
+3. It checks the declaration, permissions, input and limits.
+4. It runs parameterized SQL inside a transaction on the matching database.
+5. It responds after the commit. It does not wait for S3 or copy the whole database.
 
-El navegador no recibe credenciales de base ni puede elegir otro usuario o archivo SQLite. El estado anónimo debe estar representado de forma explícita.
+The browser receives no database credentials and cannot pick another user or SQLite file. Anonymous state must be represented explicitly.
 
-Una cola por base puede coordinar mutaciones, migraciones y restauraciones sin bloquear otras apps. SQLite WAL permite lectores concurrentes con un escritor. El volumen y la configuración de sincronización deben sostener la garantía del commit local. No se abre la misma base desde réplicas independientes en varias máquinas. [SQLite WAL](https://www.sqlite.org/wal.html).
+A queue per database can coordinate mutations, migrations and restores without blocking other apps. SQLite WAL allows concurrent readers with one writer. The volume and the sync configuration must uphold the local commit guarantee. The same database is never opened from independent replicas on several machines. [SQLite WAL](https://www.sqlite.org/wal.html).
 
-## Persistencia y objetos
+## Persistence and objects
 
-| Elemento | Mientras funciona la app | Objeto portable |
+| Element | While the app runs | Portable object |
 | --- | --- | --- |
-| Frontend | Servidor estático, disco o CDN | Artefacto inmutable |
-| Datos | SQLite activa en volumen persistente | Snapshot SQLite consistente |
-| Auth y permisos | Almacén de identidad aislado por app | Exportación de usuarios y permisos de esa app |
-| Archivos | Disco o almacén de objetos | Blobs más inventario |
-| Modelo y cambios | Esquema aceptado e historial de migraciones | Fuente y SQL versionado |
+| Frontend | Static server, disk or CDN | Immutable artifact |
+| Data | Active SQLite on a persistent volume | Consistent SQLite snapshot |
+| Auth and permissions | Identity store isolated per app | Export of that app's users and permissions |
+| Files | Disk or object store | Blobs plus inventory |
+| Model and changes | Accepted schema and migration history | Source and versioned SQL |
 
-El backup se ejecuta por petición del propietario, antes de migraciones y con una frecuencia configurada. El panel muestra la fecha y revisión del último backup completado. Si un backup falla, aumenta la antigüedad del punto recuperable; la escritura ya confirmada no se convierte en error.
+The backup runs when the owner requests it, before migrations and at a configured frequency. The panel shows the date and revision of the last completed backup. If a backup fails, the age of the recoverable point grows. A write that was already committed does not become an error.
 
-Un intervalo programado no garantiza ese mismo límite de pérdida si las copias fallan. El punto recuperable real es el último backup válido. Un reinicio del proceso conserva la base en el volumen; la pérdida del volumen es un fallo distinto. Un contenedor con disco efímero no cumple esta propuesta.
+A scheduled interval does not guarantee the same loss bound if copies fail. The real recoverable point is the last valid backup. A process restart keeps the database on the volume; losing the volume is a different failure. A container with an ephemeral disk does not meet this proposal.
 
-El snapshot usa una operación consistente de SQLite, como Online Backup API o VACUUM INTO. No se copia a ciegas solo el archivo principal de una base activa con WAL. Los backups tienen retención y una prueba de restauración. [SQLite Backup API](https://www.sqlite.org/backup.html).
+The snapshot uses a consistent SQLite operation, such as the Online Backup API or VACUUM INTO. Nobody blindly copies only the main file of an active WAL database. Backups have retention and a restore test. [SQLite Backup API](https://www.sqlite.org/backup.html).
 
-La primera exportación completa puede pausar brevemente las escrituras de la app y sus cambios de identidad para copiar datos, usuarios, permisos y referencias de archivos en un punto coordinado. Restaurar exige cerrar conexiones anteriores, validar la copia y activar el estado restaurado. No hay que restaurar automáticamente una copia remota antigua sobre un volumen sano.
+The first full export can briefly pause the app's writes and identity changes to copy data, users, permissions and file references at a coordinated point. A restore must close earlier connections, validate the copy and activate the restored state. An old remote copy must not be restored automatically over a healthy volume.
 
-## Contrato pequeño para el agente
+## A small contract for the agent
 
-El agente trabaja con archivos de la app, un modelo de datos, acciones declaradas y permisos. No necesita elegir drivers, configurar almacenamiento ni instalar un backend nuevo para cada prototipo.
+The agent works with app files, a data model, declared actions and permissions. It does not need to pick drivers, configure storage or install a new backend for each prototype.
 
 ```text
 index.html
 styles.css
-app.js o src/main.ts
+app.js or src/main.ts
 schema.ts
 actions.json
 littlebox.manifest.json
-migrations/                # resultado revisable del lifecycle
+migrations/                # reviewable lifecycle output
 ```
 
-La propuesta conserva Drizzle como modelo, según ADR-0004. Volver ahora a schema.sql como segunda autoridad cambiaría otra decisión sin resolver el problema de persistencia. El SQL generado queda disponible para inspección y exportación. Las primeras plantillas y herramientas del agente deben cubrir un subconjunto pequeño del modelo.
+The proposal keeps Drizzle as the model, per ADR-0004. Going back to schema.sql as a second authority now would change another decision without solving the persistence problem. The generated SQL stays available for inspection and export. The first templates and agent tools should cover a small subset of the model.
 
-El agente dispone de un SDK pequeño. Estos métodos son el contrato propuesto; hoy algunas capacidades aún difieren entre preview y kernels.
+The agent has a small SDK. These methods are the proposed contract; today some capabilities still differ between the preview and the kernels.
 
 ```js
 await app.auth.session();
 await app.auth.signIn();
 await app.auth.signOut();
-await app.actions.call('notes.create', { title: 'Compra' });
+await app.actions.call('notes.create', { title: 'Groceries' });
 await app.files.upload(file);
 ```
 
-El editor ofrece el formulario de login inicial, la simulación de usuarios y plantillas de acciones comunes. El agente modifica el código de la app y propone cambios de modelo y permisos. El gate comprueba build, esquema, migración y acciones antes de aplicar. La plataforma realiza la administración; el agente no adquiere una clave administrativa dentro del código generado.
+The editor provides the initial login form, user simulation and templates for common actions. The agent changes the app code and proposes model and permission changes. The gate checks build, schema, migration and actions before applying. The platform handles administration; the agent never gets an administrative key inside the generated code.
 
-Para acceso a datos hay tres diseños posibles.
+There are three possible designs for data access.
 
-| Diseño | Ventaja | Crítica |
+| Design | Advantage | Critique |
 | --- | --- | --- |
-| Acciones nombradas con SQL parametrizado | Ya existe, concentra cada operación y permite sustituirla por nombre | Tiene límites para lógica compleja; el SQL debe comprobar acceso a las filas |
-| CRUD genérico desde el cliente | Reduce código en demos simples | Obliga a diseñar filtros, joins y políticas generales; cambia la plataforma a un motor de acceso a tablas |
-| Funciones JS de servidor libres | Permite lógica convencional | Ejecutar código del usuario exige aislamiento y operación adicionales |
+| Named actions with parameterized SQL | Already exists, keeps each operation in one place and lets you replace it by name | Has limits for complex logic; the SQL must check row access |
+| Generic CRUD from the client | Reduces code in simple demos | Forces the design of general filters, joins and policies; turns the platform into a table access engine |
+| Free-form server JS functions | Allows conventional logic | Running user code requires extra isolation and operations |
 
-Mantendría las acciones existentes. Para un patrón frecuente que resulte verboso, añadiría generación o una plantilla revisable. No ampliaría actions.json hasta convertirlo en un lenguaje general. Una operación que necesita varias escrituras debe ser atómica en el backend; si el formato inicial no la soporta, se declara esa limitación y no se simula con varias llamadas del navegador.
+I would keep the existing actions. For a common pattern that turns out verbose, I would add generation or a reviewable template. I would not extend actions.json until it becomes a general-purpose language. An operation that needs several writes must be atomic in the backend. If the initial format does not support it, that limitation is stated and is not simulated with several browser calls.
 
-## Permisos y auth
+## Permissions and auth
 
-La entrada de la app es pública. Las zonas internas solicitan sesión y todas las operaciones protegidas se autorizan en el servidor. El frontend público nunca incluye datos privados ni secretos.
+The app entry is public. Internal areas ask for a session, and the server authorizes every protected operation. The public frontend never includes private data or secrets.
 
-Cada app tiene usuarios y sesiones propios, separados de las cuentas del editor. El kernel comparte la implementación de auth sin compartir identidad entre apps. Los roles iniciales pueden limitarse a propietario de app y miembro, con acciones públicas, autenticadas y restringidas.
+Each app has its own users and sessions, separate from the editor accounts. The kernel shares the auth implementation without sharing identity between apps. The initial roles can be limited to app owner and member, with public, authenticated and restricted actions.
 
-La sesión identifica al actor, pero no convierte cualquier consulta en segura. Una acción que devuelve notas privadas debe filtrar por el actor obtenido del kernel. Una mutación debe aplicar la condición de acceso al registro que modifica. La validación necesita casos de dos usuarios y dos apps, además de SQL válido. No se anuncia aislamiento de filas automático solo por usar parámetros.
+The session identifies the actor, but it does not make every query safe. An action that returns private notes must filter by the actor obtained from the kernel. A mutation must apply the access condition to the record it changes. Validation needs cases with two users and two apps, on top of valid SQL. Nobody should announce automatic row isolation just because the SQL uses parameters.
 
-El almacén de auth no debe ser accesible mediante el SQL de las acciones. Empezaría con un archivo de identidad separado por app, gestionado por el kernel. Eso simplifica el aislamiento y exige coordinarlo con la base de datos al exportar. El mecanismo inicial de login debe reutilizar una implementación mantenida; no construiría varios proveedores ni flujos distintos antes de cerrar uno completo.
+The auth store must not be reachable through action SQL. I would start with a separate identity file per app, managed by the kernel. That simplifies isolation and requires coordinating it with the database on export. The initial login mechanism should reuse a maintained implementation. I would not build several providers or flows before finishing one.
 
-## Abstracciones y salida
+## Abstractions and exit
 
-Dos entregables públicos bastan al principio.
+Two public deliverables are enough at first.
 
-- Un SDK JavaScript importable, con módulos de auth, acciones y archivos.
-- El mismo mini kernel en una distribución autoalojable con configuración, volumen y herramientas de administración.
+- An importable JavaScript SDK, with auth, actions and files modules.
+- The same mini kernel in a self-hostable distribution with configuration, volume and admin tools.
 
-Modelo, migraciones, exportación y adapters pueden empezar como módulos internos. No hace falta publicar una librería por cada concepto. El editor y la distribución propia deben usar el mismo contrato probado.
+Model, migrations, export and adapters can start as internal modules. There is no need to publish a library per concept. The editor and the self-hosted distribution must use the same tested contract.
 
-El SDK puede concentrar la configuración en un archivo de la app. El ejemplo ilustra una interfaz futura.
+The SDK can keep its configuration in a single app file. The example shows a future interface.
 
 ```ts
 // src/platform.ts
@@ -131,61 +131,61 @@ import { createClient } from '@littlebox/sdk';
 export const app = createClient({ baseUrl: '/_littlebox' });
 ```
 
-Un proxy del mismo origen puede dirigir ese prefijo al kernel alojado o al propio. No basta con cambiar una URL entre dominios y suponer que las cookies funcionarán; la distribución autoalojada incluye esa configuración.
+A same-origin proxy can route that prefix to the hosted kernel or to a self-hosted one. Changing a URL across domains and assuming cookies will work is not enough; the self-hosted distribution includes that configuration.
 
-| Paso | Trabajo | Qué sigue funcionando |
+| Step | Work | What keeps working |
 | --- | --- | --- |
-| Exportar código | Generar un proyecto ejecutable con dependencias fijadas y scripts | La app puede seguir consumiendo Littlebox |
-| Autoalojar mini kernel | Importar datos, usuarios, permisos y archivos; cambiar la conexión de runtime | Mismos nombres de acciones y llamadas del frontend |
-| Sustituir una acción | Implementar su input, output y permisos en un handler propio | El frontend conserva esa llamada |
-| Sustituir auth | Conectar otra validación de sesión y login, manteniendo IDs de usuario | Los datos mantienen su propietario si la vinculación es correcta |
-| Sustituir SQLite | Migrar datos y revisar SQL, modelo y transacciones | Se pueden conservar los contratos de acciones |
-| Salir completamente | Servir frontend y backend propios | No se requiere una cuenta ni conexión con Littlebox |
+| Export code | Generate a runnable project with pinned dependencies and scripts | The app can keep consuming Littlebox |
+| Self-host mini kernel | Import data, users, permissions and files; change the runtime connection | Same action names and frontend calls |
+| Replace an action | Implement its input, output and permissions in a custom handler | The frontend keeps that call |
+| Replace auth | Connect another session validation and login, keeping user IDs | Data keeps its owner if the mapping is correct |
+| Replace SQLite | Migrate data and review SQL, model and transactions | Action contracts can be kept |
+| Leave completely | Serve your own frontend and backend | No Littlebox account or connection is required |
 
-La sustitución de handlers es una capacidad del backend externo, no autorización para ejecutar JS arbitrario dentro del kernel compartido. Una primera implementación puede usar un router externo que atienda acciones reemplazadas y derive las demás al mini kernel, manteniendo identidad validada y controles equivalentes. No acepta un actor declarado por el navegador. Si una operación necesita datos de dos backends, no se promete una transacción distribuida.
+Handler replacement is a capability of the external backend. It does not authorize running arbitrary JS inside the shared kernel. A first implementation can use an external router that serves the replaced actions and forwards the rest to the mini kernel, keeping validated identity and equivalent controls. It does not accept an actor declared by the browser. If an operation needs data from two backends, no distributed transaction is promised.
 
-Cambiar de auth requiere vincular identidades de forma verificada. Puede obligar a iniciar sesión de nuevo o restablecer contraseñas. Cambiar a PostgreSQL puede requerir reescribir SQL. La promesa es localizar las dependencias y conservar la app donde el contrato siga siendo válido, no hacer gratuitas todas las migraciones.
+Switching auth requires mapping identities in a verified way. It can force users to sign in again or reset passwords. Switching to PostgreSQL can require rewriting SQL. The promise is to locate the dependencies and keep the app working where the contract still holds. It does not make every migration free.
 
-Autoalojar no obliga a sustituir nada. Debe ser la salida más fácil. Un Project Managed puede seguir editándose en Littlebox usando un mini kernel propio compatible. Tras eject de la autoridad del código, el repositorio pasa a ser la fuente y Littlebox puede seguir publicando artefactos. No debe haber dos escritores independientes del mismo código.
+Self-hosting does not force you to replace anything. It should be the easiest exit. A Managed Project can keep being edited in Littlebox while using a compatible self-hosted mini kernel. After ejecting code authority, the repository becomes the source and Littlebox can keep publishing artifacts. There must not be two independent writers of the same code.
 
-## Qué aprovechar del código actual
+## What to reuse from the current code
 
-- Conservar editor, agente sobre copia de trabajo, gate, parser de acciones, runtime bridge, build WASM y SQL Studio.
-- En kernel-server/index.ts ya existe el recorrido acción, autorización, transacción SQLite y respuesta sin upload de snapshot por mutación.
-- El kernel Rust desplegado por Docker añade una subida completa después del commit en kernel-rs/src/main.rs. Esa subida debe salir del camino de la petición. Hoy un fallo remoto puede devolver error después de haber escrito.
-- El lock global de Rust debe dejar de serializar escrituras de apps independientes. La coordinación se hace por base.
-- Separar identidad de app y publicación. Cambiar código no debe crear otra base ni otros usuarios.
-- Extraer un SDK del miniapp inyectado conservando compatibilidad durante la transición.
-- Convertir la exportación JSON actual en un paquete ejecutable más un paquete autorizado de datos.
-- Completar usuarios persistentes por app. El login Bun actual usa un código compartido y genera otro actor en cada entrada; no es todavía ese modelo.
+- Keep the editor, the agent working on a working copy, the gate, the action parser, the runtime bridge, the WASM build and SQL Studio.
+- The Rust Kernel already runs the action, authorization, SQLite transaction and response path without uploading a snapshot per mutation. See `invoke_action` and `run_mutation` in `kernel-rs/src/main.rs`.
+- The Rust Kernel no longer uploads the database after each commit, so a remote failure cannot fail a write that already happened. Databases are not replicated to S3 at all yet; that replication still has to be built outside the request path.
+- Writes are coordinated per database (`database_lock` in `kernel-rs/src/main.rs`), so independent apps do not serialize each other.
+- Separate app identity from publishing. Changing code must not create another database or other users.
+- Extract an SDK from the injected miniapp, keeping compatibility during the transition.
+- Turn the current JSON export into a runnable package plus an authorized data package.
+- Persistent per-app users exist in the Rust Kernel, with hashed sessions and a per-Deployment signup policy.
 
-No reescribiría el kernel ni cambiaría de lenguaje como consecuencia de esta decisión. El primer cambio debe demostrar el recorrido correcto sobre el kernel que ejecuta Docker. Las pruebas de comportamiento de Bun ayudan a completar los huecos, pero mantener dos kernels con funcionalidades distintas no es el destino final. Consolidar la implementación se decide con el coste concreto de completar ese recorrido, separado del contrato de la app.
+Update, 2026-10-23: the Bun kernel server has been removed, and the Rust Kernel in `kernel-rs/` is the only Kernel. The original advice stands: prove the correct path on the Kernel that Docker runs, separately from the app contract.
 
-## Límites que aceptaría en v1
+## Limits I would accept in v1
 
-- Apps personales con pocos usuarios y tráfico acotado.
-- Una instancia activa responsable de cada base y volumen persistente obligatorio.
-- Frontend estático, acciones declaradas y paquetes de navegador admitidos.
-- Límites de tiempo de consulta, filas, input, tamaño de base y archivos.
-- Sin ejecución arbitraria de backend, procesos por app, failover automático ni escrituras multi-región.
-- Una forma de login completa y permisos sencillos; no un sistema de organizaciones.
-- Backups con antigüedad visible; no promesa de pérdida cero ante destrucción del volumen.
-- Migraciones pequeñas, previsualizadas y validadas, con recuperación antes de aplicar.
+- Personal apps with few users and bounded traffic.
+- One active instance responsible for each database, and a mandatory persistent volume.
+- Static frontend, declared actions and approved browser packages.
+- Limits on query time, rows, input, database size and files.
+- No arbitrary backend execution, per-app processes, automatic failover or multi-region writes.
+- One complete login method and simple permissions, not an organizations system.
+- Backups with visible age, with no zero-loss promise if the volume is destroyed.
+- Small, previewed and validated migrations, with recovery in place before applying.
 
-## Secuencia y pruebas de aceptación
+## Sequence and acceptance tests
 
-| Entrega | Trabajo acotado | Prueba que decide si está terminada |
+| Delivery | Bounded work | Test that decides it is done |
 | --- | --- | --- |
-| 1. Publicar e iterar sin perder datos | Base estable por app/entorno, transacción local y backup separado | Crear una fila, publicar v2 y reiniciar kernel conserva esa fila; un fallo del backup remoto no convierte su escritura en error |
-| 2. App útil con auth | Usuario persistente, zona pública e interna, acciones por actor | Dos usuarios y dos apps no acceden a datos ajenos; login y revocación funcionan |
-| 3. Cambiar modelo y recuperar | Un modelo Drizzle, migración validada, backup y restore | Una migración conserva filas; una fallida deja el estado definido; una copia restaura en un directorio limpio |
-| 4. Ejecutar fuera | SDK y paquete de app, mini kernel autoalojable e importación | La app funciona en otra instalación con Littlebox inaccesible y conserva usuarios y permisos |
-| 5. Sustituir una capacidad | Implementación externa de una acción con el mismo contrato | Reemplazar notes.create mantiene el frontend y las pruebas de acceso; el resto sigue usando el kernel |
+| 1. Publish and iterate without losing data | Stable database per app/environment, local transaction and separate backup | Creating a row, publishing v2 and restarting the kernel keeps that row; a remote backup failure does not turn its write into an error |
+| 2. Useful app with auth | Persistent user, public and internal areas, per-actor actions | Two users and two apps cannot access each other's data; login and revocation work |
+| 3. Change the model and recover | A Drizzle model, validated migration, backup and restore | A migration keeps rows; a failed one leaves a defined state; a copy restores into a clean directory |
+| 4. Run elsewhere | SDK and app package, self-hostable mini kernel and import | The app works on another installation with Littlebox unreachable and keeps users and permissions |
+| 5. Replace a capability | External implementation of one action with the same contract | Replacing notes.create keeps the frontend and the access tests; the rest keeps using the kernel |
 
-La demostración completa empieza con la petición al agente de crear un cuaderno con portada pública, login, notas privadas y una lista compartida. Continúa con una edición del modelo, una segunda publicación y la exportación. Termina con ese mismo cuaderno funcionando en el mini kernel propio. La publicación y el eject se diseñan para ese recorrido antes de añadir más proveedores de infraestructura.
+The full demo starts with a request to the agent to create a notebook with a public cover page, login, private notes and a shared list. It continues with a model edit, a second publish and the export. It ends with that same notebook running on the self-hosted mini kernel. Publishing and eject are designed for that path before adding more infrastructure providers.
 
-## Delegación y decisiones pendientes
+## Delegation and open decisions
 
-El agente principal fija contratos y revisa integración. Agentes de menor coste pueden extraer el SDK, crear el exportador y añadir pruebas de comportamiento en tareas separadas. Los cambios de identidad, migración y persistencia requieren revisión conjunta de sus invariantes. No se delega una reescritura abierta del backend.
+The main agent sets contracts and reviews integration. Lower-cost agents can extract the SDK, build the exporter and add behavior tests in separate tasks. Identity, migration and persistence changes require a joint review of their invariants. An open-ended backend rewrite is not delegated.
 
-Los ADR deben recoger base estable por app y entorno, commit local separado de backup remoto, auth por app, autoalojamiento del mismo runtime y sustitución externa de capacidades. Este documento propone esas decisiones. No cambia las garantías del código existente por describirlas.
+The ADRs must record a stable database per app and environment, local commit separate from remote backup, per-app auth, self-hosting of the same runtime and external replacement of capabilities. This document proposes those decisions. Describing them does not change the guarantees of the existing code.

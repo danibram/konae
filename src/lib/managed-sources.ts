@@ -1,0 +1,67 @@
+import { McpClient } from "../mcp/client";
+import type { MiniAppProject } from "./types";
+import type { DeploymentReceipt } from "../deployments/client";
+
+export type ProjectMetadata = { id: string; name: string; slug: string; sourceAuthority: "managed" | "external" };
+type SourceResult = { revision: number; transfer: Parameters<McpClient["download"]>[0] | null };
+
+/** One instance remains bound to the owner that opened the workspace. */
+export class ManagedSources {
+  private readonly client: McpClient;
+  private readonly revisions = new Map<string, number>();
+  private readonly tails = new Map<string, Promise<void>>();
+
+  constructor(ownerId: string, endpoint = "/mcp") {
+    this.client = new McpClient(endpoint, { ownerId });
+  }
+
+  async load() {
+    const result = await this.client.call<{ projects: { project: ProjectMetadata }[] }>("projects_list");
+    const external = result.projects.filter(({ project }) => project.sourceAuthority === "external").map(({ project }) => project);
+    const missing: ProjectMetadata[] = [];
+    const projects: MiniAppProject[] = [];
+    const deployments: Record<string, DeploymentReceipt> = {};
+    for (const { project } of result.projects) {
+      const inspected = await this.client.call<{ deployment: DeploymentReceipt | null }>("project_inspect", { projectId: project.id });
+      if (inspected.deployment) deployments[project.id] = inspected.deployment;
+      if (project.sourceAuthority !== "managed") continue;
+      const saved = await this.client.call<SourceResult>("project_sources_read", { projectId: project.id });
+      this.revisions.set(project.id, saved.revision);
+      if (!saved.transfer) { missing.push(project); continue; }
+      const bytes = await this.client.download(saved.transfer);
+      const source = JSON.parse(new TextDecoder().decode(bytes)) as MiniAppProject;
+      if (source.id !== project.id) throw new Error("The saved source does not match its project.");
+      projects.push(source);
+    }
+    return { projects, external, missing, deployments };
+  }
+
+  save(project: MiniAppProject): Promise<void> {
+    const previous = this.tails.get(project.id) ?? Promise.resolve();
+    const next = previous.then(async () => {
+      if (!this.revisions.has(project.id)) {
+        const metadata = await this.client.call<ProjectMetadata>("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest, sourceAuthority: "managed" });
+        if (metadata.sourceAuthority !== "managed") throw new Error("This project is maintained externally.");
+        const saved = await this.client.call<SourceResult>("project_sources_read", { projectId: project.id });
+        if (saved.transfer) {
+          await this.client.cancel(saved.transfer.transferId);
+          throw new Error("This project already has saved sources. Reload before saving.");
+        }
+        this.revisions.set(project.id, saved.revision);
+      }
+      const upload = await this.client.upload(new TextEncoder().encode(JSON.stringify(project)), project.id);
+      try {
+        const result = await this.client.call<{ revision: number }>("project_sources_save", { projectId: project.id, transferId: upload.transferId, expectedRevision: this.revisions.get(project.id) });
+        this.revisions.set(project.id, result.revision);
+      } finally {
+        await this.client.cancel(upload.transferId).catch(() => {});
+      }
+    });
+    this.tails.set(project.id, next);
+    return next;
+  }
+
+  retry(projectId: string) {
+    this.tails.delete(projectId);
+  }
+}

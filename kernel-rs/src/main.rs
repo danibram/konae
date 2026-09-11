@@ -25,12 +25,17 @@ use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 use uuid::Uuid;
 
 mod auth;
+mod clerk;
+mod limits;
+mod mcp;
+mod oauth;
 use auth::{AuthError, AuthService, AuthUser};
+use limits::{Guards, trusted_proxies};
 
 #[derive(Clone)]
 struct AppState {
     deployments: Arc<RwLock<HashMap<String, Deployment>>>,
-    db_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    db_locks: LockMap,
     s3: Option<S3Client>,
     artifact_bucket: String,
     data_bucket: String,
@@ -40,10 +45,11 @@ struct AppState {
     admin_key: String,
     public_origin: String,
     host_suffix: String,
+    guards: Arc<Guards>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", from = "DeploymentRecord")]
 struct Deployment {
     id: String,
     project_id: String,
@@ -53,6 +59,163 @@ struct Deployment {
     manifest: Value,
     hostname: String,
     actions: String,
+    /// Folder under the deployment's artifact prefix that holds the live files.
+    /// Deployments published before versioning keep their files at the prefix root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    artifact_version: Option<String>,
+    /// Who may create an account. Records written before this field existed
+    /// get the default for their visibility when they load.
+    signup_policy: SignupPolicy,
+}
+
+/// The stored form of a Deployment, where the signup policy may be missing.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentRecord {
+    id: String,
+    project_id: String,
+    project_name: String,
+    url: String,
+    created_at: u64,
+    manifest: Value,
+    hostname: String,
+    actions: String,
+    #[serde(default)]
+    artifact_version: Option<String>,
+    #[serde(default)]
+    signup_policy: Option<SignupPolicy>,
+}
+
+impl From<DeploymentRecord> for Deployment {
+    fn from(record: DeploymentRecord) -> Self {
+        let signup_policy = record.signup_policy.unwrap_or_else(|| {
+            SignupPolicy::initial(
+                record
+                    .manifest
+                    .get("visibility")
+                    .and_then(Value::as_str)
+                    .unwrap_or("public"),
+            )
+        });
+        Self {
+            id: record.id,
+            project_id: record.project_id,
+            project_name: record.project_name,
+            url: record.url,
+            created_at: record.created_at,
+            manifest: record.manifest,
+            hostname: record.hostname,
+            actions: record.actions,
+            artifact_version: record.artifact_version,
+            signup_policy,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SignupMode {
+    #[default]
+    Open,
+    Allowlist,
+    Closed,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SignupPolicy {
+    mode: SignupMode,
+    /// Exact emails and `@domain` entries, stored trimmed and lowercased.
+    #[serde(default)]
+    allowlist: Vec<String>,
+}
+
+const MAX_ALLOWLIST_ENTRIES: usize = 100;
+const SIGNUP_REFUSED: &str = "This app is not accepting new accounts for this email address.";
+
+impl SignupPolicy {
+    /// Public apps start open. Private apps start closed until the owner
+    /// chooses who may join.
+    fn initial(visibility: &str) -> Self {
+        Self {
+            mode: if visibility == "private" {
+                SignupMode::Closed
+            } else {
+                SignupMode::Open
+            },
+            allowlist: Vec::new(),
+        }
+    }
+
+    /// The policy a redeploy keeps. Turning a public app private closes an
+    /// open signup, since strangers who could join the public app should not
+    /// get into the private one. Any other choice the owner made carries over.
+    fn for_republish(&self, was_private: bool, visibility: &str) -> Self {
+        if !was_private && visibility == "private" && self.mode == SignupMode::Open {
+            Self {
+                mode: SignupMode::Closed,
+                allowlist: self.allowlist.clone(),
+            }
+        } else {
+            self.clone()
+        }
+    }
+
+    /// Builds a policy from owner input, normalizing and deduplicating entries.
+    fn from_input(mode: SignupMode, entries: &[String]) -> std::result::Result<Self, String> {
+        if entries.len() > MAX_ALLOWLIST_ENTRIES {
+            return Err(format!(
+                "The allowlist holds at most {MAX_ALLOWLIST_ENTRIES} entries."
+            ));
+        }
+        let mut allowlist: Vec<String> = Vec::new();
+        for entry in entries {
+            let entry = entry.trim().to_lowercase();
+            if entry.is_empty() {
+                continue;
+            }
+            let valid = match entry.strip_prefix('@') {
+                Some(domain) => {
+                    domain.len() <= 253
+                        && domain.contains('.')
+                        && !domain.starts_with('.')
+                        && !domain.ends_with('.')
+                        && domain
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"-.".contains(&b))
+                }
+                None => auth::normalize_email(&entry).is_ok(),
+            };
+            if !valid {
+                return Err(format!(
+                    "{entry} is not an email address or an @domain entry."
+                ));
+            }
+            if !allowlist.contains(&entry) {
+                allowlist.push(entry);
+            }
+        }
+        Ok(Self { mode, allowlist })
+    }
+
+    /// Decides whether this email may create an account. Domain entries match
+    /// the exact domain after the `@`, never a subdomain.
+    fn allows(&self, email: &str) -> bool {
+        match self.mode {
+            SignupMode::Open => true,
+            SignupMode::Closed => false,
+            SignupMode::Allowlist => {
+                let Ok(email) = auth::normalize_email(email) else {
+                    return false;
+                };
+                let domain = email.rsplit_once('@').map(|(_, domain)| domain);
+                self.allowlist.iter().any(|entry| match entry.strip_prefix('@') {
+                    Some(allowed) => domain == Some(allowed),
+                    None => *entry == email,
+                })
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -67,6 +230,8 @@ struct DeployInput {
     initial_identity: Option<String>,
     #[serde(default)]
     initial_files: Option<String>,
+    #[serde(default)]
+    initial_signup_policy: Option<SignupPolicy>,
 }
 
 #[derive(Deserialize)]
@@ -118,13 +283,25 @@ struct ActionBinding {
     #[serde(rename = "type")]
     value_type: Option<String>,
     max_length: Option<usize>,
+    #[serde(default)]
+    nullable: bool,
     field: Option<String>,
     value: Option<Value>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if clerk::operator_command()? { return Ok(()); }
     let port = env("LITTLEBOX_KERNEL_PORT", "8787").parse::<u16>()?;
+    let bind = env("LITTLEBOX_BIND", "127.0.0.1");
+    let public_origin = env("LITTLEBOX_PUBLIC_ORIGIN", "http://localhost:8080");
+    let admin_key = admin_key_for(
+        &bind,
+        &public_origin,
+        std::env::var("LITTLEBOX_MCP_ORIGIN").ok().as_deref(),
+        std::env::var("LITTLEBOX_ADMIN_KEY").ok().as_deref(),
+        std::env::var("LITTLEBOX_ALLOW_DEFAULT_KEY").as_deref() == Ok("1"),
+    )?;
     let data_root = PathBuf::from(env("LITTLEBOX_DATA_DIR", "/data"));
     tokio::fs::create_dir_all(data_root.join("deployments")).await?;
     let s3 = if let Ok(endpoint) = std::env::var("LITTLEBOX_S3_ENDPOINT") {
@@ -157,48 +334,39 @@ async fn main() -> Result<()> {
     tokio::fs::create_dir_all(&backup_root).await?;
     let state = AppState {
         deployments: Arc::new(RwLock::new(deployments)),
-        db_locks: Arc::new(Mutex::new(HashMap::new())),
+        db_locks: LockMap::default(),
         s3,
         artifact_bucket,
         data_bucket,
         local_artifact_root,
         backup_root,
         data_root,
-        admin_key: env("LITTLEBOX_ADMIN_KEY", "local-development-key"),
-        public_origin: env("LITTLEBOX_PUBLIC_ORIGIN", "http://localhost:8080"),
+        admin_key,
+        public_origin,
         host_suffix: env("LITTLEBOX_HOST_SUFFIX", "localhost"),
+        guards: Arc::new(Guards::new(trusted_proxies(
+            &std::env::var("LITTLEBOX_TRUSTED_PROXIES").unwrap_or_default(),
+        )?)),
     };
 
     let app = Router::new()
         .route("/_littlebox/health", get(health))
-        .route("/_littlebox/admin/deploy", post(deploy))
-        .route("/_littlebox/admin/storage/test", post(test_storage))
-        .route(
-            "/_littlebox/admin/deployments/{id}/database/export",
-            get(export_database),
-        )
-        .route(
-            "/_littlebox/admin/deployments/{id}/portable-state",
-            get(export_portable_state),
-        )
-        .route(
-            "/_littlebox/admin/deployments/{id}/database",
-            post(admin_database),
-        )
-        .route("/_littlebox/session", get(session))
         .route("/_littlebox/auth/signup", post(signup))
         .route("/_littlebox/auth/login", post(login))
-        .route("/_littlebox/auth/logout", post(logout))
         .route("/_littlebox/login", get(login_page))
-        .route("/_littlebox/files", get(list_files).post(upload_file))
-        .route("/_littlebox/files/{id}", get(serve_file))
-        .route("/_littlebox/actions/{*name}", post(invoke_action))
+        .merge(mcp::routes())
+        .merge(oauth::routes())
+        .route("/_littlebox/{*path}", axum::routing::any(|| async { error(StatusCode::GONE, "Use authenticated MCP for platform operations.") }))
         .route("/{*path}", get(serve_artifact))
         .route("/", get(serve_root))
         .with_state(state);
-    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
+    let listener = tokio::net::TcpListener::bind((bind.as_str(), port)).await?;
     println!("Littlebox Rust Kernel listening on {port}");
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -270,19 +438,33 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             return error(StatusCode::BAD_REQUEST, &message);
         }
     }
+    if !input.artifact.files.keys().all(|path| safe_relative_path(path)) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "Artifact contains an invalid path.",
+        );
+    }
     let deployments = state.deployments.read().await;
     let existing = find_project_deployment(&deployments, &input.project.id);
     drop(deployments);
     if existing.is_some()
         && (input.initial_database.is_some()
             || input.initial_identity.is_some()
-            || input.initial_files.is_some())
+            || input.initial_files.is_some()
+            || input.initial_signup_policy.is_some())
     {
         return error(
             StatusCode::CONFLICT,
             "Portable state can only be imported on the first deployment.",
         );
     }
+    let initial_signup_policy = match input.initial_signup_policy.as_ref() {
+        Some(policy) => match SignupPolicy::from_input(policy.mode, &policy.allowlist) {
+            Ok(policy) => Some(policy),
+            Err(message) => return error(StatusCode::BAD_REQUEST, &message),
+        },
+        None => None,
+    };
     let imported_size = [
         &input.initial_database,
         &input.initial_identity,
@@ -330,6 +512,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         .unwrap_or_else(|| deployment_url(&state.public_origin, &hostname));
     let mut manifest = input.project.manifest;
     manifest["visibility"] = Value::String(input.visibility.clone());
+    let artifact_version = format!("v{}", Uuid::new_v4().simple());
     let deployment = Deployment {
         id: id.clone(),
         project_id: input.project.id,
@@ -342,6 +525,11 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         manifest,
         hostname: hostname.clone(),
         actions,
+        artifact_version: Some(artifact_version.clone()),
+        signup_policy: match existing.as_ref() {
+            Some(item) => item.signup_policy.for_republish(is_private(item), &input.visibility),
+            None => initial_signup_policy.unwrap_or_else(|| SignupPolicy::initial(&input.visibility)),
+        },
     };
     let directory = state.data_root.join("deployments").join(&id);
     if let Err(error_value) = tokio::fs::create_dir_all(&directory).await {
@@ -398,39 +586,25 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             );
         }
     }
-    for (path, contents) in input.artifact.files {
-        if !safe_relative_path(&path) {
-            return error(
-                StatusCode::BAD_REQUEST,
-                "Artifact contains an invalid path.",
-            );
-        }
-        let local_path = state.local_artifact_root.join(&id).join(&path);
-        if let Some(parent) = local_path.parent() {
-            if let Err(error_value) = tokio::fs::create_dir_all(parent).await {
-                return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
-            }
-        }
-        if let Err(error_value) = tokio::fs::write(&local_path, contents.as_bytes()).await {
-            return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
-        }
-        if let Some(s3) = state.s3.as_ref() {
-            if let Err(error_value) = s3
-                .put_object()
-                .bucket(&state.artifact_bucket)
-                .key(format!("deployments/{id}/{path}"))
-                .body(ByteStream::from(contents.into_bytes()))
-                .send()
-                .await
-            {
-                return error(
-                    StatusCode::BAD_GATEWAY,
-                    &format!("Artifact upload failed: {error_value}"),
-                );
-            }
-        }
+    // New files go into a fresh version folder. Readers keep the previous
+    // version until the deployment record switches to this one below.
+    if let Err(error_value) =
+        stage_local_artifact(&state, &id, &artifact_version, &input.artifact.files).await
+    {
+        remove_artifact_version(&state, &id, &artifact_version).await;
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
+    }
+    if let Err(error_value) =
+        upload_artifact(&state, &id, &artifact_version, input.artifact.files).await
+    {
+        remove_artifact_version(&state, &id, &artifact_version).await;
+        return error(
+            StatusCode::BAD_GATEWAY,
+            &format!("Artifact upload failed: {error_value}"),
+        );
     }
     if let Err(error_value) = persist_deployment(&state, &deployment).await {
+        remove_artifact_version(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
     state
@@ -438,7 +612,109 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         .write()
         .await
         .insert(hostname, deployment.clone());
+    remove_stale_artifacts(&state, &id, &artifact_version).await;
     Json(json!({"result": deployment})).into_response()
+}
+
+async fn stage_local_artifact(
+    state: &AppState,
+    id: &str,
+    version: &str,
+    files: &HashMap<String, String>,
+) -> Result<()> {
+    let root = state.local_artifact_root.join(id).join(version);
+    for (path, contents) in files {
+        let local_path = root.join(path);
+        if let Some(parent) = local_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(&local_path, contents.as_bytes()).await?;
+    }
+    Ok(())
+}
+
+async fn upload_artifact(
+    state: &AppState,
+    id: &str,
+    version: &str,
+    files: HashMap<String, String>,
+) -> Result<()> {
+    let Some(s3) = state.s3.as_ref() else {
+        return Ok(());
+    };
+    let mut uploads = tokio::task::JoinSet::new();
+    for (path, contents) in files {
+        if uploads.len() >= 16 {
+            if let Some(result) = uploads.join_next().await {
+                result??;
+            }
+        }
+        let request = s3
+            .put_object()
+            .bucket(&state.artifact_bucket)
+            .key(format!("deployments/{id}/{version}/{path}"))
+            .body(ByteStream::from(contents.into_bytes()));
+        uploads.spawn(async move { request.send().await.map(|_| ()).map_err(anyhow::Error::from) });
+    }
+    while let Some(result) = uploads.join_next().await {
+        result??;
+    }
+    Ok(())
+}
+
+/// Best-effort removal of a version that never went live.
+async fn remove_artifact_version(state: &AppState, id: &str, version: &str) {
+    let _ = tokio::fs::remove_dir_all(state.local_artifact_root.join(id).join(version)).await;
+    if let Some(s3) = state.s3.as_ref() {
+        let prefix = format!("deployments/{id}/{version}/");
+        if let Ok(keys) = list_s3_keys(s3, &state.artifact_bucket, &prefix).await {
+            for key in keys {
+                let _ = s3.delete_object().bucket(&state.artifact_bucket).key(key).send().await;
+            }
+        }
+    }
+}
+
+/// Deletes every artifact file outside the live version, including files that
+/// older deployments stored at the prefix root. Failures are logged because the
+/// new version is already live.
+async fn remove_stale_artifacts(state: &AppState, id: &str, version: &str) {
+    let root = state.local_artifact_root.join(id);
+    if let Ok(mut entries) = tokio::fs::read_dir(&root).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if entry.file_name().to_str() == Some(version) {
+                continue;
+            }
+            let removed = match entry.file_type().await {
+                Ok(kind) if kind.is_dir() => tokio::fs::remove_dir_all(entry.path()).await,
+                _ => tokio::fs::remove_file(entry.path()).await,
+            };
+            if let Err(error_value) = removed {
+                eprintln!("Could not remove stale artifact {}: {error_value}", entry.path().display());
+            }
+        }
+    }
+    let Some(s3) = state.s3.as_ref() else { return };
+    let prefix = format!("deployments/{id}/");
+    let live = format!("{prefix}{version}/");
+    // deployment.json shares this prefix when one bucket holds artifacts and data.
+    let record = format!("{prefix}deployment.json");
+    let shared_bucket = state.artifact_bucket == state.data_bucket;
+    let keys = match list_s3_keys(s3, &state.artifact_bucket, &prefix).await {
+        Ok(keys) => keys,
+        Err(error_value) => {
+            eprintln!("Could not list stale artifacts for {id}: {error_value}");
+            return;
+        }
+    };
+    for key in keys {
+        if key.starts_with(&live) || (shared_bucket && key == record) {
+            continue;
+        }
+        if let Err(error_value) = s3.delete_object().bucket(&state.artifact_bucket).key(&key).send().await {
+            eprintln!("Could not remove stale artifact {key}: {error_value}");
+        }
+    }
 }
 
 fn find_project_deployment(
@@ -481,7 +757,8 @@ async fn invoke_action(
     if action.access == "granted" {
         return error(StatusCode::FORBIDDEN, "action-grant-required");
     }
-    if action.access != "anonymous" && actor.is_none() {
+    // Private apps need a session even for anonymous actions, like their shell.
+    if (action.access != "anonymous" || is_private(&deployment)) && actor.is_none() {
         return error(StatusCode::UNAUTHORIZED, "authentication-required");
     }
     let params = match resolve_bindings(
@@ -551,6 +828,10 @@ async fn auth_request(
     let Some(deployment) = deployment_for(state, headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
+    let peer = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0);
     let bytes = match axum::body::to_bytes(request.into_body(), 4096).await {
         Ok(bytes) => bytes,
         Err(_) => {
@@ -569,32 +850,82 @@ async fn auth_request(
             );
         }
     };
+    let client = state.guards.client_ip(peer, headers);
+    if let Err(wait) = state.guards.auth_attempt(&deployment.id, client, &input.email) {
+        return too_many_attempts(wait);
+    }
+    if signup {
+        // Check the input first and give closed and unlisted the same answer,
+        // so a signup attempt does not reveal who is on the allowlist.
+        if let Err(error_value) = auth::normalize_email(&input.email)
+            .and_then(|_| auth::validate_password(&input.password))
+        {
+            return auth_error(error_value);
+        }
+        if !deployment.signup_policy.allows(&input.email) {
+            return error(StatusCode::FORBIDDEN, SIGNUP_REFUSED);
+        }
+    }
     let auth_path = state
         .data_root
         .join("deployments")
         .join(&deployment.id)
         .join("identity.sqlite");
-    let _identity_guard = database_lock(state, &format!("identity:{}", deployment.id)).await;
-    let email = input.email;
-    let password = input.password;
-    let result = tokio::task::spawn_blocking(move || {
-        let auth = AuthService::open(auth_path)?;
-        if signup {
-            auth.signup(&email, &password)
-        } else {
-            auth.login(&email, &password)
+    // The identity lock covers only SQLite reads and writes. The password
+    // hash runs between them without it, so slow hashes never queue other
+    // logins, logouts or releases behind them.
+    let identity = format!("identity:{}", deployment.id);
+    let (email, password) = (input.email, input.password);
+    let failed_email = email.clone();
+    let result = if signup {
+        let requested = email.clone();
+        match blocking(move || auth::NewAccount::prepare(&email, &password)).await {
+            Ok(account) => {
+                let _identity_guard = database_lock(state, &identity).await;
+                // The policy may have changed during the hash. Check the
+                // current one under the identity lock before creating the account.
+                let allowed = state
+                    .deployments
+                    .read()
+                    .await
+                    .values()
+                    .find(|current| current.id == deployment.id)
+                    .map(|current| current.signup_policy.allows(&requested));
+                match allowed {
+                    None => return error(StatusCode::NOT_FOUND, "Deployment not found."),
+                    Some(false) => return error(StatusCode::FORBIDDEN, SIGNUP_REFUSED),
+                    Some(true) => {}
+                }
+                blocking(move || AuthService::open(auth_path)?.create_account(account)).await
+            }
+            Err(error_value) => Err(error_value),
         }
-    })
-    .await;
+    } else {
+        let lookup = {
+            let _identity_guard = database_lock(state, &identity).await;
+            let (path, email, password) = (auth_path.clone(), email.clone(), password.clone());
+            blocking(move || AuthService::open(path)?.find_login(&email, &password)).await
+        };
+        match lookup {
+            Ok(stored) => match blocking(move || auth::check_password(&password, stored)).await {
+                Ok(user) => {
+                    let _identity_guard = database_lock(state, &identity).await;
+                    blocking(move || AuthService::open(auth_path)?.start_session(user)).await
+                }
+                Err(error_value) => Err(error_value),
+            },
+            Err(error_value) => Err(error_value),
+        }
+    };
+    if !signup && matches!(result, Err(AuthError::InvalidCredentials)) {
+        state.guards.auth_failed(&deployment.id, client, &failed_email);
+    }
     match result {
-        Ok(Ok(session)) => {
-            let secure = headers
-                .get("x-forwarded-proto")
-                .and_then(|v| v.to_str().ok())
-                == Some("https");
-            let secure = if secure { "; Secure" } else { "" };
+        Ok(session) => {
+            let cookie_name = app_cookie_name(state);
+            let secure = if cookie_name.starts_with("__Host-") { "; Secure" } else { "" };
             let cookie = format!(
-                "littlebox_app_session={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800{}",
+                "{cookie_name}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800{}",
                 session.token, secure
             );
             let mut response =
@@ -605,12 +936,29 @@ async fn auth_request(
                 .insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
             response
         }
-        Ok(Err(error_value)) => auth_error(error_value),
-        Err(_) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Authentication request failed.",
-        ),
+        Err(error_value) => auth_error(error_value),
     }
+}
+
+/// Runs blocking authentication work off the async runtime.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, AuthError> + Send + 'static,
+) -> Result<T, AuthError> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .unwrap_or(Err(AuthError::PasswordHash))
+}
+
+/// The answer when a login or signup exceeds its rate limit.
+fn too_many_attempts(wait: std::time::Duration) -> Response {
+    let mut response = error(
+        StatusCode::TOO_MANY_REQUESTS,
+        "Too many sign-in attempts. Try again later.",
+    );
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from(wait.as_secs().max(1)));
+    response
 }
 
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -620,7 +968,8 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
-    let token = cookie_value(&headers, "littlebox_app_session");
+    let token = headers.get(header::AUTHORIZATION).and_then(|v|v.to_str().ok()).and_then(|v|v.strip_prefix("Bearer ")).map(str::to_owned)
+        .or_else(|| cookie_value(&headers, app_cookie_name(&state)));
     let _identity_guard = database_lock(&state, &format!("identity:{}", deployment.id)).await;
     let auth = match open_auth(&state, &deployment) {
         Ok(auth) => auth,
@@ -634,9 +983,10 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let mut response = Json(json!({"result": {"ok": true}})).into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
-        HeaderValue::from_static(
-            "littlebox_app_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
-        ),
+        HeaderValue::from_str(&format!("{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
+            app_cookie_name(&state),
+            if app_cookie_name(&state).starts_with("__Host-") { "; Secure" } else { "" }
+        )).unwrap(),
     );
     response
 }
@@ -645,28 +995,32 @@ async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Respon
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
-    if deployment
-        .manifest
-        .get("visibility")
-        .and_then(Value::as_str)
-        == Some("private")
-        && !matches!(
-            authenticate_deployment(&state, &deployment, &headers),
-            Ok(Some(_))
-        )
-    {
+    let actor = match authenticate_deployment(&state, &deployment, &headers) {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    if is_private(&deployment) && actor.is_none() {
         return error(StatusCode::UNAUTHORIZED, "authentication-required");
     }
+    let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
+    let private_deployment = is_private(&deployment);
     let path = state
         .data_root
         .join("deployments")
-        .join(deployment.id)
+        .join(&deployment.id)
         .join("files")
         .join("index.json");
     match tokio::fs::read(path).await {
         Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
-            Ok(files) => Json(json!({"result": files})).into_response(),
-            Err(_) => error(StatusCode::INTERNAL_SERVER_ERROR, "File index is invalid."),
+            Ok(Value::Array(files)) => {
+                let visible = files
+                    .iter()
+                    .filter(|file| file_readable(file, actor_id, private_deployment))
+                    .map(|file| file_view(file, actor_id))
+                    .collect::<Vec<_>>();
+                Json(json!({"result": visible})).into_response()
+            }
+            Ok(_) | Err(_) => error(StatusCode::INTERNAL_SERVER_ERROR, "File index is invalid."),
         },
         Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => {
             Json(json!({"result": []})).into_response()
@@ -683,18 +1037,11 @@ async fn upload_file(
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
-    if deployment
-        .manifest
-        .get("visibility")
-        .and_then(Value::as_str)
-        == Some("private")
-        && !matches!(
-            authenticate_deployment(&state, &deployment, &headers),
-            Ok(Some(_))
-        )
-    {
-        return error(StatusCode::UNAUTHORIZED, "authentication-required");
-    }
+    let actor = match authenticate_deployment(&state, &deployment, &headers) {
+        Ok(Some(actor)) => actor,
+        Ok(None) => return error(StatusCode::UNAUTHORIZED, "authentication-required"),
+        Err(response) => return response,
+    };
     let bytes = match axum::body::to_bytes(request.into_body(), 3_000_000).await {
         Ok(bytes) => bytes,
         Err(_) => {
@@ -710,6 +1057,16 @@ async fn upload_file(
             return error(
                 StatusCode::BAD_REQUEST,
                 "File upload must be JSON with name, type, and dataUrl.",
+            );
+        }
+    };
+    let visibility = match input.get("visibility").and_then(Value::as_str) {
+        None | Some("private") => "private",
+        Some("public") => "public",
+        Some(_) => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "File visibility must be private or public.",
             );
         }
     };
@@ -761,8 +1118,12 @@ async fn upload_file(
         return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
     }
     let mut files = match tokio::fs::read(directory.join("index.json")).await {
-        Ok(bytes) => serde_json::from_slice::<Vec<Value>>(&bytes).unwrap_or_default(),
-        Err(_) => Vec::new(),
+        Ok(bytes) => match serde_json::from_slice::<Vec<Value>>(&bytes) {
+            Ok(files) => files,
+            Err(_) => return error(StatusCode::INTERNAL_SERVER_ERROR, "File index is invalid."),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
     let used = files
         .iter()
@@ -775,17 +1136,24 @@ async fn upload_file(
         );
     }
     let id = Uuid::new_v4().to_string();
-    let metadata = json!({"id":id,"name":name,"type":content_type,"size":data.len(),"url":format!("/_littlebox/files/{id}"),"createdAt":now_ms()});
+    let metadata = json!({
+        "id": id,
+        "name": name,
+        "type": content_type,
+        "size": data.len(),
+        "visibility": visibility,
+        "ownerId": actor.user_id,
+        "createdAt": now_ms(),
+    });
     if let Err(e) = tokio::fs::write(directory.join(format!("{id}.blob")), &data).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
     }
     files.insert(0, metadata.clone());
-    if let Err(e) = tokio::fs::write(
-        directory.join("index.json"),
-        serde_json::to_vec_pretty(&files).unwrap_or_default(),
-    )
-    .await
-    {
+    let index = match serde_json::to_vec_pretty(&files) {
+        Ok(bytes) => bytes,
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    if let Err(e) = write_atomic(&directory.join("index.json"), &index).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
     }
     Json(json!({"result": metadata})).into_response()
@@ -799,18 +1167,15 @@ async fn serve_file(
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
-    if deployment
-        .manifest
-        .get("visibility")
-        .and_then(Value::as_str)
-        == Some("private")
-        && !matches!(
-            authenticate_deployment(&state, &deployment, &headers),
-            Ok(Some(_))
-        )
-    {
+    let actor = match authenticate_deployment(&state, &deployment, &headers) {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    let private_deployment = is_private(&deployment);
+    if private_deployment && actor.is_none() {
         return error(StatusCode::UNAUTHORIZED, "authentication-required");
     }
+    let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
     if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
         return error(StatusCode::NOT_FOUND, "File not found.");
     }
@@ -829,6 +1194,9 @@ async fn serve_file(
     else {
         return error(StatusCode::NOT_FOUND, "File not found.");
     };
+    if !file_readable(metadata, actor_id, private_deployment) {
+        return error(StatusCode::NOT_FOUND, "File not found.");
+    }
     let bytes = match tokio::fs::read(directory.join(format!("{id}.blob"))).await {
         Ok(bytes) => bytes,
         Err(_) => return error(StatusCode::NOT_FOUND, "File not found."),
@@ -875,7 +1243,7 @@ async fn login_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
     };
     match authenticate_deployment(&state, &deployment, &headers) {
         Ok(Some(_)) => (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response(),
-        Ok(None) => private_login_page(),
+        Ok(None) => private_login_page(&deployment.signup_policy),
         Err(response) => response,
     }
 }
@@ -910,7 +1278,7 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
     {
         match authenticate_deployment(&state, &deployment, &headers) {
             Ok(Some(_)) => {}
-            Ok(None) => return private_login_page(),
+            Ok(None) => return private_login_page(&deployment.signup_policy),
             Err(response) => return response,
         }
     }
@@ -930,14 +1298,18 @@ async fn read_artifact(state: &AppState, deployment: &Deployment, path: &str) ->
     if !safe_relative_path(path) {
         anyhow::bail!("invalid artifact path");
     }
-    let local = state.local_artifact_root.join(&deployment.id).join(path);
+    let relative = match deployment.artifact_version.as_deref() {
+        Some(version) => format!("{version}/{path}"),
+        None => path.to_owned(),
+    };
+    let local = state.local_artifact_root.join(&deployment.id).join(&relative);
     match tokio::fs::read(local).await {
         Ok(bytes) => Ok(bytes),
         Err(local_error) => {
             let Some(s3) = state.s3.as_ref() else {
                 return Err(local_error.into());
             };
-            let key = format!("deployments/{}/{}", deployment.id, path);
+            let key = format!("deployments/{}/{}", deployment.id, relative);
             let object = s3
                 .get_object()
                 .bucket(&state.artifact_bucket)
@@ -949,8 +1321,33 @@ async fn read_artifact(state: &AppState, deployment: &Deployment, path: &str) ->
     }
 }
 
-fn private_login_page() -> Response {
-    let body = r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f5f7;color:#20232a;font:16px system-ui,sans-serif}main{width:min(100%,380px);padding:32px;background:white;border:1px solid #e1e4e8;border-radius:12px;box-shadow:0 12px 36px #1f293714}h1{margin:0 0 8px;font-size:24px}p{color:#586174;line-height:1.5}form,label{display:grid;gap:8px}form{gap:16px;margin-top:24px}input,button{font:inherit;border-radius:8px;padding:11px 12px}input{width:100%;border:1px solid #c9ced6}button{border:0;background:#273449;color:white;cursor:pointer}button+button{background:#edf0f4;color:#252a33}#error{min-height:1.5em;margin:0;color:#a32727}</style><main><h1>Sign in to this app</h1><p>Account creation is open for this prototype.</p><form id="auth"><label>Email <input name="email" type="email" required autocomplete="email"></label><label>Password <input name="password" type="password" minlength="8" required autocomplete="current-password"></label><button formaction="/_littlebox/auth/login">Sign in</button><button formaction="/_littlebox/auth/signup">Create account</button><p id="error" role="alert"></p></form></main><script>document.querySelector('#auth').addEventListener('submit',async e=>{e.preventDefault();const path=e.submitter?.formAction||'/_littlebox/auth/login';const form=new FormData(e.currentTarget);const response=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:form.get('email'),password:form.get('password')})});if(response.ok){location.replace('/');return}const body=await response.json().catch(()=>({}));document.querySelector('#error').textContent=body.error||'Sign in failed.'})</script></html>"#;
+fn private_login_page(policy: &SignupPolicy) -> Response {
+    let (note, create) = match policy.mode {
+        SignupMode::Open => (
+            "New here? Enter an email and password, then create an account.",
+            true,
+        ),
+        SignupMode::Allowlist => (
+            "Only invited email addresses can create an account.",
+            true,
+        ),
+        SignupMode::Closed => (
+            "This app is not accepting new accounts. Sign in with an existing account.",
+            false,
+        ),
+    };
+    let body = [
+        r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f5f7;color:#20232a;font:16px system-ui,sans-serif}main{width:min(100%,380px);padding:32px;background:white;border:1px solid #e1e4e8;border-radius:12px;box-shadow:0 12px 36px #1f293714}h1{margin:0 0 8px;font-size:24px}p{color:#586174;line-height:1.5}form,label{display:grid;gap:8px}form{gap:16px;margin-top:24px}input,button{font:inherit;border-radius:8px;padding:11px 12px}input{width:100%;border:1px solid #c9ced6}button{border:0;background:#273449;color:white;cursor:pointer}button+button{background:#edf0f4;color:#252a33}#error{min-height:1.5em;margin:0;color:#a32727}</style><main><h1>Sign in to this app</h1><p>"#,
+        note,
+        r#"</p><form id="auth"><label>Email <input name="email" type="email" required autocomplete="email"></label><label>Password <input name="password" type="password" minlength="8" required autocomplete="current-password"></label><button formaction="/_littlebox/auth/login">Sign in</button>"#,
+        if create {
+            r#"<button formaction="/_littlebox/auth/signup">Create account</button>"#
+        } else {
+            ""
+        },
+        r#"<p id="error" role="alert"></p></form></main><script>document.querySelector('#auth').addEventListener('submit',async e=>{e.preventDefault();const path=e.submitter?.formAction||'/_littlebox/auth/login';const form=new FormData(e.currentTarget);const response=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:form.get('email'),password:form.get('password')})});if(response.ok){location.replace('/');return}const body=await response.json().catch(()=>({}));document.querySelector('#error').textContent=body.error||'Sign in failed.'})</script></html>"#,
+    ]
+    .concat();
     let mut response = Response::new(Body::from(body));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -967,6 +1364,10 @@ fn artifact_response(bytes: Vec<u8>, path: &str) -> Response {
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static(content_type(path)),
+    );
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
     );
     response
 }
@@ -1009,6 +1410,9 @@ async fn export_portable_state(
     else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
+    let _project_guard = database_lock(&state, &format!("project:{}", deployment.project_id)).await;
+    let deployment = state.deployments.read().await.values()
+        .find(|current| current.id == id).cloned().unwrap_or(deployment);
     let _data_guard = database_lock(&state, &deployment.id).await;
     let _identity_guard = database_lock(&state, &format!("identity:{}", deployment.id)).await;
     match portable_state(&state, &deployment).await {
@@ -1089,6 +1493,8 @@ async fn portable_state(state: &AppState, deployment: &Deployment) -> Result<Val
         "initialDatabase": encode_base64(&database),
         "initialIdentity": encode_base64(&identity),
         "initialFiles": encode_base64(&file_bundle),
+        "initialSignupPolicy": deployment.signup_policy,
+        "visibility": if is_private(deployment) { "private" } else { "public" },
         "sizeBytes": total
     }))
 }
@@ -1202,15 +1608,53 @@ fn database_path(state: &AppState, id: &str) -> PathBuf {
         .join("database.sqlite")
 }
 
-async fn database_lock(state: &AppState, id: &str) -> OwnedMutexGuard<()> {
-    let lock = {
-        let mut locks = state.db_locks.lock().await;
+/// Named locks that serialize work on one database or transfer. An entry
+/// lives only while someone holds or waits for it, so callers that pass many
+/// distinct names cannot grow the map.
+type LockMap = Arc<std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>>;
+
+/// Holds one named lock. Dropping it releases the lock and removes the map
+/// entry when no other task holds or waits for the same name.
+struct NamedLockGuard {
+    guard: Option<OwnedMutexGuard<()>>,
+    entry: Option<Arc<Mutex<()>>>,
+    name: String,
+    locks: LockMap,
+}
+
+impl Drop for NamedLockGuard {
+    fn drop(&mut self) {
+        let mut locks = self.locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Release while holding the map lock, so no caller can insert a fresh
+        // mutex for this name while the old one is still held.
+        self.guard.take();
+        let entry = self.entry.take();
+        // The map and this guard's handle are the only owners left when
+        // nobody else holds or waits for the name.
+        if entry.is_some_and(|entry| Arc::strong_count(&entry) == 2) {
+            locks.remove(&self.name);
+        }
+    }
+}
+
+async fn database_lock(state: &AppState, id: &str) -> NamedLockGuard {
+    let entry = {
+        let mut locks = state.db_locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         locks
             .entry(id.to_owned())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     };
-    lock.lock_owned().await
+    // Built before waiting, so a caller cancelled while waiting still removes
+    // the entry it may have created.
+    let mut held = NamedLockGuard {
+        guard: None,
+        entry: Some(entry.clone()),
+        name: id.to_owned(),
+        locks: state.db_locks.clone(),
+    };
+    held.guard = Some(entry.lock_owned().await);
+    held
 }
 
 fn inspect_database(path: &Path) -> Result<Vec<Value>> {
@@ -1258,6 +1702,7 @@ fn quote_identifier(value: &str) -> String {
 
 fn browse_table(path: &Path, body: &Value) -> Result<Value> {
     let db = Connection::open(path)?;
+    restrict_database(&db)?;
     let table = body.get("tableName").and_then(Value::as_str).unwrap_or("");
     let columns = table_columns(&db, table)?;
     let names = columns
@@ -1295,7 +1740,7 @@ fn browse_table(path: &Path, body: &Value) -> Result<Value> {
         .iter()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
-    let rows = statement
+    let rows = bounded_rows(statement
         .query_map([page_size, page.saturating_mul(page_size)], |row| {
             let mut values = serde_json::Map::new();
             let mut row_id = Value::Null;
@@ -1308,8 +1753,7 @@ fn browse_table(path: &Path, body: &Value) -> Result<Value> {
                 }
             }
             Ok(json!({"rowId": row_id, "values": values}))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        })?)?;
     let count_sql = format!("SELECT COUNT(*) FROM {}", quote_identifier(table));
     let total: i64 = db.query_row(&count_sql, [], |row| row.get(0))?;
     Ok(
@@ -1325,6 +1769,7 @@ fn run_admin_sql(path: &Path, sql: &str) -> Result<Value> {
         anyhow::bail!("SQL script is too large.");
     }
     let db = Connection::open(path)?;
+    restrict_database(&db)?;
     let started = std::time::Instant::now();
     let first = sql
         .trim()
@@ -1341,12 +1786,17 @@ fn run_admin_sql(path: &Path, sql: &str) -> Result<Value> {
             .collect::<Vec<_>>();
         let mut rows = statement.query([])?;
         let mut values = Vec::new();
+        let mut result_bytes = 0;
         while let Some(row) = rows.next()? {
             let mut record = serde_json::Map::new();
             for (index, name) in names.iter().enumerate() {
                 record.insert(name.clone(), sql_json(row.get_ref(index)?));
             }
             values.push(Value::Object(record));
+            result_bytes += serde_json::to_vec(values.last().unwrap())?.len();
+            if result_bytes > 2 * 1024 * 1024 {
+                anyhow::bail!("SQL result exceeds 2 MiB.");
+            }
             if values.len() > 1000 {
                 anyhow::bail!("SQL returned more than 1000 rows.");
             }
@@ -1369,6 +1819,7 @@ fn run_admin_sql(path: &Path, sql: &str) -> Result<Value> {
 fn admin_update_cell(path: &Path, body: &Value) -> Response {
     let result = (|| -> Result<()> {
         let db = Connection::open(path)?;
+        limit_database_size(&db, MAX_APP_DATABASE_BYTES)?;
         let table = body.get("tableName").and_then(Value::as_str).unwrap_or("");
         let column = body.get("columnName").and_then(Value::as_str).unwrap_or("");
         let names = table_columns(&db, table)?;
@@ -1398,6 +1849,7 @@ fn admin_update_cell(path: &Path, body: &Value) -> Response {
 fn admin_insert_row(path: &Path, body: &Value) -> Response {
     let result = (|| -> Result<()> {
         let db = Connection::open(path)?;
+        limit_database_size(&db, MAX_APP_DATABASE_BYTES)?;
         let table = body.get("tableName").and_then(Value::as_str).unwrap_or("");
         let columns = table_columns(&db, table)?;
         let values = body
@@ -1448,6 +1900,7 @@ fn admin_insert_row(path: &Path, body: &Value) -> Response {
 fn admin_delete_row(path: &Path, body: &Value) -> Response {
     let result = (|| -> Result<()> {
         let db = Connection::open(path)?;
+        limit_database_size(&db, MAX_APP_DATABASE_BYTES)?;
         let table = body.get("tableName").and_then(Value::as_str).unwrap_or("");
         table_columns(&db, table)?;
         db.execute(
@@ -1533,6 +1986,7 @@ async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Result<V
         .join(id)
         .join(format!("{backup_id}.sqlite"));
     let bytes = tokio::fs::read(&backup_path).await?;
+    create_backup(state, id, "Before restore").await?;
     let temp_path = database_path(state, id).with_extension("restore.sqlite");
     tokio::fs::write(&temp_path, &bytes).await?;
     let check = Connection::open(&temp_path)?;
@@ -1556,6 +2010,7 @@ async fn apply_migration(state: &AppState, id: &str, body: &Value) -> Result<Val
     }
     let backup = create_backup(state, id, "Before migration").await?;
     let mut db = Connection::open(database_path(state, id))?;
+    restrict_database(&db)?;
     let tx = db.transaction()?;
     for statement in statements {
         let sql = statement
@@ -1576,22 +2031,21 @@ async fn apply_migration(state: &AppState, id: &str, body: &Value) -> Result<Val
 
 fn run_query(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Vec<Value>> {
     let connection = Connection::open(path)?;
+    restrict_database(&connection)?;
     let mut statement = connection.prepare(&action.statement)?;
     let names = statement
         .column_names()
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    let rows = statement
+    let rows = bounded_rows(statement
         .query_map(params_from_iter(params), |row| {
             let mut object = serde_json::Map::new();
             for (index, name) in names.iter().enumerate() {
                 object.insert(name.clone(), sql_json(row.get_ref(index)?));
             }
             Ok(Value::Object(object))
-        })?
-        .take(1001)
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        })?)?;
     if rows.len() > 1000 {
         anyhow::bail!("Action returned more than 1000 rows.");
     }
@@ -1600,6 +2054,7 @@ fn run_query(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -> R
 
 fn run_mutation(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Value> {
     let mut connection = Connection::open(path)?;
+    restrict_database(&connection)?;
     let transaction = connection.transaction()?;
     let changes = transaction.execute(&action.statement, params_from_iter(params))?;
     let last_insert_id = transaction.last_insert_rowid();
@@ -1645,6 +2100,9 @@ fn resolve_bindings(
                     .key
                     .as_ref()
                     .ok_or_else(|| "Input binding has no key.".to_string())?;
+                if binding.nullable && object.get(key).is_none_or(Value::is_null) {
+                    return Ok(SqlValue::Null);
+                }
                 let value = object
                     .get(key)
                     .ok_or_else(|| format!("Missing action input: {key}"))?;
@@ -1653,14 +2111,17 @@ fn resolve_bindings(
                         .as_str()
                         .filter(|value| !value.trim().is_empty())
                         .ok_or_else(|| format!("{key} must be a non-empty string."))?;
-                    if text.len() > binding.max_length.unwrap_or(10_000) {
+                    // Count UTF-16 code units so the limit matches the browser's String.length.
+                    if text.encode_utf16().count() > binding.max_length.unwrap_or(10_000) {
                         return Err(format!("{key} is too long."));
                     }
                     Ok(SqlValue::Text(text.to_owned()))
                 } else if binding.value_type.as_deref() == Some("number") {
+                    // Integers bind as INTEGER like sql.js, so a TEXT column stores "5", not "5.0".
                     value
-                        .as_f64()
-                        .map(SqlValue::Real)
+                        .as_i64()
+                        .map(SqlValue::Integer)
+                        .or_else(|| value.as_f64().map(SqlValue::Real))
                         .ok_or_else(|| format!("{key} must be a number."))
                 } else if binding.value_type.as_deref() == Some("boolean") {
                     value
@@ -1677,6 +2138,15 @@ fn resolve_bindings(
 }
 
 fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result<(), String> {
+    if action.bindings.iter().any(|binding| binding.nullable && (
+        binding.source != "input" || binding.key.is_none() ||
+        !matches!(binding.value_type.as_deref(), Some("string" | "number" | "boolean"))
+    )) {
+        return Err(format!("Action {name} has an invalid nullable input binding."));
+    }
+    if action.statement.len() > 20_000 || action.bindings.len() > 100 {
+        return Err(format!("Action {name} exceeds statement or binding limits."));
+    }
     if !name.contains('.') || name.len() > 100 {
         return Err(format!("Invalid action name: {name}"));
     }
@@ -1706,7 +2176,189 @@ fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result
     if !allowed {
         return Err(format!("Action {name} contains disallowed SQL."));
     }
+    if action.kind == "query" {
+        if let Some(reason) = unbounded_query_reason(&action.statement) {
+            return Err(format!(
+                "Action {name} {reason} Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+            ));
+        }
+    }
     Ok(())
+}
+
+/// Same rule as `src/lib/query-bound.ts`. A LIMIT counts only outside
+/// parentheses, strings and comments. The editor and an exported Kernel refuse
+/// the same query.
+fn unbounded_query_reason(sql: &str) -> Option<&'static str> {
+    let tokens = sql_tokens(sql);
+    let top: Vec<&SqlTok> = tokens.iter().filter(|token| token.depth == 0).collect();
+    if top.iter().any(|token| token.is_word("LIMIT")) {
+        return None;
+    }
+    if top.iter().any(|token| token.is_any(&["EXCEPT", "INTERSECT", "UNION"])) {
+        return Some("combines more than one query and has no LIMIT on the whole result.");
+    }
+    if tokens.iter().any(|token| token.is_word("OVER")) {
+        return Some("uses OVER, which keeps one result row per stored row, and has no LIMIT.");
+    }
+    let Some(from) = top.iter().position(|token| token.is_word("FROM")) else {
+        return None;
+    };
+    for pair in top.windows(2) {
+        if pair[0].is_word("GROUP") && pair[1].is_word("BY") {
+            return Some("groups rows and has no LIMIT, so the result can grow with the data.");
+        }
+    }
+    let Some(select) = top.iter().position(|token| token.is_word("SELECT")) else {
+        return Some("reads rows and has no LIMIT.");
+    };
+    if select >= from || !aggregate_select_list(&top[select + 1..from]) {
+        return Some("reads rows and has no LIMIT.");
+    }
+    None
+}
+
+fn aggregate_select_list(list: &[&SqlTok]) -> bool {
+    let mut index = 0;
+    if list.first().is_some_and(|token| token.is_any(&["ALL", "DISTINCT"])) {
+        index = 1;
+    }
+    if index >= list.len() {
+        return false;
+    }
+    let mut expressions = 0;
+    while index < list.len() {
+        if list[index].is_symbol(",") {
+            index += 1;
+            continue;
+        }
+        let Some(name) = list.get(index) else { return false; };
+        let Some(open) = list.get(index + 1) else { return false; };
+        if !name.is_any(&["AVG", "COUNT", "GROUP_CONCAT", "MAX", "MIN", "SUM", "TOTAL"]) || !open.is_symbol("(") {
+            return false;
+        }
+        index += 2;
+        let Some(close) = list.iter().skip(index).position(|token| token.is_symbol(")")) else {
+            return false;
+        };
+        index += close + 1;
+        if list.get(index).is_some_and(|token| token.is_word("AS")) {
+            if !list.get(index + 1).is_some_and(|token| token.kind == SqlTokKind::Word || token.kind == SqlTokKind::Ident) {
+                return false;
+            }
+            index += 2;
+        } else if list.get(index).is_some_and(|token| token.kind == SqlTokKind::Word || token.kind == SqlTokKind::Ident) {
+            index += 1;
+        }
+        expressions += 1;
+        if index < list.len() && !list[index].is_symbol(",") {
+            return false;
+        }
+    }
+    expressions > 0
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SqlTokKind { Word, Ident, String, Symbol }
+
+struct SqlTok {
+    kind: SqlTokKind,
+    text: String,
+    depth: i32,
+}
+
+impl SqlTok {
+    fn is_word(&self, word: &str) -> bool {
+        self.kind == SqlTokKind::Word && self.text.eq_ignore_ascii_case(word)
+    }
+
+    fn is_any(&self, words: &[&str]) -> bool {
+        self.kind == SqlTokKind::Word && words.iter().any(|word| self.text.eq_ignore_ascii_case(word))
+    }
+
+    fn is_symbol(&self, text: &str) -> bool {
+        self.kind == SqlTokKind::Symbol && self.text == text
+    }
+}
+
+fn sql_tokens(sql: &str) -> Vec<SqlTok> {
+    let chars: Vec<char> = sql.chars().collect();
+    let mut tokens = Vec::new();
+    let mut depth = 0i32;
+    let mut index = 0;
+    while index < chars.len() {
+        let char = chars[index];
+        let next = chars.get(index + 1).copied();
+        if char == '-' && next == Some('-') {
+            index += 2;
+            while index < chars.len() && chars[index] != '\n' { index += 1; }
+            if index < chars.len() { index += 1; }
+            continue;
+        }
+        if char == '/' && next == Some('*') {
+            index += 2;
+            while index + 1 < chars.len() && !(chars[index] == '*' && chars[index + 1] == '/') { index += 1; }
+            index = (index + 2).min(chars.len());
+            continue;
+        }
+        if char == '\'' || char == '"' || char == '`' || char == '[' {
+            let close = if char == '[' { ']' } else { char };
+            let mut end = index + 1;
+            let mut text = String::new();
+            while end < chars.len() {
+                if chars[end] == close {
+                    if close != ']' && chars.get(end + 1) == Some(&close) {
+                        text.push(close);
+                        end += 2;
+                        continue;
+                    }
+                    break;
+                }
+                text.push(chars[end]);
+                end += 1;
+            }
+            tokens.push(if char == '\'' {
+                SqlTok { kind: SqlTokKind::String, text: String::new(), depth }
+            } else {
+                SqlTok { kind: SqlTokKind::Ident, text, depth }
+            });
+            index = (end + 1).min(chars.len());
+            continue;
+        }
+        if is_sql_word_start(char) {
+            let mut end = index + 1;
+            while end < chars.len() && is_sql_word_cont(chars[end]) { end += 1; }
+            tokens.push(SqlTok { kind: SqlTokKind::Word, text: chars[index..end].iter().collect(), depth });
+            index = end;
+            continue;
+        }
+        if char.is_ascii_digit() {
+            let mut end = index + 1;
+            while end < chars.len() && (chars[end].is_ascii_alphanumeric() || chars[end] == '.' || chars[end] == '_') {
+                end += 1;
+            }
+            tokens.push(SqlTok { kind: SqlTokKind::Symbol, text: chars[index..end].iter().collect(), depth });
+            index = end;
+            continue;
+        }
+        if char.is_whitespace() {
+            index += 1;
+            continue;
+        }
+        if char == ')' { depth = (depth - 1).max(0); }
+        tokens.push(SqlTok { kind: SqlTokKind::Symbol, text: char.to_string(), depth });
+        if char == '(' { depth += 1; }
+        index += 1;
+    }
+    tokens
+}
+
+fn is_sql_word_start(char: char) -> bool {
+    char.is_ascii_alphabetic() || char == '_' || (char as u32) >= 0x80
+}
+
+fn is_sql_word_cont(char: char) -> bool {
+    char.is_ascii_alphanumeric() || char == '_' || char == '$' || (char as u32) >= 0x80
 }
 
 fn initialize_database(path: &Path) -> Result<()> {
@@ -1717,9 +2369,15 @@ fn initialize_database(path: &Path) -> Result<()> {
 
 fn apply_additive_schema(path: &Path, schema: &str, program: &ActionProgram) -> Result<()> {
     let mut connection = Connection::open(path)?;
+    // Runs before the authorizer below, which refuses every pragma.
+    limit_database_size(&connection, MAX_APP_DATABASE_BYTES)?;
     let transaction = connection.transaction()?;
     transaction.authorizer(Some(|context: AuthContext<'_>| match context.action {
         AuthAction::CreateTable { .. } | AuthAction::CreateIndex { .. } => Authorization::Allow,
+        // CHECK constraints, expression and partial indexes, and generated
+        // columns call SQL functions. The runtime denylist still applies.
+        AuthAction::Function { function_name } if denied_function(function_name) => Authorization::Deny,
+        AuthAction::Function { .. } => Authorization::Allow,
         AuthAction::Insert {
             table_name: "sqlite_master",
         } => Authorization::Allow,
@@ -1743,9 +2401,12 @@ fn apply_additive_schema(path: &Path, schema: &str, program: &ActionProgram) -> 
     second_result
         .map_err(|error| anyhow::anyhow!("schema must be idempotent and additive: {error}"))?;
     for (name, action) in &program.actions {
-        transaction.prepare(&action.statement).map_err(|error| {
+        let statement = transaction.prepare(&action.statement).map_err(|error| {
             anyhow::anyhow!("action {name} does not match the deployed schema: {error}")
         })?;
+        if action.kind == "mutation" && statement.column_count() > 0 {
+            anyhow::bail!("Action {name} cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.");
+        }
     }
     transaction.commit()?;
     Ok(())
@@ -1855,15 +2516,38 @@ async fn restore_initial_files(
             .get("createdAt")
             .and_then(Value::as_u64)
             .unwrap_or_else(now_ms);
-        let public_file = json!({"id":id,"name":name,"type":content_type,"size":data.len(),"url":format!("/_littlebox/files/{id}"),"createdAt":created_at});
+        let visibility = file_visibility(file);
+        let mut restored = json!({
+            "id": id,
+            "name": name,
+            "type": content_type,
+            "size": data.len(),
+            "visibility": visibility,
+            "createdAt": created_at,
+        });
+        if let Some(owner) = file_owner(file).filter(|owner| accepted_owner_id(owner)) {
+            restored["ownerId"] = Value::String(owner.to_owned());
+        }
         tokio::fs::write(directory.join(format!("{id}.blob")), data).await?;
-        metadata.push(public_file);
+        metadata.push(restored);
     }
-    tokio::fs::write(
-        directory.join("index.json"),
-        serde_json::to_vec_pretty(&metadata)?,
-    )
-    .await?;
+    write_atomic(&directory.join("index.json"), &serde_json::to_vec_pretty(&metadata)?).await?;
+    Ok(())
+}
+
+/// Writes a sibling temp file and renames it over `path`, so readers never see
+/// a truncated file.
+async fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("file");
+    let temp = path.with_file_name(format!(".{name}.tmp-{}", Uuid::new_v4()));
+    if let Err(error_value) = tokio::fs::write(&temp, bytes).await {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(error_value);
+    }
+    if let Err(error_value) = tokio::fs::rename(&temp, path).await {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(error_value);
+    }
     Ok(())
 }
 
@@ -1872,6 +2556,46 @@ fn valid_file_id(id: &str) -> bool {
         && id
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+}
+
+fn file_visibility(file: &Value) -> &'static str {
+    if file.get("visibility").and_then(Value::as_str) == Some("public") {
+        "public"
+    } else {
+        "private"
+    }
+}
+
+fn file_owner(file: &Value) -> Option<&str> {
+    file.get("ownerId").and_then(Value::as_str)
+}
+
+fn accepted_owner_id(value: &str) -> bool {
+    (1..=80).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+/// Private files belong to the uploader. Public files are readable by any
+/// signed-in user of the deployment, and by a visitor when the deployment
+/// itself is public. A stored file with no owner stays unreadable.
+fn file_readable(file: &Value, actor_id: Option<&str>, private_deployment: bool) -> bool {
+    if file_visibility(file) == "public" {
+        return !private_deployment || actor_id.is_some();
+    }
+    actor_id.is_some() && file_owner(file) == actor_id
+}
+
+fn file_view(file: &Value, actor_id: Option<&str>) -> Value {
+    let mut view = file.clone();
+    if let Some(object) = view.as_object_mut() {
+        object.remove("url");
+        if file_owner(file) != actor_id {
+            object.remove("ownerId");
+        }
+    }
+    view
 }
 
 fn encode_base64(bytes: &[u8]) -> String {
@@ -1941,7 +2665,7 @@ fn safe_relative_path(path: &str) -> bool {
 async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Result<()> {
     let directory = state.data_root.join("deployments").join(&deployment.id);
     let bytes = serde_json::to_vec_pretty(deployment)?;
-    tokio::fs::write(directory.join("deployment.json"), &bytes).await?;
+    write_atomic(&directory.join("deployment.json"), &bytes).await?;
     if let Some(s3) = state.s3.as_ref() {
         s3.put_object()
             .bucket(&state.data_bucket)
@@ -1969,38 +2693,70 @@ async fn load_deployments(
         }
     }
     let Some(s3) = s3 else { return Ok(result) };
-    let listed = s3
-        .list_objects_v2()
-        .bucket(data_bucket)
-        .prefix("deployments/")
-        .send()
-        .await?;
-    for object in listed.contents() {
-        let Some(key) = object.key() else { continue };
+    for key in list_s3_keys(s3, data_bucket, "deployments/").await? {
         if !key.ends_with("/deployment.json") {
             continue;
         }
-        let bytes = read_s3_bytes(s3, data_bucket, key).await?;
-        let deployment: Deployment = serde_json::from_slice(&bytes)?;
+        let bytes = match read_s3_bytes(s3, data_bucket, &key).await {
+            Ok(bytes) => bytes,
+            Err(error_value) => {
+                eprintln!("Skipping deployment {key}: {error_value}");
+                continue;
+            }
+        };
+        let deployment: Deployment = match serde_json::from_slice(&bytes) {
+            Ok(deployment) => deployment,
+            Err(error_value) => {
+                eprintln!("Skipping deployment {key}: {error_value}");
+                continue;
+            }
+        };
         let directory = root.join("deployments").join(&deployment.id);
         tokio::fs::create_dir_all(&directory).await?;
-        tokio::fs::write(directory.join("deployment.json"), &bytes).await?;
         let database_path = directory.join("database.sqlite");
         if !database_path.exists() {
-            restore_database(s3, data_bucket, &deployment.id, &database_path).await?;
+            match restore_database(s3, data_bucket, &deployment.id, &database_path).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    // S3 holds Deployment records and artifacts only. Databases,
+                    // identities and files live on the Kernel volume.
+                    eprintln!(
+                        "Warning: deployment {} was restored from S3 without its data. S3 holds Deployment records and artifacts only; the database, app accounts and files lived on the old Kernel volume. Starting with an empty database and no accounts.",
+                        deployment.id
+                    );
+                    initialize_database(&database_path)?;
+                }
+                Err(error_value) => {
+                    // Serving now would create an empty database that hides the
+                    // remote one, so leave this deployment for the next start.
+                    eprintln!(
+                        "Skipping deployment {}: database restore failed: {error_value}",
+                        deployment.id
+                    );
+                    result.remove(&deployment.hostname);
+                    continue;
+                }
+            }
         }
+        write_atomic(&directory.join("deployment.json"), &bytes).await?;
         result.insert(deployment.hostname.clone(), deployment);
     }
     Ok(result)
 }
 
+/// Restores the newest database generation. Returns false when the deployment
+/// has no database head in the bucket.
 async fn restore_database(
     s3: &S3Client,
     bucket: &str,
     deployment_id: &str,
     path: &Path,
-) -> Result<()> {
-    let head = read_s3_bytes(s3, bucket, &format!("databases/{deployment_id}/head.json")).await?;
+) -> Result<bool> {
+    let Some(head) =
+        read_s3_optional(s3, bucket, &format!("databases/{deployment_id}/head.json")).await?
+    else {
+        return Ok(false);
+    };
     let value: Value = serde_json::from_slice(&head)?;
     let generation = value
         .get("generation")
@@ -2012,8 +2768,8 @@ async fn restore_database(
         &format!("databases/{deployment_id}/generations/{generation}.sqlite"),
     )
     .await?;
-    tokio::fs::write(path, bytes).await?;
-    Ok(())
+    write_atomic(path, &bytes).await?;
+    Ok(true)
 }
 
 async fn read_s3_bytes(s3: &S3Client, bucket: &str, key: &str) -> Result<Vec<u8>> {
@@ -2021,15 +2777,56 @@ async fn read_s3_bytes(s3: &S3Client, bucket: &str, key: &str) -> Result<Vec<u8>
     Ok(object.body.collect().await?.into_bytes().to_vec())
 }
 
+async fn read_s3_optional(s3: &S3Client, bucket: &str, key: &str) -> Result<Option<Vec<u8>>> {
+    match s3.get_object().bucket(bucket).key(key).send().await {
+        Ok(object) => Ok(Some(object.body.collect().await?.into_bytes().to_vec())),
+        Err(error_value)
+            if error_value
+                .as_service_error()
+                .is_some_and(|service| service.is_no_such_key()) =>
+        {
+            Ok(None)
+        }
+        Err(error_value) => Err(error_value.into()),
+    }
+}
+
+async fn list_s3_keys(s3: &S3Client, bucket: &str, prefix: &str) -> Result<Vec<String>> {
+    let mut keys = Vec::new();
+    let mut continuation: Option<String> = None;
+    loop {
+        let page = s3
+            .list_objects_v2()
+            .bucket(bucket)
+            .prefix(prefix)
+            .set_continuation_token(continuation.take())
+            .send()
+            .await?;
+        keys.extend(page.contents().iter().filter_map(|object| object.key().map(str::to_owned)));
+        match page.next_continuation_token() {
+            Some(token) if page.is_truncated() == Some(true) => continuation = Some(token.to_owned()),
+            _ => break,
+        }
+    }
+    Ok(keys)
+}
+
 async fn deployment_for(state: &AppState, headers: &HeaderMap) -> Option<Deployment> {
     let host = headers
-        .get("x-forwarded-host")
-        .or_else(|| headers.get(header::HOST))?
+        .get(header::HOST)?
         .to_str()
         .ok()?
         .split(':')
         .next()?;
     state.deployments.read().await.get(host).cloned()
+}
+
+fn is_private(deployment: &Deployment) -> bool {
+    deployment
+        .manifest
+        .get("visibility")
+        .and_then(Value::as_str)
+        == Some("private")
 }
 
 fn is_admin(state: &AppState, headers: &HeaderMap) -> bool {
@@ -2059,8 +2856,18 @@ fn authenticate_deployment(
 ) -> std::result::Result<Option<AuthUser>, Response> {
     let auth = open_auth(state, deployment)
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-    auth.authenticate(cookie_value(headers, "littlebox_app_session").as_deref())
+    let token = headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok()).and_then(|value| value.strip_prefix("Bearer ")).map(str::to_owned)
+        .or_else(|| cookie_value(headers, app_cookie_name(state)));
+    auth.authenticate(token.as_deref())
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
+}
+
+fn app_cookie_name(state: &AppState) -> &'static str {
+    if state.public_origin.starts_with("https://") {
+        "__Host-littlebox_app_session"
+    } else {
+        "littlebox_app_session"
+    }
 }
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -2075,8 +2882,7 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
 
 fn same_origin(headers: &HeaderMap) -> bool {
     let host = headers
-        .get("x-forwarded-host")
-        .or_else(|| headers.get(header::HOST))
+        .get(header::HOST)
         .and_then(|v| v.to_str().ok());
     if let Some(site) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
         if site == "cross-site" {
@@ -2087,22 +2893,69 @@ fn same_origin(headers: &HeaderMap) -> bool {
         headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()),
         host,
     ) {
-        (Some(origin), Some(host)) => url_host(origin).is_some_and(|origin_host| {
-            origin_host.eq_ignore_ascii_case(host.split(':').next().unwrap_or(host))
+        (Some(origin), Some(host)) => url::Url::parse(origin).ok().is_some_and(|origin| {
+            let expected = url::Url::parse(&format!("{}://{host}", origin.scheme())).ok();
+            expected.is_some_and(|expected| origin.origin() == expected.origin())
         }),
         (Some(_), None) => false,
         (None, _) => true,
     }
 }
 
-fn url_host(origin: &str) -> Option<&str> {
-    origin
-        .split_once("://")?
-        .1
-        .split('/')
-        .next()?
-        .split(':')
-        .next()
+/// Each app database may grow to this size. Writes past it fail with
+/// "database or disk is full".
+const MAX_APP_DATABASE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Caps the database file behind this connection. SQLite keeps the setting per
+/// connection, so every connection that may write needs it.
+fn limit_database_size(db: &Connection, max_bytes: u64) -> Result<()> {
+    let page_size: u64 = db.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+    let pages = (max_bytes / page_size.max(1)).max(1);
+    db.query_row(&format!("PRAGMA max_page_count = {pages}"), [], |_| Ok(()))?;
+    Ok(())
+}
+
+/// SQL functions no app statement or schema may call. They reach the file
+/// system, load native code, or swap full-text tokenizers by pointer.
+const DENIED_FUNCTIONS: &[&str] = &[
+    "load_extension",
+    "readfile",
+    "writefile",
+    "edit",
+    "fts3_tokenizer",
+];
+
+fn denied_function(name: &str) -> bool {
+    DENIED_FUNCTIONS.contains(&name.to_ascii_lowercase().as_str())
+}
+
+fn restrict_database(db: &Connection) -> Result<()> {
+    // Runs before the authorizer below, which refuses this pragma.
+    limit_database_size(db, MAX_APP_DATABASE_BYTES)?;
+    db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 2 * 1024 * 1024)?;
+    db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_SQL_LENGTH, 100_000)?;
+    db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_ATTACHED, 0)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    db.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
+    db.authorizer(Some(|context: AuthContext<'_>| match context.action {
+        AuthAction::Attach { .. } | AuthAction::Detach { .. } => Authorization::Deny,
+        AuthAction::Pragma { pragma_name, .. } if !["table_info", "table_xinfo", "index_list", "index_info", "foreign_key_list", "foreign_key_check", "integrity_check", "quick_check"].contains(&pragma_name.to_ascii_lowercase().as_str()) => Authorization::Deny,
+        AuthAction::Function { function_name } if denied_function(function_name) => Authorization::Deny,
+        _ => Authorization::Allow,
+    }));
+    Ok(())
+}
+
+fn bounded_rows(rows: impl Iterator<Item = rusqlite::Result<Value>>) -> Result<Vec<Value>> {
+    let mut values = Vec::new();
+    let mut bytes = 0;
+    for row in rows.take(1001) {
+        let row = row?;
+        bytes += serde_json::to_vec(&row)?.len();
+        anyhow::ensure!(bytes <= 2 * 1024 * 1024 && values.len() < 1000, "Query result exceeds 2 MiB or 1000 rows.");
+        values.push(row);
+    }
+    Ok(values)
 }
 
 fn auth_error(error_value: AuthError) -> Response {
@@ -2168,15 +3021,108 @@ fn safe_slug(value: &str) -> String {
         .to_string()
 }
 fn content_type(path: &str) -> &'static str {
-    if path.ends_with(".js") {
-        "text/javascript; charset=utf-8"
-    } else if path.ends_with(".css") {
-        "text/css; charset=utf-8"
-    } else if path.ends_with(".json") {
-        "application/json"
-    } else {
-        "text/html; charset=utf-8"
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" | "map" => "application/json",
+        "webmanifest" => "application/manifest+json",
+        "txt" => "text/plain; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "wasm" => "application/wasm",
+        "woff2" => "font/woff2",
+        _ => "application/octet-stream",
     }
+}
+
+const DEFAULT_ADMIN_KEY: &str = "local-development-key";
+
+/// Returns the installation setup key. The well-known default only works on a
+/// loopback bind with a local public origin, unless the operator opts in with
+/// LITTLEBOX_ALLOW_DEFAULT_KEY=1. A proxy can expose a loopback bind, so the
+/// public origin counts too.
+fn admin_key_for(
+    bind: &str,
+    public_origin: &str,
+    mcp_origin: Option<&str>,
+    configured: Option<&str>,
+    allow_default: bool,
+) -> Result<String> {
+    let key = configured
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_ADMIN_KEY);
+    if key != DEFAULT_ADMIN_KEY || allow_default {
+        return Ok(key.to_owned());
+    }
+    if !is_local_host(bind) {
+        anyhow::bail!(
+            "LITTLEBOX_BIND={bind} is reachable from other machines. Set LITTLEBOX_ADMIN_KEY to a secret value before starting the Kernel."
+        );
+    }
+    let origin_host = url::Url::parse(public_origin)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned));
+    if !origin_host.as_deref().is_some_and(is_local_host) {
+        anyhow::bail!(
+            "LITTLEBOX_PUBLIC_ORIGIN={public_origin} is not a local address. Set LITTLEBOX_ADMIN_KEY to a secret value before starting the Kernel."
+        );
+    }
+    // MCP and owner sign-in also answer on this origin's host.
+    if let Some(mcp_origin) = mcp_origin {
+        let mcp_host = url::Url::parse(mcp_origin)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned));
+        if !mcp_host.as_deref().is_some_and(is_local_host) {
+            anyhow::bail!(
+                "LITTLEBOX_MCP_ORIGIN={mcp_origin} is not a local address. Set LITTLEBOX_ADMIN_KEY to a secret value before starting the Kernel."
+            );
+        }
+    }
+    Ok(key.to_owned())
+}
+
+/// A reachable Kernel must not evaluate a Drizzle model as its own user.
+/// Loopback with a local origin may spawn the worker in-process.
+pub(crate) fn derive_must_isolate(bind: &str, public_origin: &str, mcp_origin: &str) -> bool {
+    !loopback_bind(bind)
+        || !origin_is_local_or_empty(public_origin)
+        || !origin_is_local_or_empty(mcp_origin)
+}
+
+fn loopback_bind(bind: &str) -> bool {
+    let bind = bind.trim().trim_matches(['[', ']']);
+    bind == "127.0.0.1" || bind == "::1" || bind.eq_ignore_ascii_case("localhost")
+}
+
+fn origin_is_local_or_empty(origin: &str) -> bool {
+    if origin.is_empty() {
+        return true;
+    }
+    url::Url::parse(origin)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(is_local_host))
+        .unwrap_or(false)
+}
+
+/// True for localhost, *.localhost and loopback IP addresses.
+fn is_local_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    host == "localhost"
+        || host.ends_with(".localhost")
+        || host
+            .trim_matches(['[', ']'])
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -2203,12 +3149,14 @@ mod tests {
             "artifact": { "version": 1, "entrypoint": "index.html", "files": { "index.html": "<main></main>" } },
             "initialDatabase": "ZGF0YQ==",
             "initialIdentity": "aWRlbnRpdHk=",
-            "initialFiles": "eyJmaWxlcyI6W119"
+            "initialFiles": "eyJmaWxlcyI6W119",
+            "initialSignupPolicy": { "mode": "closed", "allowlist": [] }
         })).unwrap();
 
         assert_eq!(input.initial_database.as_deref(), Some("ZGF0YQ=="));
         assert_eq!(input.initial_identity.as_deref(), Some("aWRlbnRpdHk="));
         assert_eq!(input.initial_files.as_deref(), Some("eyJmaWxlcyI6W119"));
+        assert_eq!(input.initial_signup_policy.unwrap().mode, SignupMode::Closed);
     }
 
     async fn login_test_state(root: &Path, visibility: &str) -> (AppState, HeaderMap) {
@@ -2221,6 +3169,8 @@ mod tests {
             manifest: json!({"visibility": visibility}),
             hostname: "login-test.localhost".into(),
             actions: "{}".into(),
+            artifact_version: None,
+            signup_policy: SignupPolicy::default(),
         };
         tokio::fs::create_dir_all(root.join("deployments").join(&deployment.id))
             .await
@@ -2230,7 +3180,7 @@ mod tests {
                 deployment.hostname.clone(),
                 deployment,
             )]))),
-            db_locks: Arc::new(Mutex::new(HashMap::new())),
+            db_locks: LockMap::default(),
             s3: None,
             artifact_bucket: "artifacts".into(),
             data_bucket: "data".into(),
@@ -2240,6 +3190,7 @@ mod tests {
             admin_key: "test-admin".into(),
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),
+            guards: Arc::new(Guards::new(Vec::new())),
         };
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -2297,6 +3248,13 @@ mod tests {
         let mut granted = action("mutation", "DELETE FROM tasks", vec![]);
         granted.access = "granted".into();
         assert!(validate_action("tasks.delete", &granted).is_err());
+        assert!(validate_action("tasks.list", &action("query", "SELECT id FROM tasks", vec![]))
+            .unwrap_err()
+            .contains("reads rows and has no LIMIT"));
+        assert!(validate_action("tasks.list", &action("query", "SELECT id FROM tasks WHERE title = 'LIMIT 5'", vec![])).is_err());
+        assert!(validate_action("tasks.count", &action("query", "SELECT count(*) AS n FROM tasks", vec![])).is_ok());
+        assert!(validate_action("votes.results", &action("query", "SELECT choice, count(*) AS n FROM votes GROUP BY choice", vec![])).is_err());
+        assert!(validate_action("tasks.one", &action("query", "SELECT 1", vec![])).is_ok());
     }
 
     #[test]
@@ -2309,6 +3267,7 @@ mod tests {
                 key: Some("title".into()),
                 value_type: Some("string".into()),
                 max_length: Some(20),
+                nullable: false,
                 field: None,
                 value: None,
             }],
@@ -2346,8 +3305,154 @@ mod tests {
                 .unwrap();
             let html = String::from_utf8(bytes.to_vec()).unwrap();
             assert!(html.contains("Sign in to this app"));
+            assert!(html.contains("/_littlebox/auth/signup"));
+            assert!(!html.contains("Account creation is open"));
             let _ = tokio::fs::remove_dir_all(root).await;
         }
+    }
+
+    async fn set_policy(state: &AppState, mode: SignupMode, allowlist: &[&str]) {
+        let entries = allowlist.iter().map(|e| e.to_string()).collect::<Vec<_>>();
+        for deployment in state.deployments.write().await.values_mut() {
+            deployment.signup_policy = SignupPolicy::from_input(mode, &entries).unwrap();
+        }
+    }
+
+    async fn signup_status(state: &AppState, headers: &HeaderMap, email: &str) -> StatusCode {
+        let body = json!({"email": email, "password": "correct horse battery"});
+        let request = Request::builder().body(Body::from(body.to_string())).unwrap();
+        signup(State(state.clone()), headers.clone(), request).await.status()
+    }
+
+    #[test]
+    fn signup_policy_matches_exact_emails_and_whole_domains() {
+        let open = SignupPolicy::default();
+        assert!(open.allows("anyone@example.test"));
+        let closed = SignupPolicy::from_input(SignupMode::Closed, &[]).unwrap();
+        assert!(!closed.allows("anyone@example.test"));
+        let list = SignupPolicy::from_input(
+            SignupMode::Allowlist,
+            &[" Carol@Example.TEST ".into(), "@Team.Example".into(), "carol@example.test".into()],
+        )
+        .unwrap();
+        assert_eq!(list.allowlist, vec!["carol@example.test", "@team.example"]);
+        assert!(list.allows("CAROL@example.test"));
+        assert!(list.allows("dana@TEAM.example"));
+        assert!(!list.allows("dana@sub.team.example"));
+        assert!(!list.allows("dana@evilteam.example"));
+        assert!(!list.allows("team.example@attacker.test"));
+        assert!(!list.allows("erin@example.test"));
+        assert!(!list.allows("not-an-email"));
+        let empty = SignupPolicy::from_input(SignupMode::Allowlist, &[]).unwrap();
+        assert!(!empty.allows("carol@example.test"));
+        for invalid in ["@", "@nodot", "two@@example.test", "@bad domain.test", "plain"] {
+            assert!(
+                SignupPolicy::from_input(SignupMode::Allowlist, &[invalid.into()]).is_err(),
+                "entry={invalid}"
+            );
+        }
+        let too_many = (0..=MAX_ALLOWLIST_ENTRIES)
+            .map(|i| format!("user{i}@example.test"))
+            .collect::<Vec<_>>();
+        assert!(SignupPolicy::from_input(SignupMode::Allowlist, &too_many).is_err());
+    }
+
+    #[test]
+    fn deployment_records_without_a_policy_load_with_the_default_for_their_visibility() {
+        let legacy = |manifest: Value| -> Deployment {
+            serde_json::from_value(json!({
+                "id": "d", "projectId": "p", "projectName": "Legacy", "url": "http://legacy.localhost",
+                "createdAt": 1, "manifest": manifest, "hostname": "legacy.localhost",
+                "actions": "{}"
+            }))
+            .unwrap()
+        };
+        let private = legacy(json!({"visibility": "private"}));
+        assert_eq!(private.signup_policy.mode, SignupMode::Closed);
+        let saved = serde_json::to_value(&private).unwrap();
+        assert_eq!(saved["signupPolicy"], json!({"mode": "closed", "allowlist": []}));
+        assert_eq!(legacy(json!({"visibility": "public"})).signup_policy.mode, SignupMode::Open);
+        assert_eq!(legacy(json!({})).signup_policy.mode, SignupMode::Open);
+
+        // A stored policy always wins over the visibility default.
+        let stored: Deployment = serde_json::from_value(json!({
+            "id": "d", "projectId": "p", "projectName": "Kept", "url": "http://kept.localhost",
+            "createdAt": 1, "manifest": {"visibility": "private"}, "hostname": "kept.localhost",
+            "actions": "{}", "signupPolicy": {"mode": "open", "allowlist": []}
+        }))
+        .unwrap();
+        assert_eq!(stored.signup_policy.mode, SignupMode::Open);
+    }
+
+    #[tokio::test]
+    async fn signup_follows_the_deployment_policy() {
+        let root = std::env::temp_dir().join(format!("littlebox-signup-{}", Uuid::new_v4()));
+        let (state, headers) = login_test_state(&root, "public").await;
+        assert_eq!(signup_status(&state, &headers, "open@example.test").await, StatusCode::OK);
+
+        set_policy(&state, SignupMode::Closed, &[]).await;
+        assert_eq!(signup_status(&state, &headers, "closed@example.test").await, StatusCode::FORBIDDEN);
+
+        set_policy(&state, SignupMode::Allowlist, &["Listed@Example.test", "@team.example"]).await;
+        assert_eq!(signup_status(&state, &headers, "listed@EXAMPLE.test").await, StatusCode::OK);
+        assert_eq!(signup_status(&state, &headers, "any@team.example").await, StatusCode::OK);
+        assert_eq!(signup_status(&state, &headers, "other@example.test").await, StatusCode::FORBIDDEN);
+        assert_eq!(signup_status(&state, &headers, "any@sub.team.example").await, StatusCode::FORBIDDEN);
+
+        // Existing accounts still sign in when signup is closed.
+        set_policy(&state, SignupMode::Closed, &[]).await;
+        let body = json!({"email": "open@example.test", "password": "correct horse battery"});
+        let request = Request::builder().body(Body::from(body.to_string())).unwrap();
+        assert_eq!(login(State(state.clone()), headers.clone(), request).await.status(), StatusCode::OK);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn login_page_hides_account_creation_when_signup_is_closed() {
+        let root = std::env::temp_dir().join(format!("littlebox-login-policy-{}", Uuid::new_v4()));
+        let (state, headers) = login_test_state(&root, "private").await;
+        let page = |state: AppState| {
+            let headers = headers.clone();
+            async move {
+                let response = login_page(State(state), headers).await;
+                let bytes = axum::body::to_bytes(response.into_body(), 16_384).await.unwrap();
+                String::from_utf8(bytes.to_vec()).unwrap()
+            }
+        };
+        set_policy(&state, SignupMode::Closed, &[]).await;
+        let html = page(state.clone()).await;
+        assert!(!html.contains("/_littlebox/auth/signup"));
+        assert!(html.contains("not accepting new accounts"));
+        set_policy(&state, SignupMode::Allowlist, &["@example.test"]).await;
+        let html = page(state.clone()).await;
+        assert!(html.contains("/_littlebox/auth/signup"));
+        assert!(html.contains("Only invited email addresses"));
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn private_apps_refuse_anonymous_actions_without_a_session() {
+        let root = std::env::temp_dir().join(format!("littlebox-private-action-{}", Uuid::new_v4()));
+        let (state, headers) = login_test_state(&root, "private").await;
+        let program = json!({"version": 1, "actions": {"items.count": {"kind": "query", "access": "anonymous", "statement": "SELECT 1 AS n", "bindings": []}}});
+        for deployment in state.deployments.write().await.values_mut() {
+            deployment.actions = program.to_string();
+            initialize_database(&database_path(&state, &deployment.id)).unwrap();
+        }
+        let call = |state: AppState| {
+            let headers = headers.clone();
+            async move {
+                invoke_action(State(state), AxumPath("items.count".into()), headers, Json(json!({})))
+                    .await
+                    .status()
+            }
+        };
+        assert_eq!(call(state.clone()).await, StatusCode::UNAUTHORIZED);
+        for deployment in state.deployments.write().await.values_mut() {
+            deployment.manifest = json!({"visibility": "public"});
+        }
+        assert_eq!(call(state.clone()).await, StatusCode::OK);
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[test]
@@ -2399,6 +3504,78 @@ mod tests {
     }
 
     #[test]
+    fn schemas_may_call_safe_functions_but_not_dangerous_ones() {
+        let root = std::env::temp_dir().join(format!("littlebox-schema-functions-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        initialize_database(&path).unwrap();
+        let schema = "CREATE TABLE IF NOT EXISTS items (
+              id INTEGER PRIMARY KEY,
+              name TEXT NOT NULL CHECK (length(name) > 0),
+              title TEXT NOT NULL DEFAULT '',
+              slug TEXT GENERATED ALWAYS AS (lower(name)) VIRTUAL,
+              created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS items_title ON items(lower(title));
+            CREATE INDEX IF NOT EXISTS items_named ON items(name) WHERE length(name) > 0;";
+        let actions = action_program(&[("items.list", "SELECT id, name, slug FROM items")]);
+        apply_additive_schema(&path, schema, &actions).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        assert!(connection.execute("INSERT INTO items(name) VALUES ('')", []).is_err(), "the CHECK constraint runs");
+        connection.execute("INSERT INTO items(name) VALUES ('Mixed')", []).unwrap();
+        let slug: String = connection.query_row("SELECT slug FROM items", [], |row| row.get(0)).unwrap();
+        assert_eq!(slug, "mixed");
+        drop(connection);
+
+        for function in DENIED_FUNCTIONS {
+            let schema = format!(
+                "CREATE TABLE IF NOT EXISTS evil_{function} (id INTEGER PRIMARY KEY, path TEXT CHECK ({function}(path) IS NULL));"
+            );
+            let error = apply_additive_schema(&path, &schema, &actions).unwrap_err().to_string();
+            assert!(error.contains("schema may only"), "{function}: {error}");
+        }
+        let schema = "CREATE INDEX IF NOT EXISTS evil_index ON items(load_extension(name));";
+        assert!(apply_additive_schema(&path, schema, &actions).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn named_locks_leave_no_entry_once_released() {
+        let root = std::env::temp_dir().join(format!("littlebox-locks-{}", Uuid::new_v4()));
+        let state = test_state(&root);
+        let count = |state: &AppState| state.db_locks.lock().unwrap().len();
+        for i in 0..100 {
+            drop(database_lock(&state, &format!("transfer:{i}")).await);
+        }
+        assert_eq!(count(&state), 0);
+
+        let first = database_lock(&state, "shared").await;
+        let waiter = {
+            let state = state.clone();
+            tokio::spawn(async move {
+                let _second = database_lock(&state, "shared").await;
+            })
+        };
+        tokio::task::yield_now().await;
+        assert_eq!(count(&state), 1);
+        drop(first);
+        waiter.await.unwrap();
+        assert_eq!(count(&state), 0, "the last holder removes the entry");
+
+        // A caller that gives up while waiting removes the entry too.
+        let held = database_lock(&state, "contended").await;
+        let gave_up = tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            database_lock(&state, "contended"),
+        )
+        .await;
+        assert!(gave_up.is_err());
+        assert_eq!(count(&state), 1, "the holder keeps its entry");
+        drop(held);
+        assert_eq!(count(&state), 0);
+    }
+
+    #[test]
     fn redeploy_rolls_back_schema_when_an_action_does_not_prepare() {
         let root = std::env::temp_dir().join(format!("littlebox-schema-action-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
@@ -2422,5 +3599,634 @@ mod tests {
             )
             .unwrap());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn test_state(root: &Path) -> AppState {
+        AppState {
+            deployments: Arc::new(RwLock::new(HashMap::new())),
+            db_locks: LockMap::default(),
+            s3: None,
+            artifact_bucket: "artifacts".into(),
+            data_bucket: "data".into(),
+            local_artifact_root: root.join("artifacts"),
+            backup_root: root.join("backups"),
+            data_root: root.into(),
+            admin_key: "test-admin".into(),
+            public_origin: "http://localhost".into(),
+            host_suffix: "localhost".into(),
+            guards: Arc::new(Guards::new(Vec::new())),
+        }
+    }
+
+    fn input_binding(key: &str, value_type: &str, max_length: Option<usize>) -> ActionBinding {
+        ActionBinding {
+            source: "input".into(),
+            key: Some(key.into()),
+            value_type: Some(value_type.into()),
+            max_length,
+            nullable: false,
+            field: None,
+            value: None,
+        }
+    }
+
+    #[test]
+    fn nullable_inputs_preserve_types_and_required_inputs() {
+        for value_type in ["string", "number", "boolean"] {
+            let mut binding = input_binding("value", value_type, Some(4));
+            binding.nullable = true;
+            let definition = action("query", "SELECT ?1", vec![binding]);
+            assert!(validate_action("inputs.echo", &definition).is_ok());
+            for input in [json!({}), json!({"value": null})] {
+                assert_eq!(resolve_bindings(&definition, &input, None).unwrap(), vec![SqlValue::Null]);
+            }
+            assert!(resolve_bindings(&definition, &json!({"other": null}), None).unwrap_err().contains("Unexpected"));
+            let wrong = match value_type {
+                "string" => json!({"value": 5}),
+                "number" => json!({"value": "5"}),
+                _ => json!({"value": 0}),
+            };
+            assert!(resolve_bindings(&definition, &wrong, None).is_err());
+            let required = action("query", "SELECT ?1", vec![input_binding("value", value_type, Some(4))]);
+            assert!(resolve_bindings(&required, &json!({}), None).is_err());
+            assert!(resolve_bindings(&required, &json!({"value": null}), None).is_err());
+        }
+        let mut binding = input_binding("value", "string", Some(4));
+        binding.nullable = true;
+        let definition = action("query", "SELECT ?1", vec![binding]);
+        assert!(resolve_bindings(&definition, &json!({"value": ""}), None).is_err());
+        assert!(resolve_bindings(&definition, &json!({"value": "longer"}), None).is_err());
+        assert_eq!(resolve_bindings(&definition, &json!({"value": "ship"}), None).unwrap(), vec![SqlValue::Text("ship".into())]);
+        for source in ["actor", "kernel", "literal"] {
+            let mut binding = input_binding("value", "string", None);
+            binding.source = source.into();
+            binding.nullable = true;
+            assert!(validate_action("inputs.echo", &action("query", "SELECT ?1", vec![binding])).is_err());
+        }
+    }
+
+    #[test]
+    fn mutation_returning_fails_schema_validation_without_executing() {
+        let root = std::env::temp_dir().join(format!("littlebox-returning-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        initialize_database(&path).unwrap();
+        let schema = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT, \"RETURNING\" INTEGER);";
+        for sql in [
+            "INSERT INTO notes(body) VALUES ('note') RETURNING id",
+            "UPDATE notes SET body='note' returning body",
+            "DELETE FROM notes RETURNING *",
+        ] {
+            let program = ActionProgram { version: 1, actions: HashMap::from([("notes.write".into(), action("mutation", sql, vec![]))]) };
+            assert!(apply_additive_schema(&path, schema, &program).unwrap_err().to_string().contains("cannot use RETURNING"));
+        }
+        for sql in [
+            "INSERT INTO notes(body) VALUES ('RETURNING')",
+            "UPDATE notes SET body='note' /* RETURNING id */",
+            "UPDATE notes SET \"RETURNING\"=1",
+        ] {
+            let program = ActionProgram { version: 1, actions: HashMap::from([("notes.write".into(), action("mutation", sql, vec![]))]) };
+            apply_additive_schema(&path, schema, &program).unwrap();
+        }
+        let count: i64 = Connection::open(&path).unwrap().query_row("SELECT count(*) FROM notes", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn default_setup_key_is_refused_off_loopback() {
+        let local = "http://localhost:8080";
+        for bind in ["127.0.0.1", "::1", "[::1]", "localhost"] {
+            assert_eq!(admin_key_for(bind, local, None, None, false).unwrap(), DEFAULT_ADMIN_KEY, "bind={bind}");
+        }
+        assert!(admin_key_for("0.0.0.0", local, None, None, false).is_err());
+        assert!(admin_key_for("0.0.0.0", local, None, Some(""), false).is_err());
+        assert!(admin_key_for("0.0.0.0", local, None, Some(DEFAULT_ADMIN_KEY), false).is_err());
+        assert!(admin_key_for("192.168.1.4", local, None, Some(DEFAULT_ADMIN_KEY), false).is_err());
+        assert_eq!(admin_key_for("0.0.0.0", local, None, Some("s3cret"), false).unwrap(), "s3cret");
+        assert_eq!(
+            admin_key_for("0.0.0.0", local, None, Some(DEFAULT_ADMIN_KEY), true).unwrap(),
+            DEFAULT_ADMIN_KEY
+        );
+    }
+
+    #[test]
+    fn default_setup_key_is_refused_behind_a_public_origin() {
+        for origin in ["http://localhost:8790", "http://127.0.0.1:18900", "http://[::1]:8080", "http://editor.localhost"] {
+            assert!(admin_key_for("127.0.0.1", origin, None, None, false).is_ok(), "origin={origin}");
+        }
+        for origin in ["https://apps.example.com", "http://192.168.1.4:8080", "not a url", ""] {
+            assert!(admin_key_for("127.0.0.1", origin, None, None, false).is_err(), "origin={origin}");
+            assert!(admin_key_for("127.0.0.1", origin, None, None, true).is_ok(), "origin={origin}");
+            assert!(admin_key_for("127.0.0.1", origin, None, Some("s3cret"), false).is_ok(), "origin={origin}");
+        }
+    }
+
+    #[test]
+    fn default_setup_key_is_refused_behind_a_public_mcp_origin() {
+        let local = "http://localhost:8080";
+        for mcp in ["http://localhost:8790", "http://127.0.0.1:9000", "http://editor.localhost"] {
+            assert!(admin_key_for("127.0.0.1", local, Some(mcp), None, false).is_ok(), "mcp={mcp}");
+        }
+        for mcp in ["https://mcp.example.com", "http://192.168.1.4:8080", "not a url", ""] {
+            assert!(admin_key_for("127.0.0.1", local, Some(mcp), None, false).is_err(), "mcp={mcp}");
+            assert!(admin_key_for("127.0.0.1", local, Some(mcp), None, true).is_ok(), "mcp={mcp}");
+            assert!(admin_key_for("127.0.0.1", local, Some(mcp), Some("s3cret"), false).is_ok(), "mcp={mcp}");
+        }
+    }
+
+    #[test]
+    fn artifact_content_types_follow_the_extension() {
+        for (path, expected) in [
+            ("index.html", "text/html; charset=utf-8"),
+            ("docs/page.HTM", "text/html; charset=utf-8"),
+            ("app.js", "text/javascript; charset=utf-8"),
+            ("chunk.mjs", "text/javascript; charset=utf-8"),
+            ("styles.css", "text/css; charset=utf-8"),
+            ("data.json", "application/json"),
+            ("app.js.map", "application/json"),
+            ("site.webmanifest", "application/manifest+json"),
+            ("robots.txt", "text/plain; charset=utf-8"),
+            ("logo.svg", "image/svg+xml"),
+            ("a.png", "image/png"),
+            ("a.jpg", "image/jpeg"),
+            ("a.JPEG", "image/jpeg"),
+            ("a.gif", "image/gif"),
+            ("a.webp", "image/webp"),
+            ("favicon.ico", "image/x-icon"),
+            ("module.wasm", "application/wasm"),
+            ("font.woff2", "font/woff2"),
+            ("archive.zip", "application/octet-stream"),
+            ("LICENSE", "application/octet-stream"),
+            ("dir.html/file", "application/octet-stream"),
+        ] {
+            assert_eq!(content_type(path), expected, "path={path}");
+        }
+        let response = artifact_response(b"x".to_vec(), "x.bin");
+        assert_eq!(response.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/octet-stream");
+    }
+
+    #[test]
+    fn number_inputs_bind_integers_as_integer_and_fractions_as_real() {
+        let definition = action(
+            "mutation",
+            "INSERT INTO items(label) VALUES (?)",
+            vec![input_binding("value", "number", None)],
+        );
+        assert_eq!(
+            resolve_bindings(&definition, &json!({"value": 5}), None).unwrap(),
+            vec![SqlValue::Integer(5)]
+        );
+        assert_eq!(
+            resolve_bindings(&definition, &json!({"value": -3}), None).unwrap(),
+            vec![SqlValue::Integer(-3)]
+        );
+        assert_eq!(
+            resolve_bindings(&definition, &json!({"value": 5.5}), None).unwrap(),
+            vec![SqlValue::Real(5.5)]
+        );
+        assert_eq!(
+            resolve_bindings(&definition, &json!({"value": u64::MAX}), None).unwrap(),
+            vec![SqlValue::Real(u64::MAX as f64)]
+        );
+
+        let root = std::env::temp_dir().join(format!("littlebox-number-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path)
+            .unwrap()
+            .execute("CREATE TABLE items(label TEXT)", [])
+            .unwrap();
+        let params = resolve_bindings(&definition, &json!({"value": 5}), None).unwrap();
+        run_mutation(&path, &definition, params).unwrap();
+        let stored: String = Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT label FROM items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stored, "5");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn string_max_length_counts_utf16_code_units() {
+        let two = action("mutation", "SELECT ?", vec![input_binding("title", "string", Some(2))]);
+        let one = action("mutation", "SELECT ?", vec![input_binding("title", "string", Some(1))]);
+        // One emoji is 4 UTF-8 bytes and 2 UTF-16 code units, like "\u{1F600}".length in a browser.
+        let emoji = json!({"title": "\u{1F600}"});
+        assert!(resolve_bindings(&two, &emoji, None).is_ok());
+        assert!(resolve_bindings(&one, &emoji, None).unwrap_err().contains("too long"));
+        assert!(resolve_bindings(&two, &json!({"title": "\u{e9}\u{e9}"}), None).is_ok());
+    }
+
+    async fn deploy_files(state: &AppState, files: Value) -> Value {
+        deploy_with_visibility(state, files, "public").await
+    }
+
+    async fn deploy_with_visibility(state: &AppState, files: Value, visibility: &str) -> Value {
+        let body = json!({
+            "project": {
+                "id": "app_republish", "name": "Republish", "slug": "republish", "manifest": {},
+                "files": {"actions.json": "{\"version\":1,\"actions\":{}}", "schema.sql": ""}
+            },
+            "visibility": visibility,
+            "artifact": {"version": 1, "entrypoint": "index.html", "files": files}
+        });
+        let request = Request::builder()
+            .header("x-littlebox-admin-key", "test-admin")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let response = deploy(State(state.clone()), request).await;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1_000_000).await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&bytes));
+        serde_json::from_slice::<Value>(&bytes).unwrap()["result"].clone()
+    }
+
+    #[tokio::test]
+    async fn republish_stops_serving_files_missing_from_the_new_artifact() {
+        let root = std::env::temp_dir().join(format!("littlebox-republish-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        let state = test_state(&root);
+        let first = deploy_files(
+            &state,
+            json!({"index.html": "<p>one</p>", "old.js": "1", "assets/old.css": "a{}"}),
+        )
+        .await;
+        let id = first["id"].as_str().unwrap().to_owned();
+        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        assert_eq!(read_artifact(&state, &deployment, "old.js").await.unwrap(), b"1");
+
+        deploy_files(&state, json!({"index.html": "<p>two</p>", "new.js": "2"})).await;
+        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        assert_eq!(deployment.id, id);
+        assert_eq!(read_artifact(&state, &deployment, "index.html").await.unwrap(), b"<p>two</p>");
+        assert_eq!(read_artifact(&state, &deployment, "new.js").await.unwrap(), b"2");
+        assert!(read_artifact(&state, &deployment, "old.js").await.is_err());
+        assert!(read_artifact(&state, &deployment, "assets/old.css").await.is_err());
+        let mut entries = std::fs::read_dir(root.join("artifacts").join(&id))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        entries.sort();
+        assert_eq!(entries, vec![deployment.artifact_version.clone().unwrap()]);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn new_deployments_pick_a_policy_from_visibility_and_redeploys_keep_it() {
+        for (visibility, expected) in [("public", SignupMode::Open), ("private", SignupMode::Closed)] {
+            let root = std::env::temp_dir().join(format!("littlebox-policy-{}", Uuid::new_v4()));
+            tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+            let state = test_state(&root);
+            let first = deploy_with_visibility(&state, json!({"index.html": "<p>one</p>"}), visibility).await;
+            assert_eq!(first["signupPolicy"]["mode"], json!(expected), "visibility={visibility}");
+
+            set_policy(&state, SignupMode::Allowlist, &["@example.test"]).await;
+            let second = deploy_with_visibility(&state, json!({"index.html": "<p>two</p>"}), visibility).await;
+            assert_eq!(second["signupPolicy"], json!({"mode": "allowlist", "allowlist": ["@example.test"]}));
+            let id = second["id"].as_str().unwrap();
+            let stored: Deployment = serde_json::from_slice(
+                &tokio::fs::read(root.join("deployments").join(id).join("deployment.json")).await.unwrap(),
+            )
+            .unwrap();
+            assert_eq!(stored.signup_policy.mode, SignupMode::Allowlist);
+            let _ = tokio::fs::remove_dir_all(root).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn republishing_a_public_app_as_private_closes_an_open_signup() {
+        // (first visibility, policy the owner set, second visibility, expected)
+        let cases = [
+            ("public", None, "private", json!({"mode": "closed", "allowlist": []})),
+            (
+                "public",
+                Some((SignupMode::Allowlist, "@example.test")),
+                "private",
+                json!({"mode": "allowlist", "allowlist": ["@example.test"]}),
+            ),
+            // The owner opened a private app on purpose; a redeploy keeps that.
+            ("private", Some((SignupMode::Open, "")), "private", json!({"mode": "open", "allowlist": []})),
+            ("private", None, "public", json!({"mode": "closed", "allowlist": []})),
+        ];
+        for (first, chosen, second, expected) in cases {
+            let root = std::env::temp_dir().join(format!("littlebox-flip-{}", Uuid::new_v4()));
+            tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+            let state = test_state(&root);
+            deploy_with_visibility(&state, json!({"index.html": "<p>one</p>"}), first).await;
+            if let Some((mode, entry)) = chosen {
+                let entries: Vec<&str> = if entry.is_empty() { vec![] } else { vec![entry] };
+                set_policy(&state, mode, &entries).await;
+            }
+            let republished = deploy_with_visibility(&state, json!({"index.html": "<p>two</p>"}), second).await;
+            assert_eq!(republished["signupPolicy"], expected, "{first} {chosen:?} -> {second}");
+            let id = republished["id"].as_str().unwrap();
+            let stored: Deployment = serde_json::from_slice(
+                &tokio::fs::read(root.join("deployments").join(id).join("deployment.json")).await.unwrap(),
+            )
+            .unwrap();
+            assert_eq!(serde_json::to_value(&stored.signup_policy).unwrap(), expected);
+            let _ = tokio::fs::remove_dir_all(root).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn signup_checks_input_first_and_gives_one_answer_for_closed_and_unlisted() {
+        let root = std::env::temp_dir().join(format!("littlebox-signup-oracle-{}", Uuid::new_v4()));
+        let (state, headers) = login_test_state(&root, "public").await;
+        let attempt = |email: &'static str, password: &'static str| {
+            let state = state.clone();
+            let headers = headers.clone();
+            async move {
+                let body = json!({"email": email, "password": password});
+                let request = Request::builder().body(Body::from(body.to_string())).unwrap();
+                let response = signup(State(state), headers, request).await;
+                let status = response.status();
+                let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+                (status, serde_json::from_slice::<Value>(&bytes).unwrap()["error"].clone())
+            }
+        };
+        set_policy(&state, SignupMode::Allowlist, &["listed@example.test"]).await;
+        // A weak password gets the same answer whether or not the address is listed.
+        let listed = attempt("listed@example.test", "x").await;
+        let unlisted = attempt("other@example.test", "x").await;
+        assert_eq!(listed.0, StatusCode::BAD_REQUEST);
+        assert_eq!(listed, unlisted);
+        assert_eq!(attempt("not-an-email", "correct horse battery").await.0, StatusCode::BAD_REQUEST);
+        let refused = attempt("other@example.test", "correct horse battery").await;
+        assert_eq!(refused.0, StatusCode::FORBIDDEN);
+        set_policy(&state, SignupMode::Closed, &[]).await;
+        assert_eq!(attempt("listed@example.test", "correct horse battery").await, refused);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[test]
+    fn app_databases_are_capped_in_size() {
+        let root = std::env::temp_dir().join(format!("littlebox-cap-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        initialize_database(&path).unwrap();
+        let db = Connection::open(&path).unwrap();
+        restrict_database(&db).unwrap();
+        db.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
+        let page_size: u64 = db.query_row("PRAGMA page_size", [], |r| r.get(0)).unwrap();
+        let pages: u64 = db.query_row("PRAGMA max_page_count", [], |r| r.get(0)).unwrap();
+        assert_eq!(pages * page_size, MAX_APP_DATABASE_BYTES);
+        drop(db);
+
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE notes(body TEXT)").unwrap();
+        limit_database_size(&db, 64 * 1024).unwrap();
+        let mut full = None;
+        for _ in 0..100 {
+            if let Err(error_value) = db.execute("INSERT INTO notes VALUES (?1)", ["x".repeat(4000)]) {
+                full = Some(error_value.to_string());
+                break;
+            }
+        }
+        assert!(full.expect("the cap must stop writes").contains("full"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn a_failed_record_write_removes_the_new_artifact_version() {
+        let root = std::env::temp_dir().join(format!("littlebox-orphan-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        let state = test_state(&root);
+        let first = deploy_files(&state, json!({"index.html": "<p>one</p>"})).await;
+        let id = first["id"].as_str().unwrap().to_owned();
+        let record = root.join("deployments").join(&id).join("deployment.json");
+        tokio::fs::remove_file(&record).await.unwrap();
+        tokio::fs::create_dir_all(record.join("blocker")).await.unwrap();
+        let body = json!({
+            "project": {
+                "id": "app_republish", "name": "Republish", "slug": "republish", "manifest": {},
+                "files": {"actions.json": "{\"version\":1,\"actions\":{}}", "schema.sql": ""}
+            },
+            "visibility": "public",
+            "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>two</p>"}}
+        });
+        let request = Request::builder()
+            .header("x-littlebox-admin-key", "test-admin")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        assert_eq!(deploy(State(state.clone()), request).await.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let versions = std::fs::read_dir(root.join("artifacts").join(&id)).unwrap().count();
+        assert_eq!(versions, 1, "only the live version remains");
+        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        assert_eq!(read_artifact(&state, &deployment, "index.html").await.unwrap(), b"<p>one</p>");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_artifacts_without_a_version_are_still_served() {
+        let root = std::env::temp_dir().join(format!("littlebox-legacy-{}", Uuid::new_v4()));
+        let (state, _) = login_test_state(&root, "public").await;
+        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        let directory = root.join("artifacts").join(&deployment.id);
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        tokio::fs::write(directory.join("index.html"), "legacy").await.unwrap();
+        assert_eq!(read_artifact(&state, &deployment, "index.html").await.unwrap(), b"legacy");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn restoring_a_backup_first_backs_up_the_live_database() {
+        let root = std::env::temp_dir().join(format!("littlebox-restore-{}", Uuid::new_v4()));
+        let state = test_state(&root);
+        let id = "restore-test";
+        tokio::fs::create_dir_all(root.join("deployments").join(id)).await.unwrap();
+        let path = database_path(&state, id);
+        initialize_database(&path).unwrap();
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("CREATE TABLE notes(body TEXT); INSERT INTO notes VALUES ('old');")
+            .unwrap();
+        let backup = create_backup(&state, id, "Manual backup").await.unwrap();
+        Connection::open(&path)
+            .unwrap()
+            .execute("INSERT INTO notes VALUES ('newer')", [])
+            .unwrap();
+        restore_backup(&state, id, backup["id"].as_str().unwrap()).await.unwrap();
+
+        let backups = list_backups(&state, id).await.unwrap();
+        let before = backups
+            .iter()
+            .find(|item| item["label"] == "Before restore")
+            .expect("restore must keep a copy of the live database");
+        let snapshot = root
+            .join("backups")
+            .join(id)
+            .join(format!("{}.sqlite", before["id"].as_str().unwrap()));
+        let rows: i64 = Connection::open(snapshot)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 2);
+        let rows: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    fn signed_in(state: &AppState, deployment_id: &str, headers: &HeaderMap, email: &str) -> (HeaderMap, String) {
+        let auth = AuthService::open(
+            state
+                .data_root
+                .join("deployments")
+                .join(deployment_id)
+                .join("identity.sqlite"),
+        )
+        .unwrap();
+        let session = auth.signup(email, "correct horse battery").unwrap();
+        let mut headers = headers.clone();
+        headers.insert(
+            header::COOKIE,
+            format!("littlebox_app_session={}", session.token).parse().unwrap(),
+        );
+        (headers, session.user.user_id)
+    }
+
+    async fn response_json(response: Response) -> Value {
+        let bytes = axum::body::to_bytes(response.into_body(), 1_000_000).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn upload_refuses_to_overwrite_an_unreadable_file_index() {
+        let root = std::env::temp_dir().join(format!("littlebox-upload-{}", Uuid::new_v4()));
+        let (state, headers) = login_test_state(&root, "public").await;
+        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        let (headers, _) = signed_in(&state, &deployment.id, &headers, "owner@example.test");
+        let files = root.join("deployments").join(&deployment.id).join("files");
+        tokio::fs::create_dir_all(&files).await.unwrap();
+        tokio::fs::write(files.join("index.json"), "{not json").await.unwrap();
+        let body = json!({"name": "a.txt", "type": "text/plain", "dataUrl": "data:text/plain;base64,aGk="});
+        let request = Request::builder().body(Body::from(body.to_string())).unwrap();
+        let response = upload_file(State(state.clone()), headers.clone(), request).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(tokio::fs::read(files.join("index.json")).await.unwrap(), b"{not json");
+
+        tokio::fs::remove_file(files.join("index.json")).await.unwrap();
+        let request = Request::builder().body(Body::from(body.to_string())).unwrap();
+        let response = upload_file(State(state), headers, request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let index: Vec<Value> =
+            serde_json::from_slice(&tokio::fs::read(files.join("index.json")).await.unwrap()).unwrap();
+        assert_eq!(index.len(), 1);
+        assert_eq!(index[0]["visibility"], "private");
+        let leftovers = std::fs::read_dir(&files)
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().contains(".tmp-"))
+            .count();
+        assert_eq!(leftovers, 0);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn files_are_private_to_the_uploader_unless_marked_public() {
+        let root = std::env::temp_dir().join(format!("littlebox-files-{}", Uuid::new_v4()));
+        let (state, headers) = login_test_state(&root, "public").await;
+        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        let (alice, alice_id) = signed_in(&state, &deployment.id, &headers, "alice@example.test");
+        let (bob, _) = signed_in(&state, &deployment.id, &headers, "bob@example.test");
+        let body = |visibility: Option<&str>| {
+            let mut value = json!({"name": "a.txt", "type": "text/plain", "dataUrl": "data:text/plain;base64,aGk="});
+            if let Some(visibility) = visibility {
+                value["visibility"] = json!(visibility);
+            }
+            Request::builder().body(Body::from(value.to_string())).unwrap()
+        };
+
+        let anonymous = upload_file(State(state.clone()), headers.clone(), body(None)).await;
+        assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+
+        let private_file = response_json(upload_file(State(state.clone()), alice.clone(), body(None)).await).await;
+        assert_eq!(private_file["result"]["visibility"], "private");
+        assert_eq!(private_file["result"]["ownerId"], alice_id);
+        let private_id = private_file["result"]["id"].as_str().unwrap().to_owned();
+
+        let public_file = response_json(upload_file(State(state.clone()), alice.clone(), body(Some("public"))).await).await;
+        let public_id = public_file["result"]["id"].as_str().unwrap().to_owned();
+
+        let alice_list = response_json(list_files(State(state.clone()), alice.clone()).await).await;
+        assert_eq!(alice_list["result"].as_array().unwrap().len(), 2);
+        assert!(alice_list["result"].as_array().unwrap().iter().any(|file| file["ownerId"] == alice_id));
+
+        let bob_list = response_json(list_files(State(state.clone()), bob.clone()).await).await;
+        assert_eq!(bob_list["result"].as_array().unwrap().len(), 1);
+        assert_eq!(bob_list["result"][0]["id"], public_id);
+        assert!(bob_list["result"][0].get("ownerId").is_none());
+
+        let visitor_list = response_json(list_files(State(state.clone()), headers.clone()).await).await;
+        assert_eq!(visitor_list["result"][0]["id"], public_id);
+        assert!(visitor_list["result"][0].get("ownerId").is_none());
+
+        assert_eq!(
+            serve_file(State(state.clone()), AxumPath(private_id.clone()), bob.clone()).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            serve_file(State(state.clone()), AxumPath(private_id.clone()), headers.clone()).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            serve_file(State(state.clone()), AxumPath(private_id), alice.clone()).await.status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            serve_file(State(state.clone()), AxumPath(public_id.clone()), headers).await.status(),
+            StatusCode::OK
+        );
+
+        let legacy_id = Uuid::new_v4().to_string();
+        let directory = root.join("deployments").join(&deployment.id).join("files");
+        tokio::fs::write(directory.join(format!("{legacy_id}.blob")), b"hi").await.unwrap();
+        let mut index: Vec<Value> = serde_json::from_slice(&tokio::fs::read(directory.join("index.json")).await.unwrap()).unwrap();
+        index.push(json!({"id": legacy_id, "name": "old.txt", "type": "text/plain", "size": 2, "createdAt": 1}));
+        tokio::fs::write(directory.join("index.json"), serde_json::to_vec(&index).unwrap()).await.unwrap();
+        let after_legacy = response_json(list_files(State(state.clone()), alice).await).await;
+        assert!(after_legacy["result"].as_array().unwrap().iter().all(|file| file["id"] != legacy_id));
+        assert_eq!(
+            serve_file(State(state.clone()), AxumPath(legacy_id), bob).await.status(),
+            StatusCode::NOT_FOUND
+        );
+
+        let (private_state, private_headers) = login_test_state(&root.join("private"), "private").await;
+        let private_deployment = private_state.deployments.read().await.values().next().cloned().unwrap();
+        assert_eq!(
+            list_files(State(private_state.clone()), private_headers.clone()).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let (member, _) = signed_in(&private_state, &private_deployment.id, &private_headers, "member@example.test");
+        assert_eq!(list_files(State(private_state), member).await.status(), StatusCode::OK);
+
+        let restored = root.join("restored");
+        let kept = Uuid::new_v4().to_string();
+        let orphan = Uuid::new_v4().to_string();
+        let bundle = json!({"files": [
+            {"id": kept, "name": "kept.txt", "type": "text/plain", "size": 2, "visibility": "public", "ownerId": "user-1", "createdAt": 1, "dataBase64": "aGk="},
+            {"id": orphan, "name": "orphan.txt", "type": "text/plain", "size": 2, "visibility": "public", "createdAt": 1, "dataBase64": "aGk="}
+        ]});
+        restore_initial_files(&restored, &encode_base64(bundle.to_string().as_bytes()), 16 * 1024 * 1024).await.unwrap();
+        let restored_index: Vec<Value> = serde_json::from_slice(&tokio::fs::read(restored.join("index.json")).await.unwrap()).unwrap();
+        assert_eq!(restored_index[0]["ownerId"], "user-1");
+        assert_eq!(restored_index[0]["visibility"], "public");
+        assert!(restored_index[1].get("ownerId").is_none());
+        assert_eq!(restored_index[1]["visibility"], "public");
+
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[test]
+    fn reachable_kernels_isolate_schema_derivation() {
+        assert!(!derive_must_isolate("127.0.0.1", "http://localhost:8787", ""));
+        assert!(!derive_must_isolate("::1", "", ""));
+        assert!(derive_must_isolate("0.0.0.0", "http://localhost:8787", ""));
+        assert!(derive_must_isolate("127.0.0.1", "https://apps.example", ""));
+        assert!(derive_must_isolate("127.0.0.1", "http://localhost:8787", "https://mcp.example"));
     }
 }

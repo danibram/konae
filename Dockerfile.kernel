@@ -1,3 +1,14 @@
+FROM oven/bun:1.3.11 AS tooling
+WORKDIR /app
+COPY package.json bun.lock ./
+# At runtime the Kernel only spawns database-lifecycle/derive-migration.ts,
+# which needs drizzle-kit, drizzle-orm, esbuild and typescript. Install those
+# four with the root package.json specifiers. Bun reuses the resolutions in
+# bun.lock and prunes the rest, so the editor's dependencies stay out.
+RUN bun -e 'const p = await Bun.file("package.json").json(); const all = { ...p.dependencies, ...p.devDependencies }; const keep = ["drizzle-kit", "drizzle-orm", "esbuild", "typescript"]; await Bun.write("package.json", JSON.stringify({ name: p.name, private: true, type: p.type, dependencies: Object.fromEntries(keep.map((name) => [name, all[name]])) }));' \
+  && bun install
+COPY database-lifecycle ./database-lifecycle
+
 FROM rust:1.91-bookworm AS build
 
 WORKDIR /src
@@ -5,13 +16,33 @@ COPY kernel-rs/Cargo.toml kernel-rs/Cargo.lock ./
 RUN mkdir src && printf 'fn main() {}\n' > src/main.rs && cargo build --release --locked
 COPY kernel-rs/src ./src
 RUN touch src/main.rs && cargo build --release --locked
+COPY kernel-rs/derive-helper.c ./derive-helper.c
+RUN gcc -O2 -s -o littlebox-derive derive-helper.c
 
 FROM debian:bookworm-slim
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd --system --gid 10001 littlebox \
+  && useradd --system --uid 10001 --gid littlebox --home-dir /data --no-create-home --shell /usr/sbin/nologin littlebox \
+  && groupadd --system --gid 10002 littlebox-derive \
+  && useradd --system --uid 10002 --gid littlebox-derive --home-dir /tmp --no-create-home --shell /usr/sbin/nologin littlebox-derive \
+  && mkdir -p /data \
+  && chown littlebox:littlebox /data \
+  && chmod 0700 /data
 COPY --from=build /src/target/release/littlebox-kernel /usr/local/bin/littlebox-kernel
-
+COPY --from=build /src/littlebox-derive /usr/local/bin/littlebox-derive
+RUN chown root:root /usr/local/bin/littlebox-derive && chmod 4755 /usr/local/bin/littlebox-derive
+COPY --from=tooling /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=tooling /app/package.json /opt/littlebox/package.json
+COPY --from=tooling /app/node_modules /opt/littlebox/node_modules
+COPY --from=tooling /app/database-lifecycle /opt/littlebox/database-lifecycle
+COPY ops/kernel-entrypoint.sh /usr/local/bin/littlebox-entrypoint
+RUN chmod 755 /usr/local/bin/littlebox-entrypoint
+# The Kernel binds all interfaces here, so it refuses the local development
+# key unless the compose file opts in. Schema derivation goes through the
+# setuid helper, which becomes littlebox-derive before the model loads.
+ENV LITTLEBOX_BUN_PATH=/usr/local/bin/bun LITTLEBOX_SOURCE_ROOT=/opt/littlebox LITTLEBOX_BIND=0.0.0.0 LITTLEBOX_DATA_DIR=/data LITTLEBOX_DERIVE_HELPER=/usr/local/bin/littlebox-derive
 EXPOSE 8787
-ENTRYPOINT ["littlebox-kernel"]
+ENTRYPOINT ["/usr/local/bin/littlebox-entrypoint"]

@@ -13,6 +13,7 @@ import {
   openPanel,
   panelIds,
   panelsIn,
+  resetLayout,
   resizeSplit,
   setSizes,
   split,
@@ -33,7 +34,7 @@ describe("opening panels", () => {
   test("a closed panel opens as a tab in the focused group, not by splitting", () => {
     const state = openPanel(defaultLayout(), "data");
     const group = groupOf(state, "data");
-    expect(group.panels).toContain("code");
+    expect(group.panels).toContain("preview");
     expect(group.panels).toContain("data");
     expect(group.panels[group.active]).toBe("data");
     expect(accountedFor(state)).toEqual(everything);
@@ -47,10 +48,10 @@ describe("opening panels", () => {
 
   test("revealing a background tab switches its group without moving anything", () => {
     const withData = openPanel(defaultLayout(), "data");
-    const backToCode = openPanel(withData, "code");
-    expect(groupOf(backToCode, "code").panels).toEqual(groupOf(withData, "data").panels);
-    expect(isVisible(backToCode, "code")).toBe(true);
-    expect(isVisible(backToCode, "data")).toBe(false);
+    const backToPreview = openPanel(withData, "preview");
+    expect(groupOf(backToPreview, "preview").panels).toEqual(groupOf(withData, "data").panels);
+    expect(isVisible(backToPreview, "preview")).toBe(true);
+    expect(isVisible(backToPreview, "data")).toBe(false);
   });
 
   test("every panel can be opened and closed, including the code editor", () => {
@@ -65,13 +66,13 @@ describe("opening panels", () => {
 
   test("folding a panel that is hidden behind a tab reveals it instead of closing it", () => {
     const shared = openPanel(defaultLayout(), "data");
-    expect(isVisible(shared, "code")).toBe(false);
+    expect(isVisible(shared, "preview")).toBe(false);
 
-    const revealed = togglePanel(shared, "code");
-    expect(isVisible(revealed, "code")).toBe(true);
-    expect(isOpen(revealed, "code")).toBe(true);
+    const revealed = togglePanel(shared, "preview");
+    expect(isVisible(revealed, "preview")).toBe(true);
+    expect(isOpen(revealed, "preview")).toBe(true);
     // Only a panel the owner can see folds away.
-    expect(isOpen(togglePanel(revealed, "code"), "code")).toBe(false);
+    expect(isOpen(togglePanel(revealed, "preview"), "preview")).toBe(false);
   });
 
   test("closing the last panel leaves an empty but usable workshop", () => {
@@ -84,27 +85,27 @@ describe("opening panels", () => {
 
 describe("dropping panels", () => {
   test("dropping on the middle adds a tab beside the target", () => {
-    const state = movePanel(defaultLayout(), "agent", { target: "code", zone: "center" });
+    const state = movePanel(defaultLayout(), "agent", { target: "preview", zone: "center" });
     const group = groupOf(state, "agent");
-    expect(group.panels).toEqual(["code", "agent"]);
+    expect(group.panels).toEqual(["preview", "agent"]);
     expect(group.panels[group.active]).toBe("agent");
   });
 
   test("dropping on an edge splits in that direction", () => {
-    const below = movePanel(defaultLayout(), "agent", { target: "code", zone: "bottom" });
+    const below = movePanel(defaultLayout(), "agent", { target: "preview", zone: "bottom" });
     const path = stackPathOf(below.root, "agent")!;
     const parent = nodeAt(below.root, path.slice(0, -1)) as any;
     expect(parent.direction).toBe("column");
     expect(path[path.length - 1]).toBe(1);
 
-    const left = movePanel(defaultLayout(), "agent", { target: "code", zone: "left" });
+    const left = movePanel(defaultLayout(), "agent", { target: "preview", zone: "left" });
     const leftPath = stackPathOf(left.root, "agent")!;
     expect((nodeAt(left.root, leftPath.slice(0, -1)) as any).direction).toBe("row");
     expect(leftPath[leftPath.length - 1]).toBe(0);
   });
 
   test("the group a panel leaves disappears when it was its last tab", () => {
-    const state = movePanel(defaultLayout(), "preview", { target: "code", zone: "center" });
+    const state = movePanel(defaultLayout(), "preview", { target: "agent", zone: "center" });
     // preview's old group held only preview, so the column collapsed onto agent.
     expect(stackPathOf(state.root, "agent")).not.toBeNull();
     expect(accountedFor(state)).toEqual(everything);
@@ -112,23 +113,23 @@ describe("dropping panels", () => {
 
   test("dropping a panel on itself changes nothing", () => {
     const state = defaultLayout();
-    expect(movePanel(state, "code", { target: "code", zone: "left" })).toBe(state);
+    expect(movePanel(state, "preview", { target: "preview", zone: "left" })).toBe(state);
   });
 
   test("a center drop can land before its target, so a tab reaches the first position", () => {
     const group = openPanel(openPanel(defaultLayout(), "data"), "files");
-    expect(groupOf(group, "code").panels).toEqual(["code", "data", "files"]);
+    expect(groupOf(group, "preview").panels).toEqual(["preview", "data", "files"]);
 
-    const first = movePanel(group, "files", { target: "code", zone: "center", before: true });
-    expect(groupOf(first, "files").panels).toEqual(["files", "code", "data"]);
+    const first = movePanel(group, "files", { target: "preview", zone: "center", before: true });
+    expect(groupOf(first, "files").panels).toEqual(["files", "preview", "data"]);
     expect(groupOf(first, "files").active).toBe(0);
   });
 
   test("moving one tab reaches every order that moving one tab can reach", () => {
     const group = openPanel(openPanel(defaultLayout(), "data"), "files");
     const orders = new Set<string>();
-    for (const moved of ["code", "data", "files"] as const) {
-      for (const target of ["code", "data", "files"] as const) {
+    for (const moved of ["preview", "data", "files"] as const) {
+      for (const target of ["preview", "data", "files"] as const) {
         for (const before of [true, false]) {
           const next = movePanel(group, moved, { target, zone: "center", before });
           orders.add(groupOf(next, moved).panels.join(","));
@@ -137,11 +138,11 @@ describe("dropping panels", () => {
     }
     // Anchoring only ever after the target reached three of these five.
     expect([...orders].sort()).toEqual([
-      "code,data,files",
-      "code,files,data",
-      "data,code,files",
-      "data,files,code",
-      "files,code,data",
+      "data,files,preview",
+      "data,preview,files",
+      "files,preview,data",
+      "preview,data,files",
+      "preview,files,data",
     ]);
   });
 });
@@ -149,31 +150,30 @@ describe("dropping panels", () => {
 describe("tabs and sizes", () => {
   test("activating a tab changes what the group shows", () => {
     const state = openPanel(defaultLayout(), "data");
-    const path = stackPathOf(state.root, "code")!;
+    const path = stackPathOf(state.root, "preview")!;
     const back = activateTab(state, path, 0);
-    expect(visiblePanels(back.root)).toContain("code");
+    expect(visiblePanels(back.root)).toContain("preview");
     expect(visiblePanels(back.root)).not.toContain("data");
   });
 
   test("dragging a handle resizes its own pair and nothing else", () => {
     const sizesOf = (state: LayoutState) => (state.root as any).sizes as number[];
     const start = defaultLayout();
-    expect(sizesOf(start)).toEqual([15, 51, 34]);
+    expect(sizesOf(start)).toEqual([64, 36]);
 
     const middle = resizeSplit(start, [], 0, 0.5);
-    expect(sizesOf(middle)).toEqual([33, 33, 34]);
+    expect(sizesOf(middle)).toEqual([50, 50]);
 
-    // Past the floor the handle stops at the floor: the third child is not paying for it.
+    // Past the floor the handle stops at the floor: the other child is not paying for it.
     const endStop = resizeSplit(start, [], 0, 0);
-    expect(sizesOf(endStop)[0]).toBe(8);
-    expect(sizesOf(endStop)[2]).toBe(34);
-    expect(sizesOf(resizeSplit(start, [], 0, 1))[2]).toBe(34);
+    expect(sizesOf(endStop)).toEqual([8, 92]);
+    expect(sizesOf(resizeSplit(start, [], 0, 1))).toEqual([92, 8]);
   });
 
   test("repeated end-stop drags never drift the untouched children", () => {
     let state = defaultLayout();
     for (let attempt = 0; attempt < 5; attempt += 1) state = resizeSplit(state, [], 0, 0);
-    expect((state.root as any).sizes).toEqual([8, 58, 34]);
+    expect((state.root as any).sizes).toEqual([8, 92]);
   });
 
   test("resizing something that is not a split, or a pair that does not exist, is a no-op", () => {
@@ -184,7 +184,7 @@ describe("tabs and sizes", () => {
   });
 
   test("sizes normalize to 100 with a floor under each child", () => {
-    const state = setSizes(defaultLayout(), [], [97, 2, 1]);
+    const state = setSizes(defaultLayout(), [], [97, 3]);
     const root = state.root as any;
     expect(Math.round(root.sizes.reduce((a: number, b: number) => a + b, 0))).toBe(100);
     expect(Math.min(...root.sizes)).toBeGreaterThanOrEqual(8);
@@ -234,7 +234,7 @@ describe("stored layouts", () => {
   });
 
   test("a full round trip through storage keeps the arrangement", () => {
-    const state = togglePanel(movePanel(defaultLayout(), "agent", { target: "code", zone: "center" }), "explorer");
+    const state = togglePanel(movePanel(defaultLayout(), "agent", { target: "preview", zone: "center" }), "explorer");
     const restored = normalizeLayout(JSON.parse(JSON.stringify(state)));
     expect(restored).toEqual(state);
   });
@@ -243,9 +243,65 @@ describe("stored layouts", () => {
 describe("the default arrangement", () => {
   test("opens with explorer, code, preview and agent, and the rest closed", () => {
     const state = defaultLayout();
-    expect(panelsIn(state.root)).toEqual(["explorer", "code", "preview", "agent"]);
-    expect([...state.closed].sort()).toEqual(["auth", "data", "files"]);
-    expect(state.focused).toBe("code");
+    expect(panelsIn(state.root)).toEqual(["preview", "agent"]);
+    expect([...state.closed].sort()).toEqual(["auth", "code", "data", "explorer", "files"]);
+    expect(state.focused).toBe("preview");
     expect(split("row", [stack(["code"])]).children).toHaveLength(1);
+  });
+});
+
+describe("closed panels remember their slot", () => {
+  const rootSizes = (state: LayoutState) => (state.root?.type === "split" ? state.root.sizes : []);
+
+  test("opening the file list puts it left of the preview, and closing it returns", () => {
+    const start = defaultLayout();
+    const opened = togglePanel(start, "explorer");
+    expect(groupOf(opened, "explorer").panels).toEqual(["explorer"]);
+    expect(stackPathOf(opened.root, "explorer")).toEqual([0]);
+    const closed = togglePanel(opened, "explorer");
+    expect(closed.root).toEqual(start.root);
+    expect(rootSizes(closed)).toEqual(rootSizes(start));
+  });
+
+  test("the preview and the agent come back beside each other", () => {
+    const start = defaultLayout();
+    for (const panel of ["preview", "agent"] as const) {
+      const back = togglePanel(togglePanel(start, panel), panel);
+      expect(isVisible(back, "preview")).toBe(true);
+      expect(isVisible(back, "agent")).toBe(true);
+      expect(panelsIn(back.root).sort()).toEqual(["agent", "preview"]);
+    }
+  });
+
+  test("a panel closed from a tab group reopens as a tab beside the same neighbour", () => {
+    const withData = openPanel(defaultLayout(), "data");
+    const reopened = openPanel(closePanel(withData, "data"), "data");
+    expect(groupOf(reopened, "data").panels).toEqual(["preview", "data"]);
+    expect(isVisible(reopened, "data")).toBe(true);
+  });
+
+  test("a slot whose neighbour has gone falls back to the panel's default place", () => {
+    const noExplorer = closePanel(defaultLayout(), "explorer");
+    const stale: LayoutState = { ...noExplorer, homes: { explorer: { target: "agent", zone: "left", size: 15 } } };
+    const withoutAgent = closePanel(stale, "agent");
+    const reopened = openPanel({ ...withoutAgent, homes: { ...withoutAgent.homes, explorer: { target: "auth", zone: "left" } } }, "explorer");
+    expect(isVisible(reopened, "explorer")).toBe(true);
+    expect(groupOf(reopened, "explorer").panels).toEqual(["explorer"]);
+    expect(stackPathOf(reopened.root, "explorer")).toEqual([0]);
+  });
+
+  test("layouts stored before slots were remembered still load, and slots survive storage", () => {
+    const old = normalizeLayout({ root: defaultLayout().root, closed: ["explorer", "code", "data", "files", "auth"], focused: "preview" });
+    expect(old.homes).toEqual({});
+    const folded = togglePanel(defaultLayout(), "explorer");
+    const restored = normalizeLayout(JSON.parse(JSON.stringify(folded)));
+    expect(restored.homes?.explorer).toEqual(folded.homes?.explorer);
+    expect(normalizeLayout({ ...folded, homes: { explorer: { target: "nowhere", zone: "left" } } }).homes).toEqual({});
+  });
+
+  test("reset returns the default arrangement", () => {
+    const messy = movePanel(togglePanel(defaultLayout(), "explorer"), "agent", { target: "preview", zone: "center" });
+    expect(resetLayout()).toEqual(defaultLayout());
+    expect(resetLayout().root).not.toEqual(messy.root);
   });
 });

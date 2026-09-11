@@ -58,14 +58,8 @@ describe("changes that would need a human to disambiguate", () => {
   }, 30_000);
 });
 
-describe("evaluation is contained, not merely filtered", () => {
-  /**
-   * The static guard reads source text, so it cannot see what a model assembles
-   * at runtime. This model gets past it. The point of the test is what happens
-   * next: the derivation runs in its own process with no environment, so the
-   * secret the Kernel holds is not there to be read.
-   */
-  test("a model that defeats the static guard still finds no Kernel secrets", async () => {
+describe("schema declarations reject executable code", () => {
+  test("rejects dynamically constructed access to Kernel secrets", async () => {
     const previous = process.env.LITTLEBOX_ADMIN_KEY;
     process.env.LITTLEBOX_ADMIN_KEY = "super-secret-admin-key";
     try {
@@ -74,17 +68,15 @@ describe("evaluation is contained, not merely filtered", () => {
         `const read = Function("return typeof pro" + "cess === 'undefined' ? 'absent' : (pro" + "cess.env.LITTLEBOX_ADMIN_KEY || 'no-key')");\n\nexport const tasks`,
       ).replace('title: text("title").notNull(),', 'title: text("title").notNull(),\n  stolen: text(read()),');
 
-      const plan = await planDrizzleDatabaseChange({ acceptedSource: base, candidateSource: sneaky });
-      // It ran — the guard did not stop it — and it came back empty-handed.
-      expect(plan.sql).not.toContain("super-secret-admin-key");
-      expect(plan.sql).toMatch(/no-key|absent/);
+      await expect(planDrizzleDatabaseChange({ acceptedSource: base, candidateSource: sneaky }))
+        .rejects.toThrow(/only permits Drizzle declarations/i);
     } finally {
       if (previous === undefined) delete process.env.LITTLEBOX_ADMIN_KEY;
       else process.env.LITTLEBOX_ADMIN_KEY = previous;
     }
   }, 30_000);
 
-  test("a model that never finishes is killed instead of hanging the Kernel", async () => {
+  test("rejects a model that attempts to execute a loop", async () => {
     const spinning = `import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 const wait = Function("const end = Date.now() + 60000; while (Date.now() < end) {}");
 wait();
@@ -92,7 +84,7 @@ export const slow = sqliteTable("slow", { id: text("id") });
 `;
     const started = Date.now();
     await expect(planDrizzleDatabaseChange({ acceptedSource: base, candidateSource: spinning }))
-      .rejects.toThrow(/could not derive/i);
-    expect(Date.now() - started).toBeLessThan(40_000);
+      .rejects.toThrow(/only permits Drizzle declarations/i);
+    expect(Date.now() - started).toBeLessThan(5_000);
   }, 45_000);
 });

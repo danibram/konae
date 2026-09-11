@@ -3,6 +3,7 @@ import { createDefaultManifest } from "../deployments/manifest";
 import type { MiniAppProject } from "./types";
 
 export const architectureProjectId = "app_littlebox_architecture";
+// Seed copy is public/architecture.html. A stored project refreshes while it still names the old map or the simulator label.
 
 const architectureFiles = splitArchitectureSource(architectureSource);
 

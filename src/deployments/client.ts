@@ -4,33 +4,44 @@ import type { ApplyDatabaseMigrationInput } from "../database-lifecycle/contract
 import type { SqlValue } from "sql.js";
 import type { DeploymentRecord, DeploymentVisibility } from "./manifest";
 import type { BuildArtifact } from "../runtime/artifact";
+import { platformMcp, decodeBase64, type Transfer } from "../mcp/client";
 
 export type DeploymentReceipt = DeploymentRecord & { accessCode?: string; databaseModel?: DrizzleDatabaseModel };
 
 export type PortableProjectState = {
+  visibility?: DeploymentVisibility;
   initialDatabase: Uint8Array;
   initialIdentity?: Uint8Array;
   initialFiles?: Uint8Array;
+  initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">;
 };
 
-const adminKey = import.meta.env.VITE_LITTLEBOX_ADMIN_KEY ?? "local-development-key";
-
 export async function deployProject(project: MiniAppProject, visibility: DeploymentVisibility, artifact: BuildArtifact): Promise<DeploymentReceipt> {
-  const response = await fetch("/_littlebox/admin/deploy", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-littlebox-admin-key": adminKey,
-    },
-    body: JSON.stringify({ project, visibility, artifact }),
-  });
-  const body = await response.json().catch(() => ({})) as { result?: DeploymentReceipt; error?: string };
-  if (!response.ok || !body.result) throw new Error(body.error ?? "The Littlebox Kernel could not publish this deployment.");
-  return body.result;
+  await platformMcp.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest, sourceAuthority: "managed" });
+  const transfer = await platformMcp.upload(new TextEncoder().encode(JSON.stringify({ project, visibility, artifact })), project.id);
+  try {
+    const plan = await platformMcp.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+    return await platformMcp.call<DeploymentReceipt>("release_apply", { planId: plan.planId });
+  } finally {
+    await platformMcp.cancel(transfer.transferId).catch(() => {});
+  }
+}
+
+/** Who may create an account on a deployed app. `allowlist` holds exact emails and `@domain` entries. */
+export type SignupMode = "open" | "allowlist" | "closed";
+export type SignupPolicy = { deploymentId: string; visibility: DeploymentVisibility; mode: SignupMode; allowlist: string[] };
+
+export function readSignupPolicy(deploymentId: string) {
+  return platformMcp.call<SignupPolicy>("signup_policy_read", { deploymentId });
+}
+
+/** Saves the policy. The Kernel trims, lowercases and deduplicates the entries. */
+export function saveSignupPolicy(deploymentId: string, mode: SignupMode, allowlist: string[]) {
+  return platformMcp.call<SignupPolicy>("signup_policy_set", { deploymentId, mode, allowlist });
 }
 
 export class HostedDatabaseClient implements DatabaseAdminHost {
-  constructor(private readonly deploymentId: string) {}
+  constructor(readonly deploymentId: string) {}
 
   inspectDatabase() {
     return this.request<DatabaseTable[]>({ operation: "inspect" });
@@ -73,53 +84,25 @@ export class HostedDatabaseClient implements DatabaseAdminHost {
   }
 
   async exportDatabase() {
-    const response = await fetch(`${this.endpoint}/export`, { headers: { "x-littlebox-admin-key": adminKey } });
-    if (!response.ok) throw new Error(await response.text() || "Could not export the deployed database.");
-    return new Uint8Array(await response.arrayBuffer());
+    const transfer = await platformMcp.call<Transfer>("database_export", { deploymentId: this.deploymentId });
+    return platformMcp.download(transfer);
   }
 
   async exportPortableState(): Promise<PortableProjectState> {
-    const response = await fetch(`${this.deploymentEndpoint}/portable-state`, { headers: { "x-littlebox-admin-key": adminKey } });
-    const raw = await response.text();
-    const body = (() => {
-      try {
-        return JSON.parse(raw) as { result?: { initialDatabase?: string; initialIdentity?: string; initialFiles?: string }; error?: string };
-      } catch {
-        return {};
-      }
-    })();
-    if (!response.ok || !body.result?.initialDatabase) {
-      throw new Error(body.error ?? (raw.trim() || "Could not export portable app state."));
-    }
+    const transfer = await platformMcp.call<Transfer>("project_export", { deploymentId: this.deploymentId });
+    const body = JSON.parse(new TextDecoder().decode(await platformMcp.download(transfer))) as { result: { initialDatabase: string; initialIdentity?: string; initialFiles?: string; initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">; visibility?: DeploymentVisibility } };
+    if (!body.result?.initialDatabase) throw new Error("Portable export is missing its database.");
     return {
+      ...(body.result.visibility ? { visibility: body.result.visibility } : {}),
       initialDatabase: decodeBase64(body.result.initialDatabase),
       ...(body.result.initialIdentity ? { initialIdentity: decodeBase64(body.result.initialIdentity) } : {}),
       ...(body.result.initialFiles ? { initialFiles: decodeBase64(body.result.initialFiles) } : {}),
+      ...(body.result.initialSignupPolicy ? { initialSignupPolicy: body.result.initialSignupPolicy } : {}),
     };
   }
 
   private async request<T = unknown>(payload: Record<string, unknown>): Promise<T> {
-    const response = await fetch(this.endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-littlebox-admin-key": adminKey },
-      body: JSON.stringify(payload),
-    });
-    const body = await response.json().catch(() => ({})) as { result?: T; error?: string };
-    if (!response.ok || body.result === undefined) throw new Error(body.error ?? "Deployed database request failed.");
-    return body.result;
+    const { operation, ...input } = payload;
+    return platformMcp.call<T>("database_execute", { deploymentId: this.deploymentId, operation, input });
   }
-
-  private get endpoint() {
-    return `${this.deploymentEndpoint}/database`;
-  }
-
-  private get deploymentEndpoint() {
-    return `/_littlebox/admin/deployments/${encodeURIComponent(this.deploymentId)}`;
-  }
-}
-
-function decodeBase64(value: string): Uint8Array {
-  const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
-  const binary = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="));
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }

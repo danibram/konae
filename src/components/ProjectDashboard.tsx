@@ -1,102 +1,77 @@
 import {
   ArrowRight,
-  Box,
   Clock3,
-  Code2,
   ExternalLink,
-  FileCode2,
   Globe2,
-  LayoutGrid,
   LockKeyhole,
   Plus,
-  Search,
-  Settings2,
-  Sparkles,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { Badge, Button, Card, Dialog, Field, Input } from "./ui";
 import type { DeploymentReceipt } from "../deployments/client";
-import { architectureProjectId } from "../lib/architecture";
 import type { DeploymentIndex } from "../lib/workspace";
 import type { MiniAppProject } from "../lib/types";
+import type { OwnerSession } from "./owner-session";
+import type { ProjectMetadata } from "../lib/managed-sources";
+import { WorkspaceNav } from "./WorkspaceNav";
 
 type Props = {
   projects: MiniAppProject[];
   deployments: DeploymentIndex;
-  onOpenProject: (projectId: string) => void;
-  onCreateProject: (name: string, template: "tasks" | "notes") => void;
+  ownerSession: OwnerSession;
+  external: ProjectMetadata[];
+  missing: ProjectMetadata[];
+  drafts: MiniAppProject[];
+  onImportDraft: (index: number) => void;
+  onOpenProject: (projectId: string, entry?: "preview" | "agent" | "code") => void;
+  onCreateProject: (name: string, template: "tasks" | "notes" | "scratch") => void;
 };
 
-export function ProjectDashboard({ projects, deployments, onOpenProject, onCreateProject }: Props) {
-  const [query, setQuery] = useState("");
+export function ProjectDashboard({ projects, deployments, ownerSession, external, missing, drafts, onImportDraft, onOpenProject, onCreateProject }: Props) {
+  const [newestFirst, setNewestFirst] = useState(true);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
+  const [nameTouched, setNameTouched] = useState(false);
   const [template, setTemplate] = useState<"tasks" | "notes">("tasks");
-  const filtered = useMemo(() => {
-    const search = query.trim().toLowerCase();
-    return search ? projects.filter((project) => `${project.name} ${project.slug}`.toLowerCase().includes(search)) : projects;
-  }, [projects, query]);
-  const published = projects.filter((project) => deployments[project.id]).length;
-
+  const filtered = useMemo(
+    () => [...projects].sort((a, b) => newestFirst ? b.updatedAt - a.updatedAt : a.updatedAt - b.updatedAt),
+    [projects, newestFirst],
+  );
+  const nameMissing = !name.trim();
+  const nameError = nameTouched && nameMissing ? "A project name is required." : undefined;
   const create = () => {
-    onCreateProject(name, template);
+    setNameTouched(true);
+    if (nameMissing) return;
+    onCreateProject(name.trim(), template);
     setName("");
+    setNameTouched(false);
     setCreating(false);
   };
 
   return (
     <div className="account-home">
-      <aside className="account-sidebar">
-        <div className="account-brand"><span><Box size={17} /></span><strong>littlebox</strong><em>ALPHA</em></div>
-        <nav>
-          <button className="active"><LayoutGrid size={16} /> Projects <span>{projects.length}</span></button>
-          <button onClick={() => onOpenProject(architectureProjectId)}><FileCode2 size={16} /> Architecture</button>
-        </nav>
-        <div className="account-sidebar-note">
-          <Sparkles size={16} />
-          <div><strong>Kernel local</strong><small>Identity and storage online</small></div>
-          <i />
-        </div>
-        <div className="account-person">
-          <span>DR</span>
-          <div><strong>Local owner</strong><small>Personal workspace</small></div>
-          <Settings2 size={15} />
-        </div>
-      </aside>
+      <WorkspaceNav active="projects" projectCount={projects.length} ownerSession={ownerSession} />
 
       <main className="account-main">
-        <header className="account-topbar">
-          <div><p>WORKSPACE / PERSONAL</p><strong>Your projects</strong></div>
-          <label className="project-search"><Search size={15} /><input aria-label="Search projects" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search projects…" /></label>
-          <button className="new-project-button" onClick={() => setCreating(true)}><Plus size={15} /> New project</button>
-        </header>
-
         <section className="account-content">
           <div className="account-hero">
-            <div>
-              <p className="account-kicker"><span>01</span> YOUR LITTLE SOFTWARE SHELF</p>
-              <h1>Small apps.<br /><em>All yours.</em></h1>
-              <p>Open a project to change its code and data, or jump straight into its latest published Deployment.</p>
-            </div>
-            <div className="account-stats">
-              <div><strong>{String(projects.length).padStart(2, "0")}</strong><span>PROJECTS</span></div>
-              <div><strong>{String(published).padStart(2, "0")}</strong><span>PUBLISHED</span></div>
-              <div><strong>{String(projects.length - published).padStart(2, "0")}</strong><span>DRAFTS</span></div>
-            </div>
+            <Button variant="primary" className="new-project-button" onClick={() => setCreating(true)}><Plus size={15} /> New project</Button>
+            <h1>Describe an app, or edit its files. Both paths pass the same checks, and the app can leave with you.</h1>
+            <p className="hero-note">Owners deploy and keep the data. People who use an app sign in inside that app.</p>
           </div>
-
-          {creating && (
-            <form className="new-project-form" onSubmit={(event) => { event.preventDefault(); create(); }}>
-              <div><p>NEW / PROJECT</p><strong>What are you building?</strong></div>
-              <input autoFocus aria-label="Project name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Weekend planner" maxLength={80} />
-              <select aria-label="Project template" value={template} onChange={(event) => setTemplate(event.target.value as "tasks" | "notes")}><option value="tasks">Shared tasks</option><option value="notes">Private notes with login</option></select>
-              <button type="button" onClick={() => setCreating(false)}>Cancel</button>
-              <button type="submit">Create <ArrowRight size={14} /></button>
-            </form>
-          )}
+          {external.length > 0 && <section><h2>External projects</h2><p>These projects keep their sources on their owner's computer.</p><ul>{external.map((item) => <li key={item.id}>{item.name}</li>)}</ul></section>}
+          {missing.length > 0 && <section><h2>Projects without saved sources</h2><p>These projects have metadata on the server, but no saved editor sources.</p><ul>{missing.map((item) => <li key={item.id}>{item.name}</li>)}</ul></section>}
+          {drafts.length > 0 && <details><summary>Import drafts from this browser</summary><p>Choose a draft to restore missing sources or create a new project in this account.</p><ul>{drafts.map((draft, index) => <li key={`${draft.id}-${index}`}>{draft.name} <Button onClick={() => onImportDraft(index)}>{missing.some((item) => item.id === draft.id) ? "Restore sources" : "Import as new"}</Button></li>)}</ul></details>}
 
           <div className="project-list-heading">
-            <div><p>PROJECT INDEX</p><strong>{filtered.length} item{filtered.length === 1 ? "" : "s"}</strong></div>
-            <span>LAST UPDATED ↓</span>
+            <div><p>All projects</p><strong>{filtered.length} project{filtered.length === 1 ? "" : "s"}</strong></div>
+            <button
+              className="project-sort"
+              aria-label={`Sort by last updated, ${newestFirst ? "newest" : "oldest"} first`}
+              onClick={() => setNewestFirst((current) => !current)}
+            >
+              Last updated {newestFirst ? "↓" : "↑"}
+            </button>
           </div>
 
           <div className="project-grid">
@@ -106,13 +81,54 @@ export function ProjectDashboard({ projects, deployments, onOpenProject, onCreat
                 project={project}
                 deployment={deployments[project.id]}
                 index={index}
-                onOpen={() => onOpenProject(project.id)}
+                onOpen={(entry) => onOpenProject(project.id, entry)}
               />
             ))}
-            {filtered.length === 0 && <div className="projects-empty"><Search size={23} /><strong>No projects found</strong><p>Try another name or create a new mini-app.</p></div>}
+            {filtered.length === 0 && <div className="projects-empty"><strong>No projects yet</strong><p>Create one and describe what it should do.</p></div>}
           </div>
+          <p className="take-it">Take it with you. Open a project, then Export or Deploy.</p>
         </section>
       </main>
+      <Dialog
+        open={creating}
+        title="Name this app"
+        description="Pick a name, then how it starts."
+        onClose={() => { setCreating(false); setNameTouched(false); }}
+        footer={<>
+          <Button onClick={() => { setCreating(false); setNameTouched(false); }}>Cancel</Button>
+          <Button variant="primary" type="submit" form="new-project">Create <ArrowRight size={14} /></Button>
+        </>}
+      >
+        <form id="new-project" className="new-project-dialog" onSubmit={(event) => { event.preventDefault(); create(); }}>
+          <Field
+            label="Project name"
+            help={nameError ?? "Choose a name you can recognize later."}
+          >
+            <Input
+              autoFocus
+              value={name}
+              aria-invalid={nameError ? true : undefined}
+              onChange={(event) => { setName(event.target.value); if (nameTouched) setNameTouched(true); }}
+              placeholder=""
+              maxLength={80}
+            />
+          </Field>
+          <fieldset className="start-cards">
+            <legend>Start with</legend>
+            <p className="start-note">Describe is next. A shared list is the start for anything else.</p>
+            <label className={template === "tasks" ? "selected" : ""}>
+              <input type="radio" name="project-template" value="tasks" checked={template === "tasks"} onChange={() => setTemplate("tasks")} />
+              <strong>Shared list</strong>
+              <small>Anyone with the link can add a row.</small>
+            </label>
+            <label className={template === "notes" ? "selected" : ""}>
+              <input type="radio" name="project-template" value="notes" checked={template === "notes"} onChange={() => setTemplate("notes")} />
+              <strong>Private notes</strong>
+              <small>Each person signs in and only sees their own.</small>
+            </label>
+          </fieldset>
+        </form>
+      </Dialog>
     </div>
   );
 }
@@ -121,39 +137,49 @@ function ProjectCard({ project, deployment, index, onOpen }: {
   project: MiniAppProject;
   deployment?: DeploymentReceipt;
   index: number;
-  onOpen: () => void;
+  onOpen: (entry: "preview" | "agent" | "code") => void;
 }) {
   const visibility = deployment?.manifest.visibility;
   return (
-    <article className={`project-card project-tone-${index % 4}`}>
-      <button className="project-card-preview" onClick={onOpen} aria-label={`Edit ${project.name}`}>
-        <div className="project-window-bar"><i /><i /><i /><code>{project.slug}.local</code></div>
-        <div className="project-poster">
-          <span>{String(index + 1).padStart(2, "0")}</span>
-          <strong>{project.name}</strong>
-          <small>{project.files["schema.sql"].match(/CREATE TABLE/gi)?.length ?? 0} TABLE · {project.manifest.runtime.database.actions.length} ACTIONS</small>
-        </div>
-        <span className="project-edit-cue">EDIT PROJECT <ArrowRight size={13} /></span>
+    <Card className={`project-card project-tone-${index % 4}`}>
+      <button className="project-card-preview" onClick={() => onOpen("preview")} aria-label={`Open ${project.name}`}>
+        <div className="project-poster">{posterLines(project).map((line) => <span className="poster-line" key={line}>{line}</span>)}</div>
       </button>
       <div className="project-card-body">
         <div className="project-card-title">
-          <div><p>{project.slug}</p><h2>{project.name}</h2></div>
-          {visibility ? <span className={`deployment-badge ${visibility}`}>{visibility === "public" ? <Globe2 size={11} /> : <LockKeyhole size={11} />}{visibility}</span> : <span className="deployment-badge draft"><Code2 size={11} />draft</span>}
+          <div>
+            <h2>{project.name}{project.id === "app_tiny_tasks" && <Badge className="starter-badge">Starter</Badge>}</h2>
+            {pageSummary(project) && <p>{pageSummary(project)}</p>}
+          </div>
+          {visibility && <Badge tone={visibility === "public" ? "success" : "accent"} className={`deployment-badge ${visibility}`}>{visibility === "public" ? <Globe2 size={11} /> : <LockKeyhole size={11} />}{visibility}</Badge>}
         </div>
-        <div className="project-meta"><span><Clock3 size={11} /> {relativeTime(project.updatedAt)}</span><span>{Object.keys(project.files).length} source files</span></div>
+        <div className="project-meta"><span><Clock3 size={11} /> {relativeTime(project.updatedAt)}</span></div>
         <footer>
-          <button onClick={onOpen}><Code2 size={13} /> Open editor</button>
-          {deployment ? <a href={deployment.url} target="_blank" rel="noopener"><ExternalLink size={13} /> Open app</a> : <span>Not published yet</span>}
+          <Button variant="secondary" size="sm" onClick={() => onOpen("preview")}>Open</Button>
+          <button type="button" className="project-door-link" onClick={() => onOpen("agent")}>Describe</button>
+          <button type="button" className="project-door-link edit-files" onClick={() => onOpen("code")}>Edit files</button>
+          {deployment && <a href={deployment.url} target="_blank" rel="noopener"><ExternalLink size={13} /> Open app</a>}
         </footer>
       </div>
-    </article>
+    </Card>
   );
 }
 
+function posterLines(project: MiniAppProject): string[] {
+  const html = project.files["index.html"] ?? "";
+  if (project.id === "app_littlebox_architecture" || html.includes("data-map=\"leaves\"")) {
+    return ["Export and Deploy", "Accounts, rows, and rules leave together."];
+  }
+  if (html.includes("Add one small thing")) return ["Add one small thing…", "The list stops at 100 rows."];
+  const summary = pageSummary(project);
+  return summary ? [summary] : ["A small app."];
+}
+
+function pageSummary(project: MiniAppProject): string {
+  const purpose = project.files["index.html"]?.match(/data-purpose="([^"]+)"/);
+  return purpose?.[1] ?? "";
+}
+
 function relativeTime(timestamp: number) {
-  const elapsed = Math.max(0, Date.now() - timestamp);
-  if (elapsed < 60_000) return "just now";
-  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m ago`;
-  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h ago`;
-  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(timestamp);
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(timestamp);
 }

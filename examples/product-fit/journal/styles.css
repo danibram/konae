@@ -1,0 +1,9 @@
+:root{font-family:system-ui,sans-serif;background:#101418;color:#e8e6df}*{box-sizing:border-box}body{margin:0}
+.wrap{max-width:640px;margin:0 auto;padding:40px 20px}header{display:flex;justify-content:space-between;align-items:baseline}h1{font-weight:500;letter-spacing:-.02em;margin:0 0 24px}
+.who{font-size:13px;color:#9aa0a6}.who button{margin-left:8px;background:none;border:1px solid #3a4046;color:#e8e6df;border-radius:4px;padding:3px 8px;cursor:pointer}
+#gate p{color:#9aa0a6}button{font:inherit;cursor:pointer}#signin,#compose button{background:#e8e6df;color:#101418;border:0;border-radius:6px;padding:10px 16px;font-weight:600}
+textarea{width:100%;font:inherit;background:#171c22;color:inherit;border:1px solid #2a3139;border-radius:8px;padding:12px;resize:vertical}
+.moods{display:flex;gap:6px;margin-bottom:10px}.moods label{border:1px solid #2a3139;border-radius:999px;padding:4px 12px;font-size:14px;cursor:pointer}.moods input{display:none}.moods input:checked+span{color:#ffd166}
+.row{display:flex;justify-content:space-between;align-items:center;margin-top:8px}.muted{color:#9aa0a6;font-size:13px}
+.entries{list-style:none;padding:0;margin:24px 0 0}.entries li{border-top:1px solid #2a3139;padding:14px 0}.entries time{font-size:12px;color:#9aa0a6}.entries p{margin:6px 0;white-space:pre-wrap}
+.entries button{background:none;border:0;color:#9aa0a6;text-decoration:underline;padding:0;font-size:12px}

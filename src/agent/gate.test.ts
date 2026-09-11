@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import initSqlJs, { type SqlJsStatic } from "sql.js";
-import { starterProject } from "../lib/starter";
+import { withPrivateNotes } from "../lib/private-notes";
+import { cloneStarter, starterProject } from "../lib/starter";
 import type { CapsuleFiles, LiveDatabase } from "./contracts";
 import { createCapsuleValidator } from "./gate";
 
@@ -122,6 +123,23 @@ describe("validation gate", () => {
     expect(tooMany.errors[0].message).toContain("fewer parameters");
   });
 
+  test("accepts nullable filters and refuses mutation RETURNING", async () => {
+    const filtered = await validator.validate(capsule({ "actions.json": actions({ version: 1, actions: {
+      "tasks.filter": {
+        kind: "query", access: "anonymous",
+        statement: "SELECT id, title FROM tasks WHERE (?1 IS NULL OR title LIKE '%' || ?1 || '%') LIMIT 50",
+        bindings: [{ source: "input", key: "q", type: "string", nullable: true }],
+      },
+    } }) }));
+    expect(filtered.ok).toBe(true);
+    const returning = await validator.validate(capsule({ "actions.json": actions({ version: 1, actions: {
+      "tasks.remove": { kind: "mutation", access: "anonymous", statement: "DELETE FROM tasks RETURNING id", bindings: [] },
+    } }) }));
+    expect(returning.ok).toBe(false);
+    expect(returning.errors[0].stage).toBe("actions");
+    expect(returning.errors[0].detail).toContain("cannot use RETURNING");
+  });
+
   test("accepts a valid schema and action change together", async () => {
     const result = await validator.validate(capsule({
       "schema.sql": "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, owner_id TEXT NOT NULL, body TEXT NOT NULL);",
@@ -220,16 +238,111 @@ describe("validation gate", () => {
     expect(deleted.errors[0].message).toContain("DELETE");
   });
 
-  test("a trigger body is not mistaken for a destructive statement", async () => {
-    const result = await validator.validate(capsule({
+  /**
+   * The bug this pins: only the leading keyword was checked, so a trigger that
+   * wiped rows on every seed INSERT passed, and the Kernel's schema authorizer,
+   * which only allows CREATE TABLE and CREATE INDEX, then refused it at deploy.
+   */
+  test("refuses triggers and views, which the Kernel will not deploy", async () => {
+    const trigger = await validator.validate(capsule({
       "schema.sql": `${starterProject.files["schema.sql"]}
-CREATE TRIGGER IF NOT EXISTS tasks_touch AFTER INSERT ON tasks
+CREATE TRIGGER IF NOT EXISTS tasks_wipe AFTER INSERT ON tasks
 BEGIN
-  UPDATE tasks SET created_at = created_at WHERE id = NEW.id;
+  DELETE FROM tasks WHERE id <> NEW.id;
 END;`,
     }));
-    expect(result.errors).toEqual([]);
-    expect(result.ok).toBe(true);
+    expect(trigger.ok).toBe(false);
+    expect(trigger.errors[0].stage).toBe("schema");
+    expect(trigger.errors[0].message).toContain("CREATE TRIGGER");
+    expect(trigger.errors[0].message).not.toContain("DELETE");
+
+    const view = await validator.validate(capsule({
+      "schema.sql": `${starterProject.files["schema.sql"]}\nCREATE VIEW IF NOT EXISTS open_tasks AS SELECT * FROM tasks WHERE done = 0;`,
+    }));
+    expect(view.errors[0].message).toContain("CREATE VIEW");
+
+    const index = await validator.validate(capsule({
+      "schema.sql": `${starterProject.files["schema.sql"]}\nCREATE UNIQUE INDEX IF NOT EXISTS tasks_title ON tasks (title);`,
+    }));
+    expect(index.ok).toBe(true);
+  });
+
+  /**
+   * The bug this pins: the gate allowed INSERT ... ON CONFLICT DO NOTHING,
+   * PRAGMA and BEGIN/COMMIT in schema.sql, and the Kernel's schema authorizer,
+   * which only allows CREATE TABLE and CREATE INDEX, then refused the deploy.
+   */
+  test("refuses every statement the Kernel's schema authorizer refuses", async () => {
+    const live = loaded(await exportDatabase(starterProject.files["schema.sql"]));
+    for (const [statement, named] of [
+      ["INSERT INTO tasks (id, title, done, created_at) VALUES (1, 'seed', 0, 0) ON CONFLICT DO NOTHING;", "INSERT"],
+      ["INSERT OR IGNORE INTO tasks (id, title, done, created_at) VALUES (1, 'seed', 0, 0);", "INSERT"],
+      ["INSERT INTO tasks (title, done, created_at) SELECT 'x', 0, 0 WHERE NOT EXISTS (SELECT 1 FROM tasks);", "INSERT"],
+      ["INSERT INTO tasks (title, done, created_at) VALUES ('seed', 0, 0);", "INSERT"],
+      ["REPLACE INTO tasks (id, title, done, created_at) VALUES (1, 'seed', 0, 0);", "REPLACE"],
+      ["PRAGMA foreign_keys = ON;", "PRAGMA"],
+      ["BEGIN;\nCOMMIT;", "BEGIN"],
+      ["CREATE TEMP TABLE scratch (id INTEGER);", "CREATE TEMP"],
+      ["CREATE TABLE IF NOT EXISTS copy AS SELECT * FROM tasks;", "CREATE TABLE ... AS"],
+    ]) {
+      const result = await validator.validate(capsule({ "schema.sql": `${starterProject.files["schema.sql"]}\n${statement}` }), live);
+      expect(result.ok).toBe(false);
+      expect(result.errors[0].stage).toBe("schema");
+      expect(result.errors[0].message).toContain(named);
+      expect(result.errors[0].message).not.toContain("seed");
+    }
+  });
+
+  /**
+   * The bug this pins: the gate only looked for AS SELECT, so AS VALUES, AS
+   * WITH and a table named in the temp schema passed and the Kernel refused
+   * the deploy.
+   */
+  test("refuses every CREATE TABLE ... AS form and the temp schema", async () => {
+    for (const [statement, named] of [
+      ["CREATE TABLE IF NOT EXISTS copy AS VALUES (1);", "CREATE TABLE ... AS"],
+      ["CREATE TABLE IF NOT EXISTS copy AS WITH x AS (SELECT 1) SELECT * FROM x;", "CREATE TABLE ... AS"],
+      ["CREATE TABLE IF NOT EXISTS temp.scratch (a);", "CREATE TABLE temp.*"],
+      ['CREATE TABLE IF NOT EXISTS "TEMPORARY".scratch (a);', "CREATE TABLE TEMPORARY.*"],
+      ["CREATE TABLE temp.scratch (a);", "CREATE TABLE temp.*"],
+    ]) {
+      const result = await validator.validate(capsule({ "schema.sql": `${starterProject.files["schema.sql"]}\n${statement}` }));
+      expect(result.ok).toBe(false);
+      expect(result.errors[0].stage).toBe("schema");
+      expect(result.errors[0].message).toContain(named);
+    }
+  });
+
+  /** Kept in step with the Kernel's authorizer, which allows SQL functions in schema except the ones that reach the host. */
+  test("allows SQL functions in schema and refuses the dangerous ones", async () => {
+    for (const statement of [
+      "CREATE TABLE IF NOT EXISTS labels (id INTEGER PRIMARY KEY, name TEXT CHECK (length(name) > 0));",
+      "CREATE TABLE IF NOT EXISTS shouts (a TEXT, b TEXT GENERATED ALWAYS AS (upper(a)));",
+      "CREATE TABLE IF NOT EXISTS stamps (id INTEGER PRIMARY KEY, at TEXT DEFAULT (datetime('now')));",
+      "CREATE INDEX IF NOT EXISTS tasks_lower_title ON tasks(lower(title));",
+      "CREATE INDEX IF NOT EXISTS tasks_open ON tasks(done) WHERE length(title) > 0;",
+      "CREATE TABLE IF NOT EXISTS notes (as_of TEXT, readfile TEXT);",
+      "CREATE TABLE IF NOT EXISTS main.mains (a);",
+    ]) {
+      const result = await validator.validate(capsule({ "schema.sql": `${starterProject.files["schema.sql"]}\n${statement}` }));
+      expect({ statement, errors: result.errors }).toEqual({ statement, errors: [] });
+    }
+    for (const [statement, named] of [
+      ["CREATE TABLE IF NOT EXISTS files (path TEXT CHECK (readfile(path) IS NULL));", "readfile()"],
+      ["CREATE TABLE IF NOT EXISTS files (path TEXT CHECK (WRITEFILE(path, 'x') > 0));", "writefile()"],
+      ['CREATE TABLE IF NOT EXISTS files (path TEXT CHECK ("load_extension"(path) IS NULL));', "load_extension()"],
+      ["CREATE INDEX IF NOT EXISTS tasks_tok ON tasks(fts3_tokenizer(title));", "fts3_tokenizer()"],
+    ]) {
+      const result = await validator.validate(capsule({ "schema.sql": `${starterProject.files["schema.sql"]}\n${statement}` }));
+      expect(result.ok).toBe(false);
+      expect(result.errors[0].stage).toBe("schema");
+      expect(result.errors[0].message).toContain(named);
+    }
+  });
+
+  test("the starter and private notes schemas pass", async () => {
+    expect((await validator.validate(capsule())).ok).toBe(true);
+    expect((await validator.validate(withPrivateNotes(cloneStarter()).files as CapsuleFiles)).ok).toBe(true);
   });
 
   /**

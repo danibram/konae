@@ -30,6 +30,8 @@ export type LayoutState = {
   closed: PanelId[];
   /** Where a newly opened panel lands: the stack holding this one. */
   focused: PanelId | null;
+  /** Where each closed panel was, so reopening it puts it back instead of into a tab. */
+  homes?: Partial<Record<PanelId, Home>>;
 };
 
 /** Middle of a stack means "add a tab"; an edge means "split there". */
@@ -47,16 +49,19 @@ export type Placement = {
   before?: boolean;
 };
 
+/** A remembered slot, with the placement to restore and, for an edge, the share it had. */
+export type Home = Placement & { size?: number };
+
 export const panelIds: PanelId[] = ["explorer", "code", "data", "files", "auth", "preview", "agent"];
 
 export const panelLabels: Record<PanelId, string> = {
-  explorer: "Explorer",
-  code: "Code",
+  explorer: "File list",
+  code: "Files",
   data: "Data",
-  files: "Files",
+  files: "Uploads",
   auth: "Auth",
   preview: "Preview",
-  agent: "Agent",
+  agent: "Describe",
 };
 
 /** Panels that behave like documents: opening one goes to the focused group. */
@@ -92,13 +97,9 @@ function round(value: number): number {
 
 export function defaultLayout(): LayoutState {
   return {
-    root: split(
-      "row",
-      [stack(["explorer"]), stack(["code"]), split("column", [stack(["preview"]), stack(["agent"])])],
-      [15, 51, 34],
-    ),
-    closed: ["data", "files", "auth"],
-    focused: "code",
+    root: split("row", [stack(["preview"]), stack(["agent"])], [64, 36]),
+    closed: ["explorer", "code", "data", "files", "auth"],
+    focused: "preview",
   };
 }
 
@@ -177,7 +178,7 @@ export function movePanel(state: LayoutState, panel: PanelId, placement: Placeme
   if (panel === placement.target) return state;
   const withoutPanel = detach(state.root, panel);
   const closed = state.closed.filter((id) => id !== panel);
-  if (!withoutPanel) return { root: stack([panel]), closed, focused: panel };
+  if (!withoutPanel) return { ...state, root: stack([panel]), closed, focused: panel };
   if (!panelsIn(withoutPanel).includes(placement.target)) return state;
 
   const root = mapStack(withoutPanel, placement.target, (group) => {
@@ -191,7 +192,7 @@ export function movePanel(state: LayoutState, panel: PanelId, placement: Placeme
     return split(sideAxis[placement.zone], pair);
   });
 
-  return { root, closed, focused: panel };
+  return { ...state, root, closed, focused: panel };
 }
 
 /**
@@ -210,9 +211,84 @@ export function openPanel(state: LayoutState, panel: PanelId): LayoutState {
     };
   }
 
-  const host = hostPanelFor(state);
-  if (!host) return { root: stack([panel]), closed: state.closed.filter((id) => id !== panel), focused: panel };
-  return movePanel(state, panel, { target: host, zone: "center" });
+  const { [panel]: remembered, ...homes } = state.homes ?? {};
+  const rest = { ...state, homes };
+  for (const home of [remembered, defaultHomes[panel]]) {
+    if (!home) continue;
+    const restored = restoreAt(rest, panel, home);
+    if (restored) return restored;
+  }
+
+  const host = hostPanelFor(rest);
+  if (!host) return { ...rest, root: stack([panel]), closed: state.closed.filter((id) => id !== panel), focused: panel };
+  return movePanel(rest, panel, { target: host, zone: "center" });
+}
+
+/**
+ * Where a panel goes when it has no remembered slot, or its slot's neighbour is
+ * gone too. Editor panels have none, so they open as a tab in the focused group.
+ */
+const defaultHomes: Partial<Record<PanelId, Home>> = {
+  explorer: { target: "preview", zone: "left", size: 18 },
+  code: { target: "preview", zone: "left", size: 32 },
+  preview: { target: "agent", zone: "left", size: 64 },
+  agent: { target: "preview", zone: "right", size: 36 },
+};
+
+/** Puts `panel` back beside `home.target`, or returns null when the target is not on screen. */
+function restoreAt(state: LayoutState, panel: PanelId, home: Home): LayoutState | null {
+  if (home.target === panel) return null;
+  const path = stackPathOf(state.root, home.target);
+  if (!path || !state.root) return null;
+  if (home.zone === "center") return movePanel(state, panel, home);
+
+  const axis = sideAxis[home.zone];
+  // The nearest split along the same axis takes the panel as a sibling, so a
+  // reopened sidebar gets its old width back instead of half of its neighbour.
+  for (let depth = path.length - 1; depth >= 0; depth -= 1) {
+    const parentPath = path.slice(0, depth);
+    const parent = nodeAt(state.root, parentPath);
+    if (!parent || parent.type !== "split" || parent.direction !== axis) continue;
+    const at = path[depth] + (sideFirst[home.zone] ? 0 : 1);
+    const count = parent.children.length + 1;
+    const share = Math.min(Math.max(home.size ?? 100 / count, minShare), 100 - minShare * parent.children.length);
+    const sizes = parent.sizes.map((size) => size * ((100 - share) / 100));
+    const children = [...parent.children.slice(0, at), stack([panel]), ...parent.children.slice(at)];
+    sizes.splice(at, 0, share);
+    return {
+      ...state,
+      root: writeNode(state.root, parentPath, split(axis, children, shareOut(sizes))),
+      closed: state.closed.filter((id) => id !== panel),
+      focused: panel,
+    };
+  }
+  return movePanel(state, panel, home);
+}
+
+/** Where a panel sits now, described against a neighbour that stays on screen. */
+function homeOf(root: LayoutNode | null, panel: PanelId): Home | null {
+  const path = stackPathOf(root, panel);
+  const group = path ? nodeAt(root, path) : null;
+  if (!path || !group || group.type !== "stack") return null;
+  if (group.panels.length > 1) {
+    const index = group.panels.indexOf(panel);
+    const neighbour = group.panels[index + 1] ?? group.panels[index - 1];
+    return { target: neighbour, zone: "center", before: group.panels.indexOf(neighbour) > index };
+  }
+  if (path.length === 0) return null;
+  const parent = nodeAt(root, path.slice(0, -1));
+  if (!parent || parent.type !== "split") return null;
+  const index = path[path.length - 1];
+  const after = parent.children[index + 1];
+  const before = parent.children[index - 1];
+  const size = parent.sizes[index];
+  if (after) {
+    return { target: panelsIn(after)[0], zone: parent.direction === "row" ? "left" : "top", size };
+  }
+  if (before) {
+    return { target: panelsIn(before).at(-1)!, zone: parent.direction === "row" ? "right" : "bottom", size };
+  }
+  return null;
 }
 
 /** The panel whose group receives a newly opened one. */
@@ -227,9 +303,21 @@ function hostPanelFor(state: LayoutState): PanelId | null {
 
 export function closePanel(state: LayoutState, panel: PanelId): LayoutState {
   if (!panelsIn(state.root).includes(panel)) return state;
+  const home = homeOf(state.root, panel);
   const root = detach(state.root, panel);
   const focused = state.focused === panel ? visiblePanels(root)[0] ?? null : state.focused;
-  return { root, closed: [...state.closed.filter((id) => id !== panel), panel], focused };
+  const { [panel]: _previous, ...homes } = state.homes ?? {};
+  return {
+    root,
+    closed: [...state.closed.filter((id) => id !== panel), panel],
+    focused,
+    homes: home ? { ...homes, [panel]: home } : homes,
+  };
+}
+
+/** The layout a new workshop starts with, for when an owner wants it back. */
+export function resetLayout(): LayoutState {
+  return defaultLayout();
 }
 
 /**
@@ -388,10 +476,32 @@ export function normalizeLayout(value: unknown): LayoutState {
     ? (focusedRaw as PanelId)
     : visiblePanels(root)[0] ?? null;
 
-  return { root, closed: [...new Set(closed)], focused };
+  const homes: Partial<Record<PanelId, Home>> = {};
+  const storedHomes = input.homes && typeof input.homes === "object" ? input.homes as Record<string, unknown> : {};
+  for (const [key, raw] of Object.entries(storedHomes)) {
+    const home = readHome(raw);
+    if (panelIds.includes(key as PanelId) && home && home.target !== key) homes[key as PanelId] = home;
+  }
+
+  return { root, closed: [...new Set(closed)], focused, homes };
 }
 
-const storageKey = "littlebox:layout";
+const zones: DropZone[] = ["left", "right", "top", "bottom", "center"];
+
+function readHome(raw: unknown): Home | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Record<string, unknown>;
+  if (!panelIds.includes(value.target as PanelId) || !zones.includes(value.zone as DropZone)) return null;
+  const size = Number(value.size);
+  return {
+    target: value.target as PanelId,
+    zone: value.zone as DropZone,
+    ...(typeof value.before === "boolean" ? { before: value.before } : {}),
+    ...(Number.isFinite(size) && size > 0 && size < 100 ? { size } : {}),
+  };
+}
+
+const storageKey = "littlebox:layout-v2";
 
 export function loadLayout(storage: Pick<Storage, "getItem"> = localStorage): LayoutState {
   try {

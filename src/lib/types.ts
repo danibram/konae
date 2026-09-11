@@ -24,20 +24,3 @@ export type AgentMessage = {
   role: "user" | "agent";
   content: string;
 };
-
-export type RuntimeRequest = {
-  channel: "littlebox-runtime";
-  type: "request";
-  requestId: string;
-  method: string;
-  payload?: unknown;
-};
-
-export type RuntimeResponse = {
-  channel: "littlebox-runtime";
-  type: "response";
-  requestId: string;
-  ok: boolean;
-  result?: unknown;
-  error?: string;
-};
