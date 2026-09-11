@@ -1,0 +1,3 @@
+# The Littlebox Kernel owns identity and deployment visibility
+
+Authentication, sessions, grants, public/private visibility and action authorization are product semantics owned by the provider-independent Littlebox Kernel. Cloudflare, Railway and self-hosted infrastructure may supply storage and execution adapters, but their identity or access products are not the source of truth and must not change Kernel decisions. This keeps deployments portable and gives local, managed and bring-your-own-infrastructure installations the same security model, at the cost of operating our own session and authorization layer.

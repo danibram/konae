@@ -1,0 +1,117 @@
+export type DeploymentVisibility = "public" | "private";
+export type RuntimeActionAccess = "anonymous" | "authenticated" | "granted";
+export type RuntimeActionKind = "query" | "mutation";
+
+export type RuntimeActionDeclaration = {
+  name: string;
+  kind: RuntimeActionKind;
+  access: RuntimeActionAccess;
+};
+
+export type CapsuleManifest = {
+  version: 1;
+  visibility: DeploymentVisibility;
+  runtime: {
+    database: {
+      mode: "declared-actions";
+      actions: RuntimeActionDeclaration[];
+    };
+    auth: {
+      mode: "optional" | "required";
+    };
+    files: {
+      access: "deployment";
+    };
+  };
+};
+
+export type DeploymentRecord = {
+  id: string;
+  projectId: string;
+  projectName: string;
+  url: string;
+  createdAt: number;
+  manifest: CapsuleManifest;
+};
+
+export const editorCapabilities = [
+  "database:query",
+  "database:migrate",
+  "database:backup",
+  "database:export",
+  "files:admin",
+  "deployments:manage",
+] as const;
+
+const starterActions: RuntimeActionDeclaration[] = [
+  { name: "tasks.list", kind: "query", access: "anonymous" },
+  { name: "tasks.create", kind: "mutation", access: "anonymous" },
+  { name: "tasks.toggle", kind: "mutation", access: "anonymous" },
+];
+
+export function createDefaultManifest(): CapsuleManifest {
+  return {
+    version: 1,
+    visibility: "public",
+    runtime: {
+      database: { mode: "declared-actions", actions: starterActions.map((action) => ({ ...action })) },
+      auth: { mode: "optional" },
+      files: { access: "deployment" },
+    },
+  };
+}
+
+export function normalizeManifest(value: unknown): CapsuleManifest {
+  if (!value || typeof value !== "object") return createDefaultManifest();
+  const candidate = value as Partial<CapsuleManifest>;
+  const visibility = candidate.visibility === "private" ? "private" : "public";
+  const actions = candidate.runtime?.database?.actions;
+  const normalizedActions = Array.isArray(actions)
+    ? actions.flatMap(normalizeAction)
+    : starterActions.map((action) => ({ ...action }));
+
+  assertActions(normalizedActions);
+  return {
+    version: 1,
+    visibility,
+    runtime: {
+      database: { mode: "declared-actions", actions: normalizedActions },
+      auth: { mode: visibility === "private" || candidate.runtime?.auth?.mode === "required" ? "required" : "optional" },
+      files: { access: "deployment" },
+    },
+  };
+}
+
+export function createDeployment(
+  project: { id: string; name: string; slug: string; manifest: CapsuleManifest },
+  visibility: DeploymentVisibility,
+  options: { id?: string; now?: number } = {},
+): DeploymentRecord {
+  const id = options.id ?? crypto.randomUUID();
+  const manifest = normalizeManifest({ ...project.manifest, visibility });
+  if (visibility === "private") manifest.runtime.auth.mode = "required";
+  return {
+    id,
+    projectId: project.id,
+    projectName: project.name,
+    url: `https://${project.slug}-${id.replaceAll("-", "").slice(0, 4)}.littlebox.app`,
+    createdAt: options.now ?? Date.now(),
+    manifest,
+  };
+}
+
+function normalizeAction(value: unknown): RuntimeActionDeclaration[] {
+  if (!value || typeof value !== "object") return [];
+  const action = value as Partial<RuntimeActionDeclaration>;
+  if (typeof action.name !== "string" || !/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/.test(action.name)) return [];
+  if (action.kind !== "query" && action.kind !== "mutation") return [];
+  if (action.access !== "anonymous" && action.access !== "authenticated" && action.access !== "granted") return [];
+  return [{ name: action.name, kind: action.kind, access: action.access }];
+}
+
+function assertActions(actions: RuntimeActionDeclaration[]) {
+  if (actions.length > 50) throw new Error("A deployment may declare at most 50 runtime actions.");
+  if (new Set(actions.map((action) => action.name)).size !== actions.length) {
+    throw new Error("Runtime action names must be unique.");
+  }
+}

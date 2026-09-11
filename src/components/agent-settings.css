@@ -1,0 +1,51 @@
+/* Agent settings dialog — reuses .modal-backdrop, .eyebrow and .sr-only from styles.css. */
+
+.agent-settings-backdrop { padding: 20px; background: #191a15d6; }
+.agent-settings {
+  position: relative;
+  width: min(460px, calc(100vw - 40px));
+  border: 1px solid var(--ink);
+  background: #f2efe5;
+  box-shadow: 10px 10px 0 #11120f;
+  animation: publish-in .24s cubic-bezier(.2, .8, .2, 1);
+}
+.agent-settings::before { content: ""; position: absolute; inset: 0 0 auto; height: 3px; background: linear-gradient(90deg, var(--acid) 0 38%, var(--orange) 38% 62%, #8faef9 62%); }
+
+.agent-settings-head { display: grid; grid-template-columns: 30px minmax(0, 1fr) 31px; align-items: center; gap: 10px; padding: 17px 15px 15px; border-bottom: 1px solid var(--ink); background: #f7f4eb; }
+.agent-settings-mark { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--ink); background: var(--acid); box-shadow: 2px 2px 0 var(--ink); }
+.agent-settings-head p { margin: 0 0 3px; font-size: 8px; }
+.agent-settings-head strong { font-size: 14px; letter-spacing: -.03em; }
+.agent-settings-close { width: 31px; height: 31px; display: grid; place-items: center; border: 1px solid var(--line); background: transparent; cursor: pointer; }
+.agent-settings-close:hover { border-color: var(--ink); background: white; }
+
+.agent-settings-body { display: grid; gap: 11px; padding: 15px; }
+
+.agent-field { display: grid; grid-template-columns: 74px minmax(0, 1fr); align-items: center; gap: 10px; }
+.agent-field > span { color: var(--muted); font: 7px "JetBrains Mono Variable"; letter-spacing: .12em; }
+.agent-field select,
+.agent-field input { min-width: 0; height: 30px; padding: 0 8px; border: 1px solid var(--line); background: #fffdf7; outline: 0; color: var(--ink); font: 9px "JetBrains Mono Variable", monospace; }
+.agent-field select { cursor: pointer; }
+.agent-field select:hover { border-color: var(--ink); }
+.agent-field input:focus,
+.agent-field select:focus { border-color: var(--ink); box-shadow: 2px 2px 0 var(--ink); }
+
+.agent-settings-key { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border: 1px solid var(--line); background: #e8e5db; color: #4e5049; font-size: 9px; }
+.agent-settings-key > svg { flex: 0 0 auto; color: var(--muted); }
+.agent-settings-key.missing { border-left: 3px solid var(--orange); }
+.agent-settings-key.stored > svg { color: #5d8d18; }
+.agent-settings-key span { display: flex; align-items: center; gap: 5px; color: #45473f; font: 8px "JetBrains Mono Variable"; }
+.agent-settings-key input { flex: 1 1 auto; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--line); background: white; outline: 0; font: 9px "JetBrains Mono Variable", monospace; letter-spacing: .06em; }
+.agent-settings-key input:focus { border-color: var(--ink); box-shadow: 2px 2px 0 var(--ink); }
+.agent-settings-key button { flex: 0 0 auto; height: 28px; padding: 0 10px; border: 1px solid var(--line); background: #fffdf7; font-size: 8px; font-weight: 750; cursor: pointer; }
+.agent-settings-key button:hover:not(:disabled) { border-color: var(--ink); }
+.agent-settings-key button.primary { border-color: var(--ink); background: var(--acid); box-shadow: 2px 2px 0 var(--ink); }
+.agent-settings-key button:disabled { opacity: .45; cursor: default; box-shadow: none; }
+.agent-settings-key.stored button:first-of-type { margin-left: auto; }
+
+.agent-settings-note { margin: 0; color: var(--muted); font-size: 8px; line-height: 1.55; }
+
+@media (max-width: 680px) {
+  .agent-settings-backdrop { padding: 0; }
+  .agent-settings { width: 100vw; height: 100vh; box-shadow: none; }
+  .agent-field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+}

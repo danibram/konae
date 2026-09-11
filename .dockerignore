@@ -1,0 +1,8 @@
+.git
+dist
+node_modules
+kernel-rs/target
+data
+test-results
+playwright-report
+*.tsbuildinfo

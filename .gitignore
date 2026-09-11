@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.env*
+!.env.example
+data/
+kernel-rs/target/
+test-results/
+playwright-report/
+*.tsbuildinfo
+/vite.config.js
+/vite.config.d.ts

@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Littlebox — Mapa del sistema</title>
+  <meta name="description" content="Arquitectura visual del Kernel de Littlebox y acceso a una mini-app standalone." />
+  <style>
+    :root {
+      --paper: #f2efe5;
+      --paper-2: #e7e3d6;
+      --ink: #20211d;
+      --muted: #73756c;
+      --line: #b8b5aa;
+      --acid: #c8f34a;
+      --orange: #ef6847;
+      --blue: #72a6ff;
+      --white: #fffdf6;
+      --mono: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+      --display: "Iowan Old Style", "Palatino Linotype", Palatino, serif;
+      --sans: "Avenir Next", Avenir, "Century Gothic", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgba(32,33,29,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(32,33,29,.045) 1px, transparent 1px),
+        var(--paper);
+      background-size: 24px 24px;
+      font-family: var(--sans);
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      pointer-events: none;
+      opacity: .23;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.18'/%3E%3C/svg%3E");
+      mix-blend-mode: multiply;
+    }
+
+    a { color: inherit; }
+    button { font: inherit; }
+    .shell { width: min(1380px, calc(100% - 48px)); margin: 0 auto; }
+    .mono { font-family: var(--mono); }
+    .eyebrow { margin: 0; font: 700 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+    .index { color: var(--orange); }
+
+    .masthead {
+      min-height: 88vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      border-left: 1px solid var(--ink);
+      border-right: 1px solid var(--ink);
+      background: color-mix(in srgb, var(--paper) 93%, transparent);
+    }
+    .nav {
+      height: 64px;
+      display: flex;
+      align-items: center;
+      border-bottom: 1px solid var(--ink);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 0 20px; font: 800 16px/1 var(--mono); }
+    .brand-mark { width: 27px; height: 27px; display: grid; place-items: center; background: var(--ink); color: var(--paper); transform: rotate(-4deg); }
+    .nav-meta { margin-left: auto; align-self: stretch; display: flex; align-items: center; gap: 22px; padding: 0 20px; border-left: 1px solid var(--ink); font: 700 9px/1 var(--mono); letter-spacing: .08em; }
+    .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--acid); box-shadow: 0 0 0 0 rgba(200,243,74,.6); animation: ping 2s infinite; }
+    @keyframes ping { 65% { box-shadow: 0 0 0 8px rgba(200,243,74,0); } }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(320px, .55fr);
+      min-height: 600px;
+    }
+    .hero-copy { padding: clamp(50px, 8vw, 112px) clamp(30px, 6vw, 86px); display: flex; flex-direction: column; justify-content: center; }
+    .hero h1 { max-width: 920px; margin: 24px 0 24px; font: 500 clamp(64px, 9vw, 140px)/.78 var(--display); letter-spacing: -.075em; }
+    .hero h1 em { color: var(--orange); font-weight: 500; }
+    .hero-lead { max-width: 670px; margin: 0; font-size: clamp(17px, 1.8vw, 25px); line-height: 1.35; letter-spacing: -.025em; }
+    .hero-aside { border-left: 1px solid var(--ink); display: grid; grid-template-rows: 1fr auto; background: var(--ink); color: var(--paper); }
+    .manifest { padding: 34px; display: flex; flex-direction: column; justify-content: center; }
+    .manifest pre { margin: 24px 0 0; color: #d8d4c7; font: 12px/1.85 var(--mono); white-space: pre-wrap; }
+    .manifest .key { color: var(--blue); }
+    .manifest .value { color: var(--acid); }
+    .principle { padding: 28px 34px; background: var(--acid); color: var(--ink); border-top: 1px solid var(--paper); }
+    .principle strong { display: block; margin-top: 12px; font: 600 27px/1.05 var(--display); }
+    .hero-footer { min-height: 66px; display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--ink); }
+    .hero-footer div { padding: 16px 20px; border-right: 1px solid var(--ink); }
+    .hero-footer div:last-child { border: 0; }
+    .hero-footer strong { display: block; margin-bottom: 5px; font-size: 12px; }
+    .hero-footer span { color: var(--muted); font: 9px var(--mono); }
+
+    .chapter { padding: 100px 0; border-top: 1px solid var(--ink); }
+    .chapter-heading { display: grid; grid-template-columns: 90px 1fr minmax(260px, .55fr); gap: 30px; align-items: end; margin-bottom: 48px; }
+    .chapter-heading h2 { margin: 0; font: 500 clamp(46px, 6vw, 86px)/.88 var(--display); letter-spacing: -.055em; }
+    .chapter-heading > p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+
+    .system-map { border: 1px solid var(--ink); background: var(--paper); box-shadow: 10px 10px 0 var(--ink); overflow: hidden; }
+    .map-bar { min-height: 44px; display: flex; align-items: center; gap: 9px; padding: 0 15px; background: var(--ink); color: var(--paper); }
+    .map-bar span { width: 8px; height: 8px; border: 1px solid var(--paper); border-radius: 50%; }
+    .map-bar code { margin-left: 8px; font: 9px var(--mono); letter-spacing: .1em; }
+    .lane { display: grid; grid-template-columns: 150px 1fr; border-top: 1px solid var(--ink); }
+    .lane:first-of-type { border-top: 0; }
+    .lane-label { padding: 28px 20px; border-right: 1px solid var(--ink); background: var(--paper-2); }
+    .lane-label strong { display: block; margin: 8px 0 5px; font-size: 14px; }
+    .lane-label small { color: var(--muted); font: 8px/1.4 var(--mono); }
+    .flow { display: grid; grid-template-columns: repeat(7, auto); align-items: stretch; padding: 28px; overflow-x: auto; }
+    .node { min-width: 145px; padding: 17px; border: 1px solid var(--ink); background: var(--white); position: relative; }
+    .node.dark { background: var(--ink); color: var(--paper); }
+    .node.acid { background: var(--acid); }
+    .node.blue { background: #d9e6ff; }
+    .node .tag { display: block; margin-bottom: 20px; color: var(--muted); font: 8px var(--mono); letter-spacing: .09em; }
+    .node.dark .tag { color: #9c9e93; }
+    .node strong { display: block; font: 700 15px/1.1 var(--sans); }
+    .node small { display: block; margin-top: 7px; font: 9px/1.45 var(--mono); opacity: .7; }
+    .arrow { min-width: 48px; display: grid; place-items: center; position: relative; }
+    .arrow::before { content: ""; width: 100%; height: 1px; background: var(--ink); }
+    .arrow::after { content: "›"; position: absolute; right: -1px; font: 22px var(--mono); transform: translateY(-1px); }
+
+    .kernel-detail { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 56px; border: 1px solid var(--ink); }
+    .kernel-detail article { min-height: 215px; padding: 24px; border-right: 1px solid var(--ink); background: var(--paper); }
+    .kernel-detail article:last-child { border: 0; }
+    .kernel-detail .number { display: block; margin-bottom: 52px; color: var(--orange); font: 10px var(--mono); }
+    .kernel-detail h3 { margin: 0 0 10px; font: 600 23px/1 var(--display); }
+    .kernel-detail p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+
+    .sequence { display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+    .step { padding: 30px 24px; min-height: 270px; border-right: 1px solid var(--ink); position: relative; background: var(--paper); }
+    .step:last-child { border: 0; }
+    .step::after { content: "→"; position: absolute; right: -14px; top: 34px; z-index: 2; width: 27px; height: 27px; display: grid; place-items: center; border: 1px solid var(--ink); background: var(--acid); font: 14px var(--mono); }
+    .step:last-child::after { display: none; }
+    .step .step-id { display: block; margin-bottom: 55px; color: var(--muted); font: 9px var(--mono); }
+    .step h3 { margin: 0 0 10px; font: 600 24px/1 var(--display); }
+    .step p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .step code { display: inline-block; margin-top: 18px; padding: 6px 8px; background: var(--ink); color: var(--acid); font: 8px var(--mono); }
+
+    .policy-wrap { display: grid; grid-template-columns: minmax(280px, .72fr) 1fr; gap: 28px; }
+    .policy-control { border: 1px solid var(--ink); background: var(--ink); color: var(--paper); padding: 32px; }
+    .policy-control h3 { margin: 16px 0 26px; font: 500 42px/.92 var(--display); }
+    .switch { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--paper); }
+    .switch button { padding: 14px; border: 0; background: transparent; color: var(--paper); cursor: pointer; font: 700 10px var(--mono); }
+    .switch button.active { background: var(--acid); color: var(--ink); }
+    .policy-note { min-height: 120px; margin-top: 28px; padding-top: 24px; border-top: 1px solid #4e5049; color: #b9bbb0; font-size: 13px; line-height: 1.55; }
+    .policy-note strong { color: var(--acid); }
+    .matrix { border: 1px solid var(--ink); background: var(--paper); }
+    .matrix-row { display: grid; grid-template-columns: 1.05fr .75fr .75fr; border-top: 1px solid var(--line); }
+    .matrix-row:first-child { border: 0; background: var(--paper-2); }
+    .matrix-row > * { padding: 18px; border-right: 1px solid var(--line); }
+    .matrix-row > *:last-child { border: 0; }
+    .matrix-row span { font: 9px var(--mono); }
+    .matrix-row strong { font-size: 13px; }
+    .yes, .no { display: inline-flex; align-items: center; gap: 7px; font: 700 10px var(--mono); }
+    .yes::before, .no::before { content: ""; width: 8px; height: 8px; border-radius: 50%; }
+    .yes::before { background: #77a62c; }
+    .no::before { background: var(--orange); }
+
+    .standalone { padding: 100px 0 120px; border-top: 1px solid var(--ink); background: var(--ink); color: var(--paper); }
+    .standalone .chapter-heading > p { color: #9ea097; }
+    .runtime-card { display: grid; grid-template-columns: 1.05fr .95fr; border: 1px solid var(--paper); min-height: 470px; }
+    .runtime-copy { padding: clamp(32px, 5vw, 70px); display: flex; flex-direction: column; justify-content: space-between; }
+    .runtime-copy h3 { margin: 20px 0; font: 500 clamp(50px, 6vw, 80px)/.82 var(--display); letter-spacing: -.055em; }
+    .runtime-copy p { max-width: 540px; color: #aaaCA3; font-size: 14px; line-height: 1.6; }
+    .runtime-status { display: flex; align-items: center; gap: 10px; margin-top: 40px; font: 9px var(--mono); }
+    .runtime-status i { width: 9px; height: 9px; border-radius: 50%; background: #777; }
+    .runtime-status.online i { background: var(--acid); box-shadow: 0 0 14px rgba(200,243,74,.6); }
+    .launch {
+      display: inline-flex; align-items: center; justify-content: space-between; gap: 28px;
+      width: fit-content; min-width: 270px; margin-top: 24px; padding: 16px 18px;
+      border: 1px solid var(--paper); background: var(--acid); color: var(--ink);
+      text-decoration: none; font: 800 10px var(--mono); box-shadow: 5px 5px 0 var(--orange); transition: transform .18s, box-shadow .18s;
+    }
+    .launch:hover { transform: translate(3px, 3px); box-shadow: 2px 2px 0 var(--orange); }
+    .runtime-visual { position: relative; overflow: hidden; border-left: 1px solid var(--paper); background: var(--acid); color: var(--ink); display: grid; place-items: center; }
+    .runtime-visual::before { content: ""; position: absolute; width: 440px; height: 440px; border: 1px solid var(--ink); border-radius: 50%; box-shadow: 0 0 0 45px transparent, 0 0 0 46px var(--ink), 0 0 0 92px transparent, 0 0 0 93px var(--ink); opacity: .22; }
+    .mini-window { width: min(390px, 76%); position: relative; z-index: 1; border: 1px solid var(--ink); background: var(--paper); box-shadow: 12px 12px 0 var(--ink); transform: rotate(2deg); }
+    .mini-window header { height: 35px; display: flex; align-items: center; gap: 6px; padding: 0 11px; border-bottom: 1px solid var(--ink); }
+    .mini-window header i { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--ink); }
+    .mini-window header code { margin-left: auto; font: 7px var(--mono); }
+    .mini-body { padding: 28px; }
+    .mini-body small { font: 8px var(--mono); color: var(--muted); }
+    .mini-body h4 { margin: 9px 0 24px; font: 500 33px/.9 var(--display); }
+    .fake-input { height: 39px; border: 1px solid var(--ink); display: flex; align-items: center; padding: 0 12px; color: var(--muted); font: 8px var(--mono); }
+    .fake-task { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 12px 0; border-top: 1px solid var(--line); font-size: 10px; }
+    .fake-task i { width: 13px; height: 13px; border: 1px solid var(--ink); }
+    .embed-note { margin-top: 18px; color: #8e9087; font: 8px/1.55 var(--mono); }
+
+    .reveal { opacity: 0; transform: translateY(16px); transition: opacity .65s ease, transform .65s ease; }
+    .reveal.visible { opacity: 1; transform: none; }
+
+    @media (max-width: 1000px) {
+      .hero { grid-template-columns: 1fr; }
+      .hero-aside { border-left: 0; border-top: 1px solid var(--ink); }
+      .chapter-heading { grid-template-columns: 60px 1fr; }
+      .chapter-heading > p { grid-column: 2; }
+      .kernel-detail { grid-template-columns: repeat(2, 1fr); }
+      .kernel-detail article:nth-child(2) { border-right: 0; }
+      .kernel-detail article:nth-child(-n+2) { border-bottom: 1px solid var(--ink); }
+      .sequence { grid-template-columns: 1fr; }
+      .step { min-height: 190px; border-right: 0; border-bottom: 1px solid var(--ink); }
+      .step:last-child { border-bottom: 0; }
+      .step::after { content: "↓"; right: 30px; top: auto; bottom: -14px; }
+      .step .step-id { margin-bottom: 28px; }
+      .policy-wrap, .runtime-card { grid-template-columns: 1fr; }
+      .runtime-visual { min-height: 440px; border-left: 0; border-top: 1px solid var(--paper); }
+    }
+    @media (max-width: 680px) {
+      .shell { width: min(100% - 24px, 1380px); }
+      .nav-meta span:not(.pulse) { display: none; }
+      .hero h1 { font-size: 68px; }
+      .hero-footer { grid-template-columns: 1fr; }
+      .hero-footer div { border-right: 0; border-bottom: 1px solid var(--ink); }
+      .chapter { padding: 70px 0; }
+      .chapter-heading { grid-template-columns: 1fr; }
+      .chapter-heading > p { grid-column: 1; }
+      .lane { grid-template-columns: 1fr; }
+      .lane-label { border-right: 0; border-bottom: 1px solid var(--ink); }
+      .kernel-detail { grid-template-columns: 1fr; }
+      .kernel-detail article { border-right: 0; border-bottom: 1px solid var(--ink); }
+      .matrix-row { grid-template-columns: 1.2fr .8fr .8fr; }
+      .matrix-row > * { padding: 13px 9px; }
+      .runtime-copy { padding: 36px 24px; }
+      .mini-window { width: 82%; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+      .reveal { opacity: 1; transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="masthead shell">
+    <nav class="nav">
+      <div class="brand"><span class="brand-mark">⌁</span> littlebox</div>
+      <div class="nav-meta"><span class="pulse"></span><span>KERNEL ONLINE</span><span>ARCH / V1.0</span></div>
+    </nav>
+    <div class="hero">
+      <div class="hero-copy reveal">
+        <p class="eyebrow"><span class="index">00 /</span> mapa del sistema</p>
+        <h1>Apps pequeñas.<br><em>Límites serios.</em></h1>
+        <p class="hero-lead">Un editor tipo CodePen, un Kernel que decide identidad y acceso, y una cápsula aislada por cada app. Sin acoplar la seguridad al proveedor.</p>
+      </div>
+      <aside class="hero-aside">
+        <div class="manifest">
+          <p class="eyebrow">CAPSULE / MANIFEST</p>
+          <pre>{
+  <span class="key">"visibility"</span>: <span class="value">"public | private"</span>,
+  <span class="key">"database"</span>: <span class="value">"declared-actions"</span>,
+  <span class="key">"auth"</span>: <span class="value">"kernel-owned"</span>,
+  <span class="key">"files"</span>: <span class="value">"deployment-bound"</span>
+}</pre>
+        </div>
+        <div class="principle">
+          <p class="eyebrow">REGLA BASE</p>
+          <strong>El proveedor almacena.<br>El Kernel decide.</strong>
+        </div>
+      </aside>
+    </div>
+    <div class="hero-footer">
+      <div><strong>0 procesos por mini-app</strong><span>runtime compartido, aislamiento lógico</span></div>
+      <div><strong>1 SQLite por despliegue</strong><span>portable, exportable, no pública</span></div>
+      <div><strong>2 interfaces separadas</strong><span>runtime del visitante / admin del owner</span></div>
+    </div>
+  </header>
+
+  <main>
+    <section class="chapter shell" id="system">
+      <div class="chapter-heading reveal">
+        <p class="eyebrow index">01</p>
+        <h2>Dos caminos.<br>Una autoridad.</h2>
+        <p>El editor y la app publicada nunca comparten permisos. Ambos llegan al Kernel por interfaces distintas; la base de datos no sale del servidor.</p>
+      </div>
+
+      <div class="system-map reveal">
+        <div class="map-bar"><span></span><span></span><span></span><code>LITTLEBOX / REQUEST TOPOLOGY</code></div>
+        <div class="lane">
+          <div class="lane-label"><p class="eyebrow">OWNER LANE</p><strong>Construir</strong><small>confianza administrativa</small></div>
+          <div class="flow">
+            <div class="node"><span class="tag">EDITOR</span><strong>Código + agente</strong><small>schema, acciones, archivos</small></div>
+            <div class="arrow"></div>
+            <div class="node blue"><span class="tag">ADMIN INTERFACE</span><strong>Owner gate</strong><small>SQL Studio, export, deploy</small></div>
+            <div class="arrow"></div>
+            <div class="node dark"><span class="tag">AUTHORITY</span><strong>Littlebox Kernel</strong><small>identidad · grants · policy</small></div>
+            <div class="arrow"></div>
+            <div class="node acid"><span class="tag">CAPSULE</span><strong>SQLite + blobs</strong><small>aislada por deployment ID</small></div>
+          </div>
+        </div>
+        <div class="lane">
+          <div class="lane-label"><p class="eyebrow">RUNTIME LANE</p><strong>Utilizar</strong><small>confianza mínima</small></div>
+          <div class="flow">
+            <div class="node"><span class="tag">BROWSER</span><strong>App estática</strong><small>HTML, CSS, JS públicos</small></div>
+            <div class="arrow"></div>
+            <div class="node"><span class="tag">RUNTIME INTERFACE</span><strong>Acción nombrada</strong><small>sin SQL ni credenciales</small></div>
+            <div class="arrow"></div>
+            <div class="node dark"><span class="tag">AUTHORITY</span><strong>Littlebox Kernel</strong><small>actor · visibility · action</small></div>
+            <div class="arrow"></div>
+            <div class="node acid"><span class="tag">RESULT</span><strong>Sólo los campos</strong><small>que devuelve la acción</small></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="kernel-detail reveal">
+        <article><span class="number">K / 01</span><h3>Identity</h3><p>Sesiones opacas. En disco sólo se conserva el hash del token y sus grants actuales.</p></article>
+        <article><span class="number">K / 02</span><h3>Visibility</h3><p>Una app pública sirve el shell a cualquiera. Una privada exige grant antes de entregar HTML.</p></article>
+        <article><span class="number">K / 03</span><h3>Actions</h3><p>Entradas tipadas, SQL parametrizado y cuotas. El navegador no selecciona una database.</p></article>
+        <article><span class="number">K / 04</span><h3>Storage</h3><p>SQLite y ficheros viven en un volumen persistente, separados por identificador de despliegue.</p></article>
+      </div>
+    </section>
+
+    <section class="chapter" id="deploy">
+      <div class="shell chapter-heading reveal">
+        <p class="eyebrow index">02</p>
+        <h2>De código a URL.</h2>
+        <p>Publicar no crea una máquina. Convierte el proyecto en una cápsula inmutable dentro del data plane compartido.</p>
+      </div>
+      <div class="sequence reveal">
+        <article class="step"><span class="step-id">01 / EDIT</span><h3>Proyecto</h3><p>Cinco archivos legibles: interfaz, estilo, comportamiento, schema y acciones.</p><code>actions.json</code></article>
+        <article class="step"><span class="step-id">02 / COMPILE</span><h3>Contrato</h3><p>El Kernel valida acciones, bindings, límites y la política de visibilidad.</p><code>manifest v1</code></article>
+        <article class="step"><span class="step-id">03 / ALLOCATE</span><h3>Cápsula</h3><p>Se reserva un deployment ID con su SQLite y directorio de objetos propios.</p><code>uuid / sqlite</code></article>
+        <article class="step"><span class="step-id">04 / ROUTE</span><h3>Hostname</h3><p>Nginx enruta el subdominio. No autentica: sólo entrega la petición al Kernel.</p><code>*.localhost</code></article>
+        <article class="step"><span class="step-id">05 / SERVE</span><h3>Standalone</h3><p>La app corre en su origen, persiste datos y no conoce ninguna credencial de infraestructura.</p><code>HTTP 200</code></article>
+      </div>
+    </section>
+
+    <section class="chapter shell" id="policy">
+      <div class="chapter-heading reveal">
+        <p class="eyebrow index">03</p>
+        <h2>Publicar no es<br>publicar la base.</h2>
+        <p>La visibilidad del shell y el acceso a datos son decisiones diferentes. Cambia el modo para ver qué intercepta el Kernel.</p>
+      </div>
+      <div class="policy-wrap reveal">
+        <aside class="policy-control">
+          <p class="eyebrow">SIMULADOR / VISIBILITY</p>
+          <h3 id="policy-title">Deployment público</h3>
+          <div class="switch" role="group" aria-label="Visibilidad del despliegue">
+            <button type="button" class="active" data-mode="public">PUBLIC</button>
+            <button type="button" data-mode="private">PRIVATE</button>
+          </div>
+          <p class="policy-note" id="policy-note"><strong>El shell puede abrirse.</strong><br>La base sigue detrás del Kernel y sólo responde a acciones declaradas.</p>
+        </aside>
+        <div class="matrix">
+          <div class="matrix-row"><span>CAPABILITY</span><span>APP</span><span>OWNER</span></div>
+          <div class="matrix-row"><strong>Abrir HTML/CSS/JS</strong><span class="yes" id="shell-access">permitido</span><span class="yes">permitido</span></div>
+          <div class="matrix-row"><strong>Invocar acción declarada</strong><span class="yes">según policy</span><span class="yes">permitido</span></div>
+          <div class="matrix-row"><strong>Enviar SQL arbitrario</strong><span class="no">bloqueado</span><span class="yes">Admin only</span></div>
+          <div class="matrix-row"><strong>Descargar database.sqlite</strong><span class="no">bloqueado</span><span class="yes">exportación</span></div>
+          <div class="matrix-row"><strong>Leer otra mini-app</strong><span class="no">aislado</span><span class="no">otro proyecto</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="standalone" id="standalone">
+      <div class="shell">
+        <div class="chapter-heading reveal">
+          <p class="eyebrow index">04</p>
+          <h2>Ahora, la app<br>sin el editor.</h2>
+          <p>Este es el resultado real del flujo: un origen aislado servido por el Kernel, con SQLite y acciones funcionando detrás.</p>
+        </div>
+        <div class="runtime-card reveal">
+          <div class="runtime-copy">
+            <div>
+              <p class="eyebrow">LIVE DEPLOYMENT</p>
+              <h3>Tiny Tasks.</h3>
+              <p>La mini-app no está simulada ni empaquetada dentro de esta explicación. Vive en su hostname, como lo haría cualquier app publicada por Littlebox.</p>
+              <div class="runtime-status" id="runtime-status"><i></i><span>comprobando runtime…</span></div>
+              <a class="launch" href="http://tiny-tasks-4d0a56.localhost:8080" target="_blank" rel="noopener"><span>ABRIR APP STANDALONE</span><span>↗</span></a>
+              <p class="embed-note">No se incrusta aquí: el Kernel envía <code>frame-ancestors 'none'</code> para impedir clickjacking y mantener el origen aislado.</p>
+            </div>
+            <p class="mono">tiny-tasks-4d0a56.localhost:8080<br>deployment / public / sqlite-kernel</p>
+          </div>
+          <div class="runtime-visual" aria-hidden="true">
+            <div class="mini-window">
+              <header><i></i><i></i><i></i><code>tiny-tasks.local</code></header>
+              <div class="mini-body">
+                <small>MY QUIET LIST</small>
+                <h4>Things worth<br><em>finishing.</em></h4>
+                <div class="fake-input">Add one small thing…</div>
+                <div class="fake-task"><i></i><span>Ship the standalone app</span></div>
+                <div class="fake-task"><i></i><span>Keep SQLite protected</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const policy = {
+      public: {
+        title: 'Deployment público',
+        note: '<strong>El shell puede abrirse.</strong><br>La base sigue detrás del Kernel y sólo responde a acciones declaradas.',
+        shell: '<span class="yes" id="shell-access">permitido</span>'
+      },
+      private: {
+        title: 'Deployment privado',
+        note: '<strong>El Kernel para la petición.</strong><br>Sin sesión y grant válidos no entrega ni el HTML, ni acciones, ni ficheros.',
+        shell: '<span class="no" id="shell-access">requiere grant</span>'
+      }
+    };
+
+    document.querySelectorAll('[data-mode]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-mode]').forEach((item) => item.classList.toggle('active', item === button));
+        const state = policy[button.dataset.mode];
+        document.querySelector('#policy-title').textContent = state.title;
+        document.querySelector('#policy-note').innerHTML = state.note;
+        document.querySelector('#shell-access').outerHTML = state.shell;
+      });
+    });
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: .12 });
+    document.querySelectorAll('.reveal').forEach((element) => observer.observe(element));
+
+    const runtimeStatus = document.querySelector('#runtime-status');
+    fetch('http://tiny-tasks-4d0a56.localhost:8080/', { mode: 'no-cors', cache: 'no-store' })
+      .then(() => {
+        runtimeStatus.classList.add('online');
+        runtimeStatus.querySelector('span').textContent = 'runtime online · SQLite disponible';
+      })
+      .catch(() => {
+        runtimeStatus.querySelector('span').textContent = 'runtime no disponible';
+      });
+  </script>
+</body>
+</html>

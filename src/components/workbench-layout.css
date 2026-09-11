@@ -1,0 +1,135 @@
+/* Layout tree — splits and tabbed groups. Uses --ink/--paper/--line/--muted/--acid/--orange. */
+
+.workbench { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--line); }
+.workbench > .split, .workbench > .group { position: absolute; inset: 0; }
+.workbench-empty { margin: auto; padding: 20px; color: var(--muted); font-size: 10px; }
+
+.split { display: flex; min-width: 0; min-height: 0; }
+.split-row { flex-direction: row; }
+.split-column { flex-direction: column; }
+.split-slot { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; display: flex; }
+.split-slot > .split, .split-slot > .group { flex: 1 1 auto; min-width: 0; min-height: 0; }
+
+/* touch-action: none keeps a finger drag a pointer gesture: without it the
+   browser claims the pan and cancels the pointer mid-resize. */
+.split-handle { position: absolute; z-index: 6; background: transparent; touch-action: none; }
+.split-handle.row { top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; }
+.split-handle.column { bottom: -3px; left: 0; height: 7px; width: 100%; cursor: row-resize; }
+.split-handle:hover, .split-handle:active { background: var(--orange); }
+.split-handle:focus-visible { outline: 0; background: var(--orange); }
+
+/* A group: a strip of tabs and the body of whichever tab is active. */
+.group {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 29px minmax(0, 1fr);
+  margin: 0 1px 1px 0;
+  background: var(--paper);
+}
+
+.group-tabs { display: flex; align-items: stretch; min-width: 0; border-bottom: 1px solid var(--ink); background: #eceadf; overflow-x: auto; }
+.group-tabs::-webkit-scrollbar { height: 0; }
+.group-tabs-spacer { flex: 1 1 auto; }
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 5px 0 9px;
+  border-right: 1px solid var(--line);
+  color: var(--muted);
+  font: 700 8px "JetBrains Mono Variable", monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: grab;
+  user-select: none;
+}
+.tab:hover { background: #f3f0e6; color: var(--ink); }
+.tab.active { background: var(--paper); color: var(--ink); box-shadow: inset 0 2px var(--orange); }
+.tab.is-dragging { opacity: .4; }
+.tab:active { cursor: grabbing; }
+
+/* The tab is a wrapper; these two are the controls. The label carries role="tab"
+   and the roving tabindex, so it must look identical to the strip it lives in. */
+.tab-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: inherit;
+}
+.tab-label:focus-visible { outline: 1px solid var(--ink); outline-offset: 1px; }
+
+.tab-close { width: 15px; height: 15px; display: grid; place-items: center; border: 0; background: transparent; color: inherit; opacity: 0; cursor: pointer; }
+.tab:hover > .tab-close, .tab.active > .tab-close { opacity: .5; }
+/* Never a focusable control nobody can see. */
+.tab-close:hover, .tab-close:focus-visible { opacity: 1; background: #ded9cc; }
+
+.group-actions { display: flex; align-items: center; gap: 4px; padding-right: 5px; }
+.group-actions button {
+  height: 20px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink);
+  font: 700 8px "JetBrains Mono Variable", monospace;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.group-actions button:hover { border-color: var(--line); background: #fffdf7; }
+.group-actions button.active { border-color: var(--ink); background: var(--acid); }
+
+/* Every tab of the group has a page; they are stacked in one grid cell and all
+   but the active one is `hidden`, so switching tabs hides a panel instead of
+   destroying it. */
+.group-body { min-width: 0; min-height: 0; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); overflow: hidden; }
+.group-page[hidden] { display: none; }
+
+/* The frame's contract with any panel: a column where the first child grows,
+   the rest keep their height, and the growing child scrolls rather than spill.
+   That last part is the frame's, not the panel's — the rule below out-specifies
+   a panel root's own `overflow`, so no panel can be clipped out of reach in a
+   short group. A panel never names its own class or its place. */
+.group-page { grid-area: 1 / 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.group-page > * { flex: 0 0 auto; }
+.group-page > :first-child { flex: 1 1 auto; min-height: 0; overflow: auto; }
+
+/* While a panel is being dragged the bodies stop taking pointer events: an
+   iframe would otherwise swallow every dragover and never be a drop target. */
+.workbench.is-dragging .group-body { pointer-events: none; }
+
+/* Where the dragged panel will land: a band on an edge, the whole group for a tab. */
+.drop-shadow { position: absolute; z-index: 5; background: #f0644599; pointer-events: none; }
+.drop-left { inset: 29px auto 0 0; width: 50%; }
+.drop-right { inset: 29px 0 0 auto; width: 50%; }
+.drop-top { inset: 29px 0 auto 0; height: 50%; }
+.drop-bottom { inset: auto 0 0 0; height: 50%; }
+.drop-center { inset: 0; border: 2px solid var(--orange); background: #f0644522; }
+
+.drag-hint {
+  position: absolute;
+  z-index: 8;
+  bottom: 12px;
+  left: 50%;
+  translate: -50% 0;
+  margin: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--ink);
+  background: #f7f4eb;
+  box-shadow: 3px 3px 0 var(--ink);
+  font: 700 8px "JetBrains Mono Variable", monospace;
+  letter-spacing: .1em;
+  pointer-events: none;
+}

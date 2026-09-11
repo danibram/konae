@@ -1,0 +1,17 @@
+FROM rust:1.91-bookworm AS build
+
+WORKDIR /src
+COPY kernel-rs/Cargo.toml kernel-rs/Cargo.lock ./
+RUN mkdir src && printf 'fn main() {}\n' > src/main.rs && cargo build --release --locked
+COPY kernel-rs/src ./src
+RUN touch src/main.rs && cargo build --release --locked
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/littlebox-kernel /usr/local/bin/littlebox-kernel
+
+EXPOSE 8787
+ENTRYPOINT ["littlebox-kernel"]
