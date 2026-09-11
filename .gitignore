@@ -12,3 +12,4 @@ playwright-report/
 /vite.config.d.ts
 
 .littlebox/
+.scratchpad/

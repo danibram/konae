@@ -14,8 +14,8 @@ The editor builds, the Kernel passes its tests and the local stack works. What s
 | --- | --- | --- |
 | The work tree holds the whole Clerk session uncommitted | `git status` | Nothing from it is durable |
 | The export kit omits `clerk.rs` while `main.rs` declares it | `src/lib/export-project-sources.ts` | An exported app does not compile on another machine. Job 4 is broken |
-| App login over an HTTPS origin returns no `set-cookie` in the test | `tests/security-auth.integration.test.ts` | Unverified behind TLS |
-| Two tests expect an older contract | MCP permission message, Validation Gate stale result | Small, must be settled before the commit |
+| Sign-out over app MCP revoked the session but dropped the clearing cookie, so the browser kept a dead cookie | `kernel-rs/src/main.rs`, `auth_logout` | Fixed in delivery 1 |
+| One test expected an older permission message and one used stale input | `transfer_cancel` scope message, harness test | Fixed in delivery 1 |
 | Databases, accounts and files live only on the Kernel volume | `docs/architecture.md`, README | Losing the volume loses every app's state |
 | Docker images not verified on a remote host | `docs/research/product-fit.md` | No production recipe exists |
 
