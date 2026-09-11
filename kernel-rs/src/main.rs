@@ -2967,7 +2967,13 @@ fn auth_error(error_value: AuthError) -> Response {
         AuthError::InvalidEmail | AuthError::WeakPassword => StatusCode::BAD_REQUEST,
         AuthError::EmailTaken => StatusCode::CONFLICT,
         AuthError::InvalidCredentials => StatusCode::UNAUTHORIZED,
-        AuthError::Storage(_) | AuthError::PasswordHash => StatusCode::INTERNAL_SERVER_ERROR,
+        AuthError::AccountPending | AuthError::AccountSuspended | AuthError::SignupClosed => {
+            StatusCode::FORBIDDEN
+        }
+        AuthError::InvalidChallenge => StatusCode::GONE,
+        AuthError::VerificationRequired
+        | AuthError::Storage(_)
+        | AuthError::PasswordHash => StatusCode::INTERNAL_SERVER_ERROR,
     };
     error(status, &error_value.to_string())
 }
