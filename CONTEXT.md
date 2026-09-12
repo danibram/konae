@@ -49,8 +49,12 @@ The libraries a Managed Capsule states it needs, written as intent by its owner 
 _Avoid_: package.json, lockfile (those name the generated form, not the authority)
 
 **Deployment**:
-The published, addressable instance of a Project with its own hostname, visibility, signup policy and database. Republishing replaces its Build Artifact and keeps its hostname and data; immutable release history does not exist yet.
+The published, addressable instance of a Project with its own hostname, visibility, signup policy and database. Everything it is lives in one folder on the Kernel volume: its record, Build Artifact, databases, files and backups. Republishing replaces its Build Artifact and keeps its hostname and data; immutable release history does not exist yet.
 _Avoid_: Project, preview
+
+**Copy**:
+A consistent snapshot of every Deployment folder, with the owner and MCP stores, sent off the Kernel volume to a second disk or an S3 prefix on a schedule. Restore installs one Copy into an empty data directory and signs everyone out. A Copy moves an installation; an export moves one app.
+_Avoid_: backup (a Data panel snapshot of one app database), replica, mirror
 
 **Public Deployment**:
 A Deployment whose application shell may be opened without signing in. A signed-out visitor may call Server Actions declared `anonymous`, and may list and read files marked public. Uploads and private files require a Runtime Actor session. Public visibility of the Deployment grants no database access and no access to private files.

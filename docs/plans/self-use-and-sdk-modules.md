@@ -16,7 +16,7 @@ The editor builds, the Kernel passes its tests and the local stack works. What s
 | The export kit omits `clerk.rs` while `main.rs` declares it | `src/lib/export-project-sources.ts` | An exported app does not compile on another machine. Job 4 is broken |
 | Sign-out over app MCP revoked the session but dropped the clearing cookie, so the browser kept a dead cookie | `kernel-rs/src/main.rs`, `auth_logout` | Fixed in delivery 1 |
 | One test expected an older permission message and one used stale input | `transfer_cancel` scope message, harness test | Fixed in delivery 1 |
-| Databases, accounts and files live only on the Kernel volume | `docs/architecture.md`, README | Losing the volume loses every app's state |
+| Databases, accounts and files live only on the Kernel volume | `docs/architecture.md`, README | Losing the volume loses every app's state. Addressed in delivery 2 by scheduled copies and `littlebox-kernel restore` |
 | Docker images not verified on a remote host | `docs/research/product-fit.md` | No production recipe exists |
 
 ### The disk is the authority
@@ -46,6 +46,20 @@ A copy of the folder is the app. The export kit is that folder plus the Kernel. 
 | 4. Scope statement | Record in the README what this installation is for and what it is not: a single operator, known app users, Allowlist without email verification | A reader knows that strangers need the launch plan's deliveries 1 and 2 before they are let in |
 
 Clerk stays dormant while its variables are unset. The local owner account with the installation key is the operator account for this installation. Creator identity stays provider-independent: when creators beyond the operator are admitted, they get the same email and password accounts the Kernel already issues to app users, and Clerk or any OIDC provider is an optional adapter, never a requirement to sign in or to run an installation. Email, invitations, Eject and migration are not in this part.
+
+### Delivery 2 record
+
+Landed on 2026-11-06 on branch `deliv/2-app-folder-copies`. The artifact and backups now live in `deployments/<id>/artifact/` and `deployments/<id>/backups/`; a Kernel moves the older layout on start and refuses to start when both locations hold files. `LITTLEBOX_COPY_DIR` and `LITTLEBOX_COPY_S3_PREFIX` turn on the scheduled copy, `LITTLEBOX_COPY_INTERVAL_SECONDS` sets its period, and `/_littlebox/health` reports it under `copies`. `littlebox-kernel restore --from <dir | s3://bucket/prefix>` installs a copy into an empty data directory. The startup read of `databases/<id>/head.json` and of `deployment.json` records from the data bucket is removed, and the Kernel no longer writes those records there.
+
+| Command | Result |
+| --- | --- |
+| `cargo test --manifest-path kernel-rs/Cargo.toml` | 67 passed, 9 of them in `copies.rs`: migration, migration conflict, copy IDs, retention, settings, copy and restore of artifact, rows, accounts and files, refusal of damaged, unfinished and escaping copies, a copy waiting on a write lock, a failed copy in health |
+| `bun test tests/copy-restore.integration.test.ts` | Directory target passed against the real binary. The S3 case is skipped when MinIO does not answer on `LITTLEBOX_TEST_S3_ENDPOINT`, default `http://127.0.0.1:9000` |
+| `bun test` | 338 passed, 1 skipped (S3 case), 5 failed. The 5 are `database-lifecycle/server.test.ts`, which cannot write `/tmp` inside the sandbox the run used |
+| `bun run build` | Passed |
+| `bun run tests/smoke/portable-export.ts --port 19450` | Passed |
+
+Two parts of the plan's text did not match the code. ADR-0010's Usage store does not exist yet, so a Deployment folder has two databases today; the copy takes `usage.sqlite` too once it appears. The done condition asks for an S3 run; MinIO was not reachable for this delivery, so the S3 case ran only against a throwaway S3 emulator and still needs one run against MinIO with `docker compose up minio minio-init`.
 
 ### Order
 

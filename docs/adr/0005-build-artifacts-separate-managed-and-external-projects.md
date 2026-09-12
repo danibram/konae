@@ -29,3 +29,7 @@ Schema authority follows source authority. A Managed Project exposes no general 
 ## Consequences
 
 Littlebox must provide dependency resolution, TypeScript diagnostics, a canonical managed builder, Build Artifact storage and serving, a typed SDK, export/eject, external artifact submission and visible Project state. The Managed environment intentionally supports fewer packages and frameworks than a general repository; that constraint buys simpler agent behavior, faster feedback and a smaller security surface. External Projects gain freedom at the cost of losing Littlebox's source and schema guarantees.
+
+## Note, 2026-11-06
+
+The Kernel stores a Deployment's Build Artifact in `deployments/<id>/artifact/`, in the same folder as its record, databases, files and backups, instead of a separate `artifacts/<id>/` tree. That folder is the unit a scheduled copy carries and `littlebox-kernel restore` installs. When S3 is configured the Kernel still uploads the artifact to the artifact bucket, but serves from the volume and reads S3 only when the local file is missing. A Kernel with the older layout moves it into place on start.

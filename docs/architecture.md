@@ -48,14 +48,17 @@ flowchart LR
   K -->|"private: require app login"| C
   C --> B["browser mini-app"]
   B -->|"named server actions"| RI
-  K --> DB["isolated SQLite working file"]
-  K --> S3["S3: artifacts + deployment.json"]
+  K --> DB["deployments/<id>/: record, artifact, SQLite, files, backups"]
+  K -.->|"scheduled copy"| CP["second disk or S3 prefix"]
+  K -.-> S3["S3: second copy of artifacts"]
   O["project owner"] --> E["editor + agent"]
   E --> AI["Kernel admin interface"]
   AI --> K
 ```
 
-S3 holds static Build Artifacts and a copy of each `deployment.json`. SQLite databases, auth databases, uploads and backups stay on the Kernel's data directory; the Kernel does not replicate them to S3 yet. At startup the Kernel can restore a database from a `databases/<id>/head.json` generation in the data bucket, but nothing writes those heads today, so a Deployment recovered from S3 on a fresh volume starts with an empty database.
+The Kernel's data directory is the authority. Each Deployment is one folder, `deployments/<id>/`, holding `deployment.json`, the Build Artifact in `artifact/`, `database.sqlite`, `identity.sqlite`, uploads in `files/` and Data panel snapshots in `backups/`; `owners.sqlite` and `mcp.sqlite` sit at the top. A copy of a folder is the app. When S3 is configured, the Kernel also uploads each artifact to the artifact bucket and reads from it only when the local file is missing.
+
+A scheduled copy takes each Deployment's data and identity locks, snapshots its SQLite files with `VACUUM INTO`, copies the rest of its folder and writes a manifest of SHA-256 checksums last. It sends the result to a directory on another disk, an S3 prefix in the data bucket, or both, and keeps 24 recent and 30 daily copies. Copy failures are logged and reported under `copies` in `/_littlebox/health`; they never block serving. `littlebox-kernel restore` is the only way back: it installs one copy into an empty data directory, verifies every checksum and signs out every session and credential. The Kernel no longer reads anything from the data bucket at startup.
 
 The Docker development stack uses Nginx only for hostname routing: `editor.localhost` reaches Vite and the Kernel Admin Interface, while every other `*.localhost` hostname reaches the Rust Kernel Runtime Interface. MinIO provides the same S3 operations used with hosted providers. Nginx and MinIO do not make authorization decisions.
 

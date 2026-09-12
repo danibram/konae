@@ -53,7 +53,7 @@ Open [http://editor.localhost:8080](http://editor.localhost:8080). Published app
 
 Compose publishes the gateway, MinIO API and MinIO console on `127.0.0.1` only. The Kernel container binds `0.0.0.0` inside the Compose network with the development setup key, so the Compose file sets `LITTLEBOX_ALLOW_DEFAULT_KEY=1`. Do not copy that setting to a reachable installation.
 
-The local stack creates two MinIO buckets. `littlebox-apps` contains static artifacts and `littlebox-data` mirrors each Deployment's `deployment.json`. S3 holds Deployment records and artifacts only. App databases, app accounts, uploaded files and backups live on the Kernel volume, are never copied to S3, and are lost with that volume. A Kernel started on a fresh volume restores each Deployment from S3 with an empty database and no accounts, and logs a warning for each one. Mutations execute against the live database. MinIO's console runs at [http://localhost:9001](http://localhost:9001) with the development credentials `littlebox` and `littlebox-secret`.
+The local stack creates two MinIO buckets. `littlebox-apps` receives a second copy of each static artifact, and `littlebox-data` receives scheduled copies of the data directory when `LITTLEBOX_COPY_S3_PREFIX` is set. The Kernel volume stays the authority: every app's record, artifact, database, accounts, uploads and backups live there, and a Kernel started on an empty volume serves nothing until `littlebox-kernel restore` installs a copy. See [Data directory and copies](#data-directory-and-copies). Mutations execute against the live database. MinIO's console runs at [http://localhost:9001](http://localhost:9001) with the development credentials `littlebox` and `littlebox-secret`.
 
 If you ran the stack before the Kernel image became non-root, fix the volume once: `docker compose run --rm --user root --entrypoint chown kernel -R 10001:10001 /data`.
 
@@ -79,16 +79,19 @@ The Kernel reads these at startup. Defaults are the values in `kernel-rs/src` un
 | `LITTLEBOX_ADMIN_KEY` | `local-development-key` | Installation setup key that permits owner registration. An empty value counts as unset. |
 | `LITTLEBOX_ALLOW_DEFAULT_KEY` | unset | Set to `1` to let the Kernel start on a non-loopback address with the default setup key. Compose sets it for the development stack. |
 | `LITTLEBOX_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses whose `X-Forwarded-For` header the Kernel trusts for rate limiting. CIDR ranges are rejected. |
-| `LITTLEBOX_DATA_DIR` | `/data` (`data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Directory for Deployment records, SQLite databases, uploads, artifacts and backups. |
+| `LITTLEBOX_DATA_DIR` | `/data` (`data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory: one folder per Deployment under `deployments/<id>/`, plus `owners.sqlite` and `mcp.sqlite`. |
 | `LITTLEBOX_PUBLIC_ORIGIN` | `http://localhost:8080` (`http://localhost:<kernel port>` under `dev:local`) | Origin used to build app URLs. Its scheme and port are copied onto each app hostname, and an `https://` origin makes OAuth metadata use HTTPS. |
 | `LITTLEBOX_HOST_SUFFIX` | `localhost` | Domain appended to new app hostnames, as in `<slug>-<id>.localhost`. |
 | `LITTLEBOX_MCP_ORIGIN` | unset | Public origin of the MCP endpoint, without a path, when it differs from the hosting origin. OAuth discovery advertises it. |
-| `LITTLEBOX_S3_ENDPOINT` | unset | S3 endpoint URL. When unset, the Kernel stores artifacts on local disk and ignores the other S3 variables. |
+| `LITTLEBOX_S3_ENDPOINT` | unset | S3 endpoint URL. The Kernel always serves artifacts from its data directory; when this is set it also uploads each artifact to `LITTLEBOX_ARTIFACT_BUCKET` and can send copies to `LITTLEBOX_DATA_BUCKET`. When unset, the Kernel ignores the other S3 variables. |
 | `LITTLEBOX_S3_REGION` | `us-east-1` | S3 region. |
 | `LITTLEBOX_S3_ACCESS_KEY` | `littlebox` | S3 access key. |
 | `LITTLEBOX_S3_SECRET_KEY` | `littlebox-secret` | S3 secret key. |
 | `LITTLEBOX_ARTIFACT_BUCKET` | `littlebox-apps` | Bucket for static Build Artifacts. |
-| `LITTLEBOX_DATA_BUCKET` | `littlebox-data` | Bucket that mirrors `deployment.json` records. |
+| `LITTLEBOX_DATA_BUCKET` | `littlebox-data` | Bucket that receives copies when `LITTLEBOX_COPY_S3_PREFIX` is set. |
+| `LITTLEBOX_COPY_DIR` | unset | Directory, on another disk, that receives scheduled copies of the data directory. It must be outside `LITTLEBOX_DATA_DIR`. |
+| `LITTLEBOX_COPY_S3_PREFIX` | unset | Prefix in `LITTLEBOX_DATA_BUCKET`, such as `copies/`, that receives scheduled copies. Needs `LITTLEBOX_S3_ENDPOINT` and must not start with `deployments/`. |
+| `LITTLEBOX_COPY_INTERVAL_SECONDS` | `3600` | Seconds between copies when a copy target is set. The first copy runs at startup. |
 | `LITTLEBOX_BUN_PATH` | `bun` | Bun executable the Kernel spawns to derive schema migrations. The child starts with an empty environment, so a bare `bun` is found only in the system default path (`/usr/bin`, `/bin`). Set an absolute path when Bun lives elsewhere. `dev:local`, `bun run kernel` and `littlebox dev` pass their own Bun path. |
 | `LITTLEBOX_SOURCE_ROOT` | Kernel working directory | Directory that holds `database-lifecycle/` and the `node_modules` it needs. The Kernel image sets `/opt/littlebox`. |
 
@@ -109,6 +112,38 @@ The editor, the `littlebox` CLI and the test configurations read these:
 | `LITTLEBOX_PORT` | exported self-host kit | `8787` | Port the exported Kernel publishes, read from the kit's `.env`. |
 
 `littlebox dev` ignores every `LITTLEBOX_` and `VITE_` variable from your shell. It starts its own Kernel on `127.0.0.1` with a generated setup key and data under `.littlebox/dev-data`, and opens signup on the local Deployment so you can create test accounts.
+
+## Data directory and copies
+
+Each app is one folder in the Kernel's data directory. A copy of that folder, with the owner and MCP stores beside it, is the app.
+
+```text
+data/
+├── owners.sqlite           # owner accounts and sessions
+├── mcp.sqlite              # projects, sources, agent credentials, audit
+└── deployments/<id>/
+    ├── deployment.json     # record, visibility, signup policy
+    ├── artifact/           # the static files the Deployment serves
+    ├── database.sqlite     # the app's rows
+    ├── identity.sqlite     # its accounts and sessions
+    ├── files/              # uploads
+    └── backups/            # snapshots made from the Data panel
+```
+
+A Kernel that finds the older layout, with `artifacts/<id>/` and `backups/<id>/` at the top of the data directory, moves both into the Deployment's folder when it starts and logs each move. It refuses to start when the old and new locations both hold files, and names the two paths.
+
+Set `LITTLEBOX_COPY_DIR`, `LITTLEBOX_COPY_S3_PREFIX` or both to copy the data directory off the volume, by default every hour. Each copy takes every Deployment's data and identity locks in turn, snapshots its SQLite files with `VACUUM INTO`, copies its folder, then writes `manifest.json` with the size and SHA-256 of every file. A directory copy appears under its final name only when complete; an S3 copy is complete once its manifest is uploaded. The Kernel keeps the 24 newest copies and the newest copy of each day for 30 days on each target. The copy is staged under `.copy-staging/` in the data directory, so the volume needs room for one more copy.
+
+A failed copy never stops the Kernel from serving. It is logged, and `/_littlebox/health` reports it under `copies`: each target's `lastAttemptAt`, `lastSuccessAt`, `lastCopyId` and `lastError`, and an `alert` message while any target's last attempt failed. `copies.targets` is empty when no target is set.
+
+To move to a new volume or machine, restore into an empty data directory, then start the Kernel:
+
+```sh
+LITTLEBOX_DATA_DIR=/data littlebox-kernel restore --from /mnt/copies
+LITTLEBOX_DATA_DIR=/data littlebox-kernel restore --from s3://littlebox-data/copies/ --copy 2026-11-06T14-00-00.000Z
+```
+
+Without `--copy`, restore takes the newest complete copy. It refuses a data directory that holds anything besides `lost+found`, a copy without a manifest, and any file whose size or checksum differs from the manifest, and then installs nothing. It also runs SQLite's integrity check on every database. After installing, it signs everyone out: owner and app sessions, Clerk creator sessions, agent credentials, OAuth tokens and codes, and unfinished transfers and release plans. Owners create new agent credentials after a restore.
 
 ## Authenticated MCP
 
@@ -195,7 +230,6 @@ Provider-free testing covers the editor and offline demo. Connect a provider in 
 ## Next slice
 
 1. Add Workspace membership and team administration above the existing owner accounts.
-2. Replicate SQLite databases off the Kernel volume, add scheduled backups and a restore workflow for moving a Kernel to a fresh machine.
-3. Add immutable release history, data-aware rollback and file uploads backed by the private bucket.
+2. Add immutable release history, data-aware rollback and file uploads backed by the private bucket.
 
 Architecture and security boundaries are described in [docs/architecture.md](./docs/architecture.md).

@@ -20,3 +20,7 @@ The Kernel keeps Usage and Signals in a per-Deployment store of its own, next to
 ## Consequences
 
 Export with live state takes the Usage store along with accounts, the database and files. The Validation Gate and the Kernel both parse `signal` on an action and `kind: "signal"`. A Signal counts toward the action cap. The store has its own size bound and drops the oldest rows. The Development Kernel records the same way so an unpublished app still shows Usage.
+
+## Note, 2026-11-06
+
+The Usage store is not implemented yet. Its place is `deployments/<id>/usage.sqlite`, next to `database.sqlite` and `identity.sqlite`. The scheduled copy already snapshots that file with `VACUUM INTO` when it exists and restore checks its integrity, so Usage will travel with the app's folder as the Consequences section requires, without a change to the copy.
