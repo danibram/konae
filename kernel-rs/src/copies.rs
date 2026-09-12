@@ -920,6 +920,7 @@ mod tests {
             data_bucket: "data".into(),
             data_root: root.into(),
             copies: Arc::new(CopyStatus::default()),
+            accounts: crate::accounts::AccountSettings::local(),
             admin_key: "test-admin".into(),
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),

@@ -41,6 +41,7 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
 | Credentials from the owner session | `tokens_list`, `token_create`, `token_revoke` |
 | App runtime | `auth_session`, `auth_logout`, `actions_invoke`, `files_list`, `files_upload`, `files_read` and transfers |
+| App accounts, also before sign-in | `auth_signup`, `auth_verify`, `auth_recover`, `auth_reset` |
 
 The catalog depends on the credentials. The Kernel checks the permission again on execution. A token limited to projects cannot create other projects. For `schema_plan`, that token must pass a `projectId` it has access to. Reading the signup policy needs the `read` scope; changing it needs the `publish` scope.
 
@@ -56,7 +57,31 @@ Each Deployment has a signup policy that decides who may create an app account:
 
 Public Deployments start Open. Private Deployments start Closed, so the owner decides who may join before anyone can sign in. A Deployment record written before signup policies existed gets the same default from its visibility. Republishing keeps the current policy, except that republishing a public app as private turns Open into Closed. The owner changes it in the editor's Auth panel or with the admin MCP tools above. A tighter policy blocks new accounts only; existing accounts can still sign in. A refused signup gets the same answer whether signup is closed or the address is not listed.
 
-Littlebox does not verify email addresses, so whoever signs up first with a listed address or an address in a listed domain gets that account. Use Closed for apps that hold private data.
+In local mode Littlebox does not verify email addresses, so whoever signs up first with a listed address or an address in a listed domain gets that account. Use Closed for apps that hold private data, or require verification.
+
+## Verified accounts
+
+`LITTLEBOX_ACCOUNT_VERIFICATION=required` makes every new account, creator or app user, prove control of its email before it is active. The default `local` keeps unverified signup for development; the README explains both modes, the switch for existing accounts and the operator's suspension command.
+
+An account is `pending`, `active` or `suspended`. Only `active` accounts get a session, and every runtime and administrative check reads the state: the app session, the owner session, a delegated MCP credential and the OAuth code exchange. Suspending an account deletes its sessions and open links and keeps its ID, password and rows.
+
+A challenge has a purpose, `verification`, `recovery` or `invitation`, and a scope, `creator` or one Deployment. The Kernel stores only its SHA-256 hash. A token works once, expires (verification after 24 hours, recovery after 30 minutes), and does nothing for another purpose, on another Deployment or on the creator scope. A new link for the same purpose replaces the earlier one. Invitations reuse this model in a later delivery; no route accepts an invitation token yet.
+
+In required mode the signup request carries only an email. The password is chosen on the page the link opens, so a password typed by whoever registered the address first never survives verification. Signing up again with a pending email keeps the account ID and sends a fresh link. Links put the token in the URL fragment, `#verification=` or `#recovery=`, so it reaches neither server logs nor a Referer. Opening a link with GET returns the form and changes nothing; the form posts the token with the new password.
+
+| Route | Host | Body | Result |
+| --- | --- | --- | --- |
+| `POST /_littlebox/auth/signup` | app | `{ "email" }` | 202 `{ "result": { "status": "link-sent" } }`, the same for new, pending, active and suspended emails. A signup the policy refuses gets 403 as before. |
+| `POST /_littlebox/auth/verify` | app | `{ "token", "password" }` | 200 with the app session cookie. Rechecks the Deployment's current signup policy: under Closed, or for an email no longer listed, it answers 403 and keeps the link usable. |
+| `POST /_littlebox/auth/recover` | app | `{ "email" }` | 202, the same answer whether or not the account exists. Active accounts get a recovery link, pending ones a new verification link, suspended and unknown ones nothing. |
+| `POST /_littlebox/auth/reset` | app | `{ "token", "password" }` | 200 with a new session; every earlier session of the account ends. |
+| `GET /_littlebox/account` | app | | The page links open. Without a token it offers recovery. |
+| `POST /_littlebox/owner/signup` | editor | `{ "email", "setupKey" }` | 202 in required mode, after the installation key check. |
+| `POST /_littlebox/owner/verify`, `/_littlebox/owner/reset`, `/_littlebox/owner/recover` | editor | as above | The creator scope; links open `/_littlebox/owner/login`. |
+
+A used, expired, foreign or wrong-purpose token answers 410. A pending account that signs in with a correct legacy password, or a suspended one, answers 403. A weak password answers 400 before the token is read. Without a mail transport, signup and recovery answer 503. The creator routes are unavailable when the optional hosted identity adapter is configured.
+
+The runtime MCP tools `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset` run the same flows for the app on the request's host. A signed-out visitor may call them on public and private apps; on a private app they are the only tools a signed-out caller reaches, and `tools/list` and every other call still answer 401. In local mode `auth_signup` also takes `password` and signs in at once. A tool that signs someone in sets the session cookie on the response and never returns a token. A full copy drops sessions and challenges; an import deletes any it finds.
 
 ## Local development cycle
 
@@ -118,7 +143,7 @@ The client starts a transfer by declaring the size and SHA-256. Chunks are at mo
 
 Owner transfers expire after one hour and each owner credential can hold eight. App user transfers expire after 10 minutes and each app user can hold two. Owners share a pool of 128 per installation, and app users share a pool of 32 per Deployment. An app's files are at most 2 MiB each and the Deployment has a 20 MiB quota. An administrative transfer can be up to 32 MiB; a full publishing payload must fit in 26 MB and its artifact in 16 MiB. A project allows up to 100 actions. Queries limit rows, response size and execution time. Each app database is capped at 256 MiB.
 
-App login and signup accept 10 attempts per minute per client address, and 5 per minute for one email address from one client address, counted separately for each Deployment. Wrong passwords also count against the email address across all clients: after 100 failures in an hour, every login for that email waits, including a correct one. A successful login never uses up that count, and one client address adds at most 20 failures per hour to it, so pausing an account takes failures from at least five addresses. `/_littlebox/owner/login` and `/_littlebox/owner/signup` have the same limits. Further attempts get HTTP 429 with `Retry-After`. Each identity database is capped at 64 MiB.
+App login and signup accept 10 attempts per minute per client address, and 5 per minute for one email address from one client address, counted separately for each Deployment. Wrong passwords also count against the email address across all clients: after 100 failures in an hour, every login for that email waits, including a correct one. A successful login never uses up that count, and one client address adds at most 20 failures per hour to it, so pausing an account takes failures from at least five addresses. `/_littlebox/owner/login` and `/_littlebox/owner/signup` have the same limits. Recovery requests count against the email they name, and verify and reset requests share one bucket per client address, on each Deployment and on the creator scope; the runtime MCP account tools count in the same buckets. Further attempts get HTTP 429 with `Retry-After`. Each identity database is capped at 64 MiB.
 
 A release's `schema.sql` may only create tables and indexes, and must be safe to run twice. CHECK constraints, expression and partial indexes and generated columns may call SQL functions, except `load_extension`, `readfile`, `writefile`, `edit` and `fts3_tokenizer`, which app actions cannot call either.
 

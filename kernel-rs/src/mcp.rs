@@ -131,6 +131,8 @@ pub(super) fn authenticate_owner(state: &AppState, headers: &HeaderMap) -> Resul
                 if let Some(config) = &clerk {
                     let db = Connection::open(state.data_root.join("owners.sqlite"))?;
                     anyhow::ensure!(super::clerk::owner_allowed(&db, config, &r.0)?, "Creator is not admitted.");
+                } else {
+                    anyhow::ensure!(super::accounts::creator_store(state)?.is_active(&r.0)?, "Creator is not active.");
                 }
                 Ok(Owner {
                     id: r.0,
@@ -147,7 +149,7 @@ pub(super) fn authenticate_owner(state: &AppState, headers: &HeaderMap) -> Resul
         let db = Connection::open(state.data_root.join("owners.sqlite"))?;
         super::clerk::authenticate(&db, config, cookie.as_deref(), (now_ms() / 1000) as i64)?
     } else {
-        AuthService::open(state.data_root.join("owners.sqlite"))?.authenticate(cookie.as_deref())?
+        super::accounts::creator_store(state)?.authenticate(cookie.as_deref())?
     };
     Ok(user
         .map(|user| Owner {
@@ -407,7 +409,43 @@ fn runtime_tools() -> Vec<Value> {
         ),
     ];
     tools.extend(transfer_tools(true));
+    tools.extend(account_tools());
     tools
+}
+
+/// Account tools any visitor may call, also on a private deployment before
+/// signing in. Tokens arrive by email; no tool returns one.
+fn account_tools() -> Vec<Value> {
+    vec![
+        tool(
+            "auth_signup",
+            "Start an app account for an email. When the installation requires verification, this sends a link to that email and signs no one in; the person chooses the password when they open it. Otherwise it creates the account with this password and signs in. The answer does not reveal whether the email already has an account.",
+            json!({"email":{"type":"string","maxLength":254},"password":{"type":"string","maxLength":1024}}),
+            &["email"],
+            false,
+        ),
+        tool(
+            "auth_verify",
+            "Confirm an email with the token from its verification link and set the account's password. Signs in on success. A token works once.",
+            json!({"token":{"type":"string","maxLength":128},"password":{"type":"string","maxLength":1024}}),
+            &["token", "password"],
+            false,
+        ),
+        tool(
+            "auth_recover",
+            "Send a link to choose a new password. The answer is the same whether or not the email has an account.",
+            json!({"email":{"type":"string","maxLength":254}}),
+            &["email"],
+            false,
+        ),
+        tool(
+            "auth_reset",
+            "Set a new password with the token from a recovery link. Ends every earlier session of the account and signs in. A token works once.",
+            json!({"token":{"type":"string","maxLength":128},"password":{"type":"string","maxLength":1024}}),
+            &["token", "password"],
+            false,
+        ),
+    ]
 }
 
 /// Tools a visitor without a session may call on a public deployment.
@@ -422,6 +460,10 @@ fn anonymous_runtime_tools() -> Vec<Value> {
         "transfer_read",
         "transfer_status",
         "transfer_cancel",
+        "auth_signup",
+        "auth_verify",
+        "auth_recover",
+        "auth_reset",
     ];
     runtime_tools()
         .into_iter()
@@ -490,7 +532,7 @@ fn transfer_tools(runtime: bool) -> Vec<Value> {
 async fn admin(State(state): State<AppState>, request: Request) -> Response {
     handle(state, request, false).await
 }
-async fn runtime(State(state): State<AppState>, request: Request) -> Response {
+pub(super) async fn runtime(State(state): State<AppState>, request: Request) -> Response {
     handle(state, request, true).await
 }
 
@@ -515,6 +557,8 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
     let tools;
     let mut app: Option<String> = None;
     let mut anonymous = false;
+    // A visitor on a private app reaches only the account tools.
+    let mut account_only = false;
     if runtime {
         let Some(deployment) = deployment_for(&state, &headers).await else {
             return error(StatusCode::NOT_FOUND, "Deployment not found.");
@@ -534,7 +578,14 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
                 tools = anonymous_runtime_tools();
                 anonymous = true;
             }
-            _ => return unauthorized(&state, &headers),
+            Ok(None) => {
+                let client = limits::client_key(state.guards.client_ip(peer, &headers));
+                principal = format!("runtime:{}:anon:{client}", deployment.id);
+                tools = account_tools();
+                anonymous = true;
+                account_only = true;
+            }
+            Err(_) => return unauthorized(&state, &headers),
         }
         app = Some(deployment.id);
         owner = None;
@@ -575,6 +626,14 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
         return rpc_error(Value::Null, -32600, "Invalid JSON-RPC request.");
     }
     let method = call["method"].as_str().unwrap();
+    if account_only
+        && !(["initialize", "ping"].contains(&method)
+            || method.starts_with("notifications/")
+            || (method == "tools/call"
+                && call["params"]["name"].as_str().is_some_and(|name| tools.iter().any(|t| t["name"] == name))))
+    {
+        return unauthorized(&state, &headers);
+    }
     if call.get("id").is_none() {
         return if method.starts_with("notifications/") {
             StatusCode::ACCEPTED.into_response()
@@ -583,6 +642,7 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
         };
     }
     let mut clear_cookie = false;
+    let mut session_cookie: Option<HeaderValue> = None;
     let result = match method {
         "initialize" => Ok(
             json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"littlebox","version":"0.1.0"},"instructions":"Use project-scoped credentials. Source and builds stay on your computer. Use platform_describe for the workflow."}),
@@ -679,6 +739,15 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
                     Ok(()) => transfer_call(&state, &principal, name, &arguments, runtime).await,
                     Err(e) => Err(e),
                 }
+            } else if runtime && account_tools().iter().any(|t| t["name"] == name) {
+                let client = state.guards.client_ip(peer, &headers);
+                match super::accounts::runtime_tool(&state, &headers, client, name, &arguments).await {
+                    Ok((value, cookie)) => {
+                        session_cookie = cookie;
+                        Ok(value)
+                    }
+                    Err(e) => Err(e),
+                }
             } else if let Some(owner) = owner.as_ref() {
                 admin_call(&state, owner, &principal, name, arguments.clone()).await
             } else {
@@ -719,6 +788,9 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
         response
             .headers_mut()
             .insert(header::SET_COOKIE, super::cleared_app_cookie(&state));
+    }
+    if let Some(cookie) = session_cookie {
+        response.headers_mut().insert(header::SET_COOKIE, cookie);
     }
     response
 }
@@ -1755,10 +1827,10 @@ async fn owner_clerk(State(state): State<AppState>, request: Request) -> Respons
     response
 }
 
-async fn owner_login(State(state): State<AppState>, request: Request) -> Response {
+pub(super) async fn owner_login(State(state): State<AppState>, request: Request) -> Response {
     owner_auth(state, request, false).await
 }
-async fn owner_signup(State(state): State<AppState>, request: Request) -> Response {
+pub(super) async fn owner_signup(State(state): State<AppState>, request: Request) -> Response {
     owner_auth(state, request, true).await
 }
 
@@ -1813,20 +1885,33 @@ async fn owner_auth(state: AppState, request: Request, signup: bool) -> Response
     }
     let email = a["email"].as_str().unwrap_or("").to_owned();
     let password = a["password"].as_str().unwrap_or("").to_owned();
-    let path = state.data_root.join("owners.sqlite");
+    if signup && state.accounts.verification == auth::Verification::Required {
+        let origin = super::oauth::origin(&state, &headers);
+        return match super::accounts::signup_creator(&state, &email, &origin).await {
+            Ok(created) => {
+                if let Some(user_id) = created {
+                    claim_for_first_owner(&state, &user_id).await;
+                }
+                super::accounts::link_sent()
+            }
+            Err(e) => auth_error(e),
+        };
+    }
     // Only signup needs the lock: it spans the insert and the first-owner claim
     // below. The password hash runs before it, and logins run concurrently.
     let (result, _guard) = if signup {
         match blocking(move || auth::NewAccount::prepare(&email, &password)).await {
             Ok(account) => {
                 let guard = database_lock(&state, "owner-auth").await;
-                (blocking(move || AuthService::open(path)?.create_account(account)).await, Some(guard))
+                let auth = super::accounts::creator_store(&state);
+                (blocking(move || auth?.create_account(account)).await, Some(guard))
             }
             Err(error_value) => (Err(error_value), None),
         }
     } else {
         let failed_email = email.clone();
-        let result = blocking(move || AuthService::open(path)?.login(&email, &password)).await;
+        let auth = super::accounts::creator_store(&state);
+        let result = blocking(move || auth?.login(&email, &password)).await;
         if matches!(result, Err(AuthError::InvalidCredentials)) {
             state.guards.auth_failed("owner", client, &failed_email);
         }
@@ -1835,43 +1920,52 @@ async fn owner_auth(state: AppState, request: Request, signup: bool) -> Response
     match result {
         Ok(session) => {
             if signup {
-                // The installation operator claims legacy deployments during the first setup.
-                if let Ok(db) = store(&state) {
-                    let owner_db = Connection::open(state.data_root.join("owners.sqlite")).unwrap();
-                    let owners: u64 = owner_db
-                        .query_row("SELECT COUNT(*) FROM app_users", [], |r| r.get(0))
-                        .unwrap_or(0);
-                    if owners == 1 {
-                        for d in state.deployments.read().await.values() {
-                            let _=db.execute("INSERT OR IGNORE INTO projects(id,owner,body) VALUES(?1,?2,?3)",params![d.project_id,session.user.user_id,json!({"id":d.project_id,"name":d.project_name,"sourceAuthority":"managed","manifest":d.manifest}).to_string()]);
-                        }
-                    }
-                }
+                claim_for_first_owner(&state, &session.user.user_id).await;
             }
-            let cookie_name = owner_cookie_name(&state);
-            let secure = if cookie_name.starts_with("__Host-") {
-                "; Secure"
-            } else {
-                ""
-            };
-            let mut response =
-                Json(json!({"result":{"user":session.user,"expiresAt":session.expires_at}}))
-                    .into_response();
-            response.headers_mut().insert(
-                header::SET_COOKIE,
-                HeaderValue::from_str(&format!(
-                    "{cookie_name}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800{secure}",
-                    session.token
-                ))
-                .unwrap(),
-            );
-            response
-                .headers_mut()
-                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            response
+            owner_session_response(&state, session)
         }
         Err(e) => auth_error(e),
     }
+}
+
+/// The installation operator claims legacy deployments during the first setup.
+async fn claim_for_first_owner(state: &AppState, user_id: &str) {
+    if let Ok(db) = store(state) {
+        let owner_db = Connection::open(state.data_root.join("owners.sqlite")).unwrap();
+        let owners: u64 = owner_db
+            .query_row("SELECT COUNT(*) FROM app_users", [], |r| r.get(0))
+            .unwrap_or(0);
+        if owners == 1 {
+            for d in state.deployments.read().await.values() {
+                let _=db.execute("INSERT OR IGNORE INTO projects(id,owner,body) VALUES(?1,?2,?3)",params![d.project_id,user_id,json!({"id":d.project_id,"name":d.project_name,"sourceAuthority":"managed","manifest":d.manifest}).to_string()]);
+            }
+        }
+    }
+}
+
+/// The owner session cookie and body for a creator session just issued.
+pub(super) fn owner_session_response(state: &AppState, session: auth::AuthSession) -> Response {
+    let cookie_name = owner_cookie_name(state);
+    let secure = if cookie_name.starts_with("__Host-") {
+        "; Secure"
+    } else {
+        ""
+    };
+    let mut response =
+        Json(json!({"result":{"user":session.user,"expiresAt":session.expires_at}}))
+            .into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&format!(
+            "{cookie_name}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800{secure}",
+            session.token
+        ))
+        .unwrap(),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn owner_logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -1886,7 +1980,7 @@ async fn owner_logout(State(state): State<AppState>, headers: HeaderMap) -> Resp
             let _ = super::clerk::revoke(&db, cookie_value(&headers, cookie_name).as_deref());
         }
     }
-    if let Ok(auth) = AuthService::open(state.data_root.join("owners.sqlite")) {
+    if let Ok(auth) = super::accounts::creator_store(&state) {
         let _ = auth.logout(cookie_value(&headers, cookie_name).as_deref());
     }
     let secure = if cookie_name.starts_with("__Host-") { "; Secure" } else { "" };
@@ -1933,6 +2027,10 @@ mod tests {
                 "transfer_read",
                 "transfer_status",
                 "transfer_cancel",
+                "auth_signup",
+                "auth_verify",
+                "auth_recover",
+                "auth_reset",
             ]
         );
         for t in runtime_tools() {
@@ -1960,6 +2058,7 @@ mod tests {
             data_root: root.clone(),
             copies: Default::default(),
             admin_key: "test-admin".into(),
+            accounts: super::accounts::AccountSettings::local(),
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
@@ -2006,6 +2105,7 @@ mod tests {
             data_bucket: "data".into(),
             data_root: root.clone(),
             copies: Default::default(),
+            accounts: super::accounts::AccountSettings::local(),
             admin_key: "test-admin".into(),
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),

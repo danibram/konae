@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 use uuid::Uuid;
 
+mod accounts;
 mod auth;
 mod clerk;
 mod copies;
@@ -46,6 +47,7 @@ struct AppState {
     public_origin: String,
     host_suffix: String,
     guards: Arc<Guards>,
+    accounts: accounts::AccountSettings,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -293,6 +295,7 @@ struct ActionBinding {
 async fn main() -> Result<()> {
     if clerk::operator_command()? { return Ok(()); }
     if copies::operator_command().await? { return Ok(()); }
+    if accounts::operator_command()? { return Ok(()); }
     let port = env("LITTLEBOX_KERNEL_PORT", "8787").parse::<u16>()?;
     let bind = env("LITTLEBOX_BIND", "127.0.0.1");
     let public_origin = env("LITTLEBOX_PUBLIC_ORIGIN", "http://localhost:8080");
@@ -308,6 +311,7 @@ async fn main() -> Result<()> {
     for line in copies::migrate_layout(&data_root)? {
         println!("Layout migration: moved {line}");
     }
+    let account_settings = accounts::AccountSettings::from_env(&data_root)?;
     let s3 = s3_client_from_env().await;
     let artifact_bucket = env("LITTLEBOX_ARTIFACT_BUCKET", "littlebox-apps");
     let data_bucket = env("LITTLEBOX_DATA_BUCKET", "littlebox-data");
@@ -327,10 +331,14 @@ async fn main() -> Result<()> {
         guards: Arc::new(Guards::new(trusted_proxies(
             &std::env::var("LITTLEBOX_TRUSTED_PROXIES").unwrap_or_default(),
         )?)),
+        accounts: account_settings,
     };
     if let Some(config) = copy_config {
         copies::spawn_schedule(state.clone(), config);
     }
+    // Apply the verification mode to creator accounts before serving, so a
+    // switch to required revokes unverified sessions at startup.
+    accounts::creator_store(&state)?;
 
     let app = Router::new()
         .route("/_littlebox/health", get(health))
@@ -339,6 +347,7 @@ async fn main() -> Result<()> {
         .route("/_littlebox/login", get(login_page))
         .merge(mcp::routes())
         .merge(oauth::routes())
+        .merge(accounts::routes())
         .route("/_littlebox/{*path}", axum::routing::any(|| async { error(StatusCode::GONE, "Use authenticated MCP for platform operations.") }))
         .route("/{*path}", get(serve_artifact))
         .route("/", get(serve_root))
@@ -821,6 +830,9 @@ async fn session(State(state): State<AppState>, headers: HeaderMap) -> Response 
 #[derive(Deserialize)]
 struct AuthInput {
     email: String,
+    /// Not read by a signup that requires verification: the person chooses
+    /// the password when they answer the link.
+    #[serde(default)]
     password: String,
 }
 
@@ -870,6 +882,12 @@ async fn auth_request(
     if let Err(wait) = state.guards.auth_attempt(&deployment.id, client, &input.email) {
         return too_many_attempts(wait);
     }
+    if signup && state.accounts.verification == auth::Verification::Required {
+        return match accounts::signup_app(state, &deployment, &input.email).await {
+            Ok(()) => accounts::link_sent(),
+            Err(error_value) => auth_error(error_value),
+        };
+    }
     if signup {
         // Check the input first and give closed and unlisted the same answer,
         // so a signup attempt does not reveal who is on the allowlist.
@@ -882,11 +900,6 @@ async fn auth_request(
             return error(StatusCode::FORBIDDEN, SIGNUP_REFUSED);
         }
     }
-    let auth_path = state
-        .data_root
-        .join("deployments")
-        .join(&deployment.id)
-        .join("identity.sqlite");
     // The identity lock covers only SQLite reads and writes. The password
     // hash runs between them without it, so slow hashes never queue other
     // logins, logouts or releases behind them.
@@ -912,21 +925,23 @@ async fn auth_request(
                     Some(false) => return error(StatusCode::FORBIDDEN, SIGNUP_REFUSED),
                     Some(true) => {}
                 }
-                blocking(move || AuthService::open(auth_path)?.create_account(account)).await
+                let auth = accounts::app_store(state, &deployment);
+                blocking(move || auth?.create_account(account)).await
             }
             Err(error_value) => Err(error_value),
         }
     } else {
         let lookup = {
             let _identity_guard = database_lock(state, &identity).await;
-            let (path, email, password) = (auth_path.clone(), email.clone(), password.clone());
-            blocking(move || AuthService::open(path)?.find_login(&email, &password)).await
+            let (auth, email, password) = (accounts::app_store(state, &deployment), email.clone(), password.clone());
+            blocking(move || auth?.find_login(&email, &password)).await
         };
         match lookup {
             Ok(stored) => match blocking(move || auth::check_password(&password, stored)).await {
                 Ok(user) => {
                     let _identity_guard = database_lock(state, &identity).await;
-                    blocking(move || AuthService::open(auth_path)?.start_session(user)).await
+                    let auth = accounts::app_store(state, &deployment);
+                    blocking(move || auth?.start_session(user)).await
                 }
                 Err(error_value) => Err(error_value),
             },
@@ -937,21 +952,7 @@ async fn auth_request(
         state.guards.auth_failed(&deployment.id, client, &failed_email);
     }
     match result {
-        Ok(session) => {
-            let cookie_name = app_cookie_name(state);
-            let secure = if cookie_name.starts_with("__Host-") { "; Secure" } else { "" };
-            let cookie = format!(
-                "{cookie_name}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800{}",
-                session.token, secure
-            );
-            let mut response =
-                Json(json!({"result": {"user": session.user, "expiresAt": session.expires_at}}))
-                    .into_response();
-            response
-                .headers_mut()
-                .insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
-            response
-        }
+        Ok(session) => accounts::app_session_response(state, session),
         Err(error_value) => auth_error(error_value),
     }
 }
@@ -1263,7 +1264,7 @@ async fn login_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
     };
     match authenticate_deployment(&state, &deployment, &headers) {
         Ok(Some(_)) => (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response(),
-        Ok(None) => private_login_page(&deployment.signup_policy),
+        Ok(None) => private_login_page(&deployment.signup_policy, state.accounts.verification),
         Err(response) => response,
     }
 }
@@ -1298,7 +1299,7 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
     {
         match authenticate_deployment(&state, &deployment, &headers) {
             Ok(Some(_)) => {}
-            Ok(None) => return private_login_page(&deployment.signup_policy),
+            Ok(None) => return private_login_page(&deployment.signup_policy, state.accounts.verification),
             Err(response) => return response,
         }
     }
@@ -1341,8 +1342,15 @@ async fn read_artifact(state: &AppState, deployment: &Deployment, path: &str) ->
     }
 }
 
-fn private_login_page(policy: &SignupPolicy) -> Response {
+fn private_login_page(policy: &SignupPolicy, verification: auth::Verification) -> Response {
+    // With verification required, signup takes only the email: the password
+    // is chosen on the page the emailed link opens.
+    let verified = verification == auth::Verification::Required;
     let (note, create) = match policy.mode {
+        SignupMode::Open if verified => (
+            "New here? Enter your email and create an account. We send a link to choose your password.",
+            true,
+        ),
         SignupMode::Open => (
             "New here? Enter an email and password, then create an account.",
             true,
@@ -1360,12 +1368,14 @@ fn private_login_page(policy: &SignupPolicy) -> Response {
         r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f5f7;color:#20232a;font:16px system-ui,sans-serif}main{width:min(100%,380px);padding:32px;background:white;border:1px solid #e1e4e8;border-radius:12px;box-shadow:0 12px 36px #1f293714}h1{margin:0 0 8px;font-size:24px}p{color:#586174;line-height:1.5}form,label{display:grid;gap:8px}form{gap:16px;margin-top:24px}input,button{font:inherit;border-radius:8px;padding:11px 12px}input{width:100%;border:1px solid #c9ced6}button{border:0;background:#273449;color:white;cursor:pointer}button+button{background:#edf0f4;color:#252a33}#error{min-height:1.5em;margin:0;color:#a32727}</style><main><h1>Sign in to this app</h1><p>"#,
         note,
         r#"</p><form id="auth"><label>Email <input name="email" type="email" required autocomplete="email"></label><label>Password <input name="password" type="password" minlength="8" required autocomplete="current-password"></label><button formaction="/_littlebox/auth/login">Sign in</button>"#,
-        if create {
+        if create && verified {
+            r#"<button formaction="/_littlebox/auth/signup" formnovalidate>Create account</button>"#
+        } else if create {
             r#"<button formaction="/_littlebox/auth/signup">Create account</button>"#
         } else {
             ""
         },
-        r#"<p id="error" role="alert"></p></form></main><script>document.querySelector('#auth').addEventListener('submit',async e=>{e.preventDefault();const path=e.submitter?.formAction||'/_littlebox/auth/login';const form=new FormData(e.currentTarget);const response=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:form.get('email'),password:form.get('password')})});if(response.ok){location.replace('/');return}const body=await response.json().catch(()=>({}));document.querySelector('#error').textContent=body.error||'Sign in failed.'})</script></html>"#,
+        r#"<p id="error" role="alert"></p><a href="/_littlebox/account">Forgot your password?</a></form></main><script>document.querySelector('#auth').addEventListener('submit',async e=>{e.preventDefault();const path=e.submitter?.formAction||'/_littlebox/auth/login';const form=new FormData(e.currentTarget);const response=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:form.get('email'),password:form.get('password')})});const body=await response.json().catch(()=>({}));if(response.status===202){document.querySelector('#error').textContent=body.result.message;return}if(response.ok){location.replace('/');return}document.querySelector('#error').textContent=body.error||'Sign in failed.'})</script></html>"#,
     ]
     .concat();
     let mut response = Response::new(Body::from(body));
@@ -1464,6 +1474,7 @@ async fn portable_state(state: &AppState, deployment: &Deployment) -> Result<Val
     {
         let connection = Connection::open(&identity_source)?;
         connection.execute("DELETE FROM app_sessions", [])?;
+        connection.execute("DELETE FROM account_challenges", [])?;
         connection.execute(
             "VACUUM INTO ?1",
             [identity_sanitized.to_string_lossy().as_ref()],
@@ -2470,6 +2481,7 @@ fn initialize_identity_from_base64(path: &Path, encoded: &str, maximum_bytes: us
     let _ = AuthService::open(path)?;
     let connection = Connection::open(path)?;
     connection.execute("DELETE FROM app_sessions", [])?;
+    connection.execute("DELETE FROM account_challenges", [])?;
     Ok(())
 }
 
@@ -2755,13 +2767,7 @@ fn open_auth(
     state: &AppState,
     deployment: &Deployment,
 ) -> std::result::Result<AuthService, AuthError> {
-    AuthService::open(
-        state
-            .data_root
-            .join("deployments")
-            .join(&deployment.id)
-            .join("identity.sqlite"),
-    )
+    accounts::app_store(state, deployment)
 }
 
 fn authenticate_deployment(
@@ -2878,7 +2884,14 @@ fn auth_error(error_value: AuthError) -> Response {
         AuthError::InvalidEmail | AuthError::WeakPassword => StatusCode::BAD_REQUEST,
         AuthError::EmailTaken => StatusCode::CONFLICT,
         AuthError::InvalidCredentials => StatusCode::UNAUTHORIZED,
-        AuthError::Storage(_) | AuthError::PasswordHash => StatusCode::INTERNAL_SERVER_ERROR,
+        AuthError::AccountPending | AuthError::AccountSuspended | AuthError::SignupClosed => {
+            StatusCode::FORBIDDEN
+        }
+        AuthError::InvalidChallenge => StatusCode::GONE,
+        AuthError::MailUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+        AuthError::VerificationRequired
+        | AuthError::Storage(_)
+        | AuthError::PasswordHash => StatusCode::INTERNAL_SERVER_ERROR,
     };
     error(status, &error_value.to_string())
 }
@@ -3102,6 +3115,7 @@ mod tests {
             data_root: root.into(),
             copies: Arc::new(copies::CopyStatus::default()),
             admin_key: "test-admin".into(),
+            accounts: accounts::AccountSettings::local(),
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
@@ -3525,6 +3539,7 @@ mod tests {
             data_root: root.into(),
             copies: Arc::new(copies::CopyStatus::default()),
             admin_key: "test-admin".into(),
+            accounts: accounts::AccountSettings::local(),
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),

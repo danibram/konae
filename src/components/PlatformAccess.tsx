@@ -28,6 +28,7 @@ export function PlatformAccess() {
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [config, setConfig] = useState<{ mode: "local" | "clerk"; publishableKey?: string | null } | null>(null);
   useEffect(() => { void fetch("/_littlebox/owner/config").then(async (response) => {
     if (!response.ok) throw new Error("Could not load sign-in settings.");
@@ -42,14 +43,22 @@ export function PlatformAccess() {
     const action = ((event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null)?.value === "signup" ? "signup" : "login";
     setBusy(true);
     setError("");
+    setNotice("");
     try {
       const response = await fetch(`/_littlebox/owner/${action}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(action === "signup" ? { email, password, setupKey } : { email, password }),
       });
-      const body = await response.json().catch(() => ({})) as { error?: string; user?: { name?: string } };
+      const body = await response.json().catch(() => ({})) as { error?: string; user?: { name?: string }; result?: { message?: string } };
       if (!response.ok) throw new Error(body.error || (action === "signup" ? "Could not create the owner account." : "Sign in failed."));
+      // An installation that verifies email answers a signup with 202 and a
+      // link sent to the address; the account is not active yet.
+      if (response.status === 202) {
+        setNotice(body.result?.message ?? "Check your email for a link to choose your password.");
+        setPassword("");
+        return;
+      }
       rememberOwnerEmail(body.user?.name ?? email);
       setPassword("");
       setSetupKey("");
@@ -102,6 +111,7 @@ export function PlatformAccess() {
                 </Field>
               )}
               {error && error !== "Add an email." && error !== "Use at least 8 characters." && <p className="platform-error" role="alert">{error}</p>}
+              {notice && <p role="status">{notice}</p>}
               <div className="platform-actions">
                 {creatingAccount ? (
                   <>
