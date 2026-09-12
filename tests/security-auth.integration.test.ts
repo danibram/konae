@@ -7,7 +7,8 @@ import { McpClient } from "../src/mcp/client";
 const processes: ReturnType<typeof Bun.spawn>[] = [];
 const roots: string[] = [];
 const password = "security-auth-password-2026";
-let sequence = 0;
+// A random base keeps parallel runs of this suite off each other's Kernels.
+let sequence = Math.floor(Math.random() * 180);
 
 beforeAll(async () => {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
@@ -21,7 +22,7 @@ afterAll(async () => {
 });
 
 async function installation(https: boolean, separateMcp = false) {
-  const port = 19620 + sequence++;
+  const port = 19700 + sequence++;
   const url = `http://127.0.0.1:${port}`;
   const host = separateMcp ? `control.localhost:${port}` : `localhost:${port}`;
   const root = await mkdtemp(path.join(tmpdir(), "littlebox-security-auth-"));
@@ -67,6 +68,19 @@ function assertCookie(header: string, name: string, secure: boolean) {
   expect(header).toContain("; HttpOnly");
   expect(header.includes("; Secure")).toBe(secure);
   expect(header.toLowerCase()).not.toContain("domain=");
+}
+
+async function publishPublic(app: Awaited<ReturnType<typeof installation>>, id: string) {
+  await app.owner.call("project_create", { projectId: id, name: id });
+  const upload = await app.owner.upload(new TextEncoder().encode(JSON.stringify({
+    project: { id, name: id, slug: id.replaceAll("_", "-"), manifest: { version: 1, visibility: "public" }, files: {
+      "schema.sql": "CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY);", "actions.json": '{"version":1,"actions":{}}',
+    } }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": `<!doctype html><main>${id}</main>` } },
+  })), id);
+  try {
+    const plan = await app.owner.call<{ planId: string }>("release_plan", { transferId: upload.transferId });
+    return (await app.owner.call<{ hostname: string }>("release_apply", { planId: plan.planId })).hostname;
+  } finally { await app.owner.cancel(upload.transferId); }
 }
 
 describe("authentication cookie isolation", () => {
@@ -129,5 +143,49 @@ describe("authentication cookie isolation", () => {
     const app = await installation(false, true);
     assertCookie(app.ownerSetCookie, "__Host-littlebox_owner_session", true);
     expect((await app.owner.call<{ ownerId: string }>("session_inspect")).ownerId).toBeTruthy();
+  });
+
+  test("HTTPS installations send HSTS on the editor host and on every app host", async () => {
+    const app = await installation(true);
+    const appHost = await publishPublic(app, "hsts_app");
+    for (const [route, host] of [["/", appHost], ["/_littlebox/owner/login", app.host], ["/_littlebox/health", app.host], ["/missing", "unknown.localhost"]]) {
+      const response = await fetch(app.url + route, { headers: { host } });
+      expect(response.headers.get("strict-transport-security")).toBe("max-age=31536000; includeSubDomains");
+      await response.arrayBuffer();
+    }
+    const plain = await installation(false);
+    const response = await fetch(`${plain.url}/_littlebox/owner/login`, { headers: { host: plain.host } });
+    expect(response.headers.has("strict-transport-security")).toBe(false);
+  });
+
+  test("a Domain cookie set by an app never authenticates the editor or another app", async () => {
+    const app = await installation(true);
+    const first = await publishPublic(app, "cookie_first");
+    const second = await publishPublic(app, "cookie_second");
+    const signup = await app.json("/_littlebox/auth/signup", { email: "member@domain-cookie.test", password }, { host: first });
+    expect(signup.status).toBe(200);
+    const setCookie = signup.headers.get("set-cookie")!;
+    assertCookie(setCookie, "__Host-littlebox_app_session", true);
+    expect(setCookie).toContain("; SameSite=Lax");
+    const appToken = setCookie.split(";")[0].split("=")[1];
+    const ownerToken = app.cookie.split("=")[1];
+    // A browser drops a __Host- cookie that names a Domain, so an app can only
+    // plant an unprefixed name with Domain=<suffix>. Those names authenticate nothing.
+    const planted = [
+      `littlebox_owner_session=${ownerToken}`,
+      `littlebox_app_session=${appToken}`,
+      `littlebox_owner_session=${ownerToken}; littlebox_app_session=${appToken}`,
+    ];
+    for (const cookie of planted) {
+      await expect(app.client("/mcp", app.host, cookie).call("session_inspect")).rejects.toThrow();
+      expect((await app.client("/_littlebox/mcp", second, cookie).call<{ role: string }>("auth_session")).role).toBe("anonymous");
+    }
+    // The prefixed app cookie is scoped to its own host: another app does not know the session,
+    // and the editor host does not accept an app session as an owner.
+    const prefixed = `__Host-littlebox_app_session=${appToken}`;
+    expect((await app.client("/_littlebox/mcp", first, prefixed).call<{ role: string }>("auth_session")).role).toBe("member");
+    expect((await app.client("/_littlebox/mcp", second, prefixed).call<{ role: string }>("auth_session")).role).toBe("anonymous");
+    await expect(app.client("/mcp", app.host, prefixed).call("session_inspect")).rejects.toThrow();
+    await expect(app.client("/mcp", app.host, `__Host-littlebox_owner_session=${appToken}`).call("session_inspect")).rejects.toThrow();
   });
 });

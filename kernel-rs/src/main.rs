@@ -29,6 +29,7 @@ mod clerk;
 mod limits;
 mod mcp;
 mod oauth;
+mod security;
 use auth::{AuthError, AuthService, AuthUser};
 use limits::{Guards, trusted_proxies};
 
@@ -359,6 +360,7 @@ async fn main() -> Result<()> {
         .route("/_littlebox/{*path}", axum::routing::any(|| async { error(StatusCode::GONE, "Use authenticated MCP for platform operations.") }))
         .route("/{*path}", get(serve_artifact))
         .route("/", get(serve_root))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), security::headers))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind((bind.as_str(), port)).await?;
     println!("Littlebox Rust Kernel listening on {port}");

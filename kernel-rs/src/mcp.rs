@@ -504,6 +504,9 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|info| info.0);
+    if !runtime && super::security::from_app_origin(&state, &headers).await {
+        return error(StatusCode::FORBIDDEN, "Administration refuses requests from app origins.");
+    }
     if !same_origin(&headers) || !super::oauth::valid_host(&state, &headers) {
         return error(
             StatusCode::FORBIDDEN,

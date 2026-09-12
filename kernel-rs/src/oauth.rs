@@ -110,7 +110,9 @@ pub(super) async fn valid_owner_host(state: &AppState, headers: &HeaderMap) -> b
         || configured.as_ref().is_some_and(|origin| origin.host_str() == Some(host));
     let local = public.as_ref().and_then(|origin| origin.host_str()).is_some_and(is_local_host)
         && ["localhost", "127.0.0.1", "[::1]", "editor.localhost"].contains(&host);
-    (exact || local) && deployment_for(state, headers).await.is_none()
+    (exact || local)
+        && deployment_for(state, headers).await.is_none()
+        && !super::security::from_app_origin(state, headers).await
 }
 
 pub(super) fn origin(state: &AppState, headers: &HeaderMap) -> String {

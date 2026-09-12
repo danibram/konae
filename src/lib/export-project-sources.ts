@@ -4,6 +4,7 @@ import kernelOwnerPage from "../../kernel-rs/src/owner-login.html?raw";
 import kernelAuthSource from "../../kernel-rs/src/auth.rs?raw";
 import kernelClerkSource from "../../kernel-rs/src/clerk.rs?raw";
 import kernelLimitsSource from "../../kernel-rs/src/limits.rs?raw";
+import kernelSecuritySource from "../../kernel-rs/src/security.rs?raw";
 import kernelCargoLock from "../../kernel-rs/Cargo.lock?raw";
 import kernelCargoManifest from "../../kernel-rs/Cargo.toml?raw";
 import kernelMainSource from "../../kernel-rs/src/main.rs?raw";
@@ -19,4 +20,5 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/auth.rs", contents: kernelAuthSource },
   { path: "kernel-rs/src/clerk.rs", contents: kernelClerkSource },
   { path: "kernel-rs/src/limits.rs", contents: kernelLimitsSource },
+  { path: "kernel-rs/src/security.rs", contents: kernelSecuritySource },
 ];

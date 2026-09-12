@@ -106,6 +106,8 @@ bun run littlebox -- build --dir /tmp/my-app
 bun run littlebox -- publish --dir /tmp/my-app
 ```
 
+A published app runs under the Kernel's Content Security Policy, described in [the architecture](./architecture.md#isolation-of-hosted-code). The inline scripts in an artifact's HTML run because the Kernel allows each by its hash. Inline event handler attributes, scripts from other origins and requests to other origins do not. Attach listeners in JavaScript and serve every script and request from the app's own origin.
+
 The build lives in `.littlebox/artifact.json`. Publishing transfers it over MCP, validates a plan against the project revision and applies it. The tool saves the plan and the receipt in `.littlebox`. The Kernel rejects a stale plan. Repeating a plan that was already applied returns its receipt. `publish` deploys as private unless `littlebox.json` sets `project.manifest.visibility` to `"public"`. A republish keeps the URL and database and stops serving files that the new artifact no longer contains.
 
 There is also `bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173`. It reads `LITTLEBOX_EMAIL` and `LITTLEBOX_PASSWORD` from the environment, obtains a 24-hour credential and stores it with `0600` permissions in `.littlebox/credentials.json`. `LITTLEBOX_SETUP_KEY` lets it create the account if it does not exist yet. The command adds `.littlebox/` to `.gitignore`; do not copy credentials into the frontend.
