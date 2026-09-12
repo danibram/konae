@@ -107,6 +107,40 @@ This is the module that lets a project expose an API and receive a webhook witho
 | 7. HTTP module | The `http` key in `actions.json`, parsed in `src/kernel/actions.ts` and `kernel-rs/src/main.rs`. Routing, signature check, owner-set secrets, Gate refusals. A product-fit example that receives a webhook and serves a JSON endpoint | The status feed example accepts a signed POST from `curl` and refuses an unsigned one. The replay in `examples/product-fit/smoke.ts` covers it. The contract file documents the module and the two agents receive it through delivery 6 |
 | 8. Portable action contract | For every project, generate a document of its actions with inputs, output shapes and HTTP bindings. Include it in the export kit | A second backend could run the same conformance checks. No second backend is built here |
 
+### Evidence for deliveries 5 and 6
+
+Recorded on 2026-11-06.
+
+The contract is `src/sdk/contract.ts`, a typed literal, not a file under `docs/`. The prompt, the generator and the test import it and `tsc` checks its shape; `docs/sdk.md` is its rendering under `docs/`. A module has `calls` and `declarations`, so the HTTP module of delivery 7 can be one entry that declares a key in `actions.json` without a browser call.
+
+`bun run sdk:render` writes `src/agent/sdk-section.generated.ts`, `kernel-rs/src/sdk-guide.json` and `docs/sdk.md`. The Kernel serves the second with `include_str!`.
+
+| Check | Command | Result |
+| --- | --- | --- |
+| `runtime.js` and the preview client expose the contract's calls and no other; `runtime.js` calls exactly the contract's runtime tools; each documented message exists in the Kernel, `runtime.js` or the preview source; the three rendered files are current; the prompt and `platform_guide` name no other call | `bun test src/sdk/contract.test.ts` | 45 pass |
+| `platform_guide` returns the included JSON, every tool a call names is a runtime tool, and calls open to signed-out visitors use only tools they get | `cargo test --manifest-path kernel-rs/Cargo.toml platform_guide_sdk_topic_is_the_rendered_contract` | 1 pass |
+| A hand edit to `sdk-section.generated.ts` or `sdk-guide.json`, a call added to or replacing the section in `system-prompt.ts`, a hand-written `sdk` arm in `mcp.rs` and a call removed from `runtime.js` each fail | edit, `bun test src/sdk`, revert | 1 or 2 failures each, as expected |
+
+Delivery 5 found that the hand-written `sdk` topic never mentioned `miniapp.auth.signOut`.
+
+The contract records these differences between the editor preview and the Kernel. None is fixed here.
+
+| Case | Kernel | Editor preview |
+| --- | --- | --- |
+| Undeclared action | `Server action not declared.` | `Server action not declared: <name>` |
+| `input` is not an object | `Arguments must be an object.` | `Action input must be an object.` |
+| Required input omitted | `Missing action input: <key>` | The type refusal, e.g. `<key> must be a non-empty string.` |
+| Number input of the wrong type | `<key> must be a number.` | `<key> must be a finite number.` |
+| Query over 1000 rows or 2 MiB | `Query result exceeds 2 MiB or 1000 rows.` | Two messages, and it counts value bytes instead of JSON bytes |
+| Upload over 2 MiB | `Transfer size is outside the limit.` | `Local prototype files are limited to 2 MiB.` |
+| Empty upload | Refused with `Transfer size is outside the limit.` | Accepted |
+| Private Deployment, no session | Every call refused | Visibility ignored; anonymous actions run |
+| Rate limits, 2 s statement deadline | Applied | Not applied |
+| Database cap | 256 MiB | 10 MiB |
+| `auth.signIn()`, `auth.signOut()` | Navigates to the login page; returns `{ ok: true }` | Selects Alice and returns her session; returns the anonymous session |
+
+`platform_describe` lists five runtime tools and leaves out `auth_logout`, which the runtime endpoint serves.
+
 ### Order
 
 Delivery 5 before 7, so the HTTP module is the first one born from the contract. Delivery 6 can follow 5 at any time. Delivery 8 last.

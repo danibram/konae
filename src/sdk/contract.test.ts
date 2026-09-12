@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { sdkPromptSection } from "../agent/sdk-section.generated";
 import { buildSystemPrompt } from "../agent/system-prompt";
 import { cloneStarter } from "../lib/starter";
 import { runtimeClient } from "../runtime/preview";
 import { contractCalls, sdkContract, type SdkContract } from "./contract";
+import { renderAll, renderedPaths } from "./render";
 
 const root = path.resolve(import.meta.dir, "../..");
 const read = (file: string) => readFileSync(path.join(root, file), "utf8");
@@ -115,14 +117,35 @@ describe("every documented message is one the code returns", () => {
   });
 });
 
-describe("the build agent's prompt and platform_guide name the same calls", () => {
-  test("the SDK section of the build agent's prompt names every contract call and no other", () => {
-    expect(drift(namedCalls(buildSystemPrompt(cloneStarter())))).toEqual(agreed);
+describe("the rendered readers", () => {
+  test("the checked-in prompt section, platform_guide topic and docs/sdk.md are the current rendering", () => {
+    const rendered = renderAll();
+    expect(Object.keys(rendered).sort()).toEqual(Object.values(renderedPaths).sort());
+    for (const [file, contents] of Object.entries(rendered)) {
+      expect({ file, contents: read(file) }).toEqual({ file, contents });
+    }
   });
 
-  test("the sdk topic of platform_guide names every contract call and no other", () => {
+  test("editing the contract changes every reader", () => {
+    const before = renderAll();
+    const after = renderAll(withExtraCall());
+    for (const file of Object.values(renderedPaths)) {
+      expect(after[file]).not.toBe(before[file]);
+      expect(after[file]).toContain("miniapp.auth.refresh()");
+    }
+  });
+
+  test("the build agent's prompt carries the rendered section and names no other call", () => {
+    const prompt = buildSystemPrompt(cloneStarter());
+    expect(prompt).toContain(sdkPromptSection);
+    expect(drift(namedCalls(prompt))).toEqual(agreed);
+  });
+
+  test("platform_guide serves the rendered JSON, and the starter app in mcp.rs uses only contract calls", () => {
     const mcp = read("kernel-rs/src/mcp.rs");
-    const arm = mcp.slice(mcp.indexOf('"sdk" =>'), mcp.indexOf('"actions" =>'));
-    expect(drift(namedCalls(arm))).toEqual(agreed);
+    expect(mcp).toContain(`"sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,`);
+    expect(drift(namedCalls(mcp)).notInContract).toEqual([]);
+    const guide = JSON.parse(read(renderedPaths.guide)) as { modules: { calls: { call: string }[] }[] };
+    expect(drift(guide.modules.flatMap((module) => module.calls.map((call) => call.call.replace(/^miniapp\./, ""))))).toEqual(agreed);
   });
 });

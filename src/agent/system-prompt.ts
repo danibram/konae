@@ -1,5 +1,6 @@
 import type { MiniAppProject, ProjectFile } from "../lib/types";
 import { capsulePathFor } from "./capsule-env";
+import { sdkPromptSection } from "./sdk-section.generated";
 
 /**
  * The cached prefix of every request: the Capsule contract and the working
@@ -62,18 +63,7 @@ Rules the gate cannot check, so they are on you. A passing validation says nothi
 - Every action authorizes its caller before touching data. Use "access": "anonymous" only for data that may be read or written by any visitor. Rows owned by a person need { "source": "actor", "field": "id" } in both the write and the read, plus "access": "authenticated".
 - An uploaded file is private to the signed-in user. Pass { visibility: "public" } only when every visitor of a public app may read those bytes. The gate does not guess this from a column name: a shared board and a private journal can both store user_id. In the final paragraph, name each new action as personal or shared.
 
-# The miniapp SDK, the only host surface
-
-const session = await miniapp.auth.session();          // { userId, name, role }; role is "anonymous" when signed out
-await miniapp.auth.signIn();                          // published login page, preview selects Alice
-await miniapp.auth.signOut();                         // revoke this app session
-const rows = await miniapp.actions.call("tasks.list");  // array of row objects
-await miniapp.actions.call("tasks.create", { title });  // { changes, lastInsertId }
-const stored = await miniapp.files.upload(file);        // private to the signed-in user
-const shared = await miniapp.files.upload(file, { visibility: "public" });
-const files = await miniapp.files.list();               // that user's private files, plus public files
-
-There is nothing else: no fetch to other origins, no localStorage contract, no miniapp.db. A query action returns the rows of its SELECT; a mutation action returns { changes, lastInsertId }. Column names in the result are exactly the ones the SELECT projects, so alias any expression you read in app.js.
+${sdkPromptSection}
 
 This Capsule is a ${visibility} deployment and its auth mode is ${auth}. Visibility controls who may open the app shell; it never grants data access on its own.
 

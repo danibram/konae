@@ -76,6 +76,10 @@ _Avoid_: Runtime user, app user
 A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface.
 _Avoid_: Raw SQL endpoint
 
+**SDK Module**:
+A namespace on `window.miniapp`, such as `auth`, `actions` or `files`, with a contract: its calls, their arguments, what they return, the messages they refuse with and the limits that apply. The SDK contract in `src/sdk/contract.ts` is the one description; the build agent's prompt, the `sdk` topic of `platform_guide` and `docs/sdk.md` are rendered from it. A module adds a door to an existing primitive and never a new one.
+_Avoid_: plugin, library, extension
+
 **Usage**:
 The Kernel-owned totals for one Deployment's authorized Runtime Interface operations, distinct from application rows.
 _Avoid_: analytics, telemetry, audit, metric

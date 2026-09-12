@@ -77,6 +77,8 @@ const items = await miniapp.actions.call("items.list");
 const files = await miniapp.files.list();
 ```
 
+[The miniapp SDK](sdk.md) lists every call with what it returns, the exact messages it refuses with and the limits that apply. That page, the `sdk` topic of `platform_guide` and the SDK section of the build agent's prompt are rendered from one contract, `src/sdk/contract.ts`, by `bun run sdk:render`. A test fails when `src/mcp/runtime.js`, the preview client or a rendered file disagrees with it.
+
 Without a session, `miniapp.auth.session()` returns an anonymous state so the app can show a sign-in button. On a public app, a signed-out visitor may call actions declared with `"access": "anonymous"`, and may list and read files uploaded with visibility `public`. Uploads, private files, and actions declared `authenticated` require sign-in. On a private app, visitors must sign in before the app loads, and nothing runs without a session.
 
 Signed-out visitors may call `actions_invoke` 30 times per 10 seconds per client address and Deployment, and each signed-in app user 120 times per 10 seconds. Further calls return a tool error with the text `rate-limited` and a `Retry-After` header. The Kernel uses the socket peer address and reads `X-Forwarded-For` only from peers listed in `LITTLEBOX_TRUSTED_PROXIES`. Such a proxy must append the address it received the request from, never forward the client's header unchanged. Owner calls are audited. For app users the Kernel records only a signed-in `files_upload` that stores a new file. Failed uploads, receipt replays, action calls, reads and session checks write no audit row, so app users cannot grow the shared audit table at will.
