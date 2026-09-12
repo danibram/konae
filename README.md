@@ -78,6 +78,8 @@ The Kernel reads these at startup. Defaults are the values in `kernel-rs/src` un
 | `LITTLEBOX_BIND` | `127.0.0.1` (`0.0.0.0` in the Kernel image) | Address the Kernel listens on. |
 | `LITTLEBOX_ADMIN_KEY` | `local-development-key` | Installation setup key that permits owner registration. An empty value counts as unset. |
 | `LITTLEBOX_ALLOW_DEFAULT_KEY` | unset | Set to `1` to let the Kernel start on a non-loopback address with the default setup key. Compose sets it for the development stack. |
+| `LITTLEBOX_ACCOUNT_VERIFICATION` | `local` | `required` makes new creator and app accounts prove their email before they are active, and moves accounts that never verified to pending with their sessions revoked. `local` keeps unverified signup for development. See [Verified accounts](#verified-accounts). |
+| `LITTLEBOX_MAIL_TRANSPORT` | unset | How the Kernel sends account links. `development` appends each message to `mailbox.jsonl` in the data directory. Unset means no email: verification-required signup and recovery answer 503. |
 | `LITTLEBOX_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses whose `X-Forwarded-For` header the Kernel trusts for rate limiting. CIDR ranges are rejected. |
 | `LITTLEBOX_DATA_DIR` | `/data` (`data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Directory for Deployment records, SQLite databases, uploads, artifacts and backups. |
 | `LITTLEBOX_PUBLIC_ORIGIN` | `http://localhost:8080` (`http://localhost:<kernel port>` under `dev:local`) | Origin used to build app URLs. Its scheme and port are copied onto each app hostname, and an `https://` origin makes OAuth metadata use HTTPS. |
@@ -157,7 +159,29 @@ Each Deployment has a signup policy that decides who may create an app account:
 
 Public Deployments start Open. Private Deployments start Closed, so the owner chooses who may join. Deployments published before signup policies existed get the same default from their visibility: Open if public, Closed if private. Republishing keeps the current policy, except that republishing a public app as private turns Open into Closed. The owner changes the policy in the editor's Auth panel or through the admin MCP tools `signup_policy_read` and `signup_policy_set`. Existing accounts keep working when the policy tightens. A refused signup gets the same answer whether signup is closed or the address is not listed.
 
-Littlebox does not verify email addresses, so whoever signs up first with a listed address or an address in a listed domain gets that account. Use Closed for apps that hold private data.
+In local mode the Kernel does not verify email addresses, so whoever signs up first with a listed address or an address in a listed domain gets that account. Use Closed for apps that hold private data, or require verification.
+
+## Verified accounts
+
+Creator accounts and app accounts share one account core in the Kernel. An account is pending, active or suspended, and only an active account gets a session. Every session check reads the state, so suspension ends the sessions an account already holds.
+
+`LITTLEBOX_ACCOUNT_VERIFICATION` chooses the mode for the whole installation:
+
+- `local`, the default: signup creates an active, unverified account and signs it in, as before. This keeps local development working without email.
+- `required`: signup creates a pending account with no password and sends a verification link. The person opens the link, chooses the password and becomes active. Recovery sends a 30-minute link that sets a new password and ends every earlier session.
+
+Switching an installation to `required` moves every account that never verified, in both scopes, to pending and revokes its sessions. IDs, rows and file owners stay. Those people enter again through **Forgot your password?**, which sends them a verification link. The switch happens the first time the Kernel opens each identity database in the new mode, so an installation never reaches production with active accounts whose email nobody proved. Switching back to `local` and later to `required` again moves accounts created unverified in between.
+
+`required` needs a mail transport. Without one, signup and recovery answer 503 with an explanation, and active accounts still sign in. Until a production transport exists, `LITTLEBOX_MAIL_TRANSPORT=development` writes each link to `mailbox.jsonl` in the data directory with `0600` permissions; that file holds live links, so use it only on a machine you control.
+
+The operator suspends or resumes a local creator account from the server:
+
+```sh
+littlebox-kernel creator-account-suspend owner@example.com
+littlebox-kernel creator-account-resume owner@example.com
+```
+
+Suspension ends the creator's sessions, open links, MCP credentials and OAuth codes. Projects and app accounts stay. A resumed account is active if it ever verified, and pending otherwise. [docs/mcp.md](docs/mcp.md#verified-accounts) lists the routes and tools.
 
 ## Security status
 
@@ -166,6 +190,7 @@ Littlebox does not verify email addresses, so whoever signs up first with a list
 - File operations require an authenticated app session. Files are shared among authenticated users within the same Deployment; per-user private files need a separate policy.
 - Public HTML is readable by anyone. Data is reachable only through declared actions, and a signed-out visitor can reach only the actions declared `anonymous`.
 - Sessions are opaque; only token hashes are persisted. Cookies are `HttpOnly` and host-only.
+- Pending and suspended accounts get no session. Verification and recovery links are single use, expire, answer only their own purpose and scope, and are stored as hashes. Opening a link changes nothing until the person posts the form.
 - Every Deployment gets a separate SQLite working file. The Kernel writes mutations transactionally and stores backups on explicit requests and before migrations.
 - Action inputs are typed, parameterized and quota-limited; structural SQL is rejected from runtime actions.
 - Owners use first-party sessions and delegated credentials. `LITTLEBOX_ADMIN_KEY` is an installation setup key for owner registration and never enters the editor bundle. The Kernel binds to `127.0.0.1` by default and refuses a non-loopback bind with the default setup key. Remote installations must configure their public origin, TLS and setup key.

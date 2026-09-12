@@ -145,6 +145,7 @@ pub enum AuthError {
     AccountSuspended,
     InvalidChallenge,
     SignupClosed,
+    MailUnavailable,
     VerificationRequired,
     Storage(rusqlite::Error),
     PasswordHash,
@@ -163,6 +164,10 @@ impl fmt::Display for AuthError {
             ),
             Self::AccountSuspended => write!(f, "This account is suspended."),
             Self::InvalidChallenge => write!(f, "This link is invalid, expired or already used."),
+            Self::MailUnavailable => write!(
+                f,
+                "Email is not configured on this installation, so it cannot send account links."
+            ),
             Self::SignupClosed => {
                 write!(f, "This app is not accepting new accounts for this email address.")
             }
@@ -194,7 +199,7 @@ impl AuthService {
     /// a scope for challenges. Used where the caller only installs or reads
     /// the schema, such as importing a portable identity database.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, AuthError> {
-        Self::open_in(path, "", Verification::Local)
+        Self::install(path, "", Verification::Local, false)
     }
 
     /// Opens the store of one scope. In `Required` mode this also moves
@@ -203,6 +208,15 @@ impl AuthService {
         path: impl AsRef<Path>,
         scope: &str,
         verification: Verification,
+    ) -> Result<Self, AuthError> {
+        Self::install(path, scope, verification, true)
+    }
+
+    fn install(
+        path: impl AsRef<Path>,
+        scope: &str,
+        verification: Verification,
+        apply_mode: bool,
     ) -> Result<Self, AuthError> {
         let service = Self {
             path: path.as_ref().to_path_buf(),
@@ -228,7 +242,7 @@ impl AuthService {
              CREATE INDEX IF NOT EXISTS app_sessions_expiry ON app_sessions(expires_at);",
             )
             .map_err(AuthError::Storage)?;
-        migrate(&mut connection, verification)?;
+        migrate(&mut connection, apply_mode.then_some(verification))?;
         Ok(service)
     }
 
@@ -529,6 +543,18 @@ impl AuthService {
         Ok(session)
     }
 
+    /// Whether an account exists and is active. Delegated credentials that
+    /// name an account check this on every use.
+    pub fn is_active(&self, user_id: &str) -> Result<bool, AuthError> {
+        self.connection()?
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM app_users WHERE id = ?1 AND state = 'active')",
+                [user_id],
+                |row| row.get(0),
+            )
+            .map_err(AuthError::Storage)
+    }
+
     /// Suspends an account by email. Its sessions and open challenges end at
     /// once; its ID, password and rows stay. Returns the account ID.
     pub fn suspend(&self, email: &str) -> Result<String, AuthError> {
@@ -662,6 +688,10 @@ pub struct NewAccount {
 }
 
 impl NewAccount {
+    pub fn email(&self) -> &str {
+        &self.email
+    }
+
     pub fn prepare(email: &str, password: &str) -> Result<Self, AuthError> {
         let email = normalize_email(email)?;
         validate_password(password)?;
@@ -729,7 +759,26 @@ fn issue_session(connection: &Connection, user: AuthUser) -> Result<AuthSession,
 /// changing any ID or row, then applies the verification mode. Columns are
 /// added, never rebuilt. Accounts that existed before states default to
 /// active and unverified.
-fn migrate(connection: &mut Connection, verification: Verification) -> Result<(), AuthError> {
+fn migrate(connection: &mut Connection, verification: Option<Verification>) -> Result<(), AuthError> {
+    // Every request opens a store, so the common case reads without taking
+    // the write lock.
+    let current: bool = connection
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM pragma_table_info('app_users') WHERE name IN ('state', 'verified_at')) = 2
+               AND EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'account_meta')
+               AND (?1 IS NULL OR EXISTS(SELECT 1 FROM account_meta WHERE key = 'verification' AND value = ?1))",
+            [verification.map(Verification::as_str)],
+            |row| row.get(0),
+        )
+        .or_else(|error_value| match error_value {
+            // account_meta does not exist yet, so the subquery cannot compile.
+            rusqlite::Error::SqliteFailure(_, _) => Ok(false),
+            other => Err(other),
+        })
+        .map_err(AuthError::Storage)?;
+    if current {
+        return Ok(());
+    }
     let transaction = immediate(connection)?;
     let columns: Vec<String> = transaction
         .prepare("PRAGMA table_info(app_users)")
@@ -769,6 +818,9 @@ fn migrate(connection: &mut Connection, verification: Verification) -> Result<()
              CREATE TABLE IF NOT EXISTS account_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )
         .map_err(AuthError::Storage)?;
+    let Some(verification) = verification else {
+        return transaction.commit().map_err(AuthError::Storage);
+    };
     let recorded: Option<String> = transaction
         .query_row("SELECT value FROM account_meta WHERE key = 'verification'", [], |row| row.get(0))
         .optional()

@@ -8,6 +8,18 @@ Littlebox is the guardrail that lets a person who does not write code, and a per
 The authenticated identity and personal profile used to enter Littlebox and participate in Workspaces. An Account does not directly own runtime data or imply access to every Project.
 _Avoid_: Runtime Actor, Project Owner
 
+**Account State**:
+Whether an Account or a Runtime Actor's account may hold a session: pending until it proves control of its email, active, or suspended by the operator or the Project Owner. Only an active account gets a session, and suspension keeps the account's ID and rows.
+_Avoid_: enabled, verified flag
+
+**Challenge**:
+A single-use, expiring proof sent by email, with one purpose (verification, invitation or recovery) and one scope (the creator scope or one Deployment). The Kernel stores only its hash; answering it sets the account's password.
+_Avoid_: magic link, reset token
+
+**Verification Mode**:
+The installation's choice between local, where signup creates an active unverified account for development, and required, where every new account starts pending and accounts that never verified return to pending.
+_Avoid_: email confirmation setting
+
 **Workspace**:
 A collection of Projects that an Account can browse and administer through membership. A personal Workspace may have one member; the term still preserves the future boundary for teams.
 _Avoid_: Deployment list, app runtime
@@ -61,7 +73,7 @@ A Deployment whose application shell and runtime require a signed-in Runtime Act
 _Avoid_: Password-protected app
 
 **Signup Policy**:
-The per-Deployment rule for who may create a Runtime Actor account: Open (anyone), Allowlist (exact emails or `@domain` entries) or Closed (no new accounts). Public Deployments start Open and Private Deployments start Closed. The Project Owner sets it in the editor's Auth panel or through admin MCP tools.
+The per-Deployment rule for who may create a Runtime Actor account: Open (anyone), Allowlist (exact emails or `@domain` entries) or Closed (no new accounts). Public Deployments start Open and Private Deployments start Closed. The Project Owner sets it in the editor's Auth panel or through admin MCP tools. Under required Verification Mode the Kernel checks it again when the account verifies.
 _Avoid_: Invite list, access grant
 
 **Runtime Actor**:

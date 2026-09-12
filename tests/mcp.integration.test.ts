@@ -479,7 +479,7 @@ describe("authenticated MCP", () => {
     const { receipt } = await release("anonymous_proof");
     const listed = await fetch(`${url}/_littlebox/mcp`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
     expect(listed.status).toBe(200);
-    expect((await listed.json()).result.tools.map((tool: { name: string }) => tool.name)).toEqual(["auth_session", "actions_invoke", "files_list", "files_read", "transfer_read", "transfer_status", "transfer_cancel"]);
+    expect((await listed.json()).result.tools.map((tool: { name: string }) => tool.name)).toEqual(["auth_session", "actions_invoke", "files_list", "files_read", "transfer_read", "transfer_status", "transfer_cancel", "auth_signup", "auth_verify", "auth_recover", "auth_reset"]);
     const visitor = runtimeClient(receipt.hostname);
     expect(await visitor.call("auth_session")).toEqual({ userId: "anonymous", name: "Anonymous", role: "anonymous" });
     expect(await visitor.call("actions_invoke", { name: "notes.count" })).toEqual([{ total: 0 }]);
