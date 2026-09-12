@@ -26,6 +26,7 @@ use uuid::Uuid;
 
 mod auth;
 mod clerk;
+mod copies;
 mod limits;
 mod mcp;
 mod oauth;
@@ -39,9 +40,8 @@ struct AppState {
     s3: Option<S3Client>,
     artifact_bucket: String,
     data_bucket: String,
-    local_artifact_root: PathBuf,
-    backup_root: PathBuf,
     data_root: PathBuf,
+    copies: Arc<copies::CopyStatus>,
     admin_key: String,
     public_origin: String,
     host_suffix: String,
@@ -292,6 +292,7 @@ struct ActionBinding {
 #[tokio::main]
 async fn main() -> Result<()> {
     if clerk::operator_command()? { return Ok(()); }
+    if copies::operator_command().await? { return Ok(()); }
     let port = env("LITTLEBOX_KERNEL_PORT", "8787").parse::<u16>()?;
     let bind = env("LITTLEBOX_BIND", "127.0.0.1");
     let public_origin = env("LITTLEBOX_PUBLIC_ORIGIN", "http://localhost:8080");
@@ -304,43 +305,22 @@ async fn main() -> Result<()> {
     )?;
     let data_root = PathBuf::from(env("LITTLEBOX_DATA_DIR", "/data"));
     tokio::fs::create_dir_all(data_root.join("deployments")).await?;
-    let s3 = if let Ok(endpoint) = std::env::var("LITTLEBOX_S3_ENDPOINT") {
-        let credentials = Credentials::new(
-            env("LITTLEBOX_S3_ACCESS_KEY", "littlebox"),
-            env("LITTLEBOX_S3_SECRET_KEY", "littlebox-secret"),
-            None,
-            None,
-            "littlebox-config",
-        );
-        let sdk_config = aws_config::defaults(BehaviorVersion::latest())
-            .region(Region::new(env("LITTLEBOX_S3_REGION", "us-east-1")))
-            .credentials_provider(credentials)
-            .endpoint_url(endpoint)
-            .load()
-            .await;
-        let s3_config = S3ConfigBuilder::from(&sdk_config)
-            .force_path_style(true)
-            .build();
-        Some(S3Client::from_conf(s3_config))
-    } else {
-        None
-    };
+    for line in copies::migrate_layout(&data_root)? {
+        println!("Layout migration: moved {line}");
+    }
+    let s3 = s3_client_from_env().await;
     let artifact_bucket = env("LITTLEBOX_ARTIFACT_BUCKET", "littlebox-apps");
     let data_bucket = env("LITTLEBOX_DATA_BUCKET", "littlebox-data");
-    let deployments = load_deployments(&data_root, s3.as_ref(), &data_bucket).await?;
-    let local_artifact_root = data_root.join("artifacts");
-    let backup_root = data_root.join("backups");
-    tokio::fs::create_dir_all(&local_artifact_root).await?;
-    tokio::fs::create_dir_all(&backup_root).await?;
+    let copy_config = copies::CopyConfig::from_env(&data_root, s3.is_some())?;
+    let deployments = load_deployments(&data_root).await?;
     let state = AppState {
         deployments: Arc::new(RwLock::new(deployments)),
         db_locks: LockMap::default(),
         s3,
         artifact_bucket,
         data_bucket,
-        local_artifact_root,
-        backup_root,
         data_root,
+        copies: Arc::new(copies::CopyStatus::new(copy_config.as_ref())),
         admin_key,
         public_origin,
         host_suffix: env("LITTLEBOX_HOST_SUFFIX", "localhost"),
@@ -348,6 +328,9 @@ async fn main() -> Result<()> {
             &std::env::var("LITTLEBOX_TRUSTED_PROXIES").unwrap_or_default(),
         )?)),
     };
+    if let Some(config) = copy_config {
+        copies::spawn_schedule(state.clone(), config);
+    }
 
     let app = Router::new()
         .route("/_littlebox/health", get(health))
@@ -372,7 +355,43 @@ async fn main() -> Result<()> {
 
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({"ok": true, "kernel": "littlebox-rust", "version": 1,
-        "artifactStore": if state.s3.is_some() { "filesystem+s3" } else { "filesystem" }}))
+        "artifactStore": if state.s3.is_some() { "filesystem+s3" } else { "filesystem" },
+        "copies": state.copies.health()}))
+}
+
+/// The S3 client for artifacts and copies, or None when LITTLEBOX_S3_ENDPOINT is unset.
+async fn s3_client_from_env() -> Option<S3Client> {
+    let endpoint = std::env::var("LITTLEBOX_S3_ENDPOINT").ok()?;
+    let credentials = Credentials::new(
+        env("LITTLEBOX_S3_ACCESS_KEY", "littlebox"),
+        env("LITTLEBOX_S3_SECRET_KEY", "littlebox-secret"),
+        None,
+        None,
+        "littlebox-config",
+    );
+    let sdk_config = aws_config::defaults(BehaviorVersion::latest())
+        .region(Region::new(env("LITTLEBOX_S3_REGION", "us-east-1")))
+        .credentials_provider(credentials)
+        .endpoint_url(endpoint)
+        .load()
+        .await;
+    let s3_config = S3ConfigBuilder::from(&sdk_config)
+        .force_path_style(true)
+        .build();
+    Some(S3Client::from_conf(s3_config))
+}
+
+/// The Deployment's folder: its record, artifact, databases, files and backups.
+fn deployment_dir(state: &AppState, id: &str) -> PathBuf {
+    state.data_root.join("deployments").join(id)
+}
+
+fn artifact_root(state: &AppState, id: &str) -> PathBuf {
+    deployment_dir(state, id).join("artifact")
+}
+
+fn backup_dir(state: &AppState, id: &str) -> PathBuf {
+    deployment_dir(state, id).join("backups")
 }
 
 async fn test_storage(State(state): State<AppState>, request: Request) -> Response {
@@ -622,7 +641,7 @@ async fn stage_local_artifact(
     version: &str,
     files: &HashMap<String, String>,
 ) -> Result<()> {
-    let root = state.local_artifact_root.join(id).join(version);
+    let root = artifact_root(state, id).join(version);
     for (path, contents) in files {
         let local_path = root.join(path);
         if let Some(parent) = local_path.parent() {
@@ -664,7 +683,7 @@ async fn upload_artifact(
 
 /// Best-effort removal of a version that never went live.
 async fn remove_artifact_version(state: &AppState, id: &str, version: &str) {
-    let _ = tokio::fs::remove_dir_all(state.local_artifact_root.join(id).join(version)).await;
+    let _ = tokio::fs::remove_dir_all(artifact_root(state, id).join(version)).await;
     if let Some(s3) = state.s3.as_ref() {
         let prefix = format!("deployments/{id}/{version}/");
         if let Ok(keys) = list_s3_keys(s3, &state.artifact_bucket, &prefix).await {
@@ -679,7 +698,7 @@ async fn remove_artifact_version(state: &AppState, id: &str, version: &str) {
 /// older deployments stored at the prefix root. Failures are logged because the
 /// new version is already live.
 async fn remove_stale_artifacts(state: &AppState, id: &str, version: &str) {
-    let root = state.local_artifact_root.join(id);
+    let root = artifact_root(state, id);
     if let Ok(mut entries) = tokio::fs::read_dir(&root).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             if entry.file_name().to_str() == Some(version) {
@@ -697,9 +716,6 @@ async fn remove_stale_artifacts(state: &AppState, id: &str, version: &str) {
     let Some(s3) = state.s3.as_ref() else { return };
     let prefix = format!("deployments/{id}/");
     let live = format!("{prefix}{version}/");
-    // deployment.json shares this prefix when one bucket holds artifacts and data.
-    let record = format!("{prefix}deployment.json");
-    let shared_bucket = state.artifact_bucket == state.data_bucket;
     let keys = match list_s3_keys(s3, &state.artifact_bucket, &prefix).await {
         Ok(keys) => keys,
         Err(error_value) => {
@@ -708,7 +724,7 @@ async fn remove_stale_artifacts(state: &AppState, id: &str, version: &str) {
         }
     };
     for key in keys {
-        if key.starts_with(&live) || (shared_bucket && key == record) {
+        if key.starts_with(&live) {
             continue;
         }
         if let Err(error_value) = s3.delete_object().bucket(&state.artifact_bucket).key(&key).send().await {
@@ -1306,7 +1322,7 @@ async fn read_artifact(state: &AppState, deployment: &Deployment, path: &str) ->
         Some(version) => format!("{version}/{path}"),
         None => path.to_owned(),
     };
-    let local = state.local_artifact_root.join(&deployment.id).join(&relative);
+    let local = artifact_root(state, &deployment.id).join(&relative);
     match tokio::fs::read(local).await {
         Ok(bytes) => Ok(bytes),
         Err(local_error) => {
@@ -1426,7 +1442,7 @@ async fn export_portable_state(
 }
 
 async fn portable_state(state: &AppState, deployment: &Deployment) -> Result<Value> {
-    let backup_dir = state.backup_root.join(&deployment.id);
+    let backup_dir = backup_dir(state, &deployment.id);
     tokio::fs::create_dir_all(&backup_dir).await?;
     let database_path = database_path(state, &deployment.id);
     let database = sqlite_snapshot(&database_path, &backup_dir, "portable-data").await?;
@@ -1937,7 +1953,7 @@ fn value_to_sql(value: Option<&Value>) -> Result<SqlValue> {
 }
 
 async fn list_backups(state: &AppState, id: &str) -> Result<Vec<Value>> {
-    let dir = state.backup_root.join(id);
+    let dir = backup_dir(state, id);
     let mut entries = match tokio::fs::read_dir(&dir).await {
         Ok(v) => v,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -1957,7 +1973,7 @@ async fn list_backups(state: &AppState, id: &str) -> Result<Vec<Value>> {
 
 async fn create_backup(state: &AppState, id: &str, label: &str) -> Result<Value> {
     let db_path = database_path(state, id);
-    let dir = state.backup_root.join(id);
+    let dir = backup_dir(state, id);
     tokio::fs::create_dir_all(&dir).await?;
     let backup_id = Uuid::new_v4().to_string();
     let snapshot_path = dir.join(format!("{backup_id}.sqlite"));
@@ -1985,10 +2001,7 @@ async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Result<V
     if backup_id.is_empty() || backup_id.contains('/') || backup_id.contains("..") {
         anyhow::bail!("Invalid backup ID.");
     }
-    let backup_path = state
-        .backup_root
-        .join(id)
-        .join(format!("{backup_id}.sqlite"));
+    let backup_path = backup_dir(state, id).join(format!("{backup_id}.sqlite"));
     let bytes = tokio::fs::read(&backup_path).await?;
     create_backup(state, id, "Before restore").await?;
     let temp_path = database_path(state, id).with_extension("restore.sqlite");
@@ -2667,25 +2680,14 @@ fn safe_relative_path(path: &str) -> bool {
 }
 
 async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Result<()> {
-    let directory = state.data_root.join("deployments").join(&deployment.id);
     let bytes = serde_json::to_vec_pretty(deployment)?;
-    write_atomic(&directory.join("deployment.json"), &bytes).await?;
-    if let Some(s3) = state.s3.as_ref() {
-        s3.put_object()
-            .bucket(&state.data_bucket)
-            .key(format!("deployments/{}/deployment.json", deployment.id))
-            .body(ByteStream::from(bytes))
-            .send()
-            .await?;
-    }
+    write_atomic(&deployment_dir(state, &deployment.id).join("deployment.json"), &bytes).await?;
     Ok(())
 }
 
-async fn load_deployments(
-    root: &Path,
-    s3: Option<&S3Client>,
-    data_bucket: &str,
-) -> Result<HashMap<String, Deployment>> {
+/// Reads every Deployment record on the volume. A Kernel on a fresh volume
+/// starts empty; `littlebox-kernel restore` installs copied folders first.
+async fn load_deployments(root: &Path) -> Result<HashMap<String, Deployment>> {
     let mut result = HashMap::new();
     let mut entries = tokio::fs::read_dir(root.join("deployments")).await?;
     while let Some(entry) = entries.next_entry().await? {
@@ -2696,103 +2698,12 @@ async fn load_deployments(
             }
         }
     }
-    let Some(s3) = s3 else { return Ok(result) };
-    for key in list_s3_keys(s3, data_bucket, "deployments/").await? {
-        if !key.ends_with("/deployment.json") {
-            continue;
-        }
-        let bytes = match read_s3_bytes(s3, data_bucket, &key).await {
-            Ok(bytes) => bytes,
-            Err(error_value) => {
-                eprintln!("Skipping deployment {key}: {error_value}");
-                continue;
-            }
-        };
-        let deployment: Deployment = match serde_json::from_slice(&bytes) {
-            Ok(deployment) => deployment,
-            Err(error_value) => {
-                eprintln!("Skipping deployment {key}: {error_value}");
-                continue;
-            }
-        };
-        let directory = root.join("deployments").join(&deployment.id);
-        tokio::fs::create_dir_all(&directory).await?;
-        let database_path = directory.join("database.sqlite");
-        if !database_path.exists() {
-            match restore_database(s3, data_bucket, &deployment.id, &database_path).await {
-                Ok(true) => {}
-                Ok(false) => {
-                    // S3 holds Deployment records and artifacts only. Databases,
-                    // identities and files live on the Kernel volume.
-                    eprintln!(
-                        "Warning: deployment {} was restored from S3 without its data. S3 holds Deployment records and artifacts only; the database, app accounts and files lived on the old Kernel volume. Starting with an empty database and no accounts.",
-                        deployment.id
-                    );
-                    initialize_database(&database_path)?;
-                }
-                Err(error_value) => {
-                    // Serving now would create an empty database that hides the
-                    // remote one, so leave this deployment for the next start.
-                    eprintln!(
-                        "Skipping deployment {}: database restore failed: {error_value}",
-                        deployment.id
-                    );
-                    result.remove(&deployment.hostname);
-                    continue;
-                }
-            }
-        }
-        write_atomic(&directory.join("deployment.json"), &bytes).await?;
-        result.insert(deployment.hostname.clone(), deployment);
-    }
     Ok(result)
-}
-
-/// Restores the newest database generation. Returns false when the deployment
-/// has no database head in the bucket.
-async fn restore_database(
-    s3: &S3Client,
-    bucket: &str,
-    deployment_id: &str,
-    path: &Path,
-) -> Result<bool> {
-    let Some(head) =
-        read_s3_optional(s3, bucket, &format!("databases/{deployment_id}/head.json")).await?
-    else {
-        return Ok(false);
-    };
-    let value: Value = serde_json::from_slice(&head)?;
-    let generation = value
-        .get("generation")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("Database head has no generation."))?;
-    let bytes = read_s3_bytes(
-        s3,
-        bucket,
-        &format!("databases/{deployment_id}/generations/{generation}.sqlite"),
-    )
-    .await?;
-    write_atomic(path, &bytes).await?;
-    Ok(true)
 }
 
 async fn read_s3_bytes(s3: &S3Client, bucket: &str, key: &str) -> Result<Vec<u8>> {
     let object = s3.get_object().bucket(bucket).key(key).send().await?;
     Ok(object.body.collect().await?.into_bytes().to_vec())
-}
-
-async fn read_s3_optional(s3: &S3Client, bucket: &str, key: &str) -> Result<Option<Vec<u8>>> {
-    match s3.get_object().bucket(bucket).key(key).send().await {
-        Ok(object) => Ok(Some(object.body.collect().await?.into_bytes().to_vec())),
-        Err(error_value)
-            if error_value
-                .as_service_error()
-                .is_some_and(|service| service.is_no_such_key()) =>
-        {
-            Ok(None)
-        }
-        Err(error_value) => Err(error_value.into()),
-    }
 }
 
 async fn list_s3_keys(s3: &S3Client, bucket: &str, prefix: &str) -> Result<Vec<String>> {
@@ -3188,9 +3099,8 @@ mod tests {
             s3: None,
             artifact_bucket: "artifacts".into(),
             data_bucket: "data".into(),
-            local_artifact_root: root.join("artifacts"),
-            backup_root: root.join("backups"),
             data_root: root.into(),
+            copies: Arc::new(copies::CopyStatus::default()),
             admin_key: "test-admin".into(),
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),
@@ -3612,9 +3522,8 @@ mod tests {
             s3: None,
             artifact_bucket: "artifacts".into(),
             data_bucket: "data".into(),
-            local_artifact_root: root.join("artifacts"),
-            backup_root: root.join("backups"),
             data_root: root.into(),
+            copies: Arc::new(copies::CopyStatus::default()),
             admin_key: "test-admin".into(),
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),
@@ -3868,7 +3777,7 @@ mod tests {
         assert_eq!(read_artifact(&state, &deployment, "new.js").await.unwrap(), b"2");
         assert!(read_artifact(&state, &deployment, "old.js").await.is_err());
         assert!(read_artifact(&state, &deployment, "assets/old.css").await.is_err());
-        let mut entries = std::fs::read_dir(root.join("artifacts").join(&id))
+        let mut entries = std::fs::read_dir(root.join("deployments").join(&id).join("artifact"))
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect::<Vec<_>>();
@@ -4016,7 +3925,7 @@ mod tests {
             .body(Body::from(body.to_string()))
             .unwrap();
         assert_eq!(deploy(State(state.clone()), request).await.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let versions = std::fs::read_dir(root.join("artifacts").join(&id)).unwrap().count();
+        let versions = std::fs::read_dir(root.join("deployments").join(&id).join("artifact")).unwrap().count();
         assert_eq!(versions, 1, "only the live version remains");
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         assert_eq!(read_artifact(&state, &deployment, "index.html").await.unwrap(), b"<p>one</p>");
@@ -4028,7 +3937,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("littlebox-legacy-{}", Uuid::new_v4()));
         let (state, _) = login_test_state(&root, "public").await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
-        let directory = root.join("artifacts").join(&deployment.id);
+        let directory = root.join("deployments").join(&deployment.id).join("artifact");
         tokio::fs::create_dir_all(&directory).await.unwrap();
         tokio::fs::write(directory.join("index.html"), "legacy").await.unwrap();
         assert_eq!(read_artifact(&state, &deployment, "index.html").await.unwrap(), b"legacy");
@@ -4060,8 +3969,9 @@ mod tests {
             .find(|item| item["label"] == "Before restore")
             .expect("restore must keep a copy of the live database");
         let snapshot = root
-            .join("backups")
+            .join("deployments")
             .join(id)
+            .join("backups")
             .join(format!("{}.sqlite", before["id"].as_str().unwrap()));
         let rows: i64 = Connection::open(snapshot)
             .unwrap()
