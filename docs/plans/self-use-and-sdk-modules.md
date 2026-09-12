@@ -119,6 +119,7 @@ The contract is `src/sdk/contract.ts`, a typed literal, not a file under `docs/`
 | --- | --- | --- |
 | `runtime.js` and the preview client expose the contract's calls and no other; `runtime.js` calls exactly the contract's runtime tools; each documented message exists in the Kernel, `runtime.js` or the preview source; the three rendered files are current; the prompt and `platform_guide` name no other call | `bun test src/sdk/contract.test.ts` | 45 pass |
 | `platform_guide` returns the included JSON, every tool a call names is a runtime tool, and calls open to signed-out visitors use only tools they get | `cargo test --manifest-path kernel-rs/Cargo.toml platform_guide_sdk_topic_is_the_rendered_contract` | 1 pass |
+| The export kit carries `sdk-guide.json` and every other file the exported Kernel build reads with `include_str!` | `bun test src/lib/export-project-kit.test.ts` | 13 pass; removing the JSON from the kit fails it |
 | A hand edit to `sdk-section.generated.ts` or `sdk-guide.json`, a call added to or replacing the section in `system-prompt.ts`, a hand-written `sdk` arm in `mcp.rs` and a call removed from `runtime.js` each fail | edit, `bun test src/sdk`, revert | 1 or 2 failures each, as expected |
 
 Delivery 5 found that the hand-written `sdk` topic never mentioned `miniapp.auth.signOut`.

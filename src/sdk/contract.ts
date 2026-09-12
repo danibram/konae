@@ -104,7 +104,7 @@ export const sdkContract = {
     "no miniapp.db and no SQL from the browser",
   ],
   errors: [
-    { message: "Sign in to use Littlebox MCP.", when: "the Deployment is private and the visitor has no session; the SDK treats it as authentication-required", source: "kernel", preview: null },
+    { message: "Sign in to use Littlebox MCP.", when: "the Deployment is private and the visitor has no session; actions.call then sends the browser to /_littlebox/login and auth.session returns the anonymous state instead", source: "kernel", preview: null },
     { message: "Deployment not found.", when: "the host name matches no Deployment", source: "kernel", preview: null },
     { message: "Cross-origin or unrecognized-host MCP request rejected.", when: "the request does not come from the Deployment's own origin", source: "kernel", preview: null },
     { message: "MCP request exceeds 200 KB.", when: "one request body is larger than 200,000 bytes", source: "kernel", preview: null },

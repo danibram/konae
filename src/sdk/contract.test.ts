@@ -6,7 +6,7 @@ import { buildSystemPrompt } from "../agent/system-prompt";
 import { cloneStarter } from "../lib/starter";
 import { runtimeClient } from "../runtime/preview";
 import { contractCalls, sdkContract, type SdkContract } from "./contract";
-import { renderAll, renderedPaths } from "./render";
+import { renderAll, renderedPaths, renderPromptSection } from "./render";
 
 const root = path.resolve(import.meta.dir, "../..");
 const read = (file: string) => readFileSync(path.join(root, file), "utf8");
@@ -137,6 +137,8 @@ describe("the rendered readers", () => {
 
   test("the build agent's prompt carries the rendered section and names no other call", () => {
     const prompt = buildSystemPrompt(cloneStarter());
+    // The generated module escapes the section into a template literal; the value must survive it.
+    expect(sdkPromptSection).toBe(renderPromptSection());
     expect(prompt).toContain(sdkPromptSection);
     expect(drift(namedCalls(prompt))).toEqual(agreed);
   });

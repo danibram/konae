@@ -46,6 +46,18 @@ describe("buildProjectExport", () => {
     }
   });
 
+  test("includes every file the exported Kernel build reads with include_str!", () => {
+    const files = readTar(buildProjectExport(project, artifact, bundledKernelFiles).archive);
+    const sources = [...files].filter(([path]) => path.startsWith("kernel-rs/src/") && path.endsWith(".rs"));
+    // Test modules read fixtures a release build never compiles.
+    const built = sources.map(([, source]) => source.split(/#\[cfg\(test\)\]\s*mod tests/)[0]);
+    const included = built.flatMap((source) => [...source.matchAll(/include_str!\("([^"]+)"\)/g)].map((match) => match[1]));
+    expect(included).toContain("sdk-guide.json");
+    for (const file of included) {
+      expect(files.get(`kernel-rs/src/${file}`)).toBeTruthy();
+    }
+  });
+
   test("a failed self-hosted deploy releases its transfer and owner session", async () => {
     const calls: string[] = [];
     const server = Bun.serve({

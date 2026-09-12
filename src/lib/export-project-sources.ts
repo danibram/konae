@@ -7,6 +7,7 @@ import kernelLimitsSource from "../../kernel-rs/src/limits.rs?raw";
 import kernelCargoLock from "../../kernel-rs/Cargo.lock?raw";
 import kernelCargoManifest from "../../kernel-rs/Cargo.toml?raw";
 import kernelMainSource from "../../kernel-rs/src/main.rs?raw";
+import kernelSdkGuide from "../../kernel-rs/src/sdk-guide.json?raw";
 import type { ExportFile } from "./export-project-kit";
 
 export const kernelFiles: ExportFile[] = [
@@ -19,4 +20,5 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/auth.rs", contents: kernelAuthSource },
   { path: "kernel-rs/src/clerk.rs", contents: kernelClerkSource },
   { path: "kernel-rs/src/limits.rs", contents: kernelLimitsSource },
+  { path: "kernel-rs/src/sdk-guide.json", contents: kernelSdkGuide },
 ];

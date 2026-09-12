@@ -100,7 +100,7 @@ Limits:
 Editor preview: Stores the file in browser storage as a data URL, and accepts an empty file.
 
 Any call that reaches the Kernel can also refuse with:
-- "Sign in to use Littlebox MCP." when the Deployment is private and the visitor has no session; the SDK treats it as authentication-required
+- "Sign in to use Littlebox MCP." when the Deployment is private and the visitor has no session; actions.call then sends the browser to /_littlebox/login and auth.session returns the anonymous state instead
 - "Deployment not found." when the host name matches no Deployment
 - "Cross-origin or unrecognized-host MCP request rejected." when the request does not come from the Deployment's own origin
 - "MCP request exceeds 200 KB." when one request body is larger than 200,000 bytes

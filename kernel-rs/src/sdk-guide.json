@@ -21,7 +21,7 @@
   "errors": [
     {
       "message": "Sign in to use Littlebox MCP.",
-      "when": "the Deployment is private and the visitor has no session; the SDK treats it as authentication-required",
+      "when": "the Deployment is private and the visitor has no session; actions.call then sends the browser to /_littlebox/login and auth.session returns the anonymous state instead",
       "source": "kernel"
     },
     {
