@@ -1248,7 +1248,7 @@ async fn login_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
     };
     match authenticate_deployment(&state, &deployment, &headers) {
         Ok(Some(_)) => (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response(),
-        Ok(None) => private_login_page(&deployment.signup_policy),
+        Ok(None) => private_login_page(&deployment.signup_policy, state.accounts.verification),
         Err(response) => response,
     }
 }
@@ -1283,7 +1283,7 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
     {
         match authenticate_deployment(&state, &deployment, &headers) {
             Ok(Some(_)) => {}
-            Ok(None) => return private_login_page(&deployment.signup_policy),
+            Ok(None) => return private_login_page(&deployment.signup_policy, state.accounts.verification),
             Err(response) => return response,
         }
     }
@@ -1326,8 +1326,15 @@ async fn read_artifact(state: &AppState, deployment: &Deployment, path: &str) ->
     }
 }
 
-fn private_login_page(policy: &SignupPolicy) -> Response {
+fn private_login_page(policy: &SignupPolicy, verification: auth::Verification) -> Response {
+    // With verification required, signup takes only the email: the password
+    // is chosen on the page the emailed link opens.
+    let verified = verification == auth::Verification::Required;
     let (note, create) = match policy.mode {
+        SignupMode::Open if verified => (
+            "New here? Enter your email and create an account. We send a link to choose your password.",
+            true,
+        ),
         SignupMode::Open => (
             "New here? Enter an email and password, then create an account.",
             true,
@@ -1345,7 +1352,9 @@ fn private_login_page(policy: &SignupPolicy) -> Response {
         r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f5f7;color:#20232a;font:16px system-ui,sans-serif}main{width:min(100%,380px);padding:32px;background:white;border:1px solid #e1e4e8;border-radius:12px;box-shadow:0 12px 36px #1f293714}h1{margin:0 0 8px;font-size:24px}p{color:#586174;line-height:1.5}form,label{display:grid;gap:8px}form{gap:16px;margin-top:24px}input,button{font:inherit;border-radius:8px;padding:11px 12px}input{width:100%;border:1px solid #c9ced6}button{border:0;background:#273449;color:white;cursor:pointer}button+button{background:#edf0f4;color:#252a33}#error{min-height:1.5em;margin:0;color:#a32727}</style><main><h1>Sign in to this app</h1><p>"#,
         note,
         r#"</p><form id="auth"><label>Email <input name="email" type="email" required autocomplete="email"></label><label>Password <input name="password" type="password" minlength="8" required autocomplete="current-password"></label><button formaction="/_littlebox/auth/login">Sign in</button>"#,
-        if create {
+        if create && verified {
+            r#"<button formaction="/_littlebox/auth/signup" formnovalidate>Create account</button>"#
+        } else if create {
             r#"<button formaction="/_littlebox/auth/signup">Create account</button>"#
         } else {
             ""

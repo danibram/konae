@@ -730,6 +730,9 @@ mod tests {
     #[tokio::test]
     async fn app_signup_waits_for_verification_and_a_get_changes_nothing() {
         let fixture = fixture(Verification::Required, true);
+        let login = super::super::login_page(State(fixture.state.clone()), host_headers(APP_HOST)).await;
+        let login = String::from_utf8(axum::body::to_bytes(login.into_body(), 1 << 16).await.unwrap().to_vec()).unwrap();
+        assert!(login.contains("formnovalidate") && login.contains("a link to choose your password"));
         let response = app_signup(&fixture, APP_HOST, "person@example.test").await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         assert!(cookie_of(&response).is_none(), "a pending account gets no session");
@@ -741,12 +744,14 @@ mod tests {
         // The signup password was not stored, and the pending account cannot sign in.
         assert_eq!(app_login(&fixture, APP_HOST, "person@example.test", PASSWORD).await.status(), StatusCode::UNAUTHORIZED);
 
-        // A mail scanner opening the link, even with the token in the query, changes nothing.
-        for uri in [format!("/_littlebox/account?verification={token}"), "/_littlebox/account".to_owned()] {
-            let page = app_account_page(State(fixture.state.clone()), host_headers(APP_HOST)).await;
-            assert_eq!(page.status(), StatusCode::OK, "{uri}");
-            assert!(page.headers().get(header::SET_COOKIE).is_none());
-        }
+        // A mail scanner opening the link gets the form and nothing else. The
+        // page handler receives no URI, so a token in the query cannot reach
+        // it, and `routes()` binds the answer routes to POST only.
+        let page = app_account_page(State(fixture.state.clone()), host_headers(APP_HOST)).await;
+        assert_eq!(page.status(), StatusCode::OK);
+        assert!(page.headers().get(header::SET_COOKIE).is_none());
+        let body = String::from_utf8(axum::body::to_bytes(page.into_body(), 1 << 16).await.unwrap().to_vec()).unwrap();
+        assert!(body.contains("method:'POST'") && !body.contains(&token));
         assert_eq!(fixture.app_state_of(APP_HOST, "person@example.test").await, "pending");
 
         let verified = app_answer(&fixture, APP_HOST, "/_littlebox/auth/verify", &token, "the chosen password").await;
