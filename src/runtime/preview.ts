@@ -1,7 +1,7 @@
 import type { MiniAppProject } from "../lib/types";
 import { renderCapsuleDocument } from "./artifact";
 
-const runtimeClient = String.raw`
+export const runtimeClient = String.raw`
 (() => {
   const pending = new Map();
   let sequence = 0;

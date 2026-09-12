@@ -1,0 +1,279 @@
+/**
+ * The miniapp SDK contract: every module on `window.miniapp`, every call, its
+ * arguments, what it returns, what it refuses and the limits that apply.
+ *
+ * This file is the single source. `bun run sdk:render` writes three readers
+ * from it: the SDK section of the build agent's prompt
+ * (src/agent/sdk-section.generated.ts), the `sdk` topic of `platform_guide`
+ * (kernel-rs/src/sdk-guide.json) and docs/sdk.md. src/sdk/contract.test.ts
+ * fails when src/mcp/runtime.js, the preview client or any reader disagrees.
+ *
+ * Error messages are the exact text the published app sees: the Kernel's,
+ * or the SDK's own when `source` is "sdk". `preview` records where the
+ * editor preview differs: absent means the same text, null means the preview
+ * never refuses that case, a list holds the preview's own messages for it.
+ */
+
+export type SdkArgument = {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+};
+
+export type SdkError = {
+  message: string;
+  when: string;
+  source: "kernel" | "sdk";
+  /** Exact messages; placeholders are written <key> and <name>. */
+  preview?: readonly string[] | null;
+};
+
+export type SdkExample = {
+  code: string;
+  comment?: string;
+};
+
+export type SdkCall = {
+  /** The property on the module, e.g. "call" for miniapp.actions.call. */
+  name: string;
+  signature: string;
+  summary: string;
+  /** Whether a visitor without a session may use it on a public Deployment. */
+  signedOut: boolean;
+  /** The runtime MCP tools the published SDK calls, in kernel-rs/src/mcp.rs runtime_tools(). */
+  tools: string[];
+  args: SdkArgument[];
+  returns: string;
+  errors: SdkError[];
+  limits: string[];
+  examples: SdkExample[];
+  /** How the editor preview behaves differently, when it does. */
+  preview?: string;
+};
+
+/**
+ * A key a module adds to a Capsule file, for modules that are declared rather
+ * than called. No module declares one yet.
+ */
+export type SdkDeclaration = {
+  file: string;
+  key: string;
+  summary: string;
+};
+
+export type SdkModule = {
+  name: string;
+  summary: string;
+  calls: SdkCall[];
+  declarations: SdkDeclaration[];
+  notes: string[];
+};
+
+export type SdkContract = {
+  version: 1;
+  global: "miniapp";
+  endpoint: string;
+  summary: string;
+  /** Things an app may not rely on, stated so neither agent invents them. */
+  absent: string[];
+  /** Refusals any call that reaches the Kernel can return. */
+  errors: SdkError[];
+  modules: SdkModule[];
+};
+
+const download: SdkError[] = [
+  { message: "File not found.", when: "the file was removed or the actor may not read it", source: "kernel", preview: null },
+  { message: "Too many active transfers. Cancel completed transfers before starting another.", when: "the actor already holds 2 transfers, or the Deployment holds 32", source: "kernel", preview: null },
+  { message: "Transfer not found or expired.", when: "a transfer outlived its 10 minutes", source: "kernel", preview: null },
+  { message: "Invalid file size.", when: "the Kernel announced a size outside 0 to 2 MiB", source: "sdk", preview: null },
+  { message: "Invalid file block.", when: "a downloaded block does not continue at the expected offset or exceeds 64 KiB", source: "sdk", preview: null },
+  { message: "File checksum mismatch.", when: "the downloaded bytes do not match the SHA-256 the Kernel announced", source: "sdk", preview: null },
+];
+
+const fileShape = "{ id, name, type, size, visibility, createdAt, ownerId, url }. ownerId is present only on files the caller uploaded. url is a Blob URL; it keeps the type for image/png, image/jpeg, image/gif, image/webp and image/avif and is application/octet-stream otherwise";
+
+export const sdkContract = {
+  version: 1,
+  global: "miniapp",
+  endpoint: "/_littlebox/mcp",
+  summary: "window.miniapp is the only host surface a Capsule has, in the editor preview and on every Deployment. Each module is a namespace on it. A published call is one or more MCP tool calls to the Deployment's runtime endpoint with the app session cookie.",
+  absent: [
+    "no fetch to other origins",
+    "no localStorage contract",
+    "no miniapp.db and no SQL from the browser",
+  ],
+  errors: [
+    { message: "Sign in to use Littlebox MCP.", when: "the Deployment is private and the visitor has no session; the SDK treats it as authentication-required", source: "kernel", preview: null },
+    { message: "Deployment not found.", when: "the host name matches no Deployment", source: "kernel", preview: null },
+    { message: "Cross-origin or unrecognized-host MCP request rejected.", when: "the request does not come from the Deployment's own origin", source: "kernel", preview: null },
+    { message: "MCP request exceeds 200 KB.", when: "one request body is larger than 200,000 bytes", source: "kernel", preview: null },
+    { message: "Invalid MCP response.", when: "the response does not answer the request the SDK sent", source: "sdk", preview: null },
+  ],
+  modules: [
+    {
+      name: "auth",
+      summary: "Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.",
+      declarations: [],
+      notes: [
+        "Visibility decides who may open the app shell. It never grants data access on its own.",
+        "The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account.",
+      ],
+      calls: [
+        {
+          name: "session",
+          signature: "miniapp.auth.session()",
+          summary: "Read the signed-in Runtime Actor, or the anonymous state so the app can show a sign-in button.",
+          signedOut: true,
+          tools: ["auth_session"],
+          args: [],
+          returns: "{ userId, name, role }. Signed in, name is the account email and role is \"member\" or \"owner\". Signed out, { userId: \"anonymous\", name: \"Anonymous\", role: \"anonymous\" }",
+          errors: [],
+          limits: [],
+          examples: [{ code: "const session = await miniapp.auth.session();", comment: "{ userId, name, role }; role is \"anonymous\" when signed out" }],
+          preview: "Returns Alice or Bob, the preview's test accounts, with role \"member\", or the anonymous state.",
+        },
+        {
+          name: "signIn",
+          signature: "miniapp.auth.signIn()",
+          summary: "Send the visitor to the Deployment's login page at /_littlebox/login.",
+          signedOut: true,
+          tools: [],
+          args: [],
+          returns: "nothing; the page navigates away",
+          errors: [],
+          limits: [],
+          examples: [{ code: "await miniapp.auth.signIn();", comment: "published login page, preview selects Alice" }],
+          preview: "Signs in as Alice without leaving the page and returns her session.",
+        },
+        {
+          name: "signOut",
+          signature: "miniapp.auth.signOut()",
+          summary: "Revoke this app session, clear its cookie and release the file URLs the SDK created.",
+          signedOut: false,
+          tools: ["auth_logout"],
+          args: [],
+          returns: "{ ok: true }",
+          errors: [
+            { message: "authentication-required", when: "no one is signed in", source: "kernel", preview: null },
+          ],
+          limits: [],
+          examples: [{ code: "await miniapp.auth.signOut();", comment: "revoke this app session" }],
+          preview: "Switches to the signed-out state and returns the anonymous session.",
+        },
+      ],
+    },
+    {
+      name: "actions",
+      summary: "The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement.",
+      declarations: [],
+      notes: [
+        "A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.",
+        "A mutation action returns { changes, lastInsertId }. Read changed rows with a separate query.",
+      ],
+      calls: [
+        {
+          name: "call",
+          signature: "miniapp.actions.call(name, input = {})",
+          summary: "Invoke one declared Server Action as the current Runtime Actor.",
+          signedOut: true,
+          tools: ["actions_invoke"],
+          args: [
+            { name: "name", type: "string", required: true, description: "A Server Action name declared in actions.json, e.g. tasks.list" },
+            { name: "input", type: "object", required: false, description: "One value per input binding of the action, keyed by the binding's key. Defaults to {}" },
+          ],
+          returns: "an array of row objects for a query action, { changes, lastInsertId } for a mutation action",
+          errors: [
+            { message: "Server action not declared.", when: "actions.json declares no action with that name", source: "kernel", preview: ["Server action not declared: <name>"] },
+            { message: "authentication-required", when: "the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_littlebox/login", source: "kernel" },
+            { message: "rate-limited", when: "more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user", source: "kernel", preview: null },
+            { message: "Arguments must be an object.", when: "input is not an object, e.g. null", source: "kernel", preview: ["Action input must be an object."] },
+            { message: "Expected a string.", when: "name is not a string", source: "kernel", preview: ["Server action not declared: <name>"] },
+            { message: "Unexpected action input: <key>", when: "input has a key no input binding declares", source: "kernel" },
+            { message: "This action requires an authenticated actor.", when: "an anonymous action binds the actor id and no one is signed in", source: "kernel" },
+            { message: "Missing action input: <key>", when: "a required input is omitted", source: "kernel", preview: ["<key> must be a non-empty string.", "<key> must be a finite number.", "<key> must be a boolean."] },
+            { message: "<key> must be a non-empty string.", when: "a string input is not a string, or is empty or only whitespace", source: "kernel" },
+            { message: "<key> is too long.", when: "a string input is longer than its maxLength in UTF-16 code units", source: "kernel" },
+            { message: "<key> must be a number.", when: "a number input is not a JSON number", source: "kernel", preview: ["<key> must be a finite number."] },
+            { message: "<key> must be a boolean.", when: "a boolean input is not true or false", source: "kernel" },
+            { message: "Query result exceeds 2 MiB or 1000 rows.", when: "a query produces more than 1000 rows or more than 2 MiB of JSON", source: "kernel", preview: ["Query returned more than 1000 rows. Add a LIMIT clause.", "Query result is too large."] },
+          ],
+          limits: [
+            "30 calls per 10 seconds per signed-out client address and Deployment; 120 per 10 seconds per signed-in user",
+            "1000 rows and 2 MiB per query result",
+            "2 seconds per statement; SQLite's own error text is returned when a statement fails or runs out of time",
+            "string inputs default to a maxLength of 10,000 UTF-16 code units",
+            "256 MiB per app database",
+          ],
+          examples: [
+            { code: "const rows = await miniapp.actions.call(\"tasks.list\");", comment: "array of row objects" },
+            { code: "await miniapp.actions.call(\"tasks.create\", { title });", comment: "{ changes, lastInsertId }" },
+          ],
+          preview: "Ignores the Deployment's visibility and rate limits, and keeps its database in the browser with a 10 MiB cap.",
+        },
+      ],
+    },
+    {
+      name: "files",
+      summary: "Small files stored by the Kernel for one Deployment. A file is private to the user who uploaded it unless the upload asked for public.",
+      declarations: [],
+      notes: [
+        "Only the uploader can list or read a private file.",
+        "On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.",
+        "There is no HTTP download path. The SDK downloads over MCP, checks the SHA-256 and returns a Blob URL.",
+      ],
+      calls: [
+        {
+          name: "list",
+          signature: "miniapp.files.list()",
+          summary: "List and download every file the current actor may read.",
+          signedOut: true,
+          tools: ["files_list", "files_read", "transfer_read", "transfer_cancel"],
+          args: [],
+          returns: `an array of ${fileShape}`,
+          errors: download,
+          limits: [
+            "every listed file is downloaded, one at a time, on each call",
+            "2 MiB per file",
+          ],
+          examples: [{ code: "const files = await miniapp.files.list();", comment: "that user's private files, plus public files" }],
+          preview: "Reads files from browser storage and returns data URLs.",
+        },
+        {
+          name: "upload",
+          signature: "miniapp.files.upload(file, options)",
+          summary: "Store a File or Blob for the signed-in user and return it as files.list would.",
+          signedOut: false,
+          tools: ["transfer_begin", "transfer_write", "transfer_complete", "files_upload", "transfer_cancel", "files_read", "transfer_read"],
+          args: [
+            { name: "file", type: "File | Blob", required: true, description: "The bytes to store, with its name and type" },
+            { name: "options.visibility", type: "\"public\"", required: false, description: "Pass \"public\" only when every visitor of a public app may read the bytes; anything else stores a private file" },
+          ],
+          returns: fileShape,
+          errors: [
+            { message: "authentication-required", when: "no one is signed in", source: "kernel" },
+            { message: "Transfer size is outside the limit.", when: "the file is empty or larger than 2 MiB", source: "kernel", preview: ["Local prototype files are limited to 2 MiB."] },
+            { message: "This deployment has reached its 20 MiB file quota.", when: "the Deployment's files would exceed 20 MiB together", source: "kernel", preview: null },
+            ...download,
+          ],
+          limits: [
+            "1 byte to 2 MiB per file",
+            "20 MiB of files per Deployment",
+            "2 transfers at a time per user and 32 per Deployment; each expires after 10 minutes",
+            "the name is cut to 180 characters with / and \\ replaced by -; a type of 128 characters or more, or with a character other than a letter, a digit or one of !#$&^_.+-/, becomes application/octet-stream",
+          ],
+          examples: [
+            { code: "const stored = await miniapp.files.upload(file);", comment: "private to the signed-in user" },
+            { code: "const shared = await miniapp.files.upload(file, { visibility: \"public\" });" },
+          ],
+          preview: "Stores the file in browser storage as a data URL, and accepts an empty file.",
+        },
+      ],
+    },
+  ],
+} as const satisfies SdkContract;
+
+/** Every call as "module.call", in contract order. */
+export function contractCalls(contract: SdkContract = sdkContract): string[] {
+  return contract.modules.flatMap((module) => module.calls.map((call) => `${module.name}.${call.name}`));
+}
