@@ -14,7 +14,8 @@
     "test:e2e": "playwright test",
     "test:e2e:minio": "playwright test --config playwright.minio.config.ts",
     "test:e2e:local": "playwright test --config playwright.local.config.ts",
-    "littlebox": "bun run scripts/littlebox.ts"
+    "littlebox": "bun run scripts/littlebox.ts",
+    "sdk:render": "bun run scripts/render-sdk.ts"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

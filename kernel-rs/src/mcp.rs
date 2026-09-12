@@ -907,9 +907,8 @@ async fn admin_call(
 ) -> Result<Value> {
     match name {
         "platform_guide" => Ok(match a["topic"].as_str().unwrap() {
-            "sdk" => {
-                json!({"global":"miniapp","examples":["const user = await miniapp.auth.session();","await miniapp.auth.signIn();","const rows = await miniapp.actions.call('items.list');","const files = await miniapp.files.list();","await miniapp.files.upload(file);","await miniapp.files.upload(file, { visibility: 'public' });"],"authentication":"auth.session returns an anonymous state when no one is signed in, so the app can show a sign-in button. On a public app a visitor without a session may call actions declared anonymous, and may list and read files uploaded as public. Uploads, private files, and authenticated actions require sign-in. Private apps require sign-in for everything. The owner chooses who may create an account with signup_policy_set.","files":"File URLs are local Blob URLs created after an MCP download. There is no HTTP download path. An upload is private to that app user unless visibility is public. Another account cannot read a private file. On a public app, visitors can list and read only the public files."})
-            }
+            // Rendered from src/sdk/contract.ts by `bun run sdk:render`.
+            "sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,
             "actions" => {
                 json!({"filename":"actions.json","format":{"version":1,"actions":{"items.list":{"kind":"query","access":"authenticated","statement":"SELECT id,title FROM items WHERE user_id=?1 LIMIT 50","bindings":[{"source":"actor","field":"id"}]},"items.create":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO items(title,user_id) VALUES(?1,?2)","bindings":[{"source":"input","key":"title","type":"string","maxLength":200},{"source":"actor","field":"id"}]}}},"rules":"SQL and typed bindings stay server-side. Declare schema in schema.sql for artifact publication. Runtime calls only send the declared action name and input. Add nullable:true to an input binding to bind omitted values or explicit null as SQL NULL; supplied strings remain non-empty and all supplied values retain their type checks. Mutations return changes and lastInsertId, so read rows with a query instead of mutation RETURNING, which publication rejects. A query that reads rows needs a top-level LIMIT. A total with count, sum, avg, min or max and no GROUP BY does not."})
             }
@@ -1991,5 +1990,58 @@ mod tests {
         }
         assert!(new_transfer(&state, "owner:alice", body()).await.is_err());
         let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    /// The sdk topic is src/sdk/contract.ts rendered to sdk-guide.json. Every
+    /// tool a call names must be one the runtime endpoint serves, and a call the
+    /// contract opens to signed-out visitors must use only the tools they get.
+    #[tokio::test]
+    async fn platform_guide_sdk_topic_is_the_rendered_contract() {
+        let root = std::env::temp_dir().join(format!("littlebox-guide-{}", Uuid::new_v4()));
+        let state = AppState {
+            deployments: Arc::new(RwLock::new(HashMap::new())),
+            db_locks: LockMap::default(),
+            s3: None,
+            artifact_bucket: "artifacts".into(),
+            data_bucket: "data".into(),
+            local_artifact_root: root.join("artifacts"),
+            backup_root: root.join("backups"),
+            data_root: root.clone(),
+            admin_key: "test-admin".into(),
+            public_origin: "http://localhost".into(),
+            host_suffix: "localhost".into(),
+            guards: Arc::new(Guards::new(Vec::new())),
+        };
+        let owner = Owner { id: "o".into(), display: None, scopes: vec!["read".into()], projects: vec![], session: false };
+        let guide = admin_call(&state, &owner, "owner:o", "platform_guide", json!({"topic":"sdk"})).await.unwrap();
+        let rendered: Value = serde_json::from_str(include_str!("sdk-guide.json")).unwrap();
+        assert_eq!(guide, rendered);
+        let names = |tools: Vec<Value>| tools.iter().map(|t| t["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        let served = names(runtime_tools());
+        let signed_out = names(anonymous_runtime_tools());
+        let calls = guide["modules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|module| module["calls"].as_array().unwrap().clone())
+            .collect::<Vec<_>>();
+        assert!(calls.len() >= 6, "the contract lists the auth, actions and files calls");
+        for call in &calls {
+            let label = call["call"].as_str().unwrap();
+            let tools = call["tools"].as_array().unwrap().iter().map(|t| t.as_str().unwrap().to_owned()).collect::<Vec<_>>();
+            for tool in &tools {
+                assert!(served.contains(tool), "{label} names {tool}, which the runtime endpoint does not serve");
+            }
+            if call["signedOut"] == true {
+                for tool in &tools {
+                    assert!(signed_out.contains(tool), "{label} is open to signed-out visitors but {tool} is not");
+                }
+            } else {
+                assert!(
+                    tools.iter().any(|tool| !signed_out.contains(tool)),
+                    "{label} needs a session, so one of its tools must be refused to signed-out visitors"
+                );
+            }
+        }
     }
 }
