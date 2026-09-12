@@ -53,7 +53,7 @@ The irreversible transfer of a Managed Project's source and database-schema auth
 _Avoid_: Export, download
 
 **Build Artifact**:
-The validated, immutable static output of a Project revision that a Deployment serves. It contains no source authority, runtime database access or administrative capability.
+The validated, immutable static output of a Project revision that a Deployment serves. It contains no source authority, runtime database access or administrative capability. Under the Kernel's Content Security Policy its own inline scripts and same-origin files load, and inline event handler attributes and other origins do not.
 _Avoid_: Project source, build cache
 
 **Declared Dependencies**:

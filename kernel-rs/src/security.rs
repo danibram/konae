@@ -1,0 +1,265 @@
+//! Response headers that keep hosted code on its own origin.
+//!
+//! Every app is served from `<slug>-<id>.<suffix>`, so a creator's JavaScript
+//! runs next to other apps and next to the editor host. One layer adds the
+//! headers below to every response the Kernel sends.
+//!
+//! - App hosts get a Content Security Policy. A Build Artifact inlines the
+//!   Littlebox runtime and the compiled module in `index.html`, so the policy
+//!   allows those exact scripts by their SHA-256 hashes instead of allowing
+//!   inline script in general. Inline event handler attributes, `eval` and
+//!   scripts from other origins stay blocked.
+//! - Every host gets `frame-ancestors 'none'` and `X-Frame-Options: DENY`, so
+//!   an app cannot frame the editor, another app or itself in another origin.
+//! - Every host gets HSTS when the installation is served over HTTPS.
+
+use super::*;
+use axum::middleware::Next;
+use sha2::{Digest, Sha256};
+
+/// HTML larger than this is served without script hashes, so its inline
+/// scripts do not run. Deployments are capped below this size.
+const MAX_HASHED_HTML: usize = 32 * 1024 * 1024;
+
+/// The policy for a response from an app host, given the hash sources of its
+/// inline scripts.
+///
+/// Styles allow `'unsafe-inline'` because apps write `style="..."` attributes
+/// through `innerHTML` and inline a `<style>` block; a hash cannot cover a
+/// generated attribute. The starter templates load their fonts from Google
+/// Fonts, so those two hosts are the only foreign origins. Images and media
+/// accept `blob:` and `data:` because the SDK hands files to the app as Blob
+/// URLs and apps keep small inline copies of images.
+pub(super) fn app_policy(script_hashes: &[String]) -> String {
+    let mut script = String::from("'self'");
+    for hash in script_hashes {
+        script.push(' ');
+        script.push_str(hash);
+    }
+    format!(
+        "default-src 'self'; script-src {script}; \
+         style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+         font-src 'self' data: https://fonts.gstatic.com; \
+         img-src 'self' blob: data:; media-src 'self' blob: data:; \
+         connect-src 'self'; form-action 'self'; frame-ancestors 'none'; \
+         object-src 'none'; base-uri 'none'"
+    )
+}
+
+/// The policy for an HTML page the Kernel serves on the editor host, such as
+/// owner sign-in.
+pub(super) fn platform_page_policy(script_hashes: &[String]) -> String {
+    let mut script = String::from("'self'");
+    for hash in script_hashes {
+        script.push(' ');
+        script.push_str(hash);
+    }
+    format!(
+        "default-src 'self'; script-src {script}; style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data:; connect-src 'self'; form-action 'self'; \
+         frame-ancestors 'none'; object-src 'none'; base-uri 'none'"
+    )
+}
+
+/// The policy for anything else on the editor host: JSON, errors and
+/// discovery documents load nothing and may not be framed.
+pub(super) const PLATFORM_POLICY: &str = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
+
+/// The HSTS value. `includeSubDomains` makes a browser that visited the
+/// installation's own host use HTTPS for app hosts under it before their
+/// first visit. There is no `preload`, which is the operator's decision.
+pub(super) const HSTS: &str = "max-age=31536000; includeSubDomains";
+
+/// Whether the installation is served over HTTPS, by the same rule that picks
+/// the `__Host-` cookie names.
+pub(super) fn https(state: &AppState) -> bool {
+    state.public_origin.starts_with("https://")
+        || std::env::var("LITTLEBOX_MCP_ORIGIN").is_ok_and(|origin| origin.starts_with("https://"))
+}
+
+/// The CSP hash source of every inline `<script>` in an HTML document.
+///
+/// The scan follows the HTML tokenizer closely enough for documents the
+/// Kernel serves: a script element starts at `<script` followed by a space,
+/// `/` or `>`, its start tag ends at the first `>` outside a quoted attribute
+/// value, and its text ends at the next `</script`. The browser hashes the
+/// text after it turns CRLF and lone CR into LF, so the scan does the same.
+/// A script with `src` has no text and adds nothing.
+pub(super) fn inline_script_hashes(html: &[u8]) -> Vec<String> {
+    let lower = html.to_ascii_lowercase();
+    let mut hashes = Vec::new();
+    let mut cursor = 0;
+    while let Some(found) = find(&lower[cursor..], b"<script") {
+        let name_end = cursor + found + b"<script".len();
+        let Some(&next) = lower.get(name_end) else { break };
+        if !matches!(next, b' ' | b'\t' | b'\n' | b'\r' | b'\x0c' | b'/' | b'>') {
+            cursor = name_end;
+            continue;
+        }
+        let Some(tag_end) = start_tag_end(&lower, name_end) else { break };
+        let text_start = tag_end + 1;
+        let text_end = find(&lower[text_start..], b"</script").map_or(lower.len(), |at| text_start + at);
+        let text = &html[text_start..text_end];
+        if !text.is_empty() {
+            let hash = format!("'sha256-{}'", encode_base64(&Sha256::digest(normalize_newlines(text))));
+            if !hashes.contains(&hash) {
+                hashes.push(hash);
+            }
+        }
+        cursor = text_end;
+    }
+    hashes
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|window| window == needle)
+}
+
+fn start_tag_end(lower: &[u8], from: usize) -> Option<usize> {
+    let mut quote = None;
+    for (offset, &byte) in lower[from..].iter().enumerate() {
+        match quote {
+            Some(open) if byte == open => quote = None,
+            Some(_) => {}
+            None if byte == b'"' || byte == b'\'' => quote = Some(byte),
+            None if byte == b'>' => return Some(from + offset),
+            None => {}
+        }
+    }
+    None
+}
+
+fn normalize_newlines(text: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(text.len());
+    let mut bytes = text.iter().peekable();
+    while let Some(&byte) = bytes.next() {
+        if byte == b'\r' {
+            output.push(b'\n');
+            if bytes.peek() == Some(&&b'\n') {
+                bytes.next();
+            }
+        } else {
+            output.push(byte);
+        }
+    }
+    output
+}
+
+/// Whether a request's `Origin` belongs to an app rather than to the editor
+/// host. A deployment hostname always counts. Any other host under the app
+/// suffix counts too unless it is the installation's public or MCP host, or a
+/// local editor name on a local installation, so a deleted app's cached page
+/// gains nothing either.
+pub(super) async fn from_app_origin(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let Some(host) = url::Url::parse(origin).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase)) else {
+        return false;
+    };
+    if state.deployments.read().await.contains_key(&host) {
+        return true;
+    }
+    let configured = |value: &str| url::Url::parse(value).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase));
+    let public = configured(&state.public_origin);
+    let mcp = std::env::var("LITTLEBOX_MCP_ORIGIN").ok().and_then(|value| configured(&value));
+    if public.as_deref() == Some(host.as_str()) || mcp.as_deref() == Some(host.as_str()) {
+        return false;
+    }
+    let local = public.as_deref().is_some_and(is_local_host);
+    if local && ["localhost", "127.0.0.1", "[::1]", "editor.localhost"].contains(&host.as_str()) {
+        return false;
+    }
+    let suffix = state.host_suffix.trim_start_matches('.').to_ascii_lowercase();
+    !suffix.is_empty() && host.ends_with(&format!(".{suffix}"))
+}
+
+/// Adds the isolation headers to every response.
+pub(super) async fn headers(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let app = deployment_for(&state, request.headers()).await.is_some();
+    let response = next.run(request).await;
+    let (mut parts, body) = response.into_parts();
+    let html = parts
+        .headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.to_ascii_lowercase().starts_with("text/html"));
+    let body = if parts.headers.contains_key(header::CONTENT_SECURITY_POLICY) {
+        body
+    } else if html {
+        let (hashes, body) = match axum::body::to_bytes(body, MAX_HASHED_HTML).await {
+            Ok(bytes) => (inline_script_hashes(&bytes), Body::from(bytes)),
+            Err(_) => return error(StatusCode::INTERNAL_SERVER_ERROR, "Page is too large to serve."),
+        };
+        let policy = if app { app_policy(&hashes) } else { platform_page_policy(&hashes) };
+        parts.headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_str(&policy).unwrap());
+        body
+    } else {
+        let policy = if app { app_policy(&[]) } else { PLATFORM_POLICY.to_owned() };
+        parts.headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_str(&policy).unwrap());
+        body
+    };
+    parts.headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    parts.headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    if https(&state) {
+        parts.headers.insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static(HSTS));
+    }
+    Response::from_parts(parts, body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sha(text: &str) -> String {
+        format!("'sha256-{}'", encode_base64(&Sha256::digest(text.as_bytes())))
+    }
+
+    #[test]
+    fn hashes_each_inline_script_and_skips_external_ones() {
+        let html = br#"<!doctype html><head><style>p{}</style></head><body><p>hi</p><script data-littlebox-runtime>window.a=1</script><script type="module">import x from './x.js'</script><script src="/runtime.js"></script></body>"#;
+        assert_eq!(
+            inline_script_hashes(html),
+            vec![sha("window.a=1"), sha("import x from './x.js'")]
+        );
+    }
+
+    #[test]
+    fn a_document_without_inline_scripts_gets_no_hash() {
+        let html = br#"<!doctype html><script src="/runtime.js"></script><script type="module" src="shell.js"></script><main>Docs</main>"#;
+        assert!(inline_script_hashes(html).is_empty());
+        assert!(app_policy(&[]).contains("script-src 'self';"));
+    }
+
+    #[test]
+    fn the_scan_matches_the_browser_on_case_quotes_and_newlines() {
+        let html = b"<SCRIPT title=\"a>b\">one\r\ntwo\rthree</SCRIPT><scripts>no</scripts><script\n>four</script >";
+        assert_eq!(inline_script_hashes(html), vec![sha("one\ntwo\nthree"), sha("four")]);
+    }
+
+    #[test]
+    fn a_script_string_inside_a_script_does_not_open_a_second_script() {
+        let html = br#"<script>const tag = "<script>"; run(tag)</script>"#;
+        assert_eq!(inline_script_hashes(html), vec![sha(r#"const tag = "<script>"; run(tag)"#)]);
+    }
+
+    #[test]
+    fn an_unterminated_script_hashes_to_the_end_of_the_document() {
+        assert_eq!(inline_script_hashes(b"<script>tail"), vec![sha("tail")]);
+        assert!(inline_script_hashes(b"<script").is_empty());
+        assert!(inline_script_hashes(b"<script type='x").is_empty());
+    }
+
+    #[test]
+    fn app_policy_blocks_inline_handlers_framing_and_foreign_connections() {
+        let policy = app_policy(&[sha("x")]);
+        assert!(policy.starts_with("default-src 'self'; script-src 'self' 'sha256-"));
+        assert!(!policy.contains("'unsafe-inline' 'sha256"), "script-src must not allow inline script");
+        assert!(!policy.contains("unsafe-eval"));
+        for directive in ["connect-src 'self';", "frame-ancestors 'none';", "object-src 'none';", "base-uri 'none'", "img-src 'self' blob: data:;"] {
+            assert!(policy.contains(directive), "{directive} missing from {policy}");
+        }
+        assert!(platform_page_policy(&[]).contains("frame-ancestors 'none'"));
+        assert!(PLATFORM_POLICY.contains("frame-ancestors 'none'"));
+    }
+}

@@ -36,7 +36,7 @@ flowchart LR
 
 The iframe has `allow-scripts` but not same-origin access. Generated code cannot read the editor's storage or credentials directly. Each preview receives one private MessageChannel and an ephemeral preview credential. The app uses MCP tool calls over that channel. The global message listener only establishes the channel.
 
-This is a development boundary, not yet a hardened hostile-code sandbox. Hosted execution must add quotas, statement validation, capability grants, CSP, audit logs and infrastructure-enforced tenant isolation.
+This is a development boundary, not yet a hardened hostile-code sandbox. The preview applies no Content Security Policy, so code that the published policy blocks, such as an `onclick="..."` attribute, still runs in the preview. The agent prompt states the published policy. Hosted execution must add quotas, statement validation, capability grants, audit logs and infrastructure-enforced tenant isolation.
 
 ## Current self-hosted topology
 
@@ -126,6 +126,37 @@ Adapters do not receive authority to make access decisions. The Kernel passes th
 - A Railway adapter may provide a shared Node runtime and an escape hatch for applications that need Docker or unrestricted server packages.
 
 All adapters implement the same Kernel seams. Provider identity products may optionally protect infrastructure administration, but they are never the application session or grant authority. The exported unit must eventually contain source, manifest, migrations, a standard SQLite file and its blobs. Provider-specific identifiers must not appear in application code.
+
+## Isolation of hosted code
+
+Every app runs on its own host, `<slug>-<id>.<LITTLEBOX_HOST_SUFFIX>`, and the editor runs on a host no app shares. One layer in `kernel-rs/src/security.rs` adds the headers below to every Kernel response, so an exported Kernel sends them too.
+
+App hosts get this Content Security Policy:
+
+```text
+default-src 'self'; script-src 'self' 'sha256-...';
+style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+font-src 'self' data: https://fonts.gstatic.com;
+img-src 'self' blob: data:; media-src 'self' blob: data:;
+connect-src 'self'; form-action 'self'; frame-ancestors 'none';
+object-src 'none'; base-uri 'none'
+```
+
+A Build Artifact inlines the runtime and the compiled module in `index.html`. The Kernel reads each HTML response, hashes every inline `<script>` with SHA-256 and lists those hashes, so exactly the scripts in the published file run. Inline event handler attributes, `eval`, Blob scripts and scripts from other origins do not. Any other file, such as an SVG opened directly, gets the policy with no hash. The private sign-in page uses the same mechanism for its own script.
+
+- Styles allow `'unsafe-inline'` because apps write `style="..."` attributes through `innerHTML`, as the `poll` example does, and the artifact inlines `styles.css`. A hash cannot cover a generated attribute. Google Fonts is the only foreign origin because the starter templates import it and the agent is told to keep the fonts it finds. Neither font host can read app data.
+- Images and media accept `blob:` and `data:` because the SDK hands files to the app as Blob URLs and apps keep small inline copies of images, as the `portfolio` example does.
+- `connect-src 'self'` limits `fetch` to the app's origin, where the runtime reaches `/_littlebox/mcp`.
+
+Every host, apps included, sends `frame-ancestors 'none'` and `X-Frame-Options: DENY`. The Kernel's pages on the editor host, such as owner sign-in, get `default-src 'self'` with their script hashes; its JSON and errors get `default-src 'none'`. When `LITTLEBOX_PUBLIC_ORIGIN` or `LITTLEBOX_MCP_ORIGIN` is HTTPS, every response carries `Strict-Transport-Security: max-age=31536000; includeSubDomains`. `includeSubDomains` makes a browser that has visited the installation's host use HTTPS for app hosts beneath it before their first visit. There is no `preload`; the operator decides that.
+
+The Kernel does not serve the editor. Vite serves it in development and in the Docker stack, and nothing in this repository serves the built `dist/` in production. Vite's dev and preview servers send `frame-ancestors 'none'` and `X-Frame-Options: DENY`. A gateway that serves `dist/` must send the same two headers. The editor has no script policy yet. The preview is a `srcdoc` iframe, which inherits the editor's policy, so a `script-src` without `'unsafe-inline'` would stop the preview. esbuild and sql.js also need `'wasm-unsafe-eval'` and a `blob:` worker, and the agent calls model providers from the browser, so `connect-src` cannot be `'self'`. A script policy for the editor waits until the preview moves to its own origin.
+
+Under HTTPS the owner cookie is `__Host-littlebox_owner_session` and the app cookie `__Host-littlebox_app_session`, both `Secure`, `Path=/` and without `Domain`. A browser refuses a `__Host-` cookie that names a domain, so an app can only plant an unprefixed name for the whole suffix, and the Kernel ignores unprefixed names under HTTPS. The app cookie is `SameSite=Lax`; the owner cookie is `SameSite=Strict`. Over plain HTTP, as in the local Docker stack, cookies keep unprefixed names and no HSTS is sent.
+
+Administrative MCP, owner sign-in and the OAuth routes refuse a request whose `Origin` is an app host before they read a credential. An app host is a deployment hostname, or any host under the suffix other than the installation's public or MCP host. The runtime endpoint refuses an `Origin` that differs from its `Host`, so one app's page cannot call another app's runtime, and each Deployment keeps its own identity store, so its session means nothing to another app.
+
+`tests/security-http.integration.test.ts` and `tests/security-auth.integration.test.ts` check each of these against a local Kernel. `bun run examples/product-fit/smoke.ts` opens every example in Chrome and fails on a policy violation.
 
 ## Near-term security decisions
 
