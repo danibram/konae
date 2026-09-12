@@ -2,7 +2,7 @@
 
 These eight examples exercise Littlebox's current contracts through an isolated Kernel and real MCP requests. The sources came from the interrupted Fable product trial. The replay creates new projects, accounts and files each time. It copies the sources into a temporary directory and removes that directory and its Kernel when it exits.
 
-Run from the repository root with Bun and Cargo installed and the repository dependencies available.
+Run from the repository root with Bun, Cargo and Google Chrome installed and the repository dependencies available.
 
 ```sh
 bun run examples/product-fit/smoke.ts
@@ -10,7 +10,7 @@ bun run examples/product-fit/smoke.ts
 
 The default port is 19410. Set `LITTLEBOX_PRODUCT_FIT_PORT` to another unused local port when needed. The replay builds the Kernel with Cargo's offline mode. It does not connect to an existing installation, inherit Littlebox credentials or use production data. Passwords and the setup key are random and exist only for that run.
 
-The runner publishes all eight examples, then checks ten groups of behavior. It prints each result and a JSON report. It checks HTTP and MCP behavior. It does not assert browser layout or screen reader behavior.
+The runner publishes all eight examples, then checks ten groups of behavior. It prints each result and a JSON report. It checks HTTP and MCP behavior, then opens every example in Google Chrome through Playwright and fails on any Content Security Policy violation or page error. Chrome must be installed; set `LITTLEBOX_PRODUCT_FIT_BROWSER=0` to skip the browser pass. It does not assert browser layout or screen reader behavior.
 
 | Example | Behavior checked | Current cost or limit |
 | --- | --- | --- |

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { chromium } from "playwright";
 import { McpClient } from "../../src/mcp/client";
 import { buildLocal, publishLocal } from "../../scripts/littlebox";
 
@@ -81,6 +82,41 @@ try {
     } finally { await owner.cancel(upload.transferId); }
   }
   check("Publish eight examples", "All builds pass MCP release planning and apply on an empty Kernel.");
+  if (process.env.LITTLEBOX_PRODUCT_FIT_BROWSER !== "0") {
+    // Each published page runs in Chrome under the Kernel's Content Security
+    // Policy. A blocked script, style, image or request fails the replay.
+    const browser = await chromium.launch({ channel: "chrome" });
+    try {
+      const pages: [string, string][] = Object.keys(receipts).flatMap(name => name === "docs"
+        ? [[name, "/"], [name, "/guide/install.html"]] as [string, string][] : [[name, "/"]] as [string, string][]);
+      for (const [name, route] of pages) {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        const violations: string[] = [];
+        page.on("console", message => { if (/Content Security Policy|Refused to/i.test(message.text())) violations.push(message.text()); });
+        page.on("pageerror", error => violations.push(`page error: ${error.message}`));
+        await page.addInitScript(() => document.addEventListener("securitypolicyviolation", event =>
+          console.error(`Refused to load ${event.blockedURI} by ${event.violatedDirective}`)));
+        const response = await page.goto(new URL(route, receipts[name].url).href, { waitUntil: "load" });
+        assert.equal(response?.status(), 200, `${name}${route} did not load.`);
+        assert(response?.headers()["content-security-policy"]?.includes("frame-ancestors 'none'"), `${name}${route} has no policy.`);
+        if (name === "board") {
+          // The private sign-in page reports the refusal only if its inline script runs.
+          await page.getByLabel("Email").fill("stranger@example.test");
+          await page.getByLabel("Password").fill(password);
+          await page.getByRole("button", { name: "Sign in" }).click();
+          await page.locator("#error").filter({ hasText: /\S/ }).waitFor({ timeout: 10_000 });
+        } else {
+          await page.waitForFunction(() => typeof (window as any).miniapp === "object", undefined, { timeout: 10_000 });
+          await page.waitForTimeout(1_500);
+        }
+        assert.deepEqual(violations, [], `${name}${route} broke under the Content Security Policy.`);
+        await context.close();
+      }
+    } finally { await browser.close(); }
+    check("Content Security Policy", "Every published example loads in Chrome, runs its inline runtime and module, and reports no policy violation.");
+  }
+
 
   function runtime(name: string, cookie?: string) {
     return new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
@@ -218,6 +254,7 @@ try {
   assert.deepEqual(await action(probe, "items.optional", { q: null }), optional);
   assert.equal((await action(probe, "items.optional", { q: "Probe" }))[0].title, "Probe row");
   check("Action edge cases", `RETURNING mutations fail release planning. Nullable search returned ${optional.length} rows with an omitted input; explicit null and filtered input also pass.`);
+
   console.log(JSON.stringify({ examples: 8, checks: observations.length, observations }, null, 2));
 } finally {
   kernel?.kill();
