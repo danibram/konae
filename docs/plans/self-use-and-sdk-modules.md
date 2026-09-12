@@ -112,13 +112,27 @@ The Validation Gate parses the `http` key the same way the Kernel does, as it do
 
 This is the module that lets a project expose an API and receive a webhook without a server of its own, which is the "cloud functions" need in practice.
 
+#### Who may call a route, and who may fetch an asset
+
+An HTTP route is reached by three kinds of caller, and the Kernel resolves which one before any SQL runs:
+
+| Caller | Proof | Resolves to |
+| --- | --- | --- |
+| A third-party service | The signature declared on the binding | The action's `anonymous` access |
+| A program the owner wrote | An API key the owner issued for that Deployment, sent as a bearer token | A Runtime Actor of kind `service`, with the key's own ID, bound to the actions and file visibilities the key names |
+| A signed-in person | The app session cookie | The usual Runtime Actor |
+
+API keys are a third kind of Runtime Actor next to the anonymous visitor and the signed-in app user. The owner issues, scopes and revokes them from the Admin Interface and MCP; the Kernel stores the hash only; a key is bound to one Deployment and never to the owner. An action's `actor` binding yields the key's ID, so rows written by a key have an owner like any other. Export carries keys' metadata and hashes with the identity file; migration revokes them like sessions.
+
+Assets stay on the platform. Uploads already have no HTTP download path and are read through the SDK with a session and per-file visibility; the artifact's static files are served by the Kernel and a private Deployment withholds them before login. This delivery adds one HTTP read path for files, `GET /_littlebox/files/<id>`, that accepts the same three callers and applies the file's visibility, so an image can be embedded or fetched by a program without copying it anywhere public. There is no unauthenticated object URL and nothing is served from the bucket directly. Secure by default means the three principals are the only way in, for routes and for files alike.
+
 ### Deliveries
 
 | Delivery | Work | Done when |
 | --- | --- | --- |
 | 5. Module contract | Write the contract for `auth`, `actions` and `files` in one file under `docs/`. Each call lists inputs, outputs, errors and limits. Add a test that fails when `runtime.js`, `system-prompt.ts` or `platform_guide` name a call the contract does not, or miss one it does | The three readers agree by test, not by review |
 | 6. Rendered guidance | The SDK section of the build agent's prompt and the SDK topic of `platform_guide` are rendered from the contract file at build time | Editing the contract changes both; editing either by hand fails the test |
-| 7. HTTP module | The `http` key in `actions.json`, parsed in `src/kernel/actions.ts` and `kernel-rs/src/main.rs`. Routing, signature check, owner-set secrets, Gate refusals. A product-fit example that receives a webhook and serves a JSON endpoint | The status feed example accepts a signed POST from `curl` and refuses an unsigned one. The replay in `examples/product-fit/smoke.ts` covers it. The contract file documents the module and the two agents receive it through delivery 6 |
+| 7. HTTP module | The `http` key in `actions.json`, parsed in `src/kernel/actions.ts` and `kernel-rs/src/main.rs`. Routing, signature check, owner-set secrets, API keys as a `service` Runtime Actor, the file read path, Gate refusals. A product-fit example that receives a webhook, serves a JSON endpoint and embeds a private image through a key | The status feed example accepts a signed POST from `curl` and refuses an unsigned one. The replay in `examples/product-fit/smoke.ts` covers it. The contract file documents the module and the two agents receive it through delivery 6 |
 | 8. Portable action contract | For every project, generate a document of its actions with inputs, output shapes and HTTP bindings. Include it in the export kit | A second backend could run the same conformance checks. No second backend is built here |
 
 ### Evidence for deliveries 5 and 6
