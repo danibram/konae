@@ -124,7 +124,10 @@ async function expectSameApp(root: string, app: { hostname: string; cookie: stri
     const writer = withHeaders(`${url}/_littlebox/mcp`, { host: app.hostname, cookie });
     expect(await writer.call("actions_invoke", { name: "notes.list" })).toEqual([{ id: 1, title: "Before the copy" }]);
     expect(await writer.download(await writer.call<Transfer>("files_read", { fileId: app.fileId }))).toEqual(attachment);
-    await sign(url, "/_littlebox/owner/login", { email: "owner@copy.test", password });
+    const owner = withHeaders(`${url}/mcp`, { cookie: await sign(url, "/_littlebox/owner/login", { email: "owner@copy.test", password }) });
+    // The project registry in mcp.sqlite travelled with the owner account.
+    const inspection = await owner.call<{ deployment: { hostname: string } }>("project_inspect", { projectId: "copy_proof" });
+    expect(inspection.deployment.hostname).toBe(app.hostname);
   } finally {
     await stop(child);
   }
@@ -163,6 +166,9 @@ describe("copies off the volume", () => {
       await expectSameApp(restored, app);
     } finally {
       await rm(scratch, { recursive: true, force: true });
+      const bucket = new Bun.S3Client({ endpoint: s3Endpoint, bucket: s3Bucket, accessKeyId: s3Env.LITTLEBOX_S3_ACCESS_KEY, secretAccessKey: s3Env.LITTLEBOX_S3_SECRET_KEY });
+      const listed = await bucket.list({ prefix }).catch(() => undefined);
+      await Promise.all((listed?.contents ?? []).map((object) => bucket.delete(object.key)));
     }
   }, 120_000);
 });

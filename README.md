@@ -143,7 +143,7 @@ LITTLEBOX_DATA_DIR=/data littlebox-kernel restore --from /mnt/copies
 LITTLEBOX_DATA_DIR=/data littlebox-kernel restore --from s3://littlebox-data/copies/ --copy 2026-11-06T14-00-00.000Z
 ```
 
-Without `--copy`, restore takes the newest complete copy. It refuses a data directory that holds anything besides `lost+found`, a copy without a manifest, and any file whose size or checksum differs from the manifest, and then installs nothing. It also runs SQLite's integrity check on every database. After installing, it signs everyone out: owner and app sessions, Clerk creator sessions, agent credentials, OAuth tokens and codes, and unfinished transfers and release plans. Owners create new agent credentials after a restore.
+Restoring from `s3://` reads `LITTLEBOX_S3_ENDPOINT`, `LITTLEBOX_S3_REGION`, `LITTLEBOX_S3_ACCESS_KEY` and `LITTLEBOX_S3_SECRET_KEY` from the same shell. Without `--copy`, restore takes the newest complete copy. It refuses a data directory that holds anything besides `lost+found`, a copy without a manifest, and any file whose size or checksum differs from the manifest, and then installs nothing. It also runs SQLite's integrity check on every database. After installing, it signs everyone out: owner and app sessions, Clerk creator sessions, agent credentials, OAuth tokens and codes, and unfinished transfers and release plans. Owners create new agent credentials after a restore.
 
 ## Authenticated MCP
 
