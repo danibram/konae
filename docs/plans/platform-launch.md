@@ -252,3 +252,25 @@ These must not appear as active controls or beta promises. First-version support
 - `src/lib/export-project-kit.ts` and `kernel-rs/src/main.rs`, portable state and current limits.
 
 As each delivery lands, the affected ADRs, MCP contracts and documentation are updated, and the evidence is recorded here without describing pending decisions as the current system.
+
+## Evidence
+
+### Delivery D, November 6, 2026
+
+The Kernel sends the isolation headers from `kernel-rs/src/security.rs`; [the architecture](../architecture.md#isolation-of-hosted-code) lists the policy. The cookie prefixes and the refusal of administrative MCP on app hosts already existed. This delivery adds the headers, an explicit refusal of an app `Origin` on administrative MCP, owner sign-in and OAuth, and the tests.
+
+| Isolation test | Where | Run against |
+| --- | --- | --- |
+| Cross-app runtime request and session reuse | `tests/security-http.integration.test.ts` | Local Kernel, HTTP |
+| Administrative MCP from an app origin, with and without a credential | `tests/security-http.integration.test.ts` | Local Kernel, HTTP |
+| Forged `Origin` and `Host` | `tests/security-http.integration.test.ts` | Local Kernel, HTTP |
+| Cookie planted with `Domain=<suffix>` | `tests/security-auth.integration.test.ts` | Local Kernel, HTTPS origin |
+| Framed editor and framed app | `tests/security-http.integration.test.ts` | Local Kernel and the Vite config |
+| CSP on app pages, sub-resources, the fallback route and the sign-in page | `tests/security-http.integration.test.ts`, `kernel-rs/src/security.rs` | Local Kernel |
+| HSTS on HTTPS, none on HTTP | `tests/security-auth.integration.test.ts` | Local Kernel |
+
+A headless Chrome session loaded all eight product-fit examples and the docs guide page from a local Kernel. Each page ran its inline runtime, and Chrome reported no policy violation. Injecting an `onerror` attribute, an inline script and a fetch to another origin into the live poll app produced three violations, and none of them ran. The editor's `srcdoc` preview rendered under `frame-ancestors 'none'`. A starter published from the editor loaded its Google Fonts and ran. That session used a scratch script; the replay's own browser pass in `smoke.ts` has not run, because the Bash sandbox stops Chrome from starting.
+
+These tests did not run against the Docker stack. That stack serves plain HTTP on `localhost:8080`, so the `__Host-` cookies and HSTS cannot be exercised there; the "done when" criterion needs an HTTPS gateway in front of the stack.
+
+The plan did not account for two things. The preview applies no Content Security Policy, so an app that uses `onclick="..."` or a foreign script works in the preview and stops once published; the agent prompt now states the policy, and the preview needs the same policy on its own origin to close the gap. The starter templates import Google Fonts, so the app policy allows `fonts.googleapis.com` and `fonts.gstatic.com`; a stricter policy would render published starters in system fonts while the preview shows the web font.
