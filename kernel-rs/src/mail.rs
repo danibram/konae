@@ -107,14 +107,15 @@ impl Limits {
 /// The key that seals links at rest. `LITTLEBOX_MAIL_SECRET` when set;
 /// otherwise derived from `LITTLEBOX_ADMIN_KEY`, which every installation
 /// reachable from another machine already keeps secret. The development
-/// default key is public, so it never seals anything.
-fn mail_secret(admin_key: &str) -> Result<String> {
+/// default key is public, so it seals nothing for a real provider; the
+/// development mailbox writes its links in clear anyway and may use it.
+fn mail_secret(admin_key: &str, development: bool) -> Result<String> {
     if let Some(secret) = std::env::var("LITTLEBOX_MAIL_SECRET").ok().filter(|value| !value.is_empty()) {
         anyhow::ensure!(secret.len() >= 32, "LITTLEBOX_MAIL_SECRET must be at least 32 characters.");
         return Ok(secret);
     }
     anyhow::ensure!(
-        admin_key != DEFAULT_ADMIN_KEY,
+        development || admin_key != DEFAULT_ADMIN_KEY,
         "Email needs a secret to encrypt queued links. Set LITTLEBOX_MAIL_SECRET, or set LITTLEBOX_ADMIN_KEY to a secret value."
     );
     Ok(admin_key.to_owned())
@@ -669,6 +670,7 @@ impl MailQueue {
         let Some((transport, from)) = transport_from_env(data_root)? else {
             return Ok(None);
         };
+        let secret = mail_secret(admin_key, transport.name() == "development")?;
         let interval = std::env::var("LITTLEBOX_MAIL_WORKER_INTERVAL_MS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
@@ -677,7 +679,7 @@ impl MailQueue {
             data_root,
             transport,
             &from,
-            &mail_secret(admin_key)?,
+            &secret,
             Limits::from_env()?,
             Duration::from_millis(interval.max(50)),
         )?;
@@ -2093,8 +2095,9 @@ mod tests {
     #[test]
     fn the_mail_secret_falls_back_to_the_admin_key_but_never_the_public_default() {
         assert!(std::env::var("LITTLEBOX_MAIL_SECRET").is_err());
-        assert_eq!(mail_secret("an operator admin key").unwrap(), "an operator admin key");
-        assert!(mail_secret(DEFAULT_ADMIN_KEY).is_err());
+        assert_eq!(mail_secret("an operator admin key", false).unwrap(), "an operator admin key");
+        assert!(mail_secret(DEFAULT_ADMIN_KEY, false).is_err(), "a real provider needs a real secret");
+        assert!(mail_secret(DEFAULT_ADMIN_KEY, true).is_ok(), "the development mailbox keeps working locally");
     }
 
     #[test]
