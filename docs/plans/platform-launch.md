@@ -255,6 +255,28 @@ As each delivery lands, the affected ADRs, MCP contracts and documentation are u
 
 ## Evidence
 
+### Delivery B, November 6, 2026
+
+The queue, the worker, the transports, provider events, the preflight and the limits are in `kernel-rs/src/mail.rs`; [ADR-0012](../adr/0012-account-email-goes-through-a-persistent-queue.md) records the decisions and [the README](../../README.md#account-email) the configuration.
+
+| Refusal or guarantee | Test in `kernel-rs/src/mail.rs` unless named |
+| --- | --- |
+| Sending with an unverified sender: nothing queued, 503, sending stops when Resend answers 403 | `an_unverified_sender_stops_sending_and_enqueues_nothing`, `resend_preflight_needs_a_verified_domain_and_a_key_that_can_read_it`, `resend_outages_retry_and_an_unverified_sender_refuses` |
+| Exceeding a recipient limit, the same for an address with no account | `the_recipient_limits_refuse_visibly_and_the_same_for_unknown_addresses`, `the_signup_route_answers_429_past_a_limit` |
+| Exceeding the daily recipient, creator, app, installation and client limits | `the_daily_recipient_creator_app_installation_and_client_limits_refuse` |
+| An unsigned, forged or replayed provider event; events out of order; no event activates an account | `svix_signatures_are_checked_over_id_timestamp_and_raw_body`, `provider_events_are_signed_idempotent_ordered_and_never_activate_an_account`, `the_event_route_is_closed_without_a_queue` |
+| A provider outage leaves the job retryable with backoff, bounded | `a_provider_outage_keeps_the_job_and_retries_with_backoff` |
+| A pending job survives a restart; a restarted worker does not send twice | `a_pending_job_survives_a_restart_and_a_restarted_worker_does_not_send_twice`, `resend_sends_with_the_job_id_as_idempotency_key_and_dedupes_a_restart` |
+| The challenge and its job commit together | `a_refused_outbox_rolls_back_the_challenge` |
+| A replaced, ended or expired link is not mailed | `a_resend_supersedes_the_earlier_job_and_an_expired_link_is_not_sent`, `a_job_whose_challenge_is_gone_is_not_sent` |
+| Links sealed at rest and dropped once accepted | `a_signup_queues_one_sealed_job_and_the_worker_sends_it`, `a_sealed_link_opens_only_with_its_job_and_its_secret` |
+| SMTP sends with a stable Message-ID | `smtp_sends_with_a_stable_message_id_and_checks_the_connection` |
+| A copy carries the queue; a restore sends none of its pending jobs | `kernel-rs/src/copies.rs`, `a_copy_carries_the_mail_queue_and_a_restore_sends_none_of_its_pending_jobs` |
+
+Resend and SMTP ran against local fakes: an axum server that keeps one email per `Idempotency-Key`, and a plain SMTP responder on loopback. The "done when" criterion, a queued message in a real inbox, has not run: it needs a Resend account with a verified domain, or an SMTP server, and neither was available. SMTP over STARTTLS and implicit TLS has not run against a server either; only the plain loopback path did.
+
+The plan did not account for three things. A Resend key created with `sending_access` cannot list domains, so the sender check needs a second key with domain access or it refuses. Counting the recipient limit on sent emails would tell an attacker which addresses have accounts, because an active address gets no email; the limit counts requests instead. The plan names no per-app or per-client limit; the Kernel uses 100 a day per app and 20 an hour per client address.
+
 ### Delivery D, November 6, 2026
 
 The Kernel sends the isolation headers from `kernel-rs/src/security.rs`; [the architecture](../architecture.md#isolation-of-hosted-code) lists the policy. The cookie prefixes and the refusal of administrative MCP on app hosts already existed. This delivery adds the headers, an explicit refusal of an app `Origin` on administrative MCP, owner sign-in and OAuth, and the tests.

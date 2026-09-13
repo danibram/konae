@@ -33,7 +33,7 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 
 | Group | Tools |
 | --- | --- |
-| Discovery | `platform_describe`, `platform_guide`, `session_inspect`, `projects_list`, `project_inspect` |
+| Discovery | `platform_describe`, `platform_guide`, `session_inspect`, `mail_status`, `projects_list`, `project_inspect` |
 | Projects | `project_create` |
 | Owner schema and data | `schema_plan`, `database_execute`, `database_export`, `project_export`, `storage_test` |
 | Publishing | `release_plan`, `release_apply` |
@@ -79,9 +79,33 @@ In required mode the signup request carries only an email. The password is chose
 | `POST /_littlebox/owner/signup` | editor | `{ "email", "setupKey" }` | 202 in required mode, after the installation key check. |
 | `POST /_littlebox/owner/verify`, `/_littlebox/owner/reset`, `/_littlebox/owner/recover` | editor | as above | The creator scope; links open `/_littlebox/owner/login`. |
 
-A used, expired, foreign or wrong-purpose token answers 410. A pending account that signs in with a correct legacy password, or a suspended one, answers 403. A weak password answers 400 before the token is read. Without a mail transport, signup and recovery answer 503. The creator routes are unavailable when the optional hosted identity adapter is configured.
+A used, expired, foreign or wrong-purpose token answers 410. A pending account that signs in with a correct legacy password, or a suspended one, answers 403. A weak password answers 400 before the token is read. Without a mail transport, or while the sender preflight refuses, signup and recovery answer 503. Past an email limit they answer 429 and send nothing. The creator routes are unavailable when the optional hosted identity adapter is configured.
 
 The runtime MCP tools `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset` run the same flows for the app on the request's host. A signed-out visitor may call them on public and private apps; on a private app they are the only tools a signed-out caller reaches, and `tools/list` and every other call still answer 401. In local mode `auth_signup` also takes `password` and signs in at once. A tool that signs someone in sets the session cookie on the response and never returns a token. A full copy drops sessions and challenges; an import deletes any it finds.
+
+## Account email
+
+Every account link leaves through the queue in `mail.sqlite` (`kernel-rs/src/mail.rs`). The README's [Account email](../README.md#account-email) section lists the transports and their variables. What a client sees:
+
+- Signup and recovery store the challenge and its Email Job in one transaction and answer at once. The worker sends the job on its own task.
+- A job is `pending`, `accepted` (the provider took it), `delivered` (the provider reported delivery to the recipient's server) or `failed`. No job state activates an account; only the person answering the link does.
+- A refusal stores nothing. 503 means no transport, or a sender the preflight refused. 429 means a limit: per address 3 a minute and 10 a day, per client address 20 an hour, per creator 100 a day, per app 100 a day, per installation 1,000 a day. The address and client limits count requests, so an address with no account reaches them after the same number of requests as one with an account.
+
+`mail_status` is an admin tool for any owner credential. It returns the transport, the sender, `sending`, the preflight with its state (`checking`, `ready` or `refused`), reason and time, the queue depth and the count per state, the last failure as `{ kind, at, purpose }`, the limits, and whether provider events are configured. `refresh: true` runs the preflight again. It names no recipient. Without a transport it returns `sending: false` and how to configure one.
+
+`/_littlebox/health` carries a `mail` field when a transport is set: `transport`, `sending`, `preflight`, `depth` and `lastFailure` with its kind and time only.
+
+A failure kind is one of `provider-unavailable` (retrying, or out of retries), `rejected` (the provider refused that message), `sender-refused` (the provider refused the sender; sending stops until a preflight passes), `superseded` (a newer link replaced it, or its challenge ended), `link-expired`, `secret-unavailable` (the sealing secret changed), `bounced`, `provider-failed`, `suppressed` and `restored` (a restore ended it).
+
+### Resend
+
+The Resend transport calls `POST /emails` with the job ID in the `Idempotency-Key` header. Resend keeps a key for 24 hours and accepts up to 256 characters ([send email](https://resend.com/docs/api-reference/emails/send-email)); the worker's last retry runs about two hours after the first attempt. The worker treats 429, 5xx and 409 `concurrent_idempotent_requests` as retryable, 401 and 403 as a refused sender (403 `validation_error` is Resend's answer for an unverified domain), and any other 4xx as a rejected message ([errors](https://resend.com/docs/api-reference/errors)).
+
+The preflight calls `GET /domains` and requires the sender's domain with status `verified` ([list domains](https://resend.com/docs/api-reference/domains/list-domains), [domain statuses](https://resend.com/docs/dashboard/domains/manage-domains)). A key created with `sending_access` "can only send emails" ([API keys](https://resend.com/docs/api-reference/api-keys/create-api-key)), so it cannot list domains; `LITTLEBOX_RESEND_DOMAINS_KEY` supplies one that can.
+
+`POST /_littlebox/mail/resend-events` takes Resend's webhooks. Resend signs them with Svix: the `svix-id`, `svix-timestamp` and `svix-signature` headers, an HMAC-SHA256 over `{svix-id}.{svix-timestamp}.{raw body}` keyed with the base64 part of the `whsec_` secret, and a space-separated list of `v1,<signature>` entries ([verify webhooks](https://resend.com/docs/dashboard/webhooks/verify-webhooks-requests), [Svix manual verification](https://docs.svix.com/receiving/verifying-payloads/how-manual)). The Kernel compares in constant time, accepts a timestamp within five minutes of its clock, the window Svix's libraries use, and answers 401 otherwise. Without `LITTLEBOX_RESEND_WEBHOOK_SECRET` the route answers 404.
+
+Each `svix-id` is recorded once, so a replay answers 200 with `duplicate: true` and changes nothing. `email.sent` moves a job to accepted, `email.delivered` to delivered, and `email.bounced`, `email.failed` and `email.suppressed` to failed ([event types](https://resend.com/docs/dashboard/webhooks/event-types)); the job is found by `data.email_id`. A state only moves forward and the first final state wins, so events in any order end in the same state. An event for an ID the worker has not recorded yet is kept and applied when it does. Other event types are recorded and change nothing.
 
 ## Local development cycle
 

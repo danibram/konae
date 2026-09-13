@@ -16,6 +16,14 @@ _Avoid_: enabled, verified flag
 A single-use, expiring proof sent by email, with one purpose (verification, invitation or recovery) and one scope (the creator scope or one Deployment). The Kernel stores only its hash; answering it sets the account's password.
 _Avoid_: magic link, reset token
 
+**Email Job**:
+One account email in the installation's queue: its purpose, recipient, scope, idempotency key and state, pending, accepted by the provider, delivered to the recipient's server or failed. It commits with its Challenge and is sent only while that Challenge is open. Delivered says a mail server took it, not that a person read it.
+_Avoid_: notification, message log
+
+**Sender Preflight**:
+The Kernel's check that its mail transport may send as the configured sender, such as a domain verified in Resend. While it refuses, nothing is queued or sent.
+_Avoid_: email health
+
 **Verification Mode**:
 The installation's choice between local, where signup creates an active unverified account for development, and required, where every new account starts pending and accounts that never verified return to pending.
 _Avoid_: email confirmation setting

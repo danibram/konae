@@ -26,3 +26,5 @@ Verification requires choosing the password on the page the link opens. Signup i
 ## Consequences
 
 Required mode needs a mail transport; without one, signup and recovery answer 503 and existing active accounts still sign in. The transport is a seam (`AccountMail` in `kernel-rs/src/accounts.rs`); the only implementation today writes a development mailbox file. A full copy drops sessions and challenges, and an import deletes any it finds, so an old link never works on another machine. The operator suspends and resumes local creators with `littlebox-kernel creator-account-suspend` and `creator-account-resume`. Invitation acceptance and creator invitation codes plug into the same challenge model in later deliveries.
+
+Note, 2026-11-06: account email now leaves through a persistent queue in `mail.sqlite`, recorded in [ADR-0012](0012-account-email-goes-through-a-persistent-queue.md). `AccountMail` stays as the transport seam the development mailbox and tests use. The identity store gained `request_signup_with` and `request_recovery_with`, which take a `ChallengeOutbox` that writes in the challenge's transaction.
