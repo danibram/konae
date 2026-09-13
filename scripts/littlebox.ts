@@ -14,13 +14,15 @@ type Config = { url: string; project: Project };
 function endpoint(url: string) { return new URL("/mcp", url).href; }
 async function json<T>(filename: string): Promise<T> { return JSON.parse(await readFile(filename, "utf8")); }
 
-async function login(url: string, email: string, password: string, setupKey?: string): Promise<string> {
+/** Signs in, or creates the account with an invitation code or, for the first owner, the setup key. */
+async function login(url: string, email: string, password: string, admission: { code?: string; setupKey?: string } = {}): Promise<string> {
   let response = await fetch(new URL("/_littlebox/owner/login", url), {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password }),
   });
-  if (!response.ok && setupKey) response = await fetch(new URL("/_littlebox/owner/signup", url), {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password, setupKey }),
+  if (!response.ok && (admission.code || admission.setupKey)) response = await fetch(new URL("/_littlebox/owner/signup", url), {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password, ...admission }),
   });
+  if (response.status === 202) throw Error("This installation verifies email. Open the link sent to your address to choose your password, then run login again.");
   if (!response.ok) throw Error((await response.json()).error ?? "Owner sign-in failed.");
   const cookie = response.headers.get("set-cookie")?.split(";")[0];
   if (!cookie) throw Error("Owner sign-in returned no session.");
@@ -164,8 +166,8 @@ async function main() {
   if (command === "login") {
     const url = option("url", process.env.LITTLEBOX_URL ?? "http://localhost:4173")!;
     const email = process.env.LITTLEBOX_EMAIL; const password = process.env.LITTLEBOX_PASSWORD;
-    if (!email || !password) throw Error("Set LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD. Set LITTLEBOX_SETUP_KEY only when creating an owner.");
-    const token = await login(url, email, password, process.env.LITTLEBOX_SETUP_KEY);
+    if (!email || !password) throw Error("Set LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD. To create the account, also set LITTLEBOX_INVITATION_CODE, or LITTLEBOX_SETUP_KEY for an installation's first owner.");
+    const token = await login(url, email, password, { code: process.env.LITTLEBOX_INVITATION_CODE, setupKey: process.env.LITTLEBOX_SETUP_KEY });
     await mkdir(path.join(root, ".littlebox"), { recursive: true });
     await writeFile(path.join(root, ".littlebox/credentials.json"), JSON.stringify({ url, token }), { mode: 0o600 });
     await chmod(path.join(root, ".littlebox/credentials.json"), 0o600);
@@ -223,7 +225,7 @@ async function main() {
       if (ready) break; await Bun.sleep(100);
     }
     if (!ready) { child.kill(); throw Error("Development Kernel did not become ready."); }
-    const token = await login(url, "local-owner@littlebox.test", secret, secret);
+    const token = await login(url, "local-owner@littlebox.test", secret, { setupKey: secret });
     const devConfig = { ...config, url };
     try {
       const first = await publishLocal(root, devConfig, token);

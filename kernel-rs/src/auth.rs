@@ -147,6 +147,8 @@ pub enum AuthError {
     SignupClosed,
     MailUnavailable,
     VerificationRequired,
+    /// Creator signup without a valid invitation code or installation key.
+    AdmissionRefused(&'static str),
     Storage(rusqlite::Error),
     PasswordHash,
 }
@@ -174,6 +176,7 @@ impl fmt::Display for AuthError {
             Self::VerificationRequired => {
                 write!(f, "New accounts on this installation must confirm their email.")
             }
+            Self::AdmissionRefused(message) => write!(f, "{message}"),
             Self::Storage(_) | Self::PasswordHash => write!(f, "Authentication storage failed."),
         }
     }
@@ -265,6 +268,17 @@ impl AuthService {
     /// and issues its first session. The UNIQUE email column decides races
     /// between two signups for one address.
     pub fn create_account(&self, account: NewAccount) -> Result<AuthSession, AuthError> {
+        self.create_account_admitted(account, |_, _| Ok(()))
+    }
+
+    /// `create_account` with an admission check that runs inside the same
+    /// transaction, after the account row is written. A refusal rolls the
+    /// account back.
+    pub fn create_account_admitted(
+        &self,
+        account: NewAccount,
+        admit: impl FnOnce(&Connection, Option<&str>) -> Result<(), AuthError>,
+    ) -> Result<AuthSession, AuthError> {
         if self.verification == Verification::Required {
             return Err(AuthError::VerificationRequired);
         }
@@ -285,6 +299,7 @@ impl AuthService {
         if inserted == 0 {
             return Err(AuthError::EmailTaken);
         }
+        admit(&transaction, Some(&user.user_id))?;
         let session = issue_session(&transaction, user)?;
         transaction.commit().map_err(AuthError::Storage)?;
         Ok(session)
@@ -400,6 +415,18 @@ impl AuthService {
     /// owner. An active or suspended email gets nothing. The caller answers
     /// all three the same way, so the answer does not reveal who has an account.
     pub fn request_signup(&self, email: &str) -> Result<Option<IssuedChallenge>, AuthError> {
+        self.request_signup_admitted(email, |_, _| Ok(()))
+    }
+
+    /// `request_signup` with an admission check that runs inside the same
+    /// transaction. It receives the account the request created or re-linked,
+    /// or `None` when the email is active or suspended. A refusal rolls back
+    /// the pending account and its challenge.
+    pub fn request_signup_admitted(
+        &self,
+        email: &str,
+        admit: impl FnOnce(&Connection, Option<&str>) -> Result<(), AuthError>,
+    ) -> Result<Option<IssuedChallenge>, AuthError> {
         let email = normalize_email(email)?;
         let mut connection = self.connection()?;
         let transaction = immediate(&mut connection)?;
@@ -413,7 +440,11 @@ impl AuthService {
             .map_err(AuthError::Storage)?;
         let user_id = match existing {
             Some((user_id, state)) if state == "pending" => user_id,
-            Some(_) => return Ok(None),
+            Some(_) => {
+                admit(&transaction, None)?;
+                transaction.commit().map_err(AuthError::Storage)?;
+                return Ok(None);
+            }
             None => {
                 let user_id = Uuid::new_v4().to_string();
                 transaction
@@ -426,6 +457,7 @@ impl AuthService {
                 user_id
             }
         };
+        admit(&transaction, Some(&user_id))?;
         let challenge = self.issue_challenge(&transaction, &user_id, &email, Purpose::Verification)?;
         transaction.commit().map_err(AuthError::Storage)?;
         Ok(Some(challenge))

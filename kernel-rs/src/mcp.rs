@@ -1795,7 +1795,7 @@ async fn owner_config(State(state): State<AppState>, headers: HeaderMap) -> Resp
     if !super::oauth::valid_owner_host(&state, &headers).await { return StatusCode::FORBIDDEN.into_response(); }
     match super::clerk::ClerkConfig::from_env() {
         Ok(Some(config)) => Json(json!({"mode":"clerk","publishableKey":config.publishable_key})).into_response(),
-        Ok(None) => Json(json!({"mode":"local"})).into_response(),
+        Ok(None) => Json(json!({"mode":"local","admission":super::admission::mode(&state).as_str()})).into_response(),
         Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "Owner identity is not configured."),
     }
 }
@@ -1877,20 +1877,24 @@ async fn owner_auth(state: AppState, request: Request, signup: bool) -> Response
     {
         return too_many_attempts(wait);
     }
-    if signup
-        && digest(a["setupKey"].as_str().unwrap_or("").as_bytes())
-            != digest(state.admin_key.as_bytes())
-    {
-        return error(
-            StatusCode::FORBIDDEN,
-            "A valid installation setup key is required to create an owner.",
-        );
-    }
+    // An invitation code, or the installation key while it may still create
+    // the first creator. admission.rs consumes either inside the signup.
+    let admission = if signup {
+        match super::admission::read(&state, &a) {
+            Ok(admission) => Some(admission),
+            Err(e) => return auth_error(e),
+        }
+    } else {
+        None
+    };
     let email = a["email"].as_str().unwrap_or("").to_owned();
     let password = a["password"].as_str().unwrap_or("").to_owned();
-    if signup && state.accounts.verification == auth::Verification::Required {
-        let origin = super::oauth::origin(&state, &headers);
-        return match super::accounts::signup_creator(&state, &email, &origin).await {
+    if let Some(admission) = admission.clone().filter(|_| state.accounts.verification == auth::Verification::Required) {
+        let page = super::admission::login_page(
+            &super::oauth::origin(&state, &headers),
+            super::admission::return_to(&a).as_deref(),
+        );
+        return match super::accounts::signup_creator(&state, &email, &page, admission).await {
             Ok(created) => {
                 if let Some(user_id) = created {
                     claim_for_first_owner(&state, &user_id).await;
@@ -1902,12 +1906,13 @@ async fn owner_auth(state: AppState, request: Request, signup: bool) -> Response
     }
     // Only signup needs the lock: it spans the insert and the first-owner claim
     // below. The password hash runs before it, and logins run concurrently.
-    let (result, _guard) = if signup {
+    let (result, _guard) = if let Some(admission) = admission {
         match blocking(move || auth::NewAccount::prepare(&email, &password)).await {
             Ok(account) => {
                 let guard = database_lock(&state, "owner-auth").await;
                 let auth = super::accounts::creator_store(&state);
-                (blocking(move || auth?.create_account(account)).await, Some(guard))
+                let admit = super::admission::admit(admission);
+                (blocking(move || auth?.create_account_admitted(account, admit)).await, Some(guard))
             }
             Err(error_value) => (Err(error_value), None),
         }

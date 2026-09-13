@@ -26,3 +26,13 @@ Verification requires choosing the password on the page the link opens. Signup i
 ## Consequences
 
 Required mode needs a mail transport; without one, signup and recovery answer 503 and existing active accounts still sign in. The transport is a seam (`AccountMail` in `kernel-rs/src/accounts.rs`); the only implementation today writes a development mailbox file. A full copy drops sessions and challenges, and an import deletes any it finds, so an old link never works on another machine. The operator suspends and resumes local creators with `littlebox-kernel creator-account-suspend` and `creator-account-resume`. Invitation acceptance and creator invitation codes plug into the same challenge model in later deliveries.
+
+## Note, 2026-11-06: creator admission
+
+Delivery C admits creators with invitation codes, in `kernel-rs/src/admission.rs`. The operator issues, lists and revokes them with `littlebox-kernel creator-code-create`, `creator-code-list` and `creator-code-revoke`. Codes live in `owners.sqlite` next to the accounts, as SHA-256 hashes with an expiry, a note, a revocation time, a use time and the creator they produced. `auth.rs` gained one seam: `request_signup_admitted` and `create_account_admitted` run an admission check inside the transaction that writes the account, so a code is consumed exactly when the pending creator is created, and a refusal rolls both back.
+
+A code is not a challenge. A challenge proves control of an address and belongs to an account; a code proves the operator chose to admit someone and belongs to no account until it is used. The account a code creates still verifies its email through the challenge model above.
+
+The installation key now creates an account only while `owners.sqlite` is empty and no code has ever been issued. The plan said the key stops "once a code system is active"; that rule alone left signup open to a leaked key on an installation whose operator never issued a code, so the key also stops once a first creator exists. The default development key is the exception: it keeps creating owners until the first code is issued, because local development and the browser tests create an owner per run, and the Kernel already refuses that key off loopback unless the operator opts in.
+
+A code presented for an email that already has an account is consumed and creates nothing, and the answer matches a new email's, so a code cannot be used to test which creators exist. A verification link from a signup that began at the OAuth consent screen carries that consent path, so the creator returns to the MCP client after choosing a password.
