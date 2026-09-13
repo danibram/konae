@@ -26,3 +26,17 @@ Verification requires choosing the password on the page the link opens. Signup i
 ## Consequences
 
 Required mode needs a mail transport; without one, signup and recovery answer 503 and existing active accounts still sign in. The transport is a seam (`AccountMail` in `kernel-rs/src/accounts.rs`); the only implementation today writes a development mailbox file. A full copy drops sessions and challenges, and an import deletes any it finds, so an old link never works on another machine. The operator suspends and resumes local creators with `littlebox-kernel creator-account-suspend` and `creator-account-resume`. Invitation acceptance and creator invitation codes plug into the same challenge model in later deliveries.
+
+## Update, 2026-11-06: HTTP bindings and API keys
+
+The launch plan asks for one ADR that records both amendments to ADR-0002, creator identity and HTTP bindings on anonymous actions. This section is the second.
+
+An action's access level decides whether its HTTP binding answers. Deployment visibility does not. ADR-0002 tied anonymous actions to public Deployments: a private Deployment runs nothing without an app session. That stays true for the shell, the runtime endpoint and every action called through the SDK. An action declared `anonymous` that also declares an `http` key answers on its path whatever the Deployment's visibility, and the signature it declares, when it declares one, is the check. An `authenticated` action may not declare `http`; the Validation Gate and the Kernel refuse that combination, so a route never needs a session cookie to reach rows that belong to a person.
+
+A route has three kinds of caller, resolved before any SQL runs: a third-party service proves itself with the binding's signature, a program the owner wrote with an API key, and a person with the app session cookie. An API key is a third kind of Runtime Actor, next to the anonymous visitor and the signed-in app user. The owner issues it for one Deployment and names the actions and file visibilities it may use. The Kernel stores the SHA-256 hash only. An `actor` binding yields the key's ID, so rows a key writes have an owner. A key belongs to the Deployment, never to the owner, and grants no administrative capability.
+
+Files gain one HTTP read path, `GET /_littlebox/files/<id>`, that accepts the session cookie or an API key and applies the file's visibility. A key that names `private` may read every private file of its Deployment, because the owner who issued it can already read them through the Admin Interface. There is still no unauthenticated object URL.
+
+The signing secret is set by the owner through the Admin Interface and belongs to the Project, not to the Deployment, because a first publish must find it before the Deployment exists. It never enters `actions.json`, the Build Artifact or a portable export. Keys travel with the identity file in an export, hashes included, and the import revokes them, as it deletes sessions and challenges. The owner issues new keys on the destination.
+
+Considered and rejected: letting visibility gate routes too, which would make a private app unable to receive a webhook; allowing `http` on `authenticated` actions with a cookie, which would put a person's rows behind a URL that cross-site requests can reach; storing secrets in the Deployment folder, which leaves the first publish with nowhere to look.
