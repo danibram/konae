@@ -15,7 +15,6 @@
 //! `LITTLEBOX_ALLOW_DEFAULT_KEY=1`.
 
 use super::*;
-use auth::{CREATOR_SCOPE, Verification};
 use ring::rand::{SecureRandom, SystemRandom};
 use rusqlite::params;
 use sha2::{Digest, Sha256};
@@ -332,8 +331,9 @@ fn run(root: &Path, args: &[String], now: i64) -> Result<String> {
 /// can be issued before anyone has signed up.
 fn open_store(root: &Path) -> Result<Connection> {
     std::fs::create_dir_all(root)?;
-    let verification = Verification::from_env().map_err(anyhow::Error::msg)?;
-    AuthService::open_in(owners_path(root), CREATOR_SCOPE, verification)?;
+    // Installs the schema without applying a verification mode, so a shell
+    // without the Kernel's LITTLEBOX_ACCOUNT_VERIFICATION changes nothing.
+    AuthService::open(owners_path(root))?;
     let connection = Connection::open(owners_path(root))?;
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
     install(&connection)?;
@@ -450,7 +450,7 @@ fn timestamp(seconds: i64) -> String {
 mod tests {
     use super::*;
     use accounts::{AccountMail, AccountSettings, MemoryMailbox};
-    use auth::{NewPassword, Purpose};
+    use auth::{NewPassword, Purpose, Verification};
 
     const KEY: &str = "configured-installation-key";
     const PASSWORD: &str = "correct horse battery";
@@ -600,6 +600,20 @@ mod tests {
         // A code issued with a past clock lists as expired.
         create(&fixture.root, "", MIN_TTL_SECONDS, now_seconds() - 2 * MIN_TTL_SECONDS).unwrap();
         assert!(fixture.cli(&["creator-code-list"]).unwrap().contains("\texpired\t"));
+    }
+
+    #[test]
+    fn operator_commands_leave_the_kernels_verification_mode_alone() {
+        let fixture = fixture(Verification::Required, KEY);
+        accounts::creator_store(&fixture.state).unwrap();
+        // The operator's shell does not set LITTLEBOX_ACCOUNT_VERIFICATION.
+        fixture.cli(&["creator-code-create"]).unwrap();
+        fixture.cli(&["creator-code-list"]).unwrap();
+        let recorded: String = Connection::open(owners_path(&fixture.root))
+            .unwrap()
+            .query_row("SELECT value FROM account_meta WHERE key = 'verification'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(recorded, "required");
     }
 
     #[tokio::test]
