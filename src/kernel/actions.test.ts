@@ -125,3 +125,29 @@ describe("server actions", () => {
     } }))).toThrow('"access": "granted"');
   });
 });
+
+describe("http bindings", () => {
+  // kernel-rs/src/http.rs runs the same cases against the Kernel's parser.
+  test("refuse the same declarations as the Kernel, with the same messages", async () => {
+    const cases: { case: string; actions: Record<string, unknown>; error: string | null }[] =
+      await Bun.file(new URL("../../kernel-rs/src/http-binding-cases.json", import.meta.url)).json();
+    expect(cases.length).toBeGreaterThan(15);
+    for (const item of cases) {
+      const parse = () => parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
+      if (item.error === null) expect(parse, item.case).not.toThrow();
+      else expect(parse, item.case).toThrow(item.error);
+    }
+  });
+
+  test("keep the binding on the parsed action and out of the declarations", () => {
+    const program = parseServerActionSource(JSON.stringify({ version: 1, actions: {
+      "orders.receive": {
+        kind: "mutation", access: "anonymous", statement: "INSERT INTO orders (external_id) VALUES (?1)",
+        bindings: [{ source: "input", key: "id", type: "string" }],
+        http: { method: "POST", path: "/hooks/orders", signature: { header: "X-Signature", secret: "orders_webhook" } },
+      },
+    } }));
+    expect(program.actions["orders.receive"].http).toEqual({ method: "POST", path: "/hooks/orders", signature: { header: "X-Signature", secret: "orders_webhook" } });
+    expect(actionDeclarations(program)).toEqual([{ name: "orders.receive", kind: "mutation", access: "anonymous" }]);
+  });
+});
