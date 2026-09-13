@@ -14,20 +14,23 @@ test("platform pages require an owner session and return to the requested page a
   const client = `203.0.113.${1 + Math.floor(Math.random() * 254)}`;
   const signup = await page.request.post("/_littlebox/owner/signup", { headers: { "x-forwarded-for": client }, data: { email, password, setupKey: "local-development-key" } });
   expect(signup.ok()).toBe(true);
+  // A fresh owner has no projects, so a link to the browser starter would fall back to the
+  // project list. Create a project first so the requested page is a real workspace.
+  const projectPath = await createProject(page, `Return here ${Date.now()}`);
   await page.request.post("/_littlebox/owner/logout");
 
-  for (const path of ["/", "/app/app_tiny_tasks", "/design-system"]) {
+  for (const path of ["/", projectPath, "/design-system"]) {
     await page.goto(path);
     await expect(page).toHaveURL(/\/platform-access\?returnTo=/);
     await expect(page.getByRole("heading", { name: "Owner sign-in" })).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Workspace sections" })).toHaveCount(0);
   }
 
-  await page.goto("/app/app_tiny_tasks");
+  await page.goto(projectPath);
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page).toHaveURL(/\/app\/app_tiny_tasks$/);
+  await expect(page).toHaveURL(new RegExp(`${projectPath}$`));
   await expect(page.getByRole("navigation", { name: "Workspace sections" })).toBeVisible();
 });
 
@@ -38,13 +41,50 @@ async function signInApp(page: Page) {
   await page.getByRole("button", { name: "Create account", exact: true }).click();
 }
 
-async function createProject(page: Page, name: string, template = "tasks") {
+const templates = { tasks: "Shared list", notes: "Private notes" } as const;
+
+async function createProject(page: Page, name: string, template: keyof typeof templates = "tasks") {
   await page.goto("/projects");
   await page.getByRole("button", { name: "New project" }).click();
   await page.getByLabel("Project name").fill(name);
-  await page.getByLabel("Project template").selectOption(template);
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
+  await page.getByRole("radio", { name: new RegExp(`^${templates[template]}`) }).check();
+  // The new project reaches the Kernel after a short debounce. Wait for that save so a
+  // test that logs out or reloads right after does not lose it.
+  const saved = page.waitForResponse((response) => new URL(response.url()).pathname === "/mcp" && response.ok() && (response.request().postData() ?? "").includes('"project_sources_save"'));
+  await page.getByRole("button", { name: /^Create/ }).click();
+  await expect(page).toHaveURL(/\/app\/[^/]+$/);
+  await expect(page.getByRole("banner").locator("summary").getByText(name, { exact: true })).toBeVisible();
+  await saved;
+  await expect(page.getByRole("banner").getByText("Saving")).toHaveCount(0);
+  return new URL(page.url()).pathname;
+}
+
+// The editor sends project sources to the Kernel 500 ms after the last edit (App.tsx) and
+// shows "Saving" until the Kernel has them. A reload before that loads the older sources.
+async function waitForKernelSave(page: Page) {
+  await page.waitForTimeout(1_000);
+  await expect(page.getByRole("banner").getByText("Saving")).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByRole("banner").getByText("Not saved")).toHaveCount(0);
+}
+
+async function showSection(page: Page, name: "Preview" | "Auth" | "Files" | "Data") {
+  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name, exact: true }).click();
+}
+
+// The explorer with New file and New folder has no section button. The Files section shows
+// the code editor, and the fold shortcut (Ctrl+B or Cmd+B) brings the explorer next to it.
+async function openExplorer(page: Page) {
+  await showSection(page, "Files");
+  const explorer = page.getByRole("navigation", { name: "Project files" });
+  if (!(await explorer.isVisible())) await page.keyboard.press("Control+b");
+  await expect(explorer).toBeVisible();
+  return explorer;
+}
+
+async function openFile(page: Page, path: string) {
+  await showSection(page, "Files");
+  await page.getByLabel("Open file").selectOption(path);
+  return page.getByLabel(`${path} code editor`);
 }
 
 async function publish(page: Page) {
@@ -59,18 +99,20 @@ async function publish(page: Page) {
 
 test("browser builds, republishes, backs up and exports a persistent app", async ({ page, context }, testInfo) => {
   await createProject(page, `Browser tasks ${Date.now()}`);
-  const explorer = page.getByRole("navigation", { name: "Project files" });
+  const explorer = await openExplorer(page);
   await explorer.getByRole("button", { name: "New file" }).click();
   await page.getByLabel("File path").fill("src/label.js");
   await page.getByRole("button", { name: "Create", exact: true }).click();
-  await page.getByLabel("src/label.js code editor").fill("export const label = 'Compiled in the browser';");
-  await explorer.getByRole("button", { name: "app.js", exact: true }).click();
-  const editor = page.getByLabel("app.js code editor");
+  // The explorer stays in front after Create, so open the new file from the Files section.
+  await (await openFile(page, "src/label.js")).fill("export const label = 'Compiled in the browser';");
+  const editor = await openFile(page, "app.js");
   const source = await editor.inputValue();
   await editor.fill(`import { label } from './src/label.js';\n${source.replace("Nothing here yet. Anyone with this link sees the same list.", "' + label + '")}`);
   await page.getByRole("button", { name: "Run", exact: true }).click();
+  await showSection(page, "Preview");
   const preview = page.frameLocator('iframe[title="Mini-app preview"]');
   await expect(preview.getByText("Compiled in the browser")).toBeVisible();
+  await waitForKernelSave(page);
   await page.reload();
   await expect(preview.getByText("Compiled in the browser")).toBeVisible();
   const url = await publish(page);
@@ -111,7 +153,7 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   await expect(app.getByText("Added after backup")).toHaveCount(0);
 
   const downloadEvent = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Export project", exact: true }).click();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
   const download = await downloadEvent;
   expect(download.suggestedFilename()).toMatch(/-selfhost\.tar$/);
   await download.saveAs(testInfo.outputPath("selfhost.tar"));
@@ -132,11 +174,15 @@ test("public notes authenticate users and isolate private rows", async ({ page, 
   await preview.getByPlaceholder("Keep a thought…").fill("Alice preview note");
   await preview.getByRole("button", { name: "Save", exact: true }).click();
   await expect(preview.getByText("Alice preview note")).toBeVisible();
-  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: /Auth/i }).click();
+  // One section shows at a time, so pick the preview user in Auth and look in Preview.
+  await showSection(page, "Auth");
   await page.getByLabel("Preview user").selectOption("bob");
+  await showSection(page, "Preview");
   await expect(preview.getByText("No notes yet. Start with one thought.")).toBeVisible();
   await expect(preview.getByText("Alice preview note")).toHaveCount(0);
+  await showSection(page, "Auth");
   await page.getByLabel("Preview user").selectOption("alice");
+  await showSection(page, "Preview");
   await expect(preview.getByText("Alice preview note")).toBeVisible();
   const url = await publish(page);
   const app = await context.newPage();
@@ -167,7 +213,7 @@ test("public notes authenticate users and isolate private rows", async ({ page, 
   await expect(app.getByText("Alice published note")).toBeVisible();
   await app.screenshot({ path: testInfo.outputPath("authenticated-notes.png"), fullPage: true });
   const downloadEvent = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Export project", exact: true }).click();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
   const download = await downloadEvent;
   await download.saveAs(testInfo.outputPath("notes-selfhost.tar"));
 });
@@ -180,8 +226,7 @@ test("local and deployed migrations track their own model state", async ({ page,
   await app.getByPlaceholder(/Add one small thing/).fill("Keep published data");
   await app.getByRole("button", { name: "Add task" }).click();
   await expect(app.getByText("Keep published data")).toBeVisible();
-  await page.getByRole("navigation", { name: "Project files" }).getByRole("button", { name: "schema.ts", exact: true }).click();
-  const model = page.getByLabel("schema.ts code editor");
+  const model = await openFile(page, "schema.ts");
   await model.fill((await model.inputValue()).replace('  title: text("title").notNull(),', '  title: text("title").notNull(),\n  priority: text("priority").notNull().default("normal"),'));
   await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: /Data/i }).click();
   await page.getByLabel("Database target").selectOption("local");
