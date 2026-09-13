@@ -21,4 +21,4 @@ That sentence is the yardstick. A review that scores polish without it can call 
 
 ## Critic
 
-Judge the running editor at `http://localhost:4173` against the sentence at the top and the five jobs. The home is `/`. A project opens at `/app/<id>`. The starter on a fresh browser is `/app/app_tiny_tasks`. `/design-system` is the component gallery and `/platform-access` is owner sign-in. The theme follows the system. Do not clear storage.
+Judge the running editor at `http://localhost:4173` against the sentence at the top and the five jobs. The home is `/`. A project opens at `/app/<id>`. A fresh owner has no projects and lands on the project list; projects live on the Kernel, not in the browser. `/design-system` is the component gallery and `/platform-access` is owner sign-in. The theme follows the system. Do not clear storage.
