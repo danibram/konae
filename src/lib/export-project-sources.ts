@@ -6,6 +6,8 @@ import kernelAccountsSource from "../../kernel-rs/src/accounts.rs?raw";
 import kernelClerkSource from "../../kernel-rs/src/clerk.rs?raw";
 import kernelCopiesSource from "../../kernel-rs/src/copies.rs?raw";
 import kernelLimitsSource from "../../kernel-rs/src/limits.rs?raw";
+import kernelHttpSource from "../../kernel-rs/src/http.rs?raw";
+import kernelHttpBindingCases from "../../kernel-rs/src/http-binding-cases.json?raw";
 import kernelSecuritySource from "../../kernel-rs/src/security.rs?raw";
 import kernelCargoLock from "../../kernel-rs/Cargo.lock?raw";
 import kernelCargoManifest from "../../kernel-rs/Cargo.toml?raw";
@@ -25,6 +27,8 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/clerk.rs", contents: kernelClerkSource },
   { path: "kernel-rs/src/copies.rs", contents: kernelCopiesSource },
   { path: "kernel-rs/src/limits.rs", contents: kernelLimitsSource },
+  { path: "kernel-rs/src/http.rs", contents: kernelHttpSource },
+  { path: "kernel-rs/src/http-binding-cases.json", contents: kernelHttpBindingCases },
   { path: "kernel-rs/src/sdk-guide.json", contents: kernelSdkGuide },
   { path: "kernel-rs/src/security.rs", contents: kernelSecuritySource },
 ];

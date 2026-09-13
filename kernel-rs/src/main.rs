@@ -28,6 +28,7 @@ mod accounts;
 mod auth;
 mod clerk;
 mod copies;
+mod http;
 mod limits;
 mod mcp;
 mod oauth;
@@ -276,6 +277,9 @@ struct ActionDefinition {
     access: String,
     statement: String,
     bindings: Vec<ActionBinding>,
+    /// The action's HTTP route, checked by `http::binding`.
+    #[serde(default)]
+    http: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -349,8 +353,9 @@ async fn main() -> Result<()> {
         .merge(mcp::routes())
         .merge(oauth::routes())
         .merge(accounts::routes())
+        .merge(http::routes())
         .route("/_littlebox/{*path}", axum::routing::any(|| async { error(StatusCode::GONE, "Use authenticated MCP for platform operations.") }))
-        .route("/{*path}", get(serve_artifact))
+        .route("/{*path}", get(http::get_route).post(http::post_route))
         .route("/", get(serve_root))
         .layer(axum::middleware::from_fn_with_state(state.clone(), security::headers))
         .with_state(state);
@@ -467,6 +472,12 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         if let Err(message) = validate_action(name, action) {
             return error(StatusCode::BAD_REQUEST, &message);
         }
+    }
+    if let Err(message) = http::validate_routes(&program) {
+        return error(StatusCode::BAD_REQUEST, &message);
+    }
+    if let Err(error_value) = mcp::store(&state).and_then(|db| http::require_secrets(&db, &input.project.id, &program)) {
+        return error(StatusCode::BAD_REQUEST, &error_value.to_string());
     }
     if !input.artifact.files.keys().all(|path| safe_relative_path(path)) {
         return error(
@@ -1220,10 +1231,15 @@ async fn serve_file(
     if !file_readable(metadata, actor_id, private_deployment) {
         return error(StatusCode::NOT_FOUND, "File not found.");
     }
-    let bytes = match tokio::fs::read(directory.join(format!("{id}.blob"))).await {
-        Ok(bytes) => bytes,
-        Err(_) => return error(StatusCode::NOT_FOUND, "File not found."),
-    };
+    match tokio::fs::read(directory.join(format!("{id}.blob"))).await {
+        Ok(bytes) => file_response(metadata, bytes),
+        Err(_) => error(StatusCode::NOT_FOUND, "File not found."),
+    }
+}
+
+/// A stored file's bytes with its own type. Raster images display inline;
+/// everything else downloads, and nothing in it may run.
+fn file_response(metadata: &Value, bytes: Vec<u8>) -> Response {
     let content_type = metadata["type"]
         .as_str()
         .unwrap_or("application/octet-stream");
@@ -2213,6 +2229,7 @@ fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result
             ));
         }
     }
+    http::binding(name, action)?;
     Ok(())
 }
 
@@ -2484,6 +2501,7 @@ fn initialize_identity_from_base64(path: &Path, encoded: &str, maximum_bytes: us
     let connection = Connection::open(path)?;
     connection.execute("DELETE FROM app_sessions", [])?;
     connection.execute("DELETE FROM account_challenges", [])?;
+    http::revoke_imported_keys(&connection)?;
     Ok(())
 }
 
@@ -3136,6 +3154,7 @@ mod tests {
             access: "anonymous".into(),
             statement: statement.into(),
             bindings,
+            http: None,
         }
     }
 
