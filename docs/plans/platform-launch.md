@@ -255,6 +255,22 @@ As each delivery lands, the affected ADRs, MCP contracts and documentation are u
 
 ## Evidence
 
+### Delivery C, November 6, 2026
+
+`kernel-rs/src/admission.rs` issues, lists and revokes invitation codes from the Kernel executable and consumes a code in the transaction that creates the creator. The installation key creates only the first owner; [ADR-0011](../adr/0011-one-verified-account-core-for-creators-and-app-users.md) records the rule and why it is stricter than this plan's. The README's creator admission section is the operator guide, and [the MCP guide](../mcp.md#creator-admission) lists the routes and refusals.
+
+| Refusal or result | Where | Run against |
+| --- | --- | --- |
+| A new creator enters with a code and without the key, and returns to the MCP client's OAuth consent | `tests/creator-admission.integration.test.ts` | Kernel executable, required verification, development mailbox |
+| Used, expired, revoked, unknown and malformed codes; one code raced by two signups | `kernel-rs/src/admission.rs` tests; used, revoked and unknown also in the integration suite | Unit, and the Kernel executable |
+| The key at signup once a code exists, once a second creator exists, and after every code is revoked | `kernel-rs/src/admission.rs` tests, `tests/creator-admission.integration.test.ts` | Unit, and the Kernel executable |
+| A suspended creator's session, OAuth token, delegated credential, unexchanged OAuth code, recovery link, and a pending creator's verification link | `tests/creator-admission.integration.test.ts` | Kernel executable with `creator-account-suspend` |
+| A code spent on an existing email answers like a new one and cannot be reused | `kernel-rs/src/admission.rs` tests | Unit |
+
+A headless Chrome session against a Kernel from this branch showed the owner page asking for the setup key on an empty installation, asking for an invitation code once a code existed, and showing the pending-verification panel after a signup with a code. Platform access in the editor was type-checked and built but not opened in a browser.
+
+The plan did not account for three things. "Once a code system is active" left signup open to a leaked key on an installation that never issued a code, so the key also stops after the first creator. The browser tests create an owner per run with the default development key, so that key keeps working until the first code is issued. "Codes" in the suspension row reads here as the creator's open account links and OAuth authorization codes, because operator-issued invitation codes are never held by a creator.
+
 ### Delivery D, November 6, 2026
 
 The Kernel sends the isolation headers from `kernel-rs/src/security.rs`; [the architecture](../architecture.md#isolation-of-hosted-code) lists the policy. The cookie prefixes and the refusal of administrative MCP on app hosts already existed. This delivery adds the headers, an explicit refusal of an app `Origin` on administrative MCP, owner sign-in and OAuth, and the tests.
