@@ -25,11 +25,17 @@ export function PlatformAccess() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [setupKey, setSetupKey] = useState("local-development-key");
+  const [code, setCode] = useState("");
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [config, setConfig] = useState<{ mode: "local" | "clerk"; publishableKey?: string | null } | null>(null);
+  const [config, setConfig] = useState<{ mode: "local" | "clerk"; publishableKey?: string | null; admission?: "setup-key" | "code" } | null>(null);
+  // The setup key creates only an installation's first owner. Every other
+  // account needs an invitation code, so the form asks for one unless the
+  // Kernel says the key still applies.
+  const usesSetupKey = config?.admission === "setup-key";
   useEffect(() => { void fetch("/_littlebox/owner/config").then(async (response) => {
     if (!response.ok) throw new Error("Could not load sign-in settings.");
     setConfig(await response.json());
@@ -48,25 +54,47 @@ export function PlatformAccess() {
       const response = await fetch(`/_littlebox/owner/${action}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(action === "signup" ? { email, password, setupKey } : { email, password }),
+        body: JSON.stringify(action === "signup"
+          ? { email, password, ...(usesSetupKey ? { setupKey } : { code }), ...(returnTo?.startsWith("/oauth/authorize?") ? { returnTo } : {}) }
+          : { email, password }),
       });
       const body = await response.json().catch(() => ({})) as { error?: string; user?: { name?: string }; result?: { message?: string } };
       if (!response.ok) throw new Error(body.error || (action === "signup" ? "Could not create the owner account." : "Sign in failed."));
       // An installation that verifies email answers a signup with 202 and a
       // link sent to the address; the account is not active yet.
       if (response.status === 202) {
-        setNotice(body.result?.message ?? "Check your email for a link to choose your password.");
+        setPendingEmail(email.trim());
         setPassword("");
+        setCode("");
         return;
       }
       rememberOwnerEmail(body.user?.name ?? email);
       setPassword("");
       setSetupKey("");
+      setCode("");
       if (returnTo) {
         window.location.assign(returnTo);
         return;
       }
       refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // A pending account asks for its link again through recovery, which sends
+  // a new verification link and invalidates the earlier one.
+  const resend = async () => {
+    if (!pendingEmail) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/_littlebox/owner/recover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: pendingEmail }) });
+      const body = await response.json().catch(() => ({})) as { error?: string; result?: { message?: string } };
+      if (!response.ok) throw new Error(body.error || "Could not send the link.");
+      setNotice("We sent a new link. Only the newest link works.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -89,14 +117,25 @@ export function PlatformAccess() {
       </header>
       <main className="platform-main">
         <Card className="platform-card">
-          <h1>{creatingAccount ? "Create the owner account" : "Owner sign-in"}</h1>
+          <h1>{pendingEmail ? "Check your email" : creatingAccount ? "Create the owner account" : "Owner sign-in"}</h1>
           <p className="platform-lead">Owners deploy apps and manage their data. People who use your apps sign in inside each app instead.</p>
 
           {session.state === "checking" && <p className="platform-note">Checking your session…</p>}
           {session.state === "unavailable" && <p className="platform-error" role="alert">Could not reach the platform: {session.message}</p>}
 
           {session.state === "signed-out" && config?.mode === "clerk" && <ClerkSignIn publishableKey={config.publishableKey} returnTo={returnTo} onError={setError} onComplete={refresh} />}
-          {session.state === "signed-out" && config?.mode === "local" && (
+          {session.state === "signed-out" && config?.mode === "local" && pendingEmail && (
+            <div className="platform-form">
+              <p className="platform-note">We sent a link to <strong>{pendingEmail}</strong>. Open it to confirm the address and choose your password. The link works for 24 hours.</p>
+              {error && <p className="platform-error" role="alert">{error}</p>}
+              {notice && <p role="status">{notice}</p>}
+              <div className="platform-actions">
+                <Button onClick={() => void resend()} loading={busy}>Send the link again</Button>
+                <Button onClick={() => { setPendingEmail(null); setNotice(""); setError(""); }} disabled={busy}>Use another email</Button>
+              </div>
+            </div>
+          )}
+          {session.state === "signed-out" && config?.mode === "local" && !pendingEmail && (
             <form className="platform-form" noValidate onSubmit={(event) => {
               event.preventDefault();
               if (!email.trim()) { setError("Add an email."); return; }
@@ -105,9 +144,14 @@ export function PlatformAccess() {
             }}>
               <Field label="Email" help={error === "Add an email." ? error : undefined}><Input type="email" autoComplete="email" aria-invalid={error === "Add an email." || undefined} value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
               <Field label="Password" help={error === "Use at least 8 characters." ? error : undefined}><Input type="password" autoComplete="current-password" aria-invalid={error === "Use at least 8 characters." || undefined} value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
-              {creatingAccount && (
-                <Field label="This computer's setup key" help="Filled in for this computer. A hosted install prints its own key where Littlebox starts.">
+              {creatingAccount && usesSetupKey && (
+                <Field label="This computer's setup key" help="Creates the first owner. Filled in for this computer; a hosted install prints its own key where Littlebox starts.">
                   <Input type="password" autoComplete="off" required value={setupKey} onChange={(event) => setSetupKey(event.target.value)} />
+                </Field>
+              )}
+              {creatingAccount && !usesSetupKey && (
+                <Field label="Invitation code" help="The operator of this installation gives you one. It works once.">
+                  <Input autoComplete="off" spellCheck={false} required value={code} onChange={(event) => setCode(event.target.value)} />
                 </Field>
               )}
               {error && error !== "Add an email." && error !== "Use at least 8 characters." && <p className="platform-error" role="alert">{error}</p>}
