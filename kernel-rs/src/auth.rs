@@ -110,6 +110,15 @@ pub struct IssuedChallenge {
     pub expires_at: i64,
 }
 
+/// Where a challenge's message is recorded in the transaction that stores
+/// the challenge. The identity connection attaches `database()` as
+/// `outbox`, and `record` writes there before the commit; an error rolls
+/// both back. `token_hash` is the hash the identity database keeps.
+pub trait ChallengeOutbox {
+    fn database(&self) -> &Path;
+    fn record(&self, transaction: &Connection, challenge: &IssuedChallenge, token_hash: &str) -> Result<(), AuthError>;
+}
+
 /// One scope's account, password, challenge and session store: a Deployment's
 /// `identity.sqlite` or the installation's `owners.sqlite`. The caller must
 /// pass the store that belongs to the resolved app or to the creator scope.
@@ -146,6 +155,11 @@ pub enum AuthError {
     InvalidChallenge,
     SignupClosed,
     MailUnavailable,
+    /// The mail queue refused to send now: a send limit was reached. Nothing was stored.
+    MailLimit(String),
+    /// The mail transport is configured but may not send, for example because
+    /// its sender domain is not verified. Nothing was stored.
+    MailBlocked(String),
     VerificationRequired,
     Storage(rusqlite::Error),
     PasswordHash,
@@ -168,6 +182,7 @@ impl fmt::Display for AuthError {
                 f,
                 "Email is not configured on this installation, so it cannot send account links."
             ),
+            Self::MailLimit(message) | Self::MailBlocked(message) => write!(f, "{message}"),
             Self::SignupClosed => {
                 write!(f, "This app is not accepting new accounts for this email address.")
             }
@@ -399,9 +414,21 @@ impl AuthService {
     /// one, so a stranger who registered the address first cannot block its
     /// owner. An active or suspended email gets nothing. The caller answers
     /// all three the same way, so the answer does not reveal who has an account.
+    #[cfg(test)]
     pub fn request_signup(&self, email: &str) -> Result<Option<IssuedChallenge>, AuthError> {
+        self.request_signup_with(email, None)
+    }
+
+    /// `request_signup` with an outbox: the outbox records the challenge's
+    /// message in the same transaction that stores the challenge, so neither
+    /// commits without the other.
+    pub fn request_signup_with(
+        &self,
+        email: &str,
+        outbox: Option<&dyn ChallengeOutbox>,
+    ) -> Result<Option<IssuedChallenge>, AuthError> {
         let email = normalize_email(email)?;
-        let mut connection = self.connection()?;
+        let mut connection = self.connection_with(outbox)?;
         let transaction = immediate(&mut connection)?;
         let existing: Option<(String, String)> = transaction
             .query_row(
@@ -427,6 +454,9 @@ impl AuthService {
             }
         };
         let challenge = self.issue_challenge(&transaction, &user_id, &email, Purpose::Verification)?;
+        if let Some(outbox) = outbox {
+            outbox.record(&transaction, &challenge, &hash_token(&challenge.token))?;
+        }
         transaction.commit().map_err(AuthError::Storage)?;
         Ok(Some(challenge))
     }
@@ -435,11 +465,21 @@ impl AuthService {
     /// pending one gets a new verification challenge instead, which also
     /// sets its password. Suspended, unknown and malformed emails get nothing.
     /// The caller gives every case the same answer.
+    #[cfg(test)]
     pub fn request_recovery(&self, email: &str) -> Result<Option<IssuedChallenge>, AuthError> {
+        self.request_recovery_with(email, None)
+    }
+
+    /// `request_recovery` with an outbox, as `request_signup_with`.
+    pub fn request_recovery_with(
+        &self,
+        email: &str,
+        outbox: Option<&dyn ChallengeOutbox>,
+    ) -> Result<Option<IssuedChallenge>, AuthError> {
         let Ok(email) = normalize_email(email) else {
             return Ok(None);
         };
-        let mut connection = self.connection()?;
+        let mut connection = self.connection_with(outbox)?;
         let transaction = immediate(&mut connection)?;
         let existing: Option<(String, String)> = transaction
             .query_row(
@@ -456,6 +496,9 @@ impl AuthService {
         };
         let (user_id, _) = existing.unwrap();
         let challenge = self.issue_challenge(&transaction, &user_id, &email, purpose)?;
+        if let Some(outbox) = outbox {
+            outbox.record(&transaction, &challenge, &hash_token(&challenge.token))?;
+        }
         transaction.commit().map_err(AuthError::Storage)?;
         Ok(Some(challenge))
     }
@@ -658,6 +701,18 @@ impl AuthService {
             scope: self.scope.clone(),
             expires_at,
         })
+    }
+
+    /// A connection with the outbox's database attached as `outbox`. SQLite
+    /// cannot attach inside a transaction, so this happens before it begins.
+    fn connection_with(&self, outbox: Option<&dyn ChallengeOutbox>) -> Result<Connection, AuthError> {
+        let connection = self.connection()?;
+        if let Some(outbox) = outbox {
+            connection
+                .execute("ATTACH DATABASE ?1 AS outbox", [outbox.database().to_string_lossy()])
+                .map_err(AuthError::Storage)?;
+        }
+        Ok(connection)
     }
 
     fn connection(&self) -> Result<Connection, AuthError> {

@@ -1,6 +1,6 @@
 //! One folder per Deployment, copied off the volume.
 //!
-//! The data directory holds `owners.sqlite`, `mcp.sqlite` and one folder per
+//! The data directory holds `owners.sqlite`, `mcp.sqlite`, `mail.sqlite` and one folder per
 //! Deployment under `deployments/<id>/`. A copy is a consistent snapshot of
 //! those, written to a directory target, an S3 prefix, or both, with a
 //! `manifest.json` that lists every file with its size and SHA-256. The
@@ -29,7 +29,8 @@ use crate::{
 /// never byte for byte, so a WAL database copies consistently.
 /// `usage.sqlite` is ADR-0010's store; it is copied when it exists.
 const DEPLOYMENT_DATABASES: [&str; 3] = ["database.sqlite", "identity.sqlite", "usage.sqlite"];
-const ROOT_DATABASES: [&str; 2] = ["owners.sqlite", "mcp.sqlite"];
+/// `mail.sqlite` is the email queue (`mail.rs`); its links stay sealed in a copy.
+const ROOT_DATABASES: [&str; 3] = ["owners.sqlite", "mcp.sqlite", crate::mail::MAIL_DATABASE];
 const MANIFEST: &str = "manifest.json";
 const KEEP_RECENT: usize = 24;
 const KEEP_DAILY_DAYS: u64 = 30;
@@ -894,6 +895,11 @@ fn invalidate_sessions(root: &Path) -> Result<usize> {
             }
         }
     }
+    // Pending email jobs carry links to challenges a restore must not honour.
+    let mail = root.join(crate::mail::MAIL_DATABASE);
+    if mail.is_file() {
+        removed += crate::mail::end_pending_after_restore(&mail)?;
+    }
     Ok(removed)
 }
 
@@ -1090,6 +1096,38 @@ mod tests {
 
         let message = restore(&Source::Directory(copies.clone()), None, &restored).await.err().unwrap().to_string();
         assert!(message.contains("not empty"), "{message}");
+        for path in [source, copies, restored] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_copy_carries_the_mail_queue_and_a_restore_sends_none_of_its_pending_jobs() {
+        let (source, copies, restored) = (scratch("mail-source"), scratch("mail-target"), scratch("mail-restored"));
+        seed(&source);
+        let mail = Connection::open(source.join(crate::mail::MAIL_DATABASE)).unwrap();
+        crate::mail::install(&mail).unwrap();
+        mail.execute_batch(
+            "INSERT INTO jobs (id, purpose, recipient, scope, app_name, token_hash, link_nonce, link_sealed, link_expires_at,
+               state, next_attempt_at, created_at, updated_at)
+             VALUES ('pending-job', 'recovery', 'p@copy.test', 'creator', 'Littlebox', 'h', x'00', x'00', 9999999999, 'pending', 0, 0, 0),
+                    ('sent-job', 'recovery', 'p@copy.test', 'creator', 'Littlebox', 'h', NULL, NULL, 9999999999, 'delivered', 0, 0, 0);",
+        )
+        .unwrap();
+        drop(mail);
+        let id = run_copy(&state(&source), &[Target::Directory(copies.clone())]).await.unwrap();
+        assert!(copies.join(&id).join(crate::mail::MAIL_DATABASE).is_file());
+        restore(&Source::Directory(copies.clone()), None, &restored).await.unwrap();
+        let restored_mail = restored.join(crate::mail::MAIL_DATABASE);
+        let states: Vec<(String, String, bool)> = Connection::open(&restored_mail)
+            .unwrap()
+            .prepare("SELECT id, state, link_sealed IS NULL FROM jobs ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(states, vec![("pending-job".into(), "failed".into(), true), ("sent-job".into(), "delivered".into(), true)]);
         for path in [source, copies, restored] {
             let _ = std::fs::remove_dir_all(path);
         }

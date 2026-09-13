@@ -263,6 +263,13 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
             true,
         ),
         tool(
+            "mail_status",
+            "Read whether this installation sends account email: transport, sender preflight, queue depth, last failure and limits. Set refresh to check the sender again.",
+            json!({"refresh":{"type":"boolean"}}),
+            &[],
+            true,
+        ),
+        tool(
             "platform_guide",
             "Read SDK examples, Server Action format, publishing, or local development instructions.",
             json!({"topic":{"type":"string","enum":["sdk","actions","publishing","development"]}}),
@@ -997,6 +1004,7 @@ async fn admin_call(
         "platform_describe" => Ok(
             json!({"name":"Littlebox","protocolVersion":VERSION,"sourceAuthority":"external","runtimeEndpoint":"/_littlebox/mcp","chunkBytes":CHUNK,"maxTransferBytes":MAX_TRANSFER,"workflow":["project_create","build locally","transfer_begin/write/complete","release_plan","release_apply"],"runtimeTools":["auth_session","actions_invoke","files_list","files_read","files_upload"],"localDevelopment":"Use bun run littlebox -- init, build, dev, or publish. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything."}),
         ),
+        "mail_status" => super::mail::status_tool(state, a["refresh"].as_bool().unwrap_or(false)).await,
         "session_inspect" => Ok(
             json!({"ownerId":owner.id,"displayName":owner.display,"scopes":owner.scopes,"projectIds":owner.projects,"browserSession":owner.session}),
         ),
@@ -1890,7 +1898,7 @@ async fn owner_auth(state: AppState, request: Request, signup: bool) -> Response
     let password = a["password"].as_str().unwrap_or("").to_owned();
     if signup && state.accounts.verification == auth::Verification::Required {
         let origin = super::oauth::origin(&state, &headers);
-        return match super::accounts::signup_creator(&state, &email, &origin).await {
+        return match super::accounts::signup_creator(&state, &email, &origin, client).await {
             Ok(created) => {
                 if let Some(user_id) = created {
                     claim_for_first_owner(&state, &user_id).await;

@@ -29,6 +29,7 @@ mod auth;
 mod clerk;
 mod copies;
 mod limits;
+mod mail;
 mod mcp;
 mod oauth;
 mod security;
@@ -312,7 +313,7 @@ async fn main() -> Result<()> {
     for line in copies::migrate_layout(&data_root)? {
         println!("Layout migration: moved {line}");
     }
-    let account_settings = accounts::AccountSettings::from_env(&data_root)?;
+    let account_settings = accounts::AccountSettings::from_env(&data_root, &admin_key)?;
     let s3 = s3_client_from_env().await;
     let artifact_bucket = env("LITTLEBOX_ARTIFACT_BUCKET", "littlebox-apps");
     let data_bucket = env("LITTLEBOX_DATA_BUCKET", "littlebox-data");
@@ -337,6 +338,9 @@ async fn main() -> Result<()> {
     if let Some(config) = copy_config {
         copies::spawn_schedule(state.clone(), config);
     }
+    if let Some(queue) = state.accounts.queue.clone() {
+        mail::spawn_worker(queue);
+    }
     // Apply the verification mode to creator accounts before serving, so a
     // switch to required revokes unverified sessions at startup.
     accounts::creator_store(&state)?;
@@ -349,6 +353,7 @@ async fn main() -> Result<()> {
         .merge(mcp::routes())
         .merge(oauth::routes())
         .merge(accounts::routes())
+        .merge(mail::routes())
         .route("/_littlebox/{*path}", axum::routing::any(|| async { error(StatusCode::GONE, "Use authenticated MCP for platform operations.") }))
         .route("/{*path}", get(serve_artifact))
         .route("/", get(serve_root))
@@ -367,7 +372,8 @@ async fn main() -> Result<()> {
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({"ok": true, "kernel": "littlebox-rust", "version": 1,
         "artifactStore": if state.s3.is_some() { "filesystem+s3" } else { "filesystem" },
-        "copies": state.copies.health()}))
+        "copies": state.copies.health(),
+        "mail": state.accounts.queue.as_ref().map(|queue| queue.health())}))
 }
 
 /// The S3 client for artifacts and copies, or None when LITTLEBOX_S3_ENDPOINT is unset.
@@ -885,7 +891,7 @@ async fn auth_request(
         return too_many_attempts(wait);
     }
     if signup && state.accounts.verification == auth::Verification::Required {
-        return match accounts::signup_app(state, &deployment, &input.email).await {
+        return match accounts::signup_app(state, &deployment, &input.email, client).await {
             Ok(()) => accounts::link_sent(),
             Err(error_value) => auth_error(error_value),
         };
@@ -2890,7 +2896,8 @@ fn auth_error(error_value: AuthError) -> Response {
             StatusCode::FORBIDDEN
         }
         AuthError::InvalidChallenge => StatusCode::GONE,
-        AuthError::MailUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+        AuthError::MailUnavailable | AuthError::MailBlocked(_) => StatusCode::SERVICE_UNAVAILABLE,
+        AuthError::MailLimit(_) => StatusCode::TOO_MANY_REQUESTS,
         AuthError::VerificationRequired
         | AuthError::Storage(_)
         | AuthError::PasswordHash => StatusCode::INTERNAL_SERVER_ERROR,

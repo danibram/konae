@@ -16,7 +16,12 @@ use auth::{
 #[derive(Clone)]
 pub(crate) struct AccountSettings {
     pub(crate) verification: Verification,
+    /// A transport called directly after the challenge commits. Tests use it;
+    /// an installation uses `queue`.
     pub(crate) mail: Option<Arc<dyn AccountMail>>,
+    /// The persistent queue in `mail.sqlite` (`mail.rs`). When set, every
+    /// account email goes through it.
+    pub(crate) queue: Option<Arc<mail::MailQueue>>,
 }
 
 impl AccountSettings {
@@ -26,25 +31,17 @@ impl AccountSettings {
         Self {
             verification: Verification::Local,
             mail: None,
+            queue: None,
         }
     }
 
-    /// Reads `LITTLEBOX_ACCOUNT_VERIFICATION` and `LITTLEBOX_MAIL_TRANSPORT`.
-    /// The only transport today is `development`, which appends each message
-    /// to `mailbox.jsonl` in the data directory.
-    pub(crate) fn from_env(data_root: &Path) -> Result<Self> {
+    /// Reads `LITTLEBOX_ACCOUNT_VERIFICATION` and the mail transport
+    /// (`mail::MailQueue::from_env`). Every transport, including
+    /// `development`, sends through the queue.
+    pub(crate) fn from_env(data_root: &Path, admin_key: &str) -> Result<Self> {
         let verification = Verification::from_env().map_err(anyhow::Error::msg)?;
-        let mail: Option<Arc<dyn AccountMail>> =
-            match std::env::var("LITTLEBOX_MAIL_TRANSPORT").as_deref() {
-                Err(_) | Ok("") => None,
-                Ok("development") => Some(Arc::new(DevelopmentMailbox::new(
-                    data_root.join("mailbox.jsonl"),
-                ))),
-                Ok(other) => anyhow::bail!(
-                    "LITTLEBOX_MAIL_TRANSPORT={other} is not a known transport. Use development."
-                ),
-            };
-        Ok(Self { verification, mail })
+        let queue = mail::MailQueue::from_env(data_root, admin_key)?;
+        Ok(Self { verification, mail: None, queue })
     }
 }
 
@@ -147,8 +144,106 @@ pub(crate) fn creator_store(state: &AppState) -> Result<AuthService, AuthError> 
     )
 }
 
-fn mail(state: &AppState) -> Result<Arc<dyn AccountMail>, AuthError> {
-    state.accounts.mail.clone().ok_or(AuthError::MailUnavailable)
+/// How a challenge's message leaves: the persistent queue, or a direct
+/// transport in tests.
+#[derive(Clone)]
+enum Outbox {
+    Queue(Arc<mail::MailQueue>),
+    Direct(Arc<dyn AccountMail>),
+}
+
+fn mail(state: &AppState) -> Result<Outbox, AuthError> {
+    match (&state.accounts.queue, &state.accounts.mail) {
+        (Some(queue), _) => Ok(Outbox::Queue(queue.clone())),
+        (None, Some(mail)) => Ok(Outbox::Direct(mail.clone())),
+        (None, None) => Err(AuthError::MailUnavailable),
+    }
+}
+
+/// Who a challenge's message is for and where its link opens.
+struct Delivery {
+    email: String,
+    client: std::net::IpAddr,
+    scope: String,
+    creator: Option<String>,
+    app_name: String,
+    page: String,
+}
+
+/// Issues a challenge with `issue` and gets its message out. Through the
+/// queue, the limits run first and the job commits with the challenge;
+/// a refusal stores neither. Returns whether a challenge was issued.
+async fn issue_and_send(
+    state: &AppState,
+    outbox: Outbox,
+    delivery: Delivery,
+    issue: impl FnOnce(Option<&dyn auth::ChallengeOutbox>) -> Result<Option<IssuedChallenge>, AuthError> + Send + 'static,
+) -> Result<bool, AuthError> {
+    let _ = state;
+    match outbox {
+        Outbox::Queue(queue) => {
+            let recipient = delivery.email.trim().to_lowercase();
+            let admitted = queue.clone();
+            let (scope, creator) = (delivery.scope.clone(), delivery.creator.clone());
+            blocking(move || {
+                admitted.admit(&mail::Admission {
+                    recipient: &recipient,
+                    client: delivery.client,
+                    scope: &scope,
+                    creator: creator.as_deref(),
+                })
+            })
+            .await?;
+            let worker = queue.clone();
+            let issued = blocking(move || {
+                let outbox = queue.outbox(&delivery.scope, delivery.creator.as_deref(), &delivery.app_name, &delivery.page);
+                issue(Some(&outbox))
+            })
+            .await?;
+            worker.wake();
+            Ok(issued.is_some())
+        }
+        Outbox::Direct(mail) => {
+            let issued = blocking(move || issue(None)).await?;
+            match issued {
+                Some(challenge) => send(&*mail, challenge, &delivery.page).map(|()| true),
+                None => Ok(false),
+            }
+        }
+    }
+}
+
+/// The creator who owns a Deployment's project, for the per-creator limit.
+fn project_creator(state: &AppState, project_id: &str) -> Option<String> {
+    let path = state.data_root.join("mcp.sqlite");
+    let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    connection
+        .query_row("SELECT owner FROM projects WHERE id = ?1", [project_id], |row| row.get(0))
+        .optional()
+        .ok()
+        .flatten()
+}
+
+fn app_delivery(state: &AppState, deployment: &Deployment, email: &str, client: std::net::IpAddr) -> Delivery {
+    Delivery {
+        email: email.to_owned(),
+        client,
+        scope: deployment_scope(&deployment.id),
+        creator: Some(project_creator(state, &deployment.project_id).unwrap_or_else(|| "operator".into())),
+        app_name: deployment.project_name.clone(),
+        page: format!("{}/_littlebox/account", deployment.url),
+    }
+}
+
+fn creator_delivery(email: &str, client: std::net::IpAddr, origin: &str) -> Delivery {
+    Delivery {
+        email: email.to_owned(),
+        client,
+        scope: CREATOR_SCOPE.to_owned(),
+        creator: None,
+        app_name: "Littlebox".into(),
+        page: format!("{origin}/_littlebox/owner/login"),
+    }
 }
 
 fn send(mail: &dyn AccountMail, challenge: IssuedChallenge, page: &str) -> Result<(), AuthError> {
@@ -174,7 +269,12 @@ fn current_deployment_admits(deployments: &HashMap<String, Deployment>, id: &str
 
 /// Starts a signup on an app that requires verification. The current signup
 /// policy is checked under the identity lock, like an unverified signup.
-pub(crate) async fn signup_app(state: &AppState, deployment: &Deployment, email: &str) -> Result<(), AuthError> {
+pub(crate) async fn signup_app(
+    state: &AppState,
+    deployment: &Deployment,
+    email: &str,
+    client: std::net::IpAddr,
+) -> Result<(), AuthError> {
     let email = auth::normalize_email(email)?;
     let mail = mail(state)?;
     if !deployment.signup_policy.allows(&email) {
@@ -185,24 +285,25 @@ pub(crate) async fn signup_app(state: &AppState, deployment: &Deployment, email:
         return Err(AuthError::SignupClosed);
     }
     let auth = app_store(state, deployment)?;
-    let issued = blocking(move || auth.request_signup(&email)).await?;
-    if let Some(challenge) = issued {
-        send(&*mail, challenge, &format!("{}/_littlebox/account", deployment.url))?;
-    }
+    let delivery = app_delivery(state, deployment, &email, client);
+    issue_and_send(state, mail, delivery, move |outbox| auth.request_signup_with(&email, outbox)).await?;
     Ok(())
 }
 
 /// Starts a recovery on an app. Unknown, suspended and malformed emails get
 /// the same answer as real ones.
-pub(crate) async fn recover_app(state: &AppState, deployment: &Deployment, email: &str) -> Result<(), AuthError> {
+pub(crate) async fn recover_app(
+    state: &AppState,
+    deployment: &Deployment,
+    email: &str,
+    client: std::net::IpAddr,
+) -> Result<(), AuthError> {
     let mail = mail(state)?;
     let email = email.to_owned();
     let _identity_guard = database_lock(state, &format!("identity:{}", deployment.id)).await;
     let auth = app_store(state, deployment)?;
-    let issued = blocking(move || auth.request_recovery(&email)).await?;
-    if let Some(challenge) = issued {
-        send(&*mail, challenge, &format!("{}/_littlebox/account", deployment.url))?;
-    }
+    let delivery = app_delivery(state, deployment, &email, client);
+    issue_and_send(state, mail, delivery, move |outbox| auth.request_recovery_with(&email, outbox)).await?;
     Ok(())
 }
 
@@ -232,17 +333,21 @@ pub(crate) async fn complete_app(
 
 /// Starts a creator signup on an installation that requires verification.
 /// The caller has already checked the installation key.
-pub(crate) async fn signup_creator(state: &AppState, email: &str, origin: &str) -> Result<Option<String>, AuthError> {
+pub(crate) async fn signup_creator(
+    state: &AppState,
+    email: &str,
+    origin: &str,
+    client: std::net::IpAddr,
+) -> Result<Option<String>, AuthError> {
     let email = auth::normalize_email(email)?;
     let mail = mail(state)?;
     let _guard = database_lock(state, "owner-auth").await;
     let auth = creator_store(state)?;
     let lookup = email.clone();
-    let issued = blocking(move || auth.request_signup(&lookup)).await?;
-    let Some(challenge) = issued else {
+    let delivery = creator_delivery(&email, client, origin);
+    if !issue_and_send(state, mail, delivery, move |outbox| auth.request_signup_with(&lookup, outbox)).await? {
         return Ok(None);
-    };
-    send(&*mail, challenge, &format!("{origin}/_littlebox/owner/login"))?;
+    }
     let path = state.data_root.join("owners.sqlite");
     let user_id = Connection::open(path)
         .and_then(|db| {
@@ -278,7 +383,7 @@ async fn read_body<T: serde::de::DeserializeOwned>(
     request: Request,
     scope: &str,
     key: impl FnOnce(&T) -> String,
-) -> std::result::Result<T, Response> {
+) -> std::result::Result<(T, std::net::IpAddr), Response> {
     let headers = request.headers().clone();
     if !same_origin(&headers) {
         return Err(error(StatusCode::FORBIDDEN, "Cross-origin account request rejected."));
@@ -297,7 +402,7 @@ async fn read_body<T: serde::de::DeserializeOwned>(
         .guards
         .auth_attempt(scope, client, &key(&body))
         .map_err(too_many_attempts)?;
-    Ok(body)
+    Ok((body, client))
 }
 
 pub(crate) fn link_sent() -> Response {
@@ -359,12 +464,12 @@ pub(crate) async fn runtime_tool(
     let sent = || (json!({"status": "link-sent", "message": LINK_SENT}), None);
     let outcome = match name {
         "auth_signup" if state.accounts.verification == Verification::Required => {
-            signup_app(state, &deployment, &text("email")).await.map(|()| sent())
+            signup_app(state, &deployment, &text("email"), client).await.map(|()| sent())
         }
         "auth_signup" => signup_app_unverified(state, &deployment, &text("email"), &text("password"))
             .await
             .map(signed_in),
-        "auth_recover" => recover_app(state, &deployment, &text("email")).await.map(|()| sent()),
+        "auth_recover" => recover_app(state, &deployment, &text("email"), client).await.map(|()| sent()),
         "auth_verify" => complete_app(state, &deployment, Purpose::Verification, &text("token"), &text("password"))
             .await
             .map(signed_in),
@@ -417,7 +522,7 @@ async fn app_complete(state: AppState, request: Request, purpose: Purpose) -> Re
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
     let answer: ChallengeAnswer = match read_body(&state, request, &deployment.id, |_| "account-link".into()).await {
-        Ok(answer) => answer,
+        Ok((answer, _)) => answer,
         Err(response) => return response,
     };
     match complete_app(&state, &deployment, purpose, &answer.token, &answer.password).await {
@@ -430,12 +535,12 @@ async fn app_recover(State(state): State<AppState>, request: Request) -> Respons
     let Some(deployment) = deployment_for(&state, request.headers()).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
-    let input: RecoveryRequest =
+    let (input, client): (RecoveryRequest, _) =
         match read_body(&state, request, &deployment.id, |input: &RecoveryRequest| input.email.clone()).await {
             Ok(input) => input,
             Err(response) => return response,
         };
-    match recover_app(&state, &deployment, &input.email).await {
+    match recover_app(&state, &deployment, &input.email, client).await {
         Ok(()) => link_sent(),
         Err(error_value) => auth_error(error_value),
     }
@@ -454,7 +559,7 @@ async fn creator_complete(state: AppState, request: Request, purpose: Purpose) -
         return error(StatusCode::FORBIDDEN, "Owner authentication is unavailable on this origin.");
     }
     let answer: ChallengeAnswer = match read_body(&state, request, "owner", |_| "account-link".into()).await {
-        Ok(answer) => answer,
+        Ok((answer, _)) => answer,
         Err(response) => return response,
     };
     match complete_creator(&state, purpose, &answer.token, &answer.password).await {
@@ -468,7 +573,7 @@ async fn creator_recover(State(state): State<AppState>, request: Request) -> Res
         return error(StatusCode::FORBIDDEN, "Owner authentication is unavailable on this origin.");
     }
     let origin = oauth::origin(&state, request.headers());
-    let input: RecoveryRequest =
+    let (input, client): (RecoveryRequest, _) =
         match read_body(&state, request, "owner", |input: &RecoveryRequest| input.email.clone()).await {
             Ok(input) => input,
             Err(response) => return response,
@@ -478,10 +583,9 @@ async fn creator_recover(State(state): State<AppState>, request: Request) -> Res
         let _guard = database_lock(&state, "owner-auth").await;
         let auth = creator_store(&state)?;
         let email = input.email.clone();
-        if let Some(challenge) = blocking(move || auth.request_recovery(&email)).await? {
-            send(&*mail, challenge, &format!("{origin}/_littlebox/owner/login"))?;
-        }
-        Ok(())
+        let delivery = creator_delivery(&email, client, &origin);
+        issue_and_send(&state, mail, delivery, move |outbox| auth.request_recovery_with(&email, outbox)).await?;
+        Ok::<(), AuthError>(())
     }
     .await;
     match result {
@@ -636,6 +740,7 @@ mod tests {
             accounts: AccountSettings {
                 verification,
                 mail: with_mail.then(|| mailbox.clone() as Arc<dyn AccountMail>),
+                queue: None,
             },
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),
@@ -854,7 +959,7 @@ mod tests {
         assert_eq!(session.status(), StatusCode::OK, "local mode keeps unverified signup");
         let app = local.app(APP_HOST).await;
         let mut state = local.state.clone();
-        state.accounts = AccountSettings { verification: Verification::Required, mail: None };
+        state.accounts = AccountSettings { verification: Verification::Required, mail: None, queue: None };
         let required = Fixture { state, mailbox: local.mailbox.clone(), root: std::env::temp_dir().join("littlebox-accounts-unused") };
         assert_eq!(app_signup(&required, APP_HOST, "new@example.test").await.status(), StatusCode::SERVICE_UNAVAILABLE);
         let recover = app_recover(State(required.state.clone()), request("POST", APP_HOST, "/_littlebox/auth/recover", json!({"email": "person@example.test"}))).await;
