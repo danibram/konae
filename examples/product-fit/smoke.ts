@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createHmac } from "node:crypto";
 import { chromium } from "playwright";
 import { McpClient } from "../../src/mcp/client";
 import { buildLocal, publishLocal } from "../../scripts/littlebox";
@@ -13,6 +14,9 @@ assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Choose a valid 
 const url = `http://127.0.0.1:${port}`;
 const setupKey = crypto.randomUUID();
 const password = crypto.randomUUID();
+// The feed's monitors sign their pings with this secret; the owner sets it before publishing.
+const pingsSecret = crypto.randomUUID();
+const badgePng = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8ioAAAAASUVORK5CYII="), (c) => c.charCodeAt(0));
 const observations: { scenario: string; result: string }[] = [];
 let kernel: ReturnType<typeof Bun.spawn> | undefined;
 let address = 0;
@@ -71,6 +75,7 @@ try {
     await cp(path.join(import.meta.dir, name), root, { recursive: true });
     const project = { id: `product_fit_${name}`, name, slug: name, manifest: { version: 1, visibility: name === "board" ? "private" : "public" } };
     await owner.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
+    if (name === "feed") await owner.call("secret_set", { projectId: project.id, name: "pings_webhook", value: pingsSecret });
     const compiled = name === "docs" ? {
       artifact: { version: 1, entrypoint: "index.html", files: { ...await tree(path.join(root, "site")), "runtime.js": await readFile(path.join(repo, "src/mcp/runtime.js"), "utf8") } },
       files: { "schema.sql": await readFile(path.join(root, "schema.sql"), "utf8"), "actions.json": await readFile(path.join(root, "actions.json"), "utf8") },
@@ -82,6 +87,27 @@ try {
     } finally { await owner.cancel(upload.transferId); }
   }
   check("Publish eight examples", "All builds pass MCP release planning and apply on an empty Kernel.");
+  // The feed embeds a badge from the file read path. A reporter uploads it as
+  // public and the owner points the page at it, before the browser pass loads it.
+  const reporterSignup = await fetch(`${url}/_littlebox/auth/signup`, {
+    method: "POST", headers: { host: receipts.feed.hostname, "content-type": "application/json", "x-forwarded-for": freshAddress() },
+    body: JSON.stringify({ email: "reporter@example.test", password }),
+  });
+  assert.equal(reporterSignup.status, 200, await reporterSignup.clone().text());
+  const reporterCookie = reporterSignup.headers.get("set-cookie")!.split(";")[0];
+  const reporter = new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+    const headers = new Headers(init?.headers); headers.set("host", receipts.feed.hostname); headers.set("cookie", reporterCookie);
+    return fetch(input, { ...init, headers });
+  } });
+  const uploadFile = async (visibility: "public" | "private") => {
+    const transfer = await reporter.upload(badgePng);
+    try { return await reporter.call<{ id: string }>("files_upload", { transferId: transfer.transferId, name: `badge-${visibility}.png`, type: "image/png", visibility }); }
+    finally { await reporter.cancel(transfer.transferId); }
+  };
+  const publicBadge = await uploadFile("public");
+  const privateBadge = await uploadFile("private");
+  await owner.call("database_execute", { deploymentId: receipts.feed.id, operation: "sql", input: { sql: `INSERT INTO badge(file_id) VALUES('${publicBadge.id}')` } });
+
   if (process.env.LITTLEBOX_PRODUCT_FIT_BROWSER !== "0") {
     // Each published page runs in Chrome under the Kernel's Content Security
     // Policy. A blocked script, style, image or request fails the replay.
@@ -109,6 +135,10 @@ try {
         } else {
           await page.waitForFunction(() => typeof (window as any).miniapp === "object", undefined, { timeout: 10_000 });
           await page.waitForTimeout(1_500);
+        }
+        if (name === "feed") {
+          // The image comes from GET /_littlebox/files/<id> under the app's own policy.
+          await page.waitForFunction(() => { const img = document.querySelector<HTMLImageElement>("#badge img"); return !!img && img.complete && img.naturalWidth > 0; }, undefined, { timeout: 10_000 });
         }
         assert.deepEqual(violations, [], `${name}${route} broke under the Content Security Policy.`);
         await context.close();
@@ -198,7 +228,6 @@ try {
   assert.equal(listed[0].ownerId, undefined);
   const publicDownload = await visitor.call<any>("files_read", { fileId: published.id });
   assert.deepEqual(await visitor.download(publicDownload), png);
-  await visitor.cancel(publicDownload.transferId);
   check("Public portfolio", "A private upload stays with the potter. A public upload can be listed and downloaded by a visitor.");
 
   const poll = runtime("poll");
@@ -215,12 +244,39 @@ try {
   assert.equal((await action(feed, "pings.receive", { source: "monitor", payload: '{"status":"ok"}' })).changes, 1);
   const hook = await fetch(url + "/hook", { method: "POST", headers: { host: receipts.feed.hostname, "content-type": "application/json" }, body: '{"status":"ok"}' });
   assert.equal(hook.status, 405);
+  // A monitor posts with curl. The signature is HMAC-SHA256 of "<t>.<body>" with the owner's secret.
+  const curl = async (body: string, signature?: string) => {
+    const args = ["curl", "-s", "-o", "-", "-w", "\n%{http_code}", "-X", "POST", `${url}/hooks/pings`,
+      "-H", `Host: ${receipts.feed.hostname}`, "-H", "Content-Type: application/json", "-H", `X-Forwarded-For: ${freshAddress()}`, "--data-binary", body];
+    if (signature) args.push("-H", `X-Signature: ${signature}`);
+    const child = Bun.spawn(args, { stdout: "pipe", stderr: "inherit" });
+    const output = await new Response(child.stdout).text();
+    assert.equal(await child.exited, 0, "curl must run.");
+    const [text, status] = [output.slice(0, output.lastIndexOf("\n")), Number(output.slice(output.lastIndexOf("\n") + 1))];
+    return { status, body: JSON.parse(text) };
+  };
+  const ping = JSON.stringify({ source: "uptime", payload: '{"status":"ok"}' });
+  const at = Math.floor(Date.now() / 1000);
+  const signature = `t=${at},v1=${createHmac("sha256", pingsSecret).update(`${at}.${ping}`).digest("hex")}`;
+  assert.deepEqual(await curl(ping), { status: 401, body: { error: "invalid-signature" } });
+  assert.deepEqual(await curl(ping, signature), { status: 200, body: { result: { changes: 1, lastInsertId: 2 } } });
+  assert.deepEqual(await curl(ping, signature), { status: 409, body: { error: "replayed-signature" } });
+  const incidents = await fetch(`${url}/api/incidents`, { headers: { host: receipts.feed.hostname, "x-forwarded-for": freshAddress() } });
+  assert.equal(incidents.headers.get("content-type"), "application/json");
+  assert.equal((await incidents.json()).result[0].title, "Maintenance");
+  // A program reads the private badge with a key; a visitor gets nothing.
+  const reader = await owner.call<{ key: string }>("api_keys_create", { deploymentId: receipts.feed.id, name: "Badge mirror", files: ["private"] });
+  const byKey = await fetch(`${url}/_littlebox/files/${privateBadge.id}`, { headers: { host: receipts.feed.hostname, authorization: `Bearer ${reader.key}` } });
+  assert.equal(byKey.status, 200);
+  assert.equal(byKey.headers.get("content-type"), "image/png");
+  assert.deepEqual(new Uint8Array(await byKey.arrayBuffer()), badgePng);
+  assert.equal((await fetch(`${url}/_littlebox/files/${privateBadge.id}`, { headers: { host: receipts.feed.hostname } })).status, 404);
   let refused = 0;
   for (let i = 0; i < 35; i++) {
     try { await action(feed, "incidents.recent"); } catch (error) { assert.match(String(error), /rate-limited/); refused++; }
   }
   assert(refused > 0);
-  check("API and webhook boundary", "JSON-RPC reads and writes work; conventional webhook POST returns 405 and anonymous rate limits trip.");
+  check("API and webhook boundary", "JSON-RPC reads and writes work. curl's signed ping is stored once, the unsigned one and its replay are refused, GET /api/incidents returns rows, a key reads the private badge a visitor cannot, unknown POST paths return 405 and anonymous rate limits trip.");
 
   await sql("docs", "INSERT INTO pages(path,title,body) VALUES('/guide/install.html','Install the kiln','Install safely before firing')");
   assert.equal((await action(runtime("docs"), "pages.search", { q: "install" }))[0].title, "Install the kiln");
