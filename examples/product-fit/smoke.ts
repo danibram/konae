@@ -161,8 +161,9 @@ try {
   assert.equal(listed[0].visibility, "public");
   assert.equal(listed[0].ownerId, undefined);
   const publicDownload = await visitor.call<any>("files_read", { fileId: published.id });
+  // download() releases the transfer when it finishes, and the Kernel refuses a second cancel.
   assert.deepEqual(await visitor.download(publicDownload), png);
-  await visitor.cancel(publicDownload.transferId);
+  await assert.rejects(visitor.call("transfer_status", { transferId: publicDownload.transferId }), /Transfer not found or expired/);
   check("Public portfolio", "A private upload stays with the potter. A public upload can be listed and downloaded by a visitor.");
 
   const poll = runtime("poll");
