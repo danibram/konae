@@ -28,10 +28,10 @@ pub(crate) const MAIL_DATABASE: &str = "mail.sqlite";
 /// How long a claimed job stays with the worker before another pass may
 /// claim it again. A Kernel stopped mid-send leaves the lease to expire.
 const LEASE_MS: i64 = 2 * 60 * 1000;
-/// Retries after the first attempt fail. The backoff doubles from 30
-/// seconds and stops at an hour, so the last attempt runs about two hours
+/// Attempts before a job fails. The waits double from 30 seconds to 32
+/// minutes, then one of an hour, so the last attempt runs about two hours
 /// after the first, inside Resend's 24-hour idempotency window.
-const MAX_ATTEMPTS: i64 = 8;
+const MAX_ATTEMPTS: i64 = 9;
 const FIRST_BACKOFF_MS: i64 = 30_000;
 const MAX_BACKOFF_MS: i64 = 60 * 60 * 1000;
 /// A job whose challenge is not visible yet is younger than this when the

@@ -414,7 +414,7 @@ impl AuthService {
     /// one, so a stranger who registered the address first cannot block its
     /// owner. An active or suspended email gets nothing. The caller answers
     /// all three the same way, so the answer does not reveal who has an account.
-    #[cfg(test)]
+    #[allow(dead_code)] // Kept for callers without an outbox; tests use it.
     pub fn request_signup(&self, email: &str) -> Result<Option<IssuedChallenge>, AuthError> {
         self.request_signup_with(email, None)
     }
@@ -465,7 +465,7 @@ impl AuthService {
     /// pending one gets a new verification challenge instead, which also
     /// sets its password. Suspended, unknown and malformed emails get nothing.
     /// The caller gives every case the same answer.
-    #[cfg(test)]
+    #[allow(dead_code)] // Kept for callers without an outbox; tests use it.
     pub fn request_recovery(&self, email: &str) -> Result<Option<IssuedChallenge>, AuthError> {
         self.request_recovery_with(email, None)
     }

@@ -174,12 +174,10 @@ struct Delivery {
 /// queue, the limits run first and the job commits with the challenge;
 /// a refusal stores neither. Returns whether a challenge was issued.
 async fn issue_and_send(
-    state: &AppState,
     outbox: Outbox,
     delivery: Delivery,
     issue: impl FnOnce(Option<&dyn auth::ChallengeOutbox>) -> Result<Option<IssuedChallenge>, AuthError> + Send + 'static,
 ) -> Result<bool, AuthError> {
-    let _ = state;
     match outbox {
         Outbox::Queue(queue) => {
             let recipient = delivery.email.trim().to_lowercase();
@@ -286,7 +284,7 @@ pub(crate) async fn signup_app(
     }
     let auth = app_store(state, deployment)?;
     let delivery = app_delivery(state, deployment, &email, client);
-    issue_and_send(state, mail, delivery, move |outbox| auth.request_signup_with(&email, outbox)).await?;
+    issue_and_send(mail, delivery, move |outbox| auth.request_signup_with(&email, outbox)).await?;
     Ok(())
 }
 
@@ -303,7 +301,7 @@ pub(crate) async fn recover_app(
     let _identity_guard = database_lock(state, &format!("identity:{}", deployment.id)).await;
     let auth = app_store(state, deployment)?;
     let delivery = app_delivery(state, deployment, &email, client);
-    issue_and_send(state, mail, delivery, move |outbox| auth.request_recovery_with(&email, outbox)).await?;
+    issue_and_send(mail, delivery, move |outbox| auth.request_recovery_with(&email, outbox)).await?;
     Ok(())
 }
 
@@ -345,7 +343,7 @@ pub(crate) async fn signup_creator(
     let auth = creator_store(state)?;
     let lookup = email.clone();
     let delivery = creator_delivery(&email, client, origin);
-    if !issue_and_send(state, mail, delivery, move |outbox| auth.request_signup_with(&lookup, outbox)).await? {
+    if !issue_and_send(mail, delivery, move |outbox| auth.request_signup_with(&lookup, outbox)).await? {
         return Ok(None);
     }
     let path = state.data_root.join("owners.sqlite");
@@ -584,7 +582,7 @@ async fn creator_recover(State(state): State<AppState>, request: Request) -> Res
         let auth = creator_store(&state)?;
         let email = input.email.clone();
         let delivery = creator_delivery(&email, client, &origin);
-        issue_and_send(&state, mail, delivery, move |outbox| auth.request_recovery_with(&email, outbox)).await?;
+        issue_and_send(mail, delivery, move |outbox| auth.request_recovery_with(&email, outbox)).await?;
         Ok::<(), AuthError>(())
     }
     .await;
