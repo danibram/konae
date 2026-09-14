@@ -77,7 +77,7 @@ pub(super) fn binding(name: &str, action: &ActionDefinition) -> Result<Option<Ht
     }
     if !valid_path(path) {
         return Err(format!(
-            "Action {name} has an invalid http path. Use a leading \"/\" and segments of letters, digits, \".\", \"_\", \"~\" or \"-\", up to 200 characters."
+            r#"Action {name} has an invalid http path. Use a leading "/" and segments of letters, digits, ".", "_", "~" or "-", up to 200 characters."#
         ));
     }
     let first = path[1..].split('/').next().unwrap_or("").to_ascii_lowercase();
@@ -104,7 +104,7 @@ pub(super) fn binding(name: &str, action: &ActionDefinition) -> Result<Option<Ht
             let secret = signature.get("secret").and_then(Value::as_str).unwrap_or("");
             if !valid_secret_name(secret) {
                 return Err(format!(
-                    "Action {name} names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter."
+                    r#"Action {name} names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter."#
                 ));
             }
             Some(SignatureBinding { header: header.to_owned(), secret: secret.to_owned() })
@@ -175,10 +175,10 @@ pub(super) fn require_secrets(db: &Connection, project: &str, program: &ActionPr
         let Ok(Some(HttpBinding { signature: Some(signature), .. })) = binding(name, &program.actions[name]) else {
             continue;
         };
+        let secret = &signature.secret;
         anyhow::ensure!(
-            secret_value(db, project, &signature.secret)?.is_some(),
-            "Action {name} signs with the secret {}, which is not set for this project. Set it with secret_set before publishing.",
-            signature.secret
+            secret_value(db, project, secret)?.is_some(),
+            "Action {name} signs with the secret {secret}, which is not set for this project. Set it with secret_set before publishing."
         );
     }
     Ok(())

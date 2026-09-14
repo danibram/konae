@@ -5,7 +5,7 @@ import { sdkPromptSection } from "../agent/sdk-section.generated";
 import { buildSystemPrompt } from "../agent/system-prompt";
 import { cloneStarter } from "../lib/starter";
 import { runtimeClient } from "../runtime/preview";
-import { contractCalls, sdkContract, type SdkContract } from "./contract";
+import { contractCalls, sdkContract, type SdkContract, type SdkError } from "./contract";
 import { renderAll, renderedPaths, renderPromptSection } from "./render";
 
 const root = path.resolve(import.meta.dir, "../..");
@@ -104,7 +104,11 @@ describe("every documented message is one the code returns", () => {
     return new RegExp(pattern).test(source);
   }
 
-  const errors = [...sdkContract.errors, ...sdkContract.modules.flatMap((module) => module.calls.flatMap((call) => call.errors))];
+  const errors = [
+    ...sdkContract.errors,
+    ...sdkContract.modules.flatMap((module) => module.calls.flatMap((call) => call.errors)),
+    ...sdkContract.modules.flatMap((module) => module.declarations.flatMap((declaration): readonly SdkError[] => ("errors" in declaration ? declaration.errors : []))),
+  ];
 
   test.each(errors.map((error) => [error.message, error] as const))("%s", (_, error) => {
     expect(inSource(error.message, error.source === "kernel" ? kernel : publishedSdk)).toBe(true);

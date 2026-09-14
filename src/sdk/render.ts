@@ -13,6 +13,11 @@ function callPath(module: SdkModule, call: SdkCall) {
   return `miniapp.${module.name}.${call.name}`;
 }
 
+/** A module with calls is a namespace on miniapp; one without is only declared. */
+function moduleHeading(module: SdkModule) {
+  return module.calls.length ? `miniapp.${module.name}` : `The ${module.name} module, declared, with no browser call`;
+}
+
 function quoted(error: SdkError) {
   return `"${error.message}"`;
 }
@@ -42,7 +47,15 @@ export function renderPromptSection(contract: SdkContract = sdkContract): string
     absentSentence(contract),
   ];
   for (const module of contract.modules) {
-    lines.push("", `## miniapp.${module.name}`, "", module.summary, ...module.notes);
+    lines.push("", `## ${moduleHeading(module)}`, "", module.summary, ...module.notes);
+    for (const declaration of module.declarations) {
+      lines.push("", `Declared with "${declaration.key}" in ${declaration.file}: ${declaration.summary}`);
+      if (declaration.errors?.length) {
+        lines.push("Refusals:");
+        for (const error of declaration.errors) lines.push(`- ${quoted(error)} when ${error.when}`);
+      }
+      if (declaration.limits?.length) lines.push("Limits:", ...declaration.limits.map((limit) => `- ${limit}`));
+    }
     for (const call of module.calls) {
       lines.push("", `${call.signature}: ${call.summary} Returns ${call.returns}.`);
       if (!call.signedOut) lines.push("Needs a signed-in user.");
@@ -87,7 +100,10 @@ export function renderPlatformGuide(contract: SdkContract = sdkContract): string
       name: module.name,
       summary: module.summary,
       notes: module.notes,
-      declarations: module.declarations,
+      declarations: module.declarations.map(({ errors, ...declaration }) => ({
+        ...declaration,
+        ...(errors ? { errors: errors.map(guideError) } : {}),
+      })),
       calls: module.calls.map((call) => ({
         call: callPath(module, call),
         signature: call.signature,
@@ -144,10 +160,12 @@ export function renderDocs(contract: SdkContract = sdkContract): string {
     ...errorTable(contract.errors),
   ];
   for (const module of contract.modules) {
-    lines.push("", `## miniapp.${module.name}`, "", module.summary);
+    lines.push("", `## ${moduleHeading(module)}`, "", module.summary);
     if (module.notes.length) lines.push("", ...module.notes.map((note) => `- ${note}`));
     for (const declaration of module.declarations) {
       lines.push("", `Declared with \`${declaration.key}\` in \`${declaration.file}\`. ${declaration.summary}`);
+      if (declaration.errors?.length) lines.push("", ...errorTable(declaration.errors));
+      if (declaration.limits?.length) lines.push("", "Limits:", "", ...declaration.limits.map((limit) => `- ${limit}`));
     }
     for (const call of module.calls) {
       lines.push("", `### ${call.signature}`, "", call.summary, "");
