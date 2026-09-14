@@ -16,6 +16,10 @@ _Avoid_: enabled, verified flag
 A single-use, expiring proof sent by email, with one purpose (verification, invitation or recovery) and one scope (the creator scope or one Deployment). The Kernel stores only its hash; answering it sets the account's password.
 _Avoid_: magic link, reset token
 
+**Invitation Code**:
+A single-use, expiring code the operator issues on the server with the Kernel executable, which admits one creator Account. The Kernel stores its hash and the creator it produced. It is not a Challenge: nobody receives it by email and it proves no address, so the account it creates still verifies its email. The installation key creates only the first creator; once any code exists it creates none.
+_Avoid_: invite link, setup key, app invitation (the Deployment's own invitation is a Challenge)
+
 **Verification Mode**:
 The installation's choice between local, where signup creates an active unverified account for development, and required, where every new account starts pending and accounts that never verified return to pending.
 _Avoid_: email confirmation setting

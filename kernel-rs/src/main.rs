@@ -25,6 +25,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 use uuid::Uuid;
 
 mod accounts;
+mod admission;
 mod auth;
 mod clerk;
 mod copies;
@@ -297,6 +298,7 @@ async fn main() -> Result<()> {
     if clerk::operator_command()? { return Ok(()); }
     if copies::operator_command().await? { return Ok(()); }
     if accounts::operator_command()? { return Ok(()); }
+    if admission::operator_command()? { return Ok(()); }
     let port = env("LITTLEBOX_KERNEL_PORT", "8787").parse::<u16>()?;
     let bind = env("LITTLEBOX_BIND", "127.0.0.1");
     let public_origin = env("LITTLEBOX_PUBLIC_ORIGIN", "http://localhost:8080");
@@ -2886,7 +2888,10 @@ fn auth_error(error_value: AuthError) -> Response {
         AuthError::InvalidEmail | AuthError::WeakPassword => StatusCode::BAD_REQUEST,
         AuthError::EmailTaken => StatusCode::CONFLICT,
         AuthError::InvalidCredentials => StatusCode::UNAUTHORIZED,
-        AuthError::AccountPending | AuthError::AccountSuspended | AuthError::SignupClosed => {
+        AuthError::AccountPending
+        | AuthError::AccountSuspended
+        | AuthError::SignupClosed
+        | AuthError::AdmissionRefused(_) => {
             StatusCode::FORBIDDEN
         }
         AuthError::InvalidChallenge => StatusCode::GONE,

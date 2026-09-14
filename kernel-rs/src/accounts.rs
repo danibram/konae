@@ -231,18 +231,25 @@ pub(crate) async fn complete_app(
 }
 
 /// Starts a creator signup on an installation that requires verification.
-/// The caller has already checked the installation key.
-pub(crate) async fn signup_creator(state: &AppState, email: &str, origin: &str) -> Result<Option<String>, AuthError> {
+/// The admission, an invitation code or the installation key, is checked and
+/// consumed in the transaction that creates the pending creator. `page` is
+/// the sign-in page the link opens.
+pub(crate) async fn signup_creator(
+    state: &AppState,
+    email: &str,
+    page: &str,
+    admission: admission::Admission,
+) -> Result<Option<String>, AuthError> {
     let email = auth::normalize_email(email)?;
     let mail = mail(state)?;
     let _guard = database_lock(state, "owner-auth").await;
     let auth = creator_store(state)?;
     let lookup = email.clone();
-    let issued = blocking(move || auth.request_signup(&lookup)).await?;
+    let issued = blocking(move || auth.request_signup_admitted(&lookup, admission::admit(admission))).await?;
     let Some(challenge) = issued else {
         return Ok(None);
     };
-    send(&*mail, challenge, &format!("{origin}/_littlebox/owner/login"))?;
+    send(&*mail, challenge, page)?;
     let path = state.data_root.join("owners.sqlite");
     let user_id = Connection::open(path)
         .and_then(|db| {

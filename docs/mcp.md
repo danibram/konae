@@ -9,7 +9,7 @@ bun install
 bun run dev:local
 ```
 
-Open the editor and go to **Platform access**. The direct link is `http://localhost:4173/_littlebox/owner/login`. To create an owner, enter an email, a password and the installation key that the operator provides. In the default local environment that key is `local-development-key`; `LITTLEBOX_ADMIN_KEY` sets it. The first account claims the Deployments from the earlier prototype.
+Open the editor and go to **Platform access**. The direct link is `http://localhost:4173/_littlebox/owner/login`. To create the first owner, enter an email, a password and the installation key. In the default local environment that key is `local-development-key`; `LITTLEBOX_ADMIN_KEY` sets it. The first account claims the Deployments from the earlier prototype. Every later creator enters an invitation code instead, described under [creator admission](#creator-admission).
 
 Each owner administers their own projects. The page creates read-only or read, edit and publish tokens, optionally limited to specific projects, and lists and revokes active credentials. A token's secret appears only once. Tokens from this page expire after 24 hours; `token_create` accepts any subset of `read`, `write` and `publish` and a lifetime of up to 30 days.
 
@@ -76,12 +76,34 @@ In required mode the signup request carries only an email. The password is chose
 | `POST /_littlebox/auth/recover` | app | `{ "email" }` | 202, the same answer whether or not the account exists. Active accounts get a recovery link, pending ones a new verification link, suspended and unknown ones nothing. |
 | `POST /_littlebox/auth/reset` | app | `{ "token", "password" }` | 200 with a new session; every earlier session of the account ends. |
 | `GET /_littlebox/account` | app | | The page links open. Without a token it offers recovery. |
-| `POST /_littlebox/owner/signup` | editor | `{ "email", "setupKey" }` | 202 in required mode, after the installation key check. |
+| `POST /_littlebox/owner/signup` | editor | `{ "email", "code", "returnTo"? }`, or `"setupKey"` for the first owner | 202 in required mode, after the code or key is consumed. See [creator admission](#creator-admission). |
 | `POST /_littlebox/owner/verify`, `/_littlebox/owner/reset`, `/_littlebox/owner/recover` | editor | as above | The creator scope; links open `/_littlebox/owner/login`. |
 
 A used, expired, foreign or wrong-purpose token answers 410. A pending account that signs in with a correct legacy password, or a suspended one, answers 403. A weak password answers 400 before the token is read. Without a mail transport, signup and recovery answer 503. The creator routes are unavailable when the optional hosted identity adapter is configured.
 
 The runtime MCP tools `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset` run the same flows for the app on the request's host. A signed-out visitor may call them on public and private apps; on a private app they are the only tools a signed-out caller reaches, and `tools/list` and every other call still answer 401. In local mode `auth_signup` also takes `password` and signs in at once. A tool that signs someone in sets the session cookie on the response and never returns a token. A full copy drops sessions and challenges; an import deletes any it finds.
+
+## Creator admission
+
+A creator account needs an invitation code, except the installation's first owner, which the installation key creates. The operator issues codes on the server with `littlebox-kernel creator-code-create [--expires-in 14d] [--note TEXT]`, lists them with `creator-code-list` and stops an open one with `creator-code-revoke <id>`; the README's operator section has the details. A code is single use, expires after 14 days by default, and is stored as a SHA-256 hash in `owners.sqlite`.
+
+`POST /_littlebox/owner/signup` takes `{ "email", "code" }`, plus `"password"` in local mode. The Kernel consumes the code in the transaction that creates the account: a pending account with a verification link in required mode, an active account with a session in local mode. A code for an email whose account is pending is consumed and sends a fresh link to that account. A code for an active or suspended email is consumed and creates nothing, and the answer is the same 202 a new email gets. When both `code` and `setupKey` are sent, the code decides.
+
+The installation key creates an account only while `owners.sqlite` holds no account, or only the first owner's pending account asking for a new link, and no code has ever been issued. The default `local-development-key` keeps creating owners until the first code is issued, so local development and the browser tests still work; the Kernel accepts that key only on loopback unless `LITTLEBOX_ALLOW_DEFAULT_KEY=1`.
+
+`GET /_littlebox/owner/config` returns `"admission": "setup-key"` while the key can still create an account and `"code"` otherwise. The owner page and **Platform access** ask for the field it names and never mention the key in `code` mode.
+
+| Request | Status | Message |
+| --- | --- | --- |
+| Used, expired, revoked, unknown or mistyped code | 403 | `This invitation code is not valid. It may be mistyped, expired, revoked or already used.` |
+| Installation key once any code exists or any other account exists, or no admission at all | 403 | `An invitation code is required to create a creator account. Ask the operator of this installation for one.` |
+| Wrong installation key while the key can still create the first owner | 403 | `A valid installation setup key is required to create the first owner.` |
+
+A refused signup creates no account and sends no mail. Codes count in the same per-address and per-email sign-in limits as the key did.
+
+An MCP client that starts OAuth while the creator is signed out sends them to `/_littlebox/owner/login?returnTo=/oauth/authorize?...`. The page passes `returnTo` with the signup. The Kernel keeps it only when it starts with `/oauth/authorize?`, has no fragment or control character and fits in 4096 bytes, and puts it in the verification link's query: `/_littlebox/owner/login?returnTo=...#verification=TOKEN`. After the password is set the page opens the consent screen, and approving returns the code to the client's registered redirect. In local mode the signup answers with a session and the page returns to the consent screen at once.
+
+Suspending a creator with `creator-account-suspend` deletes their sessions, open verification and recovery links, delegated MCP credentials and OAuth codes not yet exchanged, and every later use of an OAuth token or credential reads the account state. A creator admitted with a code but suspended before verifying cannot use the link. The code stays used.
 
 ## Local development cycle
 
@@ -137,7 +159,7 @@ A published app runs under the Kernel's Content Security Policy, described in [t
 
 The build lives in `.littlebox/artifact.json`. Publishing transfers it over MCP, validates a plan against the project revision and applies it. The tool saves the plan and the receipt in `.littlebox`. The Kernel rejects a stale plan. Repeating a plan that was already applied returns its receipt. `publish` deploys as private unless `littlebox.json` sets `project.manifest.visibility` to `"public"`. A republish keeps the URL and database and stops serving files that the new artifact no longer contains.
 
-There is also `bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173`. It reads `LITTLEBOX_EMAIL` and `LITTLEBOX_PASSWORD` from the environment, obtains a 24-hour credential and stores it with `0600` permissions in `.littlebox/credentials.json`. `LITTLEBOX_SETUP_KEY` lets it create the account if it does not exist yet. The command adds `.littlebox/` to `.gitignore`; do not copy credentials into the frontend.
+There is also `bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173`. It reads `LITTLEBOX_EMAIL` and `LITTLEBOX_PASSWORD` from the environment, obtains a 24-hour credential and stores it with `0600` permissions in `.littlebox/credentials.json`. `LITTLEBOX_INVITATION_CODE` lets it create the account if it does not exist yet, and `LITTLEBOX_SETUP_KEY` does so for an installation's first owner. On an installation that requires verification it stops and asks you to open the emailed link first. The command adds `.littlebox/` to `.gitignore`; do not copy credentials into the frontend.
 
 ## Transfers and limits
 

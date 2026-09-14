@@ -76,7 +76,7 @@ The Kernel reads these at startup. Defaults are the values in `kernel-rs/src` un
 | --- | --- | --- |
 | `LITTLEBOX_KERNEL_PORT` | `8787` (`8790` under `bun run dev:local`) | Port the Kernel listens on. `dev:local` also uses it to build the editor's proxy target. |
 | `LITTLEBOX_BIND` | `127.0.0.1` (`0.0.0.0` in the Kernel image) | Address the Kernel listens on. |
-| `LITTLEBOX_ADMIN_KEY` | `local-development-key` | Installation setup key that permits owner registration. An empty value counts as unset. |
+| `LITTLEBOX_ADMIN_KEY` | `local-development-key` | Installation setup key that creates the first owner. Later creators need an invitation code; see [Creator admission](#creator-admission). An empty value counts as unset. |
 | `LITTLEBOX_ALLOW_DEFAULT_KEY` | unset | Set to `1` to let the Kernel start on a non-loopback address with the default setup key. Compose sets it for the development stack. |
 | `LITTLEBOX_ACCOUNT_VERIFICATION` | `local` | `required` makes new creator and app accounts prove their email before they are active, and moves accounts that never verified to pending with their sessions revoked. `local` keeps unverified signup for development. See [Verified accounts](#verified-accounts). |
 | `LITTLEBOX_MAIL_TRANSPORT` | unset | How the Kernel sends account links. `development` appends each message to `mailbox.jsonl` in the data directory. Unset means no email: verification-required signup and recovery answer 503. |
@@ -108,7 +108,8 @@ The editor, the `littlebox` CLI and the test configurations read these:
 | `LITTLEBOX_MCP_TOKEN` | `littlebox` CLI | unset | Bearer token for `init`, `publish` and `export --with-data`. When unset, the CLI reads `.littlebox/credentials.json`. |
 | `LITTLEBOX_URL` | `littlebox login`, `littlebox init` | `http://localhost:4173` | Littlebox installation to talk to. `--url` overrides it. |
 | `LITTLEBOX_EMAIL`, `LITTLEBOX_PASSWORD` | `littlebox login` | unset | Owner credentials exchanged for a 24-hour MCP token. |
-| `LITTLEBOX_SETUP_KEY` | `littlebox login` | unset | Installation setup key, needed only when the owner account does not exist yet. |
+| `LITTLEBOX_SETUP_KEY` | `littlebox login` | unset | Installation setup key, needed only to create an installation's first owner. |
+| `LITTLEBOX_INVITATION_CODE` | `littlebox login` | unset | Invitation code that creates the account when it does not exist yet. |
 | `LITTLEBOX_EDITOR_URL` | `playwright.local.config.ts` | `http://127.0.0.1:4176` | Editor the local end-to-end suite opens. When set outside CI, the suite reuses a server that is already running. |
 | `LITTLEBOX_TEST_KERNEL_PORT` | `playwright.local.config.ts` | `8794` | Kernel port for the local end-to-end suite. |
 | `LITTLEBOX_PORT` | exported self-host kit | `8787` | Port the exported Kernel publishes, read from the kit's `.env`. |
@@ -149,7 +150,7 @@ Restoring from `s3://` reads `LITTLEBOX_S3_ENDPOINT`, `LITTLEBOX_S3_REGION`, `LI
 
 ## Authenticated MCP
 
-Open **Platform access** in the editor to create an owner account or sign in. Owner registration requires the installation setup key, `local-development-key` in the local development configuration. The editor uses an HttpOnly owner session; it never receives the setup key at build time.
+Open **Platform access** in the editor to create an owner account or sign in. The installation setup key, `local-development-key` in the local development configuration, creates the first owner; every later creator signs up with an invitation code, as [Creator admission](#creator-admission) explains. The editor uses an HttpOnly owner session; it never receives the setup key at build time.
 
 Agents connect to `/mcp` using OAuth with PKCE or a scoped, expiring bearer token. Apps use the SDK over `/_littlebox/mcp` with their own app sessions. On a public app, a signed-out visitor may call actions declared with `"access": "anonymous"`; every other runtime operation requires an app session, and administration always requires an owner credential. The old operation routes return HTTP 410.
 
@@ -218,6 +219,24 @@ littlebox-kernel creator-account-resume owner@example.com
 
 Suspension ends the creator's sessions, open links, MCP credentials and OAuth codes. Projects and app accounts stay. A resumed account is active if it ever verified, and pending otherwise. [docs/mcp.md](docs/mcp.md#verified-accounts) lists the routes and tools.
 
+## Creator admission
+
+A creator account is created with an invitation code the operator issues on the server. The installation setup key creates only the first owner.
+
+Run these with the same `LITTLEBOX_DATA_DIR` as the Kernel; they work while it runs.
+
+```sh
+littlebox-kernel creator-code-create --expires-in 14d --note "For Ada"
+littlebox-kernel creator-code-list
+littlebox-kernel creator-code-revoke code_1a2b3c4d5e6f
+```
+
+`creator-code-create` prints the code once, with its ID and expiry. The Kernel stores only a SHA-256 hash of it in `owners.sqlite`. A code has 25 characters from Crockford's base32 alphabet, about 125 random bits; case, dashes and spaces do not matter. It expires after 14 days by default, and `--expires-in` takes hours or days from `1h` to `90d`. `creator-code-list` shows every code with its state (open, used, revoked or expired), its note and the creator it produced with that account's state. `creator-code-revoke` stops an open code; a used code cannot be revoked, so suspend its creator instead.
+
+The person enters the code on the owner page or in **Platform access**. One transaction consumes the code and creates the account, so two people racing with one code produce one account. Under `LITTLEBOX_ACCOUNT_VERIFICATION=required` that account is pending until its email is verified, as in [Verified accounts](#verified-accounts); in `local` mode it is active at once. A code presented for an email whose account is active or suspended is consumed and creates nothing, with the same answer as a new email, so a code holder cannot test which creators exist. A signup that started from an MCP client's OAuth consent carries the consent path in the verification link and returns there after the password is set.
+
+The setup key creates an account only while `owners.sqlite` holds no account and no code has ever been issued. A first owner whose verification link was lost can sign up again with the key for a new link, or use **Forgot your password?**. Once a second account exists or the first code is issued, the key creates no account, and revoking every code does not bring it back. A leaked key therefore does not open creator signup. One allowance keeps local development working: with the default `local-development-key`, which the Kernel accepts only on loopback unless `LITTLEBOX_ALLOW_DEFAULT_KEY=1`, the key keeps creating owners until the first code is issued. The owner page and **Platform access** ask for the key only while it can still create an account, and ask for a code otherwise.
+
 ## Security status
 
 - Runtime requests are bound to the hostname-resolved Deployment; the browser cannot select another database ID.
@@ -229,7 +248,7 @@ Suspension ends the creator's sessions, open links, MCP credentials and OAuth co
 - Pending and suspended accounts get no session. Verification and recovery links are single use, expire, answer only their own purpose and scope, and are stored as hashes. Opening a link changes nothing until the person posts the form.
 - Every Deployment gets a separate SQLite working file. The Kernel writes mutations transactionally and stores backups on explicit requests and before migrations.
 - Action inputs are typed, parameterized and quota-limited; structural SQL is rejected from runtime actions.
-- Owners use first-party sessions and delegated credentials. `LITTLEBOX_ADMIN_KEY` is an installation setup key for owner registration and never enters the editor bundle. The Kernel binds to `127.0.0.1` by default and refuses a non-loopback bind with the default setup key. Remote installations must configure their public origin, TLS and setup key.
+- Owners use first-party sessions and delegated credentials. `LITTLEBOX_ADMIN_KEY` is an installation setup key that creates the first owner and never enters the editor bundle; later creators need an operator-issued invitation code. The Kernel binds to `127.0.0.1` by default and refuses a non-loopback bind with the default setup key. Remote installations must configure their public origin, TLS and setup key.
 - The repository's two Docker images run as unprivileged users. The Dockerfile in an exported self-host kit still runs the Kernel as root.
 
 ## Export and self-host

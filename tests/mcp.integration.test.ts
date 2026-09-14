@@ -22,8 +22,17 @@ const password = "integration-password-2026";
 let nextClient = 0;
 const freshClient = () => { nextClient++; return `198.18.${Math.floor(nextClient / 250)}.${nextClient % 250 + 1}`; };
 
-async function owner(email: string) {
-  const response = await fetch(`${url}/_littlebox/owner/signup`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password, setupKey }) });
+// The setup key creates only the first owner; later owners sign up with an
+// invitation code the operator issues from the Kernel executable.
+function invitationCode() {
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_"))), LITTLEBOX_DATA_DIR: root };
+  const created = Bun.spawnSync(["kernel-rs/target/debug/littlebox-kernel", "creator-code-create"], { env });
+  expect(created.exitCode).toBe(0);
+  return created.stdout.toString().match(/shown once: (\S+)/)![1];
+}
+
+async function owner(email: string, admission: { setupKey: string } | { code: string } = { setupKey }) {
+  const response = await fetch(`${url}/_littlebox/owner/signup`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password, ...admission }) });
   expect(response.status).toBe(200);
   const cookie = response.headers.get("set-cookie")!.split(";")[0];
   const client = new McpClient(`${url}/mcp`, { fetch: (input, init) => {
@@ -41,7 +50,7 @@ beforeAll(async () => {
   url = `http://127.0.0.1:${port}`;
   await startKernel();
   const first = await owner("alice@owner.test"); alice = first.client; aliceCookie = first.cookie;
-  bob = (await owner("bob@owner.test")).client;
+  bob = (await owner("bob@owner.test", { code: invitationCode() })).client;
 }, 120_000);
 
 async function startKernel() {
