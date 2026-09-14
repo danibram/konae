@@ -38,12 +38,14 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | Owner schema and data | `schema_plan`, `database_execute`, `database_export`, `project_export`, `storage_test` |
 | Publishing | `release_plan`, `release_apply` |
 | Signup policy | `signup_policy_read`, `signup_policy_set` |
+| Signing secrets | `secrets_list`, `secret_set`, `secret_delete` |
+| API keys | `api_keys_list`, `api_keys_create`, `api_keys_revoke` |
 | Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
 | Credentials from the owner session | `tokens_list`, `token_create`, `token_revoke` |
 | App runtime | `auth_session`, `auth_logout`, `actions_invoke`, `files_list`, `files_upload`, `files_read` and transfers |
 | App accounts, also before sign-in | `auth_signup`, `auth_verify`, `auth_recover`, `auth_reset` |
 
-The catalog depends on the credentials. The Kernel checks the permission again on execution. A token limited to projects cannot create other projects. For `schema_plan`, that token must pass a `projectId` it has access to. Reading the signup policy needs the `read` scope; changing it needs the `publish` scope.
+The catalog depends on the credentials. The Kernel checks the permission again on execution. A token limited to projects cannot create other projects. For `schema_plan`, that token must pass a `projectId` it has access to. Reading the signup policy needs the `read` scope; changing it needs the `publish` scope. The same holds for listing and changing signing secrets and API keys.
 
 `project_create` returns a template and an External identity by default. Later sources stay in the user's folder; `project_inspect` returns metadata and the Deployment, without claiming to synchronize that code with the editor.
 
@@ -108,7 +110,7 @@ Without a session, `miniapp.auth.session()` returns an anonymous state so the ap
 
 Signed-out visitors may call `actions_invoke` 30 times per 10 seconds per client address and Deployment, and each signed-in app user 120 times per 10 seconds. Further calls return a tool error with the text `rate-limited` and a `Retry-After` header. The Kernel uses the socket peer address and reads `X-Forwarded-For` only from peers listed in `LITTLEBOX_TRUSTED_PROXIES`. Such a proxy must append the address it received the request from, never forward the client's header unchanged. Owner calls are audited. For app users the Kernel records only a signed-in `files_upload` that stores a new file. Failed uploads, receipt replays, action calls, reads and session checks write no audit row, so app users cannot grow the shared audit table at will.
 
-A file is private to the app user who uploaded it unless that upload set `visibility` to `public`. Only that user can list or read a private file. On a public app, a signed-out visitor can list and read public files. On a private app, any signed-in user of that app can read public files, and private files stay with the uploader. Files stored before this rule have no owner and stay unreadable to app users. A portable export still includes every file for the owner. The URLs the SDK returns are Blob URLs created after an MCP download. The app never receives an HTTP download path. Each visitor's downloads use a transfer bound to that client address, so anonymous callers do not share one transfer bucket.
+A file is private to the app user who uploaded it unless that upload set `visibility` to `public`. Only that user can list or read a private file. On a public app, a signed-out visitor can list and read public files. On a private app, any signed-in user of that app can read public files, and private files stay with the uploader. Files stored before this rule have no owner and stay unreadable to app users. A portable export still includes every file for the owner. The URLs the SDK returns are Blob URLs created after an MCP download. A page may also point an `img` at `GET /_littlebox/files/<id>`, described under [HTTP routes](#http-routes), which applies the same rules. Each visitor's downloads use a transfer bound to that client address, so anonymous callers do not share one transfer bucket.
 
 Input bindings in `actions.json` require a value by default. Add `"nullable": true` to a string, number or boolean input binding to bind an omitted value or explicit `null` as SQL `NULL`. Supplied values still follow the declared type and length limit, and empty strings remain invalid. A search action can use the same parameter for its optional filter.
 
@@ -125,6 +127,97 @@ Input bindings in `actions.json` require a value by default. Add `"nullable": tr
 ```
 
 Calling this action with `{}` returns the actor's rows up to the limit; `{ "q": "trip" }` filters them. Mutation actions return `{ "changes", "lastInsertId" }`. They cannot use SQL `RETURNING`; publication and the Validation Gate reject it. Use a separate query to read the changed rows.
+
+## HTTP routes
+
+An action declared `anonymous` may answer one method and path on its Deployment's host. This is how a project receives a webhook or serves a JSON endpoint without a server of its own. `kernel-rs/src/http.rs` implements it; the [ADR-0011 update of 2026-11-06](./adr/0011-one-verified-account-core-for-creators-and-app-users.md) records the decision.
+
+```json
+"orders.receive": {
+  "kind": "mutation",
+  "access": "anonymous",
+  "http": { "method": "POST", "path": "/hooks/orders", "signature": { "header": "X-Signature", "secret": "orders_webhook" } },
+  "statement": "INSERT INTO orders (external_id, total) VALUES (?1, ?2)",
+  "bindings": [
+    { "source": "input", "key": "id", "type": "string", "maxLength": 64 },
+    { "source": "input", "key": "total", "type": "number" }
+  ]
+}
+```
+
+A query binds `GET` and a mutation binds `POST`. A path starts with `/` and has segments of letters, digits, `.`, `_`, `~` and `-`, up to 200 characters, with no `.` or `..` segment and no trailing slash. Paths under `/_littlebox`, `/oauth`, `/.well-known` and `/mcp` belong to the Kernel. Two actions may share a path only with different methods. A binding wins over an artifact file at the same path for its method; every other `GET` still serves the Build Artifact, and a `POST` to a path no action binds answers 405. The Validation Gate and the Kernel refuse the same declarations with the same messages, from one case file, `kernel-rs/src/http-binding-cases.json`, that both test suites run. An `authenticated` action may not declare `http`.
+
+The route answers by the action's access level, not by the Deployment's visibility. On a private app, a route still answers to a caller with no session, so a route without a signature is open to anyone who knows the path. The action keeps its bindings, its query bound and the runtime endpoint's rate limits. A `GET` maps the query string onto the input bindings by their declared type, so `?min=10` binds the number 10; a `POST` reads a JSON object of at most 64 KiB. Inputs the action does not declare are refused, as with `miniapp.actions.call`, so a sender whose payload carries other fields needs an action that declares them or an adapter.
+
+| Answer | Status | When |
+| --- | --- | --- |
+| `{ "result": [rows] }` or `{ "result": { "changes", "lastInsertId" } }` | 200 | The action ran. Every answer carries `Cache-Control: no-store` |
+| `{ "error": "<binding message>" }` | 400 | An input is missing, unexpected or of the wrong type, the body is not a JSON object, or a query parameter repeats |
+| `{ "error": "invalid-signature" }` | 401 | A signed route got no signature, a wrong one, or one whose `t` is more than 300 seconds from the Kernel's clock |
+| `{ "error": "invalid-api-key" }` | 401 | The bearer token starts with `lbk_` and names no live key of this Deployment |
+| `{ "error": "This API key may not call <action>." }` | 403 | The key does not name the action |
+| `{ "error": "No route accepts POST on this path." }` | 405 | No action binds the path for `POST` |
+| `{ "error": "replayed-signature" }` | 409 | The same signature arrived before |
+| `{ "error": "The request body exceeds 64 KiB." }` | 413 | |
+| `{ "error": "rate-limited" }` | 429 | With `Retry-After`. 30 calls per 10 seconds per client address without a key or session, 120 per user or key, shared with `actions_invoke` |
+
+### Who may call a route
+
+The Kernel resolves the caller before any SQL runs.
+
+| Caller | Proof | Actor ID for an `actor` binding |
+| --- | --- | --- |
+| A service | The signature the binding declares | None, so an action that binds the actor refuses |
+| A program the owner wrote | `Authorization: Bearer lbk_...`, an API key that names the action | The key's ID, `key_...` |
+| A person | The app session cookie, sent from the app's own origin | The app user's ID |
+
+A key that names a signed action replaces the signature. A session cookie does not: a signed route needs its signature from a person too. The Kernel uses the cookie only when the request comes from the app's own origin. Every app host is same-site with the others, so `SameSite=Lax` alone would let one app's page call another app's route as its signed-in user; a request whose `Sec-Fetch-Site` is `same-site` or `cross-site`, or whose `Origin` is another host, runs as a visitor.
+
+### Signatures
+
+The owner sets the secret for the project before publishing. A release whose signature names an unset secret is refused when planned and again when applied, with `Action <name> signs with the secret <secret>, which is not set for this project. Set it with secret_set before publishing.` The editor cannot see secrets, so this is the one refusal the Validation Gate does not make.
+
+```text
+secret_set   { "projectId", "name": "orders_webhook", "value": "<16 to 512 printable characters, no spaces>" }
+secrets_list { "projectId" }                      names and update times, never values
+secret_delete { "projectId", "name" }             refused while the published Deployment signs with it
+```
+
+Secrets belong to the project and live in `mcp.sqlite`, next to the project registry, because a first publish must find them before its Deployment exists. They never enter `actions.json`, the Build Artifact, a listing, the audit log or a portable export. On another installation the owner runs `project_create`, then `secret_set`, then the release.
+
+The sender puts this in the declared header:
+
+```text
+t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw request body>", keyed with the secret>
+```
+
+The Kernel recomputes the MAC over the exact bytes it received, compares it in constant time, refuses a `t` more than 300 seconds before or after its clock, and remembers each accepted signature for 600 seconds so a replay inside the window answers 409. `t` is inside the MAC, so moving it invalidates the signature. More than one `v1=` may be sent while a secret rotates. A shell sender with OpenSSL:
+
+```sh
+body='{"id":"A-1","total":12}'
+t=$(date +%s)
+sig=$(printf '%s.%s' "$t" "$body" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.* //')
+curl -X POST "https://orders-1a2b3c.example.net/hooks/orders" \
+  -H 'Content-Type: application/json' -H "X-Signature: t=$t,v1=$sig" --data-binary "$body"
+```
+
+Services with their own fixed signing scheme do not speak this one and need an adapter. The replay memory is per Kernel process, so a restart inside the window forgets it.
+
+### API keys
+
+```text
+api_keys_create { "deploymentId", "name", "actions": ["orders.receive"], "files": ["private"] }
+api_keys_list   { "deploymentId" }               metadata and revocation times, never the key
+api_keys_revoke { "deploymentId", "keyId" }
+```
+
+`api_keys_create` returns the key once. A key belongs to one Deployment and never to the owner, grants no administrative tool, and works only on HTTP routes and the file read path; the runtime MCP endpoint does not accept it. It may name actions that have an HTTP route and the file visibilities `public` and `private`. A key that names `private` reads every private file of its Deployment, because the owner who issues it can already read them through `project_export`. A Deployment holds at most 50 live keys. The Kernel stores the SHA-256 hash in the Deployment's `identity.sqlite`, so `project_export` carries the keys' metadata and hashes with the accounts, and an import marks every key revoked, as it deletes sessions and challenges. `littlebox-kernel restore` keeps them live, since it restores the same installation.
+
+### The file read path
+
+`GET /_littlebox/files/<id>` on the Deployment host returns a stored file with its own content type, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy: same-origin` and `Cache-Control: private, no-store`. PNG, JPEG, GIF, WebP and AVIF answer `inline`; every other type answers `attachment`. A key reads the visibilities it names, a person reads by the file rules above, and a visitor reads public files of a public Deployment. Any other caller gets 404, the same as for a missing file, or 401 on a private Deployment with no session or key. There is no listing at `/_littlebox/files/`, no unauthenticated object URL, and nothing is served from the bucket. A signature does not apply here. The app's policy allows `img-src 'self'`, so a page can embed its own files; `Cross-Origin-Resource-Policy` keeps other apps' pages from embedding them.
+
+The editor preview serves no routes. Try them on a Development Kernel with `littlebox dev` or on a Deployment.
 
 ## Build and publish
 
@@ -151,7 +244,7 @@ A release's `schema.sql` may only create tables and indexes, and must be safe to
 
 `/oauth/register` accepts 10 registrations per client address per hour; IPv6 clients share one bucket per /48. It holds at most 1000 clients that have not reached consent, and at that cap a new registration replaces the oldest of them. Unconsented clients expire after one hour. A client that reached consent expires after 30 days without a new token once it holds no live credential.
 
-The audit log in `mcp.sqlite` records each owner tool call with its project or Deployment. `release_apply` records the project and the Deployment it produced, and `signup_policy_set` records the old and new mode.
+The audit log in `mcp.sqlite` records each owner tool call with its project or Deployment. `release_apply` records the project and the Deployment it produced, and `signup_policy_set` records the old and new mode. `secret_set` records the project, never the value.
 
 `transfer_status` lets a client resume an upload from the last offset. Cancel transfers you no longer need. The SDK checks the checksum of downloads and releases its temporary transfers.
 

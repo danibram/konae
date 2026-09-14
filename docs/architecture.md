@@ -71,11 +71,11 @@ Deployment visibility and data authorization are deliberately independent:
 | Public | Anyone | Only actors allowed by each server action |
 | Private | Signed-in app accounts, created under the Deployment's signup policy | Only actors allowed by each server action |
 
-On a public Deployment a signed-out visitor may call the actions declared `anonymous`, and may list and read files marked public. Uploads, private files, and authenticated actions require an app session. On a private Deployment nothing loads or runs without a login. Each Deployment's signup policy (Open, Allowlist or Closed) decides who can create an app account; public Deployments start Open and private ones start Closed.
+On a public Deployment a signed-out visitor may call the actions declared `anonymous`, and may list and read files marked public. Uploads, private files, and authenticated actions require an app session. On a private Deployment nothing loads or runs without a login, except the HTTP routes of actions declared `anonymous`: a route answers by the action's access level and its signature, whatever the visibility ([ADR-0011](./adr/0011-one-verified-account-core-for-creators-and-app-users.md), update of 2026-11-06). Each Deployment's signup policy (Open, Allowlist or Closed) decides who can create an app account; public Deployments start Open and private ones start Closed.
 
 A public deployment may contain private user records. Public means its HTML, CSS and JavaScript are public; it never means the database is public. A private deployment also protects the application shell, but still requires per-action authorization because authenticated users need not share the same data.
 
-An upload is private to the uploading app user unless the upload sets visibility to public. Another account cannot read a private file. On a public Deployment, visitors can read public files. On a private Deployment, any signed-in app user can read public files. There is no HTTP download path.
+An upload is private to the uploading app user unless the upload sets visibility to public. Another account cannot read a private file. On a public Deployment, visitors can read public files. On a private Deployment, any signed-in app user can read public files. `GET /_littlebox/files/<id>` serves a file to a caller allowed to read it: a signed-in user from the app's own origin, a visitor for a public file of a public Deployment, or an API key that names the file's visibility. There is no unauthenticated object URL, and nothing is served from the bucket.
 
 ### Database boundary
 
@@ -87,7 +87,7 @@ The hosted browser runtime must never receive:
 - owner/admin capabilities embedded in JavaScript;
 - private fields that the current action does not explicitly return.
 
-The browser calls named server actions. The Kernel resolves the deployment and actor from trusted server-side state, validates the action input, applies authorization and quotas, then executes parameterized statements through an adapter. Developer tools can replay any browser request, so security cannot depend on hiding SDK methods or UI controls.
+The browser calls named server actions. A program or another service may call an anonymous action on its HTTP route, with a signature or an API key; `kernel-rs/src/http.rs` resolves that caller before any SQL runs. The Kernel resolves the deployment and actor from trusted server-side state, validates the action input, applies authorization and quotas, then executes parameterized statements through an adapter. Developer tools can replay any browser request, so security cannot depend on hiding SDK methods or UI controls.
 
 The editor is a different trust domain. SQL Studio, schema migrations, backups and database export are served only through the Kernel Admin Interface after owner/workspace authorization, with audit logging and stronger checks for destructive operations. Runtime sessions are never accepted by admin operations.
 

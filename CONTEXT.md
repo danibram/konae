@@ -69,11 +69,11 @@ A consistent snapshot of every Deployment folder, with the owner and MCP stores,
 _Avoid_: backup (a Data panel snapshot of one app database), replica, mirror
 
 **Public Deployment**:
-A Deployment whose application shell may be opened without signing in. A signed-out visitor may call Server Actions declared `anonymous`, and may list and read files marked public. Uploads and private files require a Runtime Actor session. Public visibility of the Deployment grants no database access and no access to private files.
+A Deployment whose application shell may be opened without signing in. A signed-out visitor may call Server Actions declared `anonymous`, and may list and read files marked public. Uploads require a Runtime Actor session, and private files a session or an API Key that names them. Public visibility of the Deployment grants no database access and no access to private files.
 _Avoid_: Public database
 
 **Private Deployment**:
-A Deployment whose application shell and runtime require a signed-in Runtime Actor before anything loads or runs. Its Signup Policy decides who may create that account.
+A Deployment whose application shell and runtime require a signed-in Runtime Actor before anything loads or runs. The one exception is an HTTP route of an action declared `anonymous`, which answers by the action's access level and its signature, not by visibility. Its Signup Policy decides who may create that account.
 _Avoid_: Password-protected app
 
 **Signup Policy**:
@@ -81,15 +81,23 @@ The per-Deployment rule for who may create a Runtime Actor account: Open (anyone
 _Avoid_: Invite list, access grant
 
 **Runtime Actor**:
-The end user interacting with a Deployment. Its permissions are evaluated by server-side actions and never imply Project ownership.
+Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a signed-in app user, or a service holding an API Key. Its permissions are evaluated by server-side actions and never imply Project ownership. An `actor` binding yields the app user's ID or the key's ID, and nothing for a visitor.
 _Avoid_: Owner, editor user
+
+**API Key**:
+A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It names the Server Actions it may call over their HTTP routes and the file visibilities it may read, and is sent as `Authorization: Bearer`. The Kernel stores its hash only. An export carries it and the import revokes it.
+_Avoid_: token (an Agent Credential), service account
+
+**Signing Secret**:
+A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. A sender proves a request with an HMAC of its body under it. It never appears in `actions.json`, a Build Artifact or an export.
+_Avoid_: webhook token, API Key
 
 **Project Owner**:
 An authenticated workspace member allowed to edit a Project and administer its data, schema, files, Usage and deployments.
 _Avoid_: Runtime user, app user
 
 **Server Action**:
-A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface.
+A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for a signed request, an API Key or a signed-in user; an `authenticated` action may not.
 _Avoid_: Raw SQL endpoint
 
 **SDK Module**:
