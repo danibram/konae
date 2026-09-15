@@ -79,7 +79,7 @@ The Kernel reads these at startup. Defaults are the values in `kernel-rs/src` un
 | `LITTLEBOX_ADMIN_KEY` | `local-development-key` | Installation setup key that permits owner registration. An empty value counts as unset. |
 | `LITTLEBOX_ALLOW_DEFAULT_KEY` | unset | Set to `1` to let the Kernel start on a non-loopback address with the default setup key. Compose sets it for the development stack. |
 | `LITTLEBOX_ACCOUNT_VERIFICATION` | `local` | `required` makes new creator and app accounts prove their email before they are active, and moves accounts that never verified to pending with their sessions revoked. `local` keeps unverified signup for development. See [Verified accounts](#verified-accounts). |
-| `LITTLEBOX_MAIL_TRANSPORT` | unset | How the Kernel sends account links. `development` appends each message to `mailbox.jsonl` in the data directory. Unset means no email: verification-required signup and recovery answer 503. |
+| `LITTLEBOX_MAIL_TRANSPORT` | unset | How the Kernel sends account links. `development` appends each message to `mailbox.jsonl` in the data directory. Unset means no email: verification-required signup and recovery answer 503, and `app_invitations_create` refuses. |
 | `LITTLEBOX_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses whose `X-Forwarded-For` header the Kernel trusts for rate limiting. CIDR ranges are rejected. |
 | `LITTLEBOX_DATA_DIR` | `/data` (`data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory: one folder per Deployment under `deployments/<id>/`, plus `owners.sqlite` and `mcp.sqlite`. |
 | `LITTLEBOX_PUBLIC_ORIGIN` | `http://localhost:8080` (`http://localhost:<kernel port>` under `dev:local`) | Origin used to build app URLs. Its scheme and port are copied onto each app hostname, and an `https://` origin makes OAuth metadata use HTTPS. |
@@ -189,12 +189,21 @@ Signed-out visitors may call anonymous actions 30 times per 10 seconds per clien
 Each Deployment has a signup policy that decides who may create an app account:
 
 - Open: anyone can create an account.
-- Allowlist: only listed exact emails or `@domain` entries can create an account. A domain entry matches that exact domain, not its subdomains.
-- Closed: no new accounts.
+- Invitation only: nobody can sign up; people the owner invites by email create their account from the invitation link.
+- Closed: no new accounts, and open invitations cannot be accepted.
+- Allowlist, the advanced option kept from earlier releases: only listed exact emails or `@domain` entries can create an account. A domain entry matches that exact domain, not its subdomains. Listing an address sends nothing.
 
-Public Deployments start Open. Private Deployments start Closed, so the owner chooses who may join. Deployments published before signup policies existed get the same default from their visibility: Open if public, Closed if private. Republishing keeps the current policy, except that republishing a public app as private turns Open into Closed. The owner changes the policy in the editor's Auth panel or through the admin MCP tools `signup_policy_read` and `signup_policy_set`. Existing accounts keep working when the policy tightens. A refused signup gets the same answer whether signup is closed or the address is not listed.
+Public Deployments start Open. Private Deployments start Closed, so the owner chooses who may join. Deployments published before signup policies existed get the same default from their visibility: Open if public, Closed if private. A first release may name its policy, Invitation only included, in `initialSignupPolicy`, and the Kernel installs it before serving the first request. Republishing keeps the current policy, except that republishing a public app as private turns Open into Closed. The owner changes the policy in the editor's Auth panel or with `signup_policy_set`, which needs the `manage_users` permission. Existing accounts keep working when the policy tightens. A refused signup gets the same answer whether signup is closed or the address is not listed.
 
-In local mode the Kernel does not verify email addresses, so whoever signs up first with a listed address or an address in a listed domain gets that account. Use Closed for apps that hold private data, or require verification.
+In local mode the Kernel does not verify email addresses, so whoever signs up first with a listed address or an address in a listed domain gets that account. Use Invitation only for apps that hold private data, or require verification.
+
+### Invitations
+
+The owner or an agent with `manage_users` invites people with `app_invitations_create`. Each recipient gets an email with a link to `/_littlebox/invitation` on the app's host, valid for seven days. The page shows the invited email, which the person cannot change, and asks for a password. Accepting activates the account and signs the person in. One transaction consumes the link, rechecks the Deployment's current policy and the account's state, sets the password and marks the invitation accepted, so two people answering one link produce one account.
+
+An invitation works under Open and Invitation only, and under an Allowlist only for a listed address. Under Closed the page says the app is not accepting accounts and the link stays usable for when the owner reopens. An email that already has an active account is told to sign in; the invitation never changes its password. A suspended account is not invited and an invitation never resumes it. Resending replaces the link, so the earlier one stops working. Revoking ends a pending invitation and removes the pending account it created, if nobody used it.
+
+Inviting needs a mail transport; without one, `app_invitations_create` refuses and creates nothing. A full copy carries the invitation history and the pending recipients but no link: the export drops every challenge and clears the invitations' token hashes. At the destination a pending invitation shows `needs-resend`, and resending sends a link on the destination's host.
 
 ## Verified accounts
 

@@ -274,3 +274,22 @@ A headless Chrome session loaded all eight product-fit examples and the docs gui
 These tests did not run against the Docker stack. That stack serves plain HTTP on `localhost:8080`, so the `__Host-` cookies and HSTS cannot be exercised there; the "done when" criterion needs an HTTPS gateway in front of the stack.
 
 The plan did not account for two things. The preview applies no Content Security Policy, so an app that uses `onclick="..."` or a foreign script works in the preview and stops once published; the agent prompt now states the policy, and the preview needs the same policy on its own origin to close the gap. The starter templates import Google Fonts, so the app policy allows `fonts.googleapis.com` and `fonts.gstatic.com`; a stricter policy would render published starters in system fonts while the preview shows the web font.
+
+### Delivery E, November 6, 2026
+
+Signup has a fourth mode, Invitation only, on both sides: `SignupMode::Invitation` in `kernel-rs/src/main.rs` and `signupModes` in `src/deployments/client.ts`, which the editor's Auth panel offers as Open, Invitation only, Closed and Allowlist (advanced). `kernel-rs/src/invitations.rs` issues, lists, resends, revokes and accepts invitations, and answers the seven admin tools behind the new `manage_users` permission. The tools that the plan lists under delivery F (`manage_users`, `app_users_*`, `app_invitations_*`, idempotency keys and audit) landed here because the refusals in this delivery's brief needed them.
+
+| Refusal | Test |
+| --- | --- |
+| Acceptance under Closed, and under an Allowlist without the address | `invitations::tests::acceptance_rechecks_the_policy_and_a_refusal_keeps_the_link` |
+| Acceptance for a suspended account, suspended before, during or after the invitation | `invitations::tests::a_suspended_account_is_not_reactivated_by_an_invitation` |
+| Two concurrent acceptances producing two accounts, through the route and against the store without the Kernel's lock | `invitations::tests::two_concurrent_acceptances_produce_one_account` |
+| A token from another Deployment, an expired token, a token replaced by a resend | `invitations::tests::a_token_from_another_deployment_an_expired_one_or_a_replaced_one_does_nothing` |
+| A retried create producing a second invitation or email; a reused key with other arguments | `invitations::tests::a_retried_create_with_the_same_key_produces_one_invitation_and_one_email`, and over HTTP in `tests/mcp.integration.test.ts` |
+| An invitation changing an active account's password | `invitations::tests::an_active_account_is_told_to_sign_in_and_keeps_its_password` |
+| A link working after revoke, or a copy carrying a working link | `invitations::tests::revoking_ends_the_link_and_removes_the_unused_account`, `invitations::tests::a_copy_carries_recipients_and_history_but_no_working_link` |
+| A project-limited token touching another project's users; `publish` changing the policy directly or through a republish; an older token gaining `manage_users` | `tests/mcp.integration.test.ts`, "an invited person enters an Invitation only app, and only manage_users decides who may join", and `mcp::tests::runtime_principals_never_see_owner_tools_and_anonymous_visitors_cannot_upload` |
+
+The integration test runs the done-when criterion against a local Kernel with the development mailbox: a publish-only token releases a private app with Invitation only, a stranger's signup gets 403, an invited person reads the link from `mailbox.jsonl`, sets a password and runs an action.
+
+This delivery leaves four things undone. The invitation email names neither the app nor the inviter, because `AccountMessage` carries only a link and delivery B owns the message templates and the queue; `delivery` reports only whether the transport took the message. Invitations and their mail are not stored in one transaction, because the seam has no queue to write into; the rows commit first and a failed hand-off shows `failed`. The editor has no Users view yet (delivery G), so a person who does not write code can choose Invitation only but cannot invite anyone without an agent. There is no runtime MCP tool to accept an invitation; the HTTP route is the contract.
