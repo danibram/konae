@@ -320,6 +320,10 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
             tool("schema_plan", "Derive and validate SQL from two Drizzle models in an isolated subprocess.", json!({"acceptedSource":text,"candidateSource":text,"projectId":text}), &["acceptedSource","candidateSource"], false),
         ]);
     }
+    tools.extend([
+        tool("secrets_list", "List the names of a project's signing secrets. Values are never returned.", json!({"projectId":text}), &["projectId"], true),
+        tool("api_keys_list", "List a deployment's API keys without their secrets.", json!({"deploymentId":text}), &["deploymentId"], true),
+    ]);
     tools.push(tool(
         "signup_policy_read",
         "Read who may create an account on a deployment.",
@@ -336,6 +340,10 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
                 &["deploymentId", "mode"],
                 false,
             ),
+            tool("secret_set", "Set a signing secret an action's http signature names. The value is never returned.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64},"value":{"type":"string","minLength":16,"maxLength":512}}), &["projectId","name","value"], false),
+            tool("secret_delete", "Delete a signing secret no published action uses.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64}}), &["projectId","name"], false),
+            tool("api_keys_create", "Issue an API key for one deployment, scoped to named actions with an HTTP route and to file visibilities. The key appears only in this answer.", json!({"deploymentId":text,"name":{"type":"string","minLength":1,"maxLength":80},"actions":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"files":{"type":"array","items":{"type":"string","enum":["public","private"]}}}), &["deploymentId","name"], false),
+            tool("api_keys_revoke", "Revoke a deployment's API key by its ID.", json!({"deploymentId":text,"keyId":text}), &["deploymentId","keyId"], false),
             tool(
                 "release_plan",
                 "Validate a completed artifact transfer and pin the current project revision.",
@@ -985,7 +993,7 @@ async fn admin_call(
             // Rendered from src/sdk/contract.ts by `bun run sdk:render`.
             "sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,
             "actions" => {
-                json!({"filename":"actions.json","format":{"version":1,"actions":{"items.list":{"kind":"query","access":"authenticated","statement":"SELECT id,title FROM items WHERE user_id=?1 LIMIT 50","bindings":[{"source":"actor","field":"id"}]},"items.create":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO items(title,user_id) VALUES(?1,?2)","bindings":[{"source":"input","key":"title","type":"string","maxLength":200},{"source":"actor","field":"id"}]}}},"rules":"SQL and typed bindings stay server-side. Declare schema in schema.sql for artifact publication. Runtime calls only send the declared action name and input. Add nullable:true to an input binding to bind omitted values or explicit null as SQL NULL; supplied strings remain non-empty and all supplied values retain their type checks. Mutations return changes and lastInsertId, so read rows with a query instead of mutation RETURNING, which publication rejects. A query that reads rows needs a top-level LIMIT. A total with count, sum, avg, min or max and no GROUP BY does not."})
+                json!({"filename":"actions.json","format":{"version":1,"actions":{"items.list":{"kind":"query","access":"authenticated","statement":"SELECT id,title FROM items WHERE user_id=?1 LIMIT 50","bindings":[{"source":"actor","field":"id"}]},"items.create":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO items(title,user_id) VALUES(?1,?2)","bindings":[{"source":"input","key":"title","type":"string","maxLength":200},{"source":"actor","field":"id"}]}}},"rules":"SQL and typed bindings stay server-side. Declare schema in schema.sql for artifact publication. Runtime calls only send the declared action name and input. Add nullable:true to an input binding to bind omitted values or explicit null as SQL NULL; supplied strings remain non-empty and all supplied values retain their type checks. Mutations return changes and lastInsertId, so read rows with a query instead of mutation RETURNING, which publication rejects. A query that reads rows needs a top-level LIMIT. A total with count, sum, avg, min or max and no GROUP BY does not. An anonymous action may add http:{method:'GET' for a query or 'POST' for a mutation,path,signature?:{header,secret}} to answer on that path of its Deployment host; the sdk topic's http module describes routes, signatures, API keys and secret_set."})
             }
             "publishing" => {
                 json!({"steps":["Create project identity with project_create. Keep its id, slug and manifest locally.","Build static HTML/CSS/JS locally. Inject the SDK using the local builder.","Upload JSON {project:{id,name,slug,files,manifest},visibility,artifact:{version:1,entrypoint:'index.html',files:{...}}} using transfer_begin with projectId, byte size and sha256, then transfer_write and transfer_complete.","Call release_plan with transferId, inspect its planId and expectedRevision, then call release_apply with planId.","Save the receipt and cancel the temporary transfer."],"concurrency":"An obsolete plan is rejected. Repeating an applied plan returns the same receipt."})
@@ -1148,6 +1156,19 @@ async fn admin_call(
                 params![a["tokenId"].as_str().unwrap(), owner.id],
             )?;
             Ok(json!({"ok":true}))
+        }
+        "secrets_list" | "secret_set" | "secret_delete" => {
+            let id = a["projectId"].as_str().unwrap();
+            owned_project(state, owner, id, if name == "secrets_list" { "read" } else { "publish" })?;
+            // Releases hold this lock, so a delete cannot pass between a release's check and its apply.
+            let _guard = database_lock(state, &format!("project:{id}")).await;
+            let deployment = find_project_deployment(&*state.deployments.read().await, id);
+            super::http::secrets_call(&store(state)?, id, deployment.as_ref(), name, &a)
+        }
+        "api_keys_list" | "api_keys_create" | "api_keys_revoke" => {
+            let id = a["deploymentId"].as_str().unwrap();
+            let deployment = owned_deployment(state, owner, id, if name == "api_keys_list" { "read" } else { "publish" }).await?;
+            super::http::api_keys_call(state, &deployment, name, &a).await
         }
         "signup_policy_read" => {
             let id = a["deploymentId"].as_str().unwrap();
@@ -1361,6 +1382,8 @@ async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
     for (name, action) in &program.actions {
         validate_action(name, action).map_err(anyhow::Error::msg)?;
     }
+    super::http::validate_routes(&program).map_err(anyhow::Error::msg)?;
+    super::http::require_secrets(&store(state)?, &input.project.id, &program)?;
     let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
     let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
     anyhow::ensure!(

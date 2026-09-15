@@ -70,7 +70,7 @@ describe("HTTP security contract", () => {
       "/_littlebox/admin/deployments/unknown/database/export",
       "/_littlebox/admin/deployments/unknown/portable-state",
       "/_littlebox/admin/deployments/unknown/database", "/_littlebox/session",
-      "/_littlebox/auth/logout", "/_littlebox/files", "/_littlebox/files/unknown",
+      "/_littlebox/auth/logout", "/_littlebox/files", "/_littlebox/files/",
       "/_littlebox/actions/notes.list", "/_littlebox/unknown",
     ];
     for (const host of [new URL(url).host, appHost]) {
@@ -83,6 +83,13 @@ describe("HTTP security contract", () => {
           expect(response.headers.has("access-control-allow-origin")).toBe(false);
           await response.arrayBuffer();
         }
+        // The file read path answers GET only, and an unknown file is not found.
+        const file = await fetch(`${url}/_littlebox/files/${crypto.randomUUID()}`, {
+          method, headers: { host, cookie, "x-littlebox-admin-key": setupKey }, redirect: "manual",
+        });
+        expect(file.status).toBe(method === "GET" || method === "HEAD" ? 404 : 405);
+        expect(file.headers.has("access-control-allow-origin")).toBe(false);
+        await file.arrayBuffer();
       }
     }
   });

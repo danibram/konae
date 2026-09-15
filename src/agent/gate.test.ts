@@ -85,6 +85,25 @@ describe("validation gate", () => {
     expect(structural.errors[0].stage).toBe("actions");
   });
 
+  test("refuses an http binding the Kernel refuses and accepts one it serves", async () => {
+    const program = (http: unknown, access = "anonymous") => actions({
+      version: 1,
+      actions: { "tasks.feed": { kind: "query", access, statement: "SELECT id, title FROM tasks LIMIT 50", bindings: [], http } },
+    });
+    const served = await validator.validate(capsule({ "actions.json": program({ method: "GET", path: "/api/tasks" }) }));
+    expect(served.errors).toEqual([]);
+    for (const [http, access, message] of [
+      [{ method: "GET", path: "/api/tasks" }, "authenticated", "Action tasks.feed is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route."],
+      [{ method: "POST", path: "/api/tasks" }, "anonymous", "Action tasks.feed must bind GET for a query and POST for a mutation."],
+      [{ method: "GET", path: "/_littlebox/files" }, "anonymous", "Action tasks.feed binds the reserved path /_littlebox/files. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel."],
+    ] as const) {
+      const refused = await validator.validate(capsule({ "actions.json": program(http, access) }));
+      expect(refused.ok).toBe(false);
+      expect(refused.errors[0].stage).toBe("actions");
+      expect(refused.errors[0].detail).toBe(message);
+    }
+  });
+
   test("fails when declared bindings and statement placeholders disagree", async () => {
     const tooFew = await validator.validate(capsule({
       "actions.json": actions({

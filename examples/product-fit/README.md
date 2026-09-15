@@ -10,7 +10,7 @@ bun run examples/product-fit/smoke.ts
 
 The default port is 19410. Set `LITTLEBOX_PRODUCT_FIT_PORT` to another unused local port when needed. The replay builds the Kernel with Cargo's offline mode. It does not connect to an existing installation, inherit Littlebox credentials or use production data. Passwords and the setup key are random and exist only for that run.
 
-The runner publishes all eight examples, then checks ten groups of behavior. It prints each result and a JSON report. It checks HTTP and MCP behavior, then opens every example in Google Chrome through Playwright and fails on any Content Security Policy violation or page error. Chrome must be installed; set `LITTLEBOX_PRODUCT_FIT_BROWSER=0` to skip the browser pass. It does not assert browser layout or screen reader behavior.
+The runner sets the feed's signing secret, publishes all eight examples, then checks ten groups of behavior. It prints each result and a JSON report. It checks HTTP and MCP behavior, then opens every example in Google Chrome through Playwright and fails on any Content Security Policy violation or page error. Chrome must be installed; set `LITTLEBOX_PRODUCT_FIT_BROWSER=0` to skip the browser pass. It does not assert browser layout or screen reader behavior.
 
 | Example | Behavior checked | Current cost or limit |
 | --- | --- | --- |
@@ -19,7 +19,7 @@ The runner publishes all eight examples, then checks ten groups of behavior. It 
 | `board` | Private shell, allowlist, three users, member/admin permissions | The owner seeds the first admin with SQL; unauthorized mutations return zero changes |
 | `portfolio` | Authenticated upload and checksum-verified download, public gallery | The photo upload stays private to the potter. Visitors read the inline copy. A file uploaded as public can be read without that copy |
 | `poll` | Anonymous votes, allowed choices, totals and hourly aggregation | Browser local storage discourages repeat votes but cannot prevent them |
-| `feed` | Anonymous JSON-RPC reads and writes, rate limiting, webhook rejection | A service with a fixed webhook payload needs an adapter; `POST /hook` returns 405 |
+| `feed` | Anonymous JSON-RPC reads and writes, rate limiting, a signed ping sent with `curl` to `POST /hooks/pings`, an unsigned and a replayed ping refused, `GET /api/incidents` as JSON, a status badge embedded from `/_littlebox/files/<id>`, a private badge read by an API key and refused to a visitor | A sender must compute Littlebox's signature (`t=<seconds>,v1=<HMAC-SHA256>`); a service with its own fixed scheme needs an adapter. Unknown POST paths such as `/hook` return 405 |
 | `docs` | Multi-file artifact, a guide page, SQL-backed search | Publish uses raw MCP; missing paths return the home page with 200, pretty URLs do not resolve the guide, and XML uses octet-stream |
 | `probe` | Nullable search input, omitted/null/filtered values and action declarations | This is a contract probe rather than an end-user app |
 

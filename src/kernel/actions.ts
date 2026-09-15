@@ -10,9 +10,18 @@ type ActionBinding =
   | { source: "kernel"; field: "now" }
   | { source: "literal"; value: string | number | null };
 
+/** An action's HTTP route on its Deployment host. See docs/mcp.md, "HTTP routes". */
+export type HttpBinding = {
+  method: "GET" | "POST";
+  path: string;
+  /** `secret` names a value the owner sets with `secret_set`; it is never in actions.json. */
+  signature?: { header: string; secret: string };
+};
+
 export type ServerActionDefinition = RuntimeActionDeclaration & {
   statement: string;
   bindings: ActionBinding[];
+  http?: HttpBinding;
 };
 
 export type ServerActionProgram = {
@@ -37,6 +46,7 @@ export function parseServerActionSource(source: string): ServerActionProgram {
   for (const [name, value] of Object.entries(record.actions as Record<string, unknown>)) {
     actions[name] = parseAction(name, value);
   }
+  assertDistinctRoutes(actions);
   if (Object.keys(actions).length > 50) throw new Error("A deployment may declare at most 50 server actions.");
   return { version: 1, actions };
 }
@@ -94,7 +104,65 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
   }
   if (!Array.isArray(candidate.bindings)) throw new Error(`Action ${name} requires a bindings array.`);
   const bindings = candidate.bindings.map((binding, index) => parseBinding(name, index, binding));
-  return { name, kind, access, statement: candidate.statement.trim(), bindings };
+  const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http);
+  return { name, kind, access, statement: candidate.statement.trim(), bindings, ...(http ? { http } : {}) };
+}
+
+// The same checks, in the same order and with the same messages, as
+// kernel-rs/src/http.rs `binding`. kernel-rs/src/http-binding-cases.json
+// holds the cases both test suites run.
+const HTTP_PATH = /^(\/[A-Za-z0-9._~-]+)+$/;
+const RESERVED_SEGMENTS = new Set(["_littlebox", "oauth", ".well-known", "mcp"]);
+const SIGNATURE_HEADER = /^[A-Za-z0-9-]{1,64}$/;
+const UNSIGNABLE_HEADERS = new Set(["authorization", "cookie", "host", "content-type", "content-length"]);
+const SECRET_NAME = /^[a-z][a-z0-9_]{0,63}$/;
+
+function parseHttpBinding(name: string, kind: "query" | "mutation", access: "anonymous" | "authenticated", value: unknown): HttpBinding {
+  const invalid = `Action ${name} has an invalid http binding.`;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(invalid);
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => !["method", "path", "signature"].includes(key))) throw new Error(invalid);
+  if (typeof record.path !== "string") throw new Error(invalid);
+  if (!((record.method === "GET" && kind === "query") || (record.method === "POST" && kind === "mutation"))) {
+    throw new Error(`Action ${name} must bind GET for a query and POST for a mutation.`);
+  }
+  if (access !== "anonymous") {
+    throw new Error(`Action ${name} is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route.`);
+  }
+  const path = record.path;
+  const segments = path.split("/").slice(1);
+  if (path.length > 200 || !HTTP_PATH.test(path) || segments.some((segment) => segment === "." || segment === "..")) {
+    throw new Error(`Action ${name} has an invalid http path. Use a leading "/" and segments of letters, digits, ".", "_", "~" or "-", up to 200 characters.`);
+  }
+  if (RESERVED_SEGMENTS.has(segments[0].toLowerCase())) {
+    throw new Error(`Action ${name} binds the reserved path ${path}. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel.`);
+  }
+  const binding: HttpBinding = { method: record.method, path };
+  if (record.signature !== undefined) {
+    const signature = record.signature as Record<string, unknown> | null;
+    if (!signature || typeof signature !== "object" || Array.isArray(signature)
+      || Object.keys(signature).some((key) => key !== "header" && key !== "secret")) throw new Error(invalid);
+    if (typeof signature.header !== "string" || !SIGNATURE_HEADER.test(signature.header) || UNSIGNABLE_HEADERS.has(signature.header.toLowerCase())) {
+      throw new Error(`Action ${name} has an invalid signature header.`);
+    }
+    if (typeof signature.secret !== "string" || !SECRET_NAME.test(signature.secret)) {
+      throw new Error(`Action ${name} names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter.`);
+    }
+    binding.signature = { header: signature.header, secret: signature.secret };
+  }
+  return binding;
+}
+
+function assertDistinctRoutes(actions: Record<string, ServerActionDefinition>) {
+  const seen = new Map<string, string>();
+  for (const name of Object.keys(actions).sort()) {
+    const http = actions[name].http;
+    if (!http) continue;
+    const route = `${http.method} ${http.path}`;
+    const earlier = seen.get(route);
+    if (earlier) throw new Error(`Actions ${earlier} and ${name} both bind ${route}.`);
+    seen.set(route, name);
+  }
 }
 
 function parseBinding(actionName: string, index: number, value: unknown): ActionBinding {

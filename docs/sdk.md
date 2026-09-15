@@ -193,3 +193,44 @@ Limits:
 - the name is cut to 180 characters with / and \ replaced by -; a type of 128 characters or more, or with a character other than a letter, a digit or one of !#$&^_.+-/, becomes application/octet-stream
 
 Editor preview: Stores the file in browser storage as a data URL, and accepts an empty file.
+
+## The http module, declared, with no browser call
+
+Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.
+
+- Only an action declared anonymous may bind a route, and the route answers whatever the Deployment's visibility. On a private app, a route without a signature is open to anyone who knows the path.
+- A route has three kinds of caller: a service that signs the request, a program that sends Authorization: Bearer with an API key the owner issued, and a person signed in to the app, from the app's own origin. An actor binding yields the key's ID or the user's ID; a signed request has no actor.
+- A signed route reads the declared header as t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>" keyed with the secret>. An API key that names the action replaces the signature.
+- The owner sets the secret with the secret_set admin tool before publishing. It never appears in actions.json, the Build Artifact or an export.
+- GET /_littlebox/files/<id> returns a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it.
+- The editor preview serves no routes. Run them on a Development Kernel with littlebox dev, or on a Deployment.
+
+Declared with `http` in `actions.json`. { "method": "GET" | "POST", "path": "/api/items", "signature"?: { "header": "X-Signature", "secret": "items_webhook" } } on an action declared anonymous. GET binds a query and maps the query string onto its input bindings by type; POST binds a mutation and reads a JSON object body. The route answers { result } with the rows or { changes, lastInsertId }, and { error } with a status code. The Validation Gate and the Kernel refuse the same declarations with the same messages.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `Action <name> must bind GET for a query and POST for a mutation.` | the method does not match the action's kind, or is neither GET nor POST | Kernel | Same |
+| `Action <name> is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route.` | the action's access is authenticated | Kernel | Same |
+| `Action <name> has an invalid http path. Use a leading "/" and segments of letters, digits, ".", "_", "~" or "-", up to 200 characters.` | the path is "/", ends with "/", climbs with "..", or carries a query string | Kernel | Same |
+| `Action <name> binds the reserved path <key>. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel.` | the first segment is reserved, in any letter case | Kernel | Same |
+| `Actions <name> and <name> both bind <key>.` | two actions declare the same method and path | Kernel | Same |
+| `Action <name> has an invalid signature header.` | the header is not 1 to 64 letters, digits and -, or is Authorization, Cookie, Host, Content-Type or Content-Length | Kernel | Same |
+| `Action <name> names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter.` | the secret is not a secret name | Kernel | Same |
+| `Action <name> has an invalid http binding.` | http is not an object, has another key, or its signature has a key other than header and secret | Kernel | Same |
+| `Action <name> signs with the secret <name>, which is not set for this project. Set it with secret_set before publishing.` | publishing, and the owner has not set the secret; the editor cannot see secrets, so only the Kernel refuses this | Kernel | Never refuses |
+| `invalid-signature` | a signed route gets no signature, a wrong one, or a t more than 300 seconds from the Kernel's clock (401) | Kernel | Never refuses |
+| `replayed-signature` | the same signature arrives a second time (409) | Kernel | Never refuses |
+| `invalid-api-key` | Authorization carries an lbk_ key that is unknown or revoked (401) | Kernel | Never refuses |
+| `This API key may not call <name>.` | the key does not name the route's action (403) | Kernel | Never refuses |
+| `No route accepts POST on this path.` | a POST reaches a path no action binds (405) | Kernel | Never refuses |
+| `The request body exceeds 64 KiB.` | a POST body is larger (413) | Kernel | Never refuses |
+| `The request body must be a JSON object.` | a POST body does not parse as JSON (400) | Kernel | Never refuses |
+| `Repeated query parameter: <key>` | a GET names one input twice (400) | Kernel | Never refuses |
+| `rate-limited` | a caller exceeds the action limits of the runtime endpoint (429, with Retry-After) | Kernel | Never refuses |
+
+Limits:
+
+- a POST body of 64 KiB
+- a signature's t within 300 seconds of the Kernel's clock, and each signature accepted once
+- the runtime endpoint's action rate limits: 30 per 10 seconds per client address without a key or session, 120 per 10 seconds per user or key
+- 50 live API keys per Deployment

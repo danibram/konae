@@ -1,5 +1,6 @@
 <main class="wrap">
   <h1>Status: <span id="state">…</span></h1>
-  <p class="muted">Incidents and maintenance for the workshop API. Machine-readable: call the <code>incidents.recent</code> action, see the README in the repo.</p>
+  <p id="badge"></p>
+  <p class="muted">Incidents and maintenance for the workshop API. Machine-readable: <code>GET /api/incidents</code> returns the same rows as JSON. Monitors post signed pings to <code>/hooks/pings</code>.</p>
   <ol id="list" class="list"></ol>
 </main>
