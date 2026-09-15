@@ -4,6 +4,7 @@ import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient, checksum, encodeBase64 } from "../src/mcp/client";
+import { signupModes } from "../src/deployments/client";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -46,7 +47,7 @@ beforeAll(async () => {
 
 async function startKernel() {
   kernel = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
-    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_S3_"))), LITTLEBOX_DATA_DIR: root, LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_PUBLIC_ORIGIN: url, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1" },
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_S3_"))), LITTLEBOX_DATA_DIR: root, LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_PUBLIC_ORIGIN: url, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development" },
     stdout: "ignore", stderr: "inherit",
   });
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -474,6 +475,83 @@ describe("authenticated MCP", () => {
     // An app host never serves the owner MCP endpoint, so app cookies cannot reach owner tools.
     expect((await fetch(`${url}/mcp`, { method: "POST", headers: { host: receipt.hostname }, body: "{}" })).status).toBe(403);
   });
+
+  test("an invited person enters an Invitation only app, and only manage_users decides who may join", async () => {
+    const tools = await (await fetch(`${url}/mcp`, { method: "POST", headers: { cookie: aliceCookie, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) })).json();
+    const policyTool = tools.result.tools.find((tool: { name: string }) => tool.name === "signup_policy_set");
+    expect(policyTool.inputSchema.properties.mode.enum).toEqual([...signupModes]);
+
+    const id = "invitation_proof";
+    await alice.call("project_create", { projectId: id, name: "Invites" });
+    const grant = async (scopes: string[], projectIds = [id]) => new McpClient(`${url}/mcp`, { token: (await alice.call<{ token: string }>("token_create", { scopes, projectIds, ttlSeconds: 300 })).token });
+    const publisher = await grant(["read", "publish"]);
+    const manager = await grant(["read", "manage_users"]);
+    const publishWith = async (client: McpClient, body: object) => {
+      const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(body)), id);
+      try {
+        const plan = await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+        return await client.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId });
+      } finally { await client.cancel(transfer.transferId).catch(() => {}); }
+    };
+
+    // publish may choose the policy of a first release, and the first request finds it.
+    const receipt = await publishWith(publisher, { ...payload(id, "private"), initialSignupPolicy: { mode: "invitation", allowlist: [] } });
+    expect(await publisher.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "invitation", visibility: "private" });
+    expect((await signup(receipt.hostname, "stranger@app.test")).status).toBe(403);
+    const page = await (await fetch(`${url}/_littlebox/login`, { headers: { host: receipt.hostname } })).text();
+    expect(page).toContain("Only invited people can create an account");
+    expect(page).not.toContain("/_littlebox/auth/signup");
+
+    // Without manage_users, publish changes who may join neither directly nor through a republish.
+    await expect(publisher.call("signup_policy_set", { deploymentId: receipt.id, mode: "open" })).rejects.toThrow("Unknown tool");
+    await expect(publisher.call("app_invitations_create", { deploymentId: receipt.id, emails: ["x@app.test"], idempotencyKey: "publisher-key" })).rejects.toThrow("Unknown tool");
+    await expect(publishWith(publisher, { ...payload(id, "public"), initialSignupPolicy: { mode: "open", allowlist: [] } })).rejects.toThrow("first deployment");
+    await publishWith(publisher, payload(id, "private"));
+    expect(await alice.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "invitation" });
+    // A token from before manage_users existed does not gain it.
+    const legacy = await grant(["read", "write", "publish"]);
+    await expect(legacy.call("app_users_list", { deploymentId: receipt.id })).rejects.toThrow("Unknown tool");
+
+    // A project-limited token cannot touch another project's users.
+    const other = (await release("invitation_other")).receipt;
+    await expect(manager.call("app_users_list", { deploymentId: other.id })).rejects.toThrow("outside this token's grants");
+    await expect(manager.call("app_invitations_create", { deploymentId: other.id, emails: ["x@app.test"], idempotencyKey: "other-project" })).rejects.toThrow("outside this token's grants");
+    await expect(bob.call("app_users_list", { deploymentId: receipt.id })).rejects.toThrow("access denied");
+
+    const request = { deploymentId: receipt.id, emails: ["Ana@App.test"], idempotencyKey: "invite-ana-0001" };
+    const created = await manager.call<{ results: Array<{ status: string; delivery: string; invitationId: string }> }>("app_invitations_create", request);
+    expect(created.results[0]).toMatchObject({ status: "invited", delivery: "queued" });
+    expect(await manager.call("app_invitations_create", request)).toEqual(created);
+    const mailbox = (await Bun.file(path.join(root, "mailbox.jsonl")).text()).trim().split("\n").map((line) => JSON.parse(line)).filter((message) => message.purpose === "invitation");
+    expect(mailbox).toHaveLength(1);
+    expect(mailbox[0]).toMatchObject({ to: "ana@app.test", scope: `deployment:${receipt.id}` });
+    const token = new URL(mailbox[0].link).hash.slice("#invitation=".length);
+    expect(JSON.stringify(created)).not.toContain(token);
+
+    const opened = await fetch(`${url}/_littlebox/invitation`, { headers: { host: receipt.hostname } });
+    expect(opened.status).toBe(200);
+    const post = (route: string, body: object) => fetch(`${url}${route}`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify(body) });
+    expect((await (await post("/_littlebox/auth/invitation", { token })).json()).result).toEqual({ email: "ana@app.test", app: "MCP proof", status: "new-account" });
+    expect((await post("/_littlebox/auth/accept", { token: "0".repeat(64), password })).status).toBe(410);
+    const accepted = await post("/_littlebox/auth/accept", { token, password });
+    expect(accepted.status).toBe(200);
+    const member = runtimeClient(receipt.hostname, accepted.headers.get("set-cookie")!.split(";")[0]);
+    expect(await member.call("auth_session")).toMatchObject({ name: "ana@app.test" });
+    await member.call("actions_invoke", { name: "notes.create", input: { title: "Invited" } });
+    expect((await post("/_littlebox/auth/accept", { token, password })).status).toBe(410);
+
+    const users = await manager.call<{ users: Array<{ userId: string; state: string; verified: boolean }> }>("app_users_list", { deploymentId: receipt.id });
+    expect(users.users).toEqual([expect.objectContaining({ email: "ana@app.test", state: "active", verified: true })]);
+    expect((await manager.call<{ invitations: Array<{ status: string }> }>("app_invitations_list", { deploymentId: receipt.id })).invitations[0].status).toBe("accepted");
+    await manager.call("app_user_suspend", { deploymentId: receipt.id, userId: users.users[0].userId });
+    await expect(member.call("auth_session")).rejects.toThrow();
+    expect(await manager.call("signup_policy_set", { deploymentId: receipt.id, mode: "closed" })).toMatchObject({ mode: "closed", previousMode: "invitation" });
+
+    const audit = new Database(path.join(root, "mcp.sqlite"));
+    const rows = audit.query("SELECT tool, target, ok FROM audit WHERE tool LIKE 'app_%' AND target = ?1").all(receipt.id) as Array<{ tool: string; ok: number }>;
+    audit.close();
+    expect(new Set(rows.map((row) => row.tool))).toEqual(new Set(["app_invitations_create", "app_users_list", "app_invitations_list", "app_user_suspend"]));
+   }, 60_000);
 
   test("anonymous visitors on a public app may only call actions declared anonymous", async () => {
     const { receipt } = await release("anonymous_proof");

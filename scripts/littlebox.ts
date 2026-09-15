@@ -14,7 +14,7 @@ type Config = { url: string; project: Project };
 function endpoint(url: string) { return new URL("/mcp", url).href; }
 async function json<T>(filename: string): Promise<T> { return JSON.parse(await readFile(filename, "utf8")); }
 
-async function login(url: string, email: string, password: string, setupKey?: string): Promise<string> {
+async function login(url: string, email: string, password: string, setupKey?: string, scopes = ["read", "write", "publish"]): Promise<string> {
   let response = await fetch(new URL("/_littlebox/owner/login", url), {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password }),
   });
@@ -28,7 +28,7 @@ async function login(url: string, email: string, password: string, setupKey?: st
     const headers = new Headers(init?.headers); headers.set("cookie", cookie);
     return fetch(input, { ...init, headers });
   } });
-  const token = await client.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 86400 });
+  const token = await client.call<{ token: string }>("token_create", { scopes, ttlSeconds: 86400 });
   await fetch(new URL("/_littlebox/owner/logout", url), { method: "POST", headers: { cookie } });
   return token.token;
 }
@@ -223,7 +223,8 @@ async function main() {
       if (ready) break; await Bun.sleep(100);
     }
     if (!ready) { child.kill(); throw Error("Development Kernel did not become ready."); }
-    const token = await login(url, "local-owner@littlebox.test", secret, secret);
+    // The development Kernel opens signup below, which needs manage_users.
+    const token = await login(url, "local-owner@littlebox.test", secret, secret, ["read", "write", "publish", "manage_users"]);
     const devConfig = { ...config, url };
     try {
       const first = await publishLocal(root, devConfig, token);

@@ -117,7 +117,7 @@ export const sdkContract = {
       declarations: [],
       notes: [
         "Visibility decides who may open the app shell. It never grants data access on its own.",
-        "The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account.",
+        "The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_littlebox/invitation.",
       ],
       calls: [
         {

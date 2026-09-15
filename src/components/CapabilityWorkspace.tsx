@@ -9,7 +9,7 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DatabaseAdminHost, MiniAppRuntimeHost, StoredFile } from "../runtime/host";
 import type { DrizzleDatabaseModel } from "../lib/types";
-import { HostedDatabaseClient, readSignupPolicy, saveSignupPolicy, type SignupMode, type SignupPolicy } from "../deployments/client";
+import { HostedDatabaseClient, readSignupPolicy, saveSignupPolicy, signupModes as signupModeValues, type SignupMode, type SignupPolicy } from "../deployments/client";
 import { parseServerActionSource } from "../kernel/actions";
 import { McpError } from "../mcp/client";
 import { Button, Card, Field, Select, Textarea, EmptyState as UiEmptyState } from "./ui";
@@ -146,11 +146,13 @@ function AuthPanel({ host, onFilesChanged, deployedDatabase, actionsSource, onSe
   );
 }
 
-const signupModes: { value: SignupMode; label: string; help: string }[] = [
-  { value: "open", label: "Open", help: "Anyone who opens the published app can create an account." },
-  { value: "allowlist", label: "Allowlist (emails or @domains)", help: "Only the emails and domains listed below can create an account. Littlebox does not verify email addresses, so whoever signs up first with a listed address gets it; choose Closed for private data." },
-  { value: "closed", label: "Closed (no new accounts)", help: "No one can create an account. Existing accounts can still sign in." },
-];
+const signupModeOptions: Record<SignupMode, { label: string; help: string }> = {
+  open: { label: "Open", help: "Anyone who opens the published app can create an account." },
+  invitation: { label: "Invitation only", help: "Only people you invite by email can create an account. Each invitation link works once and expires after seven days. Agents invite with app_invitations_create." },
+  closed: { label: "Closed (no new accounts)", help: "No one can create an account, and open invitations cannot be accepted. Existing accounts can still sign in." },
+  allowlist: { label: "Allowlist (advanced: emails or @domains)", help: "Only the emails and domains listed below can create an account. Listing an address sends no invitation. Unless the installation requires email verification, whoever signs up first with a listed address gets it; choose Invitation only for private data." },
+};
+const signupModes = signupModeValues.map((value) => ({ value, ...signupModeOptions[value] }));
 
 type PolicyState =
   | { status: "loading" }

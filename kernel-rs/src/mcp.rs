@@ -159,6 +159,7 @@ pub(super) fn authenticate_owner(state: &AppState, headers: &HeaderMap) -> Resul
                 "read".into(),
                 "write".into(),
                 "publish".into(),
+                "manage_users".into(),
                 "tokens".into(),
             ],
             projects: vec![],
@@ -216,7 +217,7 @@ fn validate_managed_sources(source: &Value, id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn owned_deployment(
+pub(super) async fn owned_deployment(
     state: &AppState,
     owner: &Owner,
     id: &str,
@@ -234,7 +235,7 @@ async fn owned_deployment(
     Ok(deployment)
 }
 
-fn tool(
+pub(super) fn tool(
     name: &str,
     description: &str,
     properties: Value,
@@ -327,15 +328,18 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
         &["deploymentId"],
         true,
     ));
+    if owner.scopes.iter().any(|s| s == "manage_users") {
+        tools.push(tool(
+            "signup_policy_set",
+            "Choose who may create an account on a deployment: open, invitation (only people invited with app_invitations_create), closed, or allowlist (exact emails or @domain entries). Omitting allowlist keeps the current entries.",
+            json!({"deploymentId":text,"mode":{"type":"string","enum":["open","invitation","closed","allowlist"]},"allowlist":{"type":"array","items":{"type":"string","minLength":1,"maxLength":254}}}),
+            &["deploymentId", "mode"],
+            false,
+        ));
+        tools.extend(super::invitations::admin_tools());
+    }
     if owner.scopes.iter().any(|s| s == "publish") {
         tools.extend([
-            tool(
-                "signup_policy_set",
-                "Choose who may create an account on a deployment: open, allowlist (exact emails or @domain entries) or closed. Omitting allowlist keeps the current entries.",
-                json!({"deploymentId":text,"mode":{"type":"string","enum":["open","allowlist","closed"]},"allowlist":{"type":"array","items":{"type":"string","minLength":1,"maxLength":254}}}),
-                &["deploymentId", "mode"],
-                false,
-            ),
             tool(
                 "release_plan",
                 "Validate a completed artifact transfer and pin the current project revision.",
@@ -355,7 +359,7 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
     if owner.session {
         tools.extend([
             tool("tokens_list", "List active delegated credentials without exposing their secrets.", json!({}), &[], true),
-            tool("token_create", "Issue a revocable agent credential with selected scopes and project grants.", json!({"scopes":{"type":"array","items":{"type":"string","enum":["read","write","publish"]},"minItems":1},"projectIds":{"type":"array","items":text},"ttlSeconds":{"type":"integer","minimum":60,"maximum":2592000}}), &["scopes"], false),
+            tool("token_create", "Issue a revocable agent credential with selected scopes and project grants.", json!({"scopes":{"type":"array","items":{"type":"string","enum":["read","write","publish","manage_users"]},"minItems":1},"projectIds":{"type":"array","items":text},"ttlSeconds":{"type":"integer","minimum":60,"maximum":2592000}}), &["scopes"], false),
             tool("token_revoke", "Revoke an agent credential using its returned ID.", json!({"tokenId":text}), &["tokenId"], false),
         ]);
     }
@@ -988,7 +992,7 @@ async fn admin_call(
                 json!({"filename":"actions.json","format":{"version":1,"actions":{"items.list":{"kind":"query","access":"authenticated","statement":"SELECT id,title FROM items WHERE user_id=?1 LIMIT 50","bindings":[{"source":"actor","field":"id"}]},"items.create":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO items(title,user_id) VALUES(?1,?2)","bindings":[{"source":"input","key":"title","type":"string","maxLength":200},{"source":"actor","field":"id"}]}}},"rules":"SQL and typed bindings stay server-side. Declare schema in schema.sql for artifact publication. Runtime calls only send the declared action name and input. Add nullable:true to an input binding to bind omitted values or explicit null as SQL NULL; supplied strings remain non-empty and all supplied values retain their type checks. Mutations return changes and lastInsertId, so read rows with a query instead of mutation RETURNING, which publication rejects. A query that reads rows needs a top-level LIMIT. A total with count, sum, avg, min or max and no GROUP BY does not."})
             }
             "publishing" => {
-                json!({"steps":["Create project identity with project_create. Keep its id, slug and manifest locally.","Build static HTML/CSS/JS locally. Inject the SDK using the local builder.","Upload JSON {project:{id,name,slug,files,manifest},visibility,artifact:{version:1,entrypoint:'index.html',files:{...}}} using transfer_begin with projectId, byte size and sha256, then transfer_write and transfer_complete.","Call release_plan with transferId, inspect its planId and expectedRevision, then call release_apply with planId.","Save the receipt and cancel the temporary transfer."],"concurrency":"An obsolete plan is rejected. Repeating an applied plan returns the same receipt."})
+                json!({"steps":["Create project identity with project_create. Keep its id, slug and manifest locally.","Build static HTML/CSS/JS locally. Inject the SDK using the local builder.","Upload JSON {project:{id,name,slug,files,manifest},visibility,artifact:{version:1,entrypoint:'index.html',files:{...}}} using transfer_begin with projectId, byte size and sha256, then transfer_write and transfer_complete.","Call release_plan with transferId, inspect its planId and expectedRevision, then call release_apply with planId.","Save the receipt and cancel the temporary transfer."],"concurrency":"An obsolete plan is rejected. Repeating an applied plan returns the same receipt.","access":"A first release may add initialSignupPolicy {mode, allowlist} with mode open, invitation, closed or allowlist; the Kernel installs it before the app serves. When the owner's request leaves access open for an app with accounts, propose visibility private and mode invitation. Later changes need manage_users and signup_policy_set. Invite people with app_invitations_create only when the owner asks, because it sends email."})
             }
             _ => {
                 json!({"commands":["bun run littlebox -- init --dir /tmp/my-app --name 'My app' --url http://localhost:4173","bun run littlebox -- dev --dir /tmp/my-app","bun run littlebox -- build --dir /tmp/my-app","bun run littlebox -- publish --dir /tmp/my-app"],"credentials":"Set LITTLEBOX_MCP_TOKEN for init and publish, or use littlebox login. Never put it in app source.","isolation":"dev uses the same Rust Kernel with separate local identities, data and files under .littlebox/dev-data. It does not proxy production.","sourceAuthority":"Code and builds stay in your folder. Source is not synchronized to the browser editor."})
@@ -1156,7 +1160,7 @@ async fn admin_call(
         }
         "signup_policy_set" => {
             let id = a["deploymentId"].as_str().unwrap();
-            let deployment = owned_deployment(state, owner, id, "publish").await?;
+            let deployment = owned_deployment(state, owner, id, "manage_users").await?;
             let mode: SignupMode = serde_json::from_value(a["mode"].clone())?;
             let entries: Vec<String> = match a.get("allowlist") {
                 Some(list) => serde_json::from_value(list.clone())?,
@@ -1166,7 +1170,7 @@ async fn admin_call(
             // Releases hold the same lock, so a publish cannot overwrite this change
             // with the policy it read before.
             let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
-            let mut updated = owned_deployment(state, owner, id, "publish").await?;
+            let mut updated = owned_deployment(state, owner, id, "manage_users").await?;
             let previous = updated.signup_policy.mode;
             updated.signup_policy = policy;
             persist_deployment(state, &updated).await?;
@@ -1306,6 +1310,7 @@ async fn admin_call(
             tx.commit()?;
             Ok(receipt)
         }
+        name if name.starts_with("app_") => super::invitations::admin_call(state, owner, name, &a).await,
         _ => anyhow::bail!("Unknown tool."),
     }
 }
@@ -2044,8 +2049,13 @@ mod tests {
         let names = |owner: &Owner| admin_tools(owner).iter().map(|t| t["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
         assert!(names(&reader).contains(&"signup_policy_read".to_owned()));
         assert!(!names(&reader).contains(&"signup_policy_set".to_owned()));
-        let publisher = Owner { scopes: vec!["read".into(), "publish".into()], ..reader };
-        assert!(names(&publisher).contains(&"signup_policy_set".to_owned()));
+        let publisher = Owner { scopes: vec!["read".into(), "publish".into()], ..reader.clone() };
+        assert!(!names(&publisher).contains(&"signup_policy_set".to_owned()), "publish alone does not change who may sign up");
+        assert!(!names(&publisher).iter().any(|name| name.starts_with("app_")));
+        let manager = Owner { scopes: vec!["read".into(), "manage_users".into()], ..reader };
+        for tool in ["signup_policy_set", "app_users_list", "app_user_suspend", "app_user_resume", "app_invitations_create", "app_invitations_list", "app_invitation_resend", "app_invitation_revoke"] {
+            assert!(names(&manager).contains(&tool.to_owned()), "{tool}");
+        }
     }
 
     #[tokio::test]

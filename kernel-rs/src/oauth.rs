@@ -136,7 +136,7 @@ async fn resource_metadata(State(state): State<AppState>, headers: HeaderMap) ->
         return StatusCode::FORBIDDEN.into_response();
     }
     let origin = origin(&state, &headers);
-    Json(json!({"resource":format!("{origin}/mcp"),"authorization_servers":[origin],"scopes_supported":["read","write","publish"],"bearer_methods_supported":["header"]})).into_response()
+    Json(json!({"resource":format!("{origin}/mcp"),"authorization_servers":[origin],"scopes_supported":["read","write","publish","manage_users"],"bearer_methods_supported":["header"]})).into_response()
 }
 
 async fn server_metadata(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -144,7 +144,7 @@ async fn server_metadata(State(state): State<AppState>, headers: HeaderMap) -> R
         return StatusCode::FORBIDDEN.into_response();
     }
     let origin = origin(&state, &headers);
-    Json(json!({"issuer":origin,"authorization_endpoint":format!("{origin}/oauth/authorize"),"token_endpoint":format!("{origin}/oauth/token"),"registration_endpoint":format!("{origin}/oauth/register"),"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none"],"scopes_supported":["read","write","publish"],"authorization_response_iss_parameter_supported":true})).into_response()
+    Json(json!({"issuer":origin,"authorization_endpoint":format!("{origin}/oauth/authorize"),"token_endpoint":format!("{origin}/oauth/token"),"registration_endpoint":format!("{origin}/oauth/register"),"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none"],"scopes_supported":["read","write","publish","manage_users"],"authorization_response_iss_parameter_supported":true})).into_response()
 }
 
 fn valid_redirect(value: &str) -> bool {
@@ -280,7 +280,7 @@ fn authorization(
         !scopes.is_empty()
             && scopes
                 .iter()
-                .all(|s| ["read", "write", "publish"].contains(s)),
+                .all(|s| ["read", "write", "publish", "manage_users"].contains(s)),
         "Invalid scope."
     );
     anyhow::ensure!(get("state").len() <= 2048, "State is too large.");
