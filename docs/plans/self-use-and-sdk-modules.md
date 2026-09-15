@@ -170,6 +170,34 @@ The contract records these differences between the editor preview and the Kernel
 
 `platform_describe` lists five runtime tools and leaves out `auth_logout`, which the runtime endpoint serves.
 
+### Evidence for delivery 7
+
+Recorded on 2026-11-06 on branch `deliv/7-http-module`.
+
+The decision is a dated update on ADR-0011, not a note on ADR-0002. The launch plan asks for one ADR that records both amendments to ADR-0002, and ADR-0011 already records the first. The Kernel side is `kernel-rs/src/http.rs`; `main.rs` and `mcp.rs` gained about 50 lines between them. [The MCP guide](../mcp.md#http-routes) states the signature scheme a sender computes.
+
+| Check | Command | Result |
+| --- | --- | --- |
+| The Gate and the Kernel refuse the same `http` declarations with the same messages: two actions on one route, GET on a mutation, POST on a query, `http` on an authenticated action, a reserved path in any letter case, a malformed path, a malformed signature, a secret value written into `actions.json` | `bun test src/kernel/actions.test.ts` and `cargo test --manifest-path kernel-rs/Cargo.toml bindings_refuse_what_the_editor_refuses` | 20 cases in `kernel-rs/src/http-binding-cases.json`, run by both. `bun test src/agent/gate.test.ts` adds the Gate's own refusal through `validate` |
+| A signature verifies once inside 300 seconds and fails when stale, early, tampered, under another secret, with a moved timestamp or without a timestamp; a release naming an unset secret is refused; a listing never shows a value | `cargo test --manifest-path kernel-rs/Cargo.toml http::` | 3 pass |
+| Against a real Kernel: the unset-secret refusal and the publish refusals by message; an anonymous route answering on a private Deployment while its shell stays behind sign-in; 405 for unknown POST paths; signed, unsigned, tampered, stale, foreign, replayed and oversized POSTs; typed query strings; API keys as actor, scope, invalid and revoked; the cookie refused from another site; the file read path for a key, the uploader, another user, a visitor and a public-only key; an export carrying keys and the import revoking them; the anonymous rate limit | `LITTLEBOX_HTTP_TEST_PORT=<free> bun test tests/http-routes.integration.test.ts` | 10 pass |
+| The feed accepts a signed POST from `curl`, refuses the unsigned one and its replay, serves `GET /api/incidents`, lets a key read a private badge a visitor cannot, and loads its badge from `/_littlebox/files/<id>` in Chrome with no policy violation | `LITTLEBOX_PRODUCT_FIT_PORT=19443 bun run examples/product-fit/smoke.ts` | 11 checks pass |
+| The http module is in the contract; each of its 18 messages is found in the Kernel source | `bun test src/sdk` | 63 pass in `contract.test.ts`; changing one route message in the Kernel fails it |
+| The export kit carries `http.rs` and its case file, and the exported Kernel compiles | `bun test src/lib/export-project-kit.test.ts`, `bun run tests/smoke/portable-export.ts --port 19455` | Pass |
+| Everything else | `cargo test --manifest-path kernel-rs/Cargo.toml`, `bun run build` | 97 pass; build passes |
+| Whole suite | `bun test --timeout 60000` | 428 pass, 2 fail. The two are the sign-in rate-limit tests in `tests/mcp.integration.test.ts`; at a load average of 25 their per-minute buckets refill while the password hashes run. Both pass alone. With the default 5 second timeout the same run had 10 failures, all from tests cut off at 5 seconds |
+
+Where this differs from the text above:
+
+- Signing secrets belong to the Project, in `mcp.sqlite`, and are set with `secret_set`. The plan said the owner sets them through the Admin Interface but did not say where they live; a first publish must find them before its Deployment exists, so they cannot live in the Deployment folder. A portable export does not carry their values; the owner sets them again on the destination before the release.
+- The signature is one header, `t=<seconds>,v1=<HMAC>`, rather than a separate timestamp header, so moving the timestamp breaks the MAC. A signature is accepted once; the memory of seen signatures lives in the Kernel process, so a restart inside the 300 second window forgets it.
+- An API key that names a signed action stands in for the signature. A session cookie does not, and it counts only from the app's own origin, because app hosts are same-site with each other.
+- A route refuses inputs the action does not declare, as `actions.call` does. A sender whose payload carries more fields needs an action that declares them or an adapter.
+- `littlebox-kernel restore` keeps API keys live: it restores the same installation, and `copies.rs` is unchanged. An import revokes them.
+- ADR-0010's Usage store does not exist yet, so routes record no Usage. They do share the runtime endpoint's rate-limit buckets.
+- The editor's Auth panel has no API key screen. Keys and secrets are managed over admin MCP only.
+- `smoke.ts` cancelled a download transfer that `McpClient.download` already cancels, which failed its portfolio check on `main` too. The second cancel is removed.
+
 ### Order
 
 Delivery 5 before 7, so the HTTP module is the first one born from the contract. Delivery 6 can follow 5 at any time. Delivery 8 last.
