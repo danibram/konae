@@ -17,8 +17,7 @@ use uuid::Uuid;
 const SESSION_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 /// A verification link stays valid for 24 hours.
 pub const VERIFICATION_TTL_SECONDS: i64 = 24 * 60 * 60;
-/// An invitation link stays valid for seven days. Delivery E issues them.
-#[allow(dead_code)]
+/// An invitation link stays valid for seven days.
 pub const INVITATION_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 /// A recovery link stays valid for 30 minutes.
 pub const RECOVERY_TTL_SECONDS: i64 = 30 * 60;
@@ -27,7 +26,7 @@ pub const RECOVERY_TTL_SECONDS: i64 = 30 * 60;
 pub const CREATOR_SCOPE: &str = "creator";
 /// Stored as the password of an account created pending. It is not a valid
 /// encoding, so no password matches it; the person sets one when they verify.
-const NO_PASSWORD: &str = "unset";
+pub(crate) const NO_PASSWORD: &str = "unset";
 const MIN_PASSWORD_BYTES: usize = 8;
 const MAX_PASSWORD_BYTES: usize = 1024;
 const MAX_EMAIL_BYTES: usize = 254;
@@ -83,7 +82,6 @@ impl Verification {
 #[serde(rename_all = "lowercase")]
 pub enum Purpose {
     Verification,
-    #[allow(dead_code)]
     Invitation,
     Recovery,
 }
@@ -143,6 +141,8 @@ pub enum AuthError {
     EmailTaken,
     AccountPending,
     AccountSuspended,
+    /// An invitation reached an email that already has an active account.
+    AccountExists,
     InvalidChallenge,
     SignupClosed,
     MailUnavailable,
@@ -163,6 +163,10 @@ impl fmt::Display for AuthError {
                 "Confirm your email before signing in. Use the link we sent, or ask for a new one."
             ),
             Self::AccountSuspended => write!(f, "This account is suspended."),
+            Self::AccountExists => write!(
+                f,
+                "This email already has an account on this app. Sign in with its password instead."
+            ),
             Self::InvalidChallenge => write!(f, "This link is invalid, expired or already used."),
             Self::MailUnavailable => write!(
                 f,
@@ -473,7 +477,26 @@ impl AuthService {
         password: NewPassword,
         admits: impl FnOnce(&str) -> bool,
     ) -> Result<AuthSession, AuthError> {
-        if purpose == Purpose::Invitation || self.scope.is_empty() {
+        if purpose == Purpose::Invitation {
+            return Err(AuthError::InvalidChallenge);
+        }
+        self.complete_challenge_with(purpose, token, password, admits, |_, _, _| Ok(()))
+    }
+
+    /// `complete_challenge` for every purpose, with `on_consumed(transaction,
+    /// user_id, token_hash)` run inside the transaction before it commits.
+    /// An invitation, like a verification, needs a pending account and
+    /// `admits(email)`; an active account is told to sign in instead, and a
+    /// suspended one is refused, both inside the transaction.
+    pub(crate) fn complete_challenge_with(
+        &self,
+        purpose: Purpose,
+        token: &str,
+        password: NewPassword,
+        admits: impl FnOnce(&str) -> bool,
+        on_consumed: impl FnOnce(&Connection, &str, &str) -> Result<(), AuthError>,
+    ) -> Result<AuthSession, AuthError> {
+        if self.scope.is_empty() {
             return Err(AuthError::InvalidChallenge);
         }
         let token_hash = hash_token(token);
@@ -495,10 +518,11 @@ impl AuthService {
         };
         match (purpose, state.as_str()) {
             (_, "suspended") => return Err(AuthError::AccountSuspended),
-            (Purpose::Verification, "pending") | (Purpose::Recovery, "active") => {}
+            (Purpose::Invitation, "active") => return Err(AuthError::AccountExists),
+            (Purpose::Verification | Purpose::Invitation, "pending") | (Purpose::Recovery, "active") => {}
             _ => return Err(AuthError::InvalidChallenge),
         }
-        if purpose == Purpose::Verification && !admits(&email) {
+        if purpose != Purpose::Recovery && !admits(&email) {
             return Err(AuthError::SignupClosed);
         }
         let consumed = transaction
@@ -511,6 +535,7 @@ impl AuthService {
         if consumed != 1 {
             return Err(AuthError::InvalidChallenge);
         }
+        on_consumed(&transaction, &user_id, &token_hash)?;
         transaction
             .execute(
                 "UPDATE app_users SET password_hash = ?1, state = 'active',
@@ -617,9 +642,28 @@ impl AuthService {
         Ok((user_id, state))
     }
 
+    /// Runs `work` in one write transaction on this store that takes the
+    /// lock at BEGIN, for flows such as invitations that keep their own rows
+    /// beside the accounts.
+    pub(crate) fn transaction<T>(
+        &self,
+        work: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, AuthError>,
+    ) -> Result<T, AuthError> {
+        let mut connection = self.connection()?;
+        let transaction = immediate(&mut connection)?;
+        let value = work(&transaction)?;
+        transaction.commit().map_err(AuthError::Storage)?;
+        Ok(value)
+    }
+
+    /// Reads this store outside any transaction.
+    pub(crate) fn read<T>(&self, work: impl FnOnce(&Connection) -> Result<T, AuthError>) -> Result<T, AuthError> {
+        work(&self.connection()?)
+    }
+
     /// Stores a new challenge and invalidates the account's earlier open
     /// challenges of the same purpose, so only the newest link works.
-    fn issue_challenge(
+    pub(crate) fn issue_challenge(
         &self,
         transaction: &Connection,
         user_id: &str,
@@ -946,11 +990,11 @@ fn verify_password(password: &str, encoded: &str) -> Result<(), AuthError> {
     .map_err(|_| AuthError::InvalidCredentials)
 }
 
-fn hash_token(token: &str) -> String {
+pub(crate) fn hash_token(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
 
-fn now_seconds() -> i64 {
+pub(crate) fn now_seconds() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
