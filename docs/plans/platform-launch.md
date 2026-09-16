@@ -274,3 +274,26 @@ A headless Chrome session loaded all eight product-fit examples and the docs gui
 These tests did not run against the Docker stack. That stack serves plain HTTP on `localhost:8080`, so the `__Host-` cookies and HSTS cannot be exercised there; the "done when" criterion needs an HTTPS gateway in front of the stack.
 
 The plan did not account for two things. The preview applies no Content Security Policy, so an app that uses `onclick="..."` or a foreign script works in the preview and stops once published; the agent prompt now states the policy, and the preview needs the same policy on its own origin to close the gap. The starter templates import Google Fonts, so the app policy allows `fonts.googleapis.com` and `fonts.gstatic.com`; a stricter policy would render published starters in system fonts while the preview shows the web font.
+
+### Delivery H, November 6, 2026
+
+`package_export` in `kernel-rs/src/package.rs` captures one Deployment under its locks and offers its database, accounts and files as three download transfers with a versioned manifest. A release imports them as `initialPackage` into a project with no Deployment. [ADR-0012](../adr/0012-an-app-leaves-as-a-chunked-package.md) records the decision and [the MCP guide](../mcp.md#export-and-import-an-app) the format. The CLI's `export --with-data` and the kit's `deploy.mjs` use it.
+
+| Refusal or proof | Where | Run against |
+| --- | --- | --- |
+| Import over an existing app | `tests/package.integration.test.ts` | Local Kernel, MCP |
+| Upload bytes that differ from their SHA-256; an upload that differs from the manifest; manifest version 2 | `tests/package.integration.test.ts`, `kernel-rs/src/package.rs`, `src/lib/portable-package.test.ts` | Local Kernel, unit |
+| Export without `export_data` from `read`, `publish`, and `read`+`write`+`publish` credentials, and from an `export_data` credential for another project | `tests/package.integration.test.ts` | Local Kernel, MCP |
+| A `read` credential reading or inspecting an export's transfers | `tests/package.integration.test.ts` | Local Kernel, MCP |
+| Component over its quota | `tests/package.integration.test.ts`, `kernel-rs/src/package.rs` | Local Kernel, unit |
+| Not enough disk | `kernel-rs/src/package.rs` (message and arithmetic only) | Unit |
+| Sessions, email links and API keys absent from the export and deleted on import | `kernel-rs/src/package.rs`, `tests/package.integration.test.ts` | Unit, local Kernel |
+| A repeated apply returns its receipt and one Deployment exists | `tests/package.integration.test.ts` | Local Kernel, MCP |
+| Kit export and import with a freshly compiled kit Kernel, `export_data` refusal in the CLI | `tests/smoke/portable-export.ts` | Two local Kernels |
+| 256 MiB database at its write cap and 20 MiB of files | `tests/smoke/package-quota.ts` | Two local Kernels, debug build |
+
+The quota run filled the database through owner SQL with random bytes until the Kernel refused a write with "database or disk is full", then exported with `exportLocal` and imported with the kit's `node scripts/deploy.mjs`. The database file was 256.0 MiB and the kit archive 276.7 MiB. Row counts and byte totals matched on the target, the app user signed in with the same password, all ten 2 MiB files read back, the old session failed, and the target still refused a write for lack of space. A `ps` sample every 100 ms put the peak resident memory at 33 MiB for the source Kernel, 94 MiB for the Bun process that ran the export and the test itself, 23 MiB for the target Kernel and 117 MiB for the Node deploy script. Export took 97 s and import 128 s on the debug build, almost all of it in 64 KiB MCP calls. The target's audit log held 4 `transfer_write` rows for the import.
+
+Not verified: an identity file near its 64 MiB cap, because signups are rate limited; it goes through the same code as the database. The space refusal is tested as a function, not against a full volume. The run used the local Kernels, not the Docker stack.
+
+The plan did not account for three things. Every credential of one owner shares the transfer principal, so making `project_export` need `export_data` was not enough: the export's transfers check `export_data` too, or a `read` token of the same owner could read them. Auditing each 64 KiB block would have written about 4,400 rows per import into a log capped at 10,000, so package transfers audit once per component. The editor's own export runs in the browser and still uses the 16 MiB format; an app past that size leaves through the CLI until the editor streams the package to disk.
