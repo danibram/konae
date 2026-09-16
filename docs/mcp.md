@@ -11,7 +11,7 @@ bun run dev:local
 
 Open the editor and go to **Platform access**. The direct link is `http://localhost:4173/_littlebox/owner/login`. To create an owner, enter an email, a password and the installation key that the operator provides. In the default local environment that key is `local-development-key`; `LITTLEBOX_ADMIN_KEY` sets it. The first account claims the Deployments from the earlier prototype.
 
-Each owner administers their own projects. The page creates read-only or read, edit and publish tokens, optionally limited to specific projects, and lists and revokes active credentials. A token's secret appears only once. Tokens from this page expire after 24 hours; `token_create` accepts any subset of `read`, `write` and `publish` and a lifetime of up to 30 days.
+Each owner administers their own projects. The page creates read-only or read, edit and publish tokens, optionally limited to specific projects, and lists and revokes active credentials. A token's secret appears only once. Tokens from this page expire after 24 hours; `token_create` accepts any subset of `read`, `write`, `publish` and `export_data` and a lifetime of up to 30 days. Only `export_data` downloads an app's accounts and data, and the owner's browser session holds it.
 
 The installation key does not authenticate MCP tools and is not included in the editor bundle. The server listens on `127.0.0.1` by default. The Kernel refuses to start on a non-loopback address, or with a `LITTLEBOX_PUBLIC_ORIGIN` whose host is not `localhost`, a `*.localhost` name or a loopback IP, while the installation key is unset or still `local-development-key`, unless `LITTLEBOX_ALLOW_DEFAULT_KEY=1`. For a remote installation, configure the installation key, the HTTPS origin and the proxy before listening on another interface.
 
@@ -35,7 +35,8 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | --- | --- |
 | Discovery | `platform_describe`, `platform_guide`, `session_inspect`, `projects_list`, `project_inspect` |
 | Projects | `project_create` |
-| Owner schema and data | `schema_plan`, `database_execute`, `database_export`, `project_export`, `storage_test` |
+| Owner schema and data | `schema_plan`, `database_execute`, `database_export`, `storage_test` |
+| App export, with `export_data` | `package_export`, `project_export` |
 | Publishing | `release_plan`, `release_apply` |
 | Signup policy | `signup_policy_read`, `signup_policy_set` |
 | Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
@@ -139,11 +140,76 @@ The build lives in `.littlebox/artifact.json`. Publishing transfers it over MCP,
 
 There is also `bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173`. It reads `LITTLEBOX_EMAIL` and `LITTLEBOX_PASSWORD` from the environment, obtains a 24-hour credential and stores it with `0600` permissions in `.littlebox/credentials.json`. `LITTLEBOX_SETUP_KEY` lets it create the account if it does not exist yet. The command adds `.littlebox/` to `.gitignore`; do not copy credentials into the frontend.
 
+## Export and import an app
+
+`package_export` takes a `deploymentId` and captures the app under its project, data and identity locks: no action, upload, signup, policy change or release lands halfway, and they wait for the capture to finish. A 256 MiB database takes a few seconds. It returns a manifest and one download transfer per component.
+
+```json
+{
+  "manifest": {
+    "format": "littlebox-package", "version": 1, "packageId": "…", "createdAt": 1762430000000,
+    "deploymentId": "…", "projectId": "…", "visibility": "private",
+    "signupPolicy": { "mode": "closed", "allowlist": [] },
+    "publishedRevision": 4, "artifactVersion": "v…", "sourceAuthority": "managed", "sourcesRevision": 9,
+    "contents": [
+      { "name": "database", "size": 268435456, "sha256": "…" },
+      { "name": "identity", "size": 110592, "sha256": "…" },
+      { "name": "files", "size": 20987904, "sha256": "…" }
+    ],
+    "excluded": ["app sessions", "verification, recovery and invitation links", "…"]
+  },
+  "downloads": { "database": { "transferId": "…", "size": 268435456, "sha256": "…", "chunkBytes": 65536, "expiresAt": 0 } }
+}
+```
+
+| Component | What it is | Limit |
+| --- | --- | --- |
+| `database` | The app database, copied with `VACUUM INTO` | 256 MiB |
+| `identity` | `identity.sqlite` without sessions, email links or API keys; `secure_delete` overwrites their pages | 64 MiB |
+| `files` | A ustar archive of `index.json` and one `<id>.blob` per file, in index order | 2 MiB per file, 20 MiB of file data |
+
+`publishedRevision` counts the releases applied to the project. `sourcesRevision` counts saves of Managed sources and is absent for External projects; the two count different things, so a package never claims the saved sources produced the published app. Usage, Signals, Data panel backups, owner accounts and MCP credentials stay behind.
+
+Read each download with `transfer_read` and cancel it when done. The transfers expire after one hour like other owner transfers. They need `export_data`, not `read`, even though every credential of one owner shares the transfer pool. The audit log gets one `package_export` row and one `package_download` row per component at its first block, with the Deployment as target and the component as detail, plus a row for every refused read.
+
+To import, start each component upload with `transfer_begin` and `component` set to its name. A component upload may be as large as its limit in the table; any other upload stays at 32 MiB. Write and complete it as usual, then send a release payload with `initialPackage`:
+
+```json
+{ "project": {}, "visibility": "private", "artifact": {},
+  "initialPackage": { "manifest": {}, "components": { "database": "transferId", "identity": "transferId", "files": "transferId" } } }
+```
+
+`release_plan` checks, before any Deployment exists:
+
+- the manifest format and version, and that every listed component is within its limit;
+- each upload is complete, belongs to the caller and the destination project, was started for that component and matches the manifest's size and SHA-256;
+- both SQLite files pass `integrity_check` and the accounts file has `app_users`;
+- every file has its data at the indexed size, within the file quotas, and every file owner is an account in the package;
+- the volume has room for the components, a schema check copy of the database and 64 MiB to spare;
+- the release's `schema.sql` and actions run against the imported database.
+
+`release_apply` copies each component into the new Deployment's folder, checking its SHA-256 as it copies, deletes sessions, email links and API keys again, and unpacks the files. The uploads stay intact until you cancel them, so a failed apply can be retried with a new plan. Repeating an applied plan returns its receipt and creates nothing. A project that already has a Deployment refuses `initialPackage`, as it refuses the small format's initial state. The signup policy comes from the manifest unless the payload sets `initialSignupPolicy`.
+
+| Refusal | Message |
+| --- | --- |
+| Export without `export_data` | `Unknown tool or insufficient permission.`; a credential limited to other projects gets `Project is outside this token's grants.` |
+| Reading an export's transfer without `export_data` | `Permission denied for export_data.` |
+| Package for a project with a Deployment | `Portable state can only be imported on the first deployment.` |
+| Upload bytes that differ from the declared SHA-256 | `Upload size or SHA-256 mismatch.` |
+| Upload that differs from the manifest | `The database component does not match the size and SHA-256 in the manifest.` |
+| Another manifest version | `Package version 2 is not supported. This Kernel reads version 1.` |
+| Component over its limit | `Transfer size is outside the limit of 67108864 bytes for the identity component.` |
+| Not enough disk | `Not enough free space on the Kernel volume to import this app: 340 MiB needed, 120 MiB free.` |
+
+The CLI's `export --with-data` downloads the package into the kit as `littlebox/package/`, and the kit's `deploy.mjs` uploads it, records its progress in `littlebox/import-state.json` and resumes from the Kernel's offset after an interruption. `src/lib/portable-package.ts` checks the manifest on the client with the same limits as `kernel-rs/src/package.rs`.
+
+`project_export`, the small format, now needs `export_data` too. It returns the database, accounts and files as base64 in one transfer of at most 16 MiB, and a release still imports it through `initialDatabase`, `initialIdentity`, `initialFiles` and `initialSignupPolicy`.
+
 ## Transfers and limits
 
 The client starts a transfer by declaring the size and SHA-256. Chunks are at most 64 KiB and use base64. The server accepts identical retries at the same offset and rejects different content. Completing a transfer verifies size and hash and makes its bytes immutable.
 
-Owner transfers expire after one hour and each owner credential can hold eight. App user transfers expire after 10 minutes and each app user can hold two. Owners share a pool of 128 per installation, and app users share a pool of 32 per Deployment. An app's files are at most 2 MiB each and the Deployment has a 20 MiB quota. An administrative transfer can be up to 32 MiB; a full publishing payload must fit in 26 MB and its artifact in 16 MiB. A project allows up to 100 actions. Queries limit rows, response size and execution time. Each app database is capped at 256 MiB.
+Owner transfers expire after one hour and each owner credential can hold eight. App user transfers expire after 10 minutes and each app user can hold two. Owners share a pool of 128 per installation, and app users share a pool of 32 per Deployment. An app's files are at most 2 MiB each and the Deployment has a 20 MiB quota. An administrative transfer can be up to 32 MiB, or up to a package component's limit; a full publishing payload must fit in 26 MB and its artifact in 16 MiB. A project allows up to 100 actions. Queries limit rows, response size and execution time. Each app database is capped at 256 MiB.
 
 App login and signup accept 10 attempts per minute per client address, and 5 per minute for one email address from one client address, counted separately for each Deployment. Wrong passwords also count against the email address across all clients: after 100 failures in an hour, every login for that email waits, including a correct one. A successful login never uses up that count, and one client address adds at most 20 failures per hour to it, so pausing an account takes failures from at least five addresses. `/_littlebox/owner/login` and `/_littlebox/owner/signup` have the same limits. Recovery requests count against the email they name, and verify and reset requests share one bucket per client address, on each Deployment and on the creator scope; the runtime MCP account tools count in the same buckets. Further attempts get HTTP 429 with `Retry-After`. Each identity database is capped at 64 MiB.
 
@@ -151,7 +217,7 @@ A release's `schema.sql` may only create tables and indexes, and must be safe to
 
 `/oauth/register` accepts 10 registrations per client address per hour; IPv6 clients share one bucket per /48. It holds at most 1000 clients that have not reached consent, and at that cap a new registration replaces the oldest of them. Unconsented clients expire after one hour. A client that reached consent expires after 30 days without a new token once it holds no live credential.
 
-The audit log in `mcp.sqlite` records each owner tool call with its project or Deployment. `release_apply` records the project and the Deployment it produced, and `signup_policy_set` records the old and new mode.
+The audit log in `mcp.sqlite` records each owner tool call with its project or Deployment. `release_apply` records the project and the Deployment it produced, and `signup_policy_set` records the old and new mode. A package download or a package component upload writes one row at its first block and one for each refused block, not one per 64 KiB, so moving a 256 MiB database does not push the rest out of the 10,000-row log.
 
 `transfer_status` lets a client resume an upload from the last offset. Cancel transfers you no longer need. The SDK checks the checksum of downloads and releases its temporary transfers.
 
@@ -161,7 +227,7 @@ The official SDK checks connection, listing and MCP calls, as well as the OAuth 
 
 The self-hosted export includes the Kernel, its MCP and OAuth modules, and a deploy script that uses authenticated MCP. The platform image includes Bun and the Drizzle tooling. The minimal self-hosted kit supports administrative SQL and migrations supplied by its owner; it does not include the tool that derives Drizzle models.
 
-`project_export` includes `initialSignupPolicy` with `{ "mode": "open" | "allowlist" | "closed", "allowlist": [...] }` alongside the portable database, accounts and files. It captures `visibility` under the same project lock, so exporters use the snapshot's visibility even if an earlier project inspection or editor copy differs. A release may import that policy only on its first Deployment. The Kernel validates and installs the policy before serving that Deployment, so a public app exported with Closed signup never opens registration during import. Republishing cannot override the policy through initial state. Older exports without these fields use the inspected Deployment's visibility or the editor's current project and the normal signup defaults.
+`project_export`, which needs `export_data`, includes `initialSignupPolicy` with `{ "mode": "open" | "allowlist" | "closed", "allowlist": [...] }` alongside the portable database, accounts and files. It captures `visibility` under the same project lock, so exporters use the snapshot's visibility even if an earlier project inspection or editor copy differs. A release may import that policy only on its first Deployment. The Kernel validates and installs the policy before serving that Deployment, so a public app exported with Closed signup never opens registration during import. Republishing cannot override the policy through initial state. Older exports without these fields use the inspected Deployment's visibility or the editor's current project and the normal signup defaults.
 
 The editor preview still stores its test data in the browser, including uploads, which it keeps as data URLs in local storage. It uses MCP over a MessageChannel with an ephemeral preview credential. The registry of published projects and the credentials live in the Kernel.
 

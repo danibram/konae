@@ -31,6 +31,7 @@ mod copies;
 mod limits;
 mod mcp;
 mod oauth;
+mod package;
 mod security;
 use auth::{AuthError, AuthService, AuthUser};
 use limits::{Guards, trusted_proxies};
@@ -235,6 +236,9 @@ struct DeployInput {
     initial_files: Option<String>,
     #[serde(default)]
     initial_signup_policy: Option<SignupPolicy>,
+    /// A chunked package whose components were uploaded as transfers.
+    #[serde(default)]
+    initial_package: Option<package::InitialPackage>,
 }
 
 #[derive(Deserialize)]
@@ -481,14 +485,16 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         && (input.initial_database.is_some()
             || input.initial_identity.is_some()
             || input.initial_files.is_some()
-            || input.initial_signup_policy.is_some())
+            || input.initial_signup_policy.is_some()
+            || input.initial_package.is_some())
     {
         return error(
             StatusCode::CONFLICT,
             "Portable state can only be imported on the first deployment.",
         );
     }
-    let initial_signup_policy = match input.initial_signup_policy.as_ref() {
+    let package_policy = input.initial_package.as_ref().and_then(|package| package.manifest.signup_policy.as_ref());
+    let initial_signup_policy = match input.initial_signup_policy.as_ref().or(package_policy) {
         Some(policy) => match SignupPolicy::from_input(policy.mode, &policy.allowlist) {
             Ok(policy) => Some(policy),
             Err(message) => return error(StatusCode::BAD_REQUEST, &message),
@@ -566,6 +572,12 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
     let _database_guard = database_lock(&state, &id).await;
+    if let Some(package) = input.initial_package.as_ref() {
+        if let Err(error_value) = package::install(&state, package, &deployment.project_id, &directory).await {
+            let _ = tokio::fs::remove_dir_all(&directory).await;
+            return error(StatusCode::BAD_REQUEST, &format!("Package import failed: {error_value:#}"));
+        }
+    }
     let db_path = directory.join("database.sqlite");
     let schema = input
         .project

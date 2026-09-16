@@ -10,6 +10,7 @@ aws-credential-types = "1"
 aws-sdk-s3 = "1"
 axum = "0.8"
 hex = "0.4"
+libc = "0.2"
 rusqlite = { version = "0.37", features = ["bundled", "hooks", "limits"] }
 ring = "0.17.14"
 serde = { version = "1", features = ["derive"] }

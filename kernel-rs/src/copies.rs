@@ -402,7 +402,7 @@ fn is_backup_file(name: &str) -> bool {
         && stem.chars().all(|character| character.is_ascii_hexdigit() || character == '-')
 }
 
-fn vacuum_into(source: &Path, target: &Path) -> Result<()> {
+pub(crate) fn vacuum_into(source: &Path, target: &Path) -> Result<()> {
     let connection = Connection::open(source)?;
     connection.busy_timeout(Duration::from_secs(10))?;
     connection.execute("VACUUM INTO ?1", [target.to_string_lossy().as_ref()])?;
@@ -458,7 +458,7 @@ fn list_files(root: &Path) -> Result<Vec<ManifestFile>> {
     Ok(files)
 }
 
-fn checksum_file(path: &Path) -> Result<(u64, String)> {
+pub(crate) fn checksum_file(path: &Path) -> Result<(u64, String)> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 64 * 1024];

@@ -1394,6 +1394,7 @@ dependencies = [
  "aws-sdk-s3",
  "axum",
  "hex",
+ "libc",
  "ring",
  "rusqlite",
  "serde",

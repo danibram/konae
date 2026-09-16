@@ -22,6 +22,8 @@ An app may keep its shell public, but its data and file operations require authe
 
 > Update, 2026-11-06: The `sdk` topic of `platform_guide` is rendered from the SDK contract in `src/sdk/contract.ts`. `bun run sdk:render` writes it to `kernel-rs/src/sdk-guide.json`, which the Kernel includes at compile time, and writes the build agent's SDK section and `docs/sdk.md` from the same contract. The topic now lists each module and call with its runtime MCP tools, arguments, result, refusals and limits; the `authentication` and `files` prose keys are gone and `examples` stays. The decision itself is unchanged.
 
+> Update, 2026-11-06: Exports move through `package_export` as one transfer per component, and downloading an app's accounts and data needs the `export_data` permission, which `read`, `write` and `publish` do not include. [ADR-0012](0012-an-app-leaves-as-a-chunked-package.md) records the format and the import.
+
 ADR-0005 keeps the static artifact as the publishing contract. ADR-0006 keeps the local Development Kernel as the default option. The local tool runs the same Rust Kernel with data and identities separate from production. The editor preview uses MCP over a private MessageChannel and an ephemeral credential limited to the preview; its test actors are not production sessions.
 
 The implementation pins MCP revision `2025-11-25`, checked with the official SDK `1.32.1`. Revision `2026-07-28` requires further compatibility work. Project revisions and publishing receipts persist, but they are not an immutable artifact history or a data rollback.

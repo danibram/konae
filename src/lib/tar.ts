@@ -12,8 +12,8 @@ export function createTar(entries: readonly TarEntry[]): Uint8Array {
   for (const entry of entries) {
     const path = normalizeArchivePath(entry.path);
     const contents = typeof entry.contents === "string" ? encoder.encode(entry.contents) : entry.contents;
-    const header = createHeader(path, contents.length, entry.mode ?? 0o644);
-    chunks.push(header, contents, new Uint8Array(paddingSize(contents.length)));
+    const header = tarHeader(path, contents.length, entry.mode ?? 0o644);
+    chunks.push(header, contents, new Uint8Array(tarPadding(contents.length)));
   }
   chunks.push(new Uint8Array(blockSize * 2));
   return concatenate(chunks);
@@ -28,7 +28,8 @@ export function normalizeArchivePath(value: string): string {
   return path;
 }
 
-function createHeader(path: string, size: number, mode: number): Uint8Array {
+/** One ustar header block. Writers that stream file contents from disk use it with `tarPadding`. */
+export function tarHeader(path: string, size: number, mode: number): Uint8Array {
   const header = new Uint8Array(blockSize);
   const split = splitUstarPath(path);
   writeString(header, 0, 100, split.name);
@@ -70,7 +71,7 @@ function writeOctal(target: Uint8Array, offset: number, width: number, value: nu
   writeString(target, offset, width, `${digits}\0`);
 }
 
-function paddingSize(size: number) {
+export function tarPadding(size: number) {
   return (blockSize - (size % blockSize)) % blockSize;
 }
 
