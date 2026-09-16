@@ -4,6 +4,7 @@ import { normalizeProjectPath } from "./project-files";
 import { runtimeScriptAttribute, type BuildArtifact } from "../runtime/artifact";
 import type { MiniAppProject } from "./types";
 import type { PortableProjectState } from "../deployments/client";
+import { checkPackageManifest, type PackageManifest } from "./portable-package";
 
 export type ExportFile = { path: string; contents: string | Uint8Array };
 
@@ -207,7 +208,13 @@ When it answers on \u0060/_littlebox/health\u0060, run \u0060npm run deploy\u006
 
 Keep \u0060.env\u0060 private. It contains the owner key for this local Kernel. The exported app source and static artifact contain no Littlebox-hosted credentials.
 
-The optional \u0060littlebox/initial-database.sqlite\u0060, \u0060littlebox/initial-identity.sqlite\u0060, \u0060littlebox/initial-files.portable\u0060 and \u0060littlebox/initial-signup-policy.json\u0060 files hold portable app state supplied during export. User password hashes, file attachments and the signup policy transfer with the app, while the target Kernel starts new sessions. The first deployment imports this state; later deployments keep the target's current state.
+## App data
+
+An export made with \u0060--with-data\u0060 holds the app's data in \u0060littlebox/package/\u0060. \u0060manifest.json\u0060 lists the database, the accounts and the files with the size and SHA-256 of each, and names the published revision they came from. The first \u0060npm run deploy\u0060 imports them. It uploads each part in 64 KiB blocks and records its progress in \u0060littlebox/import-state.json\u0060, so running it again after an interruption continues where it stopped. The Kernel checks every checksum, the accounts each file names and the free space before it creates the app, and refuses a package for an app that already exists. If the script stops after the Kernel created the app, running it again returns the same receipt. Later runs publish the code and keep the data.
+
+Accounts keep their IDs, password hashes, verification state and suspensions, and the app keeps its visibility and signup policy. Sessions, open email links and API keys stay behind, so everyone signs in again. The package holds personal data and password hashes: keep this folder private and out of Git, and delete \u0060littlebox/package/\u0060 once the app runs.
+
+Exports made before packages hold \u0060littlebox/initial-database.sqlite\u0060, \u0060littlebox/initial-identity.sqlite\u0060, \u0060littlebox/initial-files.portable\u0060 and \u0060littlebox/initial-signup-policy.json\u0060 instead, at most 16 MiB together. The deploy script still imports them the same way.
 `;
 
 export function buildProjectExport(
@@ -216,6 +223,28 @@ export function buildProjectExport(
   kernelFiles: readonly ExportFile[],
   state?: Uint8Array | PortableProjectState,
 ): { archive: Uint8Array; entries: TarEntry[] } {
+  const entries = projectExportEntries(project, artifact, kernelFiles, state);
+  return { archive: createTar(entries), entries };
+}
+
+/**
+ * The kit's entries in archive order. With a package manifest the kit names
+ * the package's visibility and carries `littlebox/package/manifest.json`; the
+ * caller appends the component files from disk, so they never sit in memory.
+ */
+export function projectExportEntries(
+  project: MiniAppProject,
+  artifact: BuildArtifact,
+  kernelFiles: readonly ExportFile[],
+  state?: Uint8Array | PortableProjectState | { package: PackageManifest },
+): TarEntry[] {
+  if (state && "package" in state) {
+    const manifest = checkPackageManifest(state.package);
+    const entries = projectExportEntries(project, artifact, kernelFiles, { visibility: manifest.visibility } as PortableProjectState);
+    entries.splice(entries.findIndex((entry) => entry.path === "littlebox/artifact.json") + 1, 0,
+      { path: "littlebox/package/manifest.json", contents: JSON.stringify(manifest, null, 2), mode: 0o600 });
+    return entries;
+  }
   if (artifact.version !== 1 || artifact.entrypoint !== "index.html" || !artifact.files["index.html"]) {
     throw new Error("The export requires a valid version 1 Build Artifact.");
   }
@@ -254,7 +283,7 @@ export function buildProjectExport(
     { path: "entrypoint.sh", contents: entrypoint, mode: 0o755 },
     { path: "compose.yaml", contents: composeFile },
     { path: ".env.example", contents: "LITTLEBOX_PORT=8787\nLITTLEBOX_ADMIN_KEY=replace-me\n" },
-    { path: ".gitignore", contents: ".env\ndata/\nnode_modules/\nlittlebox/initial-*\n" },
+    { path: ".gitignore", contents: ".env\ndata/\nnode_modules/\nlittlebox/initial-*\nlittlebox/package/\nlittlebox/import-state.json\n" },
     { path: "package.json", contents: packageManifest },
     { path: "scripts/build.mjs", contents: buildScript },
     { path: "scripts/deploy.mjs", contents: deployScript },
@@ -280,7 +309,7 @@ export function buildProjectExport(
     if (uniquePaths.has(path)) throw new Error(`Duplicate export path: ${path}`);
     uniquePaths.add(path);
   }
-  return { archive: createTar(entries), entries };
+  return entries;
 }
 
 function validatePortableBytes(label: string, bytes: Uint8Array | undefined, maxBytes: number) {

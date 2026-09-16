@@ -36,12 +36,24 @@ test("CLI exports a source-only kit offline, keeps it private and refuses overwr
   }
 }, 30_000);
 
-for (const [inspectedVisibility, snapshotVisibility] of [["public", "private"], ["private", "private"], ["private", undefined], ["private", "invalid"]]) test(`export handles snapshot visibility ${snapshotVisibility ?? "absent"} after ${inspectedVisibility} inspection`, async () => {
-  const portable = new TextEncoder().encode(JSON.stringify({ result: {
-    initialDatabase: Buffer.from("SQLite snapshot").toString("base64"),
-    initialSignupPolicy: { mode: "closed", allowlist: [] }, visibility: snapshotVisibility,
-  } }));
-  const sha256 = Buffer.from(await crypto.subtle.digest("SHA-256", portable)).toString("hex");
+function readArchive(archive: Buffer) {
+  const files = new Map<string, Buffer>();
+  for (let offset = 0; offset + 512 <= archive.length && archive[offset] !== 0;) {
+    const name = archive.subarray(offset, offset + 100).toString("utf8").split("\0")[0];
+    const size = Number.parseInt(archive.subarray(offset + 124, offset + 136).toString("utf8"), 8);
+    files.set(name, archive.subarray(offset + 512, offset + 512 + size));
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  return files;
+}
+
+async function packageServer(visibility: unknown, refuse = false) {
+  const database = new TextEncoder().encode("SQLite snapshot");
+  const sha256 = Buffer.from(await crypto.subtle.digest("SHA-256", database)).toString("hex");
+  const manifest = {
+    format: "littlebox-package", version: 1, packageId: "package-1", createdAt: 1, deploymentId: "deployed-private", projectId: "offline_export",
+    visibility, signupPolicy: { mode: "closed", allowlist: [] }, publishedRevision: 3, contents: [{ name: "database", size: database.length, sha256 }], excluded: [],
+  };
   const calls: string[] = [];
   const server = Bun.serve({
     port: 0, hostname: "127.0.0.1",
@@ -51,38 +63,55 @@ for (const [inspectedVisibility, snapshotVisibility] of [["public", "private"], 
       if (message.method === "initialize") return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-11-25" } });
       const name = message.params?.name ?? "";
       calls.push(name);
-      const result = name === "project_inspect" ? { deployment: { id: "deployed-private", manifest: { version: 1, visibility: inspectedVisibility } } }
-        : name === "project_export" ? { transferId: "snapshot", size: portable.length, sha256, chunkBytes: 65536 }
-        : name === "transfer_read" ? { data: Buffer.from(portable).toString("base64"), offset: 0, nextOffset: portable.length } : {};
+      if (name === "package_export" && refuse) return Response.json({ jsonrpc: "2.0", id: message.id, error: { code: -32602, message: "Unknown tool or insufficient permission." } });
+      const result = name === "project_inspect" ? { deployment: { id: "deployed-private", manifest: { version: 1, visibility: "public" } } }
+        : name === "package_export" ? { manifest, downloads: { database: { transferId: "database", size: database.length, sha256, chunkBytes: 65536 } } }
+        : name === "transfer_read" ? { data: Buffer.from(database).toString("base64"), offset: 0, nextOffset: database.length } : {};
       return Response.json({ jsonrpc: "2.0", id: message.id, result: { structuredContent: { result } } });
     },
   });
+  return { server, calls, database };
+}
+
+async function exportWith(visibility: unknown, refuse = false) {
+  const { server, calls, database } = await packageServer(visibility, refuse);
   const root = await mkdtemp(path.join(tmpdir(), "littlebox-cli-live-export-"));
+  await writeFile(path.join(root, "app.js"), "console.log('private');");
+  await writeFile(path.join(root, "schema.sql"), "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY);");
+  await writeFile(path.join(root, "actions.json"), JSON.stringify({ version: 1, actions: {} }));
+  const output = path.join(root, "selfhost.tar");
+  const stale = { ...config, url: `http://127.0.0.1:${server.port}`, project: { ...config.project, manifest: { version: 1, visibility: "public" } } };
+  const done = async () => { server.stop(true); await rm(root, { recursive: true, force: true }); };
+  return { run: () => exportLocal(root, stale, output, "owner-token"), output, calls, database, done };
+}
+
+test("export --with-data writes the package manifest and streams each component into the kit", async () => {
+  const { run, output, calls, database, done } = await exportWith("private");
   try {
-    await writeFile(path.join(root, "app.js"), "console.log('private');");
-    await writeFile(path.join(root, "schema.sql"), "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY);");
-    await writeFile(path.join(root, "actions.json"), JSON.stringify({ version: 1, actions: {} }));
-    const output = path.join(root, "selfhost.tar");
-    const stale = { ...config, url: `http://127.0.0.1:${server.port}`, project: { ...config.project, manifest: { version: 1, visibility: "public" } } };
-    if (snapshotVisibility === "invalid") {
-      await expect(exportLocal(root, stale, output, "owner-token")).rejects.toThrow("invalid visibility");
-      expect(calls).toEqual(["project_inspect", "project_export", "transfer_read", "transfer_cancel"]);
-      return;
-    }
-    await exportLocal(root, stale, output, "owner-token");
-    const archive = await readFile(output);
-    const files = new Map<string, string>();
-    for (let offset = 0; offset + 512 <= archive.length && archive[offset] !== 0;) {
-      const name = archive.subarray(offset, offset + 100).toString("utf8").split("\0")[0];
-      const size = Number.parseInt(archive.subarray(offset + 124, offset + 136).toString("utf8"), 8);
-      files.set(name, archive.subarray(offset + 512, offset + 512 + size).toString("utf8"));
-      offset += 512 + Math.ceil(size / 512) * 512;
-    }
-    expect(JSON.parse(files.get("littlebox/project.json")!).manifest.visibility).toBe("private");
-    expect(JSON.parse(files.get("littlebox/initial-signup-policy.json")!)).toEqual({ mode: "closed", allowlist: [] });
-    expect(calls).toEqual(["project_inspect", "project_export", "transfer_read", "transfer_cancel"]);
-  } finally {
-    server.stop(true);
-    await rm(root, { recursive: true, force: true });
-  }
+    await run();
+    expect((await stat(output)).mode & 0o777).toBe(0o600);
+    const files = readArchive(await readFile(output));
+    expect(JSON.parse(files.get("littlebox/project.json")!.toString()).manifest.visibility).toBe("private");
+    expect(JSON.parse(files.get("littlebox/package/manifest.json")!.toString())).toMatchObject({ version: 1, publishedRevision: 3, signupPolicy: { mode: "closed" } });
+    expect(new Uint8Array(files.get("littlebox/package/database.sqlite")!)).toEqual(database);
+    expect(files.has("littlebox/initial-database.sqlite")).toBe(false);
+    expect(calls).toEqual(["project_inspect", "package_export", "transfer_read", "transfer_cancel", "transfer_cancel"]);
+  } finally { await done(); }
+}, 30_000);
+
+for (const visibility of [undefined, "invalid"]) test(`export --with-data refuses a package with ${visibility ?? "no"} visibility`, async () => {
+  const { run, output, done } = await exportWith(visibility);
+  try {
+    await expect(run()).rejects.toThrow("no valid visibility");
+    await expect(stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally { await done(); }
+}, 30_000);
+
+test("export --with-data names export_data when the credential lacks it", async () => {
+  const { run, output, calls, done } = await exportWith("private", true);
+  try {
+    await expect(run()).rejects.toThrow("export_data");
+    await expect(stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(calls).toEqual(["project_inspect", "package_export"]);
+  } finally { await done(); }
 }, 30_000);

@@ -238,16 +238,17 @@ Create either shared tasks or private notes from the project dashboard. The note
 
 Use Data to choose the local or deployed database, edit the model, review a generated migration, create backups and restore them. Publishing the same project keeps its URL and database, and the republished app stops serving files that the new artifact no longer contains. Local and deployed model acceptance are tracked separately.
 
-Export project downloads a tar archive with source files, a built frontend, the Rust Kernel and startup scripts. For a published app it also includes the database, users and uploads. Imported users keep their password hashes, while sessions are cleared. The combined state limit is 16 MiB and each file is limited to 2 MiB. The archive documents two ways to run it: Docker, or native Cargo with Rust 1.91 or newer. Its `deploy.mjs` publishes the app as private unless the exported project manifest sets `visibility` to `"public"`.
+Export project downloads a tar archive with source files, a built frontend, the Rust Kernel and startup scripts. For a published app it also includes the database, users and uploads. Imported users keep their password hashes, while sessions are cleared. The editor still builds this archive in the browser in the small format, so its combined state limit is 16 MiB and each file is limited to 2 MiB; the CLI below has no such limit. The archive documents two ways to run it: Docker, or native Cargo with Rust 1.91 or newer. Its `deploy.mjs` publishes the app as private unless the exported project manifest sets `visibility` to `"public"`.
 
-External projects can export through the CLI too. A source-only kit needs no connection or credential. Add `--with-data` to include the published app's database, users and uploads through authenticated MCP.
+External projects can export through the CLI too. A source-only kit needs no connection or credential. Add `--with-data` to include the published app's database, users and uploads through authenticated MCP. That needs a credential with the `export_data` permission: `login --export-data` creates one, and the read, write and publish permissions do not include it.
 
 ```sh
 bun run littlebox -- export --dir /tmp/my-app --out /tmp/my-app-selfhost.tar
+LITTLEBOX_EMAIL=... LITTLEBOX_PASSWORD=... bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173 --export-data
 bun run littlebox -- export --dir /tmp/my-app --out /tmp/my-app-with-data.tar --with-data
 ```
 
-The command refuses to overwrite an archive and writes it with owner-only permissions. Live-state exports retain the deployed visibility and signup policy. The target installs that policy with its first deployment. Exports with live state contain password hashes and attachments; keep them private. Extracted snapshots have owner-only permissions and the kit's Git rules exclude them.
+`--with-data` downloads the app as a package: a manifest and one file each for the database, the accounts and the files, streamed in 64 KiB blocks, so an app at its 256 MiB database and 20 MiB file quotas exports whole. The kit's `deploy.mjs` uploads the package the same way and the target Kernel checks it before it creates the app. [The MCP guide](./docs/mcp.md#export-and-import-an-app) describes the format. The command refuses to overwrite an archive and writes it with owner-only permissions. Live-state exports retain the deployed visibility and signup policy. The target installs that policy with its first deployment. Exports with live state contain password hashes and attachments; keep them private. Extracted snapshots have owner-only permissions and the kit's Git rules exclude them.
 
 Eight runnable examples and their MCP replay are in [examples/product-fit](./examples/product-fit/README.md). The [product-fit assessment](./docs/research/product-fit.md) records tested workflows, remaining limits and the proposed next primitives.
 
