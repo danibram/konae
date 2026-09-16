@@ -38,7 +38,7 @@ import { AgentPanel } from "./components/AgentPanel";
 import { AgentSettingsModal } from "./components/AgentSettingsModal";
 import { useAgentThread } from "./components/useAgentThread";
 import { focusPanelTab, WorkbenchLayout, type PanelRender } from "./components/WorkbenchLayout";
-import { closePanel, isOpen, isVisible, loadLayout, openPanel, panelIds, resetLayout, saveLayout, stack, togglePanel, type LayoutState, type PanelId } from "./ui/layout";
+import { closePanel, isOpen, isVisible, loadLayout, movePanel, openPanel, panelIds, resetLayout, saveLayout, stack, togglePanel, type LayoutState, type PanelId } from "./ui/layout";
 import { inTextEntry, shortcutFor } from "./ui/shortcuts";
 import { DeployDialog } from "./components/DeployDialog";
 import { ExplorerTree } from "./components/ExplorerTree";
@@ -219,7 +219,12 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const gutterRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const keyStore = useMemo(() => createAgentKeyStore(localStorage, ownerSession.ownerId), [ownerSession.ownerId]);
-  const [layout, setLayout] = useState<LayoutState>(loadLayout);
+  // The file list lives inside Files now. A layout saved while it was a panel of its own drops it.
+  const [layout, setLayout] = useState<LayoutState>(() => {
+    const saved = loadLayout();
+    return isOpen(saved, "explorer") ? closePanel(saved, "explorer") : saved;
+  });
+  const [explorerOpen, setExplorerOpen] = useState(false);
   const [compact, setCompact] = useState(() => window.matchMedia("(max-width: 900px)").matches);
   const [compactPanel, setCompactPanel] = useState<PanelId>("preview");
 
@@ -269,7 +274,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     saveLayout(next);
   };
   const displayedLayout: LayoutState = compact
-    ? { root: stack(panelIds, panelIds.indexOf(compactPanel)), closed: [], focused: compactPanel }
+    ? { root: stack(workbenchPanels, workbenchPanels.indexOf(compactPanel)), closed: [], focused: compactPanel }
     : layout;
   const [previewFrame, setPreviewFrame] = useState<HTMLIFrameElement | null>(null);
   const hostRef = useRuntimeBridge(previewFrame, project.id, previewProject.files["schema.sql"], previewProject.files["actions.json"]);
@@ -362,7 +367,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       if (!action) return;
       event.preventDefault();
       if (action.kind === "run") {
-        runPreview();
+        runPreview({ show: true });
+        return;
+      }
+      if (action.panel === "explorer") {
+        toggleExplorer({ focus: true });
         return;
       }
       if (compact) {
@@ -480,7 +489,12 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     }));
   };
 
-  const runPreview = () => {
+  /**
+   * Rebuilds the preview. Run and its shortcut also bring the Preview forward,
+   * beside Files when Files is showing, so the person sees what the edit did.
+   * A failed build shows nothing new; the "Build failed" alert says why.
+   */
+  const runPreview = ({ show = false }: { show?: boolean } = {}) => {
     setOperationError("");
     void compileProjectInBrowser(project)
       .then((compiled) => {
@@ -489,6 +503,16 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           files: { ...project.files, "index.html": compiled.body, "styles.css": compiled.styles, "app.js": compiled.script },
         });
         setPreviewEpoch((value) => value + 1);
+        if (!show) return;
+        if (compact) {
+          setCompactPanel("preview");
+          return;
+        }
+        setLayout((current) => {
+          const next = withPreviewShowing(current);
+          saveLayout(next);
+          return next;
+        });
       })
       .catch((error) => setOperationError(`Build failed: ${error instanceof Error ? error.message : String(error)}`));
   };
@@ -827,6 +851,19 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     updateLayout(focusRunningApp(layout, panel));
   };
 
+  const filesShowing = compact ? compactPanel === "code" : isVisible(layout, "code");
+
+  /** The File list is part of Files: opening it shows Files, and it stays until closed. */
+  const toggleExplorer = ({ focus = false }: { focus?: boolean } = {}) => {
+    if (explorerOpen && filesShowing) {
+      setExplorerOpen(false);
+      return;
+    }
+    setExplorerOpen(true);
+    if (!filesShowing) reveal("code");
+    if (focus) requestAnimationFrame(() => document.getElementById("explorer-new-file")?.focus());
+  };
+
   const runtimeProblems = previewProblems.filter((problem) => problem.kind === "error" || problem.kind === "unhandledrejection").length;
   const schemaProblem = previewProblems.find((problem) => problem.kind === "schema");
 
@@ -871,45 +908,40 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   });
   const canEditSelection = Boolean(selectedPath) && !protectedProjectPaths.has(selectedPath);
 
-  const explorerPanel: PanelRender = {
-    id: "explorer",
-    title: project.slug,
-    icon: <FolderTree size={12} />,
-    body: (
-      <nav className="explorer-panel" aria-label="Project files">
-        <div className="explorer-heading">
-          <button aria-label="New file" title="New file" onClick={() => startNewEntry("file")}><FilePlus2 size={12} /></button>
-          <button aria-label="New folder" title="New folder" onClick={() => startNewEntry("folder")}><FolderPlus size={12} /></button>
-          <button aria-label="Rename selected path" title="Rename selected path" disabled={!canEditSelection} onClick={startRename}><Pencil size={12} /></button>
-          <button aria-label="Delete selected path" title="Delete selected path" disabled={!canEditSelection} onClick={() => setPendingDelete(selectedPath)}><Trash2 size={12} /></button>
-        </div>
-        {newEntry && <div className="explorer-create">
-          <label htmlFor="new-project-path">{newEntry === "file" ? "File path" : "Folder path"}</label>
-          <input id="new-project-path" autoFocus value={newEntryPath} aria-invalid={treeError ? true : undefined} aria-describedby={treeError ? "tree-error" : undefined} placeholder={newEntry === "file" ? "src/features/tasks.ts" : "src/features"} onChange={(event) => { setNewEntryPath(event.target.value); setTreeError(""); }} onKeyDown={(event) => { if (event.key === "Enter") addTreeEntry(); if (event.key === "Escape") setNewEntry(null); }} />
-          <button onClick={addTreeEntry}>Create</button>
-          <button onClick={() => setNewEntry(null)}>Cancel</button>
-          {treeError && <span id="tree-error" role="alert">{treeError}</span>}
-        </div>}
-        {renaming && <div className="explorer-create">
-          <label htmlFor="rename-project-path">New path for {selectedPath}</label>
-          <input id="rename-project-path" autoFocus value={renameValue} aria-invalid={treeError ? true : undefined} aria-describedby={treeError ? "tree-error" : undefined} onChange={(event) => { setRenameValue(event.target.value); setTreeError(""); }} onKeyDown={(event) => { if (event.key === "Enter") renameSelectedPath(); if (event.key === "Escape") setRenaming(false); }} />
-          <button onClick={renameSelectedPath}>Rename</button>
-          <button onClick={() => setRenaming(false)}>Cancel</button>
-          {treeError && <span id="tree-error" role="alert">{treeError}</span>}
-        </div>}
-        <ExplorerTree
-          files={explorerFiles}
-          directories={project.directories}
-          activeFile={activeFile}
-          selectedPath={selectedPath}
-          iconFor={(path) => fileMetaFor(path).icon}
-          noteFor={(path) => path === "actions.json" ? "returns at most 100" : path === "schema.ts" ? "model" : path === "schema.sql" ? "kernel runs this" : ""}
-          onSelect={setSelectedPath}
-          onOpenFile={(file) => { setActiveFile(file); setSelectedPath(file); reveal("code"); }}
-        />
-      </nav>
-    ),
-  };
+  const explorerNav = (
+    <nav className="explorer-panel" id="file-list" aria-label="Project files">
+      <div className="explorer-heading">
+        <button id="explorer-new-file" aria-label="New file" title="New file" onClick={() => startNewEntry("file")}><FilePlus2 size={12} /></button>
+        <button aria-label="New folder" title="New folder" onClick={() => startNewEntry("folder")}><FolderPlus size={12} /></button>
+        <button aria-label="Rename selected path" title="Rename selected path" disabled={!canEditSelection} onClick={startRename}><Pencil size={12} /></button>
+        <button aria-label="Delete selected path" title="Delete selected path" disabled={!canEditSelection} onClick={() => setPendingDelete(selectedPath)}><Trash2 size={12} /></button>
+      </div>
+      {newEntry && <div className="explorer-create">
+        <label htmlFor="new-project-path">{newEntry === "file" ? "File path" : "Folder path"}</label>
+        <input id="new-project-path" autoFocus value={newEntryPath} aria-invalid={treeError ? true : undefined} aria-describedby={treeError ? "tree-error" : undefined} placeholder={newEntry === "file" ? "src/features/tasks.ts" : "src/features"} onChange={(event) => { setNewEntryPath(event.target.value); setTreeError(""); }} onKeyDown={(event) => { if (event.key === "Enter") addTreeEntry(); if (event.key === "Escape") setNewEntry(null); }} />
+        <button onClick={addTreeEntry}>Create</button>
+        <button onClick={() => setNewEntry(null)}>Cancel</button>
+        {treeError && <span id="tree-error" role="alert">{treeError}</span>}
+      </div>}
+      {renaming && <div className="explorer-create">
+        <label htmlFor="rename-project-path">New path for {selectedPath}</label>
+        <input id="rename-project-path" autoFocus value={renameValue} aria-invalid={treeError ? true : undefined} aria-describedby={treeError ? "tree-error" : undefined} onChange={(event) => { setRenameValue(event.target.value); setTreeError(""); }} onKeyDown={(event) => { if (event.key === "Enter") renameSelectedPath(); if (event.key === "Escape") setRenaming(false); }} />
+        <button onClick={renameSelectedPath}>Rename</button>
+        <button onClick={() => setRenaming(false)}>Cancel</button>
+        {treeError && <span id="tree-error" role="alert">{treeError}</span>}
+      </div>}
+      <ExplorerTree
+        files={explorerFiles}
+        directories={project.directories}
+        activeFile={activeFile}
+        selectedPath={selectedPath}
+        iconFor={(path) => fileMetaFor(path).icon}
+        noteFor={(path) => path === "actions.json" ? "returns at most 100" : path === "schema.ts" ? "model" : path === "schema.sql" ? "kernel runs this" : ""}
+        onSelect={setSelectedPath}
+        onOpenFile={(file) => { setActiveFile(file); setSelectedPath(file); }}
+      />
+    </nav>
+  );
 
   const codePanel: PanelRender = {
     id: "code",
@@ -921,55 +953,67 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           {explorerFiles.map((file) => <option key={file} value={file}>{file}</option>)}
         </select>
         <span className="panel-meta">{activeFile === "actions.json" ? `${listedActions(activeSource)} actions.` : `${activeMeta.language} · ${lines} lines`}</span>
-        <button className="active" onClick={runPreview}><Play size={11} fill="currentColor" /> {activeFile === "schema.sql" || activeFile === "actions.json" ? "Check" : "Run"}</button>
+        <button
+          className={`file-list-toggle ${explorerOpen ? "is-open" : ""}`}
+          aria-expanded={explorerOpen}
+          aria-controls={explorerOpen ? "file-list" : undefined}
+          title="Show the project's files, with New file and New folder (Ctrl+B or Cmd+B)"
+          onClick={() => toggleExplorer()}
+        >
+          <FolderTree size={11} /> File list
+        </button>
+        <button className="active" onClick={() => runPreview({ show: true })}><Play size={11} fill="currentColor" /> {activeFile === "schema.sql" || activeFile === "actions.json" ? "Check" : "Run"}</button>
       </>
     ),
     body: (
-      <div className="code-panel">
-        {compact && explorerFiles.length > 4 && (
-          <ul className="compact-file-list" aria-label="Project files">
-            {explorerFiles.map((file) => (
-              <li key={file}>
-                <button
-                  type="button"
-                  className={file === activeFile ? "active" : undefined}
-                  aria-current={file === activeFile ? "page" : undefined}
-                  onClick={() => { setActiveFile(file); setSelectedPath(file); }}
-                >
-                  {file}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        {activeFile === "actions.json" && <ActionReadout source={activeSource} />}
-        <div className="code-area">
-          <div className="line-numbers" aria-hidden="true" ref={gutterRef}>
-            {Array.from({ length: lines }, (_, index) => <span key={index}>{index + 1}</span>)}
+      <div className={`code-workspace ${explorerOpen ? "has-file-list" : ""}`}>
+        {explorerOpen && explorerNav}
+        <div className="code-panel">
+          {compact && explorerFiles.length > 4 && (
+            <ul className="compact-file-list" aria-label="Project files">
+              {explorerFiles.map((file) => (
+                <li key={file}>
+                  <button
+                    type="button"
+                    className={file === activeFile ? "active" : undefined}
+                    aria-current={file === activeFile ? "page" : undefined}
+                    onClick={() => { setActiveFile(file); setSelectedPath(file); }}
+                  >
+                    {file}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {activeFile === "actions.json" && <ActionReadout source={activeSource} />}
+          <div className="code-area">
+            <div className="line-numbers" aria-hidden="true" ref={gutterRef}>
+              {Array.from({ length: lines }, (_, index) => <span key={index}>{index + 1}</span>)}
+            </div>
+            <textarea
+              ref={editorRef}
+              value={activeSource}
+              onChange={(event) => updateFile(event.target.value)}
+              onKeyDown={indentWithTab}
+              aria-describedby="code-editor-keys"
+              // The textarea is the only scroller; the gutter is dragged along by
+              // hand, or every number is wrong from the first scroll onwards.
+              onScroll={(event) => {
+                if (gutterRef.current) gutterRef.current.scrollTop = event.currentTarget.scrollTop;
+              }}
+              spellCheck={false}
+              aria-label={`${activeFile} code editor`}
+            />
           </div>
-          <textarea
-            ref={editorRef}
-            value={activeSource}
-            onChange={(event) => updateFile(event.target.value)}
-            onKeyDown={indentWithTab}
-            aria-describedby="code-editor-keys"
-            // The textarea is the only scroller; the gutter is dragged along by
-            // hand, or every number is wrong from the first scroll onwards.
-            onScroll={(event) => {
-              if (gutterRef.current) gutterRef.current.scrollTop = event.currentTarget.scrollTop;
-            }}
-            spellCheck={false}
-            aria-label={`${activeFile} code editor`}
-          />
+          <p id="code-editor-keys" className="editor-keys">Tab inserts two spaces. Press Escape, then Tab, to leave the editor.</p>
+          {(runtimeProblems > 0 || schemaProblem) && (
+            <footer className="editor-status">
+              <span className={schemaProblem ? "is-failing" : ""} title={schemaProblem?.message}>
+                <Wifi size={12} /> {schemaProblem ? "schema.sql failed" : `${runtimeProblems} preview error${runtimeProblems === 1 ? "" : "s"}`}
+              </span>
+            </footer>
+          )}
         </div>
-        <p id="code-editor-keys" className="editor-keys">Tab inserts two spaces. Press Escape, then Tab, to leave the editor.</p>
-        {(runtimeProblems > 0 || schemaProblem) && (
-          <footer className="editor-status">
-            <span className={schemaProblem ? "is-failing" : ""} title={schemaProblem?.message}>
-              <Wifi size={12} /> {schemaProblem ? "schema.sql failed" : `${runtimeProblems} preview error${runtimeProblems === 1 ? "" : "s"}`}
-            </span>
-          </footer>
-        )}
       </div>
     ),
   };
@@ -989,7 +1033,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           onDatabaseModelAccepted={acceptDatabaseModel}
           onDatabaseModelRestored={acceptDatabaseModel}
           onExportDatabase={() => void exportDatabase()}
-          onFilesChanged={runPreview}
+          onFilesChanged={() => runPreview()}
           deployedDatabase={deployedDatabase}
           databaseTarget={databaseTarget}
           deployedLabel={activeDeployment?.url.replace(/^https?:\/\//, "")}
@@ -1011,7 +1055,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       <>
         <button className={viewport === "desktop" ? "active" : ""} title="Desktop" aria-label="Desktop preview" aria-pressed={viewport === "desktop"} onClick={() => setViewport("desktop")}><Laptop size={12} /></button>
         <button className={viewport === "mobile" ? "active" : ""} title="Mobile" aria-label="Mobile preview" aria-pressed={viewport === "mobile"} onClick={() => setViewport("mobile")}><Smartphone size={12} /></button>
-        <button title="Reload preview" aria-label="Reload preview" onClick={runPreview}><RefreshCw size={11} /></button>
+        <button title="Reload preview" aria-label="Reload preview" onClick={() => runPreview()}><RefreshCw size={11} /></button>
       </>
     ),
     body: (
@@ -1021,7 +1065,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             <header>
               <CircleAlert size={13} />
               <strong>{previewProblems.length} problem{previewProblems.length === 1 ? "" : "s"} in the preview</strong>
-              <button onClick={runPreview}><RefreshCw size={11} /> Rerun</button>
+              <button onClick={() => runPreview()}><RefreshCw size={11} /> Rerun</button>
             </header>
             <ul>
               {previewProblems.slice(0, 4).map((problem, index) => (
@@ -1137,7 +1181,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         ))}
       </nav>
 
-      <WorkbenchLayout layout={displayedLayout} compact={compact} onLayoutChange={updateLayout} panels={[explorerPanel, codePanel, capabilityPanel("data", "Data", <Database size={11} />), capabilityPanel("files", "Uploads", <FolderOpen size={11} />), capabilityPanel("auth", "Auth", <UserRound size={11} />), previewPanel, agentPanel]} />
+      <WorkbenchLayout layout={displayedLayout} compact={compact} onLayoutChange={updateLayout} panels={[codePanel, capabilityPanel("data", "Data", <Database size={11} />), capabilityPanel("files", "Uploads", <FolderOpen size={11} />), capabilityPanel("auth", "Auth", <UserRound size={11} />), previewPanel, agentPanel]} />
 
       <AgentSettingsModal
         open={settingsOpen}
@@ -1186,6 +1230,18 @@ const problemLabels: Record<string, string> = {
   error: "Runtime error",
   unhandledrejection: "Unhandled rejection",
 };
+
+/** Panels the workbench lays out. The File list is drawn inside Files instead. */
+const workbenchPanels: PanelId[] = panelIds.filter((id) => id !== "explorer");
+
+/** Preview in view: beside Files when Files is showing, otherwise brought forward where it is. */
+function withPreviewShowing(current: LayoutState): LayoutState {
+  if (isVisible(current, "preview")) return current;
+  if (!isOpen(current, "preview") && isVisible(current, "code")) {
+    return movePanel(current, "preview", { target: "code", zone: "right" });
+  }
+  return openPanel(current, "preview");
+}
 
 function focusRunningApp(current: LayoutState, target: PanelId): LayoutState {
   let next = current;

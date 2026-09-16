@@ -182,6 +182,13 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .section-nav-spacer { flex: 1; }
 
 /* Panel bodies that a workbench group hosts. */
+/* Files: the File list sits to the left of the editor and stays while the person works here. */
+.code-workspace { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); overflow: hidden; }
+.code-workspace.has-file-list { grid-template-columns: minmax(170px, 240px) minmax(0, 1fr); }
+.code-workspace > .explorer-panel { min-width: 0; min-height: 0; overflow: auto; border-right: 1px solid var(--line); }
+.is-compact .code-workspace.has-file-list { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 40%) minmax(0, 1fr); }
+.is-compact .code-workspace > .explorer-panel { border-right: 0; border-bottom: 1px solid var(--line); }
+.group-actions button.file-list-toggle.is-open { border-color: var(--line); background: var(--paper-2); }
 .code-panel { min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); background: #24251f; }
 .code-panel:has(.editor-status) { grid-template-rows: minmax(0, 1fr) auto; }
 .code-panel:has(.action-readout-block) { grid-template-rows: auto minmax(0, 1fr); }
@@ -1089,6 +1096,7 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .workshop .preview-panel-body > .preview-canvas iframe { min-height: 0; height: 100%; }
 .workshop.is-compact .group-actions button[title="Desktop"],
 .workshop.is-compact .group-actions button[title="Mobile"] { display: none; }
+.workshop .group-page:not([hidden]) > .code-workspace,
 .workshop .group-page:not([hidden]) > .cap-workspace,
 .workshop .group-page:not([hidden]) > .database-studio,
 .workshop .group-page:not([hidden]) > .capability-loading {
