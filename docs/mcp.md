@@ -11,7 +11,7 @@ bun run dev:local
 
 Open the editor and go to **Platform access**. The direct link is `http://localhost:4173/_littlebox/owner/login`. To create the first owner, enter an email, a password and the installation key. In the default local environment that key is `local-development-key`; `LITTLEBOX_ADMIN_KEY` sets it. The first account claims the Deployments from the earlier prototype. Every later creator enters an invitation code instead, described under [creator admission](#creator-admission).
 
-Each owner administers their own projects. The page creates read-only or read, edit and publish tokens, optionally limited to specific projects, and lists and revokes active credentials. A token's secret appears only once. Tokens from this page expire after 24 hours; `token_create` accepts any subset of `read`, `write` and `publish` and a lifetime of up to 30 days.
+Each owner administers their own projects. The page creates read-only or read, edit and publish tokens, optionally limited to specific projects, and lists and revokes active credentials. A token's secret appears only once. Tokens from this page expire after 24 hours; `token_create` accepts any subset of `read`, `write`, `publish` and `manage_users` and a lifetime of up to 30 days. OAuth clients may request the same four scopes.
 
 The installation key does not authenticate MCP tools and is not included in the editor bundle. The server listens on `127.0.0.1` by default. The Kernel refuses to start on a non-loopback address, or with a `LITTLEBOX_PUBLIC_ORIGIN` whose host is not `localhost`, a `*.localhost` name or a loopback IP, while the installation key is unset or still `local-development-key`, unless `LITTLEBOX_ALLOW_DEFAULT_KEY=1`. For a remote installation, configure the installation key, the HTTPS origin and the proxy before listening on another interface.
 
@@ -40,24 +40,47 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | Signup policy | `signup_policy_read`, `signup_policy_set` |
 | Signing secrets | `secrets_list`, `secret_set`, `secret_delete` |
 | API keys | `api_keys_list`, `api_keys_create`, `api_keys_revoke` |
+| App users and invitations | `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_invitations_create`, `app_invitations_list`, `app_invitation_resend`, `app_invitation_revoke` |
 | Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
 | Credentials from the owner session | `tokens_list`, `token_create`, `token_revoke` |
 | App runtime | `auth_session`, `auth_logout`, `actions_invoke`, `files_list`, `files_upload`, `files_read` and transfers |
 | App accounts, also before sign-in | `auth_signup`, `auth_verify`, `auth_recover`, `auth_reset` |
 
-The catalog depends on the credentials. The Kernel checks the permission again on execution. A token limited to projects cannot create other projects. For `schema_plan`, that token must pass a `projectId` it has access to. Reading the signup policy needs the `read` scope; changing it needs the `publish` scope. The same holds for listing and changing signing secrets and API keys.
+The catalog depends on the credentials. The Kernel checks the permission again on execution. A token limited to projects cannot create other projects. For `schema_plan`, that token must pass a `projectId` it has access to. Reading the signup policy needs the `read` scope. Changing it, and every `app_users_*` and `app_invitation*` tool, needs `manage_users`. The owner's browser session holds it. A delegated token holds it only when it was created with it, so tokens issued before this permission existed do not gain it. `read` alone never lists accounts or invitations.
+
+This changes the contract. `signup_policy_set` needed `publish` before `manage_users` existed, so a client that changed the policy with a `read`, `write` and `publish` token now gets "Unknown tool" and needs a new token that includes `manage_users`. `bun run littlebox -- dev` asks for one.
+
+Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`.
 
 `project_create` returns a template and an External identity by default. Later sources stay in the user's folder; `project_inspect` returns metadata and the Deployment, without claiming to synchronize that code with the editor.
 
 ## Signup policy
 
-Each Deployment has a signup policy that decides who may create an app account:
+Each Deployment has a signup policy that decides who may create an app account. `signup_policy_set` takes its `mode`:
 
-- Open: anyone can create an account.
-- Allowlist: only exact emails or `@domain` entries can create an account, up to 100 entries. A domain entry matches that exact domain, not its subdomains.
-- Closed: no new accounts.
+- `open`: anyone can create an account.
+- `invitation`: nobody can sign up; an invited person creates the account from the invitation link.
+- `closed`: no new accounts, and no invitation can be accepted.
+- `allowlist`: only exact emails or `@domain` entries can create an account, up to 100 entries. A domain entry matches that exact domain, not its subdomains. Entering an address sends no invitation.
 
-Public Deployments start Open. Private Deployments start Closed, so the owner decides who may join before anyone can sign in. A Deployment record written before signup policies existed gets the same default from its visibility. Republishing keeps the current policy, except that republishing a public app as private turns Open into Closed. The owner changes it in the editor's Auth panel or with the admin MCP tools above. A tighter policy blocks new accounts only; existing accounts can still sign in. A refused signup gets the same answer whether signup is closed or the address is not listed.
+Public Deployments start Open. Private Deployments start Closed, so the owner decides who may join before anyone can sign in. A Deployment record written before signup policies existed gets the same default from its visibility. A first release may set any mode in `initialSignupPolicy`, with the `publish` permission, and the Kernel installs it before serving the first request; an agent publishing an app whose access the request leaves open proposes private and `invitation`. Republishing keeps the current policy, except that republishing a public app as private turns Open into Closed; `initialSignupPolicy` on a republish answers "Portable state can only be imported on the first deployment." Changing an existing app's policy needs `manage_users`, through `signup_policy_set`, so no publish credential changes who may join. The owner changes it in the editor's Auth panel or with the admin MCP tools above.
+
+## Users and invitations
+
+All of these tools take a `deploymentId`, check `manage_users` and the token's project grants, and write an audit row naming the Deployment.
+
+| Tool | Arguments | Result |
+| --- | --- | --- |
+| `app_users_list` | `limit` (1 to 100, default 50), `cursor`, `state` | `{ users: [{ userId, email, state, verified, verifiedAt, createdAt }], nextCursor }`, ordered by email. |
+| `app_user_suspend`, `app_user_resume` | `userId` | `{ userId, email, state }`. Suspension ends sessions and open links and keeps ID, password and rows. Resume returns `active` if the account ever verified, otherwise `pending`. |
+| `app_invitations_create` | `emails` (1 to 50), `idempotencyKey` (8 to 128 characters) | `{ policy, results: [...] }` with one result per distinct address: `invited` with `invitationId`, `expiresAt`, `acceptable` and `delivery`; `already-invited` with the pending `invitationId`; `already-member`; `suspended`; or `invalid-email`. |
+| `app_invitations_list` | `limit`, `cursor` | `{ invitations: [{ invitationId, email, status, invitedBy, createdAt, expiresAt, acceptedAt, revokedAt, delivery, sends }], nextCursor }`, newest first. |
+| `app_invitation_resend` | `invitationId`, `idempotencyKey` | A new seven-day link for a pending invitation; the earlier link stops working. Refused for an accepted or revoked invitation, an active account or a suspended one. |
+| `app_invitation_revoke` | `invitationId` | Ends a pending invitation. Revoking twice answers the same; an accepted invitation is refused. |
+
+Inviting sends email, so an agent calls `app_invitations_create` only when the owner asked for those invitations. Without a mail transport the call refuses before creating anything. A retry with the same `idempotencyKey` from the same owner returns the first answer and creates and sends nothing; the same key with other arguments is refused. Answers are kept seven days. `acceptable` is false when the current policy would refuse the acceptance: Closed, or an Allowlist without that address.
+
+`status` is `pending`, `expired`, `needs-resend`, `already-member`, `accepted` or `revoked`. `needs-resend` means the link is gone because the invitation came with a copy or its account was suspended. `already-member` means the address became an active account another way, such as signing up while the app was Open. `delivery` is `queued` when the mail transport took the message, `failed` when it refused it, and `not-sent` when no message left this installation. `queued` says nothing about the recipient's inbox; delivery states come with the mail queue. A tighter policy blocks new accounts only; existing accounts can still sign in. A refused signup gets the same answer whether signup is closed or the address is not listed.
 
 In local mode Littlebox does not verify email addresses, so whoever signs up first with a listed address or an address in a listed domain gets that account. Use Closed for apps that hold private data, or require verification.
 
@@ -67,7 +90,7 @@ In local mode Littlebox does not verify email addresses, so whoever signs up fir
 
 An account is `pending`, `active` or `suspended`. Only `active` accounts get a session, and every runtime and administrative check reads the state: the app session, the owner session, a delegated MCP credential and the OAuth code exchange. Suspending an account deletes its sessions and open links and keeps its ID, password and rows.
 
-A challenge has a purpose, `verification`, `recovery` or `invitation`, and a scope, `creator` or one Deployment. The Kernel stores only its SHA-256 hash. A token works once, expires (verification after 24 hours, recovery after 30 minutes), and does nothing for another purpose, on another Deployment or on the creator scope. A new link for the same purpose replaces the earlier one. Invitations reuse this model in a later delivery; no route accepts an invitation token yet.
+A challenge has a purpose, `verification`, `recovery` or `invitation`, and a scope, `creator` or one Deployment. The Kernel stores only its SHA-256 hash. A token works once, expires (verification after 24 hours, invitation after seven days, recovery after 30 minutes), and does nothing for another purpose, on another Deployment or on the creator scope. A new link for the same purpose replaces the earlier one.
 
 In required mode the signup request carries only an email. The password is chosen on the page the link opens, so a password typed by whoever registered the address first never survives verification. Signing up again with a pending email keeps the account ID and sends a fresh link. Links put the token in the URL fragment, `#verification=` or `#recovery=`, so it reaches neither server logs nor a Referer. Opening a link with GET returns the form and changes nothing; the form posts the token with the new password.
 
@@ -78,12 +101,15 @@ In required mode the signup request carries only an email. The password is chose
 | `POST /_littlebox/auth/recover` | app | `{ "email" }` | 202, the same answer whether or not the account exists. Active accounts get a recovery link, pending ones a new verification link, suspended and unknown ones nothing. |
 | `POST /_littlebox/auth/reset` | app | `{ "token", "password" }` | 200 with a new session; every earlier session of the account ends. |
 | `GET /_littlebox/account` | app | | The page links open. Without a token it offers recovery. |
+| `GET /_littlebox/invitation` | app | | The page an invitation link opens, `#invitation=<token>`. It changes nothing. |
+| `POST /_littlebox/auth/invitation` | app | `{ "token" }` | 200 `{ "result": { "email", "app", "status" } }` with `status` `new-account`, `existing-account` or `signup-closed`. Reads only; the page shows the email read-only from it. |
+| `POST /_littlebox/auth/accept` | app | `{ "token", "password" }` | 200 with the app session cookie. One transaction consumes the token, rechecks the current policy and the account's state, sets the password, activates the account and marks the invitation accepted. 403 under Closed or an Allowlist without the address, and for a suspended account; 409 for an active account, which must sign in. Every refusal keeps the token usable. |
 | `POST /_littlebox/owner/signup` | editor | `{ "email", "code", "returnTo"? }`, or `"setupKey"` for the first owner | 202 in required mode, after the code or key is consumed. See [creator admission](#creator-admission). |
 | `POST /_littlebox/owner/verify`, `/_littlebox/owner/reset`, `/_littlebox/owner/recover` | editor | as above | The creator scope; links open `/_littlebox/owner/login`. |
 
-A used, expired, foreign or wrong-purpose token answers 410. A pending account that signs in with a correct legacy password, or a suspended one, answers 403. A weak password answers 400 before the token is read. Without a mail transport, signup and recovery answer 503. The creator routes are unavailable when the optional hosted identity adapter is configured.
+A used, expired, replaced, revoked, foreign or wrong-purpose token answers 410. A pending account that signs in with a correct legacy password, or a suspended one, answers 403. A weak password answers 400 before the token is read. Without a mail transport, signup and recovery answer 503. The creator routes are unavailable when the optional hosted identity adapter is configured.
 
-The runtime MCP tools `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset` run the same flows for the app on the request's host. A signed-out visitor may call them on public and private apps; on a private app they are the only tools a signed-out caller reaches, and `tools/list` and every other call still answer 401. In local mode `auth_signup` also takes `password` and signs in at once. A tool that signs someone in sets the session cookie on the response and never returns a token. A full copy drops sessions and challenges; an import deletes any it finds.
+The runtime MCP tools `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset` run the same flows for the app on the request's host. A signed-out visitor may call them on public and private apps; on a private app they are the only tools a signed-out caller reaches, and `tools/list` and every other call still answer 401. In local mode `auth_signup` also takes `password` and signs in at once. A tool that signs someone in sets the session cookie on the response and never returns a token. A full copy drops sessions and challenges and clears the invitations' token hashes; an import does the same to what it finds. Invitation history and pending recipients travel, and a pending invitation needs a resend at the destination.
 
 ## Creator admission
 
@@ -266,7 +292,7 @@ A release's `schema.sql` may only create tables and indexes, and must be safe to
 
 `/oauth/register` accepts 10 registrations per client address per hour; IPv6 clients share one bucket per /48. It holds at most 1000 clients that have not reached consent, and at that cap a new registration replaces the oldest of them. Unconsented clients expire after one hour. A client that reached consent expires after 30 days without a new token once it holds no live credential.
 
-The audit log in `mcp.sqlite` records each owner tool call with its project or Deployment. `release_apply` records the project and the Deployment it produced, and `signup_policy_set` records the old and new mode. `secret_set` records the project, never the value.
+The audit log in `mcp.sqlite` records each owner tool call with its project or Deployment. `release_apply` records the project and the Deployment it produced, and `signup_policy_set` records the old and new mode. `secret_set` records the project, never the value. The user and invitation tools record the Deployment; no audit row holds an email or a token.
 
 `transfer_status` lets a client resume an upload from the last offset. Cancel transfers you no longer need. The SDK checks the checksum of downloads and releases its temporary transfers.
 
@@ -276,7 +302,7 @@ The official SDK checks connection, listing and MCP calls, as well as the OAuth 
 
 The self-hosted export includes the Kernel, its MCP and OAuth modules, and a deploy script that uses authenticated MCP. The platform image includes Bun and the Drizzle tooling. The minimal self-hosted kit supports administrative SQL and migrations supplied by its owner; it does not include the tool that derives Drizzle models.
 
-`project_export` includes `initialSignupPolicy` with `{ "mode": "open" | "allowlist" | "closed", "allowlist": [...] }` alongside the portable database, accounts and files. It captures `visibility` under the same project lock, so exporters use the snapshot's visibility even if an earlier project inspection or editor copy differs. A release may import that policy only on its first Deployment. The Kernel validates and installs the policy before serving that Deployment, so a public app exported with Closed signup never opens registration during import. Republishing cannot override the policy through initial state. Older exports without these fields use the inspected Deployment's visibility or the editor's current project and the normal signup defaults.
+`project_export` includes `initialSignupPolicy` with `{ "mode": "open" | "invitation" | "closed" | "allowlist", "allowlist": [...] }` alongside the portable database, accounts and files. It captures `visibility` under the same project lock, so exporters use the snapshot's visibility even if an earlier project inspection or editor copy differs. A release may import that policy only on its first Deployment. The Kernel validates and installs the policy before serving that Deployment, so a public app exported with Closed signup never opens registration during import. Republishing cannot override the policy through initial state. Older exports without these fields use the inspected Deployment's visibility or the editor's current project and the normal signup defaults.
 
 The editor preview still stores its test data in the browser, including uploads, which it keeps as data URLs in local storage. It uses MCP over a MessageChannel with an ephemeral preview credential. The registry of published projects and the credentials live in the Kernel.
 

@@ -17,7 +17,7 @@ There is nothing else: no fetch to other origins, no localStorage contract, no m
 
 Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.
 Visibility decides who may open the app shell. It never grants data access on its own.
-The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account.
+The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_littlebox/invitation.
 
 miniapp.auth.session(): Read the signed-in Runtime Actor, or the anonymous state so the app can show a sign-in button. Returns { userId, name, role }. Signed in, name is the account email and role is "member" or "owner". Signed out, { userId: "anonymous", name: "Anonymous", role: "anonymous" }.
 Editor preview: Returns Alice or Bob, the preview's test accounts, with role "member", or the anonymous state.

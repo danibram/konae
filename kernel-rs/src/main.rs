@@ -30,6 +30,7 @@ mod auth;
 mod clerk;
 mod copies;
 mod http;
+mod invitations;
 mod limits;
 mod mcp;
 mod oauth;
@@ -122,6 +123,8 @@ impl From<DeploymentRecord> for Deployment {
 enum SignupMode {
     #[default]
     Open,
+    /// No signup without an invitation from the owner. See `invitations.rs`.
+    Invitation,
     Allowlist,
     Closed,
 }
@@ -208,7 +211,7 @@ impl SignupPolicy {
     fn allows(&self, email: &str) -> bool {
         match self.mode {
             SignupMode::Open => true,
-            SignupMode::Closed => false,
+            SignupMode::Invitation | SignupMode::Closed => false,
             SignupMode::Allowlist => {
                 let Ok(email) = auth::normalize_email(email) else {
                     return false;
@@ -356,6 +359,7 @@ async fn main() -> Result<()> {
         .merge(oauth::routes())
         .merge(accounts::routes())
         .merge(http::routes())
+        .merge(invitations::routes())
         .route("/_littlebox/{*path}", axum::routing::any(|| async { error(StatusCode::GONE, "Use authenticated MCP for platform operations.") }))
         .route("/{*path}", get(http::get_route).post(http::post_route))
         .route("/", get(serve_root))
@@ -1379,6 +1383,10 @@ fn private_login_page(policy: &SignupPolicy, verification: auth::Verification) -
             "Only invited email addresses can create an account.",
             true,
         ),
+        SignupMode::Invitation => (
+            "Only invited people can create an account. Open the link in your invitation email.",
+            false,
+        ),
         SignupMode::Closed => (
             "This app is not accepting new accounts. Sign in with an existing account.",
             false,
@@ -1495,6 +1503,7 @@ async fn portable_state(state: &AppState, deployment: &Deployment) -> Result<Val
         let connection = Connection::open(&identity_source)?;
         connection.execute("DELETE FROM app_sessions", [])?;
         connection.execute("DELETE FROM account_challenges", [])?;
+        invitations::forget_tokens(&connection)?;
         connection.execute(
             "VACUUM INTO ?1",
             [identity_sanitized.to_string_lossy().as_ref()],
@@ -2504,6 +2513,7 @@ fn initialize_identity_from_base64(path: &Path, encoded: &str, maximum_bytes: us
     connection.execute("DELETE FROM app_sessions", [])?;
     connection.execute("DELETE FROM account_challenges", [])?;
     http::revoke_imported_keys(&connection)?;
+    invitations::forget_tokens(&connection)?;
     Ok(())
 }
 
@@ -2904,7 +2914,7 @@ fn bounded_rows(rows: impl Iterator<Item = rusqlite::Result<Value>>) -> Result<V
 fn auth_error(error_value: AuthError) -> Response {
     let status = match error_value {
         AuthError::InvalidEmail | AuthError::WeakPassword => StatusCode::BAD_REQUEST,
-        AuthError::EmailTaken => StatusCode::CONFLICT,
+        AuthError::EmailTaken | AuthError::AccountExists => StatusCode::CONFLICT,
         AuthError::InvalidCredentials => StatusCode::UNAUTHORIZED,
         AuthError::AccountPending
         | AuthError::AccountSuspended
@@ -3284,6 +3294,8 @@ mod tests {
         assert!(open.allows("anyone@example.test"));
         let closed = SignupPolicy::from_input(SignupMode::Closed, &[]).unwrap();
         assert!(!closed.allows("anyone@example.test"));
+        let invitation: SignupPolicy = serde_json::from_value(json!({"mode": "invitation"})).unwrap();
+        assert!(!invitation.allows("anyone@example.test"), "Invitation only refuses every plain signup");
         let list = SignupPolicy::from_input(
             SignupMode::Allowlist,
             &[" Carol@Example.TEST ".into(), "@Team.Example".into(), "carol@example.test".into()],
@@ -3381,6 +3393,10 @@ mod tests {
         let html = page(state.clone()).await;
         assert!(html.contains("/_littlebox/auth/signup"));
         assert!(html.contains("Only invited email addresses"));
+        set_policy(&state, SignupMode::Invitation, &[]).await;
+        let html = page(state.clone()).await;
+        assert!(!html.contains("/_littlebox/auth/signup"));
+        assert!(html.contains("Only invited people can create an account"));
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

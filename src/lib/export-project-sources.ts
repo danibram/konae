@@ -4,6 +4,7 @@ import kernelOwnerPage from "../../kernel-rs/src/owner-login.html?raw";
 import kernelAuthSource from "../../kernel-rs/src/auth.rs?raw";
 import kernelAccountsSource from "../../kernel-rs/src/accounts.rs?raw";
 import kernelAdmissionSource from "../../kernel-rs/src/admission.rs?raw";
+import kernelInvitationsSource from "../../kernel-rs/src/invitations.rs?raw";
 import kernelClerkSource from "../../kernel-rs/src/clerk.rs?raw";
 import kernelCopiesSource from "../../kernel-rs/src/copies.rs?raw";
 import kernelLimitsSource from "../../kernel-rs/src/limits.rs?raw";
@@ -26,6 +27,7 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/auth.rs", contents: kernelAuthSource },
   { path: "kernel-rs/src/accounts.rs", contents: kernelAccountsSource },
   { path: "kernel-rs/src/admission.rs", contents: kernelAdmissionSource },
+  { path: "kernel-rs/src/invitations.rs", contents: kernelInvitationsSource },
   { path: "kernel-rs/src/clerk.rs", contents: kernelClerkSource },
   { path: "kernel-rs/src/copies.rs", contents: kernelCopiesSource },
   { path: "kernel-rs/src/limits.rs", contents: kernelLimitsSource },

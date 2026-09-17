@@ -27,8 +27,14 @@ export async function deployProject(project: MiniAppProject, visibility: Deploym
   }
 }
 
-/** Who may create an account on a deployed app. `allowlist` holds exact emails and `@domain` entries. */
-export type SignupMode = "open" | "allowlist" | "closed";
+/**
+ * Who may create an account on a deployed app, in the order the editor offers
+ * them. `invitation` admits only people the owner invited; `allowlist` holds
+ * exact emails and `@domain` entries. The Kernel's `signup_policy_set` accepts
+ * exactly these modes, and tests/mcp.integration.test.ts checks that.
+ */
+export const signupModes = ["open", "invitation", "closed", "allowlist"] as const;
+export type SignupMode = (typeof signupModes)[number];
 export type SignupPolicy = { deploymentId: string; visibility: DeploymentVisibility; mode: SignupMode; allowlist: string[] };
 
 export function readSignupPolicy(deploymentId: string) {

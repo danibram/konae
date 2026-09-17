@@ -10,7 +10,7 @@
     "dev:stack": "docker compose up --build",
     "build": "tsc -b && vite build --config vite.config.ts",
     "preview": "vite preview",
-    "test": "bun test",
+    "test": "bun test --timeout 30000",
     "test:e2e": "playwright test",
     "test:e2e:minio": "playwright test --config playwright.minio.config.ts",
     "test:e2e:local": "playwright test --config playwright.local.config.ts",

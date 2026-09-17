@@ -50,3 +50,13 @@ Files gain one HTTP read path, `GET /_littlebox/files/<id>`, that accepts the se
 The signing secret is set by the owner through the Admin Interface and belongs to the Project, not to the Deployment, because a first publish must find it before the Deployment exists. It never enters `actions.json`, the Build Artifact or a portable export. Keys travel with the identity file in an export, hashes included, and the import revokes them, as it deletes sessions and challenges. The owner issues new keys on the destination.
 
 Considered and rejected: letting visibility gate routes too, which would make a private app unable to receive a webhook; allowing `http` on `authenticated` actions with a cookie, which would put a person's rows behind a URL that cross-site requests can reach; storing secrets in the Deployment folder, which leaves the first publish with nowhere to look.
+
+## Note, 2026-11-06: invitations answer through the same challenge
+
+Delivery E plugs app invitations into this model rather than beside it. An invitation is an `invitation` challenge on a pending account, and `complete_challenge_with` in `auth.rs` answers it with the step verification and recovery use: consume the token, set the password, activate, issue the session. The policy check and the state check run inside that transaction. An active account is refused with "sign in instead", so an invitation never replaces a password, and a suspended one stays suspended. Inviting a new email creates the pending account at once, as signup in required mode does, so two answers to one link race on one row and one consumption.
+
+The history lives in `app_invitations` beside the accounts, in `kernel-rs/src/invitations.rs`. Keeping the secret in `account_challenges` means the rule "a copy drops every challenge" already keeps links off other machines; the export and the import also clear the rows' token hashes, and a pending invitation shows `needs-resend` at the destination.
+
+The admin tools that list accounts, suspend them, invite and change the signup policy need a new permission, `manage_users`. The owner's session holds it; delegated tokens hold it only when issued with it. `signup_policy_set` moved from `publish` to `manage_users`, so a publish credential can name the policy of a first release and cannot change who may join an existing app.
+
+We considered letting `release_plan` change an existing app's policy when the credential holds `manage_users`. We kept one path for changes, `signup_policy_set`, because a republish that silently carries a policy is how a publish-only agent would widen access, and a second path is a second place to get that check wrong.

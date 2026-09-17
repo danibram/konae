@@ -1,4 +1,0 @@
-[test]
-# Integration suites compile and start the Kernel in beforeAll and the first
-# test waits on it. Under build load that takes longer than Bun's 5 s default.
-timeout = 30000

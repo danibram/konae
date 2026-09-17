@@ -280,7 +280,7 @@ struct RecoveryRequest {
 }
 
 /// Reads a small JSON body after the origin check and the rate limit.
-async fn read_body<T: serde::de::DeserializeOwned>(
+pub(crate) async fn read_body<T: serde::de::DeserializeOwned>(
     state: &AppState,
     request: Request,
     scope: &str,
