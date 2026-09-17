@@ -134,12 +134,15 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   await app.goto(new URL("/_littlebox/login", url!).href);
   await signInApp(app);
   await expect(app.getByText("Survives a new release")).toBeVisible();
-  const attachmentType = await app.evaluate(async () => {
-    const sdk = (window as unknown as { miniapp: { files: { upload(file: File): Promise<{ url: string }> } } }).miniapp;
-    const attachment = await sdk.files.upload(new File(['<script>document.body.dataset.executed="yes"</script>'], "untrusted.html", { type: "text/html" }));
-    return (await fetch(attachment.url)).headers.get("content-type");
+  // The app's CSP keeps connect-src to its own origin, so the SDK's blob URL cannot be fetched.
+  // The Kernel's file path on the same origin must hand the HTML back as a download, never a page.
+  const attachment = await app.evaluate(async () => {
+    const sdk = (window as unknown as { miniapp: { files: { upload(file: File): Promise<{ id: string }> } } }).miniapp;
+    const stored = await sdk.files.upload(new File(['<script>document.body.dataset.executed="yes"</script>'], "untrusted.html", { type: "text/html" }));
+    const response = await fetch(`/_littlebox/files/${stored.id}`);
+    return { status: response.status, disposition: response.headers.get("content-disposition"), sniffing: response.headers.get("x-content-type-options") };
   });
-  expect(attachmentType).toBe("application/octet-stream");
+  expect(attachment).toEqual({ status: 200, disposition: "attachment", sniffing: "nosniff" });
   expect(await publish(page)).toBe(url);
   await app.reload();
   await expect(app.getByText("Survives a new release")).toBeVisible();
