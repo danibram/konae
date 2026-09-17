@@ -198,6 +198,7 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .explorer-heading .explorer-group { flex: 1; margin: 0; }
 .explorer-heading button { min-height: 32px; width: 30px; padding: 0; justify-content: center; }
 .explorer-heading button:disabled { opacity: .3; cursor: default; }
+.explorer-heading button svg { width: 14px; height: 14px; flex: 0 0 auto; }
 .explorer-create { display: grid; grid-template-columns: 1fr auto auto; gap: 4px; padding: 7px; border-bottom: 1px solid var(--line); background: #e6e3d9; }
 .explorer-create label { grid-column: 1 / -1; color: var(--muted); font: 10px "JetBrains Mono Variable"; text-transform: uppercase; }
 .explorer-create input { min-width: 0; padding: 5px 6px; border: 1px solid var(--ink); font: 11px "JetBrains Mono Variable"; }
@@ -1497,6 +1498,14 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
   .action-readout .action-limit, .action-readout strong { color: #f4f2ea; }
   .file-switch { background: #30312b; color: #e1dfd6; border-color: #3a3d34; }
   .editor-keys { color: #c5c9b9; background: #30332b; }
+  .explorer-panel { background: #1d1e19; }
+  .explorer-panel button, .group-actions button.file-list-toggle { color: #e1dfd6; }
+  .explorer-panel button:hover, .explorer-panel button.active, .group-actions button.file-list-toggle.is-open { background: #30312b; }
+  .explorer-panel button.tree-directory { color: #a9ad9d; }
+  .explorer-panel button.selected { color: #171910; }
+  .explorer-create { background: #24251f; }
+  .explorer-create label { color: #a9ad9d; }
+  .explorer-create input { background: #30312b; color: #e1dfd6; border-color: #3a3d34; }
   .project-card-preview, .project-poster { background: #1c1f28; color: #f4f2ea; }
   .project-poster span, .poster-line { color: #f4f2ea; }
 }
