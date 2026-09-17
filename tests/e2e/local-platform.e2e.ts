@@ -71,12 +71,11 @@ async function showSection(page: Page, name: "Preview" | "Auth" | "Files" | "Dat
   await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name, exact: true }).click();
 }
 
-// The explorer with New file and New folder has no section button. The Files section shows
-// the code editor, and the fold shortcut (Ctrl+B or Cmd+B) brings the explorer next to it.
+// Files has a File list button that opens New file and New folder beside the editor.
 async function openExplorer(page: Page) {
   await showSection(page, "Files");
+  await page.getByRole("button", { name: "File list", exact: true }).click();
   const explorer = page.getByRole("navigation", { name: "Project files" });
-  if (!(await explorer.isVisible())) await page.keyboard.press("Control+b");
   await expect(explorer).toBeVisible();
   return explorer;
 }
@@ -100,16 +99,24 @@ async function publish(page: Page) {
 test("browser builds, republishes, backs up and exports a persistent app", async ({ page, context }, testInfo) => {
   await createProject(page, `Browser tasks ${Date.now()}`);
   const explorer = await openExplorer(page);
+  // The button closes the File list and the fold shortcut still brings it back.
+  await page.getByRole("button", { name: "File list", exact: true }).click();
+  await expect(explorer).toBeHidden();
+  await page.keyboard.press("Control+b");
+  await expect(explorer).toBeVisible();
   await explorer.getByRole("button", { name: "New file" }).click();
   await page.getByLabel("File path").fill("src/label.js");
   await page.getByRole("button", { name: "Create", exact: true }).click();
-  // The explorer stays in front after Create, so open the new file from the Files section.
-  await (await openFile(page, "src/label.js")).fill("export const label = 'Compiled in the browser';");
-  const editor = await openFile(page, "app.js");
+  // The new file opens in the editor and the File list stays beside it.
+  await page.getByLabel("src/label.js code editor").fill("export const label = 'Compiled in the browser';");
+  await expect(explorer).toBeVisible();
+  await explorer.getByRole("button", { name: "app.js" }).click();
+  const editor = page.getByLabel("app.js code editor");
+  await expect(explorer).toBeVisible();
   const source = await editor.inputValue();
   await editor.fill(`import { label } from './src/label.js';\n${source.replace("Nothing here yet. Anyone with this link sees the same list.", "' + label + '")}`);
+  // Run shows the rebuilt preview without a trip to the Preview section.
   await page.getByRole("button", { name: "Run", exact: true }).click();
-  await showSection(page, "Preview");
   const preview = page.frameLocator('iframe[title="Mini-app preview"]');
   await expect(preview.getByText("Compiled in the browser")).toBeVisible();
   await waitForKernelSave(page);
@@ -176,6 +183,8 @@ test("public notes authenticate users and isolate private rows", async ({ page, 
   await expect(preview.getByText("Alice preview note")).toBeVisible();
   // One section shows at a time, so pick the preview user in Auth and look in Preview.
   await showSection(page, "Auth");
+  // The heading agrees with the template's rule: only a signed-in person lists notes.
+  await expect(page.getByRole("heading", { name: "A signed-in person can list the rows. The list stops at 100 rows." })).toBeVisible();
   await page.getByLabel("Preview user").selectOption("bob");
   await showSection(page, "Preview");
   await expect(preview.getByText("No notes yet. Start with one thought.")).toBeVisible();

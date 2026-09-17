@@ -18,12 +18,11 @@ test("builds a multi-file app in the browser, deploys it to MinIO, and persists 
   await page.getByRole("button", { name: /^Create/ }).click();
 
   await expect(page).toHaveURL(/\/app\/[^/]+$/);
-  // The explorer with New file and New folder has no section button. The Files section shows
-  // the code editor, and the fold shortcut (Ctrl+B or Cmd+B) brings the explorer next to it.
+  // Files has a File list button that opens New file and New folder beside the editor.
   const sections = page.getByRole("navigation", { name: "Workspace sections" });
   await sections.getByRole("button", { name: "Files", exact: true }).click();
+  await page.getByRole("button", { name: "File list", exact: true }).click();
   const explorer = page.getByRole("navigation", { name: "Project files" });
-  if (!(await explorer.isVisible())) await page.keyboard.press("Control+b");
   await expect(explorer).toBeVisible();
   await explorer.getByRole("button", { name: "New folder" }).click();
   await page.getByLabel("Folder path").fill("src/features");
@@ -33,9 +32,8 @@ test("builds a multi-file app in the browser, deploys it to MinIO, and persists 
   await explorer.getByRole("button", { name: "New file" }).click();
   await page.getByLabel("File path").fill("src/features/empty-label.js");
   await page.getByRole("button", { name: "Create" }).click();
-  // The explorer stays in front after Create, so open the new file from the Files section.
-  await sections.getByRole("button", { name: "Files", exact: true }).click();
-  await page.getByLabel("Open file").selectOption("src/features/empty-label.js");
+  // The new file opens in the editor and the File list stays beside it.
+  await expect(explorer).toBeVisible();
   await page.getByLabel("src/features/empty-label.js code editor").fill("export const emptyLabel = 'No tasks stored in MinIO yet.';\n");
 
   await page.getByLabel("Open file").selectOption("app.js");
@@ -48,8 +46,8 @@ test("builds a multi-file app in the browser, deploys it to MinIO, and persists 
     )}`,
   );
 
+  // Run shows the rebuilt preview without a trip to the Preview section.
   await page.getByRole("button", { name: "Run", exact: true }).click();
-  await sections.getByRole("button", { name: "Preview", exact: true }).click();
   const preview = page.frameLocator('iframe[title="Mini-app preview"]');
   await expect(preview.getByText("No tasks stored in MinIO yet.")).toBeVisible();
 
