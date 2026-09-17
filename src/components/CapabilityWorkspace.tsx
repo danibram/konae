@@ -14,6 +14,7 @@ import { parseServerActionSource } from "../kernel/actions";
 import { McpError } from "../mcp/client";
 import { Button, Card, Field, Select, Textarea, EmptyState as UiEmptyState } from "./ui";
 import { DatabaseStudio } from "./DatabaseStudio";
+import { authHeading } from "./auth-heading";
 
 type Props = {
   view: "database" | "files" | "auth";
@@ -103,7 +104,7 @@ function AuthPanel({ host, onFilesChanged, deployedDatabase, actionsSource, onSe
       <div className="auth-card">
         <span className="auth-avatar"><UserRound size={27} /></span>
         <div>
-          <h3>Anyone can list the rows. The list stops at 100 rows.</h3>
+          <h3>{authHeading(rules(actionsSource))}</h3>
           <label className="auth-open">
             <span>Who can open the app</span>
             <select aria-label="Who can open the app" value={visibility} onChange={(event) => onSetVisibility?.(event.target.value === "private" ? "private" : "public")}>
