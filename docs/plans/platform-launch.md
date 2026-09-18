@@ -330,3 +330,25 @@ Signup has a fourth mode, Invitation only, on both sides: `SignupMode::Invitatio
 The integration test runs the done-when criterion against a local Kernel with the development mailbox: a publish-only token releases a private app with Invitation only, a stranger's signup gets 403, an invited person reads the link from `mailbox.jsonl`, sets a password and runs an action.
 
 This delivery leaves four things undone. The invitation email names neither the app nor the inviter, because `AccountMessage` carries only a link and delivery B owns the message templates and the queue; `delivery` reports only whether the transport took the message. Invitations and their mail are not stored in one transaction, because the seam has no queue to write into; the rows commit first and a failed hand-off shows `failed`. The editor has no Users view yet (delivery G), so a person who does not write code can choose Invitation only but cannot invite anyone without an agent. There is no runtime MCP tool to accept an invitation; the HTTP route is the contract.
+### Delivery H, November 6, 2026
+
+`package_export` in `kernel-rs/src/package.rs` captures one Deployment under its locks and offers its database, accounts and files as three download transfers with a versioned manifest. A release imports them as `initialPackage` into a project with no Deployment. [ADR-0013](../adr/0013-an-app-leaves-as-a-chunked-package.md) records the decision and [the MCP guide](../mcp.md#export-and-import-an-app) the format. The CLI's `export --with-data` and the kit's `deploy.mjs` use it.
+
+| Refusal or proof | Where | Run against |
+| --- | --- | --- |
+| Import over an existing app | `tests/package.integration.test.ts` | Local Kernel, MCP |
+| Upload bytes that differ from their SHA-256; an upload that differs from the manifest; manifest version 2 | `tests/package.integration.test.ts`, `kernel-rs/src/package.rs`, `src/lib/portable-package.test.ts` | Local Kernel, unit |
+| `package_export`, `project_export` and `database_export` without `export_data` from `read`, `publish`, and `read`+`write`+`publish` credentials, and from an `export_data` credential for another project | `tests/package.integration.test.ts` | Local Kernel, MCP |
+| A `read` credential reading or inspecting an export's transfers | `tests/package.integration.test.ts` | Local Kernel, MCP |
+| Component over its quota | `tests/package.integration.test.ts`, `kernel-rs/src/package.rs` | Local Kernel, unit |
+| Not enough disk | `kernel-rs/src/package.rs` (message and arithmetic only) | Unit |
+| Sessions, email links and API keys absent from the export and deleted on import | `kernel-rs/src/package.rs`, `tests/package.integration.test.ts` | Unit, local Kernel |
+| A repeated apply returns its receipt and one Deployment exists | `tests/package.integration.test.ts` | Local Kernel, MCP |
+| Kit export and import with a freshly compiled kit Kernel, `export_data` refusal in the CLI | `tests/smoke/portable-export.ts` | Two local Kernels |
+| 256 MiB database at its write cap and 20 MiB of files | `tests/smoke/package-quota.ts` | Two local Kernels, debug build |
+
+The quota run filled the database through owner SQL with random bytes until the Kernel refused a write with "database or disk is full", then exported with `exportLocal` and imported with the kit's `node scripts/deploy.mjs`. The database file was 256.0 MiB and the kit archive 276.7 MiB. Row counts and byte totals matched on the target, the app user signed in with the same password, all ten 2 MiB files read back, the old session failed, and the target still refused a write for lack of space. A `ps` sample every 100 ms put the peak resident memory at 33 MiB for the source Kernel, 93 MiB for the Bun process that ran the export and the test itself, 23 MiB for the target Kernel and 120 MiB for the Node deploy script. Each figure includes the process's own baseline, and the smoke fails above 192 MiB. Export took 81 s and import 99 s on the debug build, almost all of it in 64 KiB MCP calls. The target's audit log held 4 `transfer_write` rows for the import.
+
+An identity file near its 64 MiB cap was not exercised, because signups are rate limited; it goes through the same code as the database. The space refusal is tested as a function, not against a full volume. The run used the local Kernels, not the Docker stack.
+
+The plan did not account for three things. Every credential of one owner shares the transfer principal, so gating the export tools alone was not enough. The export's transfers check `export_data` too, or a `read` token of the same owner could read them. `database_export` handed the raw database to `read` and now needs `export_data` as well. Auditing each 64 KiB block would have written about 4,400 rows per import into a log capped at 10,000, so package transfers audit once per component. The editor's own export runs in the browser and still uses the 16 MiB format; an app past that size leaves through the CLI until the editor streams the package to disk.

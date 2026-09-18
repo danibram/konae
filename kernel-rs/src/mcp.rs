@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 const VERSION: &str = "2025-11-25";
-const CHUNK: usize = 64 * 1024;
+pub(super) const CHUNK: usize = 64 * 1024;
 const MAX_TRANSFER: usize = 32 * 1024 * 1024;
 pub(super) fn owner_cookie_name(state: &AppState) -> &'static str {
     let mcp_https = std::env::var("LITTLEBOX_MCP_ORIGIN").is_ok_and(|origin| origin.starts_with("https://"));
@@ -17,7 +17,7 @@ pub(super) fn owner_cookie_name(state: &AppState) -> &'static str {
 const MAX_OWNER_TRANSFERS: usize = 128;
 const MAX_DEPLOYMENT_TRANSFERS: usize = 32;
 /// Active transfers one owner credential may hold.
-const MAX_OWNER_PRINCIPAL_TRANSFERS: usize = 8;
+pub(super) const MAX_OWNER_PRINCIPAL_TRANSFERS: usize = 8;
 /// Active transfers one app user may hold. Files are at most 2 MiB, so an app
 /// needs one upload or download at a time; two allows a retry.
 const MAX_RUNTIME_PRINCIPAL_TRANSFERS: usize = 2;
@@ -81,13 +81,13 @@ pub(super) fn digest(bytes: &[u8]) -> String {
 pub(super) struct Owner {
     pub(super) id: String,
     display: Option<String>,
-    scopes: Vec<String>,
+    pub(super) scopes: Vec<String>,
     projects: Vec<String>,
     session: bool,
 }
 
 impl Owner {
-    fn require(&self, scope: &str, project: Option<&str>) -> Result<()> {
+    pub(super) fn require(&self, scope: &str, project: Option<&str>) -> Result<()> {
         anyhow::ensure!(
             self.scopes.iter().any(|s| s == scope),
             "Permission denied for {scope}."
@@ -161,13 +161,14 @@ pub(super) fn authenticate_owner(state: &AppState, headers: &HeaderMap) -> Resul
                 "publish".into(),
                 "manage_users".into(),
                 "tokens".into(),
+                "export_data".into(),
             ],
             projects: vec![],
             session: true,
         }))
 }
 
-fn owned_project(state: &AppState, owner: &Owner, id: &str, scope: &str) -> Result<(Value, u64)> {
+pub(super) fn owned_project(state: &AppState, owner: &Owner, id: &str, scope: &str) -> Result<(Value, u64)> {
     owner.require(scope, Some(id))?;
     let record: Option<(String, u64)> = store(state)?
         .query_row(
@@ -300,20 +301,6 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
             false,
         ),
         tool(
-            "database_export",
-            "Snapshot a deployment database into a downloadable transfer.",
-            json!({"deploymentId":text}),
-            &["deploymentId"],
-            true,
-        ),
-        tool(
-            "project_export",
-            "Export portable database, identities without sessions, and files into a transfer.",
-            json!({"deploymentId":text}),
-            &["deploymentId"],
-            true,
-        ),
-        tool(
             "storage_test",
             "Check the configured artifact store.",
             json!({}),
@@ -332,6 +319,31 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
         tool("secrets_list", "List the names of a project's signing secrets. Values are never returned.", json!({"projectId":text}), &["projectId"], true),
         tool("api_keys_list", "List a deployment's API keys without their secrets.", json!({"deploymentId":text}), &["deploymentId"], true),
     ]);
+    if owner.scopes.iter().any(|s| s == "export_data") {
+        tools.extend([
+            tool(
+                "database_export",
+                "Snapshot a deployment database into a downloadable transfer of at most 32 MiB. Requires export_data.",
+                json!({"deploymentId":text}),
+                &["deploymentId"],
+                true,
+            ),
+            tool(
+                "project_export",
+                "Export the small portable format: database, accounts without sessions, and files as base64 in one transfer of at most 16 MiB. Requires export_data.",
+                json!({"deploymentId":text}),
+                &["deploymentId"],
+                true,
+            ),
+            tool(
+                "package_export",
+                "Capture a consistent copy of a deployment's database, accounts without sessions or links, and files. Returns a versioned manifest and one download transfer per component. Requires export_data.",
+                json!({"deploymentId":text}),
+                &["deploymentId"],
+                true,
+            ),
+        ]);
+    }
     tools.push(tool(
         "signup_policy_read",
         "Read who may create an account on a deployment.",
@@ -374,7 +386,7 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
     if owner.session {
         tools.extend([
             tool("tokens_list", "List active delegated credentials without exposing their secrets.", json!({}), &[], true),
-            tool("token_create", "Issue a revocable agent credential with selected scopes and project grants.", json!({"scopes":{"type":"array","items":{"type":"string","enum":["read","write","publish","manage_users"]},"minItems":1},"projectIds":{"type":"array","items":text},"ttlSeconds":{"type":"integer","minimum":60,"maximum":2592000}}), &["scopes"], false),
+            tool("token_create", "Issue a revocable agent credential with selected scopes and project grants.", json!({"scopes":{"type":"array","items":{"type":"string","enum":["read","write","publish","manage_users","export_data"]},"minItems":1},"projectIds":{"type":"array","items":text},"ttlSeconds":{"type":"integer","minimum":60,"maximum":2592000}}), &["scopes"], false),
             tool("token_revoke", "Revoke an agent credential using its returned ID.", json!({"tokenId":text}), &["tokenId"], false),
         ]);
     }
@@ -515,8 +527,8 @@ fn transfer_tools(runtime: bool) -> Vec<Value> {
         ),
         tool(
             "transfer_begin",
-            "Start a size-bounded upload with an expected SHA-256 checksum.",
-            json!({"size":{"type":"integer","minimum":1,"maximum":if runtime {2*1024*1024} else {MAX_TRANSFER}},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"projectId":{"type":"string"}}),
+            "Start a size-bounded upload with an expected SHA-256 checksum. An upload is at most 32 MiB unless it names a package component, which may be as large as that component's quota.",
+            json!({"size":{"type":"integer","minimum":1,"maximum":if runtime {2*1024*1024} else {super::package::MAX_COMPONENT_BYTES as usize}},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"projectId":{"type":"string"},"component":{"type":"string","enum":super::package::COMPONENT_NAMES}}),
             &["size", "sha256"],
             false,
         ),
@@ -538,10 +550,9 @@ fn transfer_tools(runtime: bool) -> Vec<Value> {
     if runtime {
         for t in &mut tools {
             if t["name"] == "transfer_begin" {
-                t["inputSchema"]["properties"]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("projectId");
+                let properties = t["inputSchema"]["properties"].as_object_mut().unwrap();
+                properties.remove("projectId");
+                properties.remove("component");
             }
         }
     }
@@ -718,6 +729,14 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
             } else {
                 None
             };
+            // A package export's downloads hold accounts and data. Every
+            // credential of one owner shares the transfer principal, so reading
+            // them needs export_data, not the read scope that finds them.
+            let package_transfer = (owner.is_some() && name.starts_with("transfer_") && name != "transfer_begin")
+                .then(|| transfer(&state, &principal, &arguments).ok())
+                .flatten();
+            let export_transfer = package_transfer.clone().filter(|t| t["exportData"] == true);
+            let component_upload = name == "transfer_write" && package_transfer.is_some_and(|t| t["component"].is_string());
             let result = if name.starts_with("transfer_") {
                 let permission = if let Some(owner) = owner.as_ref() {
                     let project = if name == "transfer_begin" {
@@ -727,7 +746,9 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
                             .ok()
                             .and_then(|t| t["projectId"].as_str().map(str::to_owned))
                     };
-                    let scope = if ["transfer_read", "transfer_status", "transfer_cancel"]
+                    let scope = if export_transfer.is_some() && name != "transfer_cancel" {
+                        "export_data"
+                    } else if ["transfer_read", "transfer_status", "transfer_cancel"]
                         .contains(&name)
                     {
                         "read"
@@ -748,7 +769,7 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
                             .unwrap_or(accepted[0])
                     };
                     if name == "transfer_cancel" {
-                        authorize(held(&["read", "publish", "write"]))
+                        authorize(held(&["read", "publish", "write", "export_data"]))
                     } else if scope == "publish" {
                         authorize(held(&["publish", "write"]))
                     } else {
@@ -780,7 +801,19 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
             // Of the app-user calls, only an upload that stores a new file is,
             // inside runtime_call: the transfer caps bound how often that happens.
             if !runtime {
-                audit(&state, &principal, name, &arguments, app.as_deref(), previous_mode, &result);
+                match export_transfer.as_ref().filter(|_| name == "transfer_read") {
+                    // One row per component download, written at its first
+                    // block or on a refusal, so a 256 MiB database read in
+                    // 64 KiB blocks does not push the rest out of the log.
+                    Some(t) if arguments["offset"] == 0 || result.is_err() => {
+                        let target = json!({"deploymentId":t["deploymentId"],"component":t["component"]});
+                        audit(&state, &principal, "package_download", &target, None, None, &result);
+                    }
+                    Some(_) => {}
+                    // A package component upload is audited at its first block.
+                    None if component_upload && arguments["offset"] != 0 && result.is_ok() => {}
+                    None => audit(&state, &principal, name, &arguments, app.as_deref(), previous_mode, &result),
+                }
             }
             // The session row is gone; the browser must drop its cookie too.
             if runtime && name == "auth_logout" && result.is_ok() {
@@ -847,6 +880,10 @@ fn audit(
                 .map(|id| format!("deployment {id}"));
             (project, deployment)
         }
+        "package_download" => (
+            arguments["deploymentId"].as_str().map(str::to_owned),
+            arguments["component"].as_str().map(str::to_owned),
+        ),
         "signup_policy_set" => {
             let before = previous_mode.map(|m| mode(&json!(m))).unwrap_or_else(|| "unknown".into());
             let after = match result {
@@ -1241,9 +1278,10 @@ async fn admin_call(
             )
             .await
         }
+        "package_export" => super::package::export(state, owner, principal, a["deploymentId"].as_str().unwrap()).await,
         "database_export" | "project_export" => {
             let id = a["deploymentId"].as_str().unwrap();
-            let d = owned_deployment(state, owner, id, "read").await?;
+            let d = owned_deployment(state, owner, id, "export_data").await?;
             let response = if name == "database_export" {
                 export_database(
                     State(state.clone()),
@@ -1293,6 +1331,9 @@ async fn admin_call(
                 transfer["projectId"] == input.project.id,
                 "Artifact belongs to another project."
             );
+            if let Some(package) = input.initial_package.as_ref() {
+                super::package::verify(state, principal, &input.project.id, package).await?;
+            }
             validate_release(state, &input).await?;
             let id = Uuid::new_v4().to_string();
             let expires = now_ms() + 900_000;
@@ -1403,7 +1444,8 @@ async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
         existing.is_none() || (input.initial_database.is_none()
             && input.initial_identity.is_none()
             && input.initial_files.is_none()
-            && input.initial_signup_policy.is_none()),
+            && input.initial_signup_policy.is_none()
+            && input.initial_package.is_none()),
         "Portable state can only be imported on the first deployment."
     );
     if let Some(policy) = input.initial_signup_policy.as_ref() {
@@ -1418,6 +1460,8 @@ async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
             connection.execute("VACUUM INTO ?1", [temp.to_string_lossy().as_ref()])?;
         } else if let Some(snapshot) = input.initial_database.as_deref() {
             initialize_database_from_base64(&temp, snapshot, 16 * 1024 * 1024)?;
+        } else if let Some(package) = input.initial_package.as_ref() {
+            super::package::copy_database(state, package, &temp)?;
         } else {
             initialize_database(&temp)?;
         }
@@ -1521,12 +1565,12 @@ async fn runtime_call(
     }
 }
 
-fn transfer_path(state: &AppState, id: &str) -> Result<PathBuf> {
+pub(super) fn transfer_path(state: &AppState, id: &str) -> Result<PathBuf> {
     anyhow::ensure!(Uuid::parse_str(id).is_ok(), "Invalid transfer ID.");
     Ok(state.data_root.join("transfers").join(id))
 }
 
-fn transfer(state: &AppState, principal: &str, a: &Value) -> Result<Value> {
+pub(super) fn transfer(state: &AppState, principal: &str, a: &Value) -> Result<Value> {
     let id = a["transferId"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Transfer ID required."))?;
@@ -1561,7 +1605,7 @@ async fn cleanup_transfers(state: &AppState) -> Result<()> {
     Ok(())
 }
 
-async fn new_transfer(state: &AppState, principal: &str, value: Value) -> Result<Value> {
+pub(super) async fn new_transfer(state: &AppState, principal: &str, value: Value) -> Result<Value> {
     cleanup_transfers(state).await?;
     let _guard = database_lock(state, "transfer-quota").await;
     let db = store(state)?;
@@ -1639,16 +1683,19 @@ async fn transfer_call(
     if name == "transfer_begin" {
         let size = a["size"].as_u64().unwrap_or(0);
         let hash = a["sha256"].as_str().unwrap_or("");
-        anyhow::ensure!(
-            size > 0
-                && size
-                    <= if runtime {
-                        2 * 1024 * 1024
-                    } else {
-                        MAX_TRANSFER as u64
-                    },
-            "Transfer size is outside the limit."
-        );
+        let component = a["component"].as_str().filter(|_| !runtime);
+        let limit = match component {
+            _ if runtime => 2 * 1024 * 1024,
+            Some(component) => super::package::component_limit(component)?,
+            None => MAX_TRANSFER as u64,
+        };
+        match component {
+            Some(component) => anyhow::ensure!(
+                size > 0 && size <= limit,
+                "Transfer size is outside the limit of {limit} bytes for the {component} component."
+            ),
+            None => anyhow::ensure!(size > 0 && size <= limit, "Transfer size is outside the limit."),
+        }
         anyhow::ensure!(
             hash.len() == 64
                 && hash
@@ -1656,7 +1703,12 @@ async fn transfer_call(
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
             "Invalid SHA-256 checksum."
         );
-        return new_transfer(state,principal,json!({"direction":"upload","size":size,"sha256":hash,"complete":false,"projectId":a["projectId"]})).await;
+        let mut body = json!({"direction":"upload","size":size,"sha256":hash,"complete":false,"projectId":a["projectId"]});
+        if let Some(component) = component {
+            super::package::ensure_upload_space(state, size)?;
+            body["component"] = json!(component);
+        }
+        return new_transfer(state, principal, body).await;
     }
     let id = a["transferId"].as_str().unwrap();
     let path = transfer_path(state, id)?;
@@ -1727,9 +1779,11 @@ async fn transfer_call(
         }
         "transfer_complete" => {
             anyhow::ensure!(t["direction"] == "upload", "Not an upload.");
-            let bytes = tokio::fs::read(path).await?;
+            // Hashes in 64 KiB reads, so a package component never sits in memory.
+            let (size, sha256) =
+                tokio::task::spawn_blocking(move || super::copies::checksum_file(&path)).await??;
             anyhow::ensure!(
-                bytes.len() as u64 == t["size"].as_u64().unwrap() && digest(&bytes) == t["sha256"],
+                size == t["size"].as_u64().unwrap() && sha256 == t["sha256"],
                 "Upload size or SHA-256 mismatch."
             );
             t["complete"] = json!(true);

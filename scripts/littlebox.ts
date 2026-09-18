@@ -1,11 +1,13 @@
-import { chmod, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { watch } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { decodeBase64, McpClient, type Transfer } from "../src/mcp/client";
+import { McpClient, type Transfer } from "../src/mcp/client";
 import { normalizeManifest } from "../src/deployments/manifest";
-import type { PortableProjectState } from "../src/deployments/client";
+import { checkPackageManifest, packageComponentFiles, type PackageManifest } from "../src/lib/portable-package";
+import { downloadToFile, writeTarFile, type FileTarEntry } from "./package-files";
 
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
@@ -86,45 +88,60 @@ export async function publishLocal(root: string, config: Config, token: string) 
 
 export async function exportLocal(root: string, config: Config, output: string, token?: string) {
   const { artifact, files } = await buildLocal(root);
-  let state: PortableProjectState | undefined;
   let manifest = config.project.manifest;
-  if (token !== undefined) {
-    const client = new McpClient(endpoint(config.url), { token });
-    const remote = await client.call<{ deployment?: { id: string; manifest?: Record<string, unknown> } }>("project_inspect", { projectId: config.project.id });
-    if (!remote.deployment) throw Error("Publish the project before exporting its live data, or omit --with-data.");
-    const deployedManifest = remote.deployment.manifest;
-    if (deployedManifest?.visibility !== "public" && deployedManifest?.visibility !== "private") {
-      throw Error("The deployment did not provide its visibility. Live data export stopped.");
+  let captured: { package: PackageManifest; files: FileTarEntry[] } | undefined;
+  const scratch = token === undefined ? undefined : await mkdtemp(path.join(tmpdir(), "littlebox-package-"));
+  try {
+    if (token !== undefined && scratch) {
+      const client = new McpClient(endpoint(config.url), { token });
+      const remote = await client.call<{ deployment?: { id: string; manifest?: Record<string, unknown> } }>("project_inspect", { projectId: config.project.id });
+      if (!remote.deployment) throw Error("Publish the project before exporting its live data, or omit --with-data.");
+      const deployedManifest = remote.deployment.manifest;
+      if (deployedManifest?.visibility !== "public" && deployedManifest?.visibility !== "private") {
+        throw Error("The deployment did not provide its visibility. Live data export stopped.");
+      }
+      manifest = deployedManifest;
+      let exported: { manifest: unknown; downloads: Record<string, Transfer> };
+      try {
+        exported = await client.call("package_export", { deploymentId: remote.deployment.id });
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("Unknown tool")) {
+          throw Error("Exporting live data needs a credential with the export_data permission. Run login with --export-data, or create a token with export_data for this project.");
+        }
+        throw error;
+      }
+      const components: FileTarEntry[] = [];
+      let checked: PackageManifest;
+      try {
+        checked = checkPackageManifest(exported.manifest);
+        for (const content of checked.contents) {
+          const transfer = exported.downloads[content.name];
+          if (!transfer || transfer.size !== content.size || transfer.sha256 !== content.sha256) throw Error(`The ${content.name} download does not match the package manifest.`);
+          const file = path.join(scratch, packageComponentFiles[content.name]);
+          await downloadToFile(client, transfer, file);
+          components.push({ path: `littlebox/package/${packageComponentFiles[content.name]}`, file, size: content.size });
+        }
+      } finally {
+        for (const transfer of Object.values(exported.downloads)) await client.cancel(transfer.transferId).catch(() => {});
+      }
+      captured = { package: checked, files: components };
     }
-    manifest = deployedManifest;
-    const transfer = await client.call<Transfer>("project_export", { deploymentId: remote.deployment.id });
-    const body = JSON.parse(new TextDecoder().decode(await client.download(transfer))) as { result?: { initialDatabase: string; initialIdentity?: string; initialFiles?: string; initialSignupPolicy?: PortableProjectState["initialSignupPolicy"]; visibility?: unknown } };
-    if (!body.result?.initialDatabase) throw Error("Portable export is missing its database.");
-    const visibility = body.result.visibility;
-    if (visibility !== undefined && visibility !== "public" && visibility !== "private") {
-      throw Error("The portable snapshot has invalid visibility. Live data export stopped.");
-    }
-    state = {
-      initialDatabase: decodeBase64(body.result.initialDatabase),
-      ...(body.result.initialIdentity ? { initialIdentity: decodeBase64(body.result.initialIdentity) } : {}),
-      ...(body.result.initialFiles ? { initialFiles: decodeBase64(body.result.initialFiles) } : {}),
-      ...(body.result.initialSignupPolicy ? { initialSignupPolicy: body.result.initialSignupPolicy } : {}),
-      ...(visibility !== undefined ? { visibility } : {}),
+    const [{ projectExportEntries }, { kernelFiles }] = await Promise.all([
+      import("../src/lib/export-project-kit"), import("../src/lib/export-project-sources"),
+    ]);
+    const model = files["schema.ts"] ?? "";
+    const project = {
+      ...config.project,
+      manifest: normalizeManifest({ ...manifest, visibility: manifest.visibility ?? "private" }),
+      files, directories: [], updatedAt: Date.now(),
+      databaseModel: { source: model, acceptedSource: model, revision: "external" },
     };
+    const entries = projectExportEntries(project, artifact, kernelFiles, captured && { package: captured.package });
+    await writeTarFile(output, [...entries, ...(captured?.files ?? [])]);
+    return output;
+  } finally {
+    if (scratch) await rm(scratch, { recursive: true, force: true });
   }
-  const [{ buildProjectExport }, { kernelFiles }] = await Promise.all([
-    import("../src/lib/export-project-kit"), import("../src/lib/export-project-sources"),
-  ]);
-  const model = files["schema.ts"] ?? "";
-  const project = {
-    ...config.project,
-    manifest: normalizeManifest({ ...manifest, visibility: manifest.visibility ?? "private" }),
-    files, directories: [], updatedAt: Date.now(),
-    databaseModel: { source: model, acceptedSource: model, revision: "external" },
-  };
-  const { archive } = buildProjectExport(project, artifact, kernelFiles, state);
-  await writeFile(output, archive, { flag: "wx", mode: 0o600 });
-  return output;
 }
 
 /** Add each entry to .gitignore unless a line already names it. */
@@ -152,7 +169,7 @@ async function main() {
   if (argv[0] === "--") argv.shift();
   const [command, ...args] = argv;
   if (!command || ["help", "--help"].includes(command)) {
-    console.log("Use login, init, build, dev, publish, or export. Options include --dir, --url, --name, --port, and --out. Export --with-data includes live data, accounts, and files.");
+    console.log("Use login, init, build, dev, publish, or export. Options include --dir, --url, --name, --port, and --out. Export --with-data includes live data, accounts, and files; it needs a credential from login --export-data or a token with export_data.");
     return;
   }
   const option = (name: string, fallback?: string) => {
@@ -166,8 +183,9 @@ async function main() {
   if (command === "login") {
     const url = option("url", process.env.LITTLEBOX_URL ?? "http://localhost:4173")!;
     const email = process.env.LITTLEBOX_EMAIL; const password = process.env.LITTLEBOX_PASSWORD;
-    if (!email || !password) throw Error("Set LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD. To create the account, also set LITTLEBOX_INVITATION_CODE, or LITTLEBOX_SETUP_KEY for an installation's first owner.");
-    const token = await login(url, email, password, { code: process.env.LITTLEBOX_INVITATION_CODE, setupKey: process.env.LITTLEBOX_SETUP_KEY });
+    if (!email || !password) throw Error("Set LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD. To create the account, also set LITTLEBOX_INVITATION_CODE, or LITTLEBOX_SETUP_KEY for the first owner.");
+    const scopes = ["read", "write", "publish", ...(args.includes("--export-data") ? ["export_data"] : [])];
+    const token = await login(url, email, password, { code: process.env.LITTLEBOX_INVITATION_CODE, setupKey: process.env.LITTLEBOX_SETUP_KEY }, scopes);
     await mkdir(path.join(root, ".littlebox"), { recursive: true });
     await writeFile(path.join(root, ".littlebox/credentials.json"), JSON.stringify({ url, token }), { mode: 0o600 });
     await chmod(path.join(root, ".littlebox/credentials.json"), 0o600);

@@ -1508,6 +1508,7 @@ dependencies = [
  "base64 0.22.1",
  "hex",
  "lettre",
+ "libc",
  "reqwest",
  "ring",
  "rusqlite",

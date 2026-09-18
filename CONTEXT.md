@@ -76,8 +76,12 @@ The published, addressable instance of a Project with its own hostname, visibili
 _Avoid_: Project, preview
 
 **Copy**:
-A consistent snapshot of every Deployment folder, with the owner and MCP stores, sent off the Kernel volume to a second disk or an S3 prefix on a schedule. Restore installs one Copy into an empty data directory and signs everyone out. A Copy moves an installation; an export moves one app.
+A consistent snapshot of every Deployment folder, with the owner and MCP stores, sent off the Kernel volume to a second disk or an S3 prefix on a schedule. Restore installs one Copy into an empty data directory and signs everyone out. A Copy moves an installation; a Package moves one app.
 _Avoid_: backup (a Data panel snapshot of one app database), replica, mirror
+
+**Package**:
+The export of one Deployment's state: its database, its accounts without sessions, email links or API keys, and its files, captured under the Deployment's locks. A versioned manifest lists each component with its size and SHA-256 and names the published revision. Each component travels as its own transfer, so no step holds a whole component in memory. An import verifies every component and installs the Package only into a project that has no Deployment yet. Downloading one needs the `export_data` permission.
+_Avoid_: dump, full backup, export file (the kit that carries it is the export)
 
 **Public Deployment**:
 A Deployment whose application shell may be opened without signing in. A signed-out visitor may call Server Actions declared `anonymous`, and may list and read files marked public. Uploads require a Runtime Actor session, and private files a session or an API Key that names them. Public visibility of the Deployment grants no database access and no access to private files.
@@ -152,5 +156,5 @@ The check that every agent-proposed change must pass before it is applied to a P
 _Avoid_: linter, preview
 
 **Agent Credential**:
-A Project Owner's revocable delegation that permits an external agent to perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity.
+A Project Owner's revocable delegation that permits an external agent to perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity. Its permissions are `read`, `write`, `publish` and `export_data`; only `export_data` downloads accounts and data.
 _Avoid_: Runtime session, installation key

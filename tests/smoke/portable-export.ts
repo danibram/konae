@@ -121,7 +121,8 @@ try {
   await command(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"]);
   const sourceKernel = await startKernel(sourceUrl, path.join(root, "source-data"));
   const admin = await owner(sourceUrl);
-  const { token } = await admin.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 3600 });
+  const { token } = await admin.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish", "export_data"], ttlSeconds: 3600 });
+  const { token: publisher } = await admin.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 3600 });
   const source = await sourceProject("portable-demo");
   const published = await publishLocal(source.directory, source.config, token);
   const inspection = await admin.call<{ deployment: Deployment }>("project_inspect", { projectId: source.config.project.id });
@@ -132,6 +133,8 @@ try {
   const saved = await writer.call<{ id: string }>("files_upload", { transferId: upload.transferId, name: "note.txt", type: "text/plain" });
   await writer.cancel(upload.transferId);
   await admin.call("signup_policy_set", { deploymentId: published.id, mode: "closed" });
+  const refusedArchive = path.join(root, "refused.tar");
+  await assert.rejects(exportLocal(source.directory, source.config, refusedArchive, publisher), /export_data/);
   const closedArchive = path.join(root, "closed.tar");
   await exportLocal(source.directory, source.config, closedArchive, token);
 
@@ -151,6 +154,7 @@ try {
   await command(["cargo", "build", "--offline", "--locked", "--manifest-path", "kernel-rs/Cargo.toml", "--target-dir", path.join(repo, "kernel-rs/target")], kit);
   await startKernel(targetUrl, targetData);
   await command(["node", "scripts/deploy.mjs"], kit);
+  await assert.rejects(readFile(path.join(kit, "littlebox/import-state.json")), { code: "ENOENT" });
   const moved = await deployment(kit, targetData);
   assert.deepEqual(moved.signupPolicy, { mode: "closed", allowlist: [] });
   await sign(targetUrl, moved.hostname, "signup", "stranger@proof.test", 403);
@@ -175,7 +179,7 @@ try {
   assert.deepEqual(allowed.signupPolicy, { mode: "allowlist", allowlist: ["@team.test"] });
   await sign(targetUrl, allowed.hostname, "signup", "outsider@proof.test", 403);
   await sign(targetUrl, allowed.hostname, "signup", "member@team.test");
-  console.log("Passed fresh-kit compilation, account/password and data/file migration, session invalidation, republish persistence, Closed import and Allowlist import.");
+  console.log("Passed the export_data refusal, fresh-kit compilation, account/password and data/file migration through a package, session invalidation, republish persistence, Closed import and Allowlist import.");
 } finally {
   for (const child of processes) if (child.exitCode === null) child.kill();
   await Promise.all(processes.map((child) => child.exited));

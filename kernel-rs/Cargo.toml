@@ -12,6 +12,7 @@ aws-sdk-s3 = "1"
 axum = "0.8"
 hex = "0.4"
 lettre = { version = "=0.11.23", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
+libc = "0.2"
 rusqlite = { version = "0.37", features = ["bundled", "hooks", "limits"] }
 reqwest = { version = "=0.12.28", default-features = false, features = ["json", "rustls-tls"] }
 ring = "0.17.14"
