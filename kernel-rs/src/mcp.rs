@@ -293,13 +293,6 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
             false,
         ),
         tool(
-            "database_export",
-            "Snapshot a deployment database into a downloadable transfer.",
-            json!({"deploymentId":text}),
-            &["deploymentId"],
-            true,
-        ),
-        tool(
             "storage_test",
             "Check the configured artifact store.",
             json!({}),
@@ -316,6 +309,13 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
     }
     if owner.scopes.iter().any(|s| s == "export_data") {
         tools.extend([
+            tool(
+                "database_export",
+                "Snapshot a deployment database into a downloadable transfer of at most 32 MiB. Requires export_data.",
+                json!({"deploymentId":text}),
+                &["deploymentId"],
+                true,
+            ),
             tool(
                 "project_export",
                 "Export the small portable format: database, accounts without sessions, and files as base64 in one transfer of at most 16 MiB. Requires export_data.",
@@ -1248,8 +1248,7 @@ async fn admin_call(
         "package_export" => super::package::export(state, owner, principal, a["deploymentId"].as_str().unwrap()).await,
         "database_export" | "project_export" => {
             let id = a["deploymentId"].as_str().unwrap();
-            let scope = if name == "project_export" { "export_data" } else { "read" };
-            let d = owned_deployment(state, owner, id, scope).await?;
+            let d = owned_deployment(state, owner, id, "export_data").await?;
             let response = if name == "database_export" {
                 export_database(
                     State(state.clone()),
@@ -1670,6 +1669,7 @@ async fn transfer_call(
         );
         let mut body = json!({"direction":"upload","size":size,"sha256":hash,"complete":false,"projectId":a["projectId"]});
         if let Some(component) = component {
+            super::package::ensure_upload_space(state, size)?;
             body["component"] = json!(component);
         }
         return new_transfer(state, principal, body).await;

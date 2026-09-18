@@ -35,8 +35,8 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | --- | --- |
 | Discovery | `platform_describe`, `platform_guide`, `session_inspect`, `projects_list`, `project_inspect` |
 | Projects | `project_create` |
-| Owner schema and data | `schema_plan`, `database_execute`, `database_export`, `storage_test` |
-| App export, with `export_data` | `package_export`, `project_export` |
+| Owner schema and data | `schema_plan`, `database_execute`, `storage_test` |
+| App export, with `export_data` | `package_export`, `project_export`, `database_export` |
 | Publishing | `release_plan`, `release_apply` |
 | Signup policy | `signup_policy_read`, `signup_policy_set` |
 | Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
@@ -142,7 +142,7 @@ There is also `bun run littlebox -- login --dir /tmp/my-app --url http://localho
 
 ## Export and import an app
 
-`package_export` takes a `deploymentId` and captures the app under its project, data and identity locks: no action, upload, signup, policy change or release lands halfway, and they wait for the capture to finish. A 256 MiB database takes a few seconds. It returns a manifest and one download transfer per component.
+`package_export` takes a `deploymentId` and captures the app under its project, data and identity locks. No action, upload, signup, policy change or release lands halfway; they wait for the capture to finish. A 256 MiB database takes a few seconds. It returns a manifest and one download transfer per component.
 
 ```json
 {
@@ -172,7 +172,7 @@ There is also `bun run littlebox -- login --dir /tmp/my-app --url http://localho
 
 Read each download with `transfer_read` and cancel it when done. The transfers expire after one hour like other owner transfers. They need `export_data`, not `read`, even though every credential of one owner shares the transfer pool. The audit log gets one `package_export` row and one `package_download` row per component at its first block, with the Deployment as target and the component as detail, plus a row for every refused read.
 
-To import, start each component upload with `transfer_begin` and `component` set to its name. A component upload may be as large as its limit in the table; any other upload stays at 32 MiB. Write and complete it as usual, then send a release payload with `initialPackage`:
+To import, start each component upload with `transfer_begin` and `component` set to its name. A component upload may be as large as its limit in the table, and the Kernel refuses it at `transfer_begin` when the volume lacks that much space plus 64 MiB. Any other upload stays at 32 MiB. Write and complete it as usual, then send a release payload with `initialPackage`:
 
 ```json
 { "project": {}, "visibility": "private", "artifact": {},
@@ -192,18 +192,18 @@ To import, start each component upload with `transfer_begin` and `component` set
 
 | Refusal | Message |
 | --- | --- |
-| Export without `export_data` | `Unknown tool or insufficient permission.`; a credential limited to other projects gets `Project is outside this token's grants.` |
+| Export without `export_data`, through any of the three export tools | `Unknown tool or insufficient permission.` A credential limited to other projects gets `Project is outside this token's grants.` |
 | Reading an export's transfer without `export_data` | `Permission denied for export_data.` |
 | Package for a project with a Deployment | `Portable state can only be imported on the first deployment.` |
 | Upload bytes that differ from the declared SHA-256 | `Upload size or SHA-256 mismatch.` |
 | Upload that differs from the manifest | `The database component does not match the size and SHA-256 in the manifest.` |
 | Another manifest version | `Package version 2 is not supported. This Kernel reads version 1.` |
 | Component over its limit | `Transfer size is outside the limit of 67108864 bytes for the identity component.` |
-| Not enough disk | `Not enough free space on the Kernel volume to import this app: 340 MiB needed, 120 MiB free.` |
+| Not enough disk at `transfer_begin` for a component, at `package_export` or at `release_plan` | `Not enough free space on the Kernel volume to import this app: 340 MiB needed, 120 MiB free.` |
 
 The CLI's `export --with-data` downloads the package into the kit as `littlebox/package/`, and the kit's `deploy.mjs` uploads it, records its progress in `littlebox/import-state.json` and resumes from the Kernel's offset after an interruption. `src/lib/portable-package.ts` checks the manifest on the client with the same limits as `kernel-rs/src/package.rs`.
 
-`project_export`, the small format, now needs `export_data` too. It returns the database, accounts and files as base64 in one transfer of at most 16 MiB, and a release still imports it through `initialDatabase`, `initialIdentity`, `initialFiles` and `initialSignupPolicy`.
+`project_export`, the small format, and `database_export`, the raw database file, now need `export_data` too. It returns the database, accounts and files as base64 in one transfer of at most 16 MiB, and a release still imports it through `initialDatabase`, `initialIdentity`, `initialFiles` and `initialSignupPolicy`.
 
 ## Transfers and limits
 

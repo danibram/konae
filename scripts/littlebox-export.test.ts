@@ -100,10 +100,11 @@ test("export --with-data writes the package manifest and streams each component 
 }, 30_000);
 
 for (const visibility of [undefined, "invalid"]) test(`export --with-data refuses a package with ${visibility ?? "no"} visibility`, async () => {
-  const { run, output, done } = await exportWith(visibility);
+  const { run, output, calls, done } = await exportWith(visibility);
   try {
     await expect(run()).rejects.toThrow("no valid visibility");
     await expect(stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(calls).toEqual(["project_inspect", "package_export", "transfer_cancel"]);
   } finally { await done(); }
 }, 30_000);
 

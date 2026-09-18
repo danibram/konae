@@ -109,9 +109,10 @@ export async function exportLocal(root: string, config: Config, output: string, 
         }
         throw error;
       }
-      const checked = checkPackageManifest(exported.manifest);
       const components: FileTarEntry[] = [];
+      let checked: PackageManifest;
       try {
+        checked = checkPackageManifest(exported.manifest);
         for (const content of checked.contents) {
           const transfer = exported.downloads[content.name];
           if (!transfer || transfer.size !== content.size || transfer.sha256 !== content.sha256) throw Error(`The ${content.name} download does not match the package manifest.`);

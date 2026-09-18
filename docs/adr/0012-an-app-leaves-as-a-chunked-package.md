@@ -10,7 +10,7 @@ Status: accepted, 2026-11-06. Amends [ADR-0008](0008-authenticated-mcp-is-the-pl
 
 An import uploads each component as a transfer started with its component name, which raises that transfer's size cap to the component's quota, and names the transfers in the release payload as `initialPackage`. `release_plan` checks the manifest, the checksums, SQLite integrity, the files against the accounts they name, and the free space before any Deployment exists. `release_apply` copies the components into the new Deployment's folder and checks each SHA-256 again as it copies. A project with a Deployment refuses a package. Repeating an applied plan returns its receipt, so an import cannot create a second app or second accounts.
 
-Downloading state needs a new permission, `export_data`. The owner's browser session holds it; `read`, `write` and `publish` do not include it; a delegated credential can carry it for chosen projects. Transfers created by an export need `export_data` to read, because every credential of one owner shares the transfer principal. `project_export` keeps its format for readers of the small package and needs `export_data` too.
+Downloading state needs a new permission, `export_data`. The owner's browser session holds it; `read`, `write` and `publish` do not include it; a delegated credential can carry it for chosen projects. Transfers created by an export need `export_data` to read, because every credential of one owner shares the transfer principal. `project_export` keeps its format for readers of the small package and needs `export_data` too, as does `database_export`, which hands out the raw database file.
 
 ## Considered options
 
@@ -21,7 +21,7 @@ Downloading state needs a new permission, `export_data`. The owner's browser ses
 
 ## Consequences
 
-The kit carries the package under `littlebox/package/`, and its `deploy.mjs` uploads it in 64 KiB blocks, resuming from the Kernel's offset. A 256 MiB database at its write cap and 20 MiB of files exported and imported with each process under 120 MiB of resident memory (`tests/smoke/package-quota.ts`). Moving it takes about 4,400 MCP calls each way.
+The kit carries the package under `littlebox/package/`, and its `deploy.mjs` uploads it in 64 KiB blocks, resuming from the Kernel's offset. A 256 MiB database at its write cap and 20 MiB of files exported and imported with each process at or under 120 MiB of resident memory (`tests/smoke/package-quota.ts`). Moving it takes about 4,400 MCP calls each way.
 
 `transfer_complete` hashes uploads in 64 KiB reads instead of reading the file whole. Package transfers write one audit row at their first block rather than one per block.
 

@@ -212,7 +212,7 @@ describe("chunked package", () => {
     await publish("pkg_other");
     for (const scopes of [["read"], ["publish"], ["read", "write", "publish"]]) {
       const client = await delegate(scopes, ["pkg_permission"]);
-      for (const name of ["package_export", "project_export"]) {
+      for (const name of ["package_export", "project_export", "database_export"]) {
         await expect(client.call(name, { deploymentId: source.id })).rejects.toThrow("Unknown tool or insufficient permission");
       }
     }

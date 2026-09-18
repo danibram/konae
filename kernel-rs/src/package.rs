@@ -34,7 +34,7 @@ pub(super) const PACKAGE_FORMAT: &str = "littlebox-package";
 pub(super) const PACKAGE_VERSION: u64 = 1;
 pub(super) const COMPONENT_NAMES: [&str; 3] = ["database", "identity", "files"];
 const MIB: u64 = 1024 * 1024;
-/// The largest component a transfer may carry: a database at its quota.
+/// The largest component a transfer may carry, a database at its quota.
 pub(super) const MAX_COMPONENT_BYTES: u64 = MAX_APP_DATABASE_BYTES;
 /// File data a Deployment may hold, and the most one file may hold.
 const MAX_FILES_BYTES: u64 = 20 * MIB;
@@ -163,6 +163,11 @@ pub(super) fn ensure_space(free: u64, needed: u64, operation: &str) -> Result<()
         free / MIB
     );
     Ok(())
+}
+
+/// Refuses a component upload the volume cannot hold, before its bytes arrive.
+pub(super) fn ensure_upload_space(state: &AppState, size: u64) -> Result<()> {
+    ensure_space(free_bytes(&state.data_root)?, size + SPACE_MARGIN, "receive this component")
 }
 
 #[cfg(unix)]
