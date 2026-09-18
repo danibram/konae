@@ -79,9 +79,26 @@ The Kernel reads these at startup. Defaults are the values in `kernel-rs/src` un
 | `LITTLEBOX_ADMIN_KEY` | `local-development-key` | Installation setup key that creates the first owner. Later creators need an invitation code; see [Creator admission](#creator-admission). An empty value counts as unset. |
 | `LITTLEBOX_ALLOW_DEFAULT_KEY` | unset | Set to `1` to let the Kernel start on a non-loopback address with the default setup key. Compose sets it for the development stack. |
 | `LITTLEBOX_ACCOUNT_VERIFICATION` | `local` | `required` makes new creator and app accounts prove their email before they are active, and moves accounts that never verified to pending with their sessions revoked. `local` keeps unverified signup for development. See [Verified accounts](#verified-accounts). |
-| `LITTLEBOX_MAIL_TRANSPORT` | unset | How the Kernel sends account links. `development` appends each message to `mailbox.jsonl` in the data directory. Unset means no email: verification-required signup and recovery answer 503, and `app_invitations_create` refuses. |
+| `LITTLEBOX_MAIL_TRANSPORT` | unset | How the Kernel sends account links: `resend`, `smtp` or `development`. Every transport sends through the queue in `mail.sqlite`. `development` appends each message to `mailbox.jsonl` in the data directory. Unset means no email: verification-required signup and recovery answer 503. See [Account email](#account-email). |
+| `LITTLEBOX_MAIL_FROM` | `Littlebox <littlebox@localhost>` for `development`; required otherwise | Sender address, such as `Littlebox <no-reply@mail.example.com>`. Its domain is the one the preflight checks. |
+| `LITTLEBOX_MAIL_SECRET` | derived from `LITTLEBOX_ADMIN_KEY` | Secret, at least 32 characters, from which the Kernel derives the key that encrypts queued links. When unset the Kernel derives the key from `LITTLEBOX_ADMIN_KEY`, and refuses to start `resend` or `smtp` if that is still `local-development-key`. |
+| `LITTLEBOX_RESEND_API_KEY` | unset | Resend API key for `resend`. A sending-only key is enough to send. |
+| `LITTLEBOX_RESEND_DOMAINS_KEY` | `LITTLEBOX_RESEND_API_KEY` | Resend key that can list domains, for the sender preflight. Set it when the sending key has `sending_access` only. |
+| `LITTLEBOX_RESEND_WEBHOOK_SECRET` | unset | The `whsec_` signing secret of the Resend webhook that posts to `/_littlebox/mail/resend-events`. Unset means the route answers 404 and jobs stop at accepted. |
+| `LITTLEBOX_RESEND_API_URL` | `https://api.resend.com` | Resend API base URL. Tests point it at a local server. |
+| `LITTLEBOX_SMTP_HOST` | unset | SMTP server for `smtp`. |
+| `LITTLEBOX_SMTP_PORT` | `587`, or `465` with implicit TLS | SMTP port. |
+| `LITTLEBOX_SMTP_TLS` | `starttls` | `starttls` requires STARTTLS on a plain connection; `implicit` uses TLS from the first byte. `none` is accepted only for a loopback host. |
+| `LITTLEBOX_SMTP_USERNAME`, `LITTLEBOX_SMTP_PASSWORD` | unset | SMTP credentials. Set both or neither. |
+| `LITTLEBOX_MAIL_LIMIT_RECIPIENT_PER_MINUTE` | `3` | Account email requests one address may receive per minute. |
+| `LITTLEBOX_MAIL_LIMIT_RECIPIENT_PER_DAY` | `10` | Account email requests one address may receive per 24 hours. |
+| `LITTLEBOX_MAIL_LIMIT_CREATOR_PER_DAY` | `100` | Emails the apps of one creator may queue per 24 hours. |
+| `LITTLEBOX_MAIL_LIMIT_APP_PER_DAY` | `100` | Emails one Deployment may queue per 24 hours. |
+| `LITTLEBOX_MAIL_LIMIT_INSTALLATION_PER_DAY` | `1000` | Emails the installation may queue per 24 hours. Keep it at or below the provider's contracted limit. |
+| `LITTLEBOX_MAIL_LIMIT_CLIENT_PER_HOUR` | `20` | Account email requests one client address may make per hour. |
+| `LITTLEBOX_MAIL_WORKER_INTERVAL_MS` | `5000` | How often the worker looks for due jobs. A new job also wakes it. |
 | `LITTLEBOX_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses whose `X-Forwarded-For` header the Kernel trusts for rate limiting. CIDR ranges are rejected. |
-| `LITTLEBOX_DATA_DIR` | `/data` (`data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory: one folder per Deployment under `deployments/<id>/`, plus `owners.sqlite` and `mcp.sqlite`. |
+| `LITTLEBOX_DATA_DIR` | `/data` (`data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory: one folder per Deployment under `deployments/<id>/`, plus `owners.sqlite`, `mcp.sqlite` and `mail.sqlite`. |
 | `LITTLEBOX_PUBLIC_ORIGIN` | `http://localhost:8080` (`http://localhost:<kernel port>` under `dev:local`) | Origin used to build app URLs. Its scheme and port are copied onto each app hostname, and an `https://` origin makes OAuth metadata use HTTPS. |
 | `LITTLEBOX_HOST_SUFFIX` | `localhost` | Domain appended to new app hostnames, as in `<slug>-<id>.localhost`. |
 | `LITTLEBOX_MCP_ORIGIN` | unset | Public origin of the MCP endpoint, without a path, when it differs from the hosting origin. OAuth discovery advertises it. |
@@ -217,7 +234,29 @@ Creator accounts and app accounts share one account core in the Kernel. An accou
 
 Switching an installation to `required` moves every account that never verified, in both scopes, to pending and revokes its sessions. IDs, rows and file owners stay. Those people enter again through **Forgot your password?**, which sends them a verification link. The switch happens the first time the Kernel opens each identity database in the new mode, so an installation never reaches production with active accounts whose email nobody proved. Switching back to `local` and later to `required` again moves accounts created unverified in between.
 
-`required` needs a mail transport. Without one, signup and recovery answer 503 with an explanation, and active accounts still sign in. Until a production transport exists, `LITTLEBOX_MAIL_TRANSPORT=development` writes each link to `mailbox.jsonl` in the data directory with `0600` permissions; that file holds live links, so use it only on a machine you control.
+`required` needs a mail transport. Without one, signup and recovery answer 503 with an explanation, and active accounts still sign in. `LITTLEBOX_MAIL_TRANSPORT=development` writes each link to `mailbox.jsonl` in the data directory with `0600` permissions; that file holds live links, so use it only on a machine you control.
+
+## Account email
+
+Signup, recovery and, later, invitation links leave through a queue in `mail.sqlite` in the data directory. The Kernel stores the job in the same transaction as the link's challenge, so a request either stores both or neither. A worker inside the Kernel sends due jobs every few seconds and whenever a job arrives; a request never waits for the provider.
+
+Choose a transport with `LITTLEBOX_MAIL_TRANSPORT`:
+
+- `resend` sends through Resend's HTTP API. Set `LITTLEBOX_RESEND_API_KEY` and `LITTLEBOX_MAIL_FROM` with an address on a domain verified in Resend. Each request carries the job ID as its `Idempotency-Key`, so a retry after a restart is the same email to Resend.
+- `smtp` sends through any SMTP server with STARTTLS (the default) or implicit TLS. Set `LITTLEBOX_SMTP_HOST`, the credentials and `LITTLEBOX_MAIL_FROM`. SMTP has no idempotency key: a Kernel stopped between the server's answer and the queue's record sends that one email twice.
+- `development` writes to `mailbox.jsonl`, as above.
+
+Before it sends anything, the Kernel checks the sender. For Resend the sender's domain must be `verified` in the account; a key with `sending_access` cannot read domains, so set `LITTLEBOX_RESEND_DOMAINS_KEY` to a full-access key or the check refuses. For SMTP the check connects, negotiates TLS and authenticates; whether the server lets that account send as the sender address is the provider's rule, and a refusal there shows as failed jobs. While the check refuses, signup and recovery answer 503 and nothing is queued. A refused check runs again every 10 minutes, and the admin MCP tool `mail_status` with `refresh: true` runs it at once. `/_littlebox/health` reports the transport, whether it is sending, the queue depth and the kind of the last failure.
+
+A job is `pending` until the provider takes it, then `accepted`, then `delivered` when the provider reports delivery to the recipient's server, or `failed`. A provider outage keeps jobs pending and retries up to nine attempts over about two hours, waiting 30 seconds at first and doubling up to an hour. A job whose link was replaced, used or expired before sending fails without being sent. Delivery says the recipient's server took the email, not that a person read it, and it never activates an account.
+
+Each queued link is encrypted with AES-256-GCM under a key derived from `LITTLEBOX_MAIL_SECRET`, or from `LITTLEBOX_ADMIN_KEY` when that is unset, and is deleted once the provider accepts the email. Changing either secret leaves pending links unreadable; those jobs fail and people ask for a new link.
+
+To record delivery, add a webhook in Resend that posts `email.sent`, `email.delivered`, `email.bounced`, `email.failed` and `email.suppressed` to `<LITTLEBOX_PUBLIC_ORIGIN>/_littlebox/mail/resend-events`, and set `LITTLEBOX_RESEND_WEBHOOK_SECRET` to its signing secret. The Kernel rejects an event without a valid signature, records each event ID once, and only moves a job forward.
+
+The limits refuse a request with 429 and queue nothing. Each address takes at most 3 account emails a minute and 10 a day, one client address may ask for 20 an hour, the apps of one creator 100 a day, one app 100 a day and the installation 1,000 a day. The address and client limits count requests, including those for addresses with no account, so a refusal never tells who has one. The `LITTLEBOX_MAIL_LIMIT_*` variables change them; keep the installation limit at or below what the provider allows.
+
+`mail.sqlite` travels in scheduled copies, with its links still encrypted. A restore ends every pending job, because the restore invalidates the challenges their links carry. An app export does not include the queue.
 
 The operator suspends or resumes a local creator account from the server:
 

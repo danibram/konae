@@ -483,6 +483,7 @@ mod tests {
             accounts: AccountSettings {
                 verification,
                 mail: Some(mailbox.clone() as Arc<dyn AccountMail>),
+                queue: None,
             },
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),

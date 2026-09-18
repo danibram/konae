@@ -16,7 +16,7 @@
 //! invitation accepted and issues the session.
 
 use super::*;
-use accounts::{AccountMessage, app_store};
+use accounts::app_store;
 use auth::{AuthSession, IssuedChallenge, NewPassword, Purpose};
 use mcp::Owner;
 use rusqlite::params;
@@ -198,7 +198,7 @@ async fn inspect_route(State(state): State<AppState>, request: Request) -> Respo
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
     let input: TokenInput = match accounts::read_body(&state, request, &deployment.id, |_| "account-link".into()).await {
-        Ok(input) => input,
+        Ok((input, _client)) => input,
         Err(response) => return response,
     };
     match inspect(&state, &deployment, &input.token).await {
@@ -216,7 +216,7 @@ async fn accept_route(State(state): State<AppState>, request: Request) -> Respon
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
     let input: AcceptInput = match accounts::read_body(&state, request, &deployment.id, |_| "account-link".into()).await {
-        Ok(input) => input,
+        Ok((input, _client)) => input,
         Err(response) => return response,
     };
     match accept(&state, &deployment, &input.token, &input.password).await {
@@ -393,7 +393,7 @@ async fn run(state: &AppState, deployment: &Deployment, inviter: &str, name: &st
         "app_invitations_create" | "app_invitation_resend" => {
             // Without a transport nothing is created, so no invitation waits
             // for a message that cannot leave.
-            let mail = state.accounts.mail.clone().ok_or(AuthError::MailUnavailable)?;
+            accounts::mail_ready(state)?;
             let key = text("idempotencyKey");
             let prepared = if name == "app_invitations_create" {
                 let emails: Vec<String> = serde_json::from_value(a["emails"].clone())?;
@@ -410,24 +410,20 @@ async fn run(state: &AppState, deployment: &Deployment, inviter: &str, name: &st
                 return Ok(response);
             }
             // The rows that record the invitations are committed before any
-            // message leaves, so a retry with the same key finds them.
+            // message leaves, so a retry with the same key finds them. Each
+            // message then goes through the account mail outbox and its budgets.
+            let page = format!("{}/_littlebox/invitation", deployment.url);
             let mut outcomes: HashMap<String, &'static str> = HashMap::new();
-            for (invitation, challenge) in &issued {
-                let message = AccountMessage {
-                    to: challenge.email.clone(),
-                    purpose: Purpose::Invitation,
-                    scope: challenge.scope.clone(),
-                    link: format!("{}/_littlebox/invitation#invitation={}", deployment.url, challenge.token),
-                    expires_at: challenge.expires_at,
-                };
-                let delivery = match mail.deliver(&message) {
+            for (invitation, challenge) in issued {
+                let scope = challenge.scope.clone();
+                let delivery = match accounts::deliver_issued(state, deployment, challenge, page.clone(), None).await {
                     Ok(()) => "queued",
                     Err(error_value) => {
-                        eprintln!("Invitation email for {} failed: {error_value}", challenge.scope);
+                        eprintln!("Invitation email for {scope} failed: {error_value}");
                         "failed"
                     }
                 };
-                outcomes.insert(invitation.clone(), delivery);
+                outcomes.insert(invitation, delivery);
             }
             let mark = |entry: &mut Value| {
                 if let Some(delivery) = entry["invitationId"].as_str().and_then(|id| outcomes.get(id)) {
@@ -829,6 +825,7 @@ mod tests {
             accounts: AccountSettings {
                 verification: Verification::Required,
                 mail: Some(mailbox.clone() as Arc<dyn AccountMail>),
+                queue: None,
             },
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),

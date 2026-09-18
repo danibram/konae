@@ -44,10 +44,15 @@ async function mailbox(): Promise<{ to: string; purpose: string; link: string }[
   return text.split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
-async function lastLinkFor(email: string) {
-  const message = (await mailbox()).filter((item) => item.to === email).at(-1);
-  if (!message) throw Error(`No link was sent to ${email}.`);
-  return new URL(message.link);
+/** The queue's worker writes the development mailbox shortly after the request returns, so wait for it. */
+async function lastLinkFor(email: string, seen = 0) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const messages = (await mailbox()).filter((item) => item.to === email);
+    if (messages.length > seen) return new URL(messages.at(-1)!.link);
+    await Bun.sleep(100);
+  }
+  throw Error(`No link was sent to ${email}.`);
 }
 
 function tokenOf(link: URL) {
@@ -79,7 +84,7 @@ beforeAll(async () => {
   const port = Number(process.env.LITTLEBOX_ADMISSION_TEST_PORT) || 19400 + Math.floor(Math.random() * 90);
   url = `http://127.0.0.1:${port}`;
   kernel = Bun.spawn([binary], {
-    env: { ...operatorEnv(), LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_PUBLIC_ORIGIN: url, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development" },
+    env: { ...operatorEnv(), LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_PUBLIC_ORIGIN: url, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development", LITTLEBOX_MAIL_LIMIT_RECIPIENT_PER_MINUTE: "100", LITTLEBOX_MAIL_LIMIT_CLIENT_PER_HOUR: "1000" },
     stdout: "ignore", stderr: "inherit",
   });
   for (let attempt = 0; attempt < 100; attempt++) {

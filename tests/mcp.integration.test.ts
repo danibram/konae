@@ -531,7 +531,10 @@ describe("authenticated MCP", () => {
     const created = await manager.call<{ results: Array<{ status: string; delivery: string; invitationId: string }> }>("app_invitations_create", request);
     expect(created.results[0]).toMatchObject({ status: "invited", delivery: "queued" });
     expect(await manager.call("app_invitations_create", request)).toEqual(created);
-    const mailbox = (await Bun.file(path.join(root, "mailbox.jsonl")).text()).trim().split("\n").map((line) => JSON.parse(line)).filter((message) => message.purpose === "invitation");
+    // The queue's worker writes the development mailbox shortly after the call returns.
+    const readInvitations = async () => (await Bun.file(path.join(root, "mailbox.jsonl")).text().catch(() => "")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((message) => message.purpose === "invitation");
+    let mailbox = await readInvitations();
+    for (const deadline = Date.now() + 10_000; mailbox.length === 0 && Date.now() < deadline; mailbox = await readInvitations()) await Bun.sleep(100);
     expect(mailbox).toHaveLength(1);
     expect(mailbox[0]).toMatchObject({ to: "ana@app.test", scope: `deployment:${receipt.id}` });
     const token = new URL(mailbox[0].link).hash.slice("#invitation=".length);
