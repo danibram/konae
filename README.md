@@ -169,7 +169,7 @@ Restoring from `s3://` reads `LITTLEBOX_S3_ENDPOINT`, `LITTLEBOX_S3_REGION`, `LI
 
 Open **Platform access** in the editor to create an owner account or sign in. The installation setup key, `local-development-key` in the local development configuration, creates the first owner; every later creator signs up with an invitation code, as [Creator admission](#creator-admission) explains. The editor uses an HttpOnly owner session; it never receives the setup key at build time.
 
-Agents connect to `/mcp` using OAuth with PKCE or a scoped, expiring bearer token. Apps use the SDK over `/_littlebox/mcp` with their own app sessions. On a public app, a signed-out visitor may call actions declared with `"access": "anonymous"`; every other runtime operation requires an app session, and administration always requires an owner credential. The old operation routes return HTTP 410.
+Agents connect to `/mcp` using OAuth with PKCE or a scoped, expiring bearer token. Apps use the SDK over `/_littlebox/mcp` with their own app sessions. On a public app, a signed-out visitor may call actions declared with `"access": "anonymous"`; every other runtime operation requires an app session, and administration always requires an owner credential. The old operation routes return HTTP 410, except the file read path `GET /_littlebox/files/<id>`, which answers its allowed callers under the file's visibility.
 
 With `LITTLEBOX_MCP_TOKEN` configured, create and develop a project from this repository:
 

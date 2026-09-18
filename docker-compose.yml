@@ -6,7 +6,8 @@ networks:
         - subnet: 172.30.10.0/24
 
 services:
-  # MinIO removed its images from Docker Hub and quay.io in 2026. RustFS is an
+  # On 2026-11-06 the pinned minio/minio and minio/mc tags could not be pulled
+  # from Docker Hub or quay.io, while other images pulled fine. RustFS is an
   # S3-compatible server under Apache 2 that answers the same health path, so the
   # tests and the Kernel's S3 settings need no change.
   minio:
