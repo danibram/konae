@@ -4,7 +4,7 @@
  * literals and quoted identifiers are consumed whole, so a keyword or a `;`
  * inside one never counts.
  */
-export type SqlToken =
+export type SqlToken = (
   /** A bare word as written, e.g. `delete`, `tasks`. */
   | { kind: "word"; text: string; depth: number }
   /** A quoted identifier ("x", `x` or [x]), without its quotes. */
@@ -12,7 +12,12 @@ export type SqlToken =
   /** A string literal. Its contents are never read. */
   | { kind: "string"; depth: number }
   /** Any other character that is not whitespace: `(`, `=`, `,`, `;` and so on. */
-  | { kind: "symbol"; text: string; depth: number };
+  | { kind: "symbol"; text: string; depth: number }
+) & {
+  /** Offsets into the statement, so a reader can quote the token as written. */
+  start: number;
+  end: number;
+};
 
 export function sqlTokens(sql: string): SqlToken[] {
   const tokens: SqlToken[] = [];
@@ -43,25 +48,26 @@ export function sqlTokens(sql: string): SqlToken[] {
         text += sql[end];
         end += 1;
       }
-      tokens.push(char === "'" ? { kind: "string", depth } : { kind: "identifier", text, depth });
+      const span = { start: index, end: Math.min(end + 1, sql.length) };
+      tokens.push(char === "'" ? { kind: "string", depth, ...span } : { kind: "identifier", text, depth, ...span });
       index = end + 1;
     } else if (/[A-Za-z_\u0080-\uffff]/.test(char)) {
       // SQLite reads every character at or above U+0080 as part of an
       // identifier, so `éwhere` or `t\u00a0WHERE` is one name, never a WHERE.
       // This branch comes before the whitespace one for that reason.
       const match = /^[A-Za-z_\u0080-\uffff][A-Za-z0-9_$\u0080-\uffff]*/.exec(sql.slice(index))![0];
-      tokens.push({ kind: "word", text: match, depth });
+      tokens.push({ kind: "word", text: match, depth, start: index, end: index + match.length });
       index += match.length;
     } else if (/[0-9]/.test(char)) {
       // A number, including forms like 1e5 or 0x1F, so its letters never read as a word.
       const match = /^[0-9][0-9A-Za-z_.]*/.exec(sql.slice(index))![0];
-      tokens.push({ kind: "symbol", text: match, depth });
+      tokens.push({ kind: "symbol", text: match, depth, start: index, end: index + match.length });
       index += match.length;
     } else if (/\s/.test(char)) {
       index += 1;
     } else {
       if (char === ")") depth = Math.max(0, depth - 1);
-      tokens.push({ kind: "symbol", text: char, depth });
+      tokens.push({ kind: "symbol", text: char, depth, start: index, end: index + 1 });
       if (char === "(") depth += 1;
       index += 1;
     }

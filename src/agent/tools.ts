@@ -237,17 +237,18 @@ function defineTool<T extends TSchema, D>(definition: AgentTool<T, D>): AgentToo
 }
 
 export function formatValidation(validation: ValidationResult): string {
+  const warnings = (validation.warnings ?? []).map((warning) => `\n- [${warning.stage}] Warning: ${warning.message}`).join("");
   if (validation.ok) {
     const skipped = validation.checked.includes("migration")
       ? ""
       : " The migration stage did not run, so nothing was checked against the live database.";
-    return `Validation passed: schema, server actions and bindings are consistent.${skipped}`;
+    return `Validation passed: schema, server actions and bindings are consistent.${skipped}${warnings}`;
   }
   const lines = validation.errors.map((error) => {
     const detail = error.detail ? `\n  ${error.detail}` : "";
     return `- [${error.stage}] ${error.message}${detail}`;
   });
-  return `Validation failed with ${validation.errors.length} problem${validation.errors.length === 1 ? "" : "s"}:\n${lines.join("\n")}`;
+  return `Validation failed with ${validation.errors.length} problem${validation.errors.length === 1 ? "" : "s"}:\n${lines.join("\n")}${warnings}`;
 }
 
 function requireCapsuleFile(path: string): ProjectFile {

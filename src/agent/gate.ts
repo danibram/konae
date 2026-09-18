@@ -1,6 +1,7 @@
 import type { Database, SqlJsStatic } from "sql.js";
 import { parseServerActionSource, resolveServerAction, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
 import { sqlStatementTokens, sqlWordsOf, type SqlToken } from "../lib/sql-tokens";
+import { contractFromProgram } from "../lib/action-contract";
 import type {
   CapsuleFiles,
   CapsuleValidator,
@@ -8,6 +9,7 @@ import type {
   ValidationError,
   ValidationResult,
   ValidationStage,
+  ValidationWarning,
 } from "./contracts";
 
 export type SqlJsLoader = () => Promise<SqlJsStatic>;
@@ -64,6 +66,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     const SQL = await this.loadSql();
     const errors: ValidationError[] = [];
     const checked: ValidationStage[] = [];
+    const warnings: ValidationWarning[] = [];
     let fresh: Database | undefined;
     let clone: Database | undefined;
 
@@ -114,6 +117,8 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       }
 
       if (program) errors.push(...checkActions(fresh, program, "actions"));
+      // A result column without a name a second backend could match passes, with a warning.
+      if (program) warnings.push(...contractFromProgram(program, files["schema.sql"]).warnings.map(({ message }) => ({ stage: "actions" as const, message })));
       checked.push("actions");
 
       if (live.state === "unreadable") {
@@ -156,7 +161,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       clone?.close();
     }
 
-    return { ok: errors.length === 0, errors, checked };
+    return { ok: errors.length === 0, errors, checked, ...(warnings.length > 0 ? { warnings } : {}) };
   }
 }
 

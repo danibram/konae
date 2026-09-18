@@ -76,9 +76,17 @@ export type ValidationError = {
   detail?: string;
 };
 
+/** A finding that does not block the change. */
+export type ValidationWarning = {
+  stage: ValidationStage;
+  message: string;
+};
+
 export type ValidationResult = {
   ok: boolean;
   errors: ValidationError[];
+  /** Absent when there is nothing to report. */
+  warnings?: ValidationWarning[];
   /**
    * The stages that actually ran. A verdict may only be reported as far as this
    * reaches: a stage that was skipped never held, it was never asked.

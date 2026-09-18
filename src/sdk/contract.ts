@@ -25,6 +25,8 @@ export type SdkError = {
   message: string;
   when: string;
   source: "kernel" | "sdk";
+  /** The HTTP status a route answers with, for refusals seen on an HTTP route. */
+  status?: number;
   /** Exact messages; placeholders are written <key> and <name>. */
   preview?: readonly string[] | null;
 };
@@ -291,15 +293,15 @@ export const sdkContract = {
             { message: "Action <name> names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter.", when: "the secret is not a secret name", source: "kernel" },
             { message: "Action <name> has an invalid http binding.", when: "http is not an object, has another key, or its signature has a key other than header and secret", source: "kernel" },
             { message: "Action <name> signs with the secret <name>, which is not set for this project. Set it with secret_set before publishing.", when: "publishing, and the owner has not set the secret; the editor cannot see secrets, so only the Kernel refuses this", source: "kernel", preview: null },
-            { message: "invalid-signature", when: "a signed route gets no signature, a wrong one, or a t more than 300 seconds from the Kernel's clock (401)", source: "kernel", preview: null },
-            { message: "replayed-signature", when: "the same signature arrives a second time (409)", source: "kernel", preview: null },
-            { message: "invalid-api-key", when: "Authorization carries an lbk_ key that is unknown or revoked (401)", source: "kernel", preview: null },
-            { message: "This API key may not call <name>.", when: "the key does not name the route's action (403)", source: "kernel", preview: null },
-            { message: "No route accepts POST on this path.", when: "a POST reaches a path no action binds (405)", source: "kernel", preview: null },
-            { message: "The request body exceeds 64 KiB.", when: "a POST body is larger (413)", source: "kernel", preview: null },
-            { message: "The request body must be a JSON object.", when: "a POST body does not parse as JSON (400)", source: "kernel", preview: null },
-            { message: "Repeated query parameter: <key>", when: "a GET names one input twice (400)", source: "kernel", preview: null },
-            { message: "rate-limited", when: "a caller exceeds the action limits of the runtime endpoint (429, with Retry-After)", source: "kernel", preview: null },
+            { message: "invalid-signature", when: "a signed route gets no signature, a wrong one, or a t more than 300 seconds from the Kernel's clock (401)", source: "kernel", status: 401, preview: null },
+            { message: "replayed-signature", when: "the same signature arrives a second time (409)", source: "kernel", status: 409, preview: null },
+            { message: "invalid-api-key", when: "Authorization carries an lbk_ key that is unknown or revoked (401)", source: "kernel", status: 401, preview: null },
+            { message: "This API key may not call <name>.", when: "the key does not name the route's action (403)", source: "kernel", status: 403, preview: null },
+            { message: "No route accepts POST on this path.", when: "a POST reaches a path no action binds (405)", source: "kernel", status: 405, preview: null },
+            { message: "The request body exceeds 64 KiB.", when: "a POST body is larger (413)", source: "kernel", status: 413, preview: null },
+            { message: "The request body must be a JSON object.", when: "a POST body does not parse as JSON (400)", source: "kernel", status: 400, preview: null },
+            { message: "Repeated query parameter: <key>", when: "a GET names one input twice (400)", source: "kernel", status: 400, preview: null },
+            { message: "rate-limited", when: "a caller exceeds the action limits of the runtime endpoint (429, with Retry-After)", source: "kernel", status: 429, preview: null },
           ],
           limits: [
             "a POST body of 64 KiB",

@@ -4,6 +4,7 @@ import { withPrivateNotes } from "../lib/private-notes";
 import { cloneStarter, starterProject } from "../lib/starter";
 import type { CapsuleFiles, LiveDatabase } from "./contracts";
 import { createCapsuleValidator } from "./gate";
+import { formatValidation } from "./tools";
 
 // sql.js resolves its own wasm under bun; the browser path uses the bundled url loader.
 let sql: Promise<SqlJsStatic> | undefined;
@@ -38,6 +39,23 @@ describe("validation gate", () => {
     const result = await validator.validate(capsule());
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
+  });
+
+  test("warns, without failing, when a query returns an expression without a name", async () => {
+    const result = await validator.validate(capsule({
+      "schema.sql": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL);",
+      "actions.json": actions({ version: 1, actions: {
+        "tasks.count": { kind: "query", access: "anonymous", statement: "SELECT count(*) FROM tasks", bindings: [] },
+        "tasks.total": { kind: "query", access: "anonymous", statement: "SELECT count(*) AS n FROM tasks", bindings: [] },
+      } }),
+    }));
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([{
+      stage: "actions",
+      message: "Server action tasks.count returns count(*) without a name. Add AS <name> so every backend returns the same key.",
+    }]);
+    expect(formatValidation(result)).toContain("Warning: Server action tasks.count returns count(*) without a name.");
+    expect((await validator.validate(capsule())).warnings).toBeUndefined();
   });
 
   test("fails at stage schema when schema.sql cannot run", async () => {
