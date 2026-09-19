@@ -33,3 +33,11 @@ Littlebox must provide dependency resolution, TypeScript diagnostics, a canonica
 ## Note, 2026-11-06
 
 The Kernel stores a Deployment's Build Artifact in `deployments/<id>/artifact/`, in the same folder as its record, databases, files and backups, instead of a separate `artifacts/<id>/` tree. That folder is the unit a scheduled copy carries and `littlebox-kernel restore` installs. When S3 is configured the Kernel still uploads the artifact to the artifact bucket, but serves from the volume and reads S3 only when the local file is missing. A Kernel with the older layout moves it into place on start.
+
+## Note, 2026-11-06: Eject on the server
+
+Eject runs on the Kernel in two steps, `eject_plan` and `eject_apply`, behind a new `manage_lifecycle` permission that the owner's browser session holds and a token holds only when delegated. The plan pins the saved-sources revision, the counter `project_sources_save` advances, and returns the code package as a download: the saved sources, a `littlebox.json` for an External project and a README with the CLI commands. The client checks it before it applies. Apply takes the project lock a save takes, checks the revision again, sets the source authority to External and records who ejected it, when, and at which revision. A save from an old tab therefore lands before Eject, which makes the plan stale, or is refused after it with one message.
+
+Eject does not export a conventional project with resolved dependencies and migration history, as the decision above describes. Managed projects have no package manifest or migration files to resolve, so the package holds what the editor saved: the source tree, `schema.sql`, `actions.json` and the Drizzle `schema.ts`. The Littlebox CLI builds that tree and publishes it. After Eject the project's last saved sources stay readable, frozen, so the editor can show them read-only; the plan forbids Managed source changes, not reads.
+
+A project created External never passes through Eject, and `project_create` asking for Managed on an External project is refused, so source authority only moves one way. The Deployment, its accounts, sessions, invitations, mail and URL are not touched.

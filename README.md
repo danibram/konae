@@ -122,8 +122,8 @@ The editor, the `littlebox` CLI and the test configurations read these:
 | --- | --- | --- | --- |
 | `LITTLEBOX_EDITOR_PORT` | `dev:local` | `4173` | Port of the Vite editor. |
 | `LITTLEBOX_KERNEL_URL` | `dev:local`, `vite.config.ts` | `http://127.0.0.1:<kernel port>` under `dev:local`, `http://127.0.0.1:8787` for plain `bun run dev` | Kernel the editor proxies `/mcp`, `/_littlebox`, `/oauth` and `/.well-known` to. |
-| `LITTLEBOX_MCP_TOKEN` | `littlebox` CLI | unset | Bearer token for `init`, `publish` and `export --with-data`. When unset, the CLI reads `.littlebox/credentials.json`. |
-| `LITTLEBOX_URL` | `littlebox login`, `littlebox init` | `http://localhost:4173` | Littlebox installation to talk to. `--url` overrides it. |
+| `LITTLEBOX_MCP_TOKEN` | `littlebox` CLI | unset | Bearer token for `init`, `publish`, `export --with-data` and `eject`. When unset, the CLI reads `.littlebox/credentials.json`. |
+| `LITTLEBOX_URL` | `littlebox login`, `littlebox init`, `littlebox eject` | `http://localhost:4173` | Littlebox installation to talk to. `--url` overrides it. |
 | `LITTLEBOX_EMAIL`, `LITTLEBOX_PASSWORD` | `littlebox login` | unset | Owner credentials exchanged for a 24-hour MCP token. |
 | `LITTLEBOX_SETUP_KEY` | `littlebox login` | unset | Installation setup key, needed only to create an installation's first owner. |
 | `LITTLEBOX_INVITATION_CODE` | `littlebox login` | unset | Invitation code that creates the account when it does not exist yet. |
@@ -316,6 +316,22 @@ bun run littlebox -- export --dir /tmp/my-app --out /tmp/my-app-with-data.tar --
 ```
 
 `--with-data` downloads the app as a package. It holds a manifest and one file each for the database, the accounts and the files, streamed in 64 KiB blocks, so an app at its 256 MiB database and 20 MiB file quotas exports whole. The kit's `deploy.mjs` uploads the package the same way and the target Kernel checks it before it creates the app. [The MCP guide](./docs/mcp.md#export-and-import-an-app) describes the format. The command refuses to overwrite an archive and writes it with owner-only permissions. Live-state exports retain the deployed visibility and signup policy. The target installs that policy with its first deployment. Exports with live state contain password hashes and attachments; keep them private. Extracted snapshots have owner-only permissions and the kit's Git rules exclude them.
+
+## Eject
+
+Eject hands a Managed project's code to its owner to edit outside Littlebox. The project becomes External; the hosted app keeps its URL, users, sessions, data, invitations and email service, and Eject exports no data. From then on the Kernel refuses edits to its saved sources from every tab and agent, and the owner publishes Build Artifacts with the CLI. Littlebox does not take a project back: to edit in the editor again, create a new project. [ADR-0005](./docs/adr/0005-build-artifacts-separate-managed-and-external-projects.md) records the decision.
+
+In the editor, the project list's "Take it with you" group has an Eject action per project. It downloads the code as a tar, checks it, and only then ejects. The project then opens read-only with the commands to publish from outside.
+
+From the CLI, eject writes the code into an empty folder and publishes from there. Eject needs the `manage_lifecycle` permission: `login --manage-lifecycle` asks for it, and the read, write, publish, manage_users and export_data permissions do not include it.
+
+```sh
+LITTLEBOX_EMAIL=... LITTLEBOX_PASSWORD=... bun run littlebox -- login --dir /tmp/ejected --url http://localhost:4173 --manage-lifecycle
+bun run littlebox -- eject --dir /tmp/ejected --project <project id> --url http://localhost:4173
+bun run littlebox -- publish --dir /tmp/ejected
+```
+
+`eject` plans at the revision the server last saved, or at `--revision`, downloads the package, checks every file's SHA-256, writes the folder and then applies, saving the receipt in `.littlebox/eject-receipt.json`. A stale revision is refused before anything downloads. After an interruption, run the same command again in the same folder. [The MCP guide](./docs/mcp.md#eject) lists the tools and refusals.
 
 Eight runnable examples and their MCP replay are in [examples/product-fit](./examples/product-fit/README.md). The [product-fit assessment](./docs/research/product-fit.md) records tested workflows, remaining limits and the proposed next primitives.
 
