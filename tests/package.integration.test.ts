@@ -140,8 +140,10 @@ describe("chunked package", () => {
     const { source, cookie, fileId, exported, files } = await sourcePackage("pkg_source", directory);
     const manifest = exported.manifest;
     expect(manifest).toMatchObject({ format: "littlebox-package", version: 1, deploymentId: source.id, projectId: "pkg_source", visibility: "public", publishedRevision: 1, sourceAuthority: "external" });
-    expect(manifest.contents.map((content) => content.name)).toEqual(["database", "identity", "files"]);
+    // The signup, the action and the upload above wrote a Usage store, which travels too.
+    expect(manifest.contents.map((content) => content.name)).toEqual(["database", "identity", "files", "usage"]);
     expect(manifest.excluded).toContain("app sessions");
+    expect(manifest.excluded).not.toContain("Usage and Signals");
     for (const content of manifest.contents) expect(await checksum(new Uint8Array(await readFile(files[content.name])))).toBe(content.sha256);
     const identity = new Database(files.identity, { readonly: true });
     try {
@@ -156,6 +158,12 @@ describe("chunked package", () => {
     expect(await owner.call("release_apply", { planId: first.planId })).toEqual(first.receipt);
     const inspected = await owner.call<{ deployment: { id: string } }>("project_inspect", { projectId: "pkg_target" });
     expect(inspected.deployment.id).toBe(first.receipt.id);
+    const today = new Date().toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const usage = await owner.call<{ totals: { kind: string; name: string; count: number }[] }>("usage_read", { deploymentId: first.receipt.id, from: yesterday, to: today });
+    expect(usage.totals).toEqual(expect.arrayContaining([
+      { kind: "signup", name: "", count: 1 }, { kind: "action", name: "notes.create", count: 1 }, { kind: "upload", name: "", count: 1 },
+    ]));
 
     const moved = runtime(first.receipt.hostname, await account(first.receipt.hostname, "login", "writer@pkg_source.test"));
     expect(await moved.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Moved with the package" }]);
@@ -242,8 +250,9 @@ describe("chunked package", () => {
     try {
       const rows = db.query("SELECT detail,ok FROM audit WHERE tool='package_download' AND target=?1 ORDER BY id").all(source.id) as { detail: string; ok: number }[];
       const details = (ok: number) => rows.filter((row) => row.ok === ok).map((row) => row.detail).sort();
-      expect(details(0)).toEqual(["database", "files", "identity"]);
-      expect(details(1)).toEqual(["database", "files", "identity"]);
+      // The source app recorded Usage, so its package has a fourth component.
+      expect(details(0)).toEqual(["database", "files", "identity", "usage"]);
+      expect(details(1)).toEqual(["database", "files", "identity", "usage"]);
       const reads = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_read'").get() as { n: number };
       expect(reads.n).toBe(0);
       // Component uploads in the earlier tests wrote one row per component, not one per block.

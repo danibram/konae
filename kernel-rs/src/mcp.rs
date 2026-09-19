@@ -203,7 +203,7 @@ fn validate_managed_sources(source: &Value, id: &str) -> Result<()> {
         && ["optional", "required"].contains(&manifest["runtime"]["auth"]["mode"].as_str().unwrap_or(""))
         && manifest["runtime"]["files"]["access"] == "deployment"
         && actions.is_some_and(|list| list.len() <= 50 && list.iter().all(|action|
-            string(&action["name"], 120) && ["query", "mutation"].contains(&action["kind"].as_str().unwrap_or(""))
+            string(&action["name"], 120) && ["query", "mutation", "signal"].contains(&action["kind"].as_str().unwrap_or(""))
             && ["anonymous", "authenticated", "granted"].contains(&action["access"].as_str().unwrap_or("")))), "Invalid project manifest.");
     let mut names = std::collections::HashSet::new();
     for action in actions.unwrap() {
@@ -344,6 +344,7 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
             ),
         ]);
     }
+    tools.extend(super::usage::admin_tools());
     tools.push(tool(
         "signup_policy_read",
         "Read who may create an account on a deployment.",
@@ -1041,7 +1042,7 @@ async fn admin_call(
             // Rendered from src/sdk/contract.ts by `bun run sdk:render`.
             "sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,
             "actions" => {
-                json!({"filename":"actions.json","format":{"version":1,"actions":{"items.list":{"kind":"query","access":"authenticated","statement":"SELECT id,title FROM items WHERE user_id=?1 LIMIT 50","bindings":[{"source":"actor","field":"id"}]},"items.create":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO items(title,user_id) VALUES(?1,?2)","bindings":[{"source":"input","key":"title","type":"string","maxLength":200},{"source":"actor","field":"id"}]}}},"rules":"SQL and typed bindings stay server-side. Declare schema in schema.sql for artifact publication. Runtime calls only send the declared action name and input. Add nullable:true to an input binding to bind omitted values or explicit null as SQL NULL; supplied strings remain non-empty and all supplied values retain their type checks. Mutations return changes and lastInsertId, so read rows with a query instead of mutation RETURNING, which publication rejects. A query that reads rows needs a top-level LIMIT. A total with count, sum, avg, min or max and no GROUP BY does not. An anonymous action may add http:{method:'GET' for a query or 'POST' for a mutation,path,signature?:{header,secret}} to answer on that path of its Deployment host; the sdk topic's http module describes routes, signatures, API keys and secret_set."})
+                json!({"filename":"actions.json","format":{"version":1,"actions":{"items.list":{"kind":"query","access":"authenticated","statement":"SELECT id,title FROM items WHERE user_id=?1 LIMIT 50","bindings":[{"source":"actor","field":"id"}]},"items.create":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO items(title,user_id) VALUES(?1,?2)","bindings":[{"source":"input","key":"title","type":"string","maxLength":200},{"source":"actor","field":"id"}]}}},"rules":"SQL and typed bindings stay server-side. Declare schema in schema.sql for artifact publication. Runtime calls only send the declared action name and input. Add nullable:true to an input binding to bind omitted values or explicit null as SQL NULL; supplied strings remain non-empty and all supplied values retain their type checks. Mutations return changes and lastInsertId, so read rows with a query instead of mutation RETURNING, which publication rejects. A query that reads rows needs a top-level LIMIT. A total with count, sum, avg, min or max and no GROUP BY does not. An anonymous action may add http:{method:'GET' for a query or 'POST' for a mutation,path,signature?:{header,secret}} to answer on that path of its Deployment host; the sdk topic's http module describes routes, signatures, API keys and secret_set. A mutation may add signal:{name:'order.placed',properties:[input keys]} to record a Signal when it succeeds, and kind:'signal' with access, bindings and signal but no statement records one without SQL. The owner reads them with signals_read and Usage with usage_read."})
             }
             "publishing" => {
                 json!({"steps":["Create project identity with project_create. Keep its id, slug and manifest locally.","Build static HTML/CSS/JS locally. Inject the SDK using the local builder.","Upload JSON {project:{id,name,slug,files,manifest},visibility,artifact:{version:1,entrypoint:'index.html',files:{...}}} using transfer_begin with projectId, byte size and sha256, then transfer_write and transfer_complete.","Call release_plan with transferId, inspect its planId and expectedRevision, then call release_apply with planId.","Save the receipt and cancel the temporary transfer."],"concurrency":"An obsolete plan is rejected. Repeating an applied plan returns the same receipt.","access":"A first release may add initialSignupPolicy {mode, allowlist} with mode open, invitation, closed or allowlist; the Kernel installs it before the app serves. When the owner's request leaves access open for an app with accounts, propose visibility private and mode invitation. Later changes need manage_users and signup_policy_set. Invite people with app_invitations_create only when the owner asks, because it sends email."})
@@ -1218,6 +1219,10 @@ async fn admin_call(
             let id = a["deploymentId"].as_str().unwrap();
             let deployment = owned_deployment(state, owner, id, if name == "api_keys_list" { "read" } else { "publish" }).await?;
             super::http::api_keys_call(state, &deployment, name, &a).await
+        }
+        "usage_read" | "signals_read" => {
+            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "read").await?;
+            super::usage::admin_call(&state.data_root, &deployment, name, &a).await
         }
         "signup_policy_read" => {
             let id = a["deploymentId"].as_str().unwrap();
@@ -1490,7 +1495,11 @@ async fn runtime_call(
 ) -> Result<Value> {
     match name {
         "auth_session" => {
-            response_value(session(State(state.clone()), headers.clone()).await).await
+            let result = response_value(session(State(state.clone()), headers.clone()).await).await;
+            if let (Ok(_), Some(id)) = (&result, app) {
+                super::usage::count(&state.data_root, id, super::usage::Operation::Session);
+            }
+            result
         }
         "auth_logout" => response_value(logout(State(state.clone()), headers.clone()).await).await,
         "actions_invoke" => {
@@ -1524,7 +1533,11 @@ async fn runtime_call(
             .await;
             anyhow::ensure!(response.status().is_success(), "File not found.");
             let bytes = axum::body::to_bytes(response.into_body(), 2 * 1024 * 1024).await?;
-            download(state, principal, &bytes, None).await
+            let result = download(state, principal, &bytes, None).await;
+            if let (Ok(_), Some(id)) = (&result, app) {
+                super::usage::count(&state.data_root, id, super::usage::Operation::FileRead);
+            }
+            result
         }
         "files_upload" => {
             let visibility = match a.get("visibility").and_then(Value::as_str) {
@@ -1556,6 +1569,9 @@ async fn runtime_call(
                     .await?;
             result.as_object_mut().unwrap().remove("url");
             store(state)?.execute("INSERT INTO file_receipts(transfer_id,principal,request_hash,body) VALUES(?1,?2,?3,?4)",params![id,principal,request_hash,result.to_string()])?;
+            if let Some(deployment) = app {
+                super::usage::count(&state.data_root, deployment, super::usage::Operation::Upload);
+            }
             // Failed uploads and receipt replays leave no row.
             let result = Ok(result);
             audit(state, principal, name, &a, app, None, &result);

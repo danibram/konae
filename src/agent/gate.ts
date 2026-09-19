@@ -250,6 +250,16 @@ function checkActions(db: Database, program: ServerActionProgram, stage: "action
   const errors: ValidationError[] = [];
 
   for (const action of Object.values(program.actions)) {
+    if (action.kind === "signal") {
+      // A signal action runs no SQL; its bindings still have to resolve.
+      if (stage !== "actions") continue;
+      try {
+        resolveServerAction(program, action.name, syntheticInput(action), { actorId: "validation_actor", now: 0 });
+      } catch (error) {
+        errors.push({ stage, message: `The bindings of server action ${action.name} cannot be resolved.`, detail: describe(error) });
+      }
+      continue;
+    }
     try {
       const statement = db.prepare(action.statement);
       statement.free();

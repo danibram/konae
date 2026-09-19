@@ -5,17 +5,18 @@
 window.miniapp is the only host surface a Capsule has, in the editor preview and on every Deployment. Each module is a namespace on it. A published call is one or more MCP tool calls to the Deployment's runtime endpoint with the app session cookie.
 
 ```js
-const session = await miniapp.auth.session();           // { userId, name, role }; role is "anonymous" when signed out
-await miniapp.auth.signIn();                            // published login page, preview selects Alice
-await miniapp.auth.signOut();                           // revoke this app session
-const rows = await miniapp.actions.call("tasks.list");  // array of row objects
-await miniapp.actions.call("tasks.create", { title });  // { changes, lastInsertId }
-const files = await miniapp.files.list();               // that user's private files, plus public files
-const stored = await miniapp.files.upload(file);        // private to the signed-in user
+const session = await miniapp.auth.session();             // { userId, name, role }; role is "anonymous" when signed out
+await miniapp.auth.signIn();                              // published login page, preview selects Alice
+await miniapp.auth.signOut();                             // revoke this app session
+const rows = await miniapp.actions.call("tasks.list");    // array of row objects
+await miniapp.actions.call("tasks.create", { title });    // { changes, lastInsertId }
+await miniapp.actions.call("lesson.finish", { lesson });  // a signal action: { recorded: true }
+const files = await miniapp.files.list();                 // that user's private files, plus public files
+const stored = await miniapp.files.upload(file);          // private to the signed-in user
 const shared = await miniapp.files.upload(file, { visibility: "public" });
 ```
 
-There is nothing else: no fetch to other origins, no localStorage contract, no miniapp.db and no SQL from the browser.
+There is nothing else: no fetch to other origins, no localStorage contract, no miniapp.db and no SQL from the browser, no miniapp.track and no analytics call: a Signal is declared on a Server Action and recorded when miniapp.actions.call runs it.
 
 Error messages below are the exact text a published app receives as `error.message`. The Editor preview column says where the preview in the editor answers differently.
 
@@ -78,10 +79,32 @@ Editor preview: Switches to the signed-out state and returns the anonymous sessi
 
 ## miniapp.actions
 
-The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement.
+The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.
 
 - A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.
 - A mutation action returns { changes, lastInsertId }. Read changed rows with a separate query.
+- To record that something happened, such as a signup to a newsletter or a finished lesson, declare a signal on the mutation that does it, or add an action of kind signal and call it with miniapp.actions.call. There is no other tracking call.
+- A call the Kernel refuses records no Signal and counts in no Usage total.
+
+Declared with `signal` in `actions.json`. { "name": "order.placed", "properties"?: ["input binding keys"] } on a mutation, or on an action of "kind": "signal" that has access and bindings but no statement. When the action succeeds the Kernel records the Signal with the named inputs as its properties, in the Deployment's Usage store. A signal action runs no SQL and returns { recorded: true }. The owner reads Signals with signals_read; the app cannot. The Validation Gate and the Kernel refuse the same declarations with the same messages.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `Action <name> is a query, so it cannot declare a signal. Declare it on a mutation or on a "kind": "signal" action.` | the action is a query | Kernel | Same |
+| `Action <name> names signal property <key>, which is not one of its input bindings.` | a property is not the key of an input binding; actor, kernel and literal bindings have no key | Kernel | Same |
+| `Action <name> names signal property <key> twice.` | properties lists a key twice | Kernel | Same |
+| `Action <name> names more than 8 signal properties.` | properties lists more than 8 keys | Kernel | Same |
+| `Action <name> names an invalid signal. Use dot-separated lowercase words, such as "order.placed", up to 64 characters.` | the name has one word, a capital, a space, an empty part or more than 64 characters | Kernel | Same |
+| `Action <name> has an invalid signal declaration.` | signal is not an object, has a key other than name and properties, has no name, or properties is not a list of strings | Kernel | Same |
+| `Action <name> is a signal action, so it must declare a signal.` | the kind is signal and there is no signal key | Kernel | Same |
+| `Action <name> is a signal action, so it runs no SQL and cannot declare a statement.` | the kind is signal and the action has a statement | Kernel | Same |
+
+Limits:
+
+- 8 properties per Signal; a string property keeps its first 128 bytes
+- a signal action counts toward the action limit like any other action
+- a signal action cannot declare http
+- the Kernel keeps the newest 50,000 Signals per Deployment and drops the oldest
 
 ### miniapp.actions.call(name, input = {})
 
@@ -96,7 +119,7 @@ Runtime MCP tools: `actions_invoke`.
 | `name` | `string` | Yes | A Server Action name declared in actions.json, e.g. tasks.list |
 | `input` | `object` | No | One value per input binding of the action, keyed by the binding's key. Defaults to {} |
 
-Returns an array of row objects for a query action, { changes, lastInsertId } for a mutation action.
+Returns an array of row objects for a query action, { changes, lastInsertId } for a mutation action, { recorded: true } for a signal action.
 
 | Message | When | Source | Editor preview |
 | --- | --- | --- | --- |
@@ -122,7 +145,7 @@ Limits:
 - string inputs default to a maxLength of 10,000 UTF-16 code units
 - 256 MiB per app database
 
-Editor preview: Ignores the Deployment's visibility and rate limits, and keeps its database in the browser with a 10 MiB cap.
+Editor preview: Ignores the Deployment's visibility and rate limits, and keeps its database in the browser with a 10 MiB cap. A signal action returns { recorded: true } and records nothing; Signals exist only on a Deployment or a Development Kernel.
 
 ## miniapp.files
 

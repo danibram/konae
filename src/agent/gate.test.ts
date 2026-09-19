@@ -104,6 +104,29 @@ describe("validation gate", () => {
     }
   });
 
+  test("passes a signal action without SQL and refuses a signal the Kernel refuses", async () => {
+    const program = (signal: unknown, kind = "signal") => actions({
+      version: 1,
+      actions: {
+        ...JSON.parse(starterProject.files["actions.json"]).actions,
+        "tasks.like": { kind, access: "anonymous", bindings: [{ source: "input", key: "title", type: "string", maxLength: 80 }],
+          ...(kind === "query" ? { statement: "SELECT id FROM tasks LIMIT 5" } : {}), signal },
+      },
+    });
+    const passed = await validator.validate(capsule({ "actions.json": program({ name: "task.liked", properties: ["title"] }) }));
+    expect(passed.errors).toEqual([]);
+    for (const [signal, kind, message] of [
+      [{ name: "task.liked", properties: ["due"] }, "signal", "Action tasks.like names signal property due, which is not one of its input bindings."],
+      [{ name: "task.liked" }, "query", 'Action tasks.like is a query, so it cannot declare a signal. Declare it on a mutation or on a "kind": "signal" action.'],
+      [{ name: "Liked" }, "signal", 'Action tasks.like names an invalid signal. Use dot-separated lowercase words, such as "order.placed", up to 64 characters.'],
+    ] as const) {
+      const refused = await validator.validate(capsule({ "actions.json": program(signal, kind) }));
+      expect(refused.ok).toBe(false);
+      expect(refused.errors[0].stage).toBe("actions");
+      expect(refused.errors[0].detail).toBe(message);
+    }
+  });
+
   test("fails when declared bindings and statement placeholders disagree", async () => {
     const tooFew = await validator.validate(capsule({
       "actions.json": actions({

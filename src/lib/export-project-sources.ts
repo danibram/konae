@@ -13,6 +13,8 @@ import kernelHttpBindingCases from "../../kernel-rs/src/http-binding-cases.json?
 import kernelMailSource from "../../kernel-rs/src/mail.rs?raw";
 import kernelPackageSource from "../../kernel-rs/src/package.rs?raw";
 import kernelSecuritySource from "../../kernel-rs/src/security.rs?raw";
+import kernelUsageSource from "../../kernel-rs/src/usage.rs?raw";
+import kernelSignalCases from "../../kernel-rs/src/signal-cases.json?raw";
 import kernelCargoLock from "../../kernel-rs/Cargo.lock?raw";
 import kernelCargoManifest from "../../kernel-rs/Cargo.toml?raw";
 import kernelMainSource from "../../kernel-rs/src/main.rs?raw";
@@ -39,4 +41,6 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/package.rs", contents: kernelPackageSource },
   { path: "kernel-rs/src/sdk-guide.json", contents: kernelSdkGuide },
   { path: "kernel-rs/src/security.rs", contents: kernelSecuritySource },
+  { path: "kernel-rs/src/usage.rs", contents: kernelUsageSource },
+  { path: "kernel-rs/src/signal-cases.json", contents: kernelSignalCases },
 ];

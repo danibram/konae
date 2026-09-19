@@ -80,7 +80,7 @@ A consistent snapshot of every Deployment folder, with the owner and MCP stores,
 _Avoid_: backup (a Data panel snapshot of one app database), replica, mirror
 
 **Package**:
-The export of one Deployment's state: its database, its accounts without sessions, email links or API keys, and its files, captured under the Deployment's locks. A versioned manifest lists each component with its size and SHA-256 and names the published revision. Each component travels as its own transfer, so no step holds a whole component in memory. An import verifies every component and installs the Package only into a project that has no Deployment yet. Downloading one needs the `export_data` permission.
+The export of one Deployment's state: its database, its accounts without sessions, email links or API keys, its files, and its Usage and Signals when it has any, captured under the Deployment's locks. A versioned manifest lists each component with its size and SHA-256 and names the published revision. Each component travels as its own transfer, so no step holds a whole component in memory. An import verifies every component and installs the Package only into a project that has no Deployment yet. Downloading one needs the `export_data` permission.
 _Avoid_: dump, full backup, export file (the kit that carries it is the export)
 
 **Public Deployment**:
@@ -124,11 +124,11 @@ A namespace on `window.miniapp`, such as `auth`, `actions` or `files`, with a co
 _Avoid_: plugin, library, extension
 
 **Usage**:
-The Kernel-owned totals for one Deployment's authorized Runtime Interface operations, distinct from application rows.
+The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations: sessions opened, actions by name, HTTP routes by method and path, uploads, file reads, signups and logins. A refused call counts nothing. It lives in the Deployment's `usage.sqlite`, distinct from application rows, and only the Project Owner reads it.
 _Avoid_: analytics, telemetry, audit, metric
 
 **Signal**:
-A named occurrence the Capsule declares on a Server Action, stored by the Kernel for that Deployment and distinct from application rows.
+A named occurrence the Capsule declares on a Server Action, with properties taken from that action's input bindings. The Kernel records it when the action succeeds, next to Usage and distinct from application rows. An action of kind `signal` records one and runs no SQL. The app calls it with `miniapp.actions.call`; only the Project Owner reads Signals.
 _Avoid_: event, track, custom metric
 
 **Littlebox Kernel**:

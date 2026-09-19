@@ -37,6 +37,7 @@ mod mcp;
 mod oauth;
 mod package;
 mod security;
+mod usage;
 use auth::{AuthError, AuthService, AuthUser};
 use limits::{Guards, trusted_proxies};
 
@@ -284,11 +285,16 @@ struct ActionProgram {
 struct ActionDefinition {
     kind: String,
     access: String,
+    /// Empty for a `"kind": "signal"` action, which runs no SQL.
+    #[serde(default)]
     statement: String,
     bindings: Vec<ActionBinding>,
     /// The action's HTTP route, checked by `http::binding`.
     #[serde(default)]
     http: Option<Value>,
+    /// The Signal the action records, checked by `usage::declaration`.
+    #[serde(default)]
+    signal: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -836,18 +842,26 @@ async fn invoke_action(
         .join("deployments")
         .join(&deployment.id)
         .join("database.sqlite");
-    let _guard = database_lock(&state, &deployment.id).await;
-    if action.kind == "query" {
-        return match run_query(&db_path, action, params) {
-            Ok(rows) => Json(json!({"result": rows})).into_response(),
-            Err(error_value) => error(StatusCode::BAD_REQUEST, &error_value.to_string()),
-        };
-    }
-    let result = match run_mutation(&db_path, action, params) {
-        Ok(value) => value,
-        Err(error_value) => return error(StatusCode::BAD_REQUEST, &error_value.to_string()),
+    // A signal action runs no SQL. The Signal is queued for the Usage store and
+    // the answer does not wait for the write.
+    let result = if action.kind == "signal" {
+        Ok(json!({"recorded": true}))
+    } else {
+        let _guard = database_lock(&state, &deployment.id).await;
+        if action.kind == "query" {
+            run_query(&db_path, action, params).map(Value::from)
+        } else {
+            run_mutation(&db_path, action, params)
+        }
     };
-    Json(json!({"result": result})).into_response()
+    match result {
+        Ok(value) => {
+            usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
+            usage::signal(&state.data_root, &deployment.id, &name, action, &input);
+            Json(json!({"result": value})).into_response()
+        }
+        Err(error_value) => error(StatusCode::BAD_REQUEST, &error_value.to_string()),
+    }
 }
 
 async fn session(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -989,7 +1003,11 @@ async fn auth_request(
         state.guards.auth_failed(&deployment.id, client, &failed_email);
     }
     match result {
-        Ok(session) => accounts::app_session_response(state, session),
+        Ok(session) => {
+            let operation = if signup { usage::Operation::Signup } else { usage::Operation::Login };
+            usage::count(&state.data_root, &deployment.id, operation);
+            accounts::app_session_response(state, session)
+        }
         Err(error_value) => auth_error(error_value),
     }
 }
@@ -2231,8 +2249,14 @@ fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result
             action.access
         ));
     }
-    if action.kind != "query" && action.kind != "mutation" {
+    if action.kind != "query" && action.kind != "mutation" && action.kind != "signal" {
         return Err(format!("Action {name} has an unsupported kind."));
+    }
+    usage::check_signal_action(name, action)?;
+    if action.kind == "signal" {
+        usage::declaration(name, action)?;
+        http::binding(name, action)?;
+        return Ok(());
     }
     let sql = action.statement.trim();
     if sql.matches(';').count() > 1 || (sql.contains(';') && !sql.ends_with(';')) {
@@ -2258,6 +2282,7 @@ fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result
             ));
         }
     }
+    usage::declaration(name, action)?;
     http::binding(name, action)?;
     Ok(())
 }
@@ -2476,7 +2501,7 @@ fn apply_additive_schema(path: &Path, schema: &str, program: &ActionProgram) -> 
         .map_err(|error| anyhow::anyhow!("schema may only create tables and indexes: {error}"))?;
     second_result
         .map_err(|error| anyhow::anyhow!("schema must be idempotent and additive: {error}"))?;
-    for (name, action) in &program.actions {
+    for (name, action) in program.actions.iter().filter(|(_, action)| action.kind != "signal") {
         let statement = transaction.prepare(&action.statement).map_err(|error| {
             anyhow::anyhow!("action {name} does not match the deployed schema: {error}")
         })?;
@@ -3189,6 +3214,7 @@ mod tests {
             statement: statement.into(),
             bindings,
             http: None,
+            signal: None,
         }
     }
 

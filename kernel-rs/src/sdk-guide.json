@@ -9,6 +9,7 @@
     "await miniapp.auth.signOut();",
     "const rows = await miniapp.actions.call(\"tasks.list\");",
     "await miniapp.actions.call(\"tasks.create\", { title });",
+    "await miniapp.actions.call(\"lesson.finish\", { lesson });",
     "const files = await miniapp.files.list();",
     "const stored = await miniapp.files.upload(file);",
     "const shared = await miniapp.files.upload(file, { visibility: \"public\" });"
@@ -16,7 +17,8 @@
   "absent": [
     "no fetch to other origins",
     "no localStorage contract",
-    "no miniapp.db and no SQL from the browser"
+    "no miniapp.db and no SQL from the browser",
+    "no miniapp.track and no analytics call: a Signal is declared on a Server Action and recorded when miniapp.actions.call runs it"
   ],
   "errors": [
     {
@@ -102,12 +104,68 @@
     },
     {
       "name": "actions",
-      "summary": "The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement.",
+      "summary": "The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.",
       "notes": [
         "A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.",
-        "A mutation action returns { changes, lastInsertId }. Read changed rows with a separate query."
+        "A mutation action returns { changes, lastInsertId }. Read changed rows with a separate query.",
+        "To record that something happened, such as a signup to a newsletter or a finished lesson, declare a signal on the mutation that does it, or add an action of kind signal and call it with miniapp.actions.call. There is no other tracking call.",
+        "A call the Kernel refuses records no Signal and counts in no Usage total."
       ],
-      "declarations": [],
+      "declarations": [
+        {
+          "file": "actions.json",
+          "key": "signal",
+          "summary": "{ \"name\": \"order.placed\", \"properties\"?: [\"input binding keys\"] } on a mutation, or on an action of \"kind\": \"signal\" that has access and bindings but no statement. When the action succeeds the Kernel records the Signal with the named inputs as its properties, in the Deployment's Usage store. A signal action runs no SQL and returns { recorded: true }. The owner reads Signals with signals_read; the app cannot. The Validation Gate and the Kernel refuse the same declarations with the same messages.",
+          "limits": [
+            "8 properties per Signal; a string property keeps its first 128 bytes",
+            "a signal action counts toward the action limit like any other action",
+            "a signal action cannot declare http",
+            "the Kernel keeps the newest 50,000 Signals per Deployment and drops the oldest"
+          ],
+          "errors": [
+            {
+              "message": "Action <name> is a query, so it cannot declare a signal. Declare it on a mutation or on a \"kind\": \"signal\" action.",
+              "when": "the action is a query",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> names signal property <key>, which is not one of its input bindings.",
+              "when": "a property is not the key of an input binding; actor, kernel and literal bindings have no key",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> names signal property <key> twice.",
+              "when": "properties lists a key twice",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> names more than 8 signal properties.",
+              "when": "properties lists more than 8 keys",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> names an invalid signal. Use dot-separated lowercase words, such as \"order.placed\", up to 64 characters.",
+              "when": "the name has one word, a capital, a space, an empty part or more than 64 characters",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> has an invalid signal declaration.",
+              "when": "signal is not an object, has a key other than name and properties, has no name, or properties is not a list of strings",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> is a signal action, so it must declare a signal.",
+              "when": "the kind is signal and there is no signal key",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> is a signal action, so it runs no SQL and cannot declare a statement.",
+              "when": "the kind is signal and the action has a statement",
+              "source": "kernel"
+            }
+          ]
+        }
+      ],
       "calls": [
         {
           "call": "miniapp.actions.call",
@@ -131,7 +189,7 @@
               "description": "One value per input binding of the action, keyed by the binding's key. Defaults to {}"
             }
           ],
-          "returns": "an array of row objects for a query action, { changes, lastInsertId } for a mutation action",
+          "returns": "an array of row objects for a query action, { changes, lastInsertId } for a mutation action, { recorded: true } for a signal action",
           "errors": [
             {
               "message": "Server action not declared.",

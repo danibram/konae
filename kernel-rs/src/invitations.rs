@@ -154,14 +154,16 @@ pub(crate) async fn accept(
     let deployments = state.deployments.clone();
     let id = deployment.id.clone();
     let token = token.to_owned();
-    blocking(move || accept_in(&auth, &token, chosen, |email| {
+    let session = blocking(move || accept_in(&auth, &token, chosen, |email| {
         deployments
             .blocking_read()
             .values()
             .find(|current| current.id == id)
             .is_some_and(|current| admits_invitation(&current.signup_policy, email))
     }))
-    .await
+    .await?;
+    super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Signup);
+    Ok(session)
 }
 
 fn accept_in(

@@ -675,6 +675,9 @@ async fn run_route(
     };
     match result {
         Ok(value) => {
+            // A route counts under its method and path, not again as an action.
+            super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Route(http.method.clone(), http.path.clone()));
+            super::usage::signal(&state.data_root, &deployment.id, name, action, &input);
             let mut response = Json(json!({"result": value})).into_response();
             response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             response
@@ -708,6 +711,9 @@ async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>
             serve_file(State(state.clone()), AxumPath(id), visitor).await
         }
     };
+    if response.status().is_success() {
+        super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::FileRead);
+    }
     // Only the app's own pages may embed the file; programs are unaffected.
     response.headers_mut().insert("cross-origin-resource-policy", HeaderValue::from_static("same-origin"));
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));

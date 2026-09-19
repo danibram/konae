@@ -151,3 +151,40 @@ describe("http bindings", () => {
     expect(actionDeclarations(program)).toEqual([{ name: "orders.receive", kind: "mutation", access: "anonymous" }]);
   });
 });
+
+describe("signals", () => {
+  // kernel-rs/src/usage.rs runs the same cases against the Kernel's parser.
+  test("refuse the same declarations as the Kernel, with the same messages", async () => {
+    const cases: { case: string; actions: Record<string, unknown>; error: string | null }[] =
+      await Bun.file(new URL("../../kernel-rs/src/signal-cases.json", import.meta.url)).json();
+    expect(cases.length).toBeGreaterThan(15);
+    for (const item of cases) {
+      const parse = () => parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
+      if (item.error === null) expect(parse, item.case).not.toThrow();
+      else expect(parse, item.case).toThrow(item.error);
+    }
+  });
+
+  test("keep the signal on the parsed action and declare a signal action as its own kind", () => {
+    const program = parseServerActionSource(JSON.stringify({ version: 1, actions: {
+      "newsletter.join": { kind: "signal", access: "anonymous", bindings: [{ source: "input", key: "source", type: "string", maxLength: 40 }],
+        signal: { name: "newsletter.joined", properties: ["source"] } },
+    } }));
+    expect(program.actions["newsletter.join"]).toMatchObject({ kind: "signal", statement: "", signal: { name: "newsletter.joined", properties: ["source"] } });
+    expect(actionDeclarations(program)).toEqual([{ name: "newsletter.join", kind: "signal", access: "anonymous" }]);
+    const resolved = resolveServerAction(program, "newsletter.join", { source: "footer" }, { actorId: null });
+    expect(resolved.params).toEqual(["footer"]);
+    expect(() => resolveServerAction(program, "newsletter.join", { source: "footer", extra: 1 }, { actorId: null })).toThrow("Unexpected action input: extra");
+  });
+
+  test("count a signal action toward the action cap", () => {
+    const actions: Record<string, unknown> = {};
+    for (let index = 0; index < 50; index += 1) {
+      actions[`items.read${String.fromCharCode(97 + (index % 26))}${String.fromCharCode(97 + Math.floor(index / 26))}`] =
+        { kind: "query", access: "anonymous", statement: "SELECT 1 AS n", bindings: [] };
+    }
+    expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions }))).not.toThrow();
+    actions["page.like"] = { kind: "signal", access: "anonymous", bindings: [], signal: { name: "page.liked" } };
+    expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions }))).toThrow("A deployment may declare at most 50 server actions.");
+  });
+});

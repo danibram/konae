@@ -1,0 +1,671 @@
+//! Usage and Signals, ADR-0010.
+//!
+//! Each Deployment keeps `usage.sqlite` in its folder, next to `database.sqlite`
+//! and `identity.sqlite`. It holds daily totals of the Runtime Interface
+//! operations the Kernel authorized and the Signals that Server Actions
+//! declared. Nothing else writes it and a Runtime Actor never reads it; the
+//! owner reads it with `usage_read` and `signals_read`.
+//!
+//! A handler calls `count` or `signal` after the operation succeeded. Both put a
+//! message on a bounded queue and return at once. One writer thread drains the
+//! queue and writes each Deployment's file in one transaction per batch, so a
+//! response never waits on this store. When the queue is full the message is
+//! dropped and counted in `dropped`, rather than slowing the app down.
+
+use super::{ActionDefinition, Deployment};
+use anyhow::Result;
+use rusqlite::{params, Connection, OpenFlags};
+use serde_json::{json, Map, Value};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
+use std::sync::OnceLock;
+use std::time::Duration;
+
+pub(crate) const USAGE_DATABASE: &str = "usage.sqlite";
+/// The largest Usage store a package may carry. The row bounds below keep a
+/// store well under it.
+pub(crate) const MAX_USAGE_DATABASE_BYTES: u64 = 128 * 1024 * 1024;
+/// Days of totals kept. Older days are dropped as new ones arrive.
+pub(crate) const USAGE_DAYS: i64 = 400;
+/// Rows of totals kept, oldest days dropped first. A Deployment has at most
+/// 100 actions and 100 routes, so a day holds at most about 205 rows.
+pub(crate) const MAX_USAGE_ROWS: i64 = 100_000;
+/// Signals kept, oldest dropped first.
+pub(crate) const MAX_SIGNALS: i64 = 50_000;
+pub(crate) const MAX_SIGNAL_PROPERTIES: usize = 8;
+/// A string property keeps at most this many bytes, cut at a character boundary.
+pub(crate) const MAX_PROPERTY_BYTES: usize = 128;
+const SIGNALS_PAGE: i64 = 100;
+const QUEUE: usize = 16_384;
+const BATCH: usize = 1_024;
+
+/// An authorized Runtime Interface operation.
+pub(crate) enum Operation {
+    /// `auth_session`, which the SDK calls when an app opens.
+    Session,
+    Action(String),
+    /// An HTTP route, as `POST /hooks/orders`.
+    Route(String, String),
+    Upload,
+    FileRead,
+    Signup,
+    Login,
+}
+
+impl Operation {
+    fn parts(self) -> (&'static str, String) {
+        match self {
+            Operation::Session => ("session", String::new()),
+            Operation::Action(name) => ("action", name),
+            Operation::Route(method, path) => ("route", format!("{method} {path}")),
+            Operation::Upload => ("upload", String::new()),
+            Operation::FileRead => ("file_read", String::new()),
+            Operation::Signup => ("signup", String::new()),
+            Operation::Login => ("login", String::new()),
+        }
+    }
+}
+
+enum Message {
+    Count { folder: PathBuf, at: u64, kind: &'static str, name: String },
+    Signal { folder: PathBuf, at: u64, name: String, properties: String },
+    Flush(SyncSender<()>),
+}
+
+static QUEUE_SENDER: OnceLock<SyncSender<Message>> = OnceLock::new();
+static DROPPED: AtomicU64 = AtomicU64::new(0);
+
+fn sender() -> &'static SyncSender<Message> {
+    QUEUE_SENDER.get_or_init(|| {
+        let (sender, receiver) = sync_channel(QUEUE);
+        std::thread::Builder::new()
+            .name("littlebox-usage".into())
+            .spawn(move || writer(receiver))
+            .expect("start the usage writer");
+        sender
+    })
+}
+
+fn enqueue(message: Message) {
+    match sender().try_send(message) {
+        Ok(()) => {}
+        Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+            if DROPPED.fetch_add(1, Ordering::Relaxed) % 1_000 == 0 {
+                eprintln!("Usage queue is full; dropping entries rather than delaying responses.");
+            }
+        }
+    }
+}
+
+fn folder(data_root: &Path, deployment_id: &str) -> PathBuf {
+    data_root.join("deployments").join(deployment_id)
+}
+
+/// Counts one authorized operation. Call it only after the operation succeeded.
+pub(crate) fn count(data_root: &Path, deployment_id: &str, operation: Operation) {
+    let (kind, name) = operation.parts();
+    enqueue(Message::Count { folder: folder(data_root, deployment_id), at: super::now_ms(), kind, name });
+}
+
+/// Records the action's Signal, if it declares one, from the input it ran
+/// with. Call it only after the action succeeded.
+pub(crate) fn signal(data_root: &Path, deployment_id: &str, action_name: &str, action: &ActionDefinition, input: &Value) {
+    let Ok(Some(declared)) = declaration(action_name, action) else { return };
+    let mut properties = Map::new();
+    for key in &declared.properties {
+        let value = match input.get(key) {
+            Some(Value::String(text)) => Value::String(truncate(text, MAX_PROPERTY_BYTES).to_owned()),
+            Some(value) => value.clone(),
+            None => Value::Null,
+        };
+        properties.insert(key.clone(), value);
+    }
+    enqueue(Message::Signal {
+        folder: folder(data_root, deployment_id),
+        at: super::now_ms(),
+        name: declared.name,
+        properties: Value::Object(properties).to_string(),
+    });
+}
+
+fn truncate(text: &str, bytes: usize) -> &str {
+    if text.len() <= bytes {
+        return text;
+    }
+    let mut end = bytes;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// Waits until every message queued before this call is written, or five
+/// seconds pass. `usage_read` and `signals_read` call it so the owner sees what
+/// happened up to the moment they asked.
+pub(crate) fn flush() {
+    let (done, wait) = sync_channel(1);
+    if send_waiting(Message::Flush(done)).is_ok() {
+        let _ = wait.recv_timeout(Duration::from_secs(5));
+    }
+}
+
+/// A flush is the one sender that waits for room, and only for five seconds.
+fn send_waiting(message: Message) -> std::result::Result<(), ()> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut message = message;
+    loop {
+        match sender().try_send(message) {
+            Ok(()) => return Ok(()),
+            Err(TrySendError::Disconnected(_)) => return Err(()),
+            Err(TrySendError::Full(back)) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(());
+                }
+                message = back;
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct Batch {
+    counts: HashMap<(String, &'static str, String), i64>,
+    signals: Vec<(u64, String, String)>,
+}
+
+fn writer(receiver: Receiver<Message>) {
+    while let Ok(first) = receiver.recv() {
+        let mut batches: HashMap<PathBuf, Batch> = HashMap::new();
+        let mut flushes = Vec::new();
+        let mut next = Some(first);
+        let mut taken = 0;
+        while let Some(message) = next.take() {
+            match message {
+                Message::Count { folder, at, kind, name } => {
+                    *batches.entry(folder).or_default().counts.entry((day(at), kind, name)).or_insert(0) += 1;
+                }
+                Message::Signal { folder, at, name, properties } => {
+                    batches.entry(folder).or_default().signals.push((at, name, properties));
+                }
+                Message::Flush(done) => flushes.push(done),
+            }
+            taken += 1;
+            if taken < BATCH {
+                next = receiver.try_recv().ok();
+            }
+        }
+        for (folder, batch) in batches {
+            if let Err(error) = write(&folder, &batch, super::now_ms()) {
+                eprintln!("Usage write failed for {}: {error}", folder.display());
+            }
+        }
+        for done in flushes {
+            let _ = done.try_send(());
+        }
+    }
+}
+
+fn open(path: &Path) -> Result<Connection> {
+    let connection = Connection::open(path)?;
+    connection.busy_timeout(Duration::from_secs(5))?;
+    connection.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         CREATE TABLE IF NOT EXISTS usage_daily(
+           day TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL,
+           PRIMARY KEY(day, kind, name));
+         CREATE TABLE IF NOT EXISTS signals(
+           id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, at INTEGER NOT NULL, properties TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS signals_by_name ON signals(name, id);",
+    )?;
+    Ok(connection)
+}
+
+fn write(folder: &Path, batch: &Batch, now: u64) -> Result<()> {
+    // A Deployment removed or moved since the message was queued gets no new folder.
+    if !folder.is_dir() {
+        return Ok(());
+    }
+    let mut connection = open(&folder.join(USAGE_DATABASE))?;
+    let transaction = connection.transaction()?;
+    for ((day, kind, name), count) in &batch.counts {
+        transaction.execute(
+            "INSERT INTO usage_daily(day, kind, name, count) VALUES(?1, ?2, ?3, ?4)
+             ON CONFLICT(day, kind, name) DO UPDATE SET count = count + excluded.count",
+            params![day, kind, name, count],
+        )?;
+    }
+    for (at, name, properties) in &batch.signals {
+        transaction.execute(
+            "INSERT INTO signals(name, at, properties) VALUES(?1, ?2, ?3)",
+            params![name, *at as i64, properties],
+        )?;
+    }
+    prune(&transaction, now)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Keeps the store within its bounds: `USAGE_DAYS` days and `MAX_USAGE_ROWS`
+/// rows of totals, and the newest `MAX_SIGNALS` Signals.
+fn prune(db: &Connection, now: u64) -> Result<()> {
+    let cutoff = day(now.saturating_sub((USAGE_DAYS as u64 - 1) * 86_400_000));
+    db.execute("DELETE FROM usage_daily WHERE day < ?1", [cutoff])?;
+    db.execute(
+        "DELETE FROM usage_daily WHERE rowid IN (SELECT rowid FROM usage_daily ORDER BY day, kind, name
+           LIMIT max(0, (SELECT COUNT(*) FROM usage_daily) - ?1))",
+        [MAX_USAGE_ROWS],
+    )?;
+    db.execute(
+        "DELETE FROM signals WHERE id <= (SELECT MAX(id) FROM signals) - ?1",
+        [MAX_SIGNALS],
+    )?;
+    Ok(())
+}
+
+/// The UTC calendar day of a time in milliseconds, written `YYYY-MM-DD`.
+fn day(ms: u64) -> String {
+    let (year, month, date) = civil((ms / 86_400_000) as i64);
+    format!("{year:04}-{month:02}-{date:02}")
+}
+
+/// Days since 1970-01-01 to a proleptic Gregorian date.
+fn civil(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let date = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, date)
+}
+
+/// Parses `YYYY-MM-DD` into days since 1970-01-01, refusing dates that do not exist.
+fn parse_day(text: &str) -> Option<i64> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
+    let number = |range: std::ops::Range<usize>| text.get(range)?.parse::<i64>().ok();
+    let (year, month, date) = (number(0..4)?, number(5..7)?, number(8..10)?);
+    if !(1..=12).contains(&month) || date < 1 {
+        return None;
+    }
+    // Days from civil, the inverse of `civil`.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let m = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * m + 2) / 5 + date - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    (civil(days) == (year, month as u32, date as u32)).then_some(days)
+}
+
+// ---------------------------------------------------------------------------
+// Declarations. The same checks, order and messages as `parseSignal` in
+// src/kernel/actions.ts; kernel-rs/src/signal-cases.json holds the cases.
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Signal {
+    pub(crate) name: String,
+    pub(crate) properties: Vec<String>,
+}
+
+/// Checks the parts of an action that a `"kind": "signal"` action changes, and
+/// its `signal` key. `validate_action` calls it after kind and access and
+/// before the SQL checks, which a signal action skips.
+pub(crate) fn check_signal_action(name: &str, action: &ActionDefinition) -> Result<(), String> {
+    if action.kind == "signal" && !action.statement.trim().is_empty() {
+        return Err(format!("Action {name} is a signal action, so it runs no SQL and cannot declare a statement."));
+    }
+    Ok(())
+}
+
+/// Parses and checks one action's `signal` key. `Ok(None)` when it has none.
+pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Option<Signal>, String> {
+    let Some(value) = action.signal.as_ref() else {
+        if action.kind == "signal" {
+            return Err(format!("Action {name} is a signal action, so it must declare a signal."));
+        }
+        return Ok(None);
+    };
+    if action.kind == "query" {
+        return Err(format!(
+            r#"Action {name} is a query, so it cannot declare a signal. Declare it on a mutation or on a "kind": "signal" action."#
+        ));
+    }
+    let invalid = || format!("Action {name} has an invalid signal declaration.");
+    let record = value.as_object().ok_or_else(invalid)?;
+    if record.keys().any(|key| key != "name" && key != "properties") {
+        return Err(invalid());
+    }
+    let signal_name = record.get("name").and_then(Value::as_str).ok_or_else(invalid)?;
+    if !valid_name(signal_name) {
+        return Err(format!(
+            r#"Action {name} names an invalid signal. Use dot-separated lowercase words, such as "order.placed", up to 64 characters."#
+        ));
+    }
+    let properties = match record.get("properties") {
+        None => Vec::new(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| item.as_str().map(str::to_owned).ok_or_else(invalid))
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => return Err(invalid()),
+    };
+    if properties.len() > MAX_SIGNAL_PROPERTIES {
+        // The number is written out so src/sdk/contract.test.ts finds the message.
+        return Err(format!("Action {name} names more than 8 signal properties."));
+    }
+    let inputs: Vec<&str> = action
+        .bindings
+        .iter()
+        .filter(|binding| binding.source == "input")
+        .filter_map(|binding| binding.key.as_deref())
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    for key in &properties {
+        if !seen.insert(key.as_str()) {
+            return Err(format!("Action {name} names signal property {key} twice."));
+        }
+        if !inputs.contains(&key.as_str()) {
+            return Err(format!("Action {name} names signal property {key}, which is not one of its input bindings."));
+        }
+    }
+    Ok(Some(Signal { name: signal_name.to_owned(), properties }))
+}
+
+/// Dot-separated lowercase words, at least two, as action names are, up to 64 characters.
+fn valid_name(name: &str) -> bool {
+    let parts: Vec<&str> = name.split('.').collect();
+    name.len() <= 64
+        && parts.len() >= 2
+        && parts.iter().all(|part| {
+            let mut bytes = part.bytes();
+            bytes.next().is_some_and(|c| c.is_ascii_lowercase())
+                && bytes.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
+}
+
+// ---------------------------------------------------------------------------
+// Owner tools. `mcp.rs` lists them for every owner credential, since each
+// needs only `read`, and checks the Deployment's project grant on every call.
+// The runtime endpoint never lists them.
+
+pub(crate) fn admin_tools() -> Vec<Value> {
+    let text = json!({"type": "string", "minLength": 1});
+    let date = json!({"type": "string", "minLength": 10, "maxLength": 10});
+    vec![
+        super::mcp::tool(
+            "usage_read",
+            "Read a deployment's Usage: daily totals of the runtime operations the Kernel allowed (session, action, route, upload, file_read, signup, login) between two UTC dates written YYYY-MM-DD, both included, at most 400 days apart.",
+            json!({"deploymentId": text, "from": date, "to": date}),
+            &["deploymentId", "from", "to"],
+            true,
+        ),
+        super::mcp::tool(
+            "signals_read",
+            "Read a deployment's Signals, newest first, 100 at a time, optionally of one name. Pass nextCursor back as cursor for the next page.",
+            json!({"deploymentId": text, "name": {"type": "string", "minLength": 1, "maxLength": 64}, "cursor": {"type": "string", "minLength": 1, "maxLength": 20}}),
+            &["deploymentId"],
+            true,
+        ),
+    ]
+}
+
+/// Answers `usage_read` and `signals_read` for a Deployment the caller may read.
+pub(crate) async fn admin_call(data_root: &Path, deployment: &Deployment, name: &str, a: &Value) -> Result<Value> {
+    let path = folder(data_root, &deployment.id).join(USAGE_DATABASE);
+    let arguments = a.clone();
+    let name = name.to_owned();
+    tokio::task::spawn_blocking(move || {
+        flush();
+        match name.as_str() {
+            "usage_read" => read_usage(&path, arguments["from"].as_str().unwrap_or(""), arguments["to"].as_str().unwrap_or("")),
+            _ => read_signals(&path, arguments["name"].as_str(), arguments["cursor"].as_str()),
+        }
+    })
+    .await?
+}
+
+fn read_only(path: &Path) -> Result<Option<Connection>> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection.busy_timeout(Duration::from_secs(5))?;
+    Ok(Some(connection))
+}
+
+pub(crate) fn read_usage(path: &Path, from: &str, to: &str) -> Result<Value> {
+    let (Some(start), Some(end)) = (parse_day(from), parse_day(to)) else {
+        anyhow::bail!("from and to must be dates written YYYY-MM-DD.");
+    };
+    anyhow::ensure!(start <= end, "from must not be after to.");
+    anyhow::ensure!(end - start < USAGE_DAYS, "Usage covers at most 400 days at a time.");
+    let mut days = Vec::new();
+    let mut totals: Vec<Value> = Vec::new();
+    if let Some(db) = read_only(path)? {
+        let mut query = db.prepare(
+            "SELECT day, kind, name, count FROM usage_daily WHERE day BETWEEN ?1 AND ?2 ORDER BY day, kind, name",
+        )?;
+        let rows = query.query_map(params![from, to], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?))
+        })?;
+        let mut sums: Vec<((String, String), i64)> = Vec::new();
+        for row in rows {
+            let (day, kind, name, count) = row?;
+            match sums.iter_mut().find(|((k, n), _)| *k == kind && *n == name) {
+                Some((_, total)) => *total += count,
+                None => sums.push(((kind.clone(), name.clone()), count)),
+            }
+            days.push(json!({"day": day, "kind": kind, "name": name, "count": count}));
+        }
+        sums.sort();
+        totals = sums.into_iter().map(|((kind, name), count)| json!({"kind": kind, "name": name, "count": count})).collect();
+    }
+    Ok(json!({"from": from, "to": to, "days": days, "totals": totals}))
+}
+
+pub(crate) fn read_signals(path: &Path, name: Option<&str>, cursor: Option<&str>) -> Result<Value> {
+    let before = match cursor {
+        None => i64::MAX,
+        Some(text) => text
+            .parse::<i64>()
+            .ok()
+            .filter(|id| *id > 0)
+            .ok_or_else(|| anyhow::anyhow!("Invalid cursor. Pass back the nextCursor of an earlier page."))?,
+    };
+    let Some(db) = read_only(path)? else {
+        return Ok(json!({"signals": [], "nextCursor": null}));
+    };
+    let mut query = db.prepare(
+        "SELECT id, name, at, properties FROM signals WHERE id < ?1 AND (?2 IS NULL OR name = ?2) ORDER BY id DESC LIMIT ?3",
+    )?;
+    let rows = query
+        .query_map(params![before, name, SIGNALS_PAGE + 1], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, String>(3)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let more = rows.len() as i64 > SIGNALS_PAGE;
+    let page: Vec<_> = rows.into_iter().take(SIGNALS_PAGE as usize).collect();
+    let next = if more { page.last().map(|(id, ..)| id.to_string()) } else { None };
+    let signals: Vec<Value> = page
+        .into_iter()
+        .map(|(_, name, at, properties)| {
+            json!({"name": name, "at": at, "properties": serde_json::from_str::<Value>(&properties).unwrap_or(json!({}))})
+        })
+        .collect();
+    Ok(json!({"signals": signals, "nextCursor": next}))
+}
+
+/// The number of Signals in a store.
+#[cfg(test)]
+fn signal_count(path: &Path) -> i64 {
+    read_only(path)
+        .unwrap()
+        .map(|db| db.query_row("SELECT COUNT(*) FROM signals", [], |row| row.get(0)).unwrap())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ActionProgram;
+
+    fn program(actions: &Value) -> ActionProgram {
+        serde_json::from_value(json!({"version": 1, "actions": actions})).unwrap()
+    }
+
+    fn scratch(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("littlebox-usage-{label}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    /// The editor runs the same file in src/kernel/actions.test.ts.
+    #[test]
+    fn signals_refuse_what_the_editor_refuses_with_the_same_message() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("signal-cases.json")).unwrap();
+        assert!(cases.len() > 15);
+        for case in cases {
+            let program = program(&case["actions"]);
+            let mut names = program.actions.keys().collect::<Vec<_>>();
+            names.sort();
+            let outcome = names.into_iter().try_for_each(|name| crate::validate_action(name, &program.actions[name]));
+            match case["error"].as_str() {
+                None => assert_eq!(outcome, Ok(()), "{}", case["case"]),
+                Some(message) => assert_eq!(outcome, Err(message.to_owned()), "{}", case["case"]),
+            }
+        }
+    }
+
+    #[test]
+    fn days_are_utc_calendar_dates() {
+        assert_eq!(day(0), "1970-01-01");
+        assert_eq!(day(1_762_430_000_000), "2025-11-06");
+        assert_eq!(day(951_782_400_000), "2000-02-29");
+        for days in [-1, 0, 59, 11_016, 20_398, 40_000] {
+            let (y, m, d) = civil(days);
+            assert_eq!(parse_day(&format!("{y:04}-{m:02}-{d:02}")), Some(days));
+        }
+        assert_eq!(parse_day("2026-02-29"), None);
+        assert_eq!(parse_day("2026-13-01"), None);
+        assert_eq!(parse_day("2026-1-01"), None);
+    }
+
+    #[test]
+    fn the_writer_counts_and_records_off_the_request_path() {
+        let root = scratch("writer");
+        let id = "deployment-a";
+        std::fs::create_dir_all(root.join("deployments").join(id)).unwrap();
+        let program = program(&json!({
+            "orders.place": {"kind": "mutation", "access": "anonymous", "statement": "INSERT INTO orders (id, note) VALUES (?1, ?2)",
+              "bindings": [{"source": "input", "key": "id", "type": "string"}, {"source": "input", "key": "note", "type": "string", "nullable": true}],
+              "signal": {"name": "order.placed", "properties": ["id", "note"]}}
+        }));
+        let action = &program.actions["orders.place"];
+        for _ in 0..3 {
+            count(&root, id, Operation::Action("orders.place".into()));
+        }
+        count(&root, id, Operation::Route("POST".into(), "/hooks/orders".into()));
+        count(&root, id, Operation::Login);
+        let long = "é".repeat(100);
+        signal(&root, id, "orders.place", action, &json!({"id": long}));
+        // A Deployment folder that is gone gets no new file.
+        count(&root, "deployment-gone", Operation::Session);
+        flush();
+        let path = root.join("deployments").join(id).join(USAGE_DATABASE);
+        let today = day(super::super::now_ms());
+        let usage = read_usage(&path, &today, &today).unwrap();
+        let totals = usage["totals"].as_array().unwrap();
+        assert!(totals.contains(&json!({"kind": "action", "name": "orders.place", "count": 3})), "{usage}");
+        assert!(totals.contains(&json!({"kind": "route", "name": "POST /hooks/orders", "count": 1})));
+        assert!(totals.contains(&json!({"kind": "login", "name": "", "count": 1})));
+        let signals = read_signals(&path, Some("order.placed"), None).unwrap();
+        let recorded = &signals["signals"][0]["properties"];
+        assert_eq!(recorded["note"], Value::Null, "an omitted nullable input records null");
+        let kept = recorded["id"].as_str().unwrap();
+        assert!(kept.len() <= MAX_PROPERTY_BYTES && kept.chars().all(|c| c == 'é'), "cut at a character boundary");
+        assert!(!root.join("deployments/deployment-gone").exists());
+        assert_eq!(read_signals(&path, Some("other.name"), None).unwrap()["signals"], json!([]));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_store_drops_the_oldest_rows_past_its_bounds() {
+        let root = scratch("bounds");
+        let path = root.join(USAGE_DATABASE);
+        let now = 1_800_000_000_000u64;
+        {
+            let mut db = open(&path).unwrap();
+            let transaction = db.transaction().unwrap();
+            // Days older than the window go, whatever the row count.
+            let old = day(now - USAGE_DAYS as u64 * 86_400_000);
+            transaction.execute("INSERT INTO usage_daily VALUES(?1, 'login', '', 7)", [&old]).unwrap();
+            // More rows than the bound inside the window: the oldest days go first.
+            let mut insert = transaction.prepare("INSERT INTO usage_daily VALUES(?1, 'action', ?2, 1)").unwrap();
+            for index in 0..(MAX_USAGE_ROWS + 10) {
+                let at = now - (index as u64 % 300) * 86_400_000;
+                insert.execute(params![day(at), format!("a.n{index}")]).unwrap();
+            }
+            drop(insert);
+            let mut insert = transaction.prepare("INSERT INTO signals(name, at, properties) VALUES('page.liked', ?1, '{}')").unwrap();
+            for index in 0..(MAX_SIGNALS + 25) {
+                insert.execute([index]).unwrap();
+            }
+            drop(insert);
+            prune(&transaction, now).unwrap();
+            transaction.commit().unwrap();
+        }
+        let db = Connection::open(&path).unwrap();
+        let rows: i64 = db.query_row("SELECT COUNT(*) FROM usage_daily", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, MAX_USAGE_ROWS);
+        let oldest_kept: String = db.query_row("SELECT MIN(day) FROM usage_daily", [], |r| r.get(0)).unwrap();
+        assert_eq!(oldest_kept, day(now - 299 * 86_400_000), "the oldest day lost rows first");
+        let today: i64 = db.query_row("SELECT COUNT(*) FROM usage_daily WHERE day=?1", [day(now)], |r| r.get(0)).unwrap();
+        assert!(today > 300, "the newest day is whole");
+        assert_eq!(signal_count(&path), MAX_SIGNALS);
+        let oldest_signal: i64 = db.query_row("SELECT MIN(at) FROM signals", [], |r| r.get(0)).unwrap();
+        assert_eq!(oldest_signal, 25, "the first 25 Signals were dropped");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reads_refuse_bad_ranges_and_cursors_and_page_signals() {
+        let root = scratch("reads");
+        let path = root.join(USAGE_DATABASE);
+        assert_eq!(read_usage(&path, "2026-11-01", "2026-11-06").unwrap()["days"], json!([]), "no store yet reads as empty");
+        assert!(!path.exists(), "a read never creates the store");
+        for (from, to, message) in [
+            ("2026-11-6", "2026-11-06", "from and to must be dates written YYYY-MM-DD."),
+            ("2026-11-07", "2026-11-06", "from must not be after to."),
+            ("2025-01-01", "2026-11-06", "Usage covers at most 400 days at a time."),
+        ] {
+            assert_eq!(read_usage(&path, from, to).unwrap_err().to_string(), message);
+        }
+        {
+            let db = open(&path).unwrap();
+            for index in 0..150 {
+                db.execute("INSERT INTO signals(name, at, properties) VALUES('page.liked', ?1, '{}')", [index]).unwrap();
+            }
+        }
+        let first = read_signals(&path, None, None).unwrap();
+        assert_eq!(first["signals"].as_array().unwrap().len(), 100);
+        assert_eq!(first["signals"][0]["at"], 149, "newest first");
+        let second = read_signals(&path, None, first["nextCursor"].as_str()).unwrap();
+        assert_eq!(second["signals"].as_array().unwrap().len(), 50);
+        assert_eq!(second["nextCursor"], Value::Null);
+        assert_eq!(
+            read_signals(&path, None, Some("abc")).unwrap_err().to_string(),
+            "Invalid cursor. Pass back the nextCursor of an earlier page."
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+}

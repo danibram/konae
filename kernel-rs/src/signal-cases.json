@@ -1,0 +1,584 @@
+[
+ {
+  "case": "a signal on a mutation, with properties from its inputs",
+  "actions": {
+   "orders.place": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id, total) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "input",
+      "key": "total",
+      "type": "number"
+     }
+    ],
+    "signal": {
+     "name": "order.placed",
+     "properties": [
+      "id",
+      "total"
+     ]
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a signal action with a property",
+  "actions": {
+   "newsletter.join": {
+    "kind": "signal",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "source",
+      "type": "string",
+      "maxLength": 40
+     }
+    ],
+    "signal": {
+     "name": "newsletter.joined",
+     "properties": [
+      "source"
+     ]
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a signal action with no properties",
+  "actions": {
+   "newsletter.join": {
+    "kind": "signal",
+    "access": "anonymous",
+    "bindings": [],
+    "signal": {
+     "name": "page.liked"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a signal action for signed-in people that binds the actor",
+  "actions": {
+   "lesson.finished": {
+    "kind": "signal",
+    "access": "authenticated",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "lesson",
+      "type": "string",
+      "maxLength": 40
+     }
+    ],
+    "signal": {
+     "name": "lesson.finished",
+     "properties": [
+      "lesson"
+     ]
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a signal on a query",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM orders LIMIT 50",
+    "bindings": [],
+    "signal": {
+     "name": "orders.viewed"
+    }
+   }
+  },
+  "error": "Action orders.list is a query, so it cannot declare a signal. Declare it on a mutation or on a \"kind\": \"signal\" action."
+ },
+ {
+  "case": "a property that is not an input binding",
+  "actions": {
+   "orders.place": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id, total) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "input",
+      "key": "total",
+      "type": "number"
+     }
+    ],
+    "signal": {
+     "name": "order.placed",
+     "properties": [
+      "coupon"
+     ]
+    }
+   }
+  },
+  "error": "Action orders.place names signal property coupon, which is not one of its input bindings."
+ },
+ {
+  "case": "a property naming the actor binding",
+  "actions": {
+   "lesson.finished": {
+    "kind": "signal",
+    "access": "authenticated",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ],
+    "signal": {
+     "name": "lesson.finished",
+     "properties": [
+      "id"
+     ]
+    }
+   }
+  },
+  "error": "Action lesson.finished names signal property id, which is not one of its input bindings."
+ },
+ {
+  "case": "a property listed twice",
+  "actions": {
+   "orders.place": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id, total) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "input",
+      "key": "total",
+      "type": "number"
+     }
+    ],
+    "signal": {
+     "name": "order.placed",
+     "properties": [
+      "id",
+      "id"
+     ]
+    }
+   }
+  },
+  "error": "Action orders.place names signal property id twice."
+ },
+ {
+  "case": "more than eight properties",
+  "actions": {
+   "newsletter.join": {
+    "kind": "signal",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "p0",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "p1",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "p2",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "p3",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "p4",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "p5",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "p6",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "p7",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "p8",
+      "type": "number"
+     }
+    ],
+    "signal": {
+     "name": "form.sent",
+     "properties": [
+      "p0",
+      "p1",
+      "p2",
+      "p3",
+      "p4",
+      "p5",
+      "p6",
+      "p7",
+      "p8"
+     ]
+    }
+   }
+  },
+  "error": "Action newsletter.join names more than 8 signal properties."
+ },
+ {
+  "case": "a name with capitals and a space",
+  "actions": {
+   "orders.place": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id, total) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "input",
+      "key": "total",
+      "type": "number"
+     }
+    ],
+    "signal": {
+     "name": "Order Placed"
+    }
+   }
+  },
+  "error": "Action orders.place names an invalid signal. Use dot-separated lowercase words, such as \"order.placed\", up to 64 characters."
+ },
+ {
+  "case": "a name with one word",
+  "actions": {
+   "orders.place": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id, total) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "input",
+      "key": "total",
+      "type": "number"
+     }
+    ],
+    "signal": {
+     "name": "placed"
+    }
+   }
+  },
+  "error": "Action orders.place names an invalid signal. Use dot-separated lowercase words, such as \"order.placed\", up to 64 characters."
+ },
+ {
+  "case": "a name with an empty part",
+  "actions": {
+   "orders.place": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id, total) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "input",
+      "key": "total",
+      "type": "number"
+     }
+    ],
+    "signal": {
+     "name": "order..placed"
+    }
+   }
+  },
+  "error": "Action orders.place names an invalid signal. Use dot-separated lowercase words, such as \"order.placed\", up to 64 characters."
+ },
+ {
+  "case": "a name longer than 64 characters",
+  "actions": {
+   "orders.place": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id, total) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "input",
+      "key": "total",
+      "type": "number"
+     }
+    ],
+    "signal": {
+     "name": "order.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+   }
+  },
+  "error": "Action orders.place names an invalid signal. Use dot-separated lowercase words, such as \"order.placed\", up to 64 characters."
+ },
+ {
+  "case": "a name of exactly 64 characters",
+  "actions": {
+   "orders.place": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id, total) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "input",
+      "key": "total",
+      "type": "number"
+     }
+    ],
+    "signal": {
+     "name": "order.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a signal that is a string",
+  "actions": {
+   "orders.place": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id, total) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "input",
+      "key": "total",
+      "type": "number"
+     }
+    ],
+    "signal": "order.placed"
+   }
+  },
+  "error": "Action orders.place has an invalid signal declaration."
+ },
+ {
+  "case": "a signal with an unknown key",
+  "actions": {
+   "orders.place": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id, total) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "input",
+      "key": "total",
+      "type": "number"
+     }
+    ],
+    "signal": {
+     "name": "order.placed",
+     "value": "total"
+    }
+   }
+  },
+  "error": "Action orders.place has an invalid signal declaration."
+ },
+ {
+  "case": "properties that are not a list of keys",
+  "actions": {
+   "orders.place": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id, total) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "input",
+      "key": "total",
+      "type": "number"
+     }
+    ],
+    "signal": {
+     "name": "order.placed",
+     "properties": "id"
+    }
+   }
+  },
+  "error": "Action orders.place has an invalid signal declaration."
+ },
+ {
+  "case": "a signal with no name",
+  "actions": {
+   "orders.place": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id, total) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "input",
+      "key": "total",
+      "type": "number"
+     }
+    ],
+    "signal": {
+     "properties": [
+      "id"
+     ]
+    }
+   }
+  },
+  "error": "Action orders.place has an invalid signal declaration."
+ },
+ {
+  "case": "a signal action without a signal",
+  "actions": {
+   "newsletter.join": {
+    "kind": "signal",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "source",
+      "type": "string",
+      "maxLength": 40
+     }
+    ]
+   }
+  },
+  "error": "Action newsletter.join is a signal action, so it must declare a signal."
+ },
+ {
+  "case": "a signal action with a statement",
+  "actions": {
+   "newsletter.join": {
+    "kind": "signal",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "source",
+      "type": "string",
+      "maxLength": 40
+     }
+    ],
+    "signal": {
+     "name": "newsletter.joined",
+     "properties": [
+      "source"
+     ]
+    },
+    "statement": "INSERT INTO joins (source) VALUES (?1)"
+   }
+  },
+  "error": "Action newsletter.join is a signal action, so it runs no SQL and cannot declare a statement."
+ },
+ {
+  "case": "a signal action with an http route",
+  "actions": {
+   "newsletter.join": {
+    "kind": "signal",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "source",
+      "type": "string",
+      "maxLength": 40
+     }
+    ],
+    "signal": {
+     "name": "newsletter.joined",
+     "properties": [
+      "source"
+     ]
+    },
+    "http": {
+     "method": "POST",
+     "path": "/hooks/join"
+    }
+   }
+  },
+  "error": "Action newsletter.join must bind GET for a query and POST for a mutation."
+ }
+]
