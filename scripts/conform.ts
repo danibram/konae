@@ -92,7 +92,9 @@ export async function conformFromCli(args: string[]): Promise<number> {
   if (!token && process.env.LITTLEBOX_APP_EMAIL && process.env.LITTLEBOX_APP_PASSWORD) {
     token = await appSession(url, process.env.LITTLEBOX_APP_EMAIL, process.env.LITTLEBOX_APP_PASSWORD);
   }
-  const report = await runConformance(contract, kernelTarget({ url, token, key: one("key") ?? process.env.LITTLEBOX_API_KEY, secrets }));
+  const inputsFile = one("inputs");
+  const inputs = inputsFile ? JSON.parse(await readFile(inputsFile, "utf8")) as Record<string, Record<string, unknown>> : undefined;
+  const report = await runConformance(contract, kernelTarget({ url, token, key: one("key") ?? process.env.LITTLEBOX_API_KEY, secrets }), { inputs });
   console.log(formatConformanceReport(report));
   return report.failed > 0 ? 1 : 0;
 }

@@ -201,7 +201,7 @@ async function main() {
   if (argv[0] === "--") argv.shift();
   const [command, ...args] = argv;
   if (!command || ["help", "--help"].includes(command)) {
-    console.log("Use login, init, build, dev, publish, export, contract, or conform. Options include --dir, --url, --name, --port, and --out. Export --with-data includes live data, accounts, and files; it needs a credential from login --export-data or a token with export_data. contract writes action-contract.json, its schema and action-contract.md from actions.json and schema.sql. conform --url <app URL> --contract <file> calls every action on a Kernel and checks the answers against the contract; it runs each mutation once, so point it at a test Deployment. Add --token <app session token> to call authenticated actions, --key <API key> for routes, and --secret <name>=<value> to sign a route.");
+    console.log("Use login, init, build, dev, publish, export, contract, or conform. Options include --dir, --url, --name, --port, and --out. Export --with-data includes live data, accounts, and files; it needs a credential from login --export-data or a token with export_data. contract writes action-contract.json, its schema and action-contract.md from actions.json and schema.sql. conform --url <app URL> --contract <file> calls every action on a Kernel and checks the answers against the contract; it runs each mutation once, so point it at a test Deployment. Add --token <app session token> to call authenticated actions, --key <API key> for routes, --secret <name>=<value> to sign a route, and --inputs <file> with input values by action where a generated string will not do.");
     return;
   }
   const option = (name: string, fallback?: string) => {

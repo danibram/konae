@@ -58,6 +58,12 @@ export type ConformanceOptions = {
   wait?: (ms: number) => Promise<void>;
   /** Seconds since the epoch, for signatures. */
   now?: () => number;
+  /**
+   * Input values by action that replace the generated ones in valid calls,
+   * for a string the statement reads as more than text, such as JSON for
+   * json_each. The contract types an input; it cannot say what SQL makes of it.
+   */
+  inputs?: Record<string, Record<string, unknown>>;
 };
 
 const UNEXPECTED_KEY = "conformProbe";
@@ -94,10 +100,13 @@ export async function runConformance(contract: ActionContract, target: Conforman
   };
 
   const unique = (maxLength: number) => `c${nonce}`.slice(0, maxLength);
-  const minimal = (action: ContractAction): Record<string, unknown> => Object.fromEntries(action.inputs.map((input) => [
-    input.key,
-    input.type === "string" ? unique(input.maxLength ?? 10_000) : input.type === "number" ? 1 : true,
-  ]));
+  const minimal = (action: ContractAction): Record<string, unknown> => ({
+    ...Object.fromEntries(action.inputs.map((input) => [
+      input.key,
+      input.type === "string" ? unique(input.maxLength ?? 10_000) : input.type === "number" ? 1 : true,
+    ])),
+    ...options.inputs?.[action.name],
+  });
 
   /** Checks a runtime refusal: the contract lists the message, and the backend answers with it. */
   const expectRefusal = async (action: ContractAction | null, check: string, messages: string[], call: () => Promise<RuntimeAnswer>) => {
@@ -145,7 +154,9 @@ export async function runConformance(contract: ActionContract, target: Conforman
     } else {
       const answer = await invoke(name, valid, caller);
       if (!answer.ok) {
-        const advice = answer.message === "Sign in to use Littlebox MCP." ? " The Deployment is private; pass --token." : "";
+        const advice = answer.message === "Sign in to use Littlebox MCP." ? " The Deployment is private; pass --token."
+          : listedIn([...action.errors, ...contract.errors], answer.message) ? ""
+          : " The contract lists no such refusal, so the statement itself failed. If an input needs a particular form, such as JSON, give one with --inputs.";
         record(name, "answers a valid call", "fail", `Refused with "${answer.message}".${advice}`);
       } else {
         const problem = checkOutput(action, answer.result);

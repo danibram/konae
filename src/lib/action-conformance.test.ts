@@ -181,3 +181,24 @@ describe("conformance runner", () => {
     expect(checkOutput(action, [{ id: 1 }])).toMatch(/where the contract says \{ changes, lastInsertId \}/);
   });
 });
+
+describe("example inputs", () => {
+  test("a statement error on a valid call fails with advice, and --inputs supplies a value that works", async () => {
+    const contract = contractOf("probe");
+    const backend = fakeBackend(contract);
+    const invoke = backend.invoke.bind(backend);
+    backend.invoke = async (name, input, as) => {
+      const ids = (input as Record<string, unknown>)?.ids;
+      // Like the Kernel, the bindings are checked before SQLite reads the value.
+      const answer = await invoke(name, input, as);
+      if (answer.ok && name === "items.jsonin" && typeof ids === "string" && !ids.startsWith("[")) return { ok: false, message: "malformed JSON" };
+      return answer;
+    };
+    const generated = await runConformance(contract, backend, noWait);
+    expect(failures(generated).map((result) => `${result.action}: ${result.detail}`)).toEqual([
+      'items.jsonin: Refused with "malformed JSON". The contract lists no such refusal, so the statement itself failed. If an input needs a particular form, such as JSON, give one with --inputs.',
+    ]);
+    const given = await runConformance(contract, backend, { ...noWait, inputs: { "items.jsonin": { ids: "[1]" } } });
+    expect(given.failed).toBe(0);
+  });
+});
