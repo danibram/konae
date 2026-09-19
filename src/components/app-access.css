@@ -1,0 +1,78 @@
+/* Auth > Users, Auth > Integrations and the access part of the publish dialog.
+   Tokens only, so the system theme carries light and dark. */
+
+.auth-tabs { display: flex; gap: var(--ds-space-1); padding: var(--ds-space-3) 20px 0; border-bottom: 1px solid var(--ds-border); }
+.auth-tabs button { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 12px; border: 1px solid transparent; border-bottom: 0; background: transparent; color: var(--ds-muted); font: 650 12px/1 var(--ds-font); cursor: pointer; }
+.auth-tabs button:hover { color: var(--ds-text); }
+.auth-tabs button.active { border-color: var(--ds-border); background: var(--ds-surface); color: var(--ds-text); margin-bottom: -1px; }
+
+.access-view { display: grid; gap: var(--ds-space-4); padding: var(--ds-space-4) 20px 20px; color: var(--ds-text); }
+.access-intro { margin: 0; max-width: 70ch; color: var(--ds-muted); font-size: 13px; line-height: 1.5; }
+.access-card { display: grid; gap: var(--ds-space-3); padding: var(--ds-space-4); background: var(--ds-surface); color: var(--ds-text); }
+.access-card h3 { margin: 0; font: 650 16px/1.3 var(--ds-font); }
+.access-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--ds-space-3); }
+.access-card-head .ui-select { width: auto; min-width: 180px; }
+.access-note { margin: 0; color: var(--ds-muted); font-size: 12px; line-height: 1.5; }
+.access-note:empty { display: none; }
+.access-note code, .access-card code { font: 12px var(--ds-mono); overflow-wrap: anywhere; }
+.access-error { padding: var(--ds-space-2) var(--ds-space-3); border: 1px solid var(--ds-danger); background: var(--ds-danger-soft); color: var(--ds-text); font-size: 12px; line-height: 1.45; }
+.access-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ds-space-3); color: var(--ds-muted); font-size: 12px; }
+.access-disabled-reason { max-width: 60ch; }
+.access-mail { display: flex; align-items: flex-start; gap: var(--ds-space-2); margin: 0; padding: var(--ds-space-3); border: 1px solid var(--ds-warning); background: var(--ds-warning-soft); color: var(--ds-text); font-size: 13px; line-height: 1.45; }
+.access-mail svg { flex-shrink: 0; margin-top: 2px; color: var(--ds-warning); }
+
+.access-results { display: grid; gap: var(--ds-space-2); margin: 0; padding: 0; list-style: none; }
+.access-results li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ds-space-2); font-size: 12px; }
+.access-results small { color: var(--ds-muted); font-size: 12px; }
+
+.access-table-wrap { overflow-x: auto; border: 1px solid var(--ds-border); }
+.access-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.access-table th { padding: var(--ds-space-2) var(--ds-space-3); border-bottom: 1px solid var(--ds-border); background: var(--ds-subtle); color: var(--ds-muted); font: 650 11px/1.2 var(--ds-font); text-align: left; white-space: nowrap; }
+.access-table td { padding: var(--ds-space-2) var(--ds-space-3); border-bottom: 1px solid var(--ds-border); vertical-align: middle; }
+.access-table tr:last-child td { border-bottom: 0; }
+.access-table small { color: var(--ds-muted); font-size: 11px; }
+.access-email { font-family: var(--ds-mono); overflow-wrap: anywhere; }
+.access-row-actions { display: flex; justify-content: flex-end; gap: var(--ds-space-2); white-space: nowrap; }
+
+.access-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; border: 1px solid var(--ds-border); }
+.access-list li { display: grid; grid-template-columns: minmax(120px, auto) auto minmax(0, 1fr) auto; align-items: center; gap: var(--ds-space-3); padding: var(--ds-space-2) var(--ds-space-3); border-bottom: 1px solid var(--ds-border); }
+.access-list li:last-child { border-bottom: 0; }
+.access-list small { color: var(--ds-muted); font-size: 11px; }
+.access-form-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--ds-space-3); }
+
+.access-keys { display: grid; gap: var(--ds-space-3); margin: 0; padding: 0; list-style: none; }
+.access-keys > li { display: grid; gap: var(--ds-space-2); padding: var(--ds-space-3); border: 1px solid var(--ds-border); background: var(--ds-canvas); }
+.access-key-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ds-space-2) var(--ds-space-3); }
+.access-key-head small { color: var(--ds-muted); font-size: 11px; }
+.access-key-head .ui-button { margin-left: auto; }
+.access-commands { display: grid; gap: var(--ds-space-2); }
+.access-commands > small { color: var(--ds-muted); font-size: 11px; }
+.access-copy { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--ds-space-2); align-items: center; }
+.access-copy > span { grid-column: 1 / -1; color: var(--ds-muted); font: 650 11px/1.3 var(--ds-font); }
+.access-copy > code { display: block; padding: var(--ds-space-2); border: 1px solid var(--ds-border); background: var(--ds-subtle); color: var(--ds-text); font: 11px/1.5 var(--ds-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
+
+.access-create { display: grid; gap: var(--ds-space-3); margin: 0; padding: var(--ds-space-3); border: 1px dashed var(--ds-border); }
+.access-create legend { padding: 0 var(--ds-space-1); font: 650 13px/1.3 var(--ds-font); }
+.access-checks { display: grid; gap: var(--ds-space-1); font-size: 13px; }
+.access-checks > span { font: 650 12px/1.3 var(--ds-font); }
+.access-checks label { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ds-space-2); }
+.access-checks small { color: var(--ds-muted); font-size: 11px; }
+.access-reveal { display: grid; gap: var(--ds-space-3); }
+
+/* Publish dialog */
+.publish-signup { padding: 0 34px 19px; }
+.publish-access { display: grid; gap: var(--ds-space-2); margin: 0 34px 19px; padding: var(--ds-space-3); border: 1px solid var(--ds-border); background: var(--ds-subtle); color: var(--ds-text); }
+.publish-access dl { display: grid; gap: var(--ds-space-2); margin: 0; }
+.publish-access dt { color: var(--ds-muted); font: 650 11px/1.3 var(--ds-font); }
+.publish-access dd { margin: 0; font-size: 13px; line-height: 1.45; }
+.publish-access p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ds-text); }
+.published-invite { margin-bottom: var(--ds-space-2); }
+
+@media (max-width: 720px) {
+  .access-view { padding-left: 16px; padding-right: 16px; }
+  .access-form-row { grid-template-columns: 1fr; }
+  .access-list li { grid-template-columns: 1fr auto; }
+  .access-list li small { grid-column: 1 / -1; }
+  .publish-signup { padding-left: 22px; padding-right: 22px; }
+  .publish-access { margin-left: 22px; margin-right: 22px; }
+}
