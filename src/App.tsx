@@ -42,6 +42,9 @@ import { closePanel, isOpen, isVisible, loadLayout, movePanel, openPanel, panelI
 import { inTextEntry, shortcutFor } from "./ui/shortcuts";
 import { DeployDialog } from "./components/DeployDialog";
 import { ExplorerTree } from "./components/ExplorerTree";
+import { ActionContractView } from "./components/ActionContractView";
+import { useActionContract } from "./components/useActionContract";
+import { ACTION_CONTRACT_MARKDOWN } from "./lib/action-contract";
 import { isSignedOutError, ownerInitials, platformAccessHref, useOwnerSession, type OwnerSession } from "./components/owner-session";
 import { PlatformAccess } from "./components/PlatformAccess";
 import { filesUnder, renamePath } from "./components/project-tree";
@@ -293,7 +296,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const targetDatabaseModel = databaseTarget === "deployed" && activeDeployment
     ? { ...deployedModel, source: project.databaseModel.source }
     : project.databaseModel;
-  const activeSource = activeFile === "schema.ts" ? project.databaseModel.source : project.files[activeFile] ?? "";
+  const actionContract = useActionContract(project.files["actions.json"], project.files["schema.sql"], project);
+  const contractOpen = activeFile === ACTION_CONTRACT_MARKDOWN;
+  const activeSource = activeFile === "schema.ts" ? project.databaseModel.source
+    : contractOpen ? (actionContract.ok ? actionContract.markdown : actionContract.reason) : project.files[activeFile] ?? "";
   const activeMeta = fileMetaFor(activeFile);
   const lines = activeSource.split("\n").length;
 
@@ -390,6 +396,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   });
 
   const updateFile = (value: string) => {
+    if (contractOpen) return;
     setProject((current) => activeFile === "schema.ts" ? {
       ...current,
       updatedAt: Date.now(),
@@ -901,12 +908,12 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   };
 
   const fileLead = ["actions.json", "schema.sql", "schema.ts", "index.html", "styles.css", "app.js"];
-  const explorerFiles = [...new Set([...Object.keys(project.files), "schema.ts"])].sort((a, b) => {
+  const explorerFiles = [...new Set([...Object.keys(project.files), "schema.ts", ACTION_CONTRACT_MARKDOWN])].sort((a, b) => {
     const ai = fileLead.indexOf(a);
     const bi = fileLead.indexOf(b);
     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi) || a.localeCompare(b);
   });
-  const canEditSelection = Boolean(selectedPath) && !protectedProjectPaths.has(selectedPath);
+  const canEditSelection = Boolean(selectedPath) && !protectedProjectPaths.has(selectedPath) && selectedPath !== ACTION_CONTRACT_MARKDOWN;
 
   const explorerNav = (
     <nav className="explorer-panel" id="file-list" aria-label="Project files">
@@ -936,7 +943,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         activeFile={activeFile}
         selectedPath={selectedPath}
         iconFor={(path) => fileMetaFor(path).icon}
-        noteFor={(path) => path === "actions.json" ? "returns at most 100" : path === "schema.ts" ? "model" : path === "schema.sql" ? "kernel runs this" : ""}
+        noteFor={(path) => path === "actions.json" ? "returns at most 100" : path === "schema.ts" ? "model" : path === "schema.sql" ? "kernel runs this" : path === ACTION_CONTRACT_MARKDOWN ? "generated" : ""}
         onSelect={setSelectedPath}
         onOpenFile={(file) => { setActiveFile(file); setSelectedPath(file); }}
       />
@@ -986,7 +993,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             </ul>
           )}
           {activeFile === "actions.json" && <ActionReadout source={activeSource} />}
-          <div className="code-area">
+          {contractOpen ? <ActionContractView state={actionContract} /> : <div className="code-area">
             <div className="line-numbers" aria-hidden="true" ref={gutterRef}>
               {Array.from({ length: lines }, (_, index) => <span key={index}>{index + 1}</span>)}
             </div>
@@ -1004,7 +1011,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               spellCheck={false}
               aria-label={`${activeFile} code editor`}
             />
-          </div>
+          </div>}
           <p id="code-editor-keys" className="editor-keys">Tab inserts two spaces. Press Escape, then Tab, to leave the editor.</p>
           {(runtimeProblems > 0 || schemaProblem) && (
             <footer className="editor-status">
