@@ -121,6 +121,21 @@ describe("buildProjectExport", () => {
     expect(files.get("package.json")).toContain('"start": "sh start.sh"');
   });
 
+  test("carries the Action Contract of its actions.json, and refuses one that does not parse", () => {
+    const withAction = { ...project, files: { ...project.files, "actions.json": JSON.stringify({ version: 1, actions: {
+      "notes.list": { kind: "query", access: "authenticated", statement: "SELECT id FROM notes LIMIT 20", bindings: [] },
+    } }) } };
+    const files = readTar(buildProjectExport(withAction, artifact, kernelFiles).archive);
+    const contract = JSON.parse(files.get("littlebox/action-contract.json")!);
+    expect(contract).toMatchObject({ format: "littlebox-action-contract", project: { id: "app_notes", name: "Private Notes" } });
+    expect(contract.actions[0].output).toEqual({ kind: "rows", columns: [{ name: "id", type: "integer", nullable: false, from: { table: "notes", column: "id" } }], unnamed: [] });
+    expect(files.get("littlebox/action-contract.md")).toContain("## notes.list");
+    expect(JSON.parse(files.get("littlebox/action-contract.schema.json")!).title).toBe("Littlebox Action Contract");
+    expect(files.get("README.md")).toContain("littlebox/action-contract.json");
+    expect(() => buildProjectExport({ ...project, files: { ...project.files, "actions.json": "{" } }, artifact, kernelFiles))
+      .toThrow("The export cannot describe its Server Actions: actions.json must contain valid JSON.");
+  });
+
   test("includes only an explicitly supplied SQLite snapshot", () => {
     const snapshot = Uint8Array.from([0, 1, 2, 255]);
     const { archive, entries } = buildProjectExport(project, artifact, kernelFiles, snapshot);

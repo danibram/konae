@@ -8,6 +8,10 @@ import { McpClient, type Transfer } from "../src/mcp/client";
 import { normalizeManifest } from "../src/deployments/manifest";
 import { checkPackageManifest, packageComponentFiles, type PackageManifest } from "../src/lib/portable-package";
 import { downloadToFile, writeTarFile, type FileTarEntry } from "./package-files";
+import {
+  ACTION_CONTRACT_FILE, ACTION_CONTRACT_MARKDOWN, ACTION_CONTRACT_SCHEMA_FILE,
+  actionContractSchema, generateActionContract, renderActionContractMarkdown, serializeActionContract,
+} from "../src/lib/action-contract";
 
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
@@ -42,13 +46,16 @@ async function credentials(root: string) {
   return (await json<{ token: string }>(path.join(root, ".littlebox/credentials.json"))).token;
 }
 
+/** Files the CLI writes beside the Capsule, which are never uploaded as its source. */
+const generatedFiles = new Set(["littlebox.json", ACTION_CONTRACT_FILE, ACTION_CONTRACT_SCHEMA_FILE]);
+
 async function sources(root: string, prefix = ""): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
   for (const entry of await readdir(path.join(root, prefix), { withFileTypes: true })) {
     if (entry.name.startsWith(".") || ["node_modules", "dist", "data", "target"].includes(entry.name)) continue;
     const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isDirectory()) Object.assign(result, await sources(root, relative));
-    else if (entry.isFile() && /\.(?:html|css|js|jsx|ts|tsx|json|sql)$/.test(entry.name) && entry.name !== "littlebox.json") result[relative] = await readFile(path.join(root, relative), "utf8");
+    else if (entry.isFile() && /\.(?:html|css|js|jsx|ts|tsx|json|sql)$/.test(entry.name) && !generatedFiles.has(relative)) result[relative] = await readFile(path.join(root, relative), "utf8");
   }
   return result;
 }
@@ -144,6 +151,31 @@ export async function exportLocal(root: string, config: Config, output: string, 
   }
 }
 
+/**
+ * Writes the Action Contract of the Capsule in `root` into `out`: the JSON,
+ * its schema and the Markdown. The project's ID and name come from
+ * littlebox.json when there is one.
+ */
+export async function writeContract(root: string, out = root) {
+  const read = async (file: string) => readFile(path.join(root, file), "utf8");
+  let project: { id: string; name: string } | undefined;
+  try {
+    const config = await json<Config>(path.join(root, "littlebox.json"));
+    project = { id: config.project.id, name: config.project.name };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  let actionsSource: string;
+  try { actionsSource = await read("actions.json"); } catch { throw Error(`No actions.json in ${root}.`); }
+  const schemaSource = await read("schema.sql").catch(() => "");
+  const { contract, warnings } = generateActionContract({ actionsSource, schemaSource, project });
+  await mkdir(out, { recursive: true });
+  await writeFile(path.join(out, ACTION_CONTRACT_FILE), serializeActionContract(contract));
+  await writeFile(path.join(out, ACTION_CONTRACT_SCHEMA_FILE), `${JSON.stringify(actionContractSchema, null, 2)}\n`);
+  await writeFile(path.join(out, ACTION_CONTRACT_MARKDOWN), renderActionContractMarkdown(contract));
+  return { contract, warnings, file: path.join(out, ACTION_CONTRACT_FILE) };
+}
+
 /** Add each entry to .gitignore unless a line already names it. */
 export async function ignoreInGit(root: string, entries: string[]) {
   const file = path.join(root, ".gitignore");
@@ -169,7 +201,7 @@ async function main() {
   if (argv[0] === "--") argv.shift();
   const [command, ...args] = argv;
   if (!command || ["help", "--help"].includes(command)) {
-    console.log("Use login, init, build, dev, publish, or export. Options include --dir, --url, --name, --port, and --out. Export --with-data includes live data, accounts, and files; it needs a credential from login --export-data or a token with export_data.");
+    console.log("Use login, init, build, dev, publish, export, or contract. Options include --dir, --url, --name, --port, and --out. Export --with-data includes live data, accounts, and files; it needs a credential from login --export-data or a token with export_data. contract writes action-contract.json, its schema and action-contract.md from actions.json and schema.sql.");
     return;
   }
   const option = (name: string, fallback?: string) => {
@@ -212,6 +244,12 @@ async function main() {
     return;
   }
   if (command === "build") { await buildLocal(root); console.log("Built .littlebox/artifact.json"); return; }
+  if (command === "contract") {
+    const { contract, warnings, file } = await writeContract(root, path.resolve(option("out", root)!));
+    for (const warning of warnings) console.warn(`Warning: ${warning.message}`);
+    console.log(`Wrote the Action Contract for ${contract.actions.length} action${contract.actions.length === 1 ? "" : "s"} to ${file}, with its schema and Markdown.`);
+    return;
+  }
   const config = await json<Config>(path.join(root, "littlebox.json"));
   if (command === "export") {
     const output = path.resolve(option("out", path.join(root, ".littlebox/selfhost.tar"))!);
@@ -267,7 +305,7 @@ async function main() {
     } finally { child.kill(); }
     return;
   }
-  throw Error("Use login, init, build, dev, publish, or export. Options include --dir, --url, --name, --port, and --out.");
+  throw Error("Use login, init, build, dev, publish, export, or contract. Options include --dir, --url, --name, --port, and --out.");
 }
 
 if (import.meta.main) main().catch(error => { console.error(error.message); process.exitCode = 1; });

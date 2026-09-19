@@ -175,6 +175,7 @@ export function contractFromProgram(program: ServerActionProgram, schemaSource: 
     errors: [
       fromSdk("Server action not declared.", "runtime"),
       fromSdk("Arguments must be an object.", "runtime"),
+      fromSdk("No route accepts POST on this path.", "http"),
     ],
     actions,
     notes: [

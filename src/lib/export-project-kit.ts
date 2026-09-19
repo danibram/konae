@@ -5,6 +5,7 @@ import { runtimeScriptAttribute, type BuildArtifact } from "../runtime/artifact"
 import type { MiniAppProject } from "./types";
 import type { PortableProjectState } from "../deployments/client";
 import { checkPackageManifest, type PackageManifest } from "./portable-package";
+import { actionContractSchema, generateActionContract, renderActionContractMarkdown, serializeActionContract } from "./action-contract";
 
 export type ExportFile = { path: string; contents: string | Uint8Array };
 
@@ -208,6 +209,10 @@ When it answers on \u0060/_littlebox/health\u0060, run \u0060npm run deploy\u006
 
 Keep \u0060.env\u0060 private. It contains the owner key for this local Kernel. The exported app source and static artifact contain no Littlebox-hosted credentials.
 
+## The Action Contract
+
+\u0060littlebox/action-contract.json\u0060 lists every Server Action in \u0060app/actions.json\u0060: its inputs, the columns or counts it returns, who may call it, its HTTP route, the errors the Kernel returns for it and the limits that apply. \u0060littlebox/action-contract.schema.json\u0060 is its JSON Schema and \u0060littlebox/action-contract.md\u0060 the same content to read. A backend that replaces this Kernel can check itself against it with \u0060bun run littlebox -- conform\u0060 from the Littlebox repository. The files describe the app as exported. After editing \u0060app/actions.json\u0060 or \u0060app/schema.sql\u0060, write them again from the Littlebox repository with \u0060bun run littlebox -- contract --dir <this folder>/app --out <this folder>/littlebox\u0060. Keep them out of \u0060app/\u0060: \u0060npm run deploy\u0060 uploads every file there as app source.
+
 ## App data
 
 An export made with \u0060--with-data\u0060 holds the app's data in \u0060littlebox/package/\u0060. \u0060manifest.json\u0060 lists the database, the accounts and the files with the size and SHA-256 of each, and names the published revision they came from. The first \u0060npm run deploy\u0060 imports them. It uploads each part in 64 KiB blocks and records its progress in \u0060littlebox/import-state.json\u0060, so running it again after an interruption continues where it stopped. The Kernel checks every checksum, the accounts each file names and the free space before it creates the app, and refuses a package for an app that already exists. If the script stops after the Kernel created the app, running it again returns the same receipt. Later runs publish the code and keep the data.
@@ -272,6 +277,7 @@ export function projectExportEntries(
   if (!project.files["schema.ts"] && project.databaseModel.source) {
     files.push({ path: "app/schema.ts", contents: project.databaseModel.source });
   }
+  const contract = actionContractEntries(project.files["actions.json"], project.files["schema.sql"] ?? "", { id: project.id, name: project.name });
   const normalizedArtifact = {
     version: artifact.version,
     entrypoint: artifact.entrypoint,
@@ -296,6 +302,7 @@ export function projectExportEntries(
       databaseModel: project.databaseModel,
     }, null, 2) },
     { path: "littlebox/artifact.json", contents: JSON.stringify(normalizedArtifact, null, 2) },
+    ...contract,
     ...(portableState?.initialDatabase ? [{ path: "littlebox/initial-database.sqlite", contents: portableState.initialDatabase, mode: 0o600 }] : []),
     ...(portableState?.initialIdentity ? [{ path: "littlebox/initial-identity.sqlite", contents: portableState.initialIdentity, mode: 0o600 }] : []),
     ...(portableState?.initialFiles ? [{ path: "littlebox/initial-files.portable", contents: portableState.initialFiles, mode: 0o600 }] : []),
@@ -310,6 +317,22 @@ export function projectExportEntries(
     uniquePaths.add(path);
   }
   return entries;
+}
+
+/** The Action Contract of the exported actions.json, or nothing for a Capsule without one. */
+function actionContractEntries(actionsSource: string | undefined, schemaSource: string, project: { id: string; name: string }): TarEntry[] {
+  if (actionsSource === undefined) return [];
+  let contract;
+  try {
+    contract = generateActionContract({ actionsSource, schemaSource, project }).contract;
+  } catch (error) {
+    throw new Error(`The export cannot describe its Server Actions: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return [
+    { path: "littlebox/action-contract.json", contents: serializeActionContract(contract) },
+    { path: "littlebox/action-contract.md", contents: renderActionContractMarkdown(contract) },
+    { path: "littlebox/action-contract.schema.json", contents: `${JSON.stringify(actionContractSchema, null, 2)}\n` },
+  ];
 }
 
 function validatePortableBytes(label: string, bytes: Uint8Array | undefined, maxBytes: number) {
