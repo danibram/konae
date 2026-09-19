@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { HostedDatabaseClient, deployProject, readSignupPolicy, saveSignupPolicy } from "./client";
-import { checksum, encodeBase64 } from "../mcp/client";
+import { HostedDatabaseClient, createAppInvitations, deployProject, listAppUsers, readSignupPolicy, resendAppInvitation, saveSignupPolicy } from "./client";
+import { checksum, decodeBase64, encodeBase64 } from "../mcp/client";
 import { starterProject } from "../lib/starter";
 
 const originalFetch = globalThis.fetch;
@@ -97,4 +97,56 @@ describe("deployment transfer cleanup", () => {
       if (failedTool === "release_plan") expect(calls).not.toContain("release_apply");
     });
   }
+});
+
+/** Answers every tool with `answer(name, args)` and records the calls. */
+function fakeKernel(answer: (name: string, args: Record<string, unknown>) => unknown = () => ({})) {
+  const calls: { name: string; args: Record<string, unknown> }[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const request = JSON.parse(String(init?.body));
+    if (request.method.startsWith("notifications/")) return new Response(null, { status: 202 });
+    if (request.method === "initialize") return Response.json({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2025-11-25" } });
+    const { name, arguments: args } = request.params;
+    calls.push({ name, args });
+    return Response.json({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { result: answer(name, args) }, content: [], isError: false } });
+  }) as typeof fetch;
+  return calls;
+}
+
+describe("first publish signup policy", () => {
+  const artifact = { version: 1 as const, entrypoint: "index.html", files: { "index.html": "<main>Test</main>" } };
+
+  async function uploaded(initialSignupPolicy?: { mode: "invitation"; allowlist: string[] }) {
+    let payload: Record<string, unknown> = {};
+    fakeKernel((name, args) => {
+      if (name === "transfer_begin") return { transferId: "t", size: args.size, sha256: args.sha256, chunkBytes: 1 << 20 };
+      if (name === "transfer_write") payload = JSON.parse(new TextDecoder().decode(decodeBase64(String(args.data))));
+      if (name === "release_plan") return { planId: "p" };
+      return {};
+    });
+    await deployProject(starterProject, "private", artifact, initialSignupPolicy);
+    return payload;
+  }
+
+  test("sends the chosen policy next to the visibility", async () => {
+    expect(await uploaded({ mode: "invitation", allowlist: [] })).toMatchObject({ visibility: "private", initialSignupPolicy: { mode: "invitation", allowlist: [] } });
+  });
+
+  test("sends no policy when none is given, as a republish must", async () => {
+    expect(await uploaded()).not.toHaveProperty("initialSignupPolicy");
+  });
+});
+
+describe("app users and invitations", () => {
+  test("passes the deployment, the page and the idempotency key to the Kernel tools", async () => {
+    const calls = fakeKernel((name) => name === "app_users_list" ? { users: [], nextCursor: null } : { results: [] });
+    await listAppUsers("deploy/a", { limit: 25, cursor: "b@example.com", state: "suspended" });
+    await createAppInvitations("deploy/a", ["ana@example.com"], "invite-key-1");
+    await resendAppInvitation("deploy/a", "inv_1", "resend-key-1");
+    expect(calls).toEqual([
+      { name: "app_users_list", args: { deploymentId: "deploy/a", limit: 25, cursor: "b@example.com", state: "suspended" } },
+      { name: "app_invitations_create", args: { deploymentId: "deploy/a", emails: ["ana@example.com"], idempotencyKey: "invite-key-1" } },
+      { name: "app_invitation_resend", args: { deploymentId: "deploy/a", invitationId: "inv_1", idempotencyKey: "resend-key-1" } },
+    ]);
+  });
 });
