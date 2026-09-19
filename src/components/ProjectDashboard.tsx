@@ -12,8 +12,10 @@ import type { DeploymentReceipt } from "../deployments/client";
 import type { DeploymentIndex } from "../lib/workspace";
 import type { MiniAppProject } from "../lib/types";
 import type { OwnerSession } from "./owner-session";
-import type { ProjectMetadata } from "../lib/managed-sources";
+import type { EjectRecord, ProjectMetadata } from "../lib/managed-sources";
+import type { EjectPlan, EjectReceipt } from "../lib/eject-package";
 import { WorkspaceNav } from "./WorkspaceNav";
+import { EjectDialog } from "./EjectDialog";
 
 type Props = {
   projects: MiniAppProject[];
@@ -25,9 +27,17 @@ type Props = {
   onImportDraft: (index: number) => void;
   onOpenProject: (projectId: string, entry?: "preview" | "agent" | "code") => void;
   onCreateProject: (name: string, template: "tasks" | "notes" | "scratch") => void;
+  ejected: Record<string, EjectRecord>;
+  eject: {
+    prepare: (projectId: string, slug: string) => Promise<{ plan: EjectPlan; archive: Uint8Array }>;
+    apply: (plan: EjectPlan) => Promise<EjectReceipt>;
+    onEjected: (projectId: string, receipt: EjectReceipt) => void;
+  };
 };
 
-export function ProjectDashboard({ projects, deployments, ownerSession, external, missing, drafts, onImportDraft, onOpenProject, onCreateProject }: Props) {
+export function ProjectDashboard({ projects, deployments, ownerSession, external, missing, drafts, onImportDraft, onOpenProject, onCreateProject, ejected, eject }: Props) {
+  const [ejecting, setEjecting] = useState<MiniAppProject | null>(null);
+  const managed = projects.filter((project) => !ejected[project.id]);
   const [newestFirst, setNewestFirst] = useState(true);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
@@ -80,15 +90,21 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
                 key={project.id}
                 project={project}
                 deployment={deployments[project.id]}
+                external={Boolean(ejected[project.id])}
                 index={index}
                 onOpen={(entry) => onOpenProject(project.id, entry)}
               />
             ))}
             {filtered.length === 0 && <div className="projects-empty"><strong>No projects yet</strong><p>Create one and describe what it should do.</p></div>}
           </div>
-          <p className="take-it">Take it with you. Open a project, then Export or Deploy.</p>
+          <section className="take-it-group" aria-labelledby="take-it-heading">
+            <h2 id="take-it-heading">Take it with you</h2>
+            <p>Open a project, then Export or Deploy. To edit a project's code outside Littlebox, Eject it. Its hosted app keeps running.</p>
+            {managed.length > 0 && <ul>{managed.map((project) => <li key={project.id}><span>{project.name}</span><Button size="sm" onClick={() => setEjecting(project)}>Eject…</Button></li>)}</ul>}
+          </section>
         </section>
       </main>
+      <EjectDialog project={ejecting} onClose={() => setEjecting(null)} prepare={eject.prepare} apply={eject.apply} onEjected={eject.onEjected} />
       <Dialog
         open={creating}
         title="Name this app"
@@ -133,9 +149,10 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
   );
 }
 
-function ProjectCard({ project, deployment, index, onOpen }: {
+function ProjectCard({ project, deployment, external, index, onOpen }: {
   project: MiniAppProject;
   deployment?: DeploymentReceipt;
+  external: boolean;
   index: number;
   onOpen: (entry: "preview" | "agent" | "code") => void;
 }) {
@@ -151,13 +168,14 @@ function ProjectCard({ project, deployment, index, onOpen }: {
             <h2>{project.name}{project.id === "app_tiny_tasks" && <Badge className="starter-badge">Starter</Badge>}</h2>
             {pageSummary(project) && <p>{pageSummary(project)}</p>}
           </div>
+          {external && <Badge tone="warning" className="external-badge">External</Badge>}
           {visibility && <Badge tone={visibility === "public" ? "success" : "accent"} className={`deployment-badge ${visibility}`}>{visibility === "public" ? <Globe2 size={11} /> : <LockKeyhole size={11} />}{visibility}</Badge>}
         </div>
         <div className="project-meta"><span><Clock3 size={11} /> {relativeTime(project.updatedAt)}</span></div>
         <footer>
           <Button variant="secondary" size="sm" onClick={() => onOpen("preview")}>Open</Button>
-          <button type="button" className="project-door-link" onClick={() => onOpen("agent")}>Describe</button>
-          <button type="button" className="project-door-link edit-files" onClick={() => onOpen("code")}>Edit files</button>
+          {!external && <button type="button" className="project-door-link" onClick={() => onOpen("agent")}>Describe</button>}
+          <button type="button" className="project-door-link edit-files" onClick={() => onOpen("code")}>{external ? "View files" : "Edit files"}</button>
           {deployment && <a href={deployment.url} target="_blank" rel="noopener"><ExternalLink size={13} /> Open app</a>}
         </footer>
       </div>

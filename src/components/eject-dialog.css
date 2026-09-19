@@ -1,0 +1,15 @@
+.eject-dialog p { margin: 0 0 12px; line-height: 1.45; }
+.eject-effects { display: grid; gap: 8px; margin: 0 0 14px; }
+.eject-effects div { display: grid; grid-template-columns: 11em 1fr; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+.eject-effects dt { font-weight: 650; }
+.eject-effects dd { margin: 0; }
+.eject-error { color: var(--red, #b42318); }
+.eject-commands { margin: 0; padding: 10px 12px; overflow-x: auto; border: 1px solid var(--line); font: 13px/1.5 ui-monospace, monospace; white-space: pre; }
+.take-it-group { margin: 24px 0 0; }
+.take-it-group h2 { margin: 0 0 6px; font-size: 16px; }
+.take-it-group p { margin: 0 0 10px; }
+.take-it-group ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.take-it-group li { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 36rem; }
+.ejected-notice { margin: 0 0 8px; padding: 10px 12px; border: 1px solid var(--line); background: var(--surface, transparent); }
+.ejected-notice p { margin: 0 0 6px; line-height: 1.45; }
+.ejected-notice pre { margin: 0; overflow-x: auto; font: 12px/1.5 ui-monospace, monospace; white-space: pre; }

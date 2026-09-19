@@ -9,7 +9,7 @@ const dataRoot = path.join(tmpdir(), `littlebox-e2e-${process.pid}`);
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  testMatch: ["**/local-platform.e2e.ts", "**/database-migration.e2e.ts"],
+  testMatch: ["**/local-platform.e2e.ts", "**/database-migration.e2e.ts", "**/eject.e2e.ts"],
   workers: 1,
   timeout: 90_000,
   expect: { timeout: 15_000 },
