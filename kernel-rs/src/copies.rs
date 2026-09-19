@@ -682,7 +682,7 @@ pub async fn operator_command() -> Result<bool> {
     };
     let summary = restore(&source, copy.as_deref(), &destination).await?;
     println!(
-        "Restored copy {} into {}: {} Deployments, {} files, checksums verified. Signed out {} sessions and credentials; owners, agents and app users sign in again.",
+        "Restored copy {} into {}: {} Deployments, {} files, checksums verified. Signed out {} sessions and credentials; owners, agents and app users sign in again. App API keys stay valid; revoke again any key you revoked after this copy was taken.",
         summary.copy_id,
         destination.display(),
         summary.deployments,
@@ -1096,6 +1096,50 @@ mod tests {
 
         let message = restore(&Source::Directory(copies.clone()), None, &restored).await.err().unwrap().to_string();
         assert!(message.contains("not empty"), "{message}");
+        for path in [source, copies, restored] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    /// ADR-0011, note of 2026-11-06: a restore brings back the same
+    /// installation for the same owner, so API keys stay valid; an import
+    /// into another installation revokes them. The Usage store travels.
+    #[tokio::test]
+    async fn a_restore_keeps_api_keys_live_and_an_import_revokes_them() {
+        let (source, copies, restored) = (scratch("keys-source"), scratch("keys-target"), scratch("keys-restored"));
+        let (deployment, _) = seed(&source);
+        let folder = source.join("deployments").join(&deployment.id);
+        Connection::open(folder.join("identity.sqlite"))
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS api_keys(
+                   id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+                   actions TEXT NOT NULL, files TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER);
+                 INSERT INTO api_keys VALUES ('key-live', 'hash-live', 'Orders', '[\"orders.receive\"]', '[]', 1, NULL);
+                 INSERT INTO api_keys VALUES ('key-revoked', 'hash-revoked', 'Old', '[]', '[]', 1, 2);",
+            )
+            .unwrap();
+        crate::usage::count(&source, &deployment.id, crate::usage::Operation::Login);
+        crate::usage::flush();
+        let id = run_copy(&state(&source), &[Target::Directory(copies.clone())]).await.unwrap();
+        assert!(copies.join(&id).join("deployments").join(&deployment.id).join(crate::usage::USAGE_DATABASE).is_file());
+        restore(&Source::Directory(copies.clone()), None, &restored).await.unwrap();
+
+        let restored_folder = restored.join("deployments").join(&deployment.id);
+        let identity = restored_folder.join("identity.sqlite");
+        assert_eq!(count(&identity, "SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL"), 1, "the live key stays live");
+        assert_eq!(count(&identity, "SELECT COUNT(*) FROM api_keys WHERE id='key-revoked' AND revoked_at=2"), 1);
+        assert_eq!(count(&restored_folder.join(crate::usage::USAGE_DATABASE), "SELECT SUM(count) FROM usage_daily WHERE kind='login'"), 1);
+
+        // The two import paths, on copies of the same accounts file.
+        let small = restored.join("small-import.sqlite");
+        std::fs::copy(&identity, &small).unwrap();
+        crate::http::revoke_imported_keys(&Connection::open(&small).unwrap()).unwrap();
+        assert_eq!(count(&small, "SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL"), 0, "project_export import revokes every key");
+        let package = restored.join("package-import.sqlite");
+        std::fs::copy(&identity, &package).unwrap();
+        crate::package::revoke_access(&package).unwrap();
+        assert_eq!(count(&package, "SELECT COUNT(*) FROM api_keys"), 0, "a package import holds no key");
         for path in [source, copies, restored] {
             let _ = std::fs::remove_dir_all(path);
         }
