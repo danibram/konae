@@ -29,6 +29,7 @@ mod admission;
 mod auth;
 mod clerk;
 mod copies;
+mod eject;
 mod http;
 mod invitations;
 mod limits;

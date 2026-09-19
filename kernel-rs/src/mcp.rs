@@ -70,6 +70,7 @@ pub(super) fn store(state: &AppState) -> Result<Connection> {
     }
     db.execute("CREATE INDEX IF NOT EXISTS audit_at ON audit(at)", [])?;
     super::oauth::install(&db)?;
+    super::eject::install(&db)?;
     Ok(db)
 }
 
@@ -83,7 +84,7 @@ pub(super) struct Owner {
     display: Option<String>,
     pub(super) scopes: Vec<String>,
     projects: Vec<String>,
-    session: bool,
+    pub(super) session: bool,
 }
 
 impl Owner {
@@ -162,6 +163,7 @@ pub(super) fn authenticate_owner(state: &AppState, headers: &HeaderMap) -> Resul
                 "manage_users".into(),
                 "tokens".into(),
                 "export_data".into(),
+                "manage_lifecycle".into(),
             ],
             projects: vec![],
             session: true,
@@ -383,10 +385,13 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
             ),
         ]);
     }
+    if owner.scopes.iter().any(|s| s == "manage_lifecycle") {
+        tools.extend(super::eject::tools());
+    }
     if owner.session {
         tools.extend([
             tool("tokens_list", "List active delegated credentials without exposing their secrets.", json!({}), &[], true),
-            tool("token_create", "Issue a revocable agent credential with selected scopes and project grants.", json!({"scopes":{"type":"array","items":{"type":"string","enum":["read","write","publish","manage_users","export_data"]},"minItems":1},"projectIds":{"type":"array","items":text},"ttlSeconds":{"type":"integer","minimum":60,"maximum":2592000}}), &["scopes"], false),
+            tool("token_create", "Issue a revocable agent credential with selected scopes and project grants.", json!({"scopes":{"type":"array","items":{"type":"string","enum":["read","write","publish","manage_users","export_data","manage_lifecycle"]},"minItems":1},"projectIds":{"type":"array","items":text},"ttlSeconds":{"type":"integer","minimum":60,"maximum":2592000}}), &["scopes"], false),
             tool("token_revoke", "Revoke an agent credential using its returned ID.", json!({"tokenId":text}), &["tokenId"], false),
         ]);
     }
@@ -880,6 +885,10 @@ fn audit(
                 .map(|id| format!("deployment {id}"));
             (project, deployment)
         }
+        "eject_apply" => (
+            store(state).ok().and_then(|db| super::eject::plan_project(&db, arguments["planId"].as_str().unwrap_or(""))),
+            result.as_ref().ok().map(|receipt| format!("sources revision {}", receipt["sourcesRevision"])),
+        ),
         "package_download" => (
             arguments["deploymentId"].as_str().map(str::to_owned),
             arguments["component"].as_str().map(str::to_owned),
@@ -1106,7 +1115,14 @@ async fn admin_call(
                 .optional()?;
             if let Some(existing) = existing {
                 anyhow::ensure!(existing == owner.id, "Project not found or access denied.");
-                return Ok(owned_project(state, owner, &id, "read")?.0);
+                let project = owned_project(state, owner, &id, "read")?.0;
+                // Source authority does not come back: an External project asked
+                // to be Managed again gets the Eject refusal.
+                anyhow::ensure!(
+                    !(a["sourceAuthority"] == "managed" && project["sourceAuthority"] != "managed"),
+                    super::eject::CLOSED
+                );
+                return Ok(project);
             }
             anyhow::ensure!(
                 !state
@@ -1132,19 +1148,23 @@ async fn admin_call(
             let id = a["projectId"].as_str().unwrap();
             let (project, revision) = owned_project(state, owner, id, "read")?;
             let deployment = find_project_deployment(&*state.deployments.read().await, id);
-            Ok(json!({"project":project,"revision":revision,"deployment":deployment}))
+            let sources_revision = super::eject::sources_revision(&store(state)?, id)?;
+            Ok(json!({"project":project,"revision":revision,"sourcesRevision":sources_revision,"deployment":deployment}))
         }
         "project_sources_read" => {
             let id = a["projectId"].as_str().unwrap();
             let (project, _) = owned_project(state, owner, id, "read")?;
-            anyhow::ensure!(project["sourceAuthority"] == "managed", "Project sources are maintained externally.");
+            // An ejected project's last saved sources stay readable, frozen, so
+            // the editor can show them read-only.
+            let ejected = super::eject::is_ejected(&project);
+            anyhow::ensure!(project["sourceAuthority"] == "managed" || ejected, "Project sources are maintained externally.");
             let row: Option<(Vec<u8>, u64)> = store(state)?.query_row(
                 "SELECT body,revision FROM managed_sources WHERE project=?1", [id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             ).optional()?;
             match row {
-                Some((bytes, revision)) => Ok(json!({"revision":revision,"transfer":download(state, principal, &bytes, Some(id)).await?})),
-                None => Ok(json!({"revision":0,"transfer":null})),
+                Some((bytes, revision)) => Ok(json!({"revision":revision,"readOnly":ejected,"transfer":download(state, principal, &bytes, Some(id)).await?})),
+                None => Ok(json!({"revision":0,"readOnly":ejected,"transfer":null})),
             }
         }
         "project_sources_save" => {
@@ -1157,6 +1177,7 @@ async fn admin_call(
             validate_managed_sources(&source, id)?;
             let _guard = database_lock(state, &format!("project:{id}")).await;
             let (project, _) = owned_project(state, owner, id, "write")?;
+            anyhow::ensure!(!super::eject::is_ejected(&project), super::eject::CLOSED);
             anyhow::ensure!(project["sourceAuthority"] == "managed", "Project sources are maintained externally.");
             let mut db = store(state)?;
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -1381,6 +1402,7 @@ async fn admin_call(
             Ok(receipt)
         }
         name if name.starts_with("app_") => super::invitations::admin_call(state, owner, name, &a).await,
+        name if name.starts_with("eject_") => super::eject::admin_call(state, owner, principal, name, &a).await,
         _ => anyhow::bail!("Unknown tool."),
     }
 }
@@ -1654,7 +1676,7 @@ pub(super) async fn new_transfer(state: &AppState, principal: &str, value: Value
     )
 }
 
-async fn download(
+pub(super) async fn download(
     state: &AppState,
     principal: &str,
     bytes: &[u8],

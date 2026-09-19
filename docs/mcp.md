@@ -11,7 +11,7 @@ bun run dev:local
 
 Open the editor and go to **Platform access**. The direct link is `http://localhost:4173/_littlebox/owner/login`. To create the first owner, enter an email, a password and the installation key. In the default local environment that key is `local-development-key`; `LITTLEBOX_ADMIN_KEY` sets it. The first account claims the Deployments from the earlier prototype. Every later creator enters an invitation code instead, described under [creator admission](#creator-admission).
 
-Each owner administers their own projects. The page creates read-only or read, edit and publish tokens, optionally limited to specific projects, and lists and revokes active credentials. A token's secret appears only once. Tokens from this page expire after 24 hours; `token_create` accepts any subset of `read`, `write`, `publish`, `manage_users` and `export_data` and a lifetime of up to 30 days. OAuth clients may request the same scopes. Only `export_data` downloads an app's accounts and data, and the owner's browser session holds it.
+Each owner administers their own projects. The page creates read-only or read, edit and publish tokens, optionally limited to specific projects, and lists and revokes active credentials. A token's secret appears only once. Tokens from this page expire after 24 hours; `token_create` accepts any subset of `read`, `write`, `publish`, `manage_users`, `export_data` and `manage_lifecycle` and a lifetime of up to 30 days. OAuth clients may request the same scopes. Only `export_data` downloads an app's accounts and data, only `manage_lifecycle` ejects a project, and the owner's browser session holds both.
 
 The installation key does not authenticate MCP tools and is not included in the editor bundle. The server listens on `127.0.0.1` by default. The Kernel refuses to start on a non-loopback address, or with a `LITTLEBOX_PUBLIC_ORIGIN` whose host is not `localhost`, a `*.localhost` name or a loopback IP, while the installation key is unset or still `local-development-key`, unless `LITTLEBOX_ALLOW_DEFAULT_KEY=1`. For a remote installation, configure the installation key, the HTTPS origin and the proxy before listening on another interface.
 
@@ -34,7 +34,8 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | Group | Tools |
 | --- | --- |
 | Discovery | `platform_describe`, `platform_guide`, `session_inspect`, `mail_status`, `projects_list`, `project_inspect` |
-| Projects | `project_create` |
+| Projects | `project_create`, `project_sources_read`, `project_sources_save` |
+| Eject, with `manage_lifecycle` | `eject_plan`, `eject_apply` |
 | Owner schema and data | `schema_plan`, `database_execute`, `storage_test` |
 | App export, with `export_data` | `package_export`, `project_export`, `database_export` |
 | Publishing | `release_plan`, `release_apply` |
@@ -304,6 +305,41 @@ A published app runs under the Kernel's Content Security Policy, described in [t
 The build lives in `.littlebox/artifact.json`. Publishing transfers it over MCP, validates a plan against the project revision and applies it. The tool saves the plan and the receipt in `.littlebox`. The Kernel rejects a stale plan. Repeating a plan that was already applied returns its receipt. `publish` deploys as private unless `littlebox.json` sets `project.manifest.visibility` to `"public"`. A republish keeps the URL and database and stops serving files that the new artifact no longer contains.
 
 There is also `bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173`. It reads `LITTLEBOX_EMAIL` and `LITTLEBOX_PASSWORD` from the environment, obtains a 24-hour credential and stores it with `0600` permissions in `.littlebox/credentials.json`. `LITTLEBOX_INVITATION_CODE` lets it create the account if it does not exist yet, and `LITTLEBOX_SETUP_KEY` does so for an installation's first owner. On an installation that requires verification it stops and asks you to open the emailed link first. The command adds `.littlebox/` to `.gitignore`; do not copy credentials into the frontend.
+
+## Eject
+
+Eject moves a Managed Project's source authority to its owner. The project becomes External: the owner builds outside Littlebox and publishes Build Artifacts through `release_plan` and `release_apply`, as for a project created with the CLI. The Deployment does not change. Its URL, accounts, sessions, data, files, invitations and email service continue, and Eject exports no data. [ADR-0005](./adr/0005-build-artifacts-separate-managed-and-external-projects.md) records the decision.
+
+```sh
+bun run littlebox -- login --dir /tmp/ejected --url http://localhost:4173 --manage-lifecycle
+bun run littlebox -- eject --dir /tmp/ejected --project <project id> --url http://localhost:4173
+bun run littlebox -- publish --dir /tmp/ejected
+```
+
+`eject` reads the saved-sources revision from `project_inspect`, or takes `--revision`, and calls `eject_plan`. It downloads the code package, checks its size, SHA-256 and the SHA-256 of every file, writes the files into the directory, and only then calls `eject_apply`. It saves the receipt in `.littlebox/eject-receipt.json`. The directory must be empty apart from dotfiles. A run interrupted after the plan resumes in the same directory and keeps the files it already wrote if they are unchanged.
+
+Both tools need `manage_lifecycle`. The owner's browser session holds it; `token_create` delegates it only when asked, and `read`, `write`, `publish`, `manage_users` and `export_data` do not include it.
+
+`eject_plan { projectId, expectedRevision }` compares `expectedRevision` with the saved-sources revision, the counter `project_sources_save` advances and `project_inspect` returns as `sourcesRevision`. It is not the release revision. A mismatch is refused before any transfer exists. The answer holds a `planId`, the `package` size, SHA-256 and content list, the `effects` Eject has, and a download `transfer`. Planning again at the same revision while the plan is current returns the same `planId` with a new download, so a client can fetch the package again after an interruption. The plan lasts one hour.
+
+The package is JSON with `format: "littlebox-eject"`, `version: 1`, `projectId`, `sourcesRevision`, `contents` (path, size and SHA-256 of each file), `directories` and `files`. `files` holds the saved sources, `schema.ts` from the Database Model when the sources lack it, a `littlebox.json` naming the Kernel's MCP origin and the project with `sourceAuthority: "external"`, and a `README.md` (or `LITTLEBOX.md` when the sources have a README) with the CLI commands. The Kernel builds it from the stored sources, so every download of one revision has the same SHA-256. `src/lib/eject-package.ts` checks it on the client.
+
+`eject_apply { planId }` takes the project lock that `project_sources_save` takes, checks that the plan is current and the saved-sources revision still equals the planned one, sets `sourceAuthority` to `external`, records `ejected: { at, by, via, planId, sourcesRevision }` on the project, and returns a receipt with the Deployment's ID and URL. Applying an applied plan returns its receipt. Planning again at the ejected revision returns the applied plan, its receipt and a new download.
+
+After Eject, `project_sources_read` still returns the frozen sources with `readOnly: true`, so the editor can show them. Every Managed source change is refused with one message, whichever tab, agent or credential sends it. The audit log has one `eject_plan` row with the project as target and one `eject_apply` row per call with the project as target and `sources revision N` as detail.
+
+| Refusal | Message |
+| --- | --- |
+| `project_sources_save` after Eject, at any expected revision | `This project was ejected: its sources are maintained outside Littlebox, so the Kernel refuses Managed source changes. Publish a Build Artifact with release_plan and release_apply, or create a new project to edit in Littlebox.` |
+| `project_create` with `sourceAuthority: "managed"` for an External project | The same message |
+| `eject_plan` with a stale revision | `Source revision changed: the saved sources are at revision 2, not 1. Reload the project, then plan the Eject again.` |
+| `eject_apply` after a save made the plan stale | `Source revision changed since this plan: the saved sources are at revision 2, not 1. Plan the Eject again.` |
+| Eject without `manage_lifecycle` | `Unknown tool or insufficient permission.` A credential limited to other projects gets `Project is outside this token's grants.` |
+| `eject_plan` for a project created External | `Project sources are maintained externally. A project created outside the editor is already External and does not pass through Eject.` |
+| `eject_plan` at another revision after Eject | `This project was ejected at sources revision 2. Plan again with that revision to download its package.` |
+| `eject_plan` with no saved sources | `This project has no saved sources to eject. Save it in the editor first.` |
+
+Returning to managed authoring is not supported. To edit in Littlebox again, create a new project; production data does not merge into it.
 
 ## Export and import an app
 

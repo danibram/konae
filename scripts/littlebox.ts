@@ -8,6 +8,7 @@ import { McpClient, type Transfer } from "../src/mcp/client";
 import { normalizeManifest } from "../src/deployments/manifest";
 import { checkPackageManifest, packageComponentFiles, type PackageManifest } from "../src/lib/portable-package";
 import { downloadToFile, writeTarFile, type FileTarEntry } from "./package-files";
+import { checkEjectPackage, type EjectPlan, type EjectReceipt } from "../src/lib/eject-package";
 
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
@@ -144,6 +145,53 @@ export async function exportLocal(root: string, config: Config, output: string, 
   }
 }
 
+/**
+ * Eject: plan on the server at the saved-sources revision, download and check
+ * the code package, write it into `root`, then apply. A stale revision is
+ * refused by eject_plan, before anything downloads. The project changes only
+ * after every file is on disk, and a run after an interruption finishes the
+ * same Eject: eject_plan returns the applied plan and its receipt.
+ */
+export async function ejectLocal(root: string, url: string, projectId: string, token: string, expectedRevision?: number): Promise<EjectReceipt> {
+  const marker = path.join(root, ".littlebox/eject-plan.json");
+  let resuming = false;
+  try { resuming = (await json<{ projectId?: string }>(marker)).projectId === projectId; } catch {}
+  if (!resuming) await assertEmptyForInit(root);
+  const client = new McpClient(endpoint(url), { token });
+  const revision = expectedRevision ?? (await client.call<{ sourcesRevision: number }>("project_inspect", { projectId })).sourcesRevision;
+  let plan: EjectPlan;
+  try {
+    plan = await client.call<EjectPlan>("eject_plan", { projectId, expectedRevision: revision });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("Unknown tool")) {
+      throw Error("Eject needs a credential with the manage_lifecycle permission. Run login with --manage-lifecycle, or create a token with manage_lifecycle for this project.");
+    }
+    throw error;
+  }
+  const checked = await checkEjectPackage(await client.download(plan.transfer), plan);
+  const targets = Object.entries(checked.files).map(([name, text]) => {
+    const target = path.resolve(root, name);
+    if (!target.startsWith(root + path.sep)) throw Error(`Invalid package path: ${name}`);
+    return [target, text] as const;
+  });
+  // A resumed run keeps files it already wrote, but only if they are unchanged.
+  for (const [target, text] of targets) {
+    const existing = await readFile(target, "utf8").catch(() => undefined);
+    if (existing !== undefined && existing !== text) throw Error(`${path.relative(root, target)} differs from the code package. Choose an empty directory.`);
+  }
+  await mkdir(path.join(root, ".littlebox"), { recursive: true });
+  await writeFile(marker, JSON.stringify({ projectId, planId: plan.planId, sourcesRevision: plan.expectedRevision, sha256: plan.package.sha256 }, null, 2));
+  for (const directory of checked.directories) await mkdir(path.resolve(root, directory), { recursive: true });
+  for (const [target, text] of targets) {
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, text);
+  }
+  await ignoreInGit(root, [".littlebox/", "node_modules/"]);
+  const receipt = plan.applied && plan.receipt ? plan.receipt : await client.call<EjectReceipt>("eject_apply", { planId: plan.planId });
+  await writeFile(path.join(root, ".littlebox/eject-receipt.json"), JSON.stringify(receipt, null, 2));
+  return receipt;
+}
+
 /** Add each entry to .gitignore unless a line already names it. */
 export async function ignoreInGit(root: string, entries: string[]) {
   const file = path.join(root, ".gitignore");
@@ -169,7 +217,7 @@ async function main() {
   if (argv[0] === "--") argv.shift();
   const [command, ...args] = argv;
   if (!command || ["help", "--help"].includes(command)) {
-    console.log("Use login, init, build, dev, publish, or export. Options include --dir, --url, --name, --port, and --out. Export --with-data includes live data, accounts, and files; it needs a credential from login --export-data or a token with export_data.");
+    console.log("Use login, init, build, dev, publish, export, or eject. Options include --dir, --url, --name, --port, and --out. Export --with-data includes live data, accounts, and files; it needs a credential from login --export-data or a token with export_data. Eject --project <id> writes a Managed project's sources into --dir and makes the project External; it needs a credential from login --manage-lifecycle or a token with manage_lifecycle.");
     return;
   }
   const option = (name: string, fallback?: string) => {
@@ -184,7 +232,7 @@ async function main() {
     const url = option("url", process.env.LITTLEBOX_URL ?? "http://localhost:4173")!;
     const email = process.env.LITTLEBOX_EMAIL; const password = process.env.LITTLEBOX_PASSWORD;
     if (!email || !password) throw Error("Set LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD. To create the account, also set LITTLEBOX_INVITATION_CODE, or LITTLEBOX_SETUP_KEY for the first owner.");
-    const scopes = ["read", "write", "publish", ...(args.includes("--export-data") ? ["export_data"] : [])];
+    const scopes = ["read", "write", "publish", ...(args.includes("--export-data") ? ["export_data"] : []), ...(args.includes("--manage-lifecycle") ? ["manage_lifecycle"] : [])];
     const token = await login(url, email, password, { code: process.env.LITTLEBOX_INVITATION_CODE, setupKey: process.env.LITTLEBOX_SETUP_KEY }, scopes);
     await mkdir(path.join(root, ".littlebox"), { recursive: true });
     await writeFile(path.join(root, ".littlebox/credentials.json"), JSON.stringify({ url, token }), { mode: 0o600 });
@@ -212,6 +260,18 @@ async function main() {
     return;
   }
   if (command === "build") { await buildLocal(root); console.log("Built .littlebox/artifact.json"); return; }
+  if (command === "eject") {
+    const projectId = option("project");
+    if (!projectId) throw Error("Name the project to eject with --project <id>.");
+    const pinned = option("revision");
+    if (pinned !== undefined && !/^\d+$/.test(pinned)) throw Error("--revision needs a whole number.");
+    const url = option("url", process.env.LITTLEBOX_URL ?? "http://localhost:4173")!;
+    const token = process.env.LITTLEBOX_MCP_TOKEN ?? (await json<{ token: string }>(path.join(root, ".littlebox/credentials.json"))).token;
+    const receipt = await ejectLocal(root, url, projectId, token, pinned === undefined ? undefined : Number(pinned));
+    console.log(`Ejected ${projectId} at sources revision ${receipt.sourcesRevision} into ${root}.${receipt.deployment ? ` ${receipt.deployment.url} keeps serving.` : ""}`);
+    console.log(`Publish from this folder with: bun run littlebox -- publish --dir ${root}`);
+    return;
+  }
   const config = await json<Config>(path.join(root, "littlebox.json"));
   if (command === "export") {
     const output = path.resolve(option("out", path.join(root, ".littlebox/selfhost.tar"))!);
@@ -267,7 +327,7 @@ async function main() {
     } finally { child.kill(); }
     return;
   }
-  throw Error("Use login, init, build, dev, publish, or export. Options include --dir, --url, --name, --port, and --out.");
+  throw Error("Use login, init, build, dev, publish, export, or eject. Options include --dir, --url, --name, --port, and --out.");
 }
 
 if (import.meta.main) main().catch(error => { console.error(error.message); process.exitCode = 1; });
