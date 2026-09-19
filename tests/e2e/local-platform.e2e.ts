@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, test, type Page } from "playwright/test";
 
 test.beforeEach(async ({ page }) => {
@@ -256,4 +258,106 @@ test("local and deployed migrations track their own model state", async ({ page,
   expect(await publish(page)).toBe(url);
   await app.reload();
   await expect(app.getByText("Keep published data")).toBeVisible();
+});
+
+// playwright.local.config.ts starts the Kernel with LITTLEBOX_MAIL_TRANSPORT=development,
+// which writes each message to mailbox.jsonl in the data directory instead of sending it.
+async function invitationLink(to: string) {
+  const mailbox = path.join(process.env.LITTLEBOX_E2E_DATA_DIR!, "mailbox.jsonl");
+  let link: string | undefined;
+  await expect(async () => {
+    const lines = (await readFile(mailbox, "utf8").catch(() => "")).trim().split("\n").filter(Boolean);
+    link = lines.map((line) => JSON.parse(line)).find((message) => message.purpose === "invitation" && message.to === to)?.link;
+    expect(link).toBeTruthy();
+  }).toPass({ timeout: 15_000 });
+  return link!;
+}
+
+test("a private Invitation only app admits the person the owner invites from the Users view", async ({ page, context }, testInfo) => {
+  const name = `Invited notes ${Date.now()}`;
+  await createProject(page, name, "notes");
+  await page.getByRole("button", { name: "Deploy", exact: true }).click();
+  // The radio itself is visually hidden; its card is what a person clicks.
+  await page.getByRole("radiogroup", { name: "Deployment visibility" }).getByText("Private", { exact: true }).click();
+  await expect(page.getByRole("radio", { name: /^Private/ })).toBeChecked();
+  // A private first publish proposes Invitation only and says what it means.
+  const signup = page.getByLabel("Who can create an app account");
+  await expect(signup).toHaveValue("invitation");
+  await expect(page.getByText("Only people you invite by email can create an app account", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Deploy private", exact: true }).click();
+  const link = page.locator("a.published-url");
+  await expect(link).toBeVisible({ timeout: 30_000 });
+  const url = (await link.getAttribute("href"))!;
+  await expect(page.getByText("New app accounts: Invitation only.")).toBeVisible();
+  await page.getByRole("button", { name: "Invite people", exact: true }).click();
+
+  // An uninvited visitor finds no way to create an app account.
+  const app = await context.newPage();
+  await app.goto(url);
+  await expect(app.getByRole("heading", { name: "Sign in to this app" })).toBeVisible();
+  await expect(app.getByRole("button", { name: "Create account" })).toHaveCount(0);
+
+  const users = page.getByRole("region", { name: "App users" });
+  await expect(users.getByLabel("Who can create an app account")).toHaveValue("invitation");
+  const invitee = `guest-${crypto.randomUUID()}@example.test`;
+  await users.getByLabel("Email addresses").fill(invitee);
+  await users.getByRole("button", { name: "Send invitation", exact: true }).click();
+  await expect(users.getByRole("list", { name: "Invitation results" })).toContainText("Invitation email handed to mail.");
+  const invitations = users.getByRole("group", { name: "Invitations" });
+  const row = invitations.getByRole("row").filter({ hasText: invitee });
+  await expect(row).toContainText("Pending");
+  await expect(row).toContainText("Handed to mail");
+  await expect(row).toContainText(/Expires /);
+  await expect(users.getByRole("group", { name: "App accounts" }).getByRole("row").filter({ hasText: invitee })).toContainText("Pending");
+
+  // The person opens the emailed link, chooses a password and enters.
+  await app.goto(await invitationLink(invitee));
+  await expect(app.getByRole("heading", { name: `Join ${name}` })).toBeVisible();
+  await app.getByLabel("Choose a password").fill("Invited-password-2026");
+  await app.getByRole("button", { name: "Accept and enter" }).click();
+  await expect(app.getByPlaceholder("Keep a thought…")).toBeVisible();
+  await app.getByRole("button", { name: "Sign out", exact: true }).click();
+  await app.goto(new URL("/_littlebox/login", url).href);
+  await app.getByLabel("Email").fill(invitee);
+  await app.getByLabel("Password").fill("Invited-password-2026");
+  await app.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(app.getByPlaceholder("Keep a thought…")).toBeVisible();
+
+  await invitations.getByRole("button", { name: "Refresh invitations" }).click();
+  await expect(row).toContainText("Accepted");
+  await expect(row.getByRole("button", { name: /Resend/ })).toHaveCount(0);
+  await expect(users.getByRole("group", { name: "App accounts" }).getByRole("row").filter({ hasText: invitee })).toContainText("Active");
+  // The Auth panel scrolls inside the window, so a tall window shows the whole view.
+  // Buttons fade their colour on a theme change; "disabled" finishes that before the capture.
+  await page.setViewportSize({ width: 1280, height: 2000 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  for (const scheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.screenshot({ path: testInfo.outputPath(`users-${scheme}.png`), animations: "disabled" });
+  }
+
+  // Integrations: a signing secret by name only, and an API key shown once with a working curl.
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.getByRole("navigation", { name: "Auth views" }).getByRole("button", { name: "Integrations" }).click();
+  const integrations = page.getByRole("region", { name: "Integrations" });
+  await integrations.getByLabel("Secret name").fill("orders_webhook");
+  await integrations.getByLabel("Secret value").fill("a-long-enough-secret-2026");
+  await integrations.getByRole("button", { name: "Save secret" }).click();
+  await expect(integrations.getByRole("list", { name: "Signing secrets" })).toContainText("orders_webhook");
+  await expect(integrations).not.toContainText("a-long-enough-secret-2026");
+  await expect(integrations.getByLabel("Secret value")).toHaveValue("");
+  await expect(integrations.getByLabel("Secret name")).toHaveValue("");
+  await integrations.getByLabel("Key name").fill("Nightly backup");
+  await integrations.getByLabel("Private files").check();
+  await integrations.getByRole("button", { name: "Create API key" }).click();
+  const reveal = page.getByRole("dialog", { name: "Copy this API key now" });
+  await expect(reveal.locator("code").first()).toHaveText(/^lbk_/);
+  await expect(reveal).toContainText(`${url.replace(/\/$/, "")}/_littlebox/files/`);
+  await reveal.getByRole("button", { name: "I copied the key" }).click();
+  await expect(integrations.getByRole("list", { name: "Live API keys" })).toContainText("Nightly backup");
+  await expect(integrations.getByRole("list", { name: "Live API keys" })).toContainText("Bearer $LITTLEBOX_API_KEY");
+  for (const scheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.screenshot({ path: testInfo.outputPath(`integrations-${scheme}.png`), animations: "disabled" });
+  }
 });
