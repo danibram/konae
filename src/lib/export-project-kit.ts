@@ -185,7 +185,7 @@ Run \u0060docker compose down\u0060 to stop the Kernel. The app database and its
 
 ## Where the app lives
 
-Everything the app is sits in one folder, \u0060data/deployments/<id>/\u0060: \u0060deployment.json\u0060, the built \u0060artifact/\u0060, \u0060database.sqlite\u0060, the accounts in \u0060identity.sqlite\u0060, uploads in \u0060files/\u0060 and \u0060backups/\u0060. The owner account is in \u0060data/owners.sqlite\u0060 and the project registry in \u0060data/mcp.sqlite\u0060.
+Everything the app is sits in one folder, \u0060data/deployments/<id>/\u0060: \u0060deployment.json\u0060, the built \u0060artifact/\u0060, \u0060database.sqlite\u0060, the accounts in \u0060identity.sqlite\u0060, Usage and Signals in \u0060usage.sqlite\u0060, uploads in \u0060files/\u0060 and \u0060backups/\u0060. The owner account is in \u0060data/owners.sqlite\u0060 and the project registry in \u0060data/mcp.sqlite\u0060.
 
 Set \u0060LITTLEBOX_COPY_DIR\u0060 to a directory on another disk and the Kernel copies \u0060data/\u0060 there every hour, keeping the last 24 copies and one a day for 30 days. To move to a new machine, start from an empty data directory and run \u0060LITTLEBOX_DATA_DIR=data cargo run --release --manifest-path kernel-rs/Cargo.toml -- restore --from <copy directory>\u0060, then start the Kernel. Restore checks every checksum and signs everyone out.
 

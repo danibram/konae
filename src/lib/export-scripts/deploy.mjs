@@ -119,7 +119,8 @@ async function uploadComponent(content, transferId, projectId) {
   if (!transferId) {
     transferId = (await call('transfer_begin', { projectId, size: content.size, sha256: content.sha256, component: content.name })).transferId;
   }
-  const names = { database: 'database.sqlite', identity: 'identity.sqlite', files: 'files.tar' };
+  // The same names as packageComponentFiles in src/lib/portable-package.ts.
+  const names = { database: 'database.sqlite', identity: 'identity.sqlite', files: 'files.tar', usage: 'usage.sqlite' };
   const file = await open(path.join(root, 'littlebox/package', names[content.name]), 'r');
   try {
     const buffer = Buffer.alloc(64 * 1024);
