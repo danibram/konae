@@ -119,6 +119,10 @@ _Avoid_: Runtime user, app user
 A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for a signed request, an API Key or a signed-in user; an `authenticated` action may not.
 _Avoid_: Raw SQL endpoint
 
+**Action Contract**:
+The generated description of a Capsule's Server Actions, `action-contract.json` with its JSON Schema and a Markdown rendering: for each action its inputs with types, nullability and limits, the columns a query returns or the `{ changes, lastInsertId }` a mutation returns, who may call it on the runtime endpoint and on its HTTP route, the errors the Kernel answers with and the limits that apply. It is written from `actions.json` and `schema.sql`, never edited, and travels in the export. The conformance runner (`littlebox conform`) calls every action against a backend and checks the answers against it, which is how a second backend would show it serves the same app.
+_Avoid_: API spec, OpenAPI document, schema dump
+
 **SDK Module**:
 A namespace on `window.miniapp`, such as `auth`, `actions` or `files`, with a contract: its calls, their arguments, what they return, the messages they refuse with and the limits that apply. The SDK contract in `src/sdk/contract.ts` is the one description; the build agent's prompt, the `sdk` topic of `platform_guide` and `docs/sdk.md` are rendered from it. A module adds a door to an existing primitive and never a new one.
 _Avoid_: plugin, library, extension

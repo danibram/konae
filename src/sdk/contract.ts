@@ -174,6 +174,7 @@ export const sdkContract = {
       notes: [
         "A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.",
         "A mutation action returns { changes, lastInsertId }. Read changed rows with a separate query.",
+        "The Action Contract, action-contract.json, lists every action with its inputs, the columns it returns, its errors and limits. It is written from actions.json and schema.sql by littlebox contract and carried in the export; an expression the SELECT returns without AS has no name in it, and the Validation Gate warns.",
       ],
       calls: [
         {

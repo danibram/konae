@@ -36,6 +36,7 @@ Editor preview: Switches to the signed-out state and returns the anonymous sessi
 The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement.
 A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.
 A mutation action returns { changes, lastInsertId }. Read changed rows with a separate query.
+The Action Contract, action-contract.json, lists every action with its inputs, the columns it returns, its errors and limits. It is written from actions.json and schema.sql by littlebox contract and carried in the export; an expression the SELECT returns without AS has no name in it, and the Validation Gate warns.
 
 miniapp.actions.call(name, input = {}): Invoke one declared Server Action as the current Runtime Actor. Returns an array of row objects for a query action, { changes, lastInsertId } for a mutation action.
 Refusals:

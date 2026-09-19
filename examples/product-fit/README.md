@@ -23,7 +23,7 @@ The runner sets the feed's signing secret, publishes all eight examples, then ch
 | `docs` | Multi-file artifact, a guide page, SQL-backed search | Publish uses raw MCP; missing paths return the home page with 200, pretty URLs do not resolve the guide, and XML uses octet-stream |
 | `probe` | Nullable search input, omitted/null/filtered values and action declarations | This is a contract probe rather than an end-user app |
 
-The runner also fails nine release plans through the CLI, repairs the schema, and publishes with the same credential. That checks upload cleanup against the Kernel's real transfer quota. It separately verifies that a mutation with `RETURNING` fails release planning with a useful error.
+The runner also fails nine release plans through the CLI, repairs the schema, and publishes with the same credential. That checks upload cleanup against the Kernel's real transfer quota. It separately verifies that a mutation with `RETURNING` fails release planning with a useful error. Last, it writes each example's Action Contract and runs the conformance checks of `bun run littlebox -- conform` against the Kernel serving it, then runs the CLI once from a contract file on disk; every check must pass and none may be skipped.
 
 ## Use one example in another project
 

@@ -198,6 +198,37 @@ Where this differs from the text above:
 - The editor's Auth panel has no API key screen. Keys and secrets are managed over admin MCP only.
 - `smoke.ts` cancelled a download transfer that `McpClient.download` already cancels, which failed its portfolio check on `main` too. The second cancel is removed.
 
+### Evidence for delivery 8
+
+Recorded on 2026-11-06 on branch `deliv/8-action-contract`.
+
+The Action Contract is `action-contract.json`, checked by `src/lib/action-contract.schema.json`, with `action-contract.md` beside it. `src/lib/action-contract.ts` writes all three from `actions.json` and `schema.sql`; `bun run littlebox -- contract --dir <dir>` writes them beside `littlebox.json`, the export kit carries them under `littlebox/`, and the editor lists `action-contract.md` in Files as generated and read-only. `bun run littlebox -- conform --url <app URL> --contract <file>` is the conformance runner, `src/lib/action-conformance.ts`. [The MCP guide](../mcp.md#action-contract) describes both, CONTEXT.md defines the term and ADR-0009 has a dated note. The Kernel is unchanged: it needed no new read tool.
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Every product-fit example produces a contract that passes the schema check, reads back equal, converts back to the program `parseServerActionSource` returns and writes the same bytes twice; the 16 queries name exactly the columns SQLite's `getColumnNames` returns; 10 more statements cover `*`, `t.*`, aliases with and without `AS`, `DISTINCT`, a compound select, a subquery source and unnamed expressions; types, nullability, a LEFT JOIN, the schema check's refusals and the Kernel's limit constants | `bun test src/lib/action-contract.test.ts` | 29 pass |
+| The Gate passes a query that returns `count(*)` without `AS`, with one warning, and `validate_capsule` prints it; the starter has none | `bun test src/agent/gate.test.ts` | 20 pass |
+| The runner passes a fake backend that follows each example's contract, and fails variants that accept an undeclared input, refuse a missing one with another message, return an extra column, return null in a NOT NULL column, run an authenticated action for a visitor, accept an unsigned webhook or refuse it with 403; it fails when the contract does not list the refusal it probes, skips rather than passes what needs a session, waits out `rate-limited`, and names a statement error on a valid call | `bun test src/lib/action-conformance.test.ts` | 14 pass |
+| The CLI writes the three files, `build` does not pick them up, and a folder without `actions.json` is refused | `bun test scripts/littlebox-contract.test.ts` | 2 pass |
+| The export kit carries the contract, its Markdown and schema, and its README names them; an `actions.json` that does not parse stops the export | `bun test src/lib/export-project-kit.test.ts` | 14 pass |
+| Every example conforms on a real Kernel: each action's valid call, its refusals, and the feed's signed route, replay, unsigned POST, unknown key, non-JSON body and unbound POST path. The CLI run from a contract file on disk agrees | `LITTLEBOX_PRODUCT_FIT_PORT=19481 bun run examples/product-fit/smoke.ts` | 12 checks pass. The contracts: 175 checks pass, none skipped (launch 17, journal 20, board 45, portfolio 22, poll 11, feed 29, docs 7, probe 24); the CLI on launch: 17 passed, 0 failed, 0 skipped |
+| Files shows `action-contract.md` as generated and read-only, and Delete is disabled for it | `bun run test:e2e:local` | 5 pass |
+| Everything else | `bun run test`, `cargo test --manifest-path kernel-rs/Cargo.toml`, `bun run build`, `bun run tests/smoke/portable-export.ts --port 19511` | 494 pass; 150 pass; build passes; export smoke passes |
+
+The first live run found what the plan did not foresee. The probe example's `items.jsonin` reads its string input with `json_each`, and the runner's generated string is not JSON, so SQLite refused the valid call. A contract types an input but cannot say what the statement does with it. `conform` therefore takes `--inputs <file>`, values by action that replace the generated ones, and the smoke passes `[1, 2]` for that input. A valid call refused with a message the contract does not list fails and says so.
+
+Decisions the plan left open:
+
+- The contract carries each action's statement and binding order. The plan asked for inputs and output shapes. Without the SQL a second backend could not run the action, and with it the contract converts back to the same `actions.json` program, which is the round-trip the tests check.
+- Error messages are not written in the generator. It picks them from the SDK contract, which now records the HTTP status of each route refusal, so `src/sdk/contract.test.ts` keeps them true to the Kernel source.
+- An unnamed column is a Gate warning, not a refusal, and the Kernel does not check it. The ADR-0009 note says why and what a refusal would cost.
+- `--token` is an app session token, the value of the app session cookie, because the runtime endpoint accepts it as `Authorization: Bearer` and only a Runtime Actor can invoke actions. An owner credential cannot. `LITTLEBOX_APP_EMAIL` and `LITTLEBOX_APP_PASSWORD` sign in for one.
+- `conform` writes rows: each mutation runs once with real input. Generated strings carry a per-run suffix so a UNIQUE column does not refuse a second run.
+- The SQL tokenizer now records each token's offsets, so the contract quotes an unnamed expression as written.
+- The `signal` output shape is in the schema and the types and is not generated, because no action declares a Signal yet.
+
+Not verified: a second backend, which this delivery does not build; types of columns read from a subquery, a table-valued function or an expression other than a known function, which the contract states as `unknown`; nullability through a RIGHT or FULL JOIN on the left side. The editor's agent panel does not show Gate warnings to the person; the agent reads them in `validate_capsule` and the person sees them in `action-contract.md`.
+
 ### Order
 
 Delivery 5 before 7, so the HTTP module is the first one born from the contract. Delivery 6 can follow 5 at any time. Delivery 8 last.

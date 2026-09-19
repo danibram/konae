@@ -305,6 +305,32 @@ The build lives in `.littlebox/artifact.json`. Publishing transfers it over MCP,
 
 There is also `bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173`. It reads `LITTLEBOX_EMAIL` and `LITTLEBOX_PASSWORD` from the environment, obtains a 24-hour credential and stores it with `0600` permissions in `.littlebox/credentials.json`. `LITTLEBOX_INVITATION_CODE` lets it create the account if it does not exist yet, and `LITTLEBOX_SETUP_KEY` does so for an installation's first owner. On an installation that requires verification it stops and asks you to open the emailed link first. The command adds `.littlebox/` to `.gitignore`; do not copy credentials into the frontend.
 
+## Action Contract
+
+```sh
+bun run littlebox -- contract --dir /tmp/my-app
+bun run littlebox -- conform --url http://my-app-ab12.localhost:8796 --contract /tmp/my-app/action-contract.json --token <app session token>
+```
+
+`contract` reads `actions.json` and `schema.sql` and writes three files beside `littlebox.json`, or into `--out`: `action-contract.json`, its JSON Schema `action-contract.schema.json`, and `action-contract.md` for a person to read. `build` and `publish` never upload them. The export kit carries the same three under `littlebox/`, and the editor shows the Markdown in Files as `action-contract.md`, generated and read-only. `src/lib/action-contract.ts` writes all of them.
+
+For each Server Action the contract states:
+
+| Field | What it holds |
+| --- | --- |
+| `kind`, `access`, `actorBound` | Query or mutation, anonymous or authenticated, and whether a binding passes the caller's ID |
+| `inputs` | Each input key with its type, whether it is required or nullable, and a string's `maxLength` |
+| `output` | `rows` with the columns a query returns, each with its SQLite affinity, nullability and the table column it reads; or `changes` for `{ changes, lastInsertId }`. `signal` is reserved for actions that record a Signal |
+| `runtime` | The endpoint, `/_littlebox/mcp`, the `actions_invoke` tool and the callers it accepts |
+| `http` | The route's method and path, how the input is read, the signature header, secret name and scheme, and the three kinds of caller |
+| `errors` | The exact messages the Kernel answers with for this action, where they are seen, and the HTTP status on a route |
+| `limits` | The top-level `LIMIT`, or that the query returns one row, the 1000-row and 2 MiB cap, the 2-second statement deadline, the two rate limits and a route's 64 KiB body |
+| `statement`, `bindings` | The SQL and the order its parameters bind in, so the contract converts back to the same `actions.json` program |
+
+Column names follow SQLite: the alias, or the column's own name. An expression without `AS`, such as `count(*)`, gets a key only SQLite would print, so the contract lists it under `unnamed`, `contract` prints a warning and the Validation Gate passes the Capsule with the same warning. Types come from `schema.sql` and SQLite does not enforce them. A column of a subquery or a table-valued function has a name and the type `unknown`. Error messages come from the SDK contract, whose test checks each one against the Kernel's source.
+
+`conform` is what a replacement backend would run. It calls every action through the runtime endpoint with generated inputs and checks the answer's shape, then probes each refusal the contract lists: an undeclared action, an undeclared, missing, mistyped, empty or overlong input, a caller without a session or without an ID, and on a route an unsigned or replayed signature, an unknown API key, an undeclared query or body key, a body that is not JSON and a POST to an unbound path. A refusal passes only when the contract lists the message and the backend answers with it, with the contract's status on a route. `--token` carries an app session token, the value of the app session cookie; `LITTLEBOX_APP_EMAIL` and `LITTLEBOX_APP_PASSWORD` sign in for one instead. `--secret <name>=<value>` signs a route and may repeat; `--key` sends an API key to a signed route whose secret was not given. The generated inputs are a short unique string, the number 1 and `true`; a statement that reads a string as more than text, such as `json_each(?1)`, needs a real value, which `--inputs <file>` gives as JSON keyed by action name, for example `{ "items.jsonin": { "ids": "[1, 2]" } }`. A valid call refused with a message the contract does not list fails and says so. A check that needs a credential it was not given is reported as skipped, not passed. It runs every mutation once with real input, so point it at a test Deployment. It exits with 1 when any check fails.
+
 ## Export and import an app
 
 `package_export` takes a `deploymentId` and captures the app under its project, data and identity locks. No action, upload, signup, policy change or release lands halfway; they wait for the capture to finish. A 256 MiB database takes a few seconds. It returns a manifest and one download transfer per component.
