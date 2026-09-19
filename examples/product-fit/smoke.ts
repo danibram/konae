@@ -6,6 +6,9 @@ import { createHmac } from "node:crypto";
 import { chromium } from "playwright";
 import { McpClient } from "../../src/mcp/client";
 import { buildLocal, publishLocal } from "../../scripts/littlebox";
+import { kernelTarget } from "../../scripts/conform";
+import { generateActionContract } from "../../src/lib/action-contract";
+import { formatConformanceReport, runConformance } from "../../src/lib/action-conformance";
 
 const repo = path.resolve(import.meta.dir, "../..");
 const scratch = await mkdtemp(path.join(tmpdir(), "littlebox-product-fit-"));
@@ -312,6 +315,56 @@ try {
   assert.deepEqual(await action(probe, "items.optional", { q: null }), optional);
   assert.equal((await action(probe, "items.optional", { q: "Probe" }))[0].title, "Probe row");
   check("Action edge cases", `RETURNING mutations fail release planning. Nullable search returned ${optional.length} rows with an omitted input; explicit null and filtered input also pass.`);
+
+  // Each example's Action Contract, run against the Kernel that serves it. A
+  // replacement backend would run the same checks. Every request comes from
+  // its own address, so the anonymous rate limit does not slow the run.
+  const sessionToken = async (name: string, email: string) => {
+    const response = await fetch(`${url}/_littlebox/auth/login`, {
+      method: "POST", headers: { host: receipts[name].hostname, "content-type": "application/json", "x-forwarded-for": freshAddress() },
+      body: JSON.stringify({ email, password }),
+    });
+    assert.equal(response.status, 200, await response.clone().text());
+    return response.headers.get("set-cookie")!.split(";")[0].split("=").slice(1).join("=");
+  };
+  await signupApp("probe", "conform@example.test");
+  const tokens: Record<string, string> = {
+    journal: await sessionToken("journal", "ana@example.test"),
+    board: await sessionToken("board", "lead@team.example"),
+    portfolio: await sessionToken("portfolio", "potter@example.test"),
+    probe: await sessionToken("probe", "conform@example.test"),
+  };
+  const fromFreshAddress: typeof fetch = (input, init) => {
+    const headers = new Headers(init?.headers); headers.set("x-forwarded-for", freshAddress());
+    return fetch(input, { ...init, headers });
+  };
+  const conformance: Record<string, { passed: number; skipped: number }> = {};
+  for (const name of Object.keys(receipts)) {
+    const { contract } = generateActionContract({
+      actionsSource: await readFile(path.join(import.meta.dir, name, "actions.json"), "utf8"),
+      schemaSource: await readFile(path.join(import.meta.dir, name, "schema.sql"), "utf8"),
+    });
+    const report = await runConformance(contract, kernelTarget({
+      url: receipts[name].url, token: tokens[name], fetch: fromFreshAddress,
+      secrets: name === "feed" ? { pings_webhook: pingsSecret } : undefined,
+    }), { inputs: { "items.jsonin": { ids: "[1, 2]" } } });
+    assert.equal(report.failed, 0, `${name} does not conform to its Action Contract:\n${formatConformanceReport(report)}`);
+    assert.equal(report.skipped, 0, `${name} skipped checks:\n${formatConformanceReport(report)}`);
+    conformance[name] = { passed: report.passed, skipped: report.skipped };
+  }
+  // The CLI, from a contract file on disk, with no proxy header and no session.
+  const contractDir = path.join(scratch, "contract-launch");
+  await cp(path.join(import.meta.dir, "launch"), contractDir, { recursive: true });
+  const cli = (args: string[]) => Bun.spawn(["bun", "run", path.join(repo, "scripts/littlebox.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+  const written = cli(["contract", "--dir", contractDir]);
+  assert.equal(await written.exited, 0, await new Response(written.stderr).text());
+  const conformCli = cli(["conform", "--url", receipts.launch.url, "--contract", path.join(contractDir, "action-contract.json")]);
+  const [cliCode, cliOutput] = await Promise.all([conformCli.exited, new Response(conformCli.stdout).text()]);
+  assert.equal(cliCode, 0, cliOutput + await new Response(conformCli.stderr).text());
+  const cliTotals = cliOutput.trim().split("\n").at(-1)!;
+  assert.match(cliTotals, /^\d+ passed, 0 failed, 0 skipped/);
+  const total = Object.values(conformance).reduce((sum, item) => sum + item.passed, 0);
+  check("Action Contracts", `All eight examples conform: ${total} checks pass, none skipped (${Object.entries(conformance).map(([name, item]) => `${name} ${item.passed}`).join(", ")}). The CLI run on launch reports "${cliTotals}"`);
 
   console.log(JSON.stringify({ examples: 8, checks: observations.length, observations }, null, 2));
 } finally {

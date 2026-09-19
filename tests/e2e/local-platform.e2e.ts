@@ -110,6 +110,13 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   // The new file opens in the editor and the File list stays beside it.
   await page.getByLabel("src/label.js code editor").fill("export const label = 'Compiled in the browser';");
   await expect(explorer).toBeVisible();
+  // The Action Contract is generated from the Capsule and cannot be edited.
+  await explorer.getByRole("button", { name: "action-contract.md" }).click();
+  const contract = page.getByLabel("action-contract.md, generated, read only");
+  await expect(contract).toHaveValue(/^# Action Contract for Browser tasks/);
+  await expect(contract).toHaveAttribute("readonly", "");
+  await expect(page.getByText("Generated from actions.json and schema.sql, so it cannot be edited here.")).toBeVisible();
+  await expect(explorer.getByRole("button", { name: "Delete selected path" })).toBeDisabled();
   await explorer.getByRole("button", { name: "app.js" }).click();
   const editor = page.getByLabel("app.js code editor");
   await expect(explorer).toBeVisible();
