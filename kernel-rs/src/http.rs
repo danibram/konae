@@ -371,6 +371,7 @@ pub(super) async fn api_keys_call(state: &AppState, deployment: &Deployment, nam
                     || db.query_row("SELECT EXISTS(SELECT 1 FROM api_keys WHERE id=?1)", [id], |row| row.get::<_, bool>(0))?,
                 "Key not found."
             );
+            super::recovery::record(state, super::recovery::Entry::new("api-key", Some(&deployment.id), id, "revoked")).await?;
             Ok(json!({"keyId": id, "revoked": true}))
         }
         _ => anyhow::bail!("Unknown tool."),

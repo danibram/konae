@@ -12,7 +12,9 @@ import kernelLimitsSource from "../../kernel-rs/src/limits.rs?raw";
 import kernelHttpSource from "../../kernel-rs/src/http.rs?raw";
 import kernelHttpBindingCases from "../../kernel-rs/src/http-binding-cases.json?raw";
 import kernelMailSource from "../../kernel-rs/src/mail.rs?raw";
+import kernelMigrationSource from "../../kernel-rs/src/migration.rs?raw";
 import kernelPackageSource from "../../kernel-rs/src/package.rs?raw";
+import kernelRecoverySource from "../../kernel-rs/src/recovery.rs?raw";
 import kernelSecuritySource from "../../kernel-rs/src/security.rs?raw";
 import kernelUsageSource from "../../kernel-rs/src/usage.rs?raw";
 import kernelSignalCases from "../../kernel-rs/src/signal-cases.json?raw";
@@ -40,7 +42,9 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/http.rs", contents: kernelHttpSource },
   { path: "kernel-rs/src/http-binding-cases.json", contents: kernelHttpBindingCases },
   { path: "kernel-rs/src/mail.rs", contents: kernelMailSource },
+  { path: "kernel-rs/src/migration.rs", contents: kernelMigrationSource },
   { path: "kernel-rs/src/package.rs", contents: kernelPackageSource },
+  { path: "kernel-rs/src/recovery.rs", contents: kernelRecoverySource },
   { path: "kernel-rs/src/sdk-guide.json", contents: kernelSdkGuide },
   { path: "kernel-rs/src/security.rs", contents: kernelSecuritySource },
   { path: "kernel-rs/src/usage.rs", contents: kernelUsageSource },

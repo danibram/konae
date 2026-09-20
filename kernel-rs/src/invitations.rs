@@ -386,7 +386,12 @@ async fn run(state: &AppState, deployment: &Deployment, inviter: &str, name: &st
         "app_invitations_list" => off(move || Ok(auth.read(|db| list_invitations(db, cursor.as_deref(), limit))?)).await,
         "app_user_suspend" | "app_user_resume" => {
             let (user_id, suspend) = (text("userId"), name == "app_user_suspend");
-            off(move || set_suspended(&auth, &user_id, suspend)).await
+            let value = off(move || set_suspended(&auth, &user_id, suspend)).await?;
+            if suspend {
+                let entry = super::recovery::Entry::new("app-user", Some(&deployment.id), &text("userId"), "suspended");
+                super::recovery::record(state, entry).await?;
+            }
+            Ok(value)
         }
         "app_invitation_revoke" => {
             let invitation = text("invitationId");

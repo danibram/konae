@@ -201,7 +201,9 @@ describe("chunked package", () => {
     await expect(release(owner, { ...payload("pkg_checksum"), initialPackage: { manifest: exported.manifest, components } }, "pkg_checksum")).rejects.toThrow("does not match the size and SHA-256 in the manifest");
 
     // A manifest from a future version is refused with the version it names.
-    await expect(release(owner, { ...payload("pkg_checksum"), initialPackage: { manifest: { ...exported.manifest, version: 2 }, components } }, "pkg_checksum")).rejects.toThrow("Package version 2 is not supported");
+    await expect(release(owner, { ...payload("pkg_checksum"), initialPackage: { manifest: { ...exported.manifest, version: 3 }, components } }, "pkg_checksum")).rejects.toThrow("Package version 3 is not supported");
+    // Version 2 is a migration package and must say which migration.
+    await expect(release(owner, { ...payload("pkg_checksum"), initialPackage: { manifest: { ...exported.manifest, version: 2 }, components } }, "pkg_checksum")).rejects.toThrow("must name its migration");
     expect((await owner.call<{ deployment: unknown }>("project_inspect", { projectId: "pkg_checksum" })).deployment).toBeNull();
     for (const id of Object.values(components)) await owner.cancel(id).catch(() => {});
   }, 60_000);

@@ -76,12 +76,24 @@ The published, addressable instance of a Project with its own hostname, visibili
 _Avoid_: Project, preview
 
 **Copy**:
-A consistent snapshot of every Deployment folder, with the owner and MCP stores, sent off the Kernel volume to a second disk or an S3 prefix on a schedule. Restore installs one Copy into an empty data directory and signs everyone out. A Copy moves an installation; a Package moves one app.
+A consistent snapshot of every Deployment folder, with the owner and MCP stores, sent off the Kernel volume to a second disk or an S3 prefix on a schedule. With a copy secret, the files sent to S3 are encrypted. Each copy target also keeps the Revocation Record. Restore installs one Copy into an empty data directory, signs everyone out, ends every open email link and applies the Revocation Record, or holds the installation in Maintenance when it cannot read it. A Copy moves an installation; a Package moves one app.
 _Avoid_: backup (a Data panel snapshot of one app database), replica, mirror
 
 **Package**:
-The export of one Deployment's state: its database, its accounts without sessions, email links or API keys, its files, and its Usage and Signals when it has any, captured under the Deployment's locks. A versioned manifest lists each component with its size and SHA-256 and names the published revision. Each component travels as its own transfer, so no step holds a whole component in memory. An import verifies every component and installs the Package only into a project that has no Deployment yet. Downloading one needs the `export_data` permission.
+The export of one Deployment's state: its database, its accounts without sessions, email links or API keys, its files, and its Usage and Signals when it has any, captured under the Deployment's locks. A versioned manifest lists each component with its size and SHA-256 and names the published revision. Each component travels as its own transfer, so no step holds a whole component in memory. An import verifies every component and installs the Package only into a project that has no Deployment yet; the same Package imported again returns the first import. Downloading one needs the `export_data` permission. A Migration's Package is version 2 and imports in Maintenance.
 _Avoid_: dump, full backup, export file (the kit that carries it is the export)
+
+**Migration**:
+The move of one Deployment to another installation so that exactly one installation takes its writes. The origin enters Maintenance, captures a Package with its live artifact, and is then confirmed, which retires it for seven days and reveals a confirmation, or cancelled, which resumes it. The destination imports the Package in Maintenance and leaves it only through activation with that confirmation. People sign in again with their passwords; sessions, links, API keys and signing secrets do not travel.
+_Avoid_: replication, sync, transfer (a transfer is one upload or download)
+
+**Maintenance**:
+The state of a Deployment that takes no writes: its host shows a page naming the operation, refuses actions, uploads, signups, sign-ins, recovery, invitations and HTTP routes, the owner cannot change it, and its email waits. A Migration and an unreconciled restore put Deployments in Maintenance. It is kept in the Deployment's folder, so a restart or a restore keeps it.
+_Avoid_: downtime, read-only mode (reads stop too)
+
+**Revocation Record**:
+The suspensions of accounts and revocations of API keys, each written to every copy target as it happens. A restore applies it so a Copy taken earlier cannot bring back what was revoked since; it never lifts a suspension.
+_Avoid_: audit log (that stays on the volume)
 
 **Public Deployment**:
 A Deployment whose application shell may be opened without signing in. A signed-out visitor may call Server Actions declared `anonymous`, and may list and read files marked public. Uploads require a Runtime Actor session, and private files a session or an API Key that names them. Public visibility of the Deployment grants no database access and no access to private files.

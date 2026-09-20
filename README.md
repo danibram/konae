@@ -111,6 +111,7 @@ The Kernel reads these at startup. Defaults are the values in `kernel-rs/src` un
 | `LITTLEBOX_COPY_DIR` | unset | Directory, on another disk, that receives scheduled copies of the data directory. It must be outside `LITTLEBOX_DATA_DIR`. |
 | `LITTLEBOX_COPY_S3_PREFIX` | unset | Prefix in `LITTLEBOX_DATA_BUCKET`, such as `copies/`, that receives scheduled copies. Needs `LITTLEBOX_S3_ENDPOINT` and must not start with `deployments/`. |
 | `LITTLEBOX_COPY_INTERVAL_SECONDS` | `3600` | Seconds between copies when a copy target is set. The first copy runs at startup. |
+| `LITTLEBOX_COPY_SECRET` | unset | Secret, at least 32 characters, that encrypts every file of a copy sent to S3 with AES-256-GCM. `restore` needs the same secret to open such a copy. Directory copies stay unencrypted. |
 | `LITTLEBOX_BUN_PATH` | `bun` | Bun executable the Kernel spawns to derive schema migrations. The child starts with an empty environment, so a bare `bun` is found only in the system default path (`/usr/bin`, `/bin`). Set an absolute path when Bun lives elsewhere. `dev:local`, `bun run kernel` and `littlebox dev` pass their own Bun path. |
 | `LITTLEBOX_SOURCE_ROOT` | Kernel working directory | Directory that holds `database-lifecycle/` and the `node_modules` it needs. The Kernel image sets `/opt/littlebox`. |
 
@@ -163,7 +164,16 @@ LITTLEBOX_DATA_DIR=/data littlebox-kernel restore --from /mnt/copies
 LITTLEBOX_DATA_DIR=/data littlebox-kernel restore --from s3://littlebox-data/copies/ --copy 2026-11-06T14-00-00.000Z
 ```
 
-Restoring from `s3://` reads `LITTLEBOX_S3_ENDPOINT`, `LITTLEBOX_S3_REGION`, `LITTLEBOX_S3_ACCESS_KEY` and `LITTLEBOX_S3_SECRET_KEY` from the same shell. Without `--copy`, restore takes the newest complete copy. It refuses a data directory that holds anything besides `lost+found`, a copy without a manifest, and any file whose size or checksum differs from the manifest, and then installs nothing. It also runs SQLite's integrity check on every database. After installing, it signs everyone out: owner and app sessions, Clerk creator sessions, agent credentials, OAuth tokens and codes, and unfinished transfers and release plans. Owners create new agent credentials after a restore.
+Restoring from `s3://` reads `LITTLEBOX_S3_ENDPOINT`, `LITTLEBOX_S3_REGION`, `LITTLEBOX_S3_ACCESS_KEY` and `LITTLEBOX_S3_SECRET_KEY` from the same shell, and `LITTLEBOX_COPY_SECRET` when the copies are encrypted. Without `--copy`, restore takes the newest complete copy. It refuses a data directory that holds anything besides `lost+found`, a copy without a manifest, any file whose size or checksum differs from the manifest, and an encrypted copy without its secret or with another one, and then installs nothing. It also runs SQLite's integrity check on every database. After installing, it signs everyone out: owner and app sessions, Clerk creator sessions, agent credentials, OAuth tokens and codes, open verification, recovery and invitation links, and unfinished transfers and release plans. Owners create new agent credentials after a restore.
+
+A copy can be up to an hour old, so each copy target also keeps a record of what was revoked since: every app account suspension, creator suspension and API key revocation is written to `revocations/` on each target before the tool reports it done. Restore applies that record before installing, so a restored installation never brings back a suspended account or a revoked key. If the record cannot be read, because the target is unreachable or the source has no `revocations/started.json`, the restore still installs but the installation starts in maintenance: every app shows its maintenance page and owner changes are refused. Then either apply the record once it is reachable, or reopen without it after checking suspensions and keys by hand:
+
+```sh
+LITTLEBOX_DATA_DIR=/data littlebox-kernel reconcile --from /mnt/copies
+LITTLEBOX_DATA_DIR=/data littlebox-kernel reconcile --without-record
+```
+
+A Deployment paused or retired by a migration stays so after a restore, because its migration state travels in the copy.
 
 ## Authenticated MCP
 
@@ -316,6 +326,18 @@ bun run littlebox -- export --dir /tmp/my-app --out /tmp/my-app-with-data.tar --
 ```
 
 `--with-data` downloads the app as a package. It holds a manifest and one file each for the database, the accounts and the files, streamed in 64 KiB blocks, so an app at its 256 MiB database and 20 MiB file quotas exports whole. The kit's `deploy.mjs` uploads the package the same way and the target Kernel checks it before it creates the app. [The MCP guide](./docs/mcp.md#export-and-import-an-app) describes the format. The command refuses to overwrite an archive and writes it with owner-only permissions. Live-state exports retain the deployed visibility and signup policy. The target installs that policy with its first deployment. Exports with live state contain password hashes and attachments; keep them private. Extracted snapshots have owner-only permissions and the kit's Git rules exclude them.
+
+## Migrate to another server
+
+A migration moves a published app to another Littlebox Kernel with its accounts, passwords, rows, files, suspensions, policy, Usage and Signals, and leaves one Kernel taking its writes. It needs a credential with `manage_lifecycle` and `export_data` on the origin and `manage_lifecycle` on the destination.
+
+1. Start the destination Kernel with its own `LITTLEBOX_PUBLIC_ORIGIN`, an owner and an email transport. Create a project with the same ID and set any route signing secrets the app needs.
+2. Run `migration_begin` on the origin. The app shows a maintenance page and takes no writes, signups, sign-ins or email from then on, also after a restart. Download the package and the release.
+3. Import them on the destination with `release_plan` and `release_apply`. The imported app stays in maintenance; check it with read tools.
+4. Run `migration_confirm` on the origin, with the new address if it changed. The origin stays in maintenance for good and shows a link to the new address for seven days. Keep the confirmation it returns.
+5. Run `migration_activate` on the destination with that confirmation, and `resendInvitations` to send pending invitations again from the new host. People sign in again with their passwords.
+
+Until step 4, `migration_cancel` resumes the origin, and a package imported elsewhere can never be activated. After it, cancel is refused: to come back, migrate the destination's state here. [The MCP guide](./docs/mcp.md#migrate-an-app) lists the tools and refusals, and `bun run tests/smoke/migration.ts --port 19460` rehearses the whole procedure on two local Kernels.
 
 ## Eject
 

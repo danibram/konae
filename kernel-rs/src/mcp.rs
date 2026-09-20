@@ -71,6 +71,7 @@ pub(super) fn store(state: &AppState) -> Result<Connection> {
     db.execute("CREATE INDEX IF NOT EXISTS audit_at ON audit(at)", [])?;
     super::oauth::install(&db)?;
     super::eject::install(&db)?;
+    super::migration::install(&db)?;
     Ok(db)
 }
 
@@ -389,6 +390,7 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
     if owner.scopes.iter().any(|s| s == "manage_lifecycle") {
         tools.extend(super::eject::tools());
     }
+    tools.extend(super::migration::tools_for(&owner.scopes));
     if owner.session {
         tools.extend([
             tool("tokens_list", "List active delegated credentials without exposing their secrets.", json!({}), &[], true),
@@ -798,7 +800,10 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
                     Err(e) => Err(e),
                 }
             } else if let Some(owner) = owner.as_ref() {
-                admin_call(&state, owner, &principal, name, arguments.clone()).await
+                match super::migration::admin_guard(&state, name, &arguments).await {
+                    Ok(()) => admin_call(&state, owner, &principal, name, arguments.clone()).await,
+                    Err(e) => Err(e),
+                }
             } else {
                 runtime_call(&state, &headers, &principal, app.as_deref(), name, arguments.clone()).await
             };
@@ -889,6 +894,13 @@ fn audit(
         "eject_apply" => (
             store(state).ok().and_then(|db| super::eject::plan_project(&db, arguments["planId"].as_str().unwrap_or(""))),
             result.as_ref().ok().map(|receipt| format!("sources revision {}", receipt["sourcesRevision"])),
+        ),
+        name if name.starts_with("migration_") => (
+            arguments["deploymentId"]
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| super::migration::operation_deployment(&state.data_root, arguments["operationId"].as_str().unwrap_or(""))),
+            result.as_ref().ok().and_then(|value| value["operationId"].as_str()).map(|op| format!("operation {op}")),
         ),
         "package_download" => (
             arguments["deploymentId"].as_str().map(str::to_owned),
@@ -1357,12 +1369,19 @@ async fn admin_call(
                 "Artifact belongs to another project."
             );
             if let Some(package) = input.initial_package.as_ref() {
+                // The same package again answers with the first import.
+                if let Some(replay) = super::migration::replay_import(state, owner, &input.project.id, &package.manifest.package_id)? {
+                    return Ok(replay);
+                }
                 super::package::verify(state, principal, &input.project.id, package).await?;
             }
             validate_release(state, &input).await?;
             let id = Uuid::new_v4().to_string();
             let expires = now_ms() + 900_000;
             store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires) VALUES(?1,?2,?3,?4,?5,?6)",params![id,owner.id,input.project.id,revision,a["transferId"].as_str().unwrap(),expires])?;
+            if let Some(package) = input.initial_package.as_ref() {
+                super::migration::remember_import(state, &package.manifest.package_id, &input.project.id, &id)?;
+            }
             Ok(
                 json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"artifactSha256":transfer["sha256"],"visibility":input.visibility,"expiresAt":expires}),
             )
@@ -1407,6 +1426,7 @@ async fn admin_call(
         }
         name if name.starts_with("app_") => super::invitations::admin_call(state, owner, name, &a).await,
         name if name.starts_with("eject_") => super::eject::admin_call(state, owner, principal, name, &a).await,
+        name if name.starts_with("migration_") => super::migration::admin_call(state, owner, principal, name, &a).await,
         _ => anyhow::bail!("Unknown tool."),
     }
 }
