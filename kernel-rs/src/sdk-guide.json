@@ -528,7 +528,7 @@
             },
             {
               "message": "rate-limited",
-              "when": "a caller exceeds the action limits of the runtime endpoint (429, with Retry-After)",
+              "when": "a caller exceeds the action limits of the runtime endpoint, or its address sent 10 unknown or revoked API keys to the Deployment in a minute (429, with Retry-After)",
               "source": "kernel"
             }
           ]

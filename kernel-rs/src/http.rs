@@ -412,12 +412,20 @@ fn own_origin(headers: &HeaderMap) -> bool {
 }
 
 /// Resolves the caller, or the answer that refuses it. A bearer token with
-/// the key prefix is only ever looked up as a key.
-fn resolve_caller(state: &AppState, deployment: &Deployment, headers: &HeaderMap) -> Result<Caller, Response> {
+/// the key prefix is only ever looked up as a key. A client whose unknown or
+/// revoked keys used up its bucket is refused before the lookup, as a client
+/// that sent too many wrong passwords is.
+fn resolve_caller(state: &AppState, deployment: &Deployment, headers: &HeaderMap, client: std::net::IpAddr) -> Result<Caller, Response> {
     if let Some(token) = bearer(headers).filter(|token| token.starts_with(KEY_PREFIX)) {
+        if let Err(wait) = state.guards.key_attempt(&deployment.id, client) {
+            return Err(rate_limited(wait));
+        }
         return match find_key(state, deployment, token) {
             Ok(Some(key)) => Ok(Caller::Key(key)),
-            Ok(None) => Err(refusal(StatusCode::UNAUTHORIZED, "invalid-api-key")),
+            Ok(None) => {
+                state.guards.key_failed(&deployment.id, client);
+                Err(refusal(StatusCode::UNAUTHORIZED, "invalid-api-key"))
+            }
             Err(error_value) => Err(error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string())),
         };
     }
@@ -429,6 +437,12 @@ fn resolve_caller(state: &AppState, deployment: &Deployment, headers: &HeaderMap
         Ok(None) => Ok(Caller::Visitor),
         Err(response) => Err(response),
     }
+}
+
+fn rate_limited(wait: std::time::Duration) -> Response {
+    let mut response = refusal(StatusCode::TOO_MANY_REQUESTS, "rate-limited");
+    response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(wait.as_secs().max(1)));
+    response
 }
 
 fn refusal(status: StatusCode, message: &str) -> Response {
@@ -708,7 +722,7 @@ async fn run_route(
     query: Value,
     body: &[u8],
 ) -> Response {
-    let caller = match resolve_caller(state, deployment, headers) {
+    let caller = match resolve_caller(state, deployment, headers, client) {
         Ok(caller) => caller,
         Err(response) => return response,
     };
@@ -725,9 +739,7 @@ async fn run_route(
         Caller::Key(key) => state.guards.signed_in_actions.check(&format!("key:{}:{}", deployment.id, key.id)),
     };
     if let Err(wait) = limited {
-        let mut response = refusal(StatusCode::TOO_MANY_REQUESTS, "rate-limited");
-        response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(wait.as_secs().max(1)));
-        return response;
+        return rate_limited(wait);
     }
     if let (Some(signature), false) = (&http.signature, matches!(caller, Caller::Key(_))) {
         let secret = match super::mcp::store(state).and_then(|db| secret_value(&db, &deployment.project_id, &signature.secret)) {
@@ -787,11 +799,13 @@ async fn run_route(
 // what `file_readable` allows; a visitor reads public files of a public
 // Deployment. A file another caller may not read answers 404, as a missing one.
 
-async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>, headers: HeaderMap) -> Response {
+async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>, request: Request) -> Response {
+    let client = state.guards.client_ip(peer(&request), request.headers());
+    let headers = request.headers().clone();
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
-    let caller = match resolve_caller(&state, &deployment, &headers) {
+    let caller = match resolve_caller(&state, &deployment, &headers, client) {
         Ok(caller) => caller,
         Err(response) => return response,
     };

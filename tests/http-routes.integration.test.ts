@@ -232,6 +232,23 @@ describe("HTTP routes", () => {
     await expect(owner.call("api_keys_create", { deploymentId, name: "Wrong", actions: ["notes.mine"] })).rejects.toThrow("Action notes.mine has no HTTP route, so a key cannot call it.");
   });
 
+  test("unknown API keys use up the client's bucket, and then no key is looked up from that address", async () => {
+    const reader = await owner.call<{ key: string }>("api_keys_create", { deploymentId, name: "Order reader", actions: ["orders.list"] });
+    const from = (address: string, key: string, pathname = "/api/orders") =>
+      route(pathname, { headers: { authorization: `Bearer ${key}`, "x-forwarded-for": address } });
+    const statuses: number[] = [];
+    for (let i = 0; i < 9; i++) statuses.push((await from("198.18.3.1", `lbk_wrong${i}`)).status);
+    // The file read path shares the bucket.
+    statuses.push((await from("198.18.3.1", "lbk_wrong-file", `/_littlebox/files/${crypto.randomUUID()}`)).status);
+    expect(statuses).toEqual(Array(10).fill(401));
+    const limited = await from("198.18.3.1", "lbk_wrong-again");
+    expect(await json(limited)).toEqual({ status: 429, body: { error: "rate-limited" } });
+    expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect((await from("198.18.3.1", reader.key)).status).toBe(429);
+    expect((await from("198.18.3.2", reader.key)).status).toBe(200);
+    for (let i = 0; i < 15; i++) expect((await from("198.18.3.3", reader.key)).status).toBe(200);
+  });
+
   test("a session cookie counts only from the app's own origin", async () => {
     await owner.call("signup_policy_set", { deploymentId, mode: "open" });
     const signup = await route("/_littlebox/auth/signup", { method: "POST", body: JSON.stringify({ email: "ana@routes.test", password }) });

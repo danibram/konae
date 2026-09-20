@@ -149,7 +149,7 @@ Refusals:
 - "The request body exceeds 64 KiB." when a POST body is larger (413)
 - "The request body must be a JSON object." when a POST body does not parse as JSON (400)
 - "Repeated query parameter: <key>" when a GET names one input twice (400)
-- "rate-limited" when a caller exceeds the action limits of the runtime endpoint (429, with Retry-After)
+- "rate-limited" when a caller exceeds the action limits of the runtime endpoint, or its address sent 10 unknown or revoked API keys to the Deployment in a minute (429, with Retry-After)
 Limits:
 - a POST body of 64 KiB
 - a signature's t within 300 seconds of the Kernel's clock, and each signature accepted once

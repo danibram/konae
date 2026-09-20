@@ -235,7 +235,7 @@ The route answers by the action's access level, not by the Deployment's visibili
 | `{ "error": "A route does not answer HEAD. Send GET." }` | 405 | A `HEAD` reaches a path a query binds. It is refused before the caller is resolved and before any SQL, with `Allow: GET`. `HEAD` on every other path serves the Build Artifact's headers as before |
 | `{ "error": "replayed-signature" }` | 409 | The same signature arrived before, on this path, in the last 600 seconds, before or after a Kernel restart |
 | `{ "error": "The request body exceeds 64 KiB." }` | 413 | |
-| `{ "error": "rate-limited" }` | 429 | With `Retry-After`. 30 calls per 10 seconds per client address without a key or session, 120 per user or key, shared with `actions_invoke` |
+| `{ "error": "rate-limited" }` | 429 | With `Retry-After`. 30 calls per 10 seconds per client address without a key or session, 120 per user or key, shared with `actions_invoke`. Also after 10 unknown or revoked `lbk_` keys from one client address to one Deployment in a minute: from then on any key from that address, a valid one included, is refused without a lookup until the bucket refills, on routes and on the file read path |
 
 ### Who may call a route
 
@@ -289,7 +289,7 @@ api_keys_revoke { "deploymentId", "keyId" }
 
 The editor's Auth > Integrations view sets, lists and deletes secrets by name and creates, lists and revokes keys, showing a new key once with a curl for each route it names and for the file read path.
 
-`api_keys_create` returns the key once. A key belongs to one Deployment and never to the owner, grants no administrative tool, and works only on HTTP routes and the file read path; the runtime MCP endpoint does not accept it. It may name actions that have an HTTP route and the file visibilities `public` and `private`. A key that names `private` reads every private file of its Deployment, because the owner who issues it can already read them through `project_export`. A Deployment holds at most 50 live keys. The Kernel stores the SHA-256 hash in the Deployment's `identity.sqlite`, so `project_export` carries the keys' metadata and hashes with the accounts, and an import marks every key revoked, as it deletes sessions and challenges. `littlebox-kernel restore` keeps them live, since it restores the same installation.
+`api_keys_create` returns the key once. A key belongs to one Deployment and never to the owner, grants no administrative tool, and works only on HTTP routes and the file read path; the runtime MCP endpoint does not accept it. It may name actions that have an HTTP route and the file visibilities `public` and `private`. A key that names `private` reads every private file of its Deployment, because the owner who issues it can already read them through `project_export`. A Deployment holds at most 50 live keys. Each unknown or revoked key a client presents counts against that client address, as a wrong password does: after 10 in a minute on one Deployment, the Kernel answers `rate-limited` to every key from that address without looking it up, so guessing keys costs no more than one bucket per address. A valid key never uses the bucket up. The Kernel stores the SHA-256 hash in the Deployment's `identity.sqlite`, so `project_export` carries the keys' metadata and hashes with the accounts, and an import marks every key revoked, as it deletes sessions and challenges. `littlebox-kernel restore` keeps them live, since it restores the same installation.
 
 ### The file read path
 

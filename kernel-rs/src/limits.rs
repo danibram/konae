@@ -33,6 +33,12 @@ pub(crate) const AUTH_EMAIL_FAILURES: u32 = 100;
 /// exhausting it takes failures from at least five addresses.
 pub(crate) const AUTH_CLIENT_EMAIL_FAILURES: u32 = 20;
 pub(crate) const AUTH_FAILURES_PERIOD: Duration = Duration::from_secs(60 * 60);
+/// Unknown or revoked API keys one client address may present to a
+/// Deployment per minute. Each runs a lookup in the Deployment's identity
+/// store; once they are used up the Kernel refuses keys from that address
+/// without looking, a valid one included, until the bucket refills.
+pub(crate) const API_KEY_FAILURES: u32 = 10;
+pub(crate) const API_KEY_FAILURES_PERIOD: Duration = Duration::from_secs(60);
 /// Each limiter remembers at most this many clients.
 const MAX_TRACKED_CLIENTS: usize = 10_000;
 
@@ -139,6 +145,7 @@ pub(crate) struct Guards {
     auth_client_emails: RateLimiter,
     auth_email_failures: RateLimiter,
     auth_client_email_failures: RateLimiter,
+    api_key_failures: RateLimiter,
     trusted_proxies: Vec<IpAddr>,
 }
 
@@ -164,6 +171,7 @@ impl Guards {
                 AUTH_FAILURES_PERIOD,
                 MAX_TRACKED_CLIENTS,
             ),
+            api_key_failures: RateLimiter::new(API_KEY_FAILURES, API_KEY_FAILURES_PERIOD, MAX_TRACKED_CLIENTS),
             trusted_proxies,
         }
     }
@@ -199,6 +207,18 @@ impl Guards {
         if self.auth_client_email_failures.check_at(&share, now).is_ok() {
             let _ = self.auth_email_failures.check_at(&format!("{scope}|{email}"), now);
         }
+    }
+
+    /// Whether a client may present an API key to the Deployment `scope`.
+    /// Only failures use the bucket up, as wrong passwords do: `key_failed`
+    /// takes from it, so a client presenting a valid key never waits here.
+    pub(crate) fn key_attempt(&self, scope: &str, client: IpAddr) -> Result<(), Duration> {
+        self.api_key_failures.peek_at(&format!("{scope}|{}", client_key(client)), Instant::now())
+    }
+
+    /// Records an unknown or revoked key from this client.
+    pub(crate) fn key_failed(&self, scope: &str, client: IpAddr) {
+        let _ = self.api_key_failures.check(&format!("{scope}|{}", client_key(client)));
     }
 
     /// The address a rate limit should count. X-Forwarded-For is read only
@@ -421,6 +441,24 @@ mod tests {
         for i in 0..1000 {
             let address: IpAddr = format!("10.0.{}.{}", i / 250, i % 250 + 1).parse().unwrap();
             guards.auth_attempt_at("app", address, "busy@example.test", start).unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_api_keys_use_up_the_client_bucket_before_any_lookup() {
+        let guards = Guards::new(Vec::new());
+        let client: IpAddr = "198.51.100.7".parse().unwrap();
+        for _ in 0..API_KEY_FAILURES {
+            assert!(guards.key_attempt("app", client).is_ok());
+            guards.key_failed("app", client);
+        }
+        let wait = guards.key_attempt("app", client).unwrap_err();
+        assert!(wait > Duration::ZERO && wait <= API_KEY_FAILURES_PERIOD);
+        assert!(guards.key_attempt("app", "198.51.100.8".parse().unwrap()).is_ok(), "another client keeps its own bucket");
+        assert!(guards.key_attempt("other-app", client).is_ok(), "each Deployment counts separately");
+        let busy: IpAddr = "198.51.100.9".parse().unwrap();
+        for _ in 0..1000 {
+            assert!(guards.key_attempt("app", busy).is_ok(), "presenting a valid key takes nothing");
         }
     }
 }

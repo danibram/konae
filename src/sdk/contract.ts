@@ -329,7 +329,7 @@ export const sdkContract = {
             { message: "The request body exceeds 64 KiB.", when: "a POST body is larger (413)", source: "kernel", status: 413, preview: null },
             { message: "The request body must be a JSON object.", when: "a POST body does not parse as JSON (400)", source: "kernel", status: 400, preview: null },
             { message: "Repeated query parameter: <key>", when: "a GET names one input twice (400)", source: "kernel", status: 400, preview: null },
-            { message: "rate-limited", when: "a caller exceeds the action limits of the runtime endpoint (429, with Retry-After)", source: "kernel", status: 429, preview: null },
+            { message: "rate-limited", when: "a caller exceeds the action limits of the runtime endpoint, or its address sent 10 unknown or revoked API keys to the Deployment in a minute (429, with Retry-After)", source: "kernel", status: 429, preview: null },
           ],
           limits: [
             "a POST body of 64 KiB",

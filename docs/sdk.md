@@ -251,7 +251,7 @@ Declared with `http` in `actions.json`. { "method": "GET" | "POST", "path": "/ap
 | `The request body exceeds 64 KiB.` | a POST body is larger (413) | Kernel | Never refuses |
 | `The request body must be a JSON object.` | a POST body does not parse as JSON (400) | Kernel | Never refuses |
 | `Repeated query parameter: <key>` | a GET names one input twice (400) | Kernel | Never refuses |
-| `rate-limited` | a caller exceeds the action limits of the runtime endpoint (429, with Retry-After) | Kernel | Never refuses |
+| `rate-limited` | a caller exceeds the action limits of the runtime endpoint, or its address sent 10 unknown or revoked API keys to the Deployment in a minute (429, with Retry-After) | Kernel | Never refuses |
 
 Limits:
 
