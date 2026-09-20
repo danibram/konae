@@ -12,6 +12,8 @@ export const packageComponentLimits = {
   database: 256 * mib,
   identity: 64 * mib,
   files: 256 * mib,
+  /** Usage and Signals, ADR-0010. A package has it when the Deployment recorded any. */
+  usage: 128 * mib,
 } as const;
 
 export type PackageComponentName = keyof typeof packageComponentLimits;
@@ -21,6 +23,7 @@ export const packageComponentFiles: Record<PackageComponentName, string> = {
   database: "database.sqlite",
   identity: "identity.sqlite",
   files: "files.tar",
+  usage: "usage.sqlite",
 };
 
 export type PackageContent = { name: PackageComponentName; size: number; sha256: string };

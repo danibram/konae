@@ -32,7 +32,8 @@ use super::*;
 
 pub(super) const PACKAGE_FORMAT: &str = "littlebox-package";
 pub(super) const PACKAGE_VERSION: u64 = 1;
-pub(super) const COMPONENT_NAMES: [&str; 3] = ["database", "identity", "files"];
+/// `usage` travels when the Deployment has a Usage store, ADR-0010.
+pub(super) const COMPONENT_NAMES: [&str; 4] = ["database", "identity", "files", "usage"];
 const MIB: u64 = 1024 * 1024;
 /// The largest component a transfer may carry, a database at its quota.
 pub(super) const MAX_COMPONENT_BYTES: u64 = MAX_APP_DATABASE_BYTES;
@@ -47,11 +48,10 @@ const SPACE_MARGIN: u64 = 64 * MIB;
 /// and an import deletes any it finds. `api_keys` is deleted when an identity
 /// file has that table.
 const ACCESS_TABLES: [&str; 3] = ["app_sessions", "account_challenges", "api_keys"];
-const EXCLUDED: [&str; 6] = [
+const EXCLUDED: [&str; 5] = [
     "app sessions",
     "verification, recovery and invitation links",
     "owner accounts, owner sessions and MCP credentials",
-    "Usage and Signals",
     "Data panel backups",
     "operator email and storage keys",
 ];
@@ -116,6 +116,7 @@ pub(super) fn component_limit(name: &str) -> Result<u64> {
         // File data is capped at 20 MiB by the files check; the tar headers
         // and the index add to it, so the archive itself gets the largest cap.
         "files" => Ok(MAX_COMPONENT_BYTES),
+        "usage" => Ok(usage::MAX_USAGE_DATABASE_BYTES),
         other => bail!("Unknown package component {other}."),
     }
 }
@@ -284,7 +285,7 @@ pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id:
 
 fn folder_size(folder: &Path) -> Result<u64> {
     let mut total = 0;
-    for name in ["database.sqlite", "identity.sqlite"] {
+    for name in ["database.sqlite", "identity.sqlite", usage::USAGE_DATABASE] {
         total += std::fs::metadata(folder.join(name)).map(|m| m.len()).unwrap_or(0);
     }
     if let Ok(entries) = std::fs::read_dir(folder.join("files")) {
@@ -295,9 +296,11 @@ fn folder_size(folder: &Path) -> Result<u64> {
     Ok(total)
 }
 
-/// Writes the three components into `scratch` and returns each with its
-/// size and SHA-256.
+/// Writes the components into `scratch` and returns each with its size and
+/// SHA-256. `usage` is left out when the Deployment has no Usage store yet.
 fn capture(folder: &Path, scratch: &Path) -> Result<Vec<(String, PathBuf, u64, String)>> {
+    // Usage queued before the export is written first, so the package holds it.
+    usage::flush();
     std::fs::create_dir_all(scratch)?;
     let database = scratch.join("database.sqlite");
     copies::vacuum_into(&folder.join("database.sqlite"), &database).context("database")?;
@@ -306,7 +309,13 @@ fn capture(folder: &Path, scratch: &Path) -> Result<Vec<(String, PathBuf, u64, S
     revoke_access(&identity)?;
     let files = scratch.join("files.tar");
     write_files_tar(&folder.join("files"), &files).context("files")?;
-    [("database", database), ("identity", identity), ("files", files)]
+    let mut components = vec![("database", database), ("identity", identity), ("files", files)];
+    if folder.join(usage::USAGE_DATABASE).is_file() {
+        let usage = scratch.join(usage::USAGE_DATABASE);
+        copies::vacuum_into(&folder.join(usage::USAGE_DATABASE), &usage).context("usage")?;
+        components.push(("usage", usage));
+    }
+    components
         .into_iter()
         .map(|(name, path)| {
             let (size, sha256) = copies::checksum_file(&path)?;
@@ -566,6 +575,9 @@ pub(super) async fn verify(state: &AppState, principal: &str, project_id: &str, 
         if let Some(files) = path("files") {
             unpack_files(&files, accounts.as_ref(), None)?;
         }
+        if let Some(usage) = path("usage") {
+            integrity(&usage, "usage")?;
+        }
         Ok(())
     })
     .await?
@@ -612,6 +624,9 @@ pub(super) async fn install(state: &AppState, package: &InitialPackage, project_
             ensure!(size == content.size && sha256 == content.sha256, "The files component does not match the SHA-256 in the manifest.");
             let accounts = identity.exists().then(|| Connection::open(&identity)).transpose()?;
             unpack_files(source, accounts.as_ref(), Some(&directory.join("files")))?;
+        }
+        if let Some((content, source)) = find("usage") {
+            copy_verified(source, &directory.join(usage::USAGE_DATABASE), content)?;
         }
         Ok(())
     })

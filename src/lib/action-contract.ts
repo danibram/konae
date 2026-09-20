@@ -100,12 +100,14 @@ export type ContractLimits = {
 
 export type ContractAction = {
   name: string;
-  kind: "query" | "mutation";
+  kind: "query" | "mutation" | "signal";
   access: "anonymous" | "authenticated";
   /** Whether a binding passes the caller's ID; such an action refuses a caller without one. */
   actorBound: boolean;
   inputs: ContractInput[];
   output: ContractOutput;
+  /** The Signal the action records when it succeeds, with the input keys copied into its properties (ADR-0010). */
+  signal?: { name: string; properties: string[] };
   runtime: { endpoint: string; tool: string; sdk: string; callers: ContractCaller[] };
   http?: ContractHttp;
   errors: ContractError[];
@@ -217,7 +219,9 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables): C
   const actorBound = action.bindings.some((binding) => binding.source === "actor");
   const output: ContractOutput = action.kind === "query"
     ? { kind: "rows", ...deriveOutputColumns(action.statement, tables) }
-    : { kind: "changes", fields: ["changes", "lastInsertId"] };
+    : action.kind === "signal"
+      ? { kind: "signal", signal: action.signal?.name ?? action.name }
+      : { kind: "changes", fields: ["changes", "lastInsertId"] };
   const http = action.http ? contractHttp(action.http, action.kind) : undefined;
   return {
     name: action.name,
@@ -226,6 +230,7 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables): C
     actorBound,
     inputs,
     output,
+    ...(action.signal ? { signal: { name: action.signal.name, properties: [...action.signal.properties] } } : {}),
     runtime: { ...RUNTIME, callers: runtimeCallers(access) },
     ...(http ? { http } : {}),
     errors: actionErrors(action, inputs, actorBound),
@@ -242,7 +247,7 @@ function runtimeCallers(access: "anonymous" | "authenticated"): ContractCaller[]
     : [person];
 }
 
-function contractHttp(http: HttpBinding, kind: "query" | "mutation"): ContractHttp {
+function contractHttp(http: HttpBinding, kind: "query" | "mutation" | "signal"): ContractHttp {
   const visitor: ContractCaller = http.signature
     ? { kind: "visitor", proof: `the ${http.signature.header} signature`, actor: "none" }
     : { kind: "visitor", proof: "none", actor: "none" };
@@ -838,6 +843,7 @@ export function programFromContract(contract: ActionContract): ServerActionProgr
       access: action.access,
       statement: action.statement,
       bindings,
+      ...(action.signal ? { signal: { name: action.signal.name, properties: [...action.signal.properties] } } : {}),
       ...(action.http ? {
         http: {
           method: action.http.method,

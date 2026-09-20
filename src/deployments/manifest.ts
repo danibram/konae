@@ -1,6 +1,6 @@
 export type DeploymentVisibility = "public" | "private";
 export type RuntimeActionAccess = "anonymous" | "authenticated" | "granted";
-export type RuntimeActionKind = "query" | "mutation";
+export type RuntimeActionKind = "query" | "mutation" | "signal";
 
 export type RuntimeActionDeclaration = {
   name: string;
@@ -104,7 +104,7 @@ function normalizeAction(value: unknown): RuntimeActionDeclaration[] {
   if (!value || typeof value !== "object") return [];
   const action = value as Partial<RuntimeActionDeclaration>;
   if (typeof action.name !== "string" || !/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/.test(action.name)) return [];
-  if (action.kind !== "query" && action.kind !== "mutation") return [];
+  if (action.kind !== "query" && action.kind !== "mutation" && action.kind !== "signal") return [];
   if (action.access !== "anonymous" && action.access !== "authenticated" && action.access !== "granted") return [];
   return [{ name: action.name, kind: action.kind, access: action.access }];
 }

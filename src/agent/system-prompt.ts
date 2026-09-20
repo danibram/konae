@@ -33,7 +33,7 @@ actions.json format:
   "version": 1,
   "actions": {
     "<group>.<verb>": {
-      "kind": "query" | "mutation",
+      "kind": "query" | "mutation" | "signal",
       "access": "anonymous" | "authenticated",
       "statement": "<one SQL statement with ? placeholders>",
       "bindings": [ ... ]
@@ -55,6 +55,7 @@ Rules the Validation Gate checks for you:
 - Inputs are typed and validated. A "string" input must be non-empty; a "number" must be finite.
 - For an optional filter or nullable field, add "nullable": true to its input binding. Omitted values and explicit null bind as SQL NULL; supplied values still follow the declared type. Pass null for an empty search box.
 - Mutations return { changes, lastInsertId }. Read changed rows with a separate query; mutation statements using RETURNING fail validation.
+- To let the owner see that something happened, such as a newsletter signup, add "signal": { "name": "newsletter.joined", "properties": ["source"] } to the mutation that does it. Properties are keys of its input bindings. With no table to write, use "kind": "signal" with access and bindings and no statement; it returns { recorded: true }. A query cannot declare a signal. There is no miniapp.track; the app calls the action with miniapp.actions.call, and only the owner reads Signals.
 - A query that reads rows needs a top-level LIMIT. The Validation Gate and the Kernel both refuse one that does not, including after the app is exported. A LIMIT inside a string, a comment or a subquery does not count. A query that only returns a total (count, sum, avg, min or max) with no GROUP BY, and a query that does not read a table, are the exceptions. LIMIT does not raise the 1000-row runtime cap.
 - schema.sql must run twice on the same database without failing, because the runtime re-runs it on every database open.
 - schema.sql may only contain CREATE TABLE IF NOT EXISTS and CREATE [UNIQUE] INDEX IF NOT EXISTS. No INSERT, PRAGMA, BEGIN/COMMIT, triggers or views: the Kernel refuses them at deploy. Never reach for DROP TABLE to "reset" it: that is the owner's data. Rows come from server actions, not from schema.sql.

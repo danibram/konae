@@ -42,6 +42,7 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | Signup policy | `signup_policy_read`, `signup_policy_set` |
 | Signing secrets | `secrets_list`, `secret_set`, `secret_delete` |
 | API keys | `api_keys_list`, `api_keys_create`, `api_keys_revoke` |
+| Usage and Signals | `usage_read`, `signals_read` |
 | App users and invitations | `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_invitations_create`, `app_invitations_list`, `app_invitation_resend`, `app_invitation_revoke` |
 | Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
 | Credentials from the owner session | `tokens_list`, `token_create`, `token_revoke` |
@@ -52,7 +53,7 @@ The catalog depends on the credentials. The Kernel checks the permission again o
 
 This changes the contract. `signup_policy_set` needed `publish` before `manage_users` existed, so a client that changed the policy with a `read`, `write` and `publish` token now gets "Unknown tool" and needs a new token that includes `manage_users`. `bun run littlebox -- dev` asks for one.
 
-Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`.
+Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `usage_read` and `signals_read` need `read`.
 
 `project_create` returns a template and an External identity by default. Later sources stay in the user's folder; `project_inspect` returns metadata and the Deployment, without claiming to synchronize that code with the editor.
 
@@ -221,7 +222,7 @@ An action declared `anonymous` may answer one method and path on its Deployment'
 
 A query binds `GET` and a mutation binds `POST`. A path starts with `/` and has segments of letters, digits, `.`, `_`, `~` and `-`, up to 200 characters, with no `.` or `..` segment and no trailing slash. Paths under `/_littlebox`, `/oauth`, `/.well-known` and `/mcp` belong to the Kernel. Two actions may share a path only with different methods. A binding wins over an artifact file at the same path for its method; every other `GET` still serves the Build Artifact, and a `POST` to a path no action binds answers 405. The Validation Gate and the Kernel refuse the same declarations with the same messages, from one case file, `kernel-rs/src/http-binding-cases.json`, that both test suites run. An `authenticated` action may not declare `http`.
 
-The route answers by the action's access level, not by the Deployment's visibility. On a private app, a route still answers to a caller with no session, so a route without a signature is open to anyone who knows the path. The action keeps its bindings, its query bound and the runtime endpoint's rate limits. A `GET` maps the query string onto the input bindings by their declared type, so `?min=10` binds the number 10; a `POST` reads a JSON object of at most 64 KiB. Inputs the action does not declare are refused, as with `miniapp.actions.call`, so a sender whose payload carries other fields needs an action that declares them or an adapter.
+The route answers by the action's access level, not by the Deployment's visibility. On a private app, a route still answers to a caller with no session, so a route without a signature is open to anyone who knows the path. The action keeps its bindings, its query bound and the runtime endpoint's rate limits. A call that succeeds counts in [Usage](#usage-and-signals) under the route's method and path, and records the action's Signal if it declares one. A `GET` maps the query string onto the input bindings by their declared type, so `?min=10` binds the number 10; a `POST` reads a JSON object of at most 64 KiB. Inputs the action does not declare are refused, as with `miniapp.actions.call`, so a sender whose payload carries other fields needs an action that declares them or an adapter.
 
 | Answer | Status | When |
 | --- | --- | --- |
@@ -295,6 +296,68 @@ The editor's Auth > Integrations view sets, lists and deletes secrets by name an
 
 The editor preview serves no routes. Try them on a Development Kernel with `littlebox dev` or on a Deployment.
 
+## Usage and Signals
+
+Each Deployment keeps Usage and Signals in its own `usage.sqlite`, next to its database and accounts. [ADR-0010](./adr/0010-kernel-owns-usage-and-signals.md) records the decision; `kernel-rs/src/usage.rs` implements it. Only the owner reads them, through two tools that need `read` and the project grant. The runtime endpoint does not list them, so an app cannot read its own Usage.
+
+```text
+usage_read   { "deploymentId", "from": "2026-11-01", "to": "2026-11-06" }
+signals_read { "deploymentId", "name"?: "order.placed", "cursor"? }
+```
+
+`usage_read` returns one row per UTC day, kind and name between two dates, both included, at most 400 days apart, and the totals over the range:
+
+```json
+{ "from": "2026-11-01", "to": "2026-11-06",
+  "days": [{ "day": "2026-11-06", "kind": "action", "name": "notes.add", "count": 12 }],
+  "totals": [{ "kind": "action", "name": "notes.add", "count": 12 }] }
+```
+
+| Kind | Name | Counted when |
+| --- | --- | --- |
+| `session` | | `auth_session` answers. The SDK calls it when an app opens |
+| `action` | the action | `actions_invoke` runs the action |
+| `route` | `POST /hooks/orders` | an HTTP route runs its action, which is not counted again under `action` |
+| `upload` | | `files_upload` stores a file |
+| `file_read` | | `files_read` or `GET /_littlebox/files/<id>` returns a file |
+| `signup` | | an account becomes active: a signup in local mode, an answered verification link or an accepted invitation |
+| `login` | | a password sign-in or an answered recovery link |
+
+Nothing the Kernel refuses is counted: a call without the session it needs, an input the bindings reject, a statement SQLite refuses, a bad signature or a wrong password. The Kernel writes Usage off the request path. A response never waits for it, and when more than 16,384 entries are waiting the newest are dropped and logged. The two read tools wait up to five seconds for the queue to drain, so they include every call that finished before them.
+
+A Signal is a named occurrence a Server Action declares. It is recorded when that action succeeds, with properties taken from the input the action ran with:
+
+```json
+"newsletter.join": {
+  "kind": "signal",
+  "access": "anonymous",
+  "bindings": [{ "source": "input", "key": "source", "type": "string", "maxLength": 40 }],
+  "signal": { "name": "newsletter.joined", "properties": ["source"] }
+}
+```
+
+A mutation may declare `signal` too, and records it after its statement succeeds. An action of `"kind": "signal"` runs no SQL and returns `{ "recorded": true }`; it has no statement and no `http`. There is no `miniapp.track`. The app records a Signal with `miniapp.actions.call`, so it goes through the same access check, input check and rate limit as any action. `signals_read` returns 100 Signals at a time, newest first, as `{ "signals": [{ "name", "at", "properties" }], "nextCursor" }`; pass `nextCursor` back as `cursor` for the next page.
+
+| Refusal | Message |
+| --- | --- |
+| A Signal on a query | `Action <name> is a query, so it cannot declare a signal. Declare it on a mutation or on a "kind": "signal" action.` |
+| A property that is not an input binding's key | `Action <name> names signal property <key>, which is not one of its input bindings.` |
+| A property listed twice | `Action <name> names signal property <key> twice.` |
+| More than 8 properties | `Action <name> names more than 8 signal properties.` |
+| A name that is not dot-separated lowercase words of up to 64 characters | `Action <name> names an invalid signal. Use dot-separated lowercase words, such as "order.placed", up to 64 characters.` |
+| `signal` that is not `{ name, properties? }` with a list of strings | `Action <name> has an invalid signal declaration.` |
+| A signal action without `signal` | `Action <name> is a signal action, so it must declare a signal.` |
+| A signal action with a statement | `Action <name> is a signal action, so it runs no SQL and cannot declare a statement.` |
+| A signal action with `http` | `Action <name> must bind GET for a query and POST for a mutation.` |
+| `usage_read` with a date that is not `YYYY-MM-DD` | `from and to must be dates written YYYY-MM-DD.` |
+| `usage_read` with `from` after `to` | `from must not be after to.` |
+| `usage_read` over more than 400 days | `Usage covers at most 400 days at a time.` |
+| `signals_read` with a cursor it did not return | `Invalid cursor. Pass back the nextCursor of an earlier page.` |
+
+The Validation Gate and the Kernel refuse the same declarations with the same messages, from one case file, `kernel-rs/src/signal-cases.json`, that both test suites run. A signal action counts toward the action limit.
+
+The store keeps 400 days and at most 100,000 rows of totals, and the newest 50,000 Signals; past those bounds the oldest rows go first. A string property keeps its first 128 bytes. The scheduled copy and `package_export` carry the store; `project_export` does not. A Development Kernel started with `bun run littlebox -- dev` records the same way, in `.littlebox/dev-data/deployments/<id>/usage.sqlite`. The editor preview has no store: a signal action there returns `{ "recorded": true }` and nothing is kept.
+
 ## Build and publish
 
 ```sh
@@ -323,7 +386,8 @@ For each Server Action the contract states:
 | --- | --- |
 | `kind`, `access`, `actorBound` | Query or mutation, anonymous or authenticated, and whether a binding passes the caller's ID |
 | `inputs` | Each input key with its type, whether it is required or nullable, and a string's `maxLength` |
-| `output` | `rows` with the columns a query returns, each with its SQLite affinity, nullability and the table column it reads; or `changes` for `{ changes, lastInsertId }`. `signal` is reserved for actions that record a Signal |
+| `output` | `rows` with the columns a query returns, each with its SQLite affinity, nullability and the table column it reads; or `changes` for `{ changes, lastInsertId }`. `signal` names the Signal a `signal` action records |
+| `signal` | For an action that records a Signal (ADR-0010): the Signal's name and the input keys copied into its properties |
 | `runtime` | The endpoint, `/_littlebox/mcp`, the `actions_invoke` tool and the callers it accepts |
 | `http` | The route's method and path, how the input is read, the signature header, secret name and scheme, and the three kinds of caller |
 | `errors` | The exact messages the Kernel answers with for this action, where they are seen, and the HTTP status on a route |
@@ -384,7 +448,8 @@ Returning to managed authoring is not supported. To edit in Littlebox again, cre
     "contents": [
       { "name": "database", "size": 268435456, "sha256": "…" },
       { "name": "identity", "size": 110592, "sha256": "…" },
-      { "name": "files", "size": 20987904, "sha256": "…" }
+      { "name": "files", "size": 20987904, "sha256": "…" },
+      { "name": "usage", "size": 61440, "sha256": "…" }
     ],
     "excluded": ["app sessions", "verification, recovery and invitation links", "…"]
   },
@@ -397,8 +462,9 @@ Returning to managed authoring is not supported. To edit in Littlebox again, cre
 | `database` | The app database, copied with `VACUUM INTO` | 256 MiB |
 | `identity` | `identity.sqlite` without sessions, email links or API keys; `secure_delete` overwrites their pages | 64 MiB |
 | `files` | A ustar archive of `index.json` and one `<id>.blob` per file, in index order | 2 MiB per file, 20 MiB of file data |
+| `usage` | `usage.sqlite`, copied with `VACUUM INTO`. Present only when the Deployment recorded Usage or a Signal. A Kernel from before this component refuses a package that lists it | 128 MiB |
 
-`publishedRevision` counts the releases applied to the project. `sourcesRevision` counts saves of Managed sources and is absent for External projects; the two count different things, so a package never claims the saved sources produced the published app. Usage, Signals, Data panel backups, owner accounts and MCP credentials stay behind.
+`publishedRevision` counts the releases applied to the project. `sourcesRevision` counts saves of Managed sources and is absent for External projects; the two count different things, so a package never claims the saved sources produced the published app. Data panel backups, owner accounts and MCP credentials stay behind.
 
 Read each download with `transfer_read` and cancel it when done. The transfers expire after one hour like other owner transfers. They need `export_data`, not `read`, even though every credential of one owner shares the transfer pool. The audit log gets one `package_export` row and one `package_download` row per component at its first block, with the Deployment as target and the component as detail, plus a row for every refused read.
 
@@ -413,7 +479,7 @@ To import, start each component upload with `transfer_begin` and `component` set
 
 - the manifest format and version, and that every listed component is within its limit;
 - each upload is complete, belongs to the caller and the destination project, was started for that component and matches the manifest's size and SHA-256;
-- both SQLite files pass `integrity_check` and the accounts file has `app_users`;
+- every SQLite file passes `integrity_check` and the accounts file has `app_users`;
 - every file has its data at the indexed size, within the file quotas, and every file owner is an account in the package;
 - the volume has room for the components, a schema check copy of the database and 64 MiB to spare;
 - the release's `schema.sql` and actions run against the imported database.

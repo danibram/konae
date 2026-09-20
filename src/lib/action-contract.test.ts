@@ -214,10 +214,29 @@ describe("schema check", () => {
     expect(checkActionContract(extra)).toContain("$.actions[0]: unexpected secret");
     const kind = valid();
     kind.actions[0].kind = "procedure";
-    expect(checkActionContract(kind)).toEqual([`$.actions[0].kind: must be one of "query", "mutation"`]);
+    expect(checkActionContract(kind)).toEqual([`$.actions[0].kind: must be one of "query", "mutation", "signal"`]);
     const output = valid();
     output.actions[0].output = { kind: "rows", columns: [] };
     expect(checkActionContract(output)[0]).toMatch(/matches 0 of the allowed shapes/);
+  });
+
+  test("a signal action gets a signal output and round-trips", () => {
+    const actionsSource = JSON.stringify({ version: 1, actions: {
+      "newsletter.join": {
+        kind: "signal",
+        access: "anonymous",
+        bindings: [{ source: "input", key: "source", type: "string", maxLength: 40 }],
+        signal: { name: "newsletter.joined", properties: ["source"] },
+      },
+    } });
+    const { contract, warnings } = generateActionContract({ actionsSource, schemaSource: "" });
+    expect(warnings).toEqual([]);
+    expect(contract.actions[0].kind).toBe("signal");
+    expect(contract.actions[0].output).toEqual({ kind: "signal", signal: "newsletter.joined" });
+    const read = JSON.parse(serializeActionContract(contract));
+    expect(checkActionContract(read)).toEqual([]);
+    const { $schema, ...body } = read;
+    expect(programFromContract(body as ActionContract)).toEqual(withoutFalseNullable(parseServerActionSource(actionsSource)));
   });
 
   test("accepts the reserved signal output", () => {

@@ -186,7 +186,7 @@ Run \u0060docker compose down\u0060 to stop the Kernel. The app database and its
 
 ## Where the app lives
 
-Everything the app is sits in one folder, \u0060data/deployments/<id>/\u0060: \u0060deployment.json\u0060, the built \u0060artifact/\u0060, \u0060database.sqlite\u0060, the accounts in \u0060identity.sqlite\u0060, uploads in \u0060files/\u0060 and \u0060backups/\u0060. The owner account is in \u0060data/owners.sqlite\u0060 and the project registry in \u0060data/mcp.sqlite\u0060.
+Everything the app is sits in one folder, \u0060data/deployments/<id>/\u0060: \u0060deployment.json\u0060, the built \u0060artifact/\u0060, \u0060database.sqlite\u0060, the accounts in \u0060identity.sqlite\u0060, Usage and Signals in \u0060usage.sqlite\u0060, uploads in \u0060files/\u0060 and \u0060backups/\u0060. The owner account is in \u0060data/owners.sqlite\u0060 and the project registry in \u0060data/mcp.sqlite\u0060.
 
 Set \u0060LITTLEBOX_COPY_DIR\u0060 to a directory on another disk and the Kernel copies \u0060data/\u0060 there every hour, keeping the last 24 copies and one a day for 30 days. To move to a new machine, start from an empty data directory and run \u0060LITTLEBOX_DATA_DIR=data cargo run --release --manifest-path kernel-rs/Cargo.toml -- restore --from <copy directory>\u0060, then start the Kernel. Restore checks every checksum and signs everyone out.
 
@@ -215,7 +215,7 @@ Keep \u0060.env\u0060 private. It contains the owner key for this local Kernel. 
 
 ## App data
 
-An export made with \u0060--with-data\u0060 holds the app's data in \u0060littlebox/package/\u0060. \u0060manifest.json\u0060 lists the database, the accounts and the files with the size and SHA-256 of each, and names the published revision they came from. The first \u0060npm run deploy\u0060 imports them. It uploads each part in 64 KiB blocks and records its progress in \u0060littlebox/import-state.json\u0060, so running it again after an interruption continues where it stopped. The Kernel checks every checksum, the accounts each file names and the free space before it creates the app, and refuses a package for an app that already exists. If the script stops after the Kernel created the app, running it again returns the same receipt. Later runs publish the code and keep the data.
+An export made with \u0060--with-data\u0060 holds the app's data in \u0060littlebox/package/\u0060. \u0060manifest.json\u0060 lists the database, the accounts, the files and, when the app recorded any, its Usage and Signals, with the size and SHA-256 of each, and names the published revision they came from. The first \u0060npm run deploy\u0060 imports them. It uploads each part in 64 KiB blocks and records its progress in \u0060littlebox/import-state.json\u0060, so running it again after an interruption continues where it stopped. The Kernel checks every checksum, the accounts each file names and the free space before it creates the app, and refuses a package for an app that already exists. If the script stops after the Kernel created the app, running it again returns the same receipt. Later runs publish the code and keep the data.
 
 Accounts keep their IDs, password hashes, verification state and suspensions, and the app keeps its visibility and signup policy. Sessions, open email links and API keys stay behind, so everyone signs in again. The package holds personal data and password hashes. Keep this folder private and out of Git, and delete \u0060littlebox/package/\u0060 once the app runs.
 

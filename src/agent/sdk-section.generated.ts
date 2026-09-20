@@ -2,16 +2,17 @@
 
 export const sdkPromptSection = `# The miniapp SDK, the only host surface
 
-const session = await miniapp.auth.session();           // { userId, name, role }; role is "anonymous" when signed out
-await miniapp.auth.signIn();                            // published login page, preview selects Alice
-await miniapp.auth.signOut();                           // revoke this app session
-const rows = await miniapp.actions.call("tasks.list");  // array of row objects
-await miniapp.actions.call("tasks.create", { title });  // { changes, lastInsertId }
-const files = await miniapp.files.list();               // that user's private files, plus public files
-const stored = await miniapp.files.upload(file);        // private to the signed-in user
+const session = await miniapp.auth.session();             // { userId, name, role }; role is "anonymous" when signed out
+await miniapp.auth.signIn();                              // published login page, preview selects Alice
+await miniapp.auth.signOut();                             // revoke this app session
+const rows = await miniapp.actions.call("tasks.list");    // array of row objects
+await miniapp.actions.call("tasks.create", { title });    // { changes, lastInsertId }
+await miniapp.actions.call("lesson.finish", { lesson });  // a signal action: { recorded: true }
+const files = await miniapp.files.list();                 // that user's private files, plus public files
+const stored = await miniapp.files.upload(file);          // private to the signed-in user
 const shared = await miniapp.files.upload(file, { visibility: "public" });
 
-There is nothing else: no fetch to other origins, no localStorage contract, no miniapp.db and no SQL from the browser.
+There is nothing else: no fetch to other origins, no localStorage contract, no miniapp.db and no SQL from the browser, no miniapp.track and no analytics call: a Signal is declared on a Server Action and recorded when miniapp.actions.call runs it.
 
 ## miniapp.auth
 
@@ -33,12 +34,30 @@ Editor preview: Switches to the signed-out state and returns the anonymous sessi
 
 ## miniapp.actions
 
-The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement.
+The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.
 A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.
 A mutation action returns { changes, lastInsertId }. Read changed rows with a separate query.
 The Action Contract, action-contract.json, lists every action with its inputs, the columns it returns, its errors and limits. It is written from actions.json and schema.sql by littlebox contract and carried in the export; an expression the SELECT returns without AS has no name in it, and the Validation Gate warns.
+To record that something happened, such as a signup to a newsletter or a finished lesson, declare a signal on the mutation that does it, or add an action of kind signal and call it with miniapp.actions.call. There is no other tracking call.
+A call the Kernel refuses records no Signal and counts in no Usage total.
 
-miniapp.actions.call(name, input = {}): Invoke one declared Server Action as the current Runtime Actor. Returns an array of row objects for a query action, { changes, lastInsertId } for a mutation action.
+Declared with "signal" in actions.json: { "name": "order.placed", "properties"?: ["input binding keys"] } on a mutation, or on an action of "kind": "signal" that has access and bindings but no statement. When the action succeeds the Kernel records the Signal with the named inputs as its properties, in the Deployment's Usage store. A signal action runs no SQL and returns { recorded: true }. The owner reads Signals with signals_read; the app cannot. The Validation Gate and the Kernel refuse the same declarations with the same messages.
+Refusals:
+- "Action <name> is a query, so it cannot declare a signal. Declare it on a mutation or on a "kind": "signal" action." when the action is a query
+- "Action <name> names signal property <key>, which is not one of its input bindings." when a property is not the key of an input binding; actor, kernel and literal bindings have no key
+- "Action <name> names signal property <key> twice." when properties lists a key twice
+- "Action <name> names more than 8 signal properties." when properties lists more than 8 keys
+- "Action <name> names an invalid signal. Use dot-separated lowercase words, such as "order.placed", up to 64 characters." when the name has one word, a capital, a space, an empty part or more than 64 characters
+- "Action <name> has an invalid signal declaration." when signal is not an object, has a key other than name and properties, has no name, or properties is not a list of strings
+- "Action <name> is a signal action, so it must declare a signal." when the kind is signal and there is no signal key
+- "Action <name> is a signal action, so it runs no SQL and cannot declare a statement." when the kind is signal and the action has a statement
+Limits:
+- 8 properties per Signal; a string property keeps its first 128 bytes
+- a signal action counts toward the action limit like any other action
+- a signal action cannot declare http
+- the Kernel keeps the newest 50,000 Signals per Deployment and drops the oldest
+
+miniapp.actions.call(name, input = {}): Invoke one declared Server Action as the current Runtime Actor. Returns an array of row objects for a query action, { changes, lastInsertId } for a mutation action, { recorded: true } for a signal action.
 Refusals:
 - "Server action not declared." when actions.json declares no action with that name
 - "authentication-required" when the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_littlebox/login
@@ -59,7 +78,7 @@ Limits:
 - 2 seconds per statement; SQLite's own error text is returned when a statement fails or runs out of time
 - string inputs default to a maxLength of 10,000 UTF-16 code units
 - 256 MiB per app database
-Editor preview: Ignores the Deployment's visibility and rate limits, and keeps its database in the browser with a 10 MiB cap.
+Editor preview: Ignores the Deployment's visibility and rate limits, and keeps its database in the browser with a 10 MiB cap. A signal action returns { recorded: true } and records nothing; Signals exist only on a Deployment or a Development Kernel.
 
 ## miniapp.files
 

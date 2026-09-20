@@ -353,12 +353,16 @@ pub(crate) async fn complete_app(
     let id = deployment.id.clone();
     let auth = app_store(state, deployment)?;
     let token = token.to_owned();
-    blocking(move || {
+    let session = blocking(move || {
         auth.complete_challenge(purpose, &token, chosen, |email| {
             current_deployment_admits(&deployments, &id, email)
         })
     })
-    .await
+    .await?;
+    // An answered verification link activates an account; a recovery signs one in.
+    let operation = if purpose == Purpose::Recovery { super::usage::Operation::Login } else { super::usage::Operation::Signup };
+    super::usage::count(&state.data_root, &deployment.id, operation);
+    Ok(session)
 }
 
 /// Starts a creator signup on an installation that requires verification.
@@ -533,7 +537,9 @@ async fn signup_app_unverified(
         return Err(AuthError::SignupClosed);
     }
     let auth = app_store(state, deployment)?;
-    blocking(move || auth.create_account(account)).await
+    let session = blocking(move || auth.create_account(account)).await?;
+    super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Signup);
+    Ok(session)
 }
 
 async fn app_account_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
