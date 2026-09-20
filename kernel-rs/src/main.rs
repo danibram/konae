@@ -684,6 +684,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         .write()
         .await
         .insert(hostname, deployment.clone());
+    http::routes_published(&deployment);
     remove_stale_artifacts(&state, &id, &artifact_version).await;
     Json(json!({"result": deployment})).into_response()
 }

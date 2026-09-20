@@ -19,7 +19,7 @@
 //! states the signature scheme a sender computes.
 
 use super::*;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// The largest POST body a route reads.
 pub(super) const MAX_BODY_BYTES: usize = 64 * 1024;
@@ -520,25 +520,96 @@ fn peer(request: &Request) -> Option<std::net::SocketAddr> {
         .map(|info| info.0)
 }
 
-/// The bound action for a method and path on a Deployment, if any.
-fn find_route(deployment: &Deployment, method: &str, path: &str) -> Option<(String, HttpBinding)> {
-    let program: ActionProgram = serde_json::from_str(&deployment.actions).ok()?;
-    program.actions.iter().find_map(|(name, action)| match binding(name, action) {
-        Ok(Some(http)) if http.method == method && http.path == path => Some((name.clone(), http)),
-        _ => None,
-    })
+/// A Deployment's routes, parsed once from its `actions.json`.
+pub(super) struct RouteTable {
+    program: ActionProgram,
+    /// `"<method> <path>"` to the action's name and binding.
+    routes: HashMap<String, (String, HttpBinding)>,
+}
+
+impl RouteTable {
+    fn parse(actions: &str) -> Self {
+        let program: ActionProgram =
+            serde_json::from_str(actions).unwrap_or(ActionProgram { version: 1, actions: HashMap::new() });
+        let routes = program
+            .actions
+            .iter()
+            .filter_map(|(name, action)| match binding(name, action) {
+                Ok(Some(http)) => Some((format!("{} {}", http.method, http.path), (name.clone(), http))),
+                _ => None,
+            })
+            .collect();
+        Self { program, routes }
+    }
+
+    fn find(&self, method: &str, path: &str) -> Option<&(String, HttpBinding)> {
+        self.routes.get(&format!("{method} {path}"))
+    }
+}
+
+/// The parsed table of one Deployment and the revision it was parsed from.
+/// Every publish writes a fresh `artifact_version`, so a table built from an
+/// earlier release never answers for a later one.
+struct CachedRoutes {
+    revision: Option<String>,
+    table: Arc<RouteTable>,
+    parses: u64,
+}
+
+fn route_cache() -> &'static std::sync::Mutex<HashMap<String, CachedRoutes>> {
+    static CACHE: OnceLock<std::sync::Mutex<HashMap<String, CachedRoutes>>> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn cache_table(deployment: &Deployment) -> Arc<RouteTable> {
+    let table = Arc::new(RouteTable::parse(&deployment.actions));
+    let mut cache = route_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let entry = cache.entry(deployment.id.clone()).or_insert_with(|| CachedRoutes {
+        revision: None,
+        table: table.clone(),
+        parses: 0,
+    });
+    entry.revision = deployment.artifact_version.clone();
+    entry.table = table.clone();
+    entry.parses += 1;
+    table
+}
+
+/// The routes of the Deployment's current release. Only the first request
+/// after a Kernel start parses `actions.json`; a publish parses it in
+/// `routes_published`.
+fn route_table(deployment: &Deployment) -> Arc<RouteTable> {
+    {
+        let cache = route_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = cache.get(&deployment.id).filter(|cached| cached.revision == deployment.artifact_version) {
+            return cached.table.clone();
+        }
+    }
+    cache_table(deployment)
+}
+
+/// Replaces the cached routes with the release `deploy` just installed.
+/// `release_apply` reaches `deploy`, so every publish passes here.
+pub(super) fn routes_published(deployment: &Deployment) {
+    cache_table(deployment);
+}
+
+#[cfg(test)]
+fn route_parses(deployment_id: &str) -> u64 {
+    route_cache().lock().unwrap().get(deployment_id).map_or(0, |cached| cached.parses)
 }
 
 pub(super) async fn get_route(State(state): State<AppState>, AxumPath(relative): AxumPath<String>, request: Request) -> Response {
     let path = request.uri().path().to_owned();
     if let Some(deployment) = deployment_for(&state, request.headers()).await {
-        if let Some((name, http)) = find_route(&deployment, "GET", &path) {
-            let input = match query_input(&deployment, &name, request.uri().query().unwrap_or("")) {
+        let table = route_table(&deployment);
+        if let Some((name, http)) = table.find("GET", &path) {
+            let input = match query_input(&table.program, name, request.uri().query().unwrap_or("")) {
                 Ok(input) => input,
                 Err(message) => return refusal(StatusCode::BAD_REQUEST, &message),
             };
             let client = state.guards.client_ip(peer(&request), request.headers());
-            return run_route(&state, &deployment, &name, &http, request.headers(), client, input, b"").await;
+            return run_route(&state, &deployment, &table, name, http, request.headers(), client, input, b"").await;
         }
     }
     // Every other GET keeps serving the Build Artifact.
@@ -553,21 +624,21 @@ pub(super) async fn post_route(State(state): State<AppState>, request: Request) 
         response
     };
     let Some(deployment) = deployment_for(&state, request.headers()).await else { return not_allowed() };
-    let Some((name, http)) = find_route(&deployment, "POST", &path) else { return not_allowed() };
+    let table = route_table(&deployment);
+    let Some((name, http)) = table.find("POST", &path) else { return not_allowed() };
     let client = state.guards.client_ip(peer(&request), request.headers());
     let headers = request.headers().clone();
     let body = match axum::body::to_bytes(request.into_body(), MAX_BODY_BYTES).await {
         Ok(body) => body,
         Err(_) => return refusal(StatusCode::PAYLOAD_TOO_LARGE, "The request body exceeds 64 KiB."),
     };
-    run_route(&state, &deployment, &name, &http, &headers, client, Value::Null, &body).await
+    run_route(&state, &deployment, &table, name, http, &headers, client, Value::Null, &body).await
 }
 
 /// Turns a query string into action input, typed by the action's bindings, so
 /// `?since=5` binds the number 5. A value that does not parse as its type is
 /// passed on as text and refused by the usual binding check.
-fn query_input(deployment: &Deployment, name: &str, query: &str) -> Result<Value, String> {
-    let program: ActionProgram = serde_json::from_str(&deployment.actions).map_err(|e| e.to_string())?;
+fn query_input(program: &ActionProgram, name: &str, query: &str) -> Result<Value, String> {
     let action = &program.actions[name];
     let mut input = serde_json::Map::new();
     for (key, text) in url::form_urlencoded::parse(query.as_bytes()) {
@@ -603,6 +674,7 @@ fn query_input(deployment: &Deployment, name: &str, query: &str) -> Result<Value
 async fn run_route(
     state: &AppState,
     deployment: &Deployment,
+    table: &RouteTable,
     name: &str,
     http: &HttpBinding,
     headers: &HeaderMap,
@@ -657,11 +729,7 @@ async fn run_route(
     } else {
         query
     };
-    let program: ActionProgram = match serde_json::from_str(&deployment.actions) {
-        Ok(program) => program,
-        Err(_) => return error(StatusCode::INTERNAL_SERVER_ERROR, "Stored action program is invalid."),
-    };
-    let action = &program.actions[name];
+    let action = &table.program.actions[name];
     let params = match resolve_bindings(action, &input, caller.actor_id()) {
         Ok(params) => params,
         Err(message) => return refusal(StatusCode::BAD_REQUEST, &message),
@@ -786,6 +854,80 @@ mod tests {
         assert_eq!(verify_signature(&fresh, "orders-secret-0123", None, body, now), SignatureCheck::Invalid, "missing");
         assert_eq!(verify_signature(&fresh, "orders-secret-0123", Some("v1=00"), body, now), SignatureCheck::Invalid, "no timestamp");
         assert_eq!(verify_signature(&fresh, "orders-secret-0123", Some(&header), body, now), SignatureCheck::Valid);
+    }
+
+    fn test_state(root: &std::path::Path) -> AppState {
+        AppState {
+            deployments: Arc::new(RwLock::new(HashMap::new())),
+            db_locks: LockMap::default(),
+            s3: None,
+            artifact_bucket: "artifacts".into(),
+            data_bucket: "data".into(),
+            data_root: root.into(),
+            copies: Arc::new(super::super::copies::CopyStatus::default()),
+            admin_key: "test-admin".into(),
+            accounts: super::super::accounts::AccountSettings::local(),
+            public_origin: "http://localhost".into(),
+            host_suffix: "localhost".into(),
+            guards: Arc::new(Guards::new(Vec::new())),
+        }
+    }
+
+    /// Publishes a public app whose one GET route is `path`, with a static
+    /// `app.js` next to it.
+    async fn publish_route(state: &AppState, path: &str) -> Deployment {
+        let actions = json!({"version": 1, "actions": {"items.count": {"kind": "query", "access": "anonymous",
+            "statement": "SELECT 1 AS n LIMIT 1", "bindings": [], "http": {"method": "GET", "path": path}}}});
+        let body = json!({
+            "project": {"id": "route_cache", "name": "Route cache", "slug": "route-cache", "manifest": {},
+                "files": {"actions.json": actions.to_string(), "schema.sql": ""}},
+            "visibility": "public",
+            "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>", "app.js": "app"}}
+        });
+        let request = Request::builder().header("x-littlebox-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
+        assert_eq!(deploy(State(state.clone()), request).await.status(), StatusCode::OK);
+        state.deployments.read().await.values().next().cloned().unwrap()
+    }
+
+    async fn get(state: &AppState, deployment: &Deployment, path: &str) -> (StatusCode, String) {
+        let request = Request::builder().uri(path).header(header::HOST, &deployment.hostname).body(Body::empty()).unwrap();
+        let response = get_route(State(state.clone()), AxumPath(path.trim_start_matches('/').to_owned()), request).await;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1_000_000).await.unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[tokio::test]
+    async fn a_static_request_does_not_parse_actions_and_a_publish_replaces_the_routes() {
+        let root = std::env::temp_dir().join(format!("littlebox-route-cache-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        let state = test_state(&root);
+        let first = publish_route(&state, "/api/count").await;
+        assert_eq!(route_parses(&first.id), 1, "the publish parses the actions once");
+        for _ in 0..3 {
+            assert_eq!(get(&state, &first, "/app.js").await, (StatusCode::OK, "app".into()));
+        }
+        assert_eq!(get(&state, &first, "/api/count").await, (StatusCode::OK, r#"{"result":[{"n":1}]}"#.into()));
+        assert_eq!(route_parses(&first.id), 1, "static files and the route reuse the parsed table");
+
+        let second = publish_route(&state, "/api/total").await;
+        assert_eq!(second.id, first.id);
+        assert_ne!(second.artifact_version, first.artifact_version);
+        assert_eq!(route_parses(&second.id), 2, "a publish parses the new release");
+        assert_eq!(get(&state, &second, "/api/total").await.0, StatusCode::OK);
+        assert_eq!(get(&state, &second, "/api/count").await, (StatusCode::OK, "<p>shell</p>".into()), "the old route is gone");
+        assert_eq!(route_parses(&second.id), 2);
+
+        // A table cached for another revision is not used: a Kernel that
+        // loads the record without a publish parses on the first request.
+        let mut restarted = second.clone();
+        restarted.artifact_version = Some("v-restarted".into());
+        state.deployments.write().await.insert(restarted.hostname.clone(), restarted.clone());
+        assert_eq!(get(&state, &restarted, "/api/total").await.0, StatusCode::OK);
+        assert_eq!(route_parses(&second.id), 3);
+        assert_eq!(get(&state, &restarted, "/api/total").await.0, StatusCode::OK);
+        assert_eq!(route_parses(&second.id), 3);
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[test]
