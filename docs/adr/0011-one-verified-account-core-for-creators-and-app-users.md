@@ -68,3 +68,15 @@ Note, 2026-11-06: account email now leaves through a persistent queue in `mail.s
 A restore and an import treat API keys differently, and the difference follows who ends up holding the app. `littlebox-kernel restore` installs a Copy of the same installation for the same owner, after a lost volume or a move to a new host. It signs out every session and agent credential because the owner can sign in again in a minute, but it keeps API keys valid, because they sit in programs and services the owner may not control and the app is still the same app. An import, through a Package or the small export, puts the app in another installation, possibly under another owner, so it revokes every key: the package leaves the keys out and its import deletes any it finds, and the small format marks each one revoked.
 
 A key the owner revoked after the copy was taken comes back live after a restore. The restore command says so and tells the operator to revoke it again. `a_restore_keeps_api_keys_live_and_an_import_revokes_them` in `kernel-rs/src/copies.rs` checks both paths on one accounts file, and `tests/http-routes.integration.test.ts` checks the import against a running Kernel.
+
+## Note, 2026-11-06: hardening the HTTP update
+
+Four changes to the HTTP update above, from the open items of delivery 7.
+
+Accepted signatures persist. The memory of seen signatures was in the Kernel process, so a restart inside the 300 second window accepted a replay. It is now a `route_signatures` table in the Deployment's `identity.sqlite`, keyed by path and MAC and pruned past 600 seconds. We chose `identity.sqlite` over `usage.sqlite` because Usage has one background writer that drops entries when its queue fills, and a replay check must answer synchronously and never drop. `identity.sqlite` already holds the other caller proofs, sessions and keys. The table travels in an export, so the destination refuses a request captured on its way to the origin. A restore brings back the table as the copy held it, so a signature accepted after that copy can be replayed once within 300 seconds of the restore.
+
+`HEAD` on a `GET` route answers 405 with `Allow: GET`. axum answered `HEAD` with the `GET` handler, which ran the query and dropped the rows. Answering with the `GET` headers without the query would be guessing: the status depends on the caller, the rate limit and the input. `HEAD` on any other path still serves the artifact.
+
+An unknown or revoked `lbk_` key counts against the client address, as a wrong password does: 10 a minute per Deployment, checked before the lookup and taken only on a miss. When they are used up, every key from that address answers `rate-limited` without a lookup, a valid key included, until the bucket refills. A valid key never drains it.
+
+The Kernel parses a Deployment's routes once per release, keyed by the `artifact_version` each publish mints, and `deploy` replaces the parsed table when it installs a release. A static file request no longer parses `actions.json`.

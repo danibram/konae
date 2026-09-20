@@ -198,6 +198,29 @@ Where this differs from the text above:
 - The editor's Auth panel has no API key screen. Keys and secrets are managed over admin MCP only.
 - `smoke.ts` cancelled a download transfer that `McpClient.download` already cancels, which failed its portfolio check on `main` too. The second cancel is removed.
 
+#### Hardening, recorded 2026-11-06 on branch `deliv/http-hardening`
+
+Four open items of this delivery and one from the invitations delivery, closed. The decision is a dated note on [ADR-0011](../adr/0011-one-verified-account-core-for-creators-and-app-users.md) under the HTTP update, and the inviter is a dated note on [ADR-0012](../adr/0012-account-email-goes-through-a-persistent-queue.md). The bullet above about the in-process replay memory no longer holds.
+
+| Check | Command | Result |
+| --- | --- | --- |
+| A signature verifies once, and a second connection to the same `identity.sqlite` refuses it, as a restarted Kernel would; another path keeps its own memory; entries past 600 seconds are pruned. A static file request does not parse `actions.json`: a parse counter stays at 1 across static and route requests, a republish parses once and drops the old path, and a record with another revision parses on its first request. `HEAD` on a route answers 405 with `Allow: GET` and never opens the app database | `cargo test --manifest-path kernel-rs/Cargo.toml http::` | 4 pass |
+| Unknown keys drain a per-client, per-Deployment bucket of 10; another client and another Deployment keep theirs; 1,000 presentations of a valid key take nothing | `cargo test --manifest-path kernel-rs/Cargo.toml failed_api_keys` | 1 pass |
+| The invitation template names the inviter with line breaks removed and HTML escaped, and only an invitation names one; a real invitation through the queue stores the inviter on the job and the sent message names the owner's account email; an owner with no email, as under Clerk, is not named; a queue file from before the column gains it | `cargo test --manifest-path kernel-rs/Cargo.toml -- invitations:: mail::` | 37 pass |
+| Against a real Kernel: a signed POST accepted, the Kernel killed and started on the same data directory, the same request refused with 409 and one row stored; `HEAD /api/orders` 405 with `Allow: GET` and an empty body while `HEAD /` answers 200; `POST` on a GET route says `Allow: GET`; nine unknown keys on a route and one on the file read path answer 401, the eleventh 429 with `Retry-After`, a valid key from that address 429, the same key from another address 200 | `LITTLEBOX_HTTP_TEST_PORT=<free> bun test tests/http-routes.integration.test.ts` | 13 pass |
+| The contract lists the HEAD refusal and the key bucket under `rate-limited`; `bun run sdk:render` regenerated the three readers | `bun test src/sdk` | 72 pass |
+| The feed's signed route, replay, unknown key and unbound POST still behave; every example conforms | `LITTLEBOX_PRODUCT_FIT_PORT=19833 bun run examples/product-fit/smoke.ts` | 12 checks pass; the contracts 175 checks, none skipped |
+| Everything else | `cargo test --manifest-path kernel-rs/Cargo.toml`, `bun run test`, `bun run build`, `bun run tests/smoke/portable-export.ts --port 19823` | 163 pass; 551 pass, 0 fail; build passes; export smoke passes |
+
+Where this differs from the request:
+
+- `limits.rs` and `accounts.rs` changed though the delivery named neither. The key bucket belongs with the other per-client limits, and the inviter reaches the outbox only through `accounts::deliver_issued`.
+- The key bucket is its own limiter, 10 failures a minute per client address and Deployment, rather than the login bucket, so a client's wrong keys do not cost it sign-in attempts. Once it is empty, a valid key from that address is refused too, because the refusal comes before the lookup.
+- `HEAD` is refused with 405 rather than answered with the `GET` headers, which depend on the caller, the rate limit and the input.
+- The route table is cached in a static map in `http.rs`, keyed by Deployment ID and `artifact_version`, not in `AppState`, so no fixture constructor changed.
+- The inviter is the email of the owner's account in `owners.sqlite`. A Clerk owner has none, and that invitation names only the app.
+- A restore brings back `route_signatures` as the copy held it, so a signature accepted after the copy can be replayed once within 300 seconds of a restore. The editor end-to-end suite did not run, because no editor file changed.
+
 ### Evidence for delivery 8
 
 Recorded on 2026-11-06 on branch `deliv/8-action-contract`.
