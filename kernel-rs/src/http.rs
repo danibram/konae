@@ -545,6 +545,11 @@ impl RouteTable {
     fn find(&self, method: &str, path: &str) -> Option<&(String, HttpBinding)> {
         self.routes.get(&format!("{method} {path}"))
     }
+
+    /// The `Allow` header for a path. A GET route does not answer HEAD.
+    fn allowed(&self, path: &str) -> &'static str {
+        if self.find("GET", path).is_some() { "GET" } else { "GET, HEAD" }
+    }
 }
 
 /// The parsed table of one Deployment and the revision it was parsed from.
@@ -604,6 +609,13 @@ pub(super) async fn get_route(State(state): State<AppState>, AxumPath(relative):
     if let Some(deployment) = deployment_for(&state, request.headers()).await {
         let table = route_table(&deployment);
         if let Some((name, http)) = table.find("GET", &path) {
+            // HEAD would run the query only to drop its rows, and its headers
+            // depend on the answer, so a route refuses it before any check.
+            if request.method() == axum::http::Method::HEAD {
+                let mut response = error(StatusCode::METHOD_NOT_ALLOWED, "A route does not answer HEAD. Send GET.");
+                response.headers_mut().insert(header::ALLOW, HeaderValue::from_static("GET"));
+                return response;
+            }
             let input = match query_input(&table.program, name, request.uri().query().unwrap_or("")) {
                 Ok(input) => input,
                 Err(message) => return refusal(StatusCode::BAD_REQUEST, &message),
@@ -618,14 +630,14 @@ pub(super) async fn get_route(State(state): State<AppState>, AxumPath(relative):
 
 pub(super) async fn post_route(State(state): State<AppState>, request: Request) -> Response {
     let path = request.uri().path().to_owned();
-    let not_allowed = || {
+    let not_allowed = |allow: &'static str| {
         let mut response = error(StatusCode::METHOD_NOT_ALLOWED, "No route accepts POST on this path.");
-        response.headers_mut().insert(header::ALLOW, HeaderValue::from_static("GET, HEAD"));
+        response.headers_mut().insert(header::ALLOW, HeaderValue::from_static(allow));
         response
     };
-    let Some(deployment) = deployment_for(&state, request.headers()).await else { return not_allowed() };
+    let Some(deployment) = deployment_for(&state, request.headers()).await else { return not_allowed("GET, HEAD") };
     let table = route_table(&deployment);
-    let Some((name, http)) = table.find("POST", &path) else { return not_allowed() };
+    let Some((name, http)) = table.find("POST", &path) else { return not_allowed(table.allowed(&path)) };
     let client = state.guards.client_ip(peer(&request), request.headers());
     let headers = request.headers().clone();
     let body = match axum::body::to_bytes(request.into_body(), MAX_BODY_BYTES).await {
@@ -909,6 +921,16 @@ mod tests {
         }
         assert_eq!(get(&state, &first, "/api/count").await, (StatusCode::OK, r#"{"result":[{"n":1}]}"#.into()));
         assert_eq!(route_parses(&first.id), 1, "static files and the route reuse the parsed table");
+        // HEAD on the route refuses before SQL. Running a query opens, and so
+        // creates, the database file; after a HEAD it is still missing.
+        let head = Request::builder().method(axum::http::Method::HEAD).uri("/api/count").header(header::HOST, &first.hostname).body(Body::empty()).unwrap();
+        tokio::fs::remove_file(database_path(&state, &first.id)).await.unwrap();
+        let refused = get_route(State(state.clone()), AxumPath("api/count".into()), head).await;
+        assert_eq!(refused.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(refused.headers()[header::ALLOW], "GET");
+        assert!(!database_path(&state, &first.id).exists(), "HEAD opened no database");
+        assert_eq!(get(&state, &first, "/api/count").await.0, StatusCode::OK);
+        assert!(database_path(&state, &first.id).exists(), "GET ran the query");
 
         let second = publish_route(&state, "/api/total").await;
         assert_eq!(second.id, first.id);

@@ -247,6 +247,7 @@ Declared with `http` in `actions.json`. { "method": "GET" | "POST", "path": "/ap
 | `invalid-api-key` | Authorization carries an lbk_ key that is unknown or revoked (401) | Kernel | Never refuses |
 | `This API key may not call <name>.` | the key does not name the route's action (403) | Kernel | Never refuses |
 | `No route accepts POST on this path.` | a POST reaches a path no action binds (405) | Kernel | Never refuses |
+| `A route does not answer HEAD. Send GET.` | a HEAD reaches a path a query binds; it is refused before any SQL, with Allow: GET (405) | Kernel | Never refuses |
 | `The request body exceeds 64 KiB.` | a POST body is larger (413) | Kernel | Never refuses |
 | `The request body must be a JSON object.` | a POST body does not parse as JSON (400) | Kernel | Never refuses |
 | `Repeated query parameter: <key>` | a GET names one input twice (400) | Kernel | Never refuses |

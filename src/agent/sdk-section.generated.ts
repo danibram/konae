@@ -145,6 +145,7 @@ Refusals:
 - "invalid-api-key" when Authorization carries an lbk_ key that is unknown or revoked (401)
 - "This API key may not call <name>." when the key does not name the route's action (403)
 - "No route accepts POST on this path." when a POST reaches a path no action binds (405)
+- "A route does not answer HEAD. Send GET." when a HEAD reaches a path a query binds; it is refused before any SQL, with Allow: GET (405)
 - "The request body exceeds 64 KiB." when a POST body is larger (413)
 - "The request body must be a JSON object." when a POST body does not parse as JSON (400)
 - "Repeated query parameter: <key>" when a GET names one input twice (400)

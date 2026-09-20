@@ -158,7 +158,17 @@ describe("HTTP routes", () => {
     const unknown = await route("/hooks/unknown", { method: "POST", body: "{}" });
     expect(unknown.status).toBe(405);
     expect(unknown.headers.get("allow")).toBe("GET, HEAD");
-    expect((await route("/api/orders", { method: "POST", body: "{}" })).status).toBe(405);
+    const postOnGetRoute = await route("/api/orders", { method: "POST", body: "{}" });
+    expect(postOnGetRoute.status).toBe(405);
+    expect(postOnGetRoute.headers.get("allow")).toBe("GET");
+  });
+
+  test("HEAD on a GET route is refused before the query runs, and HEAD on the shell still answers", async () => {
+    const head = await route("/api/orders", { method: "HEAD", headers: { authorization: "Bearer lbk_unknown" } });
+    expect(head.status).toBe(405);
+    expect(head.headers.get("allow")).toBe("GET");
+    expect(await head.text()).toBe("");
+    expect((await route("/", { method: "HEAD" })).status).toBe(200);
   });
 
   test("a signed POST is accepted once, and unsigned, tampered, stale, foreign and replayed ones are refused", async () => {
