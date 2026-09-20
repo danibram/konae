@@ -220,6 +220,15 @@ describe("Usage and Signals", () => {
     await expect(owner.call("signals_read", { deploymentId, cursor: "next" })).rejects.toThrow("Invalid cursor.");
   });
 
+  test("a signal action counts toward the Kernel's action limit", async () => {
+    const many: Record<string, unknown> = {};
+    for (let index = 0; index < 100; index++) many[`items.read${index}`] = { kind: "query", access: "anonymous", statement: "SELECT 1 AS n", bindings: [] };
+    await owner.call("project_create", { projectId: "usage_cap", name: "Cap" });
+    const files = (extra: Record<string, unknown>) => ({ "schema.sql": schema, "actions.json": JSON.stringify({ version: 1, actions: { ...many, ...extra } }) });
+    await expect(release("usage_cap", files({ "page.like": actions.actions["page.like"] }))).rejects.toThrow("A project may declare at most 100 actions.");
+    expect((await release("usage_cap", files({}))).id).toBeString();
+  });
+
   test("the Kernel refuses a signal the editor refuses, with the same message", async () => {
     const refused = { ...actions, actions: { ...actions.actions, "page.like": { ...actions.actions["page.like"], signal: { name: "page.liked", properties: ["visitor"] } } } };
     await expect(release("usage_app", { "schema.sql": schema, "actions.json": JSON.stringify(refused) }))
