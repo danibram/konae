@@ -60,7 +60,7 @@ A Project created with external source authority or transferred out of Littlebox
 _Avoid_: Exported Project, detached Deployment
 
 **Eject**:
-The irreversible transfer of a Managed Project's source and database-schema authority to its owner while retaining the Project's Littlebox hosting and administration. Returning to managed authoring creates a new Project.
+The irreversible transfer of a Managed Project's source and database-schema authority to its owner while retaining the Project's Littlebox hosting and administration. It runs on the Kernel against an expected saved-sources revision and needs the `manage_lifecycle` permission. The owner receives the saved sources as a code package before the Project changes; the Kernel then records who ejected it and when, refuses every Managed source change, and keeps accepting Build Artifacts. The Deployment's URL, accounts, sessions, data, invitations and email continue. Returning to managed authoring creates a new Project.
 _Avoid_: Export, download
 
 **Build Artifact**:

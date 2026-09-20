@@ -50,6 +50,7 @@ import { PlatformAccess } from "./components/PlatformAccess";
 import { filesUnder, renamePath } from "./components/project-tree";
 import { usePreviewProblems } from "./components/usePreviewProblems";
 import { ProjectDashboard } from "./components/ProjectDashboard";
+import { EjectedNotice } from "./components/EjectDialog";
 import { deployProject, HostedDatabaseClient, type DeploymentReceipt, type SignupMode } from "./deployments/client";
 import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/manifest";
 import { createSchemaSnapshot } from "./database-lifecycle/schema-snapshot";
@@ -62,7 +63,7 @@ import type { MiniAppProject, ProjectFile } from "./lib/types";
 import { createDirectory, createFile, directoriesForFiles, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
 import { LIMIT_REFUSE_SENTENCE } from "./lib/query-bound";
 import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, resetWorkspaceProject } from "./lib/workspace";
-import { ManagedSources, type ProjectMetadata } from "./lib/managed-sources";
+import { ManagedSources, type EjectRecord, type ProjectMetadata } from "./lib/managed-sources";
 import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
 import { useRuntimeBridge } from "./runtime/useRuntimeBridge";
@@ -128,7 +129,7 @@ function CardForPlatformError({ message, onRetry }: { message: string; onRetry: 
   return <div className="platform-card"><h1>Platform unavailable</h1><p role="alert">Could not check your session. {message}</p><Button onClick={onRetry}>Try again</Button></div>;
 }
 
-function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { ownerSession: Extract<OwnerSession, { state: "signed-in" }>; refreshOwnerSession: () => void; sources: ManagedSources; loaded: { projects: MiniAppProject[]; external: ProjectMetadata[]; missing: ProjectMetadata[]; deployments: Record<string, DeploymentReceipt> } }) {
+function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { ownerSession: Extract<OwnerSession, { state: "signed-in" }>; refreshOwnerSession: () => void; sources: ManagedSources; loaded: { projects: MiniAppProject[]; external: ProjectMetadata[]; missing: ProjectMetadata[]; deployments: Record<string, DeploymentReceipt>; ejected: Record<string, EjectRecord> } }) {
   const workspaceStorage = useMemo(() => ({
     getItem: (key: string) => localStorage.getItem(`littlebox:owner:${encodeURIComponent(ownerSession.ownerId)}:${key}`),
     setItem: (key: string, value: string) => localStorage.setItem(`littlebox:owner:${encodeURIComponent(ownerSession.ownerId)}:${key}`, value),
@@ -203,6 +204,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const failedSave = useRef(false);
   const failedProjects = useRef(new Set<string>());
   const [saveAttempt, setSaveAttempt] = useState(0);
+  // An ejected project is External: its files and the agent are read-only here.
+  const [ejected, setEjected] = useState(loaded.ejected);
+  const ejectRecord = ejected[project.id];
   workspaceRef.current = { projects, project, deployments };
 
   useEffect(() => {
@@ -331,6 +335,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       for (const item of projects) {
+        if (ejected[item.id]) continue;
         const snapshot = JSON.stringify(item);
         if (synchronized.current.get(item.id) === snapshot) continue;
         synchronized.current.set(item.id, snapshot);
@@ -347,7 +352,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       }
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [projects, sources, saveAttempt]);
+  }, [projects, sources, saveAttempt, ejected]);
 
   const retrySave = () => {
     if (pendingSaves.current) return;
@@ -397,7 +402,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   });
 
   const updateFile = (value: string) => {
-    if (contractOpen) return;
+    if (contractOpen || ejectRecord) return;
     setProject((current) => activeFile === "schema.ts" ? {
       ...current,
       updatedAt: Date.now(),
@@ -632,6 +637,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     // The Validation Gate is structural here, not just a disabled button in the
     // panel: the merge refuses a proposal whose untouched files have moved since
     // the gate saw them, because that combination was never validated.
+    if (ejectRecord) return false;
     const merge = mergeProposal(project.files, proposal);
     if (!merge.ok) return false;
     const next: MiniAppProject = {
@@ -839,7 +845,13 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   };
 
   if (screen === "projects") {
-    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} external={loaded.external} missing={loaded.missing} drafts={drafts} onImportDraft={importDraft} onOpenProject={openProject} onCreateProject={createProject} />;
+    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} external={loaded.external} missing={loaded.missing} drafts={drafts} onImportDraft={importDraft} onOpenProject={openProject} onCreateProject={createProject}
+      ejected={ejected}
+      eject={{
+        prepare: (projectId, slug) => sources.prepareEject(projectId, slug),
+        apply: (plan) => sources.applyEject(plan),
+        onEjected: (projectId, receipt) => setEjected((current) => ({ ...current, [projectId]: { at: receipt.ejectedAt, by: receipt.ejectedBy, via: receipt.via, planId: receipt.planId, sourcesRevision: receipt.sourcesRevision } })),
+      }} />;
   }
 
   const signInHref = platformAccessHref(window.location.pathname);
@@ -921,10 +933,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const explorerNav = (
     <nav className="explorer-panel" id="file-list" aria-label="Project files">
       <div className="explorer-heading">
-        <button id="explorer-new-file" aria-label="New file" title="New file" onClick={() => startNewEntry("file")}><FilePlus2 size={12} /></button>
-        <button aria-label="New folder" title="New folder" onClick={() => startNewEntry("folder")}><FolderPlus size={12} /></button>
-        <button aria-label="Rename selected path" title="Rename selected path" disabled={!canEditSelection} onClick={startRename}><Pencil size={12} /></button>
-        <button aria-label="Delete selected path" title="Delete selected path" disabled={!canEditSelection} onClick={() => setPendingDelete(selectedPath)}><Trash2 size={12} /></button>
+        <button id="explorer-new-file" aria-label="New file" title="New file" disabled={Boolean(ejectRecord)} onClick={() => startNewEntry("file")}><FilePlus2 size={12} /></button>
+        <button aria-label="New folder" title="New folder" disabled={Boolean(ejectRecord)} onClick={() => startNewEntry("folder")}><FolderPlus size={12} /></button>
+        <button aria-label="Rename selected path" title="Rename selected path" disabled={!canEditSelection || Boolean(ejectRecord)} onClick={startRename}><Pencil size={12} /></button>
+        <button aria-label="Delete selected path" title="Delete selected path" disabled={!canEditSelection || Boolean(ejectRecord)} onClick={() => setPendingDelete(selectedPath)}><Trash2 size={12} /></button>
       </div>
       {newEntry && <div className="explorer-create">
         <label htmlFor="new-project-path">{newEntry === "file" ? "File path" : "Folder path"}</label>
@@ -995,6 +1007,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               ))}
             </ul>
           )}
+          {ejectRecord && <EjectedNotice projectId={project.id} slug={project.slug} ejectedAt={ejectRecord.at} sourcesRevision={ejectRecord.sourcesRevision} />}
           {activeFile === "actions.json" && <ActionReadout source={activeSource} />}
           {contractOpen ? <ActionContractView state={actionContract} /> : <div className="code-area">
             <div className="line-numbers" aria-hidden="true" ref={gutterRef}>
@@ -1003,6 +1016,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             <textarea
               ref={editorRef}
               value={activeSource}
+              readOnly={Boolean(ejectRecord)}
               onChange={(event) => updateFile(event.target.value)}
               onKeyDown={indentWithTab}
               aria-describedby="code-editor-keys"
@@ -1107,7 +1121,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     actions: (
       <button title="Agent settings" onClick={() => setSettingsOpen(true)}><Settings2 size={11} /></button>
     ),
-    body: <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} />,
+    body: ejectRecord
+      ? <EjectedNotice projectId={project.id} slug={project.slug} ejectedAt={ejectRecord.at} sourcesRevision={ejectRecord.sourcesRevision} />
+      : <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} />,
   };
 
   return (
@@ -1143,7 +1159,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           {saveError && <Button onClick={retrySave} disabled={pendingSaves.current > 0}>Retry save</Button>}
           <div className="take-actions" role="group" aria-label="Take it with you">
             <Button className="export-button" aria-label={exporting ? "Exporting" : "Export"} disabled={exporting} onClick={() => void exportProject()}><Download size={14} /> <span>{exporting ? "Exporting…" : "Export"}</span></Button>
-            <Button variant="primary" className="deploy-button" aria-label="Deploy" onClick={() => { setDeployment(null); setDeployError(""); setDeployOpen(true); refreshOwnerSession(); }}><Rocket size={15} /> <span>Deploy</span></Button>
+            <Button variant="primary" className="deploy-button" aria-label="Deploy" disabled={Boolean(ejectRecord)} title={ejectRecord ? "Publish this External project with the Littlebox CLI." : undefined} onClick={() => { setDeployment(null); setDeployError(""); setDeployOpen(true); refreshOwnerSession(); }}><Rocket size={15} /> <span>Deploy</span></Button>
           </div>
           <details className="mobile-project-actions" ref={projectMenu} onToggle={(event) => { if (event.currentTarget.open) switcherRef.current?.removeAttribute("open"); }}>
             <summary>More</summary>

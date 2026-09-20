@@ -330,6 +330,26 @@ Signup has a fourth mode, Invitation only, on both sides: `SignupMode::Invitatio
 The integration test runs the done-when criterion against a local Kernel with the development mailbox: a publish-only token releases a private app with Invitation only, a stranger's signup gets 403, an invited person reads the link from `mailbox.jsonl`, sets a password and runs an action.
 
 This delivery leaves four things undone. The invitation email names neither the app nor the inviter, because `AccountMessage` carries only a link and delivery B owns the message templates and the queue; `delivery` reports only whether the transport took the message. Invitations and their mail are not stored in one transaction, because the seam has no queue to write into; the rows commit first and a failed hand-off shows `failed`. The editor has no Users view yet (delivery G), so a person who does not write code can choose Invitation only but cannot invite anyone without an agent. There is no runtime MCP tool to accept an invitation; the HTTP route is the contract.
+### Delivery I, November 6, 2026
+
+`kernel-rs/src/eject.rs` adds `eject_plan` and `eject_apply` behind the `manage_lifecycle` permission. The plan checks the expected saved-sources revision before any transfer exists and returns the code package; apply flips the project to External under the project lock and records who and when. The CLI's `eject` command and the editor's Eject dialog both check the package before they apply. An ejected project opens read-only in the editor, and its card says External. [ADR-0005](../adr/0005-build-artifacts-separate-managed-and-external-projects.md) has the dated note and [the MCP guide](../mcp.md#eject) the tools and refusals.
+
+| Refusal or proof | Where | Run against |
+| --- | --- | --- |
+| A Managed write after Eject, from the tab that saved last, from a tab one revision behind, and from an agent's write token | `tests/eject.integration.test.ts` | Local Kernel, MCP |
+| A Managed write from an old browser tab after another tab ejected | `tests/e2e/eject.e2e.ts` | Chrome, `dev:local` |
+| Eject with a stale revision, refused with no transfer created; apply after a save made the plan stale; the CLI with `--revision 0` writing nothing | `tests/eject.integration.test.ts` | Local Kernel, MCP, CLI |
+| Eject without `manage_lifecycle` from `read`+`write`+`publish` and `read`+`manage_users`+`export_data` tokens, and from a `manage_lifecycle` token for another project | `tests/eject.integration.test.ts` | Local Kernel, MCP |
+| An applied plan reapplied returns the same receipt; planning again returns the applied plan and the same package | `tests/eject.integration.test.ts` | Local Kernel, MCP |
+| The Deployment keeps serving, keeps its hostname, and an app user stays signed in with their rows across Eject and a later release from outside | `tests/eject.integration.test.ts`, `tests/e2e/eject.e2e.ts` | Local Kernel, Chrome |
+| Returning to Managed through `project_create` refused with "create a new project", for an ejected project and for one created External; Eject of a project with no saved sources | `tests/eject.integration.test.ts` | Local Kernel, MCP |
+| A tampered package, a file that differs from the content list, a path outside the folder, another revision | `src/lib/eject-package.test.ts` | Unit |
+| Audit rows for plan and apply | `tests/eject.integration.test.ts` | Local Kernel |
+
+Not covered: the Docker stack, and an Eject racing a save on two connections at the same instant. The race is closed by the shared project lock, not by a test that forces the interleaving.
+
+The plan said the client fetches and checks the code package before the project changes, and both clients do. It did not say what the package is. The Kernel cannot build the self-host kit, which is assembled in TypeScript, so the package is the saved source tree with `littlebox.json` and a README in a JSON envelope with per-file SHA-256s; the CLI writes it as a folder and the editor as a tar. It also did not say whether an ejected project's sources stay readable. They do, frozen, because the editor needs them to show the project read-only.
+
 ### Delivery H, November 6, 2026
 
 `package_export` in `kernel-rs/src/package.rs` captures one Deployment under its locks and offers its database, accounts and files as three download transfers with a versioned manifest. A release imports them as `initialPackage` into a project with no Deployment. [ADR-0013](../adr/0013-an-app-leaves-as-a-chunked-package.md) records the decision and [the MCP guide](../mcp.md#export-and-import-an-app) the format. The CLI's `export --with-data` and the kit's `deploy.mjs` use it.
