@@ -164,7 +164,8 @@ function InviteForm({ deploymentId, mailReady, mailReason, onInvited, onSignedOu
     setSending(true);
     setError("");
     try {
-      const answer = await createAppInvitations(deploymentId, batch.emails, next.key);
+      // Sorted, so a retry after reordering lines sends the arguments its key was made for.
+      const answer = await createAppInvitations(deploymentId, [...batch.emails].sort(), next.key);
       setResults(answer.results);
       setPending(null);
       setText("");
