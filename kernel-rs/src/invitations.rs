@@ -464,6 +464,7 @@ async fn run(state: &AppState, deployment: &Deployment, inviter: &str, name: &st
 fn inviter_display(state: &AppState, owner_id: &str) -> Option<String> {
     let path = state.data_root.join("owners.sqlite");
     let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    db.busy_timeout(std::time::Duration::from_secs(5)).ok()?;
     db.query_row("SELECT email FROM app_users WHERE id = ?1", [owner_id], |row| row.get(0)).optional().ok().flatten()
 }
 
@@ -970,7 +971,7 @@ mod tests {
         // The owner record as the creator store keeps it.
         Connection::open(fixture.root.join("owners.sqlite"))
             .unwrap()
-            .execute_batch("CREATE TABLE app_users(id TEXT PRIMARY KEY, email TEXT NOT NULL); INSERT INTO app_users VALUES ('owner-1', 'o''neil&co@example.test');")
+            .execute_batch("PRAGMA journal_mode = WAL; CREATE TABLE app_users(id TEXT PRIMARY KEY, email TEXT NOT NULL); INSERT INTO app_users VALUES ('owner-1', 'o''neil&co@example.test');")
             .unwrap();
 
         let answer = fixture.invite(&["ana@example.test"], "inviter-key-1").await;

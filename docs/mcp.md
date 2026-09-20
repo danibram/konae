@@ -277,7 +277,7 @@ curl -X POST "https://orders-1a2b3c.example.net/hooks/orders" \
   -H 'Content-Type: application/json' -H "X-Signature: t=$t,v1=$sig" --data-binary "$body"
 ```
 
-Services with their own fixed signing scheme do not speak this one and need an adapter. `littlebox-kernel restore` brings back the table as the copy held it, so a signature accepted after that copy and replayed within 300 seconds of a restore is accepted again.
+Services with their own fixed signing scheme do not speak this one and need an adapter. `littlebox-kernel restore` brings back the table as the copy held it, so a signature accepted after that copy is accepted once more if it is replayed while its `t` is still within 300 seconds of the Kernel's clock.
 
 ### API keys
 

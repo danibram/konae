@@ -219,7 +219,7 @@ Where this differs from the request:
 - `HEAD` is refused with 405 rather than answered with the `GET` headers, which depend on the caller, the rate limit and the input.
 - The route table is cached in a static map in `http.rs`, keyed by Deployment ID and `artifact_version`, not in `AppState`, so no fixture constructor changed.
 - The inviter is the email of the owner's account in `owners.sqlite`. A Clerk owner has none, and that invitation names only the app.
-- A restore brings back `route_signatures` as the copy held it, so a signature accepted after the copy can be replayed once within 300 seconds of a restore. The editor end-to-end suite did not run, because no editor file changed.
+- A restore brings back `route_signatures` as the copy held it, so a signature accepted after the copy can be replayed once more while its `t` is still within 300 seconds of the Kernel's clock. The editor end-to-end suite did not run, because no editor file changed.
 
 ### Evidence for delivery 8
 
