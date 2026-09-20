@@ -81,12 +81,9 @@ async function json(response: Response) {
   return { status: response.status, body: await response.json() };
 }
 
-beforeAll(async () => {
-  const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
-  expect(await build.exited).toBe(0);
-  root = await mkdtemp(path.join(tmpdir(), "littlebox-http-routes-"));
-  const port = Number(process.env.LITTLEBOX_HTTP_TEST_PORT ?? 19700 + Math.floor(Math.random() * 40));
-  url = `http://127.0.0.1:${port}`;
+let port = 0;
+
+async function startKernel() {
   kernel = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))),
@@ -104,6 +101,15 @@ beforeAll(async () => {
     await Bun.sleep(100);
   }
   expect(ready).toBe(true);
+}
+
+beforeAll(async () => {
+  const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
+  expect(await build.exited).toBe(0);
+  root = await mkdtemp(path.join(tmpdir(), "littlebox-http-routes-"));
+  port = Number(process.env.LITTLEBOX_HTTP_TEST_PORT ?? 19700 + Math.floor(Math.random() * 40));
+  url = `http://127.0.0.1:${port}`;
+  await startKernel();
   const response = await fetch(`${url}/_littlebox/owner/signup`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "owner@routes.test", password, setupKey }),
@@ -299,5 +305,18 @@ describe("HTTP routes", () => {
     const limited = await route("/api/orders", { headers: { "x-forwarded-for": "198.18.2.1" } });
     expect(limited.status).toBe(429);
     expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
+  });
+
+  test("a signature accepted before a Kernel restart is refused after it", async () => {
+    const body = JSON.stringify({ id: "R-1", total: 7 });
+    const header = signed(body);
+    const send = async () => json(await route("/hooks/orders", { method: "POST", body, headers: { "x-signature": header } }));
+    expect((await send()).status).toBe(200);
+    kernel.kill();
+    await kernel.exited;
+    await startKernel();
+    expect(await send()).toEqual({ status: 409, body: { error: "replayed-signature" } });
+    const rows = await owner.call<{ rows: unknown[] }>("database_execute", { deploymentId, operation: "sql", input: { sql: "SELECT id FROM orders WHERE external_id = 'R-1'" } });
+    expect(rows.rows).toHaveLength(1);
   });
 });

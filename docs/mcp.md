@@ -233,7 +233,7 @@ The route answers by the action's access level, not by the Deployment's visibili
 | `{ "error": "This API key may not call <action>." }` | 403 | The key does not name the action |
 | `{ "error": "No route accepts POST on this path." }` | 405 | No action binds the path for `POST`. `Allow` is `GET` on a path a query binds, `GET, HEAD` elsewhere |
 | `{ "error": "A route does not answer HEAD. Send GET." }` | 405 | A `HEAD` reaches a path a query binds. It is refused before the caller is resolved and before any SQL, with `Allow: GET`. `HEAD` on every other path serves the Build Artifact's headers as before |
-| `{ "error": "replayed-signature" }` | 409 | The same signature arrived before |
+| `{ "error": "replayed-signature" }` | 409 | The same signature arrived before, on this path, in the last 600 seconds, before or after a Kernel restart |
 | `{ "error": "The request body exceeds 64 KiB." }` | 413 | |
 | `{ "error": "rate-limited" }` | 429 | With `Retry-After`. 30 calls per 10 seconds per client address without a key or session, 120 per user or key, shared with `actions_invoke` |
 
@@ -267,7 +267,7 @@ The sender puts this in the declared header:
 t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw request body>", keyed with the secret>
 ```
 
-The Kernel recomputes the MAC over the exact bytes it received, compares it in constant time, refuses a `t` more than 300 seconds before or after its clock, and remembers each accepted signature for 600 seconds so a replay inside the window answers 409. `t` is inside the MAC, so moving it invalidates the signature. More than one `v1=` may be sent while a secret rotates. A shell sender with OpenSSL:
+The Kernel recomputes the MAC over the exact bytes it received, compares it in constant time, refuses a `t` more than 300 seconds before or after its clock, and remembers each accepted signature for 600 seconds so a replay inside the window answers 409. The memory is a `route_signatures` table in the Deployment's `identity.sqlite`, so a Kernel restart does not forget it, and an export carries it with the accounts, so the destination refuses a request captured on its way to the origin. `t` is inside the MAC, so moving it invalidates the signature. More than one `v1=` may be sent while a secret rotates. A shell sender with OpenSSL:
 
 ```sh
 body='{"id":"A-1","total":12}'
@@ -277,7 +277,7 @@ curl -X POST "https://orders-1a2b3c.example.net/hooks/orders" \
   -H 'Content-Type: application/json' -H "X-Signature: t=$t,v1=$sig" --data-binary "$body"
 ```
 
-Services with their own fixed signing scheme do not speak this one and need an adapter. The replay memory is per Kernel process, so a restart inside the window forgets it.
+Services with their own fixed signing scheme do not speak this one and need an adapter. `littlebox-kernel restore` brings back the table as the copy held it, so a signature accepted after that copy and replayed within 300 seconds of a restore is accepted again.
 
 ### API keys
 

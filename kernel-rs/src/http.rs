@@ -444,7 +444,15 @@ fn refusal(status: StatusCode, message: &str) -> Response {
 // Signatures. The header carries `t=<unix seconds>,v1=<hex HMAC-SHA256>`, the
 // MAC is over `<t>.<raw body>` with the secret as key, and `t` must be within
 // SIGNATURE_WINDOW_SECONDS of the Kernel's clock. A verified signature is
-// remembered for twice the window, so the same request is refused if replayed.
+// remembered for twice the window in the Deployment's identity.sqlite, so the
+// same request is refused if replayed, across Kernel restarts too.
+//
+// identity.sqlite rather than usage.sqlite: Usage is written by one background
+// thread that drops entries when its queue is full, and a replay check must
+// be synchronous and must not drop. identity.sqlite already holds the
+// Deployment's other caller proofs, sessions and API keys, and the key lookup
+// opens it on the same request. The table travels in an export with the
+// accounts, so the destination also refuses a request replayed from the origin.
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum SignatureCheck {
@@ -462,13 +470,26 @@ pub(super) fn sign(secret: &str, timestamp: u64, body: &[u8]) -> String {
     hex::encode(context.sign().as_ref())
 }
 
-fn seen_signatures() -> &'static std::sync::Mutex<HashMap<String, u64>> {
-    static SEEN: OnceLock<std::sync::Mutex<HashMap<String, u64>>> = OnceLock::new();
-    SEEN.get_or_init(Default::default)
+fn signatures_table(db: &Connection) -> rusqlite::Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS route_signatures(
+           path TEXT NOT NULL, tag TEXT NOT NULL, seen_at INTEGER NOT NULL, PRIMARY KEY(path, tag));
+         CREATE INDEX IF NOT EXISTS route_signatures_seen ON route_signatures(seen_at);",
+    )
 }
 
-pub(super) fn verify_signature(scope: &str, secret: &str, header_value: Option<&str>, body: &[u8], now: u64) -> SignatureCheck {
-    let Some(value) = header_value else { return SignatureCheck::Invalid };
+/// Checks a signature for the route at `path` and records it in `db`, the
+/// Deployment's identity store. Entries older than twice the window are
+/// pruned on the way: a `t` that old is refused before the lookup.
+pub(super) fn verify_signature(
+    db: &Connection,
+    path: &str,
+    secret: &str,
+    header_value: Option<&str>,
+    body: &[u8],
+    now: u64,
+) -> Result<SignatureCheck> {
+    let Some(value) = header_value else { return Ok(SignatureCheck::Invalid) };
     let mut timestamp = None;
     let mut tags = Vec::new();
     for part in value.split(',') {
@@ -484,30 +505,23 @@ pub(super) fn verify_signature(scope: &str, secret: &str, header_value: Option<&
             _ => {}
         }
     }
-    let Some(timestamp) = timestamp else { return SignatureCheck::Invalid };
+    let Some(timestamp) = timestamp else { return Ok(SignatureCheck::Invalid) };
     if timestamp.abs_diff(now) > SIGNATURE_WINDOW_SECONDS {
-        return SignatureCheck::Invalid;
+        return Ok(SignatureCheck::Invalid);
     }
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes());
     let message = [format!("{timestamp}.").as_bytes(), body].concat();
     let Some(tag) = tags.iter().find(|tag| ring::hmac::verify(&key, &message, tag).is_ok()) else {
-        return SignatureCheck::Invalid;
+        return Ok(SignatureCheck::Invalid);
     };
-    let mut seen = seen_signatures().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let cutoff = now.saturating_sub(2 * SIGNATURE_WINDOW_SECONDS);
-    if seen.len() > 50_000 {
-        seen.retain(|_, at| *at >= cutoff);
-    }
-    match seen.entry(format!("{scope}|{}", hex::encode(tag))) {
-        std::collections::hash_map::Entry::Occupied(mut entry) if *entry.get() >= cutoff => {
-            entry.insert(now);
-            SignatureCheck::Replayed
-        }
-        entry => {
-            *entry.or_insert(now) = now;
-            SignatureCheck::Valid
-        }
-    }
+    signatures_table(db)?;
+    let cutoff = now.saturating_sub(2 * SIGNATURE_WINDOW_SECONDS) as i64;
+    db.execute("DELETE FROM route_signatures WHERE seen_at < ?1", [cutoff])?;
+    let inserted = db.execute(
+        "INSERT INTO route_signatures(path, tag, seen_at) VALUES(?1, ?2, ?3) ON CONFLICT(path, tag) DO NOTHING",
+        rusqlite::params![path, hex::encode(tag), now as i64],
+    )?;
+    Ok(if inserted == 1 { SignatureCheck::Valid } else { SignatureCheck::Replayed })
 }
 
 // ---------------------------------------------------------------------------
@@ -722,11 +736,13 @@ async fn run_route(
             Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
         };
         let header_value = headers.get(signature.header.as_str()).and_then(|value| value.to_str().ok());
-        let scope = format!("{}|{}", deployment.id, http.path);
-        match verify_signature(&scope, &secret, header_value, body, now_ms() / 1000) {
-            SignatureCheck::Valid => {}
-            SignatureCheck::Invalid => return refusal(StatusCode::UNAUTHORIZED, "invalid-signature"),
-            SignatureCheck::Replayed => return refusal(StatusCode::CONFLICT, "replayed-signature"),
+        let checked = identity_connection(state, deployment)
+            .and_then(|db| verify_signature(&db, &http.path, &secret, header_value, body, now_ms() / 1000));
+        match checked {
+            Ok(SignatureCheck::Valid) => {}
+            Ok(SignatureCheck::Invalid) => return refusal(StatusCode::UNAUTHORIZED, "invalid-signature"),
+            Ok(SignatureCheck::Replayed) => return refusal(StatusCode::CONFLICT, "replayed-signature"),
+            Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
         }
     }
     let input = if http.method == "POST" {
@@ -849,23 +865,39 @@ mod tests {
     }
 
     #[test]
-    fn a_signature_verifies_once_inside_its_window() {
+    fn a_signature_verifies_once_inside_its_window_and_the_store_remembers_it() {
+        let root = std::env::temp_dir().join(format!("littlebox-signatures-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("identity.sqlite");
+        let open = || Connection::open(&file).unwrap();
         let body = br#"{"id":"A-1","total":12}"#;
         let now = 1_800_000_000;
         let header = format!("t={now},v1={}", sign("orders-secret-0123", now, body));
-        let scope = format!("deployment-{}|/hooks/orders", Uuid::new_v4());
-        assert_eq!(verify_signature(&scope, "orders-secret-0123", Some(&header), body, now + 10), SignatureCheck::Valid);
-        assert_eq!(verify_signature(&scope, "orders-secret-0123", Some(&header), body, now + 20), SignatureCheck::Replayed);
-        let fresh = format!("deployment-{}|/hooks/orders", Uuid::new_v4());
-        assert_eq!(verify_signature(&fresh, "orders-secret-0123", Some(&header), body, now + 301), SignatureCheck::Invalid, "stale");
-        assert_eq!(verify_signature(&fresh, "orders-secret-0123", Some(&header), body, now - 301), SignatureCheck::Invalid, "future");
-        assert_eq!(verify_signature(&fresh, "another-secret-0123", Some(&header), body, now), SignatureCheck::Invalid, "wrong secret");
-        assert_eq!(verify_signature(&fresh, "orders-secret-0123", Some(&header), br#"{"id":"A-1","total":99}"#, now), SignatureCheck::Invalid, "tampered body");
+        let verify = |db: &Connection, path: &str, secret: &str, header: Option<&str>, body: &[u8], at: u64| {
+            verify_signature(db, path, secret, header, body, at).unwrap()
+        };
+        assert_eq!(verify(&open(), "/hooks/orders", "orders-secret-0123", Some(&header), body, now + 10), SignatureCheck::Valid);
+        // A new connection stands in for a restarted Kernel.
+        assert_eq!(verify(&open(), "/hooks/orders", "orders-secret-0123", Some(&header), body, now + 20), SignatureCheck::Replayed);
+        assert_eq!(verify(&open(), "/hooks/other", "orders-secret-0123", Some(&header), body, now + 20), SignatureCheck::Valid, "each path keeps its own");
+        let db = open();
+        assert_eq!(verify(&db, "/hooks/fresh", "orders-secret-0123", Some(&header), body, now + 301), SignatureCheck::Invalid, "stale");
+        assert_eq!(verify(&db, "/hooks/fresh", "orders-secret-0123", Some(&header), body, now - 301), SignatureCheck::Invalid, "future");
+        assert_eq!(verify(&db, "/hooks/fresh", "another-secret-0123", Some(&header), body, now), SignatureCheck::Invalid, "wrong secret");
+        assert_eq!(verify(&db, "/hooks/fresh", "orders-secret-0123", Some(&header), br#"{"id":"A-1","total":99}"#, now), SignatureCheck::Invalid, "tampered body");
         let moved = format!("t={},v1={}", now + 1, sign("orders-secret-0123", now, body));
-        assert_eq!(verify_signature(&fresh, "orders-secret-0123", Some(&moved), body, now), SignatureCheck::Invalid, "timestamp is signed");
-        assert_eq!(verify_signature(&fresh, "orders-secret-0123", None, body, now), SignatureCheck::Invalid, "missing");
-        assert_eq!(verify_signature(&fresh, "orders-secret-0123", Some("v1=00"), body, now), SignatureCheck::Invalid, "no timestamp");
-        assert_eq!(verify_signature(&fresh, "orders-secret-0123", Some(&header), body, now), SignatureCheck::Valid);
+        assert_eq!(verify(&db, "/hooks/fresh", "orders-secret-0123", Some(&moved), body, now), SignatureCheck::Invalid, "timestamp is signed");
+        assert_eq!(verify(&db, "/hooks/fresh", "orders-secret-0123", None, body, now), SignatureCheck::Invalid, "missing");
+        assert_eq!(verify(&db, "/hooks/fresh", "orders-secret-0123", Some("v1=00"), body, now), SignatureCheck::Invalid, "no timestamp");
+        assert_eq!(verify(&db, "/hooks/fresh", "orders-secret-0123", Some(&header), body, now), SignatureCheck::Valid);
+        let stored = |db: &Connection| db.query_row("SELECT COUNT(*) FROM route_signatures", [], |row| row.get::<_, i64>(0)).unwrap();
+        assert_eq!(stored(&db), 3);
+        // A verification past twice the window prunes what came before it.
+        let later = now + 2 * SIGNATURE_WINDOW_SECONDS + 30;
+        let fresh = format!("t={later},v1={}", sign("orders-secret-0123", later, body));
+        assert_eq!(verify(&db, "/hooks/orders", "orders-secret-0123", Some(&fresh), body, later), SignatureCheck::Valid);
+        assert_eq!(stored(&db), 1);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn test_state(root: &std::path::Path) -> AppState {
