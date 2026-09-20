@@ -167,6 +167,8 @@ struct Delivery {
     scope: String,
     creator: Option<String>,
     app_name: String,
+    /// The inviting owner's account email, for an invitation.
+    inviter: Option<String>,
     page: String,
 }
 
@@ -194,7 +196,13 @@ async fn issue_and_send(
             .await?;
             let worker = queue.clone();
             let issued = blocking(move || {
-                let outbox = queue.outbox(&delivery.scope, delivery.creator.as_deref(), &delivery.app_name, &delivery.page);
+                let outbox = queue.outbox(
+                    &delivery.scope,
+                    delivery.creator.as_deref(),
+                    &delivery.app_name,
+                    delivery.inviter.as_deref(),
+                    &delivery.page,
+                );
                 issue(Some(&outbox))
             })
             .await?;
@@ -229,6 +237,7 @@ fn app_delivery(state: &AppState, deployment: &Deployment, email: &str, client: 
         scope: deployment_scope(&deployment.id),
         creator: Some(project_creator(state, &deployment.project_id).unwrap_or_else(|| "operator".into())),
         app_name: deployment.project_name.clone(),
+        inviter: None,
         page: format!("{}/_littlebox/account", deployment.url),
     }
 }
@@ -240,6 +249,7 @@ fn creator_delivery(email: &str, client: std::net::IpAddr, page: &str) -> Delive
         scope: CREATOR_SCOPE.to_owned(),
         creator: None,
         app_name: "Littlebox".into(),
+        inviter: None,
         page: page.to_owned(),
     }
 }
@@ -261,10 +271,12 @@ pub(crate) async fn deliver_issued(
     challenge: IssuedChallenge,
     page: String,
     client: Option<std::net::IpAddr>,
+    inviter: Option<String>,
 ) -> Result<(), AuthError> {
     let mut delivery = app_delivery(state, deployment, &challenge.email, std::net::Ipv4Addr::UNSPECIFIED.into());
     delivery.client = client;
     delivery.page = page;
+    delivery.inviter = inviter;
     let auth = app_store(state, deployment)?;
     issue_and_send(mail(state)?, delivery, move |outbox| {
         if let Some(outbox) = outbox {

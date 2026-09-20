@@ -525,22 +525,15 @@ fn webhook_key(secret: &str) -> Result<Vec<u8>> {
 // ---------------------------------------------------------------------------
 // Templates
 
-/// Subject, plain text and HTML for one account email. Only the app name
-/// and the link vary. The app name is the Deployment's, escaped for HTML and
+/// Subject, plain text and HTML for one account email. Only the app name,
+/// the inviter and the link vary. The app name is the Deployment's and the
+/// inviter is the inviting owner's account email, both escaped for HTML and
 /// stripped of line breaks; the link is built by the Kernel from the
 /// Deployment's validated origin. No agent-supplied text reaches a message.
-pub(crate) fn render(purpose: Purpose, app_name: &str, link: &str) -> (String, String, String) {
-    let name: String = app_name
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(80)
-        .collect();
+pub(crate) fn render(purpose: Purpose, app_name: &str, inviter: Option<&str>, link: &str) -> (String, String, String) {
+    let name = one_line(app_name, 80);
     let name = if name.is_empty() { "Littlebox".to_owned() } else { name };
+    let inviter = inviter.map(|value| one_line(value, 254)).filter(|value| !value.is_empty());
     let (subject, lead, action, expiry, ignore) = match purpose {
         Purpose::Verification => (
             format!("Confirm your email for {name}"),
@@ -557,8 +550,14 @@ pub(crate) fn render(purpose: Purpose, app_name: &str, link: &str) -> (String, S
             "If you did not ask for this, ignore this email. Your password stays the same.",
         ),
         Purpose::Invitation => (
-            format!("You are invited to {name}"),
-            format!("You are invited to join {name} with this email address."),
+            match &inviter {
+                Some(inviter) => format!("{inviter} invited you to {name}"),
+                None => format!("You are invited to {name}"),
+            },
+            match &inviter {
+                Some(inviter) => format!("{inviter} invited you to join {name} with this email address."),
+                None => format!("You are invited to join {name} with this email address."),
+            },
             "Accept the invitation",
             "The link works once and expires in 7 days.",
             "If you do not expect this invitation, ignore this email.",
@@ -574,6 +573,22 @@ pub(crate) fn render(purpose: Purpose, app_name: &str, link: &str) -> (String, S
         escape_html(ignore),
     );
     (subject, text, html)
+}
+
+/// Control characters become spaces, runs of white space become one, and
+/// the result keeps at most `max` characters, so a value cannot break a
+/// header line.
+fn one_line(value: &str, max: usize) -> String {
+    value
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max)
+        .collect()
 }
 
 fn escape_html(value: &str) -> String {
@@ -636,6 +651,7 @@ struct Claimed {
     recipient: String,
     scope: String,
     app_name: String,
+    inviter: Option<String>,
     token_hash: String,
     nonce: Option<Vec<u8>>,
     sealed: Option<Vec<u8>>,
@@ -801,9 +817,17 @@ impl MailQueue {
 
     /// The outbox that records one challenge's job in the identity
     /// transaction. `page` is the account page the link opens, built from
-    /// the Deployment's validated origin or the editor's.
-    pub(crate) fn outbox<'a>(&'a self, scope: &'a str, creator: Option<&'a str>, app_name: &'a str, page: &'a str) -> JobOutbox<'a> {
-        JobOutbox { queue: self, scope, creator, app_name, page }
+    /// the Deployment's validated origin or the editor's. `inviter` is the
+    /// inviting owner's account email, for an invitation.
+    pub(crate) fn outbox<'a>(
+        &'a self,
+        scope: &'a str,
+        creator: Option<&'a str>,
+        app_name: &'a str,
+        inviter: Option<&'a str>,
+        page: &'a str,
+    ) -> JobOutbox<'a> {
+        JobOutbox { queue: self, scope, creator, app_name, inviter, page }
     }
 
     // -- Worker -------------------------------------------------------------
@@ -836,7 +860,7 @@ impl MailQueue {
                  AND (leased_until IS NULL OR leased_until < ?2)
                ORDER BY next_attempt_at LIMIT ?3)
              RETURNING id, purpose, recipient, scope, app_name, token_hash, link_nonce, link_sealed,
-                       link_expires_at, attempts, created_at",
+                       link_expires_at, attempts, created_at, inviter",
         )?;
         let rows = statement
             .query_map(params![at + LEASE_MS, at, BATCH], |row| {
@@ -852,6 +876,7 @@ impl MailQueue {
                     link_expires_at: row.get(8)?,
                     attempts: row.get(9)?,
                     created_at: row.get(10)?,
+                    inviter: row.get(11)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -905,7 +930,7 @@ impl MailQueue {
             self.finish_failed(&job.id, "secret-unavailable")?;
             return Ok(false);
         };
-        let (subject, text, html) = render(purpose, &job.app_name, &link);
+        let (subject, text, html) = render(purpose, &job.app_name, job.inviter.as_deref(), &link);
         let email = OutgoingEmail {
             id: job.id.clone(),
             from: self.from.clone(),
@@ -1170,7 +1195,15 @@ pub(crate) fn install(connection: &Connection) -> rusqlite::Result<()> {
            received_at INTEGER NOT NULL
          );
          CREATE INDEX IF NOT EXISTS provider_events_email ON provider_events(email_id);",
-    )
+    )?;
+    // Queues created before invitations named their inviter.
+    let has_inviter = connection
+        .prepare("SELECT 1 FROM pragma_table_info('jobs') WHERE name = 'inviter'")?
+        .exists([])?;
+    if !has_inviter {
+        connection.execute("ALTER TABLE jobs ADD COLUMN inviter TEXT", [])?;
+    }
+    Ok(())
 }
 
 /// Records one challenge's job inside the identity transaction.
@@ -1179,6 +1212,7 @@ pub(crate) struct JobOutbox<'a> {
     scope: &'a str,
     creator: Option<&'a str>,
     app_name: &'a str,
+    inviter: Option<&'a str>,
     page: &'a str,
 }
 
@@ -1209,8 +1243,8 @@ impl ChallengeOutbox for JobOutbox<'_> {
         transaction
             .execute(
                 "INSERT INTO outbox.jobs (id, purpose, recipient, scope, creator, app_name, token_hash, link_nonce,
-                   link_sealed, link_expires_at, state, attempts, next_attempt_at, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'pending', 0, ?11, ?11, ?11)",
+                   link_sealed, link_expires_at, state, attempts, next_attempt_at, created_at, updated_at, inviter)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'pending', 0, ?11, ?11, ?11, ?12)",
                 params![
                     id,
                     challenge.purpose.as_str(),
@@ -1223,6 +1257,7 @@ impl ChallengeOutbox for JobOutbox<'_> {
                     sealed,
                     challenge.expires_at,
                     at,
+                    self.inviter,
                 ],
             )
             .map_err(storage)?;
@@ -1568,7 +1603,7 @@ mod tests {
         let queue = fixture.queue();
         let auth = accounts::app_store(&fixture.state, &fixture.app).unwrap();
         let scope = auth::deployment_scope(&fixture.app.id);
-        let outbox = queue.outbox(&scope, Some("creator-1"), "Tasks", "http://tasks.localhost/_littlebox/account");
+        let outbox = queue.outbox(&scope, Some("creator-1"), "Tasks", None, "http://tasks.localhost/_littlebox/account");
         let refused = auth.request_signup_with("second@example.test", Some(&outbox), |_, _| Ok(()));
         assert!(matches!(refused, Err(AuthError::MailLimit(_))));
         assert_eq!(fixture.account_state(&fixture.app, "second@example.test"), None);
@@ -2078,13 +2113,55 @@ mod tests {
 
     #[test]
     fn templates_escape_the_app_name_and_strip_line_breaks() {
-        let (subject, text, html) = render(Purpose::Invitation, "Evil\r\nBcc: x@example.test <img src=x>", "http://app.localhost/_littlebox/account#invitation=abc");
+        let (subject, text, html) = render(Purpose::Invitation, "Evil\r\nBcc: x@example.test <img src=x>", None, "http://app.localhost/_littlebox/account#invitation=abc");
         assert_eq!(subject, "You are invited to Evil Bcc: x@example.test <img src=x>");
         assert!(!subject.contains(['\r', '\n']));
         assert!(text.contains("http://app.localhost/_littlebox/account#invitation=abc"));
         assert!(html.contains("&lt;img src=x&gt;") && !html.contains("<img"));
-        let (subject, _, _) = render(Purpose::Recovery, "  ", "l");
+        let (subject, _, _) = render(Purpose::Recovery, "  ", None, "l");
         assert_eq!(subject, "Reset your password for Littlebox");
+    }
+
+    #[test]
+    fn a_queue_from_before_inviters_gains_the_column() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE jobs (id TEXT PRIMARY KEY, purpose TEXT NOT NULL, recipient TEXT NOT NULL, scope TEXT NOT NULL,
+               creator TEXT, app_name TEXT NOT NULL, token_hash TEXT NOT NULL, link_nonce BLOB, link_sealed BLOB,
+               link_expires_at INTEGER NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+               next_attempt_at INTEGER NOT NULL, leased_until INTEGER, provider_id TEXT UNIQUE, error_kind TEXT,
+               created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+             INSERT INTO jobs (id, purpose, recipient, scope, app_name, token_hash, link_expires_at, state, next_attempt_at, created_at, updated_at)
+               VALUES ('old', 'invitation', 'a@example.test', 'deployment:x', 'Tasks', 'h', 1, 'pending', 1, 1, 1);",
+        )
+        .unwrap();
+        install(&db).unwrap();
+        install(&db).unwrap();
+        let inviter: Option<String> = db.query_row("SELECT inviter FROM jobs WHERE id = 'old'", [], |row| row.get(0)).unwrap();
+        assert_eq!(inviter, None, "a job queued before the column renders without an inviter");
+    }
+
+    #[test]
+    fn an_invitation_names_its_inviter_escaped_and_on_one_line() {
+        let link = "http://app.localhost/_littlebox/invitation#invitation=abc";
+        let (subject, text, html) = render(Purpose::Invitation, "Tasks", Some("owner@example.test"), link);
+        assert_eq!(subject, "owner@example.test invited you to Tasks");
+        assert_eq!(
+            text,
+            format!("owner@example.test invited you to join Tasks with this email address.\n\nAccept the invitation:\n{link}\n\nThe link works once and expires in 7 days.\n\nIf you do not expect this invitation, ignore this email.\n")
+        );
+        assert!(html.contains("<p>owner@example.test invited you to join Tasks with this email address.</p>"));
+
+        let (subject, text, html) = render(Purpose::Invitation, "Tasks", Some("Eve\r\nBcc: x@example.test <img src=x> & \"co\""), link);
+        assert_eq!(subject, "Eve Bcc: x@example.test <img src=x> & \"co\" invited you to Tasks");
+        assert!(!subject.contains(['\r', '\n']) && !text.starts_with("Eve\r"));
+        assert!(html.contains("Eve Bcc: x@example.test &lt;img src=x&gt; &amp; &quot;co&quot; invited you"));
+        assert!(!html.contains("<img"));
+
+        let (subject, _, _) = render(Purpose::Invitation, "Tasks", Some(" \n "), link);
+        assert_eq!(subject, "You are invited to Tasks", "a blank inviter reads as none");
+        let (_, text, _) = render(Purpose::Verification, "Tasks", Some("owner@example.test"), link);
+        assert!(!text.contains("owner@example.test"), "only an invitation names the inviter");
     }
 
     #[test]

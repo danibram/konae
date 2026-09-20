@@ -415,10 +415,11 @@ async fn run(state: &AppState, deployment: &Deployment, inviter: &str, name: &st
             // message leaves, so a retry with the same key finds them. Each
             // message then goes through the account mail outbox and its budgets.
             let page = format!("{}/_littlebox/invitation", deployment.url);
+            let invited_by = inviter_display(state, &inviter);
             let mut outcomes: HashMap<String, &'static str> = HashMap::new();
             for (invitation, challenge) in issued {
                 let scope = challenge.scope.clone();
-                let delivery = match accounts::deliver_issued(state, deployment, challenge, page.clone(), None).await {
+                let delivery = match accounts::deliver_issued(state, deployment, challenge, page.clone(), None, invited_by.clone()).await {
                     Ok(()) => "queued",
                     Err(error_value) => {
                         eprintln!("Invitation email for {scope} failed: {error_value}");
@@ -454,6 +455,16 @@ async fn run(state: &AppState, deployment: &Deployment, inviter: &str, name: &st
         }
         _ => anyhow::bail!("Unknown tool."),
     }
+}
+
+/// The email of the owner account that invites, for the message. Owners
+/// signed in through Clerk keep no email in the Kernel, so their invitations
+/// name only the app. The file is opened read-only, so a lookup never
+/// creates the account tables.
+fn inviter_display(state: &AppState, owner_id: &str) -> Option<String> {
+    let path = state.data_root.join("owners.sqlite");
+    let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    db.query_row("SELECT email FROM app_users WHERE id = ?1", [owner_id], |row| row.get(0)).optional().ok().flatten()
 }
 
 /// The answer to a create or resend, the links to send once the rows that
@@ -926,6 +937,61 @@ mod tests {
 
     fn has_cookie(response: &Response) -> bool {
         response.headers().get(header::SET_COOKIE).is_some()
+    }
+
+    /// Records what the queue's worker sends.
+    #[derive(Default)]
+    struct Recorded(std::sync::Mutex<Vec<mail::OutgoingEmail>>);
+
+    impl mail::Transport for Recorded {
+        fn name(&self) -> &'static str {
+            "recorded"
+        }
+        fn send<'a>(&'a self, email: &'a mail::OutgoingEmail) -> std::pin::Pin<Box<dyn std::future::Future<Output = mail::SendOutcome> + Send + 'a>> {
+            self.0.lock().unwrap().push(email.clone());
+            Box::pin(async { mail::SendOutcome::Accepted { provider_id: None, delivered: false } })
+        }
+        fn preflight<'a>(&'a self, _sender: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = mail::PreflightResult> + Send + 'a>> {
+            Box::pin(async { mail::PreflightResult::Ready })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_queued_invitation_names_the_inviting_owner_escaped() {
+        let mut fixture = fixture(SignupMode::Invitation);
+        let transport = Arc::new(Recorded::default());
+        let queue = Arc::new(
+            mail::MailQueue::open(&fixture.root, transport.clone(), "Littlebox <no-reply@mail.example.test>",
+                "a mail secret that is long enough for tests", mail::Limits::default(), std::time::Duration::from_millis(50))
+            .unwrap(),
+        );
+        queue.run_preflight().await;
+        fixture.state.accounts = AccountSettings { verification: Verification::Required, mail: None, queue: Some(queue.clone()) };
+        // The owner record as the creator store keeps it.
+        Connection::open(fixture.root.join("owners.sqlite"))
+            .unwrap()
+            .execute_batch("CREATE TABLE app_users(id TEXT PRIMARY KEY, email TEXT NOT NULL); INSERT INTO app_users VALUES ('owner-1', 'o''neil&co@example.test');")
+            .unwrap();
+
+        let answer = fixture.invite(&["ana@example.test"], "inviter-key-1").await;
+        assert_eq!(answer["results"][0]["delivery"], "queued");
+        let stored: Option<String> = Connection::open(fixture.root.join(mail::MAIL_DATABASE))
+            .unwrap()
+            .query_row("SELECT inviter FROM jobs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stored.as_deref(), Some("o'neil&co@example.test"), "the job carries the inviter");
+        assert_eq!(queue.run_once().await.unwrap(), 1);
+        let sent = transport.0.lock().unwrap().clone();
+        assert_eq!(sent[0].subject, "o'neil&co@example.test invited you to Invitation test");
+        assert!(sent[0].text.starts_with("o'neil&co@example.test invited you to join Invitation test with this email address."));
+        assert!(sent[0].html.contains("<p>o&#39;neil&amp;co@example.test invited you to join Invitation test with this email address.</p>"));
+
+        // An owner with no email in the Kernel, as a Clerk owner, is not named.
+        let app = fixture.app(APP_HOST).await;
+        run(&fixture.state, &app, "clerk-owner", "app_invitations_create",
+            &json!({"emails": ["ben@example.test"], "idempotencyKey": "inviter-key-2"})).await.unwrap();
+        assert_eq!(queue.run_once().await.unwrap(), 1);
+        assert_eq!(transport.0.lock().unwrap()[1].subject, "You are invited to Invitation test");
     }
 
     #[tokio::test]
