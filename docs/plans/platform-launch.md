@@ -352,3 +352,20 @@ The quota run filled the database through owner SQL with random bytes until the 
 An identity file near its 64 MiB cap was not exercised, because signups are rate limited; it goes through the same code as the database. The space refusal is tested as a function, not against a full volume. The run used the local Kernels, not the Docker stack.
 
 The plan did not account for three things. Every credential of one owner shares the transfer principal, so gating the export tools alone was not enough. The export's transfers check `export_data` too, or a `read` token of the same owner could read them. `database_export` handed the raw database to `read` and now needs `export_data` as well. Auditing each 64 KiB block would have written about 4,400 rows per import into a log capped at 10,000, so package transfers audit once per component. The editor's own export runs in the browser and still uses the 16 MiB format; an app past that size leaves through the CLI until the editor streams the package to disk.
+
+### Delivery G, November 6, 2026
+
+The editor's Auth section has three views: Rules, Users and Integrations. Users (`src/components/AppUsersView.tsx`) holds who can open the app, the signup policy with one sentence per mode and Allowlist under Advanced, invite by email in batches of up to 50, the invitation list with resend and revoke, and app accounts by state with pagination, suspend and resume. Integrations (`src/components/IntegrationsView.tsx`) sets and deletes signing secrets by name and creates, lists and revokes API keys with a curl for each route and the file read path. The publish dialog chooses visibility and signup policy on a first publish and shows both read-only on a republish. Every call is an admin MCP tool the Kernel already had; the Kernel did not change. The words and state rules live in `src/components/app-access.ts`.
+
+| Refusal or proof | Where | Run against |
+| --- | --- | --- |
+| Messages that confuse creating an app with signing in to one, or an owner with an app user | `src/components/app-access.test.ts`, "speaks of app accounts and never of creating an app when it means joining one" | Unit |
+| Invite and resend while the installation cannot send; the reason for no transport, a refused sender and a running check | `src/components/app-access.test.ts`, "mail readiness" | Unit |
+| A retried batch producing a second invitation: the same addresses reuse the idempotency key | `src/components/app-access.test.ts`, "a retry of the same addresses reuses the idempotency key" | Unit |
+| More than 50 addresses, a secret name or value `secret_set` would refuse, a key with no scope | `src/components/app-access.test.ts` | Unit |
+| A republish sending `initialSignupPolicy` | `src/deployments/client.test.ts`, "first publish signup policy" | Unit |
+| An uninvited visitor finding a way to create an account on a private Invitation only app; the done-when criterion from the editor | `tests/e2e/local-platform.e2e.ts`, "a private Invitation only app admits the person the owner invites from the Users view" | Local Kernel with the development mailbox, Chrome |
+
+The browser test publishes a private app with Invitation only from the dialog, invites an address in Auth > Users, reads the link from `mailbox.jsonl`, accepts it, signs out, signs in with the chosen password, sees the invitation Accepted and the app account Active, then saves a signing secret and creates an API key whose curl names the app's host.
+
+The plan asks the Users view to show each invitation as pending, accepted by the provider, delivered, failed or needing a resend. The Kernel records per invitation only whether the transport took the message (`queued`, `failed`, `not-sent`); the provider's accepted and delivered states exist per Email Job and as queue totals in `mail_status`, with no link from the invitation to its job. The view shows what the Kernel records and does not claim delivery. Joining an invitation to its Email Job is a Kernel change for a later delivery. Access pages served by the Kernel stayed out of scope.

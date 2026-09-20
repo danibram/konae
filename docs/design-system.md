@@ -64,7 +64,7 @@ Use links for navigation and buttons for actions. Set `type="submit"` explicitly
 
 ## Adoption
 
-The dashboard uses shared buttons, inputs, selects, badges and cards. Agent settings and publishing use the same dialog component. Agent messages use the shared textarea and connection button. Files and database tables use the shared empty state.
+The dashboard uses shared buttons, inputs, selects, badges and cards. Agent settings and publishing use the same dialog component. Agent messages use the shared textarea and connection button. Files and database tables use the shared empty state. Auth > Users and Auth > Integrations use cards, fields, selects, badges, buttons and confirmation dialogs from the same set; their layout rules live in `src/components/app-access.css` and use only `--ds-*` tokens, so the system theme carries light and dark.
 
 Existing domain panels retain their layout selectors and use token-based compatibility rules in `src/design-system.css`. New controls should use the shared components. Keep SQL editing, table state and runtime permissions in their existing modules.
 

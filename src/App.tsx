@@ -50,7 +50,7 @@ import { PlatformAccess } from "./components/PlatformAccess";
 import { filesUnder, renamePath } from "./components/project-tree";
 import { usePreviewProblems } from "./components/usePreviewProblems";
 import { ProjectDashboard } from "./components/ProjectDashboard";
-import { deployProject, HostedDatabaseClient, type DeploymentReceipt } from "./deployments/client";
+import { deployProject, HostedDatabaseClient, type DeploymentReceipt, type SignupMode } from "./deployments/client";
 import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/manifest";
 import { createSchemaSnapshot } from "./database-lifecycle/schema-snapshot";
 import { parseServerActionSource } from "./kernel/actions";
@@ -178,6 +178,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [deployOpen, setDeployOpen] = useState(false);
   const [deployment, setDeployment] = useState<DeploymentReceipt | null>(null);
   const [databaseTarget, setDatabaseTarget] = useState<"local" | "deployed">("local");
+  const [authView, setAuthView] = useState<"rules" | "users" | "integrations">("rules");
   const [exporting, setExporting] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [deployError, setDeployError] = useState("");
@@ -716,7 +717,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     downloadBlob(new Blob([bytes as BlobPart], { type: "application/vnd.sqlite3" }), `${project.slug}${suffix}.sqlite`);
   };
 
-  const deploy = async (visibility: DeploymentVisibility) => {
+  const deploy = async (visibility: DeploymentVisibility, signupMode?: SignupMode) => {
     setPublishing(true);
     setDeployError("");
     try {
@@ -728,7 +729,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           : "Apply or revert the local schema changes before publishing.");
       }
       const artifact = await buildProjectInBrowser(project);
-      const record = { ...await deployProject(project, visibility, artifact), databaseModel: { ...model } };
+      // The signup policy goes only with a first release; the Kernel keeps it on a republish.
+      const initialSignupPolicy = !activeDeployment && signupMode ? { mode: signupMode, allowlist: [] } : undefined;
+      const record = { ...await deployProject(project, visibility, artifact, initialSignupPolicy), databaseModel: { ...model } };
       setProject((current) => ({ ...current, manifest: record.manifest, updatedAt: Date.now() }));
       setDeployment(record);
       setDeployments((current) => ({ ...current, [project.id]: record }));
@@ -1049,6 +1052,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           onSetAccess={setActionAccess}
           visibility={project.manifest.visibility}
           onSetVisibility={setVisibility}
+          projectId={project.id}
+          deployment={activeDeployment ? { id: activeDeployment.id, url: activeDeployment.url } : undefined}
+          authView={authView}
+          onAuthViewChange={setAuthView}
         />
       </Suspense>
     ),
@@ -1200,7 +1207,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         providers={PROVIDERS}
       />
 
-      {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} session={ownerSession} signInHref={signInHref} onClose={() => setDeployOpen(false)} onDeploy={(visibility) => void deploy(visibility)} onEditAuth={() => { setDeployOpen(false); reveal("auth"); }} />}
+      {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} session={ownerSession} signInHref={signInHref} onClose={() => setDeployOpen(false)} current={activeDeployment} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} />}
 
       <Dialog
         open={resetOpen}

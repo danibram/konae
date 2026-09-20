@@ -1311,7 +1311,7 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
   .preview-canvas { background: #2a2e24; padding: 12px; }
   .preview-canvas iframe { outline: 2px solid #f4f2ea; box-shadow: 4px 4px 0 #f4f2ea; }
   .studio-empty, .cap-workspace .ui-empty { background: #262a34; color: #f4f2ea; border-color: #f4f2ea; }
-  .publish-dialog .publish-actions > div, .publish-limit, .signup-policy > p { color: #f4f2ea; }
+  .publish-dialog .publish-actions > div, .publish-limit { color: #f4f2ea; }
 }
 .section-nav { overflow: visible; }
 .action-readout { max-height: none; overflow: visible; padding: 14px 16px 16px; }
@@ -1469,7 +1469,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .account-hero h1 { max-width: min(22em, 100%); overflow-wrap: break-word; }
 .publish-heading .publish-limit { margin: 14px 0 0; }
 .auth-open, .auth-rules label { grid-template-columns: minmax(140px, 240px) 220px; justify-content: start; }
-.signup-policy select, .signup-policy .ui-select { width: min(320px, 100%); max-width: 320px; }
 .schema-columns { max-width: 480px; }
 .platform-card { width: min(480px, 100%); }
 .code-area { background: #f4f2ea; }

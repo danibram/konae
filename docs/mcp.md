@@ -64,11 +64,11 @@ Each Deployment has a signup policy that decides who may create an app account. 
 - `closed`: no new accounts, and no invitation can be accepted.
 - `allowlist`: only exact emails or `@domain` entries can create an account, up to 100 entries. A domain entry matches that exact domain, not its subdomains. Entering an address sends no invitation.
 
-Public Deployments start Open. Private Deployments start Closed, so the owner decides who may join before anyone can sign in. A Deployment record written before signup policies existed gets the same default from its visibility. A first release may set any mode in `initialSignupPolicy`, with the `publish` permission, and the Kernel installs it before serving the first request; an agent publishing an app whose access the request leaves open proposes private and `invitation`. Republishing keeps the current policy, except that republishing a public app as private turns Open into Closed; `initialSignupPolicy` on a republish answers "Portable state can only be imported on the first deployment." Changing an existing app's policy needs `manage_users`, through `signup_policy_set`, so no publish credential changes who may join. The owner changes it in the editor's Auth panel or with the admin MCP tools above.
+Public Deployments start Open. Private Deployments start Closed, so the owner decides who may join before anyone can sign in. A Deployment record written before signup policies existed gets the same default from its visibility. A first release may set any mode in `initialSignupPolicy`, with the `publish` permission, and the Kernel installs it before serving the first request; an agent publishing an app whose access the request leaves open proposes private and `invitation`. Republishing keeps the current policy, except that republishing a public app as private turns Open into Closed; `initialSignupPolicy` on a republish answers "Portable state can only be imported on the first deployment." Changing an existing app's policy needs `manage_users`, through `signup_policy_set`, so no publish credential changes who may join. The owner changes it in the editor's Auth > Users view or with the admin MCP tools above. The editor's publish dialog sends `initialSignupPolicy` on a first publish, proposing Invitation only for a private app, and on a republish shows the current policy read-only.
 
 ## Users and invitations
 
-All of these tools take a `deploymentId`, check `manage_users` and the token's project grants, and write an audit row naming the Deployment.
+All of these tools take a `deploymentId`, check `manage_users` and the token's project grants, and write an audit row naming the Deployment. The editor's Auth > Users view calls the same tools with the owner's session, so a person who does not write code invites, resends, revokes, suspends and resumes through the same checks an agent meets. It generates one idempotency key per batch of addresses and reuses it when the same batch is retried, and it disables invite and resend, with the reason, while `mail_status` reports `sending: false`.
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
@@ -283,6 +283,8 @@ api_keys_create { "deploymentId", "name", "actions": ["orders.receive"], "files"
 api_keys_list   { "deploymentId" }               metadata and revocation times, never the key
 api_keys_revoke { "deploymentId", "keyId" }
 ```
+
+The editor's Auth > Integrations view sets, lists and deletes secrets by name and creates, lists and revokes keys, showing a new key once with a curl for each route it names and for the file read path.
 
 `api_keys_create` returns the key once. A key belongs to one Deployment and never to the owner, grants no administrative tool, and works only on HTTP routes and the file read path; the runtime MCP endpoint does not accept it. It may name actions that have an HTTP route and the file visibilities `public` and `private`. A key that names `private` reads every private file of its Deployment, because the owner who issues it can already read them through `project_export`. A Deployment holds at most 50 live keys. The Kernel stores the SHA-256 hash in the Deployment's `identity.sqlite`, so `project_export` carries the keys' metadata and hashes with the accounts, and an import marks every key revoked, as it deletes sessions and challenges. `littlebox-kernel restore` keeps them live, since it restores the same installation.
 
