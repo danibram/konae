@@ -312,7 +312,7 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
     ];
     if owner.scopes.iter().any(|s| s == "write") {
         tools.extend([
-            tool("project_create", "Register an external project. Repeating the same project ID is idempotent.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourceAuthority":{"type":"string","enum":["managed","external"]}}), &["name"], false),
+            tool("project_create", "Register an external project. Repeating the same project ID returns it, except that an External project cannot become Managed.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourceAuthority":{"type":"string","enum":["managed","external"]}}), &["name"], false),
             tool("project_sources_save", "Save Managed project sources if the expected source revision still matches. Upload the project JSON first.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
             tool("schema_plan", "Derive and validate SQL from two Drizzle models in an isolated subprocess.", json!({"acceptedSource":text,"candidateSource":text,"projectId":text}), &["acceptedSource","candidateSource"], false),
         ]);
@@ -1118,10 +1118,9 @@ async fn admin_call(
                 let project = owned_project(state, owner, &id, "read")?.0;
                 // Source authority does not come back: an External project asked
                 // to be Managed again gets the Eject refusal.
-                anyhow::ensure!(
-                    !(a["sourceAuthority"] == "managed" && project["sourceAuthority"] != "managed"),
-                    super::eject::CLOSED
-                );
+                if a["sourceAuthority"] == "managed" && project["sourceAuthority"] != "managed" {
+                    anyhow::bail!(if super::eject::is_ejected(&project) { super::eject::CLOSED } else { super::eject::ALWAYS_EXTERNAL });
+                }
                 return Ok(project);
             }
             anyhow::ensure!(

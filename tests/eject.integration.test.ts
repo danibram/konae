@@ -147,7 +147,7 @@ describe("Eject on the server", () => {
     const agent = await delegate(["read", "write", "publish"], [id]);
     await expect(save(agent, id, 2)).rejects.toThrow(closed);
     // Taking the project back into the editor is refused with the way out.
-    await expect(owner.call("project_create", { projectId: id, name: "Eject proof", sourceAuthority: "managed" })).rejects.toThrow("create a new project");
+    await expect(owner.call("project_create", { projectId: id, name: "Eject proof", sourceAuthority: "managed" })).rejects.toThrow(closed);
 
     // The frozen sources stay readable for the read-only editor.
     const frozen = await owner.call<{ revision: number; readOnly: boolean; transfer: Parameters<McpClient["download"]>[0] }>("project_sources_read", { projectId: id });
@@ -234,11 +234,17 @@ describe("Eject on the server", () => {
     expect(auditRows("eject_apply", id).map((row) => row.ok)).toEqual([1, 1]);
   });
 
+  test("a Managed project with no saved sources has nothing to eject", async () => {
+    const id = "eject_empty";
+    await owner.call("project_create", { projectId: id, name: "Empty", sourceAuthority: "managed" });
+    await expect(owner.call("eject_plan", { projectId: id, expectedRevision: 0 })).rejects.toThrow("no saved sources to eject");
+  });
+
   test("a project created outside the editor is already External and does not pass through Eject", async () => {
     const id = "eject_external";
     await owner.call("project_create", { projectId: id, name: "External" });
     await expect(owner.call("eject_plan", { projectId: id, expectedRevision: 0 })).rejects.toThrow("already External");
-    await expect(owner.call("project_create", { projectId: id, name: "External", sourceAuthority: "managed" })).rejects.toThrow("create a new project");
+    await expect(owner.call("project_create", { projectId: id, name: "External", sourceAuthority: "managed" })).rejects.toThrow("This project is External. Littlebox does not take source authority back, so create a new project");
   });
 
   test("the CLI refuses a stale revision before downloading, then writes, verifies and applies", async () => {

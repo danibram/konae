@@ -342,7 +342,7 @@ This delivery leaves four things undone. The invitation email names neither the 
 | Eject without `manage_lifecycle` from `read`+`write`+`publish` and `read`+`manage_users`+`export_data` tokens, and from a `manage_lifecycle` token for another project | `tests/eject.integration.test.ts` | Local Kernel, MCP |
 | An applied plan reapplied returns the same receipt; planning again returns the applied plan and the same package | `tests/eject.integration.test.ts` | Local Kernel, MCP |
 | The Deployment keeps serving, keeps its hostname, and an app user stays signed in with their rows across Eject and a later release from outside | `tests/eject.integration.test.ts`, `tests/e2e/eject.e2e.ts` | Local Kernel, Chrome |
-| Returning to Managed through `project_create` refused with "create a new project" | `tests/eject.integration.test.ts` | Local Kernel, MCP |
+| Returning to Managed through `project_create` refused with "create a new project", for an ejected project and for one created External; Eject of a project with no saved sources | `tests/eject.integration.test.ts` | Local Kernel, MCP |
 | A tampered package, a file that differs from the content list, a path outside the folder, another revision | `src/lib/eject-package.test.ts` | Unit |
 | Audit rows for plan and apply | `tests/eject.integration.test.ts` | Local Kernel |
 

@@ -16,6 +16,9 @@ use rusqlite::params;
 /// The one answer to a Managed source change after Eject.
 pub(super) const CLOSED: &str = "This project was ejected: its sources are maintained outside Littlebox, so the Kernel refuses Managed source changes. Publish a Build Artifact with release_plan and release_apply, or create a new project to edit in Littlebox.";
 
+/** The answer to a project created External that asks to become Managed. */
+pub(super) const ALWAYS_EXTERNAL: &str = "This project is External. Littlebox does not take source authority back, so create a new project to edit in Littlebox.";
+
 const PLAN_TTL_MS: u64 = 60 * 60 * 1000;
 const PACKAGE_FORMAT: &str = "littlebox-eject";
 

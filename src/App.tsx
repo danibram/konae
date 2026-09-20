@@ -1146,7 +1146,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           {saveError && <Button onClick={retrySave} disabled={pendingSaves.current > 0}>Retry save</Button>}
           <div className="take-actions" role="group" aria-label="Take it with you">
             <Button className="export-button" aria-label={exporting ? "Exporting" : "Export"} disabled={exporting} onClick={() => void exportProject()}><Download size={14} /> <span>{exporting ? "Exporting…" : "Export"}</span></Button>
-            <Button variant="primary" className="deploy-button" aria-label="Deploy" onClick={() => { setDeployment(null); setDeployError(""); setDeployOpen(true); refreshOwnerSession(); }}><Rocket size={15} /> <span>Deploy</span></Button>
+            <Button variant="primary" className="deploy-button" aria-label="Deploy" disabled={Boolean(ejectRecord)} title={ejectRecord ? "Publish this External project with the Littlebox CLI." : undefined} onClick={() => { setDeployment(null); setDeployError(""); setDeployOpen(true); refreshOwnerSession(); }}><Rocket size={15} /> <span>Deploy</span></Button>
           </div>
           <details className="mobile-project-actions" ref={projectMenu} onToggle={(event) => { if (event.currentTarget.open) switcherRef.current?.removeAttribute("open"); }}>
             <summary>More</summary>

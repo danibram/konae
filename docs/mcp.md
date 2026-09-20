@@ -331,7 +331,8 @@ After Eject, `project_sources_read` still returns the frozen sources with `readO
 | Refusal | Message |
 | --- | --- |
 | `project_sources_save` after Eject, at any expected revision | `This project was ejected: its sources are maintained outside Littlebox, so the Kernel refuses Managed source changes. Publish a Build Artifact with release_plan and release_apply, or create a new project to edit in Littlebox.` |
-| `project_create` with `sourceAuthority: "managed"` for an External project | The same message |
+| `project_create` with `sourceAuthority: "managed"` for an ejected project | The same message |
+| `project_create` with `sourceAuthority: "managed"` for a project created External | `This project is External. Littlebox does not take source authority back, so create a new project to edit in Littlebox.` |
 | `eject_plan` with a stale revision | `Source revision changed: the saved sources are at revision 2, not 1. Reload the project, then plan the Eject again.` |
 | `eject_apply` after a save made the plan stale | `Source revision changed since this plan: the saved sources are at revision 2, not 1. Plan the Eject again.` |
 | Eject without `manage_lifecycle` | `Unknown tool or insufficient permission.` A credential limited to other projects gets `Project is outside this token's grants.` |
