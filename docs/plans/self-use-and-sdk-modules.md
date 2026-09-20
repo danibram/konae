@@ -211,6 +211,7 @@ Four open items of this delivery and one from the invitations delivery, closed. 
 | The contract lists the HEAD refusal and the key bucket under `rate-limited`; `bun run sdk:render` regenerated the three readers | `bun test src/sdk` | 72 pass |
 | The feed's signed route, replay, unknown key and unbound POST still behave; every example conforms | `LITTLEBOX_PRODUCT_FIT_PORT=19833 bun run examples/product-fit/smoke.ts` | 12 checks pass; the contracts 175 checks, none skipped |
 | Everything else | `cargo test --manifest-path kernel-rs/Cargo.toml`, `bun run test`, `bun run build`, `bun run tests/smoke/portable-export.ts --port 19823` | 163 pass; 551 pass, 0 fail; build passes; export smoke passes |
+| The editor, whose `src/sdk/contract.ts` and generated agent section changed through `sdk:render`, including the invitation from the Users view | `LITTLEBOX_EDITOR_URL=http://127.0.0.1:4391 LITTLEBOX_TEST_KERNEL_PORT=19841 bun run test:e2e:local` | 7 pass |
 
 Where this differs from the request:
 
@@ -219,7 +220,7 @@ Where this differs from the request:
 - `HEAD` is refused with 405 rather than answered with the `GET` headers, which depend on the caller, the rate limit and the input.
 - The route table is cached in a static map in `http.rs`, keyed by Deployment ID and `artifact_version`, not in `AppState`, so no fixture constructor changed.
 - The inviter is the email of the owner's account in `owners.sqlite`. A Clerk owner has none, and that invitation names only the app.
-- A restore brings back `route_signatures` as the copy held it, so a signature accepted after the copy can be replayed once more while its `t` is still within 300 seconds of the Kernel's clock. The editor end-to-end suite did not run, because no editor file changed.
+- A restore brings back `route_signatures` as the copy held it, so a signature accepted after the copy can be replayed once more while its `t` is still within 300 seconds of the Kernel's clock.
 
 ### Evidence for delivery 8
 
