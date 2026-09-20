@@ -59,7 +59,7 @@ Landed on 2026-11-06 on branch `deliv/2-app-folder-copies`. The artifact and bac
 | `bun run build` | Passed |
 | `bun run tests/smoke/portable-export.ts --port 19450` | Passed |
 
-Two parts of the plan's text did not match the code. ADR-0010's Usage store does not exist yet, so a Deployment folder has two databases today; the copy takes `usage.sqlite` too once it appears. The done condition asks for an S3 run; MinIO was not reachable for this delivery, so the S3 case ran only against a throwaway S3 emulator and still needs one run against MinIO with `docker compose up minio minio-init`.
+Two parts of the plan's text did not match the code. ADR-0010's Usage store did not exist at this delivery, so a Deployment folder had two databases; the copy already took `usage.sqlite` when present, and the Usage delivery below added the file. The done condition asks for an S3 run; MinIO was not reachable for this delivery, so the S3 case ran only against a throwaway S3 emulator and still needs one run against MinIO with `docker compose up minio minio-init`.
 
 ### Order
 
@@ -194,13 +194,38 @@ Where this differs from the text above:
 - An API key that names a signed action stands in for the signature. A session cookie does not, and it counts only from the app's own origin, because app hosts are same-site with each other.
 - A route refuses inputs the action does not declare, as `actions.call` does. A sender whose payload carries more fields needs an action that declares them or an adapter.
 - `littlebox-kernel restore` keeps API keys live: it restores the same installation, and `copies.rs` is unchanged. An import revokes them.
-- ADR-0010's Usage store does not exist yet, so routes record no Usage. They do share the runtime endpoint's rate-limit buckets.
+- ADR-0010's Usage store did not exist at this delivery, so routes recorded no Usage. They share the runtime endpoint's rate-limit buckets. The Usage delivery below counts them under their method and path.
 - The editor's Auth panel has no API key screen. Keys and secrets are managed over admin MCP only.
 - `smoke.ts` cancelled a download transfer that `McpClient.download` already cancels, which failed its portfolio check on `main` too. The second cancel is removed.
 
 ### Order
 
 Delivery 5 before 7, so the HTTP module is the first one born from the contract. Delivery 6 can follow 5 at any time. Delivery 8 last.
+
+### Evidence for Usage and Signals, ADR-0010
+
+Landed on 2026-11-06 on branch `deliv/usage-signals`. `kernel-rs/src/usage.rs` keeps `deployments/<id>/usage.sqlite` with daily totals of session, action, route, upload, file_read, signup and login, and the Signals that actions declare. A queue and one writer thread keep it off the request path. `usage_read` and `signals_read` give it to the owner behind `read`. The scheduled copy and `package_export` carry it. The ADR-0010 note of 2026-11-06 records the bounds and the rules.
+
+| Check | Command | Result |
+| --- | --- | --- |
+| The Gate and the Kernel refuse the same `signal` declarations with the same messages: a signal on a query, a property that is not an input key, a property listed twice, more than 8 properties, a bad name, a malformed declaration, a signal action without `signal`, with a statement or with `http` | `bun test src/kernel/actions.test.ts` and `cargo test --manifest-path kernel-rs/Cargo.toml signals_refuse_what_the_editor_refuses` | 21 cases in `kernel-rs/src/signal-cases.json`, run by both. `bun test src/agent/gate.test.ts` adds three refusals through `validate`. A signal action counts toward the Gate's cap |
+| The store writes off the request path, keeps 400 days and 100,000 rows of totals and 50,000 Signals, drops the oldest first, cuts a string property at 128 bytes on a character boundary, and refuses bad ranges and cursors | `cargo test --manifest-path kernel-rs/Cargo.toml usage::` | 5 pass |
+| A restore keeps API keys live, the small and the package import revoke them, and `usage.sqlite` travels in a copy | `cargo test --manifest-path kernel-rs/Cargo.toml a_restore_keeps_api_keys_live` | Pass |
+| Against a real Kernel: each kind counted once per allowed call; Signals from a mutation, a signal action and a route, with their inputs; no count and no Signal for a missing session, an undeclared input, a missing input, a CHECK failure, a bad route body, a wrong password, a repeated signup or an unreadable file; the runtime endpoint and a token for another project refused; range and cursor refusals; a release with a bad property refused by the Kernel | `LITTLEBOX_USAGE_TEST_PORT=<free> bun test tests/usage-signals.integration.test.ts` | 6 pass |
+| A package carries `usage` and the imported app shows the source's totals | `bun test tests/package.integration.test.ts` | 6 pass |
+| An exported kit deploys a package with `usage` | `bun run tests/smoke/portable-export.ts --port 19473` | Pass, after `deploy.mjs` learned the component |
+| Everything else | `cargo test --manifest-path kernel-rs/Cargo.toml`, `bun run build`, `LITTLEBOX_EDITOR_URL=http://127.0.0.1:4391 LITTLEBOX_TEST_KERNEL_PORT=8891 bun run test:e2e:local` | 156 pass; build passes; 5 of 5 pass |
+| Whole suite | `bun run test` | 465 pass. An earlier run at a load average of 19 failed one sign-in rate-limit test in `tests/mcp.integration.test.ts`, which passed alone, as delivery 7 recorded |
+| The Development Kernel records the same way | `bun run littlebox -- dev --dir <project> --port 8899`, one signup and one call of a signal action | `usage.sqlite` held `signup 1`, `action page.like 1` and the Signal `page.liked {"page":"/home"}` |
+
+Where this differs from the brief:
+
+- A route call counts under `route` with its method and path and not again under `action`, so the two kinds add up to the calls made.
+- `session` counts `auth_session`, which the SDK calls when an app opens. `signup` counts an account that becomes active, so a signup in required mode counts when its link is answered, and an accepted invitation counts too. `login` counts password sign-ins and answered recovery links.
+- A signal action may not declare `http`. Both parsers already refuse it with the method message, because a signal action is neither a query nor a mutation.
+- Property values are the inputs the action ran with. Actor, kernel and literal bindings have no key, so a Signal cannot carry who caused it.
+- A package lists `usage` only when the store exists, and a Kernel from before this delivery refuses a package that lists it. The exported kit carries the new Kernel, so a kit is unaffected.
+- The action cap was 50 in the Gate and 100 in the Kernel before this delivery. A signal action counts toward each; the two numbers still differ.
 
 ## What this plan leaves out
 
