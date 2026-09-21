@@ -602,8 +602,13 @@ async fn begin(state: &AppState, owner: &Owner, principal: &str, a: &Value) -> R
             }
         }
     };
+    // A copy does not carry the kept package, so an origin restored while
+    // captured captures again. It was paused since, so the state is the same.
+    if marker.phase == CAPTURED && !keep_dir(&state.data_root, id, &marker.operation_id).join(RELEASE).is_file() {
+        marker.phase = PAUSING.into();
+    }
     if marker.phase == PAUSING {
-        let settled = settle(state, &deployment, wait).await?;
+        let settled = settle(state, &deployment, wait).await.map_err(still_paused)?;
         let done = settled["waitingFor"].is_null();
         marker.settle = Some(settled);
         if !done {
@@ -612,7 +617,7 @@ async fn begin(state: &AppState, owner: &Owner, principal: &str, a: &Value) -> R
             answer["next"] = json!("The app is paused but work in progress has not settled. Call migration_begin again to keep waiting, or migration_cancel to resume the app.");
             return Ok(answer);
         }
-        let downloads = capture(state, owner, principal, &deployment, &mut marker).await?;
+        let downloads = capture(state, owner, principal, &deployment, &mut marker).await.map_err(still_paused)?;
         save(&state.data_root, id, &marker)?;
         let mut answer = view(&marker);
         answer["downloads"] = Value::Object(downloads);
@@ -622,12 +627,17 @@ async fn begin(state: &AppState, owner: &Owner, principal: &str, a: &Value) -> R
     // Captured already: offer the same package again.
     let keep = keep_dir(&state.data_root, id, &marker.operation_id);
     let manifest: package::Manifest = serde_json::from_value(marker.manifest.clone().context("The captured manifest is missing.")?)?;
-    let mut downloads = package::offer(state, principal, id, &deployment.project_id, &keep, &manifest.contents).await?;
-    downloads.extend(offer_release(state, principal, &deployment, &marker, &keep).await?);
+    let mut downloads = package::offer(state, principal, id, &deployment.project_id, &keep, &manifest.contents).await.map_err(still_paused)?;
+    downloads.extend(offer_release(state, principal, &deployment, &marker, &keep).await.map_err(still_paused)?);
     let mut answer = view(&marker);
     answer["downloads"] = Value::Object(downloads);
     answer["next"] = next_steps();
     Ok(answer)
+}
+
+/// A failure after the pause names the cause and the two ways on.
+fn still_paused(error_value: anyhow::Error) -> anyhow::Error {
+    anyhow::anyhow!("{error_value:#}. The app stays paused: call migration_begin again to retry, or migration_cancel to resume it.")
 }
 
 fn next_steps() -> Value {

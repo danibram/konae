@@ -279,7 +279,7 @@ pub async fn operator_command() -> Result<bool> {
         Some("--without-record") if args.len() == 2 => {
             clear_hold(&root)?;
             println!(
-                "Reopened {} without the revocation record. Accounts suspended and API keys revoked after the restored copy may be active again; check them in each app's Users view and revoke again.",
+                "Reopened {} without the revocation record. Accounts suspended and API keys revoked after the restored copy may be active again; check them in each app's Users view and revoke again. Start the Kernel again; a running Kernel keeps the maintenance it read at startup.",
                 root.display()
             );
         }
@@ -288,7 +288,10 @@ pub async fn operator_command() -> Result<bool> {
             match apply_or_hold(&root, record)? {
                 Ok(changed) => {
                     clear_hold(&root)?;
-                    println!("Applied the revocation record to {}: {changed} rows changed. The installation can serve.", root.display());
+                    println!(
+                        "Applied the revocation record to {}: {changed} rows changed. Start the Kernel again; a running Kernel keeps the maintenance it read at startup.",
+                        root.display()
+                    );
                 }
                 Err(reason) => bail!("The installation stays in maintenance. {reason}"),
             }

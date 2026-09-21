@@ -224,6 +224,20 @@ describe("migration", () => {
     expect((await runtime(kernel, copy.hostname, cookie).call<{ user: unknown }>("auth_session")).user ?? null).toBeNull();
   }, 120_000);
 
+  test("an origin whose kept package is gone, as after a restore, captures again under the same operation", async () => {
+    const app = await publish("mig_recapture");
+    const begun = await begin(app);
+    await drop(begun);
+    await rm(path.join(kernel.data, "deployments", app.id, "migration", begun.operationId), { recursive: true });
+    const again = await owner.call<Begun>("migration_begin", { deploymentId: app.id });
+    expect(again.phase).toBe("captured");
+    expect(again.operationId).toBe(begun.operationId);
+    expect(again.packageId).not.toBe(begun.packageId);
+    expect(again.manifest?.migration?.confirmationHash).toBe(begun.manifest?.migration?.confirmationHash);
+    await drop(again);
+    await owner.call("migration_cancel", { operationId: begun.operationId });
+  }, 60_000);
+
   test("cancelling at the origin leaves an imported copy unable to activate", async () => {
     const app = await publish("mig_cancel");
     const begun = await begin(app);

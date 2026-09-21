@@ -173,6 +173,8 @@ LITTLEBOX_DATA_DIR=/data littlebox-kernel reconcile --from /mnt/copies
 LITTLEBOX_DATA_DIR=/data littlebox-kernel reconcile --without-record
 ```
 
+Run `reconcile` with the Kernel stopped, or start it again afterwards: a running Kernel keeps the maintenance it read at startup.
+
 A Deployment paused or retired by a migration stays so after a restore, because its migration state travels in the copy.
 
 ## Authenticated MCP
