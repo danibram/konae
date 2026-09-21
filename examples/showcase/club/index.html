@@ -1,0 +1,67 @@
+<header class="bar">
+  <div>
+    <p class="eyebrow">Members only</p>
+    <h1>Club</h1>
+  </div>
+  <div class="who">
+    <span id="who-name"></span>
+    <span id="who-role" class="badge"></span>
+    <button id="sign-out" class="ghost" type="button">Sign out</button>
+  </div>
+</header>
+<main class="wrap">
+  <p id="status" class="status" role="status" aria-live="polite" hidden></p>
+
+  <section id="join" class="card" hidden>
+    <h2>Join the club</h2>
+    <p class="muted">Pick the name the other members will see. The owner decides who organizes.</p>
+    <form id="join-form" class="row">
+      <label class="field">Display name <input name="display" required maxlength="60" autocomplete="nickname"></label>
+      <button class="primary" type="submit">Join</button>
+    </form>
+  </section>
+
+  <div id="club" hidden>
+    <section class="card current" aria-labelledby="current-title">
+      <h2 id="current-title">Reading now</h2>
+      <div id="current"></div>
+    </section>
+
+    <section class="card" aria-labelledby="shortlist-title">
+      <div class="section-head">
+        <h2 id="shortlist-title">Shortlist</h2>
+        <p class="muted">Any member can propose a book. Organizers schedule, finish and remove them.</p>
+      </div>
+      <ul id="shortlist" class="books"></ul>
+    </section>
+
+    <div class="grid">
+      <section class="card" aria-labelledby="propose-title">
+        <h2 id="propose-title">Propose a book</h2>
+        <form id="propose-form" class="stack">
+          <label class="field">Title <input name="title" required maxlength="120"></label>
+          <label class="field">Author <input name="author" required maxlength="120"></label>
+          <label class="field">Cover image <span class="hint">PNG, JPEG, GIF or WebP up to 2 MiB. Every member can see it.</span>
+            <input name="cover" type="file" accept="image/png,image/jpeg,image/gif,image/webp"></label>
+          <button class="primary" type="submit">Propose</button>
+        </form>
+      </section>
+
+      <section class="card" aria-labelledby="notes-title">
+        <h2 id="notes-title">My notes</h2>
+        <p class="muted">Notes are files only you can open. Organizers and the other members cannot read them.</p>
+        <form id="note-form" class="stack">
+          <label class="field">Book <select name="book" required></select></label>
+          <label class="field">Note <textarea name="body" rows="4" required maxlength="20000"></textarea></label>
+          <button class="primary" type="submit">Save private note</button>
+        </form>
+        <ul id="notes" class="notes"></ul>
+      </section>
+    </div>
+
+    <section class="card" aria-labelledby="members-title">
+      <h2 id="members-title">Members</h2>
+      <ul id="members" class="members"></ul>
+    </section>
+  </div>
+</main>
