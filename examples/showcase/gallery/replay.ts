@@ -1,0 +1,470 @@
+// Replays the gallery on its own Kernel: publishes it as a Public Deployment
+// with Closed signup, admits one curator by invitation, uploads public photos
+// and private drafts, reads them as a visitor, sends contact messages until the
+// rate limit answers, reads /feed.json as a program, walks the multi-page
+// artifact, writes the Action Contract and runs conform. Exits 0 when every
+// assertion holds; removes its Kernel and data either way.
+//
+//   LITTLEBOX_SHOWCASE_PORT=19620 bun run examples/showcase/gallery/replay.ts
+//
+// LITTLEBOX_SHOWCASE_BROWSER=0 skips Chrome. LITTLEBOX_SHOWCASE_SCREENSHOTS=<dir>
+// writes a light and a dark screenshot of the published home page there.
+import assert from "node:assert/strict";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { deflateSync } from "node:zlib";
+import { chromium } from "playwright";
+import { McpClient } from "../../../src/mcp/client";
+import { buildLocal } from "../../../scripts/littlebox";
+import { kernelTarget } from "../../../scripts/conform";
+import { generateActionContract } from "../../../src/lib/action-contract";
+import { formatConformanceReport, runConformance } from "../../../src/lib/action-conformance";
+
+const here = import.meta.dir;
+const repo = path.resolve(here, "../../..");
+const scratch = await mkdtemp(path.join(tmpdir(), "littlebox-showcase-gallery-"));
+const port = Number(process.env.LITTLEBOX_SHOWCASE_PORT ?? 19620);
+assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Set LITTLEBOX_SHOWCASE_PORT to a free local port.");
+const url = `http://127.0.0.1:${port}`;
+const dataDir = path.join(scratch, "data");
+const setupKey = crypto.randomUUID();
+const ownerPassword = crypto.randomUUID();
+const curatorPassword = crypto.randomUUID();
+const curatorEmail = "lena@studio.example";
+
+const observations: { flow: string; result: string }[] = [];
+const refusals: { attempt: string; status?: number; message: string }[] = [];
+const pass = (flow: string, result: string) => { observations.push({ flow, result }); console.log(`PASS ${flow}. ${result}`); };
+const refused = (attempt: string, message: string, status?: number) => { refusals.push({ attempt, status, message }); };
+let addressCounter = 0;
+const freshAddress = () => `198.18.${Math.floor(++addressCounter / 250)}.${(addressCounter % 250) + 1}`;
+const errorText = async (promise: Promise<unknown>) => {
+  try { await promise; } catch (error) { return error instanceof Error ? error.message : String(error); }
+  throw Error("Expected a refusal, but the call succeeded.");
+};
+
+// Photographs: 640x480 PNG landscapes drawn here, so the replay carries no binaries.
+const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+const crc32 = (bytes: Uint8Array) => { let c = 0xffffffff; for (const b of bytes) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+const pngChunk = (type: string, data: Uint8Array) => {
+  const out = Buffer.alloc(12 + data.length);
+  out.writeUInt32BE(data.length, 0); out.write(type, 4, "ascii"); Buffer.from(data).copy(out, 8);
+  out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)), 8 + data.length);
+  return out;
+};
+const palettes: number[][][] = [
+  [[38, 58, 112], [242, 172, 128], [28, 38, 48], [255, 224, 176]],
+  [[64, 128, 204], [196, 224, 242], [204, 182, 142], [255, 250, 232]],
+  [[30, 20, 62], [204, 94, 92], [20, 24, 34], [255, 196, 140]],
+  [[176, 182, 188], [222, 224, 226], [108, 120, 114], [240, 240, 236]],
+  [[10, 14, 30], [42, 52, 94], [6, 8, 12], [228, 230, 240]],
+];
+function landscape(seed: number, width = 640, height = 480): Uint8Array {
+  const [top, bottom, ground, sun] = palettes[seed % palettes.length];
+  const raw = Buffer.alloc((width * 3 + 1) * height);
+  const sunX = width * (0.25 + 0.12 * seed), sunY = height * 0.38, sunR = height * 0.07;
+  for (let y = 0; y < height; y++) {
+    const row = y * (width * 3 + 1);
+    for (let x = 0; x < width; x++) {
+      const horizon = height * 0.62 + Math.sin((x / width) * Math.PI * (2 + seed) + seed) * height * 0.05;
+      let color: number[];
+      if (y >= horizon) {
+        const depth = (y - horizon) / (height - horizon);
+        color = ground.map((c) => c * (1 - 0.35 * depth));
+      } else if ((x - sunX) ** 2 + (y - sunY) ** 2 < sunR ** 2) {
+        color = sun;
+      } else {
+        const t = y / horizon;
+        color = top.map((c, i) => c + (bottom[i] - c) * t);
+      }
+      raw[row + 1 + x * 3] = color[0]; raw[row + 2 + x * 3] = color[1]; raw[row + 3 + x * 3] = color[2];
+    }
+  }
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 2;
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), pngChunk("IHDR", header), pngChunk("IDAT", deflateSync(raw)), pngChunk("IEND", new Uint8Array())]);
+}
+
+let kernel: ReturnType<typeof Bun.spawn> | undefined;
+try {
+  const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
+  assert.equal(await build.exited, 0, "The Kernel must compile.");
+  kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/littlebox-kernel")], {
+    cwd: repo,
+    env: {
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))),
+      LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_PUBLIC_ORIGIN: url,
+      LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: dataDir, LITTLEBOX_ADMIN_KEY: setupKey,
+      LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: repo,
+      LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development",
+    },
+    stdout: "ignore", stderr: "inherit",
+  });
+  let ready = false;
+  for (let attempt = 0; attempt < 100 && !ready; attempt++) {
+    assert.equal(kernel.exitCode, null, "The Kernel stopped before startup. Is the port taken?");
+    try { ready = (await fetch(`${url}/_littlebox/health`)).ok; } catch {}
+    if (!ready) await Bun.sleep(100);
+  }
+  assert(ready, "The Kernel did not start.");
+
+  // The owner of the installation and of the project.
+  const signup = await fetch(`${url}/_littlebox/owner/signup`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "owner@studio.example", password: ownerPassword, setupKey }),
+  });
+  assert.equal(signup.status, 200, await signup.clone().text());
+  const ownerCookie = signup.headers.get("set-cookie")!.split(";")[0];
+  const owner = new McpClient(`${url}/mcp`, { fetch: (input, init) => {
+    const headers = new Headers(init?.headers); headers.set("cookie", ownerCookie);
+    return fetch(input, { ...init, headers });
+  } });
+
+  // The CLI builder makes one index.html from a body fragment. It drops about.html.
+  const cliCopy = path.join(scratch, "cli-build");
+  await cp(here, cliCopy, { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
+  const cliBuild = await buildLocal(cliCopy);
+  assert.deepEqual(Object.keys(cliBuild.artifact.files), ["index.html"]);
+  assert(!("about.html" in cliBuild.artifact.files));
+  refused("`littlebox build` / `publish` on a Capsule with about.html", "No error. The artifact holds only index.html, so /about.html would serve the home page.");
+  pass("CLI build", `littlebox build writes an artifact with ${Object.keys(cliBuild.artifact.files).join(", ")} only: styles.css and app.js are inlined into it, and about.html is dropped.`);
+
+  // The multi-page artifact, assembled the way the docs example in product-fit does.
+  const source = async (name: string) => readFile(path.join(here, name), "utf8");
+  const capsule = {
+    "index.html": await source("index.html"), "about.html": await source("about.html"), "styles.css": await source("styles.css"),
+    "app.js": await source("app.js"), "schema.sql": await source("schema.sql"), "actions.json": await source("actions.json"),
+  };
+  const artifact = {
+    version: 1, entrypoint: "index.html",
+    files: {
+      "index.html": capsule["index.html"], "about.html": capsule["about.html"], "styles.css": capsule["styles.css"],
+      "app.js": capsule["app.js"], "runtime.js": await readFile(path.join(repo, "src/mcp/runtime.js"), "utf8"),
+    },
+  };
+  const project = { id: "showcase_gallery", name: "Gallery", slug: "gallery", manifest: { version: 1, visibility: "public" } };
+  await owner.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
+  const release = async (files: Record<string, string>, extra: object = {}) => {
+    const bytes = new TextEncoder().encode(JSON.stringify({ project: { ...project, files }, visibility: "public", artifact, ...extra }));
+    const upload = await owner.upload(bytes, project.id);
+    try {
+      const plan = await owner.call<{ planId: string }>("release_plan", { transferId: upload.transferId });
+      return await owner.call<{ id: string; hostname: string; url: string }>("release_apply", { planId: plan.planId });
+    } finally { await owner.cancel(upload.transferId).catch(() => {}); }
+  };
+
+  // A mutation with RETURNING is refused when the release is planned.
+  const returning = JSON.parse(capsule["actions.json"]);
+  returning.actions["contact.send"].statement += " RETURNING id";
+  const returningMessage = await errorText(release({ ...capsule, "actions.json": JSON.stringify(returning) }));
+  assert.equal(returningMessage, "Action contact.send cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.");
+  refused("Publish contact.send with `... RETURNING id`", returningMessage);
+  pass("RETURNING refused", returningMessage);
+
+  // First release: public, signup Closed from the first request.
+  const receipt = await release(capsule, { initialSignupPolicy: { mode: "closed", allowlist: [] } });
+  const host = receipt.hostname;
+  const policy = await owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receipt.id });
+  assert.equal(policy.mode, "closed");
+  pass("Publish", `${receipt.url} is public with signup ${policy.mode}.`);
+
+  const appFetch = (address = freshAddress(), cookie?: string): typeof fetch => (input, init) => {
+    const headers = new Headers(init?.headers);
+    headers.set("host", host); headers.set("x-forwarded-for", address);
+    if (cookie) headers.set("cookie", cookie);
+    return fetch(input, { ...init, headers });
+  };
+  const runtime = (cookie?: string, address = freshAddress()) => new McpClient(`${url}/_littlebox/mcp`, { fetch: appFetch(address, cookie) });
+  const post = (route: string, body: object, address = freshAddress()) => appFetch(address)(url + route, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  const get = (route: string, init: RequestInit = {}) => appFetch()(url + route, { redirect: "manual", ...init });
+
+  // Closed: a stranger cannot create an account, and neither can the curator yet.
+  const stranger = await post("/_littlebox/auth/signup", { email: "stranger@example.test", password: crypto.randomUUID() });
+  const strangerBody = await stranger.json();
+  assert.equal(stranger.status, 403);
+  refused("A visitor signs up while signup is Closed (POST /_littlebox/auth/signup)", strangerBody.error, 403);
+
+  // The owner invites the curator. Under Closed the invitation is sent but cannot be accepted.
+  const invited = await owner.call<{ policy: string; results: any[] }>("app_invitations_create", {
+    deploymentId: receipt.id, emails: [curatorEmail], idempotencyKey: crypto.randomUUID(),
+  });
+  assert.equal(invited.results[0].status, "invited");
+  assert.equal(invited.results[0].acceptable, false);
+  let invitationToken = "";
+  for (let attempt = 0; attempt < 50 && !invitationToken; attempt++) {
+    const mailbox = await readFile(path.join(dataDir, "mailbox.jsonl"), "utf8").catch(() => "");
+    invitationToken = mailbox.match(/#invitation=([A-Za-z0-9_-]+)/)?.[1] ?? "";
+    if (!invitationToken) await Bun.sleep(100);
+  }
+  assert(invitationToken, "The invitation never reached mailbox.jsonl.");
+  const closedAccept = await post("/_littlebox/auth/accept", { token: invitationToken, password: curatorPassword });
+  const closedAcceptBody = await closedAccept.json();
+  assert.equal(closedAccept.status, 403);
+  refused("The invited curator accepts while signup is Closed (POST /_littlebox/auth/accept)", closedAcceptBody.error, 403);
+
+  // To admit one account the owner opens Invitation only, the curator accepts, the owner closes again.
+  await owner.call("signup_policy_set", { deploymentId: receipt.id, mode: "invitation" });
+  const accepted = await post("/_littlebox/auth/accept", { token: invitationToken, password: curatorPassword });
+  assert.equal(accepted.status, 200, await accepted.clone().text());
+  const curatorCookie = accepted.headers.get("set-cookie")!.split(";")[0];
+  await owner.call("signup_policy_set", { deploymentId: receipt.id, mode: "closed" });
+  const strangerAgain = await post("/_littlebox/auth/signup", { email: "second@example.test", password: crypto.randomUUID() });
+  assert.equal(strangerAgain.status, 403);
+  const curatorLogin = await post("/_littlebox/auth/login", { email: curatorEmail, password: curatorPassword });
+  assert.equal(curatorLogin.status, 200);
+  const users = await owner.call<{ users: any[] }>("app_users_list", { deploymentId: receipt.id });
+  assert.deepEqual(users.users.map((user) => user.email), [curatorEmail]);
+  pass("Closed signup, one account", `A stranger's signup answers 403 "${strangerBody.error}". The invitation accepted under Closed answers 403 "${closedAcceptBody.error}" and stays usable; after the owner switches to Invitation only, accepts it and closes again, the app has exactly one account and still refuses new ones.`);
+
+  // The curator's account becomes the studio. Only the owner can say so, with SQL.
+  const curator = runtime(curatorCookie);
+  const curatorSession = await curator.call<{ userId: string; role: string }>("auth_session");
+  assert.equal(curatorSession.role, "member");
+  assert.equal((await curator.call<any>("actions_invoke", { name: "photos.add", input: { file_id: "none", title: "Before the studio row", caption: null, status: "draft" } })).changes, 0);
+  await owner.call("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: `INSERT INTO studio (user_id) VALUES ('${curatorSession.userId.replaceAll("'", "''")}')` } });
+
+  const upload = async (bytes: Uint8Array, name: string, visibility?: "public") => {
+    const transfer = await curator.upload(bytes);
+    try { return await curator.call<{ id: string; visibility: string }>("files_upload", { transferId: transfer.transferId, name, type: "image/png", ...(visibility ? { visibility } : {}) }); }
+    finally { await curator.cancel(transfer.transferId).catch(() => {}); }
+  };
+  const action = <T = any>(client: McpClient, name: string, input: object = {}) => client.call<T>("actions_invoke", { name, input });
+  const photos = [
+    { title: "Low tide, Vlissingen", caption: "The harbour wall at six in the morning." },
+    { title: "Depot 4", caption: "Night trams waiting for the first shift." },
+    { title: "Before harvest", caption: null },
+    { title: "Fog over the dyke", caption: "Unpublished: still choosing the crop." },
+    { title: "Moon over the yard", caption: null },
+  ];
+  const images = photos.map((_, index) => landscape(index));
+  const stored: { id: number; fileId: string; status: string }[] = [];
+  for (const [index, photo] of photos.entries()) {
+    const draft = index >= 3;
+    const file = await upload(images[index], `photo-${index + 1}.png`, draft ? undefined : "public");
+    assert.equal(file.visibility, draft ? "private" : "public");
+    const added = await action(curator, "photos.add", { file_id: file.id, title: photo.title, caption: photo.caption, status: draft ? "draft" : "published" });
+    assert.equal(added.changes, 1);
+    stored.push({ id: added.lastInsertId, fileId: file.id, status: draft ? "draft" : "published" });
+  }
+  const drafts = stored.filter((photo) => photo.status === "draft");
+  assert.equal((await action(curator, "studio.photos")).length, 5);
+  pass("Curator uploads", "The curator stores three public photographs and two private drafts; photos.add changed nothing before the owner added the account to the studio table.");
+
+  // A visitor sees published photographs only, by every door.
+  const visitor = runtime();
+  const published = await action(visitor, "photos.published");
+  assert.deepEqual(published.map((row: any) => row.title).sort(), photos.slice(0, 3).map((p) => p.title).sort());
+  const visibleFiles = await visitor.call<{ id: string; visibility: string }[]>("files_list");
+  assert.deepEqual(visibleFiles.map((file) => file.id).sort(), stored.filter((p) => p.status === "published").map((p) => p.fileId).sort());
+  const draftRead = await errorText(visitor.call("files_read", { fileId: drafts[0].fileId }));
+  assert.equal(draftRead, "File not found.");
+  refused("A visitor reads a draft over MCP (files_read)", draftRead);
+  const draftHttp = await get(`/_littlebox/files/${drafts[0].fileId}`);
+  assert.equal(draftHttp.status, 404);
+  refused("A visitor reads a draft at GET /_littlebox/files/<id>", (await draftHttp.text()).trim() || "(empty body)", 404);
+  const publicHttp = await get(`/_littlebox/files/${stored[0].fileId}`);
+  assert.equal(publicHttp.status, 200);
+  assert.equal(publicHttp.headers.get("content-type"), "image/png");
+  assert.match(publicHttp.headers.get("content-disposition") ?? "", /^inline/);
+  assert.equal(publicHttp.headers.get("cross-origin-resource-policy"), "same-origin");
+  assert.deepEqual(new Uint8Array(await publicHttp.arrayBuffer()), images[0]);
+  const studioAsVisitor = await errorText(action(visitor, "studio.photos"));
+  assert.equal(studioAsVisitor, "authentication-required");
+  const addAsVisitor = await errorText(action(visitor, "photos.add", { file_id: "x", title: "x", caption: null, status: "published" }));
+  assert.equal(addAsVisitor, "authentication-required");
+  const visitorUpload = await errorText(visitor.upload(images[0]));
+  refused("A visitor uploads a file (transfer_begin)", visitorUpload);
+  pass("Visitor view", `photos.published returns 3 rows, files_list lists the 3 public files, a draft answers "${draftRead}" over MCP and 404 at the file path, a public file answers 200 image/png inline with CORP same-origin, and studio actions answer "${studioAsVisitor}".`);
+
+  // Publishing a draft: a file's visibility is fixed, so the curator uploads the bytes again as public.
+  const republished = await upload(images[3], "photo-4.png", "public");
+  assert.equal((await action(curator, "photos.publish", { id: drafts[0].id, file_id: republished.id })).changes, 1);
+  assert.equal((await action(visitor, "photos.published")).length, 4);
+  assert.equal((await get(`/_littlebox/files/${drafts[0].fileId}`)).status, 404);
+  const curatorFiles = await curator.call<any[]>("files_list");
+  assert.equal(curatorFiles.length, 6);
+  refused("Make a private draft's file public, or delete the private copy", "No primitive: the runtime tools are files_list, files_read and files_upload. The curator uploads the bytes again; the private copy stays and counts against the 20 MiB quota.");
+  pass("Publish a draft", `The curator uploads the draft's bytes again as public and photos.publish points the row at the new file. The curator now holds ${curatorFiles.length} files for 5 photographs; the old private copy is still stored and still 404 to visitors.`);
+
+  // /feed.json: a public GET route any program reads without a signature or a key.
+  const feed = await fetch(`${url}/feed.json`, { headers: { host, "x-forwarded-for": freshAddress(), origin: "https://reader.example" } });
+  assert.equal(feed.status, 200);
+  assert.equal(feed.headers.get("content-type"), "application/json");
+  assert.equal(feed.headers.get("cache-control"), "no-store");
+  assert.equal(feed.headers.get("access-control-allow-origin"), null);
+  const feedBody = await feed.json();
+  assert.deepEqual(Object.keys(feedBody), ["result"]);
+  assert.equal(feedBody.result.length, 4);
+  assert.equal(feedBody.result[0].title, "Fog over the dyke");
+  assert.match(feedBody.result[0].image, /^\/_littlebox\/files\/[^/]+$/);
+  assert.equal((await get(feedBody.result[0].image)).status, 200);
+  const head = await get("/feed.json", { method: "HEAD" });
+  assert.equal(head.status, 405);
+  assert.equal(head.headers.get("allow"), "GET");
+  // HTTP strips the body of a HEAD answer, so the documented message never reaches the caller.
+  const headBody = await head.text();
+  refused("HEAD /feed.json", `405 with Allow: GET and ${headBody ? `body ${headBody}` : "an empty body"}`, 405);
+  const postFeed = await get("/feed.json", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  assert.equal(postFeed.status, 405);
+  assert.equal(postFeed.headers.get("allow"), "GET");
+  const postFeedBody = await postFeed.json();
+  assert.equal(postFeedBody.error, "No route accepts POST on this path.");
+  refused("POST /feed.json", postFeedBody.error, 405);
+  const feedQuery = await get("/feed.json?page=2");
+  const feedQueryBody = await feedQuery.json();
+  assert.equal(feedQuery.status, 400);
+  refused("GET /feed.json?page=2 (an undeclared query parameter)", feedQueryBody.error, 400);
+  refused("Shape /feed.json as a JSON Feed document (version, title, items)", "No primitive: a route always answers { \"result\": [rows] }.");
+  refused("Absolute image URLs in /feed.json", "No primitive: the only kernel binding is now; the statement cannot read the Deployment's origin.");
+  refused("Let a browser on another origin read /feed.json, or cache it", "No primitive: no Access-Control-Allow-Origin header and Cache-Control: no-store on every answer.");
+  pass("/feed.json", `GET with no signature or key answers 200 application/json { result: [4 items] } newest first, with image paths that load; HEAD answers 405 Allow: GET with ${headBody ? "a body" : "no body"}; POST answers 405 Allow: GET "${postFeedBody.error}"; ?page=2 answers 400 "${feedQueryBody.error}".`);
+
+  // contact.send: anonymous, records a Signal, and trips the per-address limit.
+  const message = (n: number) => ({ name: `Reader ${n}`, email: `reader${n}@example.test`, topic: n % 2 ? "print" : "commission", message: `Is print ${n} still available?` });
+  let lastResponse: Response | undefined;
+  const limitedAddress = freshAddress();
+  const sameAddress = new McpClient(`${url}/_littlebox/mcp`, { fetch: async (input, init) => (lastResponse = await appFetch(limitedAddress)(input, init)) });
+  let sent = 0, limitedAt = 0, retryAfter = "";
+  for (let n = 1; n <= 40 && !limitedAt; n++) {
+    try { assert.equal((await action(sameAddress, "contact.send", message(n))).changes, 1); sent++; }
+    catch (error) {
+      assert.equal((error as Error).message, "rate-limited");
+      limitedAt = n; retryAfter = lastResponse!.headers.get("retry-after") ?? "";
+      assert.equal(lastResponse!.status, 200);
+    }
+  }
+  assert(limitedAt > 0, "40 messages from one address were never rate-limited.");
+  assert.match(retryAfter, /^\d+$/);
+  assert(Number(retryAfter) >= 1);
+  refused(`Message ${limitedAt} from one address within 10 seconds (actions_invoke contact.send)`, `rate-limited, HTTP 200 with isError and Retry-After: ${retryAfter}`);
+  const otherAddress = runtime();
+  assert.equal((await action(otherAddress, "contact.send", message(99))).changes, 1);
+  const badTopic = await errorText(action(runtime(), "contact.send", { ...message(100), topic: "spam" }));
+  assert.match(badTopic, /CHECK constraint failed/);
+  refused("contact.send with topic \"spam\"", badTopic);
+  refused("A tighter limit for contact.send alone, such as 3 an hour", "No primitive: actions.json declares no rate limit; every anonymous action shares 30 calls per 10 seconds per address.");
+  const signals = await owner.call<{ signals: { name: string; properties: Record<string, unknown> }[] }>("signals_read", { deploymentId: receipt.id, name: "contact.received" });
+  assert.equal(signals.signals.length, sent + 1);
+  assert.deepEqual(Object.keys(signals.signals[0].properties), ["topic"]);
+  const inbox = await action(curator, "studio.messages");
+  assert.equal(inbox.length, sent + 1);
+  pass("contact.send", `One address sends ${sent} messages, call ${limitedAt} answers "rate-limited" (HTTP 200, isError, Retry-After: ${retryAfter}), another address sends at once; ${signals.signals.length} contact.received Signals carry only the topic, and the curator's studio.messages lists ${inbox.length}. A topic outside the CHECK answers SQLite's text: "${badTopic}".`);
+
+  // The multi-page artifact and unknown paths.
+  const title = (html: string) => html.match(/<title>([^<]*)<\/title>/)?.[1] ?? "(no title)";
+  const paths = ["/", "/index.html", "/about.html", "/about", "/about/", "/missing-page", "/photos/2026/fog.jpg", "/styles.css", "/feed"];
+  const walk: { path: string; status: number; type: string; title: string }[] = [];
+  for (const route of paths) {
+    const response = await get(route);
+    const text = await response.text();
+    walk.push({ path: route, status: response.status, type: response.headers.get("content-type") ?? "", title: /html/.test(response.headers.get("content-type") ?? "") ? title(text) : "" });
+  }
+  console.table(walk);
+  const at = (route: string) => walk.find((entry) => entry.path === route)!;
+  assert.equal(at("/about.html").title, "About · Lena Varga");
+  assert.equal(at("/").title, "Lena Varga · Photographs");
+  assert.equal(at("/missing-page").status, 200);
+  assert.equal(at("/missing-page").title, "Lena Varga · Photographs");
+  assert.equal(at("/about").title, "Lena Varga · Photographs");
+  refused("GET /missing-page (expecting 404)", "No error: 200 with the home page. Every unknown GET path serves index.html.", 200);
+  refused("GET /about (extensionless)", "No error: 200 with the home page, not about.html.", 200);
+  refused("Ship a 404.html for unknown paths", "No primitive: the Kernel falls back to index.html and never reads 404.html.");
+  pass("Multi-page artifact", `about.html serves its own page; /missing-page answers ${at("/missing-page").status} with the home page, /about and /about/ answer ${at("/about").status} and ${at("/about/").status} with "${at("/about").title}" and "${at("/about/").title}".`);
+
+  // Usage counts the route under its method and path.
+  const today = new Date().toISOString().slice(0, 10);
+  const usage = await owner.call<{ totals: { kind: string; name: string; count: number }[] }>("usage_read", { deploymentId: receipt.id, from: today, to: today });
+  const routeCount = usage.totals.find((row) => row.kind === "route" && row.name === "GET /feed.json")?.count ?? 0;
+  assert.equal(routeCount, 1);
+  pass("Usage", `usage_read counts GET /feed.json ${routeCount} time (the 400 and 405 answers count nothing) and contact.send ${usage.totals.find((row) => row.kind === "action" && row.name === "contact.send")?.count} times.`);
+
+  // The published pages in Chrome, under the Kernel's Content Security Policy.
+  if (process.env.LITTLEBOX_SHOWCASE_BROWSER !== "0") {
+    const browser = await chromium.launch({ channel: "chrome" });
+    const shots = process.env.LITTLEBOX_SHOWCASE_SCREENSHOTS;
+    if (shots) await mkdir(shots, { recursive: true });
+    const open = async (route: string, options: { colorScheme?: "light" | "dark"; cookie?: string } = {}) => {
+      const context = await browser.newContext({ colorScheme: options.colorScheme ?? "light", viewport: { width: 1280, height: 900 }, extraHTTPHeaders: { "x-forwarded-for": freshAddress() } });
+      if (options.cookie) {
+        const [name, value] = [options.cookie.slice(0, options.cookie.indexOf("=")), options.cookie.slice(options.cookie.indexOf("=") + 1)];
+        await context.addCookies([{ name, value, domain: host.split(":")[0], path: "/" }]);
+      }
+      const page = await context.newPage();
+      const violations: string[] = [];
+      page.on("console", (entry) => { if (/Content Security Policy|Refused to/i.test(entry.text())) violations.push(entry.text()); });
+      page.on("pageerror", (error) => violations.push(`page error: ${error.message}`));
+      await page.addInitScript(() => document.addEventListener("securitypolicyviolation", (event) => console.error(`Refused to load ${event.blockedURI} by ${event.violatedDirective}`)));
+      const response = await page.goto(new URL(route, receipt.url).href, { waitUntil: "load" });
+      assert.equal(response?.status(), 200);
+      assert.match(response?.headers()["content-security-policy"] ?? "", /img-src 'self' blob: data:/);
+      await page.waitForFunction(() => typeof (window as any).miniapp === "object", undefined, { timeout: 10_000 });
+      return { context, page, violations };
+    };
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        const { context, page, violations } = await open("/", { colorScheme: scheme });
+        await page.waitForFunction(() => { const imgs = [...document.querySelectorAll<HTMLImageElement>("#grid img")]; return imgs.length === 4 && imgs.every((img) => img.complete && img.naturalWidth === 640); }, undefined, { timeout: 10_000 });
+        if (shots) await page.screenshot({ path: path.join(shots, `gallery-${scheme}.png`), fullPage: true });
+        assert.deepEqual(violations, [], `/ in ${scheme} broke under the Content Security Policy.`);
+        await context.close();
+      }
+      const about = await open("/about.html");
+      await about.page.getByLabel("Name").fill("Browser reader");
+      await about.page.getByLabel("Email").fill("browser@example.test");
+      await about.page.getByLabel("About").selectOption("print");
+      await about.page.getByLabel("Message").fill("Do you ship prints abroad?");
+      await about.page.getByRole("button", { name: "Send message" }).click();
+      await about.page.locator("#contact-status.ok").waitFor({ timeout: 10_000 });
+      if (shots) await about.page.screenshot({ path: path.join(shots, "gallery-about-light.png"), fullPage: true });
+      assert.deepEqual(about.violations, [], "/about.html broke under the Content Security Policy.");
+      await about.context.close();
+      const studio = await open("/", { cookie: curatorCookie });
+      await studio.page.locator("#studio:not([hidden]) .draft img").waitFor({ timeout: 10_000 });
+      assert.equal(await studio.page.locator("#drafts .draft").count(), 1);
+      if (shots) await studio.page.screenshot({ path: path.join(shots, "gallery-studio-light.png"), fullPage: true });
+      assert.deepEqual(studio.violations, [], "The studio view broke under the Content Security Policy.");
+      // Reading a draft's bytes back from the Blob URL the SDK returns, to upload them as public.
+      const blobRead = await studio.page.evaluate(async () => {
+        const files = await (window as any).miniapp.files.list();
+        try { await fetch(files[0].url); return "read"; } catch (error) { return String(error); }
+      });
+      await studio.page.waitForTimeout(300);
+      const blobViolation = studio.violations.find((text) => /connect-src/.test(text)) ?? "";
+      refused("Read a draft's Blob URL with fetch() to re-upload it as public", `${blobRead}; ${blobViolation || "no violation reported"}`);
+      await studio.context.close();
+      pass("Chrome", `The home page in light and dark, about.html with a sent contact form, and the signed-in studio load with no policy violation; every grid image loads from /_littlebox/files/<id> at 640px. fetch() of the SDK's Blob URL answers "${blobRead}".`);
+    } finally { await browser.close(); }
+  }
+
+  // The Action Contract, written by the CLI, and conform with no credential.
+  const contractDir = path.join(scratch, "contract");
+  const cli = (args: string[]) => Bun.spawn(["bun", "run", path.join(repo, "scripts/littlebox.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+  const written = cli(["contract", "--dir", cliCopy, "--out", contractDir]);
+  const [writtenCode, writtenOut, writtenErr] = await Promise.all([written.exited, new Response(written.stdout).text(), new Response(written.stderr).text()]);
+  assert.equal(writtenCode, 0, writtenErr);
+  if (process.env.LITTLEBOX_SHOWCASE_CONTRACT_OUT) await writeFile(process.env.LITTLEBOX_SHOWCASE_CONTRACT_OUT, await readFile(path.join(contractDir, "action-contract.md"), "utf8"));
+  const inputsFile = path.join(scratch, "conform-inputs.json");
+  await writeFile(inputsFile, JSON.stringify({ "contact.send": { topic: "other" } }));
+  const conformCli = cli(["conform", "--url", receipt.url, "--contract", path.join(contractDir, "action-contract.json"), "--inputs", inputsFile]);
+  const [cliCode, cliOut, cliErr] = await Promise.all([conformCli.exited, new Response(conformCli.stdout).text(), new Response(conformCli.stderr).text()]);
+  console.log(cliOut);
+  assert.equal(cliCode, 0, cliOut + cliErr);
+  const cliTotals = cliOut.trim().split("\n").at(-1)!;
+  const skippedLines = cliOut.split("\n").filter((line) => line.startsWith("SKIP"));
+  const { contract } = generateActionContract({ actionsSource: capsule["actions.json"], schemaSource: capsule["schema.sql"] });
+  const report = await runConformance(contract, kernelTarget({ url: receipt.url, fetch: (input, init) => {
+    const headers = new Headers(init?.headers); headers.set("x-forwarded-for", freshAddress());
+    return fetch(input, { ...init, headers });
+  } }), { inputs: { "contact.send": { topic: "other" } } });
+  assert.equal(report.failed, 0, formatConformanceReport(report));
+  pass("Action Contract", `${writtenOut.trim()} conform with no credential: "${cliTotals}". Skipped: ${skippedLines.map((line) => line.replace(/^SKIP\s+/, "")).join(" | ") || "none"}. The same run in process, one address per call: ${report.passed} passed, ${report.failed} failed, ${report.skipped} skipped.`);
+
+  console.log(JSON.stringify({ app: "gallery", url: receipt.url, observations, refusals }, null, 2));
+} finally {
+  kernel?.kill();
+  if (kernel) await kernel.exited;
+  await rm(scratch, { recursive: true, force: true });
+}

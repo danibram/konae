@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>About · Lena Varga</title>
+<meta name="description" content="About Lena Varga, and how to reach the studio for commissions and prints.">
+<link rel="alternate" type="application/json" title="Lena Varga photographs" href="/feed.json">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <a class="brand" href="/">Lena Varga</a>
+  <nav aria-label="Site">
+    <a href="/">Work</a>
+    <a href="/about.html" aria-current="page">About and contact</a>
+    <a href="/feed.json">Feed</a>
+  </nav>
+</header>
+<main class="narrow">
+  <h1>About</h1>
+  <p>Lena Varga photographs the edges of places: harbours at low tide, tram depots after midnight, fields the week before harvest. She works on medium-format film and scans every frame herself.</p>
+  <p>Prints are made to order on cotton rag paper in three sizes. Commissions for editorial and architectural work are open for the coming season.</p>
+
+  <h2 id="contact-title">Contact the studio</h2>
+  <form id="contact" class="card form" aria-labelledby="contact-title">
+    <label>Name <input name="name" maxlength="120" autocomplete="name" required></label>
+    <label>Email <input name="email" type="email" maxlength="254" autocomplete="email" required></label>
+    <label>About
+      <select name="topic">
+        <option value="print">A print</option>
+        <option value="commission">A commission</option>
+        <option value="other">Something else</option>
+      </select>
+    </label>
+    <label>Message <textarea name="message" maxlength="4000" rows="5" required></textarea></label>
+    <div class="actions"><button type="submit" class="primary">Send message</button><span id="contact-status" class="muted" role="status"></span></div>
+  </form>
+</main>
+<footer class="site">
+  <span class="muted">© Lena Varga</span>
+  <button id="auth" type="button" class="ghost">Studio sign-in</button>
+</footer>
+<script src="/runtime.js"></script>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "actions": {
+    "photos.published": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT id, file_id, title, caption, published_at FROM photos WHERE status = 'published' ORDER BY published_at DESC, id DESC LIMIT 60",
+      "bindings": []
+    },
+    "feed.items": {
+      "kind": "query",
+      "access": "anonymous",
+      "http": { "method": "GET", "path": "/feed.json" },
+      "statement": "SELECT id, title, caption, '/_littlebox/files/' || file_id AS image, published_at FROM photos WHERE status = 'published' ORDER BY published_at DESC, id DESC LIMIT 20",
+      "bindings": []
+    },
+    "studio.photos": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT id, file_id, title, caption, status, created_at, published_at FROM photos WHERE EXISTS (SELECT 1 FROM studio WHERE user_id = ?1) ORDER BY created_at DESC, id DESC LIMIT 200",
+      "bindings": [{ "source": "actor", "field": "id" }]
+    },
+    "studio.messages": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT id, name, email, topic, body, received_at FROM messages WHERE EXISTS (SELECT 1 FROM studio WHERE user_id = ?1) ORDER BY received_at DESC, id DESC LIMIT 100",
+      "bindings": [{ "source": "actor", "field": "id" }]
+    },
+    "photos.add": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO photos (file_id, title, caption, status, created_at, published_at) SELECT ?2, ?3, ?4, ?5, ?6, CASE WHEN ?5 = 'published' THEN ?6 END WHERE EXISTS (SELECT 1 FROM studio WHERE user_id = ?1)",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "file_id", "type": "string", "maxLength": 80 },
+        { "source": "input", "key": "title", "type": "string", "maxLength": 120 },
+        { "source": "input", "key": "caption", "type": "string", "maxLength": 600, "nullable": true },
+        { "source": "input", "key": "status", "type": "string", "maxLength": 12 },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "photos.publish": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "UPDATE photos SET status = 'published', file_id = ?3, published_at = ?4 WHERE id = ?2 AND status = 'draft' AND EXISTS (SELECT 1 FROM studio WHERE user_id = ?1)",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "id", "type": "number" },
+        { "source": "input", "key": "file_id", "type": "string", "maxLength": 80 },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "contact.send": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "statement": "INSERT INTO messages (name, email, topic, body, received_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+      "bindings": [
+        { "source": "input", "key": "name", "type": "string", "maxLength": 120 },
+        { "source": "input", "key": "email", "type": "string", "maxLength": 254 },
+        { "source": "input", "key": "topic", "type": "string", "maxLength": 20 },
+        { "source": "input", "key": "message", "type": "string", "maxLength": 4000 },
+        { "source": "kernel", "field": "now" }
+      ],
+      "signal": { "name": "contact.received", "properties": ["topic"] }
+    }
+  }
+}
