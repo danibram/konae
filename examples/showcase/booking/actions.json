@@ -1,0 +1,211 @@
+{
+  "version": 1,
+  "actions": {
+    "rooms.list": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT id, name, seats FROM rooms ORDER BY name LIMIT 50",
+      "bindings": []
+    },
+    "availability.day": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT room_id AS room, slot AS hour FROM bookings WHERE day = ?1 AND cancelled_at IS NULL ORDER BY room_id, slot LIMIT 500",
+      "bindings": [
+        {
+          "source": "input",
+          "key": "day",
+          "type": "string",
+          "maxLength": 10
+        }
+      ],
+      "http": {
+        "method": "GET",
+        "path": "/api/availability"
+      }
+    },
+    "bookings.day": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT b.booking_ref AS ref, b.room_id AS room, b.slot AS hour, b.title AS title, coalesce(s.display, 'A colleague') AS booked_by, b.user_id = ?1 AS mine, b.checked_in_at AS checked_in_at FROM bookings b LEFT JOIN staff s ON s.user_id = b.user_id WHERE b.day = ?2 AND b.cancelled_at IS NULL ORDER BY b.room_id, b.slot LIMIT 500",
+      "bindings": [
+        {
+          "source": "actor",
+          "field": "id"
+        },
+        {
+          "source": "input",
+          "key": "day",
+          "type": "string",
+          "maxLength": 10
+        }
+      ]
+    },
+    "bookings.mine": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT booking_ref AS ref, room_id AS room, day, min(slot) AS start, count(*) AS hours, title FROM bookings WHERE user_id = ?1 AND day >= ?2 AND cancelled_at IS NULL GROUP BY booking_ref ORDER BY day, start LIMIT 50",
+      "bindings": [
+        {
+          "source": "actor",
+          "field": "id"
+        },
+        {
+          "source": "input",
+          "key": "from",
+          "type": "string",
+          "maxLength": 10
+        }
+      ]
+    },
+    "bookings.recent": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT b.booking_ref AS ref, b.room_id AS room, b.day AS day, min(b.slot) AS start, count(*) AS hours, b.title AS title, coalesce(s.display, 'A colleague') AS booked_by, max(b.created_at) AS created_at, max(b.cancelled_at) AS cancelled_at FROM bookings b LEFT JOIN staff s ON s.user_id = b.user_id GROUP BY b.booking_ref ORDER BY max(coalesce(b.cancelled_at, b.created_at)) DESC LIMIT 10",
+      "bindings": []
+    },
+    "bookings.create": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO bookings (booking_ref, room_id, day, slot, user_id, title, created_at)\nWITH RECURSIVE span(slot) AS (SELECT ?4 UNION ALL SELECT slot + 1 FROM span WHERE slot + 1 < ?4 + min(?5, 4))\nSELECT printf('%s/%s/%d/%d', r.id, ?3, ?4, ?7), r.id, ?3, span.slot, ?1, ?6, ?7\nFROM rooms r, span\nWHERE r.id = ?2\n  AND date(?3) IS ?3 AND ?3 >= date(?7 / 1000, 'unixepoch')\n  AND ?4 = CAST(?4 AS INTEGER) AND ?5 = CAST(?5 AS INTEGER)\n  AND ?4 >= 8 AND ?5 BETWEEN 1 AND 4 AND ?4 + ?5 <= 18\n  AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.room_id = ?2 AND b.day = ?3 AND b.slot >= ?4 AND b.slot < ?4 + ?5 AND b.cancelled_at IS NULL)",
+      "bindings": [
+        {
+          "source": "actor",
+          "field": "id"
+        },
+        {
+          "source": "input",
+          "key": "room",
+          "type": "string",
+          "maxLength": 40
+        },
+        {
+          "source": "input",
+          "key": "day",
+          "type": "string",
+          "maxLength": 10
+        },
+        {
+          "source": "input",
+          "key": "start",
+          "type": "number"
+        },
+        {
+          "source": "input",
+          "key": "hours",
+          "type": "number"
+        },
+        {
+          "source": "input",
+          "key": "title",
+          "type": "string",
+          "maxLength": 80
+        },
+        {
+          "source": "kernel",
+          "field": "now"
+        }
+      ],
+      "signal": {
+        "name": "booking.created",
+        "properties": [
+          "room",
+          "day",
+          "start",
+          "hours"
+        ]
+      }
+    },
+    "bookings.cancel": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "UPDATE bookings SET cancelled_at = ?3 WHERE booking_ref = ?1 AND user_id = ?2 AND cancelled_at IS NULL",
+      "bindings": [
+        {
+          "source": "input",
+          "key": "ref",
+          "type": "string",
+          "maxLength": 120
+        },
+        {
+          "source": "actor",
+          "field": "id"
+        },
+        {
+          "source": "kernel",
+          "field": "now"
+        }
+      ],
+      "signal": {
+        "name": "booking.cancelled",
+        "properties": [
+          "ref"
+        ]
+      }
+    },
+    "staff.me": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT display FROM staff WHERE user_id = ?1 LIMIT 1",
+      "bindings": [
+        {
+          "source": "actor",
+          "field": "id"
+        }
+      ]
+    },
+    "staff.name": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO staff (user_id, display) VALUES (?1, ?2) ON CONFLICT(user_id) DO UPDATE SET display = excluded.display",
+      "bindings": [
+        {
+          "source": "actor",
+          "field": "id"
+        },
+        {
+          "source": "input",
+          "key": "display",
+          "type": "string",
+          "maxLength": 60
+        }
+      ]
+    },
+    "panel.checkin": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "statement": "UPDATE bookings SET checked_in_at = ?4 WHERE room_id = ?1 AND day = ?2 AND slot = ?3 AND cancelled_at IS NULL AND checked_in_at IS NULL",
+      "bindings": [
+        {
+          "source": "input",
+          "key": "room",
+          "type": "string",
+          "maxLength": 40
+        },
+        {
+          "source": "input",
+          "key": "day",
+          "type": "string",
+          "maxLength": 10
+        },
+        {
+          "source": "input",
+          "key": "hour",
+          "type": "number"
+        },
+        {
+          "source": "kernel",
+          "field": "now"
+        }
+      ],
+      "http": {
+        "method": "POST",
+        "path": "/api/checkin",
+        "signature": {
+          "header": "X-Panel-Signature",
+          "secret": "panel_hook"
+        }
+      }
+    }
+  }
+}
