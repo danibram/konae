@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "actions": {
+    "habits.list": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT id, name, created_at FROM habits WHERE user_id = ?1 AND archived_at IS NULL ORDER BY created_at, id LIMIT 20",
+      "bindings": [{ "source": "actor", "field": "id" }]
+    },
+    "habits.create": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO habits(user_id, name, created_at) SELECT ?1, ?2, ?3 WHERE (SELECT COUNT(*) FROM habits WHERE user_id = ?1 AND archived_at IS NULL) < 20",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "name", "type": "string", "maxLength": 60 },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "habits.archive": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "UPDATE habits SET archived_at = ?3 WHERE id = ?1 AND user_id = ?2 AND archived_at IS NULL",
+      "bindings": [
+        { "source": "input", "key": "id", "type": "number" },
+        { "source": "actor", "field": "id" },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "checkins.add": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO checkins(habit_id, user_id, day, device, created_at) SELECT id, ?2, ?3, ?4, ?5 FROM habits WHERE id = ?1 AND user_id = ?2 AND archived_at IS NULL AND ?3 BETWEEN date(?5 / 1000, 'unixepoch', '-30 days') AND date(?5 / 1000, 'unixepoch', '+1 day') ON CONFLICT(habit_id, day) DO NOTHING",
+      "bindings": [
+        { "source": "input", "key": "habitId", "type": "number" },
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "day", "type": "string", "maxLength": 10 },
+        { "source": "input", "key": "device", "type": "string", "maxLength": 20 },
+        { "source": "kernel", "field": "now" }
+      ],
+      "signal": { "name": "habit.completed", "properties": ["habitId", "day", "device"] }
+    },
+    "checkins.remove": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "DELETE FROM checkins WHERE habit_id = ?1 AND day = ?2 AND user_id = ?3",
+      "bindings": [
+        { "source": "input", "key": "habitId", "type": "number" },
+        { "source": "input", "key": "day", "type": "string", "maxLength": 10 },
+        { "source": "actor", "field": "id" }
+      ]
+    },
+    "checkins.since": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT habit_id, day, device FROM checkins WHERE user_id = ?1 AND day >= ?2 ORDER BY day DESC, habit_id LIMIT 1000",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "from", "type": "string", "maxLength": 10 }
+      ]
+    },
+    "habits.streaks": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT habit_id, MAX(CASE WHEN last_day >= date(?2, '-1 day') THEN run ELSE 0 END) AS current_streak, MAX(run) AS best_streak, SUM(run) AS total_days FROM (SELECT habit_id, COUNT(*) AS run, MAX(day) AS last_day FROM (SELECT habit_id, day, julianday(day) - ROW_NUMBER() OVER (PARTITION BY habit_id ORDER BY day) AS island FROM checkins WHERE user_id = ?1) GROUP BY habit_id, island) GROUP BY habit_id ORDER BY habit_id LIMIT 20",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "today", "type": "string", "maxLength": 10 }
+      ]
+    },
+    "habits.import": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": { "method": "POST", "path": "/api/habits" },
+      "statement": "INSERT INTO habits(user_id, name, created_at) SELECT ?1, ?2, ?3 WHERE (SELECT COUNT(*) FROM habits WHERE user_id = ?1 AND archived_at IS NULL) < 20",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "name", "type": "string", "maxLength": 60 },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "habits.mine": {
+      "kind": "query",
+      "access": "anonymous",
+      "http": { "method": "GET", "path": "/api/habits" },
+      "statement": "SELECT id, name, created_at FROM habits WHERE user_id = ?1 AND archived_at IS NULL ORDER BY id LIMIT 20",
+      "bindings": [{ "source": "actor", "field": "id" }]
+    },
+    "checkins.log": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": { "method": "POST", "path": "/api/checkins" },
+      "statement": "INSERT INTO checkins(habit_id, user_id, day, device, created_at) SELECT id, ?2, ?3, ?4, ?5 FROM habits WHERE id = ?1 AND user_id = ?2 AND archived_at IS NULL AND ?3 BETWEEN date(?5 / 1000, 'unixepoch', '-30 days') AND date(?5 / 1000, 'unixepoch', '+1 day') ON CONFLICT(habit_id, day) DO NOTHING",
+      "bindings": [
+        { "source": "input", "key": "habitId", "type": "number" },
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "day", "type": "string", "maxLength": 10 },
+        { "source": "input", "key": "device", "type": "string", "maxLength": 20 },
+        { "source": "kernel", "field": "now" }
+      ],
+      "signal": { "name": "habit.completed", "properties": ["habitId", "day", "device"] }
+    }
+  }
+}
