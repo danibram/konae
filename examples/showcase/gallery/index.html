@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lena Varga · Photographs</title>
+<meta name="description" content="Photographs by Lena Varga: coast, city and weather.">
+<link rel="alternate" type="application/json" title="Lena Varga photographs" href="/feed.json">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site">
+  <a class="brand" href="/">Lena Varga</a>
+  <nav aria-label="Site">
+    <a href="/" aria-current="page">Work</a>
+    <a href="/about.html">About and contact</a>
+    <a href="/feed.json">Feed</a>
+  </nav>
+</header>
+<main>
+  <section class="intro">
+    <h1>Photographs</h1>
+    <p class="muted">Coast, city and weather, printed to order. New work appears here and in the <a href="/feed.json">JSON feed</a>.</p>
+  </section>
+  <p id="gallery-status" class="muted" role="status">Loading photographs…</p>
+  <ul id="grid" class="grid" aria-label="Published photographs"></ul>
+
+  <section id="studio" class="studio" hidden aria-labelledby="studio-title">
+    <h2 id="studio-title">Studio</h2>
+    <p class="muted">Only you see this. Drafts stay private to your account until you publish them.</p>
+    <form id="upload" class="card form">
+      <label>Photograph <input name="file" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/gif" required></label>
+      <label>Title <input name="title" maxlength="120" required></label>
+      <label>Caption <textarea name="caption" maxlength="600" rows="2"></textarea></label>
+      <label class="inline"><input name="publish" type="checkbox"> Publish now</label>
+      <div class="actions"><button type="submit" class="primary">Add photograph</button><span id="upload-status" class="muted" role="status"></span></div>
+    </form>
+    <h3>Drafts</h3>
+    <ul id="drafts" class="drafts"></ul>
+    <h3>Messages</h3>
+    <ul id="inbox" class="inbox"></ul>
+  </section>
+</main>
+<footer class="site">
+  <span class="muted">© Lena Varga</span>
+  <button id="auth" type="button" class="ghost">Studio sign-in</button>
+</footer>
+<dialog id="viewer" aria-label="Photograph">
+  <figure><img alt=""><figcaption></figcaption></figure>
+  <form method="dialog"><button class="ghost">Close</button></form>
+</dialog>
+<script src="/runtime.js"></script>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
