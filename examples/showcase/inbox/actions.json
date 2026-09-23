@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "actions": {
+    "events.receive": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": { "method": "POST", "path": "/hooks/events", "signature": { "header": "X-Inbox-Signature", "secret": "events_webhook" } },
+      "statement": "INSERT INTO events (source, external_id, severity, title, body, received_at) VALUES (?1, ?2, ?3, ?4, COALESCE(?5, ''), ?6) ON CONFLICT (source, external_id) DO NOTHING",
+      "bindings": [
+        { "source": "input", "key": "source", "type": "string", "maxLength": 40 },
+        { "source": "input", "key": "id", "type": "string", "maxLength": 100 },
+        { "source": "input", "key": "severity", "type": "string", "maxLength": 10 },
+        { "source": "input", "key": "title", "type": "string", "maxLength": 200 },
+        { "source": "input", "key": "body", "type": "string", "maxLength": 4000, "nullable": true },
+        { "source": "kernel", "field": "now" }
+      ],
+      "signal": { "name": "event.received", "properties": ["source", "severity"] }
+    },
+    "events.feed": {
+      "kind": "query",
+      "access": "anonymous",
+      "http": { "method": "GET", "path": "/api/events", "signature": { "header": "X-Inbox-Signature", "secret": "events_feed" } },
+      "statement": "SELECT id, source, external_id, severity, title, received_at, acknowledged_at FROM events WHERE (?1 IS NULL OR id > ?1) ORDER BY id LIMIT 100",
+      "bindings": [
+        { "source": "input", "key": "after", "type": "number", "nullable": true }
+      ]
+    },
+    "events.list": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT e.id, e.source, e.external_id, e.severity, e.title, e.body, e.received_at, e.acknowledged_at, m.email AS acknowledged_by_email FROM events e LEFT JOIN members m ON m.user_id = e.acknowledged_by WHERE (?1 IS NULL OR e.severity = ?1) AND (?2 IS NULL OR (?2 = 'open' AND e.acknowledged_at IS NULL) OR (?2 = 'acknowledged' AND e.acknowledged_at IS NOT NULL)) ORDER BY e.id DESC LIMIT 50",
+      "bindings": [
+        { "source": "input", "key": "severity", "type": "string", "maxLength": 10, "nullable": true },
+        { "source": "input", "key": "state", "type": "string", "maxLength": 12, "nullable": true }
+      ]
+    },
+    "events.counts": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT COUNT(*) AS total, COUNT(acknowledged_at) AS acknowledged FROM events",
+      "bindings": []
+    },
+    "events.acknowledge": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "UPDATE events SET acknowledged_by = ?2, acknowledged_at = ?3 WHERE id = ?1 AND acknowledged_at IS NULL",
+      "bindings": [
+        { "source": "input", "key": "id", "type": "number" },
+        { "source": "actor", "field": "id" },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "events.acknowledged": {
+      "kind": "signal",
+      "access": "authenticated",
+      "bindings": [
+        { "source": "input", "key": "id", "type": "number" },
+        { "source": "input", "key": "severity", "type": "string", "maxLength": 10 }
+      ],
+      "signal": { "name": "event.acknowledged", "properties": ["id", "severity"] }
+    },
+    "members.hello": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO members (user_id, email, seen_at) VALUES (?1, ?2, ?3) ON CONFLICT (user_id) DO UPDATE SET email = excluded.email, seen_at = excluded.seen_at",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "email", "type": "string", "maxLength": 254 },
+        { "source": "kernel", "field": "now" }
+      ]
+    }
+  }
+}
