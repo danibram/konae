@@ -1,0 +1,54 @@
+<div class="shell">
+  <header class="bar">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <h1>Operations inbox</h1>
+        <p class="who" id="who">Checking your session…</p>
+      </div>
+    </div>
+    <div class="bar-actions">
+      <button type="button" class="button secondary" id="refresh">Refresh</button>
+      <button type="button" class="button ghost" id="sign-out">Sign out</button>
+    </div>
+  </header>
+
+  <section class="stats" aria-label="Totals">
+    <div class="stat"><span class="stat-value" id="open-count">–</span><span class="stat-label">open</span></div>
+    <div class="stat"><span class="stat-value" id="ack-count">–</span><span class="stat-label">acknowledged</span></div>
+    <div class="stat"><span class="stat-value" id="total-count">–</span><span class="stat-label">received</span></div>
+  </section>
+
+  <form class="filters" id="filters" aria-label="Filter events">
+    <label class="field">
+      <span>Severity</span>
+      <select name="severity" id="severity">
+        <option value="">Any severity</option>
+        <option value="critical">Critical</option>
+        <option value="warning">Warning</option>
+        <option value="info">Info</option>
+      </select>
+    </label>
+    <fieldset class="segmented">
+      <legend>State</legend>
+      <label><input type="radio" name="state" value="open" checked><span>Open</span></label>
+      <label><input type="radio" name="state" value="acknowledged"><span>Acknowledged</span></label>
+      <label><input type="radio" name="state" value=""><span>All</span></label>
+    </fieldset>
+  </form>
+
+  <p class="notice" id="notice" role="status" hidden></p>
+
+  <ol class="events" id="events" aria-live="polite"></ol>
+
+  <section class="empty" id="empty" hidden>
+    <h2>Nothing here</h2>
+    <p id="empty-text">No event matches these filters.</p>
+  </section>
+
+  <details class="howto">
+    <summary>How events arrive</summary>
+    <p>Services post JSON to <code>POST /hooks/events</code> on this app's host, signed in the <code>X-Inbox-Signature</code> header as <code>t=&lt;unix seconds&gt;,v1=&lt;HMAC-SHA256 of "&lt;t&gt;.&lt;body&gt;"&gt;</code> with the inbox's signing secret. The body is <code>{ "source", "id", "severity", "title", "body"? }</code>, and severity is <code>info</code>, <code>warning</code> or <code>critical</code>. A repeated <code>source</code> and <code>id</code> is stored once.</p>
+    <p>Programs read <code>GET /api/events?after=&lt;id&gt;</code> with an API key the owner issued, sent as <code>Authorization: Bearer</code>.</p>
+  </details>
+</div>
