@@ -131,20 +131,24 @@ try {
   assert.equal(passed.ok, true, JSON.stringify(passed.errors));
   const program = JSON.parse(sources["actions.json"]);
   const streakSql: string = program.actions["habits.streaks"].statement;
-  const variants = {
-    unbounded: streakSql.replace(/ LIMIT 20$/, ""),
-    recursive: "WITH RECURSIVE d(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM d WHERE n < 7) SELECT n AS day_offset FROM d WHERE ?1 IS NOT NULL AND ?2 IS NOT NULL LIMIT 7",
+  // Three programs the doors must refuse: the streak without its LIMIT, a
+  // recursive calendar, and a Signal that tries to name the account.
+  const variants: Record<string, (actions: any) => void> = {
+    unbounded: (actions) => { actions["habits.streaks"].statement = streakSql.replace(/ LIMIT 20$/, ""); },
+    recursive: (actions) => { actions["habits.streaks"].statement = "WITH RECURSIVE d(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM d WHERE n < 7) SELECT n AS day_offset FROM d WHERE ?1 IS NOT NULL AND ?2 IS NOT NULL LIMIT 7"; },
+    signalActor: (actions) => { actions["checkins.add"].signal.properties.push("user"); },
   };
   const gateRefusals: Record<string, string> = {};
-  for (const [name, statement] of Object.entries(variants)) {
+  for (const [name, change] of Object.entries(variants)) {
     const variant = structuredClone(program);
-    variant.actions["habits.streaks"].statement = statement;
+    change(variant.actions);
     const result = await gate.validate({ "schema.sql": sources["schema.sql"], "actions.json": JSON.stringify(variant) } as never);
     assert.equal(result.ok, false);
     gateRefusals[name] = result.errors[0].detail ?? result.errors[0].message;
   }
   assert.match(gateRefusals.unbounded, /uses OVER, which keeps one result row per stored row, and has no LIMIT/);
   assert.match(gateRefusals.recursive, /Runtime query only allows: SELECT/);
+  assert.match(gateRefusals.signalActor, /Action checkins.add names signal property user, which is not one of its input bindings\./);
 
   // ------------------------------------------------------------ the Kernel
   kernel = await startKernel(dataDir, { LITTLEBOX_COPY_DIR: copyDir, LITTLEBOX_COPY_INTERVAL_SECONDS: "2" });
@@ -160,9 +164,9 @@ try {
   // The Kernel refuses the same two streak variants on release_plan.
   const kernelRefusals: Record<string, string> = {};
   await owner.call("project_create", { projectId: "showcase_habits_probe", name: "Habits probe", slug: "habits-probe", manifest: { version: 1, visibility: "public" } });
-  for (const [name, statement] of Object.entries(variants)) {
+  for (const [name, change] of Object.entries(variants)) {
     const variant = structuredClone(program);
-    variant.actions["habits.streaks"].statement = statement;
+    change(variant.actions);
     const payload = { project: { id: "showcase_habits_probe", name: "Habits probe", slug: "habits-probe", manifest: { version: 1, visibility: "public" }, files: { ...sources, "actions.json": JSON.stringify(variant) } }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>probe</main>" } } };
     const upload = await owner.upload(new TextEncoder().encode(JSON.stringify(payload)), "showcase_habits_probe");
     try {
@@ -171,8 +175,10 @@ try {
   }
   assert.match(kernelRefusals.unbounded, /uses OVER, which keeps one result row per stored row, and has no LIMIT/);
   assert.match(kernelRefusals.recursive, /contains disallowed SQL/);
+  assert.equal(kernelRefusals.signalActor, gateRefusals.signalActor);
+  assert.equal(kernelRefusals.unbounded, gateRefusals.unbounded);
   check("Streak SQL within the LIMIT rules",
-    `The Gate passes the capsule and both doors refuse the streak query without its top-level LIMIT. A WITH RECURSIVE calendar is refused by both, with different words: Gate "${gateRefusals.recursive}", Kernel "${kernelRefusals.recursive}".`);
+    `The Gate passes the capsule and both doors refuse the streak query without its top-level LIMIT. A WITH RECURSIVE calendar is refused by both, with different words: Gate "${gateRefusals.recursive}", Kernel "${kernelRefusals.recursive}". A Signal property that is not an input key is refused by both with "${kernelRefusals.signalActor}"`);
 
   // ------------------------------------------------- the editor's managed path
   // project_sources_save and release_plan/apply in the shapes the editor sends.
