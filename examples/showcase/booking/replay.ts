@@ -218,7 +218,7 @@ try {
   assert.equal(crowdChanges.filter((value) => value === 1).length, 1, `Exactly one of ten must win, got ${crowdChanges}.`);
   assert.equal(crowdChanges.filter((value) => value === 0).length, 9);
   const held = await sql(`SELECT count(*) AS n FROM bookings WHERE room_id = 'pine' AND day = '${crowdDay}' AND cancelled_at IS NULL`);
-  check("Double booking under concurrency", `${raceWins} rounds of two overlapping bookings sent together: one wins with 2 rows, the other gets { changes: 0 } (${[...new Set(outcomes)].join(", ")}). Ten requests for one hour: ${crowdChanges.join(",")}. Owner SQL counts ${JSON.stringify(held)} holder.`);
+  check("Double booking under concurrency", `${raceWins} rounds of two overlapping bookings sent together: one wins with 2 rows, the other gets { changes: 0 } (${[...new Set(outcomes)].join(", ")}). Ten requests for one hour: ${crowdChanges.join(",")}. Owner SQL counts ${held.rows[0].n} holder.`);
 
   // 7. Signals record even when the statement inserted nothing.
   const signals: any[] = [];
@@ -228,9 +228,10 @@ try {
     signals.push(...page.signals);
     cursor = page.nextCursor ?? undefined;
   } while (cursor);
-  const booked = Number((await sql("SELECT count(DISTINCT booking_ref) AS n FROM bookings"))?.rows?.[0]?.n ?? NaN);
+  const booked = Number((await sql("SELECT count(DISTINCT booking_ref) AS n FROM bookings")).rows[0].n);
   assert.equal(signals.length, createCalls, "booking.created records once per create call that did not error.");
-  check("Signals", `${createCalls} bookings.create calls answered without error and ${signals.length} booking.created Signals exist, though only ${Number.isNaN(booked) ? "some" : booked} bookings were made: a mutation that changed nothing still records its Signal.`);
+  assert(booked < createCalls);
+  check("Signals", `${createCalls} bookings.create calls answered without error and ${signals.length} booking.created Signals exist, though only ${booked} bookings were made: a mutation that changed nothing still records its Signal.`);
 
   // 8. The signed check-in route for a door panel, with a key or a signature.
   const panel = await owner.call<{ key: string; id?: string; keyId?: string }>("api_keys_create", { deploymentId, name: "Door panel", actions: ["panel.checkin"] });
