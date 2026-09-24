@@ -352,6 +352,10 @@ try {
   completions++;
   const foreignOrigin = await route("POST", "/api/checkins", { habitId: walk.id, day: utcDay(-1), device: "route" }, { host: new URL(receipt.url).host, cookie: anaPhoneCookie, origin: `http://other-app.localhost:${port}` });
   assert.equal(foreignOrigin.status, 400, JSON.stringify(foreignOrigin));
+  assert.equal(foreignOrigin.body.error, "This action requires an authenticated actor.");
+  // A hand-written client whose Host lacks the port its Origin carries runs as a visitor too.
+  const portless = await route("POST", "/api/checkins", { habitId: walk.id, day: utcDay(-1), device: "route" }, { cookie: anaPhoneCookie, origin: appOrigin });
+  assert.deepEqual(portless, { status: 400, body: { error: "This action requires an authenticated actor." } });
   assert.deepEqual((await action(anaPhone, "habits.list")).map((row: any) => row.name), ["Read 20 pages", "Walk"]);
   check("API key on an actor-bound route",
     `A key writes a habit whose owner is the key's ID ${key.keyId}; GET /api/habits with the key returns only that row; the key's check-in on Ana's habit changes 0 rows; a visitor gets 400 "${visitorRoute.body.error}". Ana's cookie from the app origin runs the route as Ana; from another origin it runs as a visitor (${foreignOrigin.status}).`);
@@ -375,9 +379,13 @@ try {
   assert.equal(total("route", "POST /api/checkins"), 3);
   assert.equal(total("route", "POST /api/habits"), 1);
   assert.equal(total("signup"), 2);
+  // The app's own session cannot read either store.
+  let runtimeUsage = "";
+  await assert.rejects(anaPhone.call("usage_read", { deploymentId: receipt.id, from: utcDay(-1), to: utcDay(1) }), (error: Error) => { runtimeUsage = error.message; return true; });
+  await assert.rejects(anaPhone.call("signals_read", { deploymentId: receipt.id }), (error: Error) => error.message === runtimeUsage);
   const dailyCheckins = usage.days.filter((row) => row.kind === "action" && row.name === "checkins.add");
   check("Signals and Usage",
-    `signals_read returns ${signals.length} habit.completed Signals with habitId, day and device; ${completions} of the calls added a row, ${zeroChangeSignals} changed nothing and still recorded one, including Ben's attempt on Ana's habit and a key's. usage_read gives checkins.add ${total("action", "checkins.add")} on ${dailyCheckins.map((row) => row.day).join(", ")}, POST /api/checkins ${total("route", "POST /api/checkins")}, signup ${total("signup")}, login ${total("login")}, session ${total("session")}. The app cannot read either.`);
+    `signals_read returns ${signals.length} habit.completed Signals with habitId, day and device; ${completions} of the calls added a row, ${zeroChangeSignals} changed nothing and still recorded one, including Ben's attempt on Ana's habit and a key's. usage_read gives checkins.add ${total("action", "checkins.add")} on ${dailyCheckins.map((row) => row.day).join(", ")}, POST /api/checkins ${total("route", "POST /api/checkins")}, signup ${total("signup")}, login ${total("login")}, session ${total("session")}. An app session calling usage_read or signals_read gets "${runtimeUsage}".`);
 
   // --------------------------------------------------- Action Contract and conform
   const conformEmail = "conform@habits.test";

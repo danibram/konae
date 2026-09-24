@@ -36,7 +36,7 @@ From the repository root, with Bun, Cargo and Google Chrome installed:
 LITTLEBOX_SHOWCASE_PORT=21410 bun run examples/showcase/habits/replay.ts
 ```
 
-The port defaults to 21410. The replay compiles the Kernel with `cargo build --offline`, so the first run takes a few minutes. It ignores every `LITTLEBOX_` variable in the shell, uses random passwords and setup key, and removes its Kernels, data directories, copies and ejected folder when it exits. It exits 0 when every check passes.
+The port defaults to 21410. The replay compiles the Kernel with `cargo build --offline`, so the first run takes a few minutes. The Kernels and CLI runs it starts ignore the shell's `LITTLEBOX_` variables. It uses random passwords and a random setup key, and it removes its Kernels, data directories, copies and ejected folder when it exits. It exits 0 when every check passes.
 
 - `LITTLEBOX_SHOWCASE_SCREENSHOTS=<dir>` writes `habits-light.png` and `habits-dark.png` of the signed-in page.
 - `LITTLEBOX_SHOWCASE_BROWSER=0` skips the Chrome pass.
@@ -68,9 +68,9 @@ The replay runs in this order:
 - **Copy and restore.** The restored Kernel serves Build 2 and keeps the accounts, passwords, rows, streaks, Signals, the ejected state and the API key, which still reads `GET /api/habits`. It signs out Ana's sessions, the owner's session and the delegated token.
 - **Content Security Policy.** Chrome loads the signed-out gate and the signed-in page with no violation or page error.
 
-## Does the lack of in-app Usage hurt this app?
+## Usage the app cannot read
 
-Not for the person. Their streaks and history come from their own `checkins` rows through Server Actions, so an in-app `usage_read` would add nothing they need. ADR-0010's v1 choice costs the owner instead, in two ways the replay measured. A Signal cannot say which account caused it, because properties may only be input keys, so the owner cannot count active users or completions per person from `habit.completed`. Second, a Signal records whenever the statement runs, including when it changes no row. In the replay 4 of 12 `habit.completed` Signals came from calls that stored nothing: a second tick on the same day, a day outside the 30-day window, Ben's attempt on Ana's habit, and the API key's attempt on it. The Signal count overstates completions by half again. The owner can get exact numbers only with `database_execute` on the rows, which is the Admin Interface and not something the app can show.
+ADR-0010 v1 keeps Usage and Signals away from the app. That does not hurt the person. Their streaks and history come from their own `checkins` rows through Server Actions, so an in-app `usage_read` would add nothing they need. It costs the owner instead, in two ways the replay measured. First, a Signal cannot say which account caused it, because properties may only be input keys, so the owner cannot count active users or completions per person from `habit.completed`. Second, a Signal records whenever the statement runs, including when it changes no row. In the replay 4 of 12 `habit.completed` Signals came from calls that stored nothing: a second tick on the same day, a day outside the 30-day window, Ben's attempt on Ana's habit, and the API key's attempt on it. The Signal count overstates completions by half again. The owner can get exact numbers only with `database_execute` on the rows, which is the Admin Interface and not something the app can show.
 
 ## What the primitives refused or could not do
 
@@ -80,7 +80,7 @@ Not for the person. Their streaks and history come from their own `checkins` row
 | Query bound, both doors | A window function anywhere in the statement needs a top-level `LIMIT`, even when the outer `SELECT` groups to one row per habit. Same message on both doors. | `Action habits.streaks uses OVER, which keeps one result row per stored row, and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.` |
 | Signals | A Signal cannot carry the actor. Naming a property that is not an input key is refused by the Gate and the Kernel. | `Action checkins.add names signal property user, which is not one of its input bindings.` |
 | Signals | A mutation records its Signal when it changes 0 rows. There is no way to declare "record only when a row changed". | No refusal. 12 Signals for 8 stored check-ins. |
-| Signals and Usage in the app | The runtime endpoint does not list `usage_read` or `signals_read`, so the app cannot show the owner's totals or a person's own Signals. | Not reachable from `window.miniapp`. |
+| Signals and Usage in the app | The runtime endpoint does not offer `usage_read` or `signals_read`, so the app cannot show the owner's totals or a person's own Signals. The replay calls both with Ana's app session. | `Unknown tool or insufficient permission.` |
 | API key | A key acts as itself, never as a person. Its rows belong to `key_...`. A phone shortcut holding a key cannot tick Ana's habit, and Littlebox has no per-user key. | `POST /api/checkins` with the key on Ana's habit answers `{ "result": { "changes": 0, ... } }`. |
 | HTTP route, no credential | An actor-bound route refuses a visitor with 400, not 401. | `{ "error": "This action requires an authenticated actor." }` |
 | HTTP route with a cookie | The Kernel compares `Origin` with `Host`. A hand-written client that sends `Host` without the port `Origin` carries runs as a visitor. A browser sends both and is not affected. | 400 `This action requires an authenticated actor.` |
