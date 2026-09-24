@@ -213,7 +213,7 @@ describe("migration", () => {
     // POST and auth routes are refused, never redirected.
     expect((await appFetch(kernel, app.hostname, "/_littlebox/auth/login", { method: "POST", body: "{}" })).status).toBe(503);
 
-    await expect(owner.call("migration_activate", { deploymentId: copy.id, confirmation: confirmed.confirmation.replace(/.$/, "0") })).rejects.toThrow("does not belong");
+    await expect(owner.call("migration_activate", { deploymentId: copy.id, confirmation: confirmed.confirmation.replace(/.$/, (last) => (last === "0" ? "1" : "0")) })).rejects.toThrow("does not belong");
     const activated = await owner.call<{ operationId: string; url: string }>("migration_activate", { deploymentId: copy.id, confirmation: confirmed.confirmation });
     expect(activated.operationId).toBe(begun.operationId);
     expect(await owner.call("migration_activate", { deploymentId: copy.id, confirmation: confirmed.confirmation })).toEqual(activated);
