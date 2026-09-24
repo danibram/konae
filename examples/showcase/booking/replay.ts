@@ -260,7 +260,7 @@ try {
   // The same action through the runtime endpoint needs no signature at all.
   const unsignedRuntime = await call<{ changes: number }>(visitor, "panel.checkin", { room: "oak", day, hour: 11 });
   assert.equal(unsignedRuntime.changes, 1);
-  check("Check-in route", `POST /api/checkin refuses an unsigned body (401 invalid-signature) and accepts a signature or the panel's API key. A staff session cookie from the app's origin without a signature gets 401 invalid-signature, though the contract lists "person" among the route's callers. On the runtime endpoint the key is ignored: anonymous actions answer as for a visitor and bookings.mine answers "${keyOnRuntime}". A signed-out visitor calls panel.checkin through actions_invoke with no signature and checks in a booking (changes ${unsignedRuntime.changes}).`);
+  check("Check-in route", `POST /api/checkin refuses an unsigned body (401 invalid-signature) and accepts a signature or the panel's API key. A staff session cookie without a signature gets 401 invalid-signature. On the runtime endpoint the key is ignored: anonymous actions answer as for a visitor and bookings.mine answers "${keyOnRuntime}". A signed-out visitor calls panel.checkin through actions_invoke with no signature and checks in a booking (changes ${unsignedRuntime.changes}).`);
 
   // 9. The Action Contract, and conform with a session token and with an API key.
   const contractDir = await copyOf("contract");

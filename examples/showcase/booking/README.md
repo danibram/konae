@@ -30,19 +30,19 @@ LITTLEBOX_SHOWCASE_PORT=19473 bun run examples/showcase/booking/replay.ts
 
 The replay builds the Kernel offline, starts it on `LITTLEBOX_SHOWCASE_PORT` (default 19470) with a random setup key and a data directory under the system temp folder, and deletes both on exit. It refuses to start when something already answers on the port. `LITTLEBOX_SHOWCASE_BROWSER=0` skips Chrome. `LITTLEBOX_SHOWCASE_SCREENSHOTS=<dir>` writes `booking-visitor-light.png`, `booking-staff-light.png` and `booking-staff-dark.png` there.
 
-It prints one `PASS` line per group and a JSON report, and exits 0 when all ten hold. The last run printed:
+It prints one `PASS` line per group and a JSON report, and exits 0 when all ten hold. The last run printed these lines, trimmed where marked `[...]`:
 
 ```text
-PASS Validation Gate and Kernel. Both pass the Capsule and both refuse a trigger that writes the booking log, a mutation that starts with WITH, two statements in one action, a view of free hours.
-PASS Publish. Refused first with "Action panel.checkin signs with the secret panel_hook, which is not set for this project. Set it with secret_set before publishing."; published public after secret_set, with initialSignupPolicy allowlist @office.example.
+PASS Validation Gate and Kernel. Both pass the Capsule and both refuse a trigger that writes the booking log, a mutation that starts with WITH, two statements in one action, a view of free hours. [...]
+PASS Publish. Refused first with "Action panel.checkin signs with the secret panel_hook, which is not set for this project. Set it with secret_set before publishing."; published public at [...] after secret_set, with initialSignupPolicy allowlist @office.example.
 PASS Allowlist signup. @office.example signs up. pat@elsewhere.example, sam@sub.office.example and, under Closed, cara@office.example all get 403 {"error":"This app is not accepting new accounts for this email address."}. Existing staff still sign in under Closed.
-PASS One-statement booking. A two-hour booking writes two rows in one INSERT ... WITH RECURSIVE ... SELECT. An overlap and a fractional hour, five hours, a span past 18:00, a past day, an impossible date, text that is not a date, an unknown room each return { changes: 0 } with no reason.
-PASS Public and staff views. A visitor and GET /api/availability get only { room, hour }; titles and names need a session, and authenticated actions answer authentication-required.
-PASS Double booking under concurrency. 20 rounds of two overlapping bookings sent together: one wins with 2 rows, the other gets { changes: 0 } (2/0, 0/2). Ten requests for one hour: 1,0,0,0,0,0,0,0,0,0.
+PASS One-statement booking. A two-hour booking writes two rows in one INSERT ... WITH RECURSIVE ... SELECT. An overlap and a fractional hour, five hours, a span past 18:00, a past day, an impossible date, text that is not a date, an unknown room each return { changes: 0 } with no reason. [...]
+PASS Public and staff views. A visitor and GET /api/availability get only { room, hour }; titles and names need a session, and authenticated actions answer authentication-required. [...]
+PASS Double booking under concurrency. 20 rounds of two overlapping bookings sent together: one wins with 2 rows, the other gets { changes: 0 } (2/0, 0/2). Ten requests for one hour: 1,0,0,0,0,0,0,0,0,0. Owner SQL counts 1 holder.
 PASS Signals. 61 bookings.create calls answered without error and 61 booking.created Signals exist, though only 24 bookings were made: a mutation that changed nothing still records its Signal.
 PASS Check-in route. POST /api/checkin refuses an unsigned body (401 invalid-signature) and accepts a signature or the panel's API key. [...] A signed-out visitor calls panel.checkin through actions_invoke with no signature and checks in a booking (changes 1).
-PASS Action Contract. conform --token --secret: "84 passed, 0 failed, 0 skipped.". conform --token --key: "81 passed, 0 failed, 0 skipped.". conform --key alone: "35 passed, 0 failed, 14 skipped.".
-PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no policy violation or page error; staff book two hours from the grid.
+PASS Action Contract. [...] conform --token --secret: "84 passed, 0 failed, 0 skipped.". conform --token --key: "81 passed, 0 failed, 0 skipped, 1 rate-limit waits.". conform --key alone: "35 passed, 0 failed, 14 skipped, 1 rate-limit waits.".
+PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no policy violation or page error; staff book two hours from the grid. [...]
 ```
 
 ## What worked
@@ -53,7 +53,7 @@ PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no
 - **A span of hours in one statement.** `bookings.create` generates the hours with a recursive CTE inside the `INSERT`'s `SELECT`, guards them with `WHERE`, and writes every hour or none. Cancelling is one `UPDATE ... WHERE booking_ref = ? AND user_id = ?` over all the rows of a booking. Another member's cancel changes 0 rows.
 - **No double booking.** Twenty rounds of two overlapping requests sent at once, and one round of ten requests for the same hour, each end with exactly one holder. The loser always gets `{ changes: 0 }`, never an error.
 - **Backstops in the schema.** Owner SQL that skips the action's `WHERE` still meets `UNIQUE constraint failed: bookings.room_id, bookings.day, bookings.slot` and `CHECK constraint failed: typeof(slot) = 'integer' AND slot BETWEEN 8 AND 17`.
-- **Routes.** `GET /api/availability` returns the visitor's rows as JSON. `POST /api/checkin` refuses an unsigned body with 401 `invalid-signature` and accepts a signature or the panel's API key. A staff session cookie sent from the app's own origin without a signature also gets 401.
+- **Routes.** `GET /api/availability` returns the visitor's rows as JSON. `POST /api/checkin` refuses an unsigned body with 401 `invalid-signature` and accepts a signature or the panel's API key. A staff session cookie sent without a signature gets 401 too.
 - **Content Security Policy.** The visitor page and the staff page load in Chrome under the Kernel's policy with no violation and no page error, and a staff member books two hours by clicking the grid.
 
 ## Atomic booking and the one-statement rule
@@ -117,7 +117,7 @@ Messages are quoted exactly as the replay received them. "Gate" is the editor's 
 | Telling the requester why a booking failed | Kernel | `{ changes: 0 }`, nothing else | Overlap, past day, bad date, unknown room, too many hours and a span past 18:00 all look the same. `RETURNING` is refused (`Action <name> cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.`) and there are no triggers to `RAISE`. Letting the unique index fail instead would show staff `UNIQUE constraint failed: bookings.room_id, bookings.day, bookings.slot` |
 | Counting bookings with a Signal on `bookings.create` | Kernel | No refusal. 61 calls, 61 `booking.created` Signals, 24 bookings made | A Signal on a mutation records whenever the statement ran without error, including `{ changes: 0 }`. The owner cannot tell a booking from a refused attempt |
 | Protecting `panel.checkin` with a signature | Kernel | No refusal. A signed-out visitor calls it through `actions_invoke` with no signature and gets `{ changes: 1 }` | The signature guards only `POST /api/checkin`. Any visitor of a public app can check in any booking through the runtime endpoint. Making the action `authenticated` closes that door and the route with it: `Action <name> is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route.` The contract does list "visitor" on the runtime endpoint for this action |
-| A staff member checking in from the app with their session | Kernel | 401 `{"error":"invalid-signature"}` | Matches docs/mcp.md, but the contract's route section lists "person (the app session cookie, from the app's own origin)" among the callers of the signed route |
+| A staff member checking in from the app with their session | Kernel | 401 `{"error":"invalid-signature"}` | Matches docs/mcp.md: a person needs the signature too. The contract's route section lists "person (the app session cookie, from the app's own origin)" as a caller without saying the signature is still required. A 401 on an action with no actor binding does not show whether the Kernel read the cookie at all |
 | The panel's API key on the runtime endpoint | Kernel | No refusal. `availability.day` answers as for a visitor; `bookings.mine` answers `authentication-required` | docs/mcp.md says the runtime endpoint "does not accept" a key. It ignores it instead, so a misconfigured program gets visitor data without an error |
 | An API key booking a room | Kernel | Not possible: keys work only on HTTP routes, and `bookings.create` is `authenticated`, which cannot declare `http` | A program, such as a calendar sync, cannot book on a person's behalf |
 | A webhook out to notify staff | none | No primitive exists | See [Notifying staff](#notifying-staff) |
