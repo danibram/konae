@@ -36,6 +36,7 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | Discovery | `platform_describe`, `platform_guide`, `session_inspect`, `mail_status`, `projects_list`, `project_inspect` |
 | Projects | `project_create`, `project_sources_read`, `project_sources_save` |
 | Eject, with `manage_lifecycle` | `eject_plan`, `eject_apply` |
+| Migration, with `manage_lifecycle` | `migration_begin`, `migration_confirm`, `migration_cancel`, `migration_activate`; `migration_status` with `read` |
 | Owner schema and data | `schema_plan`, `database_execute`, `storage_test` |
 | App export, with `export_data` | `package_export`, `project_export`, `database_export` |
 | Publishing | `release_plan`, `release_apply` |
@@ -485,7 +486,7 @@ To import, start each component upload with `transfer_begin` and `component` set
 - the volume has room for the components, a schema check copy of the database and 64 MiB to spare;
 - the release's `schema.sql` and actions run against the imported database.
 
-`release_apply` copies each component into the new Deployment's folder, checking its SHA-256 as it copies, deletes sessions, email links and API keys again, and unpacks the files. The uploads stay intact until you cancel them, so a failed apply can be retried with a new plan. Repeating an applied plan returns its receipt and creates nothing. A project that already has a Deployment refuses `initialPackage`, as it refuses the small format's initial state. The signup policy comes from the manifest unless the payload sets `initialSignupPolicy`.
+`release_apply` copies each component into the new Deployment's folder, checking its SHA-256 as it copies, deletes sessions, email links and API keys again, and unpacks the files. The uploads stay intact until you cancel them, so a failed apply can be retried with a new plan. Repeating an applied plan returns its receipt and creates nothing. A `release_plan` that names a package this project already imported returns `{ planId, applied: true, packageId, receipt }` with the first plan, so `release_apply` with that plan returns the first receipt. A project that already has a Deployment refuses any other `initialPackage`, as it refuses the small format's initial state. The signup policy comes from the manifest unless the payload sets `initialSignupPolicy`.
 
 | Refusal | Message |
 | --- | --- |
@@ -494,13 +495,80 @@ To import, start each component upload with `transfer_begin` and `component` set
 | Package for a project with a Deployment | `Portable state can only be imported on the first deployment.` |
 | Upload bytes that differ from the declared SHA-256 | `Upload size or SHA-256 mismatch.` |
 | Upload that differs from the manifest | `The database component does not match the size and SHA-256 in the manifest.` |
-| Another manifest version | `Package version 2 is not supported. This Kernel reads version 1.` |
+| Another manifest version | `Package version 3 is not supported. This Kernel reads versions 1 and 2.` |
+| Version 2 without a migration stamp, or a stamp on version 1 | `A version 2 package must name its migration.` / `Only a version 2 package may name a migration.` |
 | Component over its limit | `Transfer size is outside the limit of 67108864 bytes for the identity component.` |
 | Not enough disk at `transfer_begin` for a component, at `package_export` or at `release_plan` | `Not enough free space on the Kernel volume to import this app: 340 MiB needed, 120 MiB free.` |
 
 The CLI's `export --with-data` downloads the package into the kit as `littlebox/package/`, and the kit's `deploy.mjs` uploads it, records its progress in `littlebox/import-state.json` and resumes from the Kernel's offset after an interruption. `src/lib/portable-package.ts` checks the manifest on the client with the same limits as `kernel-rs/src/package.rs`.
 
 `project_export`, the small format, and `database_export`, the raw database file, now need `export_data` too. It returns the database, accounts and files as base64 in one transfer of at most 16 MiB, and a release still imports it through `initialDatabase`, `initialIdentity`, `initialFiles` and `initialSignupPolicy`.
+
+## Migrate an app
+
+A migration moves one app to another installation with its accounts, rows, files, Usage and Signals, policy and published artifact, and leaves exactly one installation taking its writes. [ADR-0014](./adr/0014-an-app-migrates-with-one-writer-at-a-time.md) records the decisions, and `tests/smoke/migration.ts` rehearses the whole procedure on two Kernels.
+
+1. Prepare the destination: a Kernel with its own `LITTLEBOX_PUBLIC_ORIGIN`, an owner, an email transport, and the route signing secrets the app needs set with `secret_set` on a project with the same ID.
+2. On the origin, `migration_begin { deploymentId, waitSeconds? }`. The app pauses at once, then the Kernel waits up to `waitSeconds` (30 by default, at most 120) for work in progress and captures the package. Download every entry of `downloads` with `transfer_read`.
+3. On the destination, upload each component with `transfer_begin` and its component name, add `initialPackage` to the `release` download, and release it with `release_plan` and `release_apply`. The imported app is paused. Check it with read tools.
+4. On the origin, `migration_confirm { operationId, newUrl? }`. Keep the `confirmation` from the receipt.
+5. On the destination, `migration_activate { deploymentId, confirmation, resendInvitations? }`. The app serves; people sign in with their passwords.
+
+### Maintenance
+
+While an app is paused its host answers a request for a page, or any `GET` outside `/_littlebox/`, with a 503 maintenance page that names the operation, and every other request with HTTP 503, `Retry-After: 300` and:
+
+```json
+{ "error": "This app is paused for migration 5d74cf67-…. It accepts no writes, signups, recovery, administrative changes or email until the migration is confirmed or cancelled.", "operationId": "5d74cf67-…", "maintenance": true }
+```
+
+That covers actions, uploads and file reads, signup, sign-in, recovery, invitation acceptance, HTTP routes and the runtime MCP endpoint. Nothing is redirected. Owner tools that would change the app are refused with the same message: publishing, the signup policy, suspending and resuming accounts, invitations, secrets, API keys and owner SQL that writes. Tools ending in `_list` or `_read`, `package_export`, `database_export`, `project_export`, `release_plan`, `database_execute` with `inspect`, `browse` or `list-backups`, and the migration tools keep working. The mail worker holds the app's queued email; a held job keeps its attempt count.
+
+The pause is the file `deployments/<id>/migration.json`. A restart keeps it, a scheduled copy carries it, and a restore of that copy stays paused. A file that cannot be parsed pauses the app with a message that names it.
+
+### Tools
+
+`migration_begin` needs `manage_lifecycle` and `export_data`. It writes the pause, takes the project, data and identity locks once each so every write that began before the pause finishes, then waits while an email of the app is with the provider. When the wait ends before that, it returns `phase: "pausing"` with `settle.waitingFor` set to `operations` or `mail`; the app stays paused and the next call continues. Then it ends the app's other queued email (`settle.mailEnded`), captures the package and returns `phase: "captured"` with `operationId`, `packageId`, `manifest` and `downloads`, one per component plus `release`. Calling it again while captured returns the same operation and package with new downloads. A copy does not carry the kept package, so an origin restored while captured captures again under the same operation and confirmation, with a new `packageId`. An error after the pause ends with `The app stays paused: call migration_begin again to retry, or migration_cancel to resume it.`
+
+The manifest is version 2. Its `migration` stamp names the operation, the origin Deployment, project and URL, the size and SHA-256 of the `release` download, and `confirmationHash`, the SHA-256 of a confirmation the origin keeps until `migration_confirm`. A Kernel that reads only version 1 refuses the package. The `release` download is a release payload with the live artifact, `actions.json`, the project manifest and the visibility; it has no `schema.sql`, because the database arrives whole.
+
+`migration_status { deploymentId }` needs `read` and returns `role` (`origin` or `destination`), `phase`, `paused`, the operation, the package and, once confirmed, `confirmedAt`, `retainUntil` and `newUrl`. It never returns the confirmation.
+
+`migration_confirm { operationId, newUrl? }` needs `manage_lifecycle` and a captured operation. The origin stays paused for good, keeps its state and the kept package until `retainUntil`, seven days later, and shows `newUrl` on its maintenance page until then. `newUrl` must be an absolute `https` URL, or `http` on a loopback host, with no credentials, query or fragment, on another host than the app's. The receipt holds the `confirmation`. Repeating returns the same receipt.
+
+`migration_cancel { operationId }` needs `manage_lifecycle`. It resumes the origin, deletes the kept package and discards the confirmation, so a package already imported elsewhere can never be activated. Email ended by the pause is not sent again: resend invitations, and people ask again for verification or recovery links. Repeating returns the same receipt.
+
+`migration_activate { deploymentId, confirmation, resendInvitations? }` runs on the destination and needs `manage_lifecycle`, and `manage_users` with `resendInvitations`. It checks the confirmation against the package's hash, ends any session, email link or API key in the imported accounts, and starts serving. The receipt lists pending invitations; with `resendInvitations` each gets a new seven-day link on the destination's host, and `invitations.resent` holds each result. Repeating returns the same receipt.
+
+The audit log records each migration tool with the Deployment as target and the operation as detail.
+
+### What travels
+
+| Carried | Not carried |
+| --- | --- |
+| Account IDs, password hashes, verified state and suspensions | Sessions, verification, recovery and invitation links |
+| Rows, files and their owners, Usage and Signals | API keys and route signing secrets |
+| Visibility and signup policy | Queued email; pending invitations keep their recipient and are resent |
+| The live artifact and `actions.json` | The origin's hostname; the destination builds one from its own origin |
+
+| Refusal | Message |
+| --- | --- |
+| `migration_begin` without `export_data` | `Permission denied for export_data.` |
+| Any migration tool but `migration_status` without `manage_lifecycle` | `Unknown tool or insufficient permission.` |
+| A write, signup, sign-in, recovery or route call on a paused app | HTTP 503 with the operation, as above |
+| An owner change to a paused app | `This app is paused for migration <id>. …` |
+| `migration_cancel` after confirmation | `Migration <id> was confirmed, so its destination may already accept writes. Cancelling would leave two installations writing. …` |
+| `migration_begin` on a confirmed origin | `Migration <id> was confirmed: this app now takes its writes at the destination. Migrate it from there.` |
+| `migration_begin` on an import that is not active | `This app was imported by migration <id> and is not active yet. …` |
+| `migration_confirm` after cancel, or before the capture | `Migration <id> was cancelled. Begin a new migration.` / `… has not captured the app yet. …` |
+| `migration_activate` with another confirmation, or after the origin cancelled | `This confirmation does not belong to migration <id>. …` |
+| `migration_activate` on an app that was not imported | `This app was not imported by a migration, so it has nothing to activate.` |
+| `newUrl` over plain `http`, with credentials, a query or fragment, or on the app's own host | `newUrl must use https.` and the like |
+| A second package into an app that has one | `Portable state can only be imported on the first deployment.` |
+
+### Restore and the revocation record
+
+A restore brings back an installation from its last copy, up to an hour old. So that it cannot bring back an account suspended or an API key revoked since then, `app_user_suspend`, `api_keys_revoke` and `littlebox-kernel creator-account-suspend` write each change to every copy target, under `revocations/`, before they report success. If a target cannot be written the tool reports `The change holds on this server, but it could not be recorded at the copy target, so a restore could undo it …`; repeating the same request records it. `littlebox-kernel restore` applies the record before it installs the copy. When the record cannot be read, the restored installation starts in maintenance: every app serves its maintenance page and every owner change is refused with `This installation was restored from a copy and stays in maintenance …` until the operator runs `littlebox-kernel reconcile`. The README's section on copies gives the commands.
 
 ## Transfers and limits
 

@@ -26,3 +26,7 @@ The kit carries the package under `littlebox/package/`, and its `deploy.mjs` upl
 `transfer_complete` hashes uploads in 64 KiB reads instead of reading the file whole. Package transfers write one audit row at their first block rather than one per block.
 
 The editor's own export still builds the small format in the browser. The OAuth consent screen does not offer `export_data`, so an OAuth client cannot download state; a delegated token or the owner session can.
+
+## Note, 2026-11-06: migration packages
+
+[ADR-0014](0014-an-app-migrates-with-one-writer-at-a-time.md) adds a version 2 manifest: version 1 plus a `migration` stamp that `migration_begin` writes. The Kernel and `src/lib/portable-package.ts` accept both versions, require the stamp on version 2 and refuse it on version 1. A version 2 import starts paused until `migration_activate`. A `release_plan` with a package the project already imported now returns the first plan and its receipt instead of the refusal for a project that has a Deployment; any other package for that project is still refused.

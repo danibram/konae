@@ -5,6 +5,11 @@
 //! those, written to a directory target, an S3 prefix, or both, with a
 //! `manifest.json` that lists every file with its size and SHA-256. The
 //! `restore` subcommand installs one copy into an empty data directory.
+//!
+//! With `LITTLEBOX_COPY_SECRET` set, every file sent to S3 is sealed with
+//! AES-256-GCM, as `mail.rs` seals queued links, and `restore` needs the
+//! same secret to open it. Every target also keeps the revocation record of
+//! `recovery.rs`, which `restore` applies before the Kernel serves.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -20,8 +25,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use ring::{
+    aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey},
+    hkdf,
+    rand::{SecureRandom, SystemRandom},
+};
+
 use crate::{
-    AppState, database_lock, list_s3_keys, now_ms, read_s3_bytes, s3_client_from_env,
+    AppState, database_lock, list_s3_keys, now_ms, read_s3_bytes, recovery, s3_client_from_env,
     safe_relative_path,
 };
 
@@ -32,6 +43,8 @@ const DEPLOYMENT_DATABASES: [&str; 3] = ["database.sqlite", "identity.sqlite", "
 /// `mail.sqlite` is the email queue (`mail.rs`); its links stay sealed in a copy.
 const ROOT_DATABASES: [&str; 3] = ["owners.sqlite", "mcp.sqlite", crate::mail::MAIL_DATABASE];
 const MANIFEST: &str = "manifest.json";
+/// The only cipher a copy names in its manifest.
+const ENCRYPTION: &str = "AES-256-GCM";
 const KEEP_RECENT: usize = 24;
 const KEEP_DAILY_DAYS: u64 = 30;
 const DAY_MS: u64 = 86_400_000;
@@ -125,6 +138,8 @@ pub struct CopyConfig {
 impl CopyConfig {
     pub fn from_env(data_root: &Path, s3_configured: bool) -> Result<Option<Self>> {
         let read = |name: &str| std::env::var(name).ok().filter(|value| !value.trim().is_empty());
+        // Refuses a short secret at startup rather than at the first copy.
+        CopyKey::from_env()?;
         Self::parse(
             read("LITTLEBOX_COPY_DIR").as_deref(),
             read("LITTLEBOX_COPY_S3_PREFIX").as_deref(),
@@ -178,6 +193,80 @@ impl CopyConfig {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Encryption at rest
+
+/// The key that seals copy files on S3. HKDF-SHA256 of `LITTLEBOX_COPY_SECRET`
+/// with a fixed salt and label, as `mail.rs` derives its link key, so the
+/// secret itself never encrypts anything.
+pub(crate) struct CopyKey {
+    key: LessSafeKey,
+    check: String,
+}
+
+impl CopyKey {
+    pub(crate) fn from_env() -> Result<Option<Self>> {
+        match std::env::var("LITTLEBOX_COPY_SECRET").ok().filter(|value| !value.is_empty()) {
+            None => Ok(None),
+            Some(secret) => {
+                ensure!(secret.len() >= 32, "LITTLEBOX_COPY_SECRET must be at least 32 characters.");
+                Ok(Some(Self::derive(&secret)))
+            }
+        }
+    }
+
+    pub(crate) fn derive(secret: &str) -> Self {
+        let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, b"littlebox-copy-v1").extract(secret.as_bytes());
+        let okm = prk.expand(&[b"copy file"], &AES_256_GCM).expect("HKDF output fits AES-256");
+        let key = LessSafeKey::new(UnboundKey::from(okm));
+        // A second expansion, so the manifest can tell a wrong secret from a
+        // damaged file without revealing anything about the key.
+        let mut check = [0u8; 32];
+        prk.expand(&[b"key check"], HkdfLength(32)).expect("HKDF output fits 32 bytes").fill(&mut check).expect("32 bytes");
+        Self { key, check: hex::encode(check) }
+    }
+
+    /// Seals one file. The copy ID and the file's path are the associated
+    /// data, so a sealed file moved to another copy or path does not open.
+    /// The output is the nonce followed by the ciphertext and its tag.
+    pub(crate) fn seal(&self, copy: &str, path: &str, mut bytes: Vec<u8>) -> Result<Vec<u8>> {
+        let mut nonce = [0u8; NONCE_LEN];
+        SystemRandom::new().fill(&mut nonce).map_err(|_| anyhow::anyhow!("Could not generate a nonce."))?;
+        self.key
+            .seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::from(format!("{copy}/{path}").as_bytes()), &mut bytes)
+            .map_err(|_| anyhow::anyhow!("Could not encrypt {path}."))?;
+        let mut sealed = nonce.to_vec();
+        sealed.extend_from_slice(&bytes);
+        Ok(sealed)
+    }
+
+    pub(crate) fn open(&self, copy: &str, path: &str, sealed: &[u8]) -> Option<Vec<u8>> {
+        if sealed.len() < NONCE_LEN {
+            return None;
+        }
+        let (nonce, body) = sealed.split_at(NONCE_LEN);
+        let nonce = Nonce::try_assume_unique_for_key(nonce).ok()?;
+        let mut buffer = body.to_vec();
+        let plain = self.key.open_in_place(nonce, Aad::from(format!("{copy}/{path}").as_bytes()), &mut buffer).ok()?;
+        Some(plain.to_vec())
+    }
+}
+
+struct HkdfLength(usize);
+
+impl hkdf::KeyType for HkdfLength {
+    fn len(&self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Encryption {
+    algorithm: String,
+    key_check: String,
+}
+
 fn normalize_prefix(prefix: &str) -> String {
     let trimmed = prefix.trim().trim_matches('/');
     if trimmed.is_empty() { String::new() } else { format!("{trimmed}/") }
@@ -198,6 +287,9 @@ pub struct CopyStatus {
     targets: Vec<&'static str>,
     interval_seconds: Option<u64>,
     reports: std::sync::Mutex<HashMap<&'static str, TargetReport>>,
+    /// Where `recovery.rs` writes the revocation record.
+    ledger: Vec<Target>,
+    key: Option<std::sync::Arc<CopyKey>>,
 }
 
 impl CopyStatus {
@@ -206,7 +298,13 @@ impl CopyStatus {
             targets: config.map(|config| config.targets.iter().map(Target::kind).collect()).unwrap_or_default(),
             interval_seconds: config.map(|config| config.interval.as_secs()),
             reports: Default::default(),
+            ledger: config.map(|config| config.targets.clone()).unwrap_or_default(),
+            key: config.and_then(|_| CopyKey::from_env().ok().flatten()).map(std::sync::Arc::new),
         }
+    }
+
+    pub(crate) fn ledger_targets(&self) -> &[Target] {
+        &self.ledger
     }
 
     fn update(&self, kind: &'static str, change: impl FnOnce(&mut TargetReport)) {
@@ -227,6 +325,7 @@ impl CopyStatus {
                 }
                 json!({
                     "kind": kind,
+                    "encrypted": *kind == "s3" && self.key.is_some(),
                     "lastAttemptAt": report.last_attempt_at,
                     "lastSuccessAt": report.last_success_at,
                     "lastCopyId": report.last_copy_id,
@@ -257,16 +356,20 @@ pub fn spawn_schedule(state: AppState, config: CopyConfig) {
     });
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Manifest {
     version: u32,
     copy_id: String,
     created_at: u64,
     files: Vec<ManifestFile>,
+    /// Present when the files are sealed; sizes and checksums are of the
+    /// plain files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    encryption: Option<Encryption>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct ManifestFile {
     path: String,
     size: u64,
@@ -288,7 +391,10 @@ pub async fn run_copy(state: &AppState, targets: &[Target]) -> Result<String> {
         state.copies.update(kind, |report| report.last_attempt_at = Some(started));
         let outcome = match &staged {
             Err(error_value) => Err(anyhow::anyhow!("the snapshot failed: {error_value:#}")),
-            Ok(manifest) => send(state, target, &staging, manifest, &id).await,
+            Ok(manifest) => match recovery::start(target, state.s3.as_ref(), &state.data_bucket).await {
+                Ok(()) => send(state, target, &staging, manifest, &id).await,
+                Err(error_value) => Err(error_value.context("the revocation record could not be started")),
+            },
         };
         match outcome {
             Ok(pruned) => {
@@ -323,7 +429,7 @@ async fn send(state: &AppState, target: &Target, staging: &Path, manifest: &Mani
         }
         Target::S3 { prefix } => {
             let s3 = state.s3.as_ref().context("S3 is not configured.")?;
-            send_to_s3(s3, &state.data_bucket, prefix, staging, manifest, id).await?;
+            send_to_s3(s3, &state.data_bucket, prefix, staging, manifest, id, state.copies.key.as_deref()).await?;
             prune_s3(s3, &state.data_bucket, prefix, id, now_ms()).await
         }
     }
@@ -356,7 +462,7 @@ async fn stage_copy(state: &AppState, staging: &Path, id: &str, created_at: u64)
     }
     let (root, id) = (staging.to_owned(), id.to_owned());
     tokio::task::spawn_blocking(move || {
-        let manifest = Manifest { version: 1, copy_id: id, created_at, files: list_files(&root)? };
+        let manifest = Manifest { version: 1, copy_id: id, created_at, files: list_files(&root)?, encryption: None };
         std::fs::write(root.join(MANIFEST), serde_json::to_vec_pretty(&manifest)?)?;
         Ok(manifest)
     })
@@ -372,7 +478,9 @@ fn copy_deployment(source: &Path, target: &Path) -> Result<()> {
         let name = name.to_string_lossy();
         let (from, to) = (entry.path(), target.join(&*name));
         match &*name {
-            "deployment.json" if kind.is_file() => {
+            // The migration state travels, so a restore never revives an
+            // app that moved or was paused for a migration.
+            "deployment.json" | crate::migration::MARKER_FILE if kind.is_file() => {
                 std::fs::copy(&from, &to)?;
             }
             database if kind.is_file() && DEPLOYMENT_DATABASES.contains(&database) => vacuum_into(&from, &to)?,
@@ -508,9 +616,22 @@ fn prune_directory(directory: &Path, now: u64) -> Result<usize> {
     Ok(expired.len())
 }
 
+/// The manifest a sealed copy carries.
+fn sealed_manifest(manifest: &Manifest, key: &CopyKey) -> Manifest {
+    Manifest { encryption: Some(Encryption { algorithm: ENCRYPTION.into(), key_check: key.check.clone() }), ..manifest.clone() }
+}
+
 /// Uploads every file, then the manifest. A prefix without a manifest is an
-/// unfinished upload and restore refuses it.
-async fn send_to_s3(s3: &S3Client, bucket: &str, prefix: &str, staging: &Path, manifest: &Manifest, id: &str) -> Result<()> {
+/// unfinished upload and restore refuses it. With a key each file is sealed.
+async fn send_to_s3(
+    s3: &S3Client,
+    bucket: &str,
+    prefix: &str,
+    staging: &Path,
+    manifest: &Manifest,
+    id: &str,
+    key: Option<&CopyKey>,
+) -> Result<()> {
     let mut uploads = tokio::task::JoinSet::new();
     for file in &manifest.files {
         if uploads.len() >= 8 {
@@ -518,7 +639,10 @@ async fn send_to_s3(s3: &S3Client, bucket: &str, prefix: &str, staging: &Path, m
                 result??;
             }
         }
-        let bytes = tokio::fs::read(staging.join(&file.path)).await?;
+        let mut bytes = tokio::fs::read(staging.join(&file.path)).await?;
+        if let Some(key) = key {
+            bytes = key.seal(id, &file.path, bytes)?;
+        }
         let request = s3
             .put_object()
             .bucket(bucket)
@@ -529,10 +653,14 @@ async fn send_to_s3(s3: &S3Client, bucket: &str, prefix: &str, staging: &Path, m
     while let Some(result) = uploads.join_next().await {
         result??;
     }
+    let manifest_bytes = match key {
+        Some(key) => serde_json::to_vec_pretty(&sealed_manifest(manifest, key))?,
+        None => tokio::fs::read(staging.join(MANIFEST)).await?,
+    };
     s3.put_object()
         .bucket(bucket)
         .key(format!("{prefix}{id}/{MANIFEST}"))
-        .body(ByteStream::from(tokio::fs::read(staging.join(MANIFEST)).await?))
+        .body(ByteStream::from(manifest_bytes))
         .send()
         .await?;
     Ok(())
@@ -669,7 +797,39 @@ pub async fn operator_command() -> Result<bool> {
     }
     let from = from.context(RESTORE_USAGE)?;
     let destination = PathBuf::from(std::env::var("LITTLEBOX_DATA_DIR").unwrap_or_else(|_| "/data".into()));
-    let source = match from.strip_prefix("s3://") {
+    let source = source_for(&from).await?;
+    let summary = restore(&source, copy.as_deref(), &destination, CopyKey::from_env()?.as_ref()).await?;
+    println!(
+        "Restored copy {} into {}: {} Deployments, {} files, checksums verified. Signed out {} sessions and credentials and ended every open email link; owners, agents and app users sign in again.",
+        summary.copy_id,
+        destination.display(),
+        summary.deployments,
+        summary.files,
+        summary.sessions_removed
+    );
+    match summary.reconciled {
+        Ok(changed) => println!("Applied the revocation record: {changed} rows changed, so no account suspended or API key revoked after this copy is active again."),
+        Err(reason) => println!(
+            "The installation starts in maintenance: {reason} Run littlebox-kernel reconcile --from <the same source> once the record is reachable, or littlebox-kernel reconcile --without-record to reopen without it."
+        ),
+    }
+    Ok(true)
+}
+
+/// Reads the revocation record next to the copies at `from`, for
+/// `littlebox-kernel reconcile`. `None` when the source keeps no record.
+pub(crate) async fn read_record(from: &str) -> Result<Option<Vec<Vec<u8>>>> {
+    let source = source_for(from).await?;
+    // A directory that is itself one copy keeps the record one level up.
+    let source = match source {
+        Source::Directory(path) if path.join(MANIFEST).is_file() => Source::Directory(path.parent().unwrap_or(Path::new(".")).to_owned()),
+        other => other,
+    };
+    source.record().await
+}
+
+async fn source_for(from: &str) -> Result<Source> {
+    Ok(match from.strip_prefix("s3://") {
         Some(location) => {
             let (bucket, prefix) = location.split_once('/').unwrap_or((location, ""));
             ensure!(!bucket.is_empty(), "{RESTORE_USAGE}");
@@ -679,17 +839,7 @@ pub async fn operator_command() -> Result<bool> {
             Source::S3 { client, bucket: bucket.to_owned(), prefix: normalize_prefix(prefix) }
         }
         None => Source::Directory(PathBuf::from(from)),
-    };
-    let summary = restore(&source, copy.as_deref(), &destination).await?;
-    println!(
-        "Restored copy {} into {}: {} Deployments, {} files, checksums verified. Signed out {} sessions and credentials; owners, agents and app users sign in again. App API keys stay valid; revoke again any key you revoked after this copy was taken.",
-        summary.copy_id,
-        destination.display(),
-        summary.deployments,
-        summary.files,
-        summary.sessions_removed
-    );
-    Ok(true)
+    })
 }
 
 enum Source {
@@ -729,6 +879,41 @@ impl Source {
             Source::S3 { client, bucket, prefix } => read_s3_bytes(client, bucket, &format!("{prefix}{copy}/{path}")).await,
         }
     }
+
+    /// The revocation record's entries. `None` when `started.json` is
+    /// missing: the source never kept a record, so it cannot prove none.
+    async fn record(&self) -> Result<Option<Vec<Vec<u8>>>> {
+        let dir = recovery::LEDGER_DIR;
+        let start = recovery::LEDGER_START;
+        match self {
+            Source::Directory(root) => {
+                let folder = root.join(dir);
+                if !folder.join(start).is_file() {
+                    return Ok(None);
+                }
+                let mut files = Vec::new();
+                for entry in std::fs::read_dir(&folder)? {
+                    let name = entry?.file_name().to_string_lossy().into_owned();
+                    if name.ends_with(".json") && name != start && !name.starts_with('.') {
+                        files.push(tokio::fs::read(folder.join(&name)).await?);
+                    }
+                }
+                Ok(Some(files))
+            }
+            Source::S3 { client, bucket, prefix } => {
+                let base = format!("{prefix}{dir}/");
+                let keys = list_s3_keys(client, bucket, &base).await?;
+                if !keys.iter().any(|key| key[base.len()..] == *start) {
+                    return Ok(None);
+                }
+                let mut files = Vec::new();
+                for key in keys.iter().filter(|key| key.ends_with(".json") && key[base.len()..] != *start) {
+                    files.push(read_s3_bytes(client, bucket, key).await?);
+                }
+                Ok(Some(files))
+            }
+        }
+    }
 }
 
 struct RestoreSummary {
@@ -736,9 +921,11 @@ struct RestoreSummary {
     deployments: usize,
     files: usize,
     sessions_removed: usize,
+    /// Rows the revocation record changed, or why the installation holds.
+    reconciled: std::result::Result<usize, String>,
 }
 
-async fn restore(source: &Source, copy: Option<&str>, destination: &Path) -> Result<RestoreSummary> {
+async fn restore(source: &Source, copy: Option<&str>, destination: &Path, key: Option<&CopyKey>) -> Result<RestoreSummary> {
     ensure_empty(destination)?;
     // A directory that is itself one copy.
     let direct;
@@ -764,6 +951,16 @@ async fn restore(source: &Source, copy: Option<&str>, destination: &Path) -> Res
         .with_context(|| format!("Copy {copy} has no manifest.json, so it is incomplete or missing."))?;
     let manifest: Manifest = serde_json::from_slice(&manifest_bytes).context("The copy's manifest.json is invalid.")?;
     ensure!(manifest.version == 1, "The copy's manifest version is not supported.");
+    if let Some(encryption) = &manifest.encryption {
+        ensure!(encryption.algorithm == ENCRYPTION, "Copy {copy} uses {}, which this Kernel cannot open.", encryption.algorithm);
+        let key = key.with_context(|| {
+            format!("Copy {copy} is encrypted. Set LITTLEBOX_COPY_SECRET to the secret the copies were made with. Nothing was installed.")
+        })?;
+        ensure!(
+            key.check == encryption.key_check,
+            "LITTLEBOX_COPY_SECRET does not open copy {copy}: it is not the secret the copy was encrypted with. Nothing was installed."
+        );
+    }
     for file in &manifest.files {
         let allowed = ROOT_DATABASES.contains(&file.path.as_str()) || file.path.starts_with("deployments/");
         ensure!(
@@ -775,7 +972,12 @@ async fn restore(source: &Source, copy: Option<&str>, destination: &Path) -> Res
     let staging = destination.join(format!(".restore-{}", uuid::Uuid::new_v4()));
     let staged = async {
         for file in &manifest.files {
-            let bytes = source.read(&copy, &file.path).await.with_context(|| format!("Could not read {}", file.path))?;
+            let mut bytes = source.read(&copy, &file.path).await.with_context(|| format!("Could not read {}", file.path))?;
+            if let (Some(_), Some(key)) = (&manifest.encryption, key) {
+                bytes = key
+                    .open(&copy, &file.path, &bytes)
+                    .with_context(|| format!("Copy {copy} is damaged: {} does not decrypt. Nothing was installed.", file.path))?;
+            }
             ensure!(
                 bytes.len() as u64 == file.size && hex::encode(Sha256::digest(&bytes)) == file.sha256,
                 "Copy {copy} is damaged: {} does not match its checksum. Nothing was installed.",
@@ -786,14 +988,19 @@ async fn restore(source: &Source, copy: Option<&str>, destination: &Path) -> Res
             tokio::fs::write(&target, &bytes).await?;
         }
         let root = staging.clone();
-        tokio::task::spawn_blocking(move || -> Result<usize> {
+        let removed = tokio::task::spawn_blocking(move || -> Result<usize> {
             check_databases(&root)?;
             invalidate_sessions(&root)
         })
-        .await?
+        .await??;
+        // Applied before anything is in place, or the installation holds.
+        let record = source.record().await;
+        let root = staging.clone();
+        let reconciled = tokio::task::spawn_blocking(move || recovery::apply_or_hold(&root, record)).await??;
+        Ok((removed, reconciled))
     }
     .await;
-    let sessions_removed = match staged {
+    let (sessions_removed, reconciled) = match staged {
         Ok(count) => count,
         Err(error_value) => {
             let _ = tokio::fs::remove_dir_all(&staging).await;
@@ -810,7 +1017,7 @@ async fn restore(source: &Source, copy: Option<&str>, destination: &Path) -> Res
         .iter()
         .filter(|file| file.path.ends_with("/deployment.json"))
         .count();
-    Ok(RestoreSummary { copy_id: copy, deployments, files: manifest.files.len(), sessions_removed })
+    Ok(RestoreSummary { copy_id: copy, deployments, files: manifest.files.len(), sessions_removed, reconciled })
 }
 
 /// Restore writes only into an empty data directory, so it can never merge a
@@ -865,7 +1072,7 @@ fn check_databases(root: &Path) -> Result<()> {
 /// back, and the transfer files never leave the old volume.
 fn invalidate_sessions(root: &Path) -> Result<usize> {
     let tables: [(&str, &[&str]); 2] = [
-        ("owners.sqlite", &["app_sessions", "creator_sessions"]),
+        ("owners.sqlite", &["app_sessions", "creator_sessions", "account_challenges"]),
         ("mcp.sqlite", &["credentials", "oauth_codes", "transfers", "plans"]),
     ];
     let mut removed = 0;
@@ -891,7 +1098,7 @@ fn invalidate_sessions(root: &Path) -> Result<usize> {
         for entry in entries {
             let identity = entry?.path().join("identity.sqlite");
             if identity.is_file() {
-                clear(&identity, &["app_sessions"])?;
+                clear(&identity, &["app_sessions", "account_challenges"])?;
             }
         }
     }
@@ -1073,7 +1280,7 @@ mod tests {
         assert!(!copied.join("files/.index.json.tmp-x").exists(), "temporary files stay behind");
         assert!(!copied.join("backups/portable-data-x.sqlite").exists(), "export scratch stays behind");
 
-        let summary = restore(&Source::Directory(copies.clone()), None, &restored).await.unwrap();
+        let summary = restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
         assert_eq!((summary.copy_id.as_str(), summary.deployments), (id.as_str(), 1));
         let loaded = load_deployments(&restored).await.unwrap();
         let served = loaded.get("copy-test.localhost").expect("the restored Kernel knows the app");
@@ -1094,9 +1301,109 @@ mod tests {
         assert_eq!(std::fs::read_dir(folder.join("backups")).unwrap().count(), 1, "the saved backup travels");
         assert!(std::fs::read_dir(&restored).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with(".restore-")));
 
-        let message = restore(&Source::Directory(copies.clone()), None, &restored).await.err().unwrap().to_string();
+        let message = restore(&Source::Directory(copies.clone()), None, &restored, None).await.err().unwrap().to_string();
         assert!(message.contains("not empty"), "{message}");
         for path in [source, copies, restored] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    /// A suspension recorded after the copy is applied by the restore, and a
+    /// source without a record leaves the installation in maintenance.
+    #[tokio::test]
+    async fn a_restore_applies_the_revocation_record_or_holds_without_it() {
+        let (source, copies, restored, held) = (scratch("record-source"), scratch("record-target"), scratch("record-restored"), scratch("record-held"));
+        let (deployment, _) = seed(&source);
+        let state = state(&source);
+        run_copy(&state, &[Target::Directory(copies.clone())]).await.unwrap();
+        assert!(copies.join(recovery::LEDGER_DIR).join(recovery::LEDGER_START).is_file(), "the first copy starts the record");
+        let identity = source.join("deployments").join(&deployment.id).join("identity.sqlite");
+        let user: String = Connection::open(&identity).unwrap().query_row("SELECT id FROM app_users", [], |r| r.get(0)).unwrap();
+        // Suspended after the copy was taken.
+        let entry = recovery::Entry::new("app-user", Some(&deployment.id), &user, "suspended");
+        recovery::write(&[Target::Directory(copies.clone())], None, "data", &entry).await.unwrap();
+
+        let summary = restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
+        assert!(summary.reconciled.as_ref().is_ok_and(|changed| *changed >= 1), "{:?}", summary.reconciled);
+        assert!(recovery::hold(&restored).is_none());
+        let folder = restored.join("deployments").join(&deployment.id);
+        let restored_auth = AuthService::open(folder.join("identity.sqlite")).unwrap();
+        assert!(restored_auth.login("writer@copy.test", "correct horse battery").is_err(), "the suspension survives the restore");
+
+        std::fs::remove_file(copies.join(recovery::LEDGER_DIR).join(recovery::LEDGER_START)).unwrap();
+        let summary = restore(&Source::Directory(copies.clone()), None, &held, None).await.unwrap();
+        assert!(summary.reconciled.as_ref().is_err_and(|reason| reason.contains("started.json")));
+        assert!(recovery::hold(&held).is_some(), "an unreadable record keeps the installation in maintenance");
+        assert!(crate::migration::pause(&held, &deployment.id).is_some());
+        for path in [source, copies, restored, held] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    /// A paused or retired origin restored from a copy stays paused, so a
+    /// restore cannot add a second writer.
+    #[tokio::test]
+    async fn a_copy_carries_the_migration_state() {
+        let (source, copies, restored) = (scratch("marker-source"), scratch("marker-target"), scratch("marker-restored"));
+        let (deployment, _) = seed(&source);
+        let marker = json!({"role": "origin", "phase": "confirmed", "operationId": "op-copied"});
+        std::fs::write(source.join("deployments").join(&deployment.id).join(crate::migration::MARKER_FILE), marker.to_string()).unwrap();
+        run_copy(&state(&source), &[Target::Directory(copies.clone())]).await.unwrap();
+        restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
+        let (operation, message, _) = crate::migration::pause(&restored, &deployment.id).expect("the restored app stays paused");
+        assert_eq!(operation, "op-copied");
+        assert!(message.contains("moved"));
+        for path in [source, copies, restored] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    /// The files an S3 copy holds when LITTLEBOX_COPY_SECRET is set: each
+    /// sealed with the copy ID and path, and a manifest naming the cipher.
+    fn seal_copy(plain: &Path, sealed: &Path, id: &str, key: &CopyKey) {
+        let manifest: Manifest = serde_json::from_slice(&std::fs::read(plain.join(id).join(MANIFEST)).unwrap()).unwrap();
+        for file in &manifest.files {
+            let target = sealed.join(id).join(&file.path);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(&target, key.seal(id, &file.path, std::fs::read(plain.join(id).join(&file.path)).unwrap()).unwrap()).unwrap();
+        }
+        std::fs::write(sealed.join(id).join(MANIFEST), serde_json::to_vec(&sealed_manifest(&manifest, key)).unwrap()).unwrap();
+        copy_tree(&plain.join(recovery::LEDGER_DIR), &sealed.join(recovery::LEDGER_DIR)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_encrypted_copy_restores_only_with_its_secret() {
+        let (source, plain, sealed) = (scratch("sealed-source"), scratch("sealed-plain"), scratch("sealed-copy"));
+        let (deployment, _) = seed(&source);
+        let id = run_copy(&state(&source), &[Target::Directory(plain.clone())]).await.unwrap();
+        let key = CopyKey::derive("a copy secret that is long enough for tests");
+        seal_copy(&plain, &sealed, &id, &key);
+        let database = format!("deployments/{}/database.sqlite", deployment.id);
+        let bytes = std::fs::read(sealed.join(&id).join(&database)).unwrap();
+        assert!(!bytes.windows(4).any(|w| w == b"kept"), "rows are not readable at rest");
+
+        let refused_root = scratch("sealed-refused");
+        let without = restore(&Source::Directory(sealed.clone()), None, &refused_root, None).await.err().unwrap().to_string();
+        assert!(without.contains("is encrypted") && without.contains("LITTLEBOX_COPY_SECRET"), "{without}");
+        let wrong = CopyKey::derive("another secret that is long enough for tests");
+        let refused = restore(&Source::Directory(sealed.clone()), None, &refused_root, Some(&wrong)).await.err().unwrap().to_string();
+        assert!(refused.contains("does not open"), "{refused}");
+
+        // A sealed file moved to another path does not open.
+        let identity = format!("deployments/{}/identity.sqlite", deployment.id);
+        let moved = scratch("sealed-moved-copy");
+        copy_tree(&sealed, &moved).unwrap();
+        std::fs::copy(moved.join(&id).join(&identity), moved.join(&id).join(&database)).unwrap();
+        let damaged = restore(&Source::Directory(moved.clone()), Some(&id), &refused_root, Some(&key)).await.err().unwrap().to_string();
+        assert!(damaged.contains("does not decrypt"), "{damaged}");
+
+        let restored = scratch("sealed-restored");
+        restore(&Source::Directory(sealed.clone()), Some(&id), &restored, Some(&key)).await.unwrap();
+        let folder = restored.join("deployments").join(&deployment.id);
+        assert_eq!(count(&folder.join("database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
+        AuthService::open(folder.join("identity.sqlite")).unwrap().login("writer@copy.test", "correct horse battery").unwrap();
+        assert_eq!(std::fs::read_dir(&refused_root).unwrap().count(), 0, "a refused restore installs nothing");
+        for path in [source, plain, sealed, restored, moved, refused_root] {
             let _ = std::fs::remove_dir_all(path);
         }
     }
@@ -1123,7 +1430,7 @@ mod tests {
         crate::usage::flush();
         let id = run_copy(&state(&source), &[Target::Directory(copies.clone())]).await.unwrap();
         assert!(copies.join(&id).join("deployments").join(&deployment.id).join(crate::usage::USAGE_DATABASE).is_file());
-        restore(&Source::Directory(copies.clone()), None, &restored).await.unwrap();
+        restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
 
         let restored_folder = restored.join("deployments").join(&deployment.id);
         let identity = restored_folder.join("identity.sqlite");
@@ -1161,7 +1468,7 @@ mod tests {
         drop(mail);
         let id = run_copy(&state(&source), &[Target::Directory(copies.clone())]).await.unwrap();
         assert!(copies.join(&id).join(crate::mail::MAIL_DATABASE).is_file());
-        restore(&Source::Directory(copies.clone()), None, &restored).await.unwrap();
+        restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
         let restored_mail = restored.join(crate::mail::MAIL_DATABASE);
         let states: Vec<(String, String, bool)> = Connection::open(&restored_mail)
             .unwrap()
@@ -1187,16 +1494,16 @@ mod tests {
         copy_tree(&copies.join(&id), &unfinished).unwrap();
         std::fs::remove_file(unfinished.join(MANIFEST)).unwrap();
         let destination = scratch("damaged-restore");
-        let latest = restore(&Source::Directory(copies.clone()), None, &destination).await.unwrap();
+        let latest = restore(&Source::Directory(copies.clone()), None, &destination, None).await.unwrap();
         assert_eq!(latest.copy_id, id, "a copy without a manifest is never picked");
         let named = unfinished.file_name().unwrap().to_str().unwrap();
         let empty = scratch("damaged-empty");
-        let message = restore(&Source::Directory(copies.clone()), Some(named), &empty).await.err().unwrap().to_string();
+        let message = restore(&Source::Directory(copies.clone()), Some(named), &empty, None).await.err().unwrap().to_string();
         assert!(message.contains("incomplete"), "{message}");
 
         let artifact = copies.join(&id).join("deployments").join(&deployment.id).join("artifact/v1/index.html");
         std::fs::write(&artifact, "<main>tampered</main>").unwrap();
-        let message = restore(&Source::Directory(copies.join(&id)), None, &empty).await.err().unwrap().to_string();
+        let message = restore(&Source::Directory(copies.join(&id)), None, &empty, None).await.err().unwrap().to_string();
         assert!(message.contains("does not match its checksum"), "{message}");
         assert_eq!(std::fs::read_dir(&empty).unwrap().count(), 0, "a refused restore leaves the directory empty");
 
@@ -1204,7 +1511,7 @@ mod tests {
         let mut manifest: Value = serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
         manifest["files"][0]["path"] = json!("../outside.sqlite");
         std::fs::write(&manifest_path, manifest.to_string()).unwrap();
-        let message = restore(&Source::Directory(copies.join(&id)), None, &empty).await.err().unwrap().to_string();
+        let message = restore(&Source::Directory(copies.join(&id)), None, &empty, None).await.err().unwrap().to_string();
         assert!(message.contains("outside a data directory"), "{message}");
         for path in [source, copies, destination, empty] {
             let _ = std::fs::remove_dir_all(path);

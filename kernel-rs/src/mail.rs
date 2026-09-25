@@ -910,6 +910,11 @@ impl MailQueue {
 
     /// Runs one claimed job. Returns true when the provider accepted it.
     async fn process(&self, job: Claimed) -> Result<bool> {
+        // A paused app sends nothing; the job waits uncounted.
+        if super::migration::holds_mail(&self.data_root, &job.scope) {
+            self.release(&job.id, super::migration::MAIL_HOLD_MS, false, None)?;
+            return Ok(false);
+        }
         if job.link_expires_at * 1000 <= now() {
             self.finish_failed(&job.id, "link-expired")?;
             return Ok(false);
@@ -1590,6 +1595,28 @@ mod tests {
         let session = accounts::complete_app(&fixture.state, &fixture.app, Purpose::Verification, &token, "correct horse battery").await;
         assert!(session.is_ok());
         assert_eq!(fixture.queue().run_once().await.unwrap(), 0, "an accepted job is not sent again");
+    }
+
+    /// Delivery J: a paused app sends no email. Its job waits uncounted and
+    /// leaves once the pause ends.
+    #[tokio::test]
+    async fn a_paused_apps_job_waits_and_leaves_when_the_pause_ends() {
+        let transport = Scripted::new();
+        let fixture = fixture(transport.clone()).await;
+        fixture.signup(&fixture.app, "person@example.test").await.unwrap();
+        fixture.signup(&fixture.other, "person@example.test").await.unwrap();
+        crate::migration::pause_for_test(&fixture.root, &fixture.app.id, true);
+        assert_eq!(fixture.queue().run_once().await.unwrap(), 1, "only the other app's job leaves");
+        assert_eq!(transport.sent()[0].account.scope, format!("deployment:{}", fixture.other.id));
+        let attempts: i64 = fixture
+            .db()
+            .query_row("SELECT attempts FROM jobs WHERE scope = ?1", [format!("deployment:{}", fixture.app.id)], |row| row.get(0))
+            .unwrap();
+        assert_eq!(attempts, 0, "a held job keeps its attempts");
+        crate::migration::pause_for_test(&fixture.root, &fixture.app.id, false);
+        fixture.due_now();
+        assert_eq!(fixture.queue().run_once().await.unwrap(), 1);
+        assert_eq!(transport.sent().len(), 2);
     }
 
     #[tokio::test]

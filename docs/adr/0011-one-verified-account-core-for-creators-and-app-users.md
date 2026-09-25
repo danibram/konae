@@ -80,3 +80,7 @@ Accepted signatures persist. The memory of seen signatures was in the Kernel pro
 An unknown or revoked `lbk_` key counts against the client address, as a wrong password does: 10 a minute per Deployment, checked before the lookup and taken only on a miss. When they are used up, every key from that address answers `rate-limited` without a lookup, a valid key included, until the bucket refills. A valid key never drains it.
 
 The Kernel parses a Deployment's routes once per release, keyed by the `artifact_version` each publish mints, and `deploy` replaces the parsed table when it installs a release. A static file request no longer parses `actions.json`.
+
+## Note, 2026-11-06: revocations after the copy
+
+A key revoked, or an account suspended, after the copy no longer comes back with a restore. Each revocation and suspension is written to the copy targets as it happens, and `restore` applies that record before the Kernel serves; [ADR-0014](0014-an-app-migrates-with-one-writer-at-a-time.md) records how. Keys that were live when the owner last saw them stay live, as above. A restore now also ends every open verification, recovery and invitation link, on both scopes.

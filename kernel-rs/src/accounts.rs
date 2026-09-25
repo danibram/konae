@@ -731,6 +731,7 @@ fn run_operator_command(root: &Path, suspend: bool, email: &str) -> Result<Strin
         }
         transaction.commit()?;
     }
+    super::recovery::record_offline(root, super::recovery::Entry::new("creator", None, &id, "suspended"))?;
     Ok(format!(
         "Suspended creator {id}. Projects and app accounts remain available to the installation operator."
     ))

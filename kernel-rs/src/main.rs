@@ -35,8 +35,10 @@ mod invitations;
 mod limits;
 mod mail;
 mod mcp;
+mod migration;
 mod oauth;
 mod package;
+mod recovery;
 mod security;
 mod usage;
 use auth::{AuthError, AuthService, AuthUser};
@@ -316,6 +318,7 @@ struct ActionBinding {
 async fn main() -> Result<()> {
     if clerk::operator_command()? { return Ok(()); }
     if copies::operator_command().await? { return Ok(()); }
+    if recovery::operator_command().await? { return Ok(()); }
     if accounts::operator_command()? { return Ok(()); }
     if admission::operator_command()? { return Ok(()); }
     let port = env("LITTLEBOX_KERNEL_PORT", "8787").parse::<u16>()?;
@@ -379,6 +382,7 @@ async fn main() -> Result<()> {
         .route("/_littlebox/{*path}", axum::routing::any(|| async { error(StatusCode::GONE, "Use authenticated MCP for platform operations.") }))
         .route("/{*path}", get(http::get_route).post(http::post_route))
         .route("/", get(serve_root))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), migration::guard))
         .layer(axum::middleware::from_fn_with_state(state.clone(), security::headers))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind((bind.as_str(), port)).await?;
@@ -603,7 +607,10 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
     }
     let _database_guard = database_lock(&state, &id).await;
     if let Some(package) = input.initial_package.as_ref() {
-        if let Err(error_value) = package::install(&state, package, &deployment.project_id, &directory).await {
+        if let Err(error_value) = package::install(&state, package, &deployment.project_id, &directory)
+            .await
+            .and_then(|()| migration::imported(&state.data_root, &id, &deployment.project_id, &package.manifest))
+        {
             let _ = tokio::fs::remove_dir_all(&directory).await;
             return error(StatusCode::BAD_REQUEST, &format!("Package import failed: {error_value:#}"));
         }
