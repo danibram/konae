@@ -187,12 +187,14 @@ try {
   assert.equal(stranger.status, 403);
   refused("A visitor signs up while signup is Closed (POST /_littlebox/auth/signup)", strangerBody.error, 403);
 
-  // The owner invites the curator. Under Closed the invitation is sent but cannot be accepted.
+  // The owner invites the curator. Closed refuses self-signup, not the
+  // owner's invitation (ADR-0011, note of 2026-11-06 on Closed).
   const invited = await owner.call<{ policy: string; results: any[] }>("app_invitations_create", {
     deploymentId: receipt.id, emails: [curatorEmail], idempotencyKey: crypto.randomUUID(),
   });
+  assert.equal(invited.policy, "closed");
   assert.equal(invited.results[0].status, "invited");
-  assert.equal(invited.results[0].acceptable, false);
+  assert.equal(invited.results[0].acceptable, true);
   let invitationToken = "";
   for (let attempt = 0; attempt < 50 && !invitationToken; attempt++) {
     const mailbox = await readFile(path.join(dataDir, "mailbox.jsonl"), "utf8").catch(() => "");
@@ -200,24 +202,20 @@ try {
     if (!invitationToken) await Bun.sleep(100);
   }
   assert(invitationToken, "The invitation never reached mailbox.jsonl.");
-  const closedAccept = await post("/_littlebox/auth/accept", { token: invitationToken, password: curatorPassword });
-  const closedAcceptBody = await closedAccept.json();
-  assert.equal(closedAccept.status, 403);
-  refused("The invited curator accepts while signup is Closed (POST /_littlebox/auth/accept)", closedAcceptBody.error, 403);
-
-  // To admit one account the owner opens Invitation only, the curator accepts, the owner closes again.
-  await owner.call("signup_policy_set", { deploymentId: receipt.id, mode: "invitation" });
+  const curatorSignup = await post("/_littlebox/auth/signup", { email: curatorEmail, password: curatorPassword });
+  assert.equal(curatorSignup.status, 403, "an invitation is not a signup");
   const accepted = await post("/_littlebox/auth/accept", { token: invitationToken, password: curatorPassword });
   assert.equal(accepted.status, 200, await accepted.clone().text());
   const curatorCookie = accepted.headers.get("set-cookie")!.split(";")[0];
-  await owner.call("signup_policy_set", { deploymentId: receipt.id, mode: "closed" });
+  const policyAfter = await owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receipt.id });
+  assert.equal(policyAfter.mode, "closed", "the policy never left Closed");
   const strangerAgain = await post("/_littlebox/auth/signup", { email: "second@example.test", password: crypto.randomUUID() });
   assert.equal(strangerAgain.status, 403);
   const curatorLogin = await post("/_littlebox/auth/login", { email: curatorEmail, password: curatorPassword });
   assert.equal(curatorLogin.status, 200);
   const users = await owner.call<{ users: any[] }>("app_users_list", { deploymentId: receipt.id });
   assert.deepEqual(users.users.map((user) => user.email), [curatorEmail]);
-  pass("Closed signup, one account", `A stranger's signup answers 403 "${strangerBody.error}". The invitation accepted under Closed answers 403 "${closedAcceptBody.error}" and stays usable; after the owner switches to Invitation only, accepts it and closes again, the app has exactly one account and still refuses new ones.`);
+  pass("Closed signup, one account", `A stranger's signup answers 403 "${strangerBody.error}". The owner's invitation answers acceptable: true under Closed and the curator accepts it with 200, while the curator's own signup answers 403; the policy stays Closed throughout, and the app has exactly one account and still refuses new ones.`);
 
   // The curator's account becomes the studio. Only the owner can say so, with SQL.
   const curator = runtime(curatorCookie);

@@ -84,3 +84,11 @@ The Kernel parses a Deployment's routes once per release, keyed by the `artifact
 ## Note, 2026-11-06: revocations after the copy
 
 A key revoked, or an account suspended, after the copy no longer comes back with a restore. Each revocation and suspension is written to the copy targets as it happens, and `restore` applies that record before the Kernel serves; [ADR-0014](0014-an-app-migrates-with-one-writer-at-a-time.md) records how. Keys that were live when the owner last saw them stay live, as above. A restore now also ends every open verification, recovery and invitation link, on both scopes.
+
+## Note, 2026-11-06: an invitation is acceptable under Closed
+
+Closed refused both a signup and the acceptance of an invitation. The gallery showcase app was Closed from its first release and could admit no one: the owner's invitation went out with `acceptable: false`, and the only way in was to open Invitation only for the minute it took to accept, then close again.
+
+Closed now refuses only what a person does alone: a signup, and the verification that completes one. An invitation is the owner choosing one person for one address, so `admits_invitation` in `kernel-rs/src/invitations.rs` admits it under Open, Invitation only and Closed, and `app_invitations_create` answers `acceptable: true`. The acceptance still rechecks the policy and the account's state in its transaction. An Allowlist still has to list the address, because the list is a rule the owner wrote about addresses, and an invitation outside it answers `acceptable: false` as before.
+
+One consequence follows. Closing signup no longer ends pending invitations; the owner revokes the ones that should end. We considered ending every pending invitation when the policy moves to Closed, and kept them, because that would send people a link that stops working without a word, and revoke already says it. `closed_refuses_a_signup_and_accepts_an_owner_invitation` in `invitations.rs` and the gallery replay check both sides.

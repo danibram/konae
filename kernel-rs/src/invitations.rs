@@ -36,12 +36,13 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// Whether a valid invitation may activate an account for this email under
-/// the policy. Open and Invitation only admit it, Closed does not, and an
-/// Allowlist still has to list the email.
+/// the policy. Open, Invitation only and Closed admit it: Closed stops people
+/// from signing themselves up, and the owner chose the invited person. An
+/// Allowlist still has to list the email, because the list is the owner's
+/// own rule about addresses. ADR-0011, note of 2026-11-06 on Closed.
 pub(crate) fn admits_invitation(policy: &SignupPolicy, email: &str) -> bool {
     match policy.mode {
-        SignupMode::Open | SignupMode::Invitation => true,
-        SignupMode::Closed => false,
+        SignupMode::Open | SignupMode::Invitation | SignupMode::Closed => true,
         SignupMode::Allowlist => policy.allows(email),
     }
 }
@@ -1052,15 +1053,39 @@ mod tests {
         let fixture = fixture(SignupMode::Invitation);
         fixture.invite(&["ana@example.test"], "policy-batch").await;
         let token = fixture.last_token();
-        fixture.set_policy(SignupMode::Closed, &[]).await;
-        let closed = fixture.answer(APP_HOST, &token, PASSWORD).await;
-        assert_eq!(closed.status(), StatusCode::FORBIDDEN, "no acceptance under Closed");
-        assert!(!has_cookie(&closed));
-        assert_eq!(fixture.accounts_named("ana@example.test").await[0].1, "pending");
         fixture.set_policy(SignupMode::Allowlist, &["@other.test"]).await;
-        assert_eq!(fixture.answer(APP_HOST, &token, PASSWORD).await.status(), StatusCode::FORBIDDEN, "an Allowlist must still list the email");
+        let refused = fixture.answer(APP_HOST, &token, PASSWORD).await;
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN, "an Allowlist must still list the email");
+        assert!(!has_cookie(&refused));
+        assert_eq!(fixture.accounts_named("ana@example.test").await[0].1, "pending");
         fixture.set_policy(SignupMode::Allowlist, &["@example.test"]).await;
-        assert_eq!(fixture.answer(APP_HOST, &token, PASSWORD).await.status(), StatusCode::OK);
+        assert_eq!(fixture.answer(APP_HOST, &token, PASSWORD).await.status(), StatusCode::OK, "the refused link still works");
+    }
+
+    /// ADR-0011, note of 2026-11-06 on Closed: the owner chose the invited
+    /// person, so an invitation is acceptable under Closed, from the answer
+    /// to `app_invitations_create` to the acceptance. A signup and a
+    /// verification stay refused.
+    #[tokio::test]
+    async fn closed_refuses_a_signup_and_accepts_an_owner_invitation() {
+        let fixture = fixture(SignupMode::Closed);
+        assert_eq!(fixture.signup("stranger@example.test").await, StatusCode::FORBIDDEN);
+        assert!(fixture.accounts_named("stranger@example.test").await.is_empty());
+
+        let created = fixture.invite(&["ana@example.test"], "closed-batch").await;
+        assert_eq!(created["policy"], "closed");
+        assert_eq!(created["results"][0]["acceptable"], true);
+        assert_eq!(fixture.signup("ana@example.test").await, StatusCode::FORBIDDEN, "an invitation is not a signup");
+        let token = fixture.last_token();
+        let app = fixture.app(APP_HOST).await;
+        assert_eq!(inspect(&fixture.state, &app, &token).await.unwrap()["status"], "new-account");
+
+        let accepted = fixture.answer(APP_HOST, &token, PASSWORD).await;
+        assert_eq!(accepted.status(), StatusCode::OK);
+        assert!(has_cookie(&accepted));
+        assert_eq!(fixture.accounts_named("ana@example.test").await[0].1, "active");
+        assert_eq!(fixture.login("ana@example.test", PASSWORD).await, StatusCode::OK);
+        assert_eq!(fixture.signup("another@example.test").await, StatusCode::FORBIDDEN, "Closed still refuses everyone else");
     }
 
     #[tokio::test]

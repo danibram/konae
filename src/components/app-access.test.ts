@@ -49,6 +49,8 @@ describe("signup policy copy", () => {
       expect(sentence.slice(0, -1)).not.toContain(". ");
     }
     expect(signupModeCopy.invitation.label).toBe("Invitation only");
+    // ADR-0011, note of 2026-11-06 on Closed: the owner's invitation still works.
+    expect(signupModeCopy.closed.sentence).toContain("people you invite can still accept");
     expect(signupModes.filter((mode) => signupModeCopy[mode].advanced)).toEqual(["allowlist"]);
   });
 
@@ -134,7 +136,7 @@ describe("invitation state", () => {
 
   test("says per address what an invite did", () => {
     expect(invitationResultMessage({ email: "a@x.test", status: "invited", invitationId: "i", expiresAt: 1, acceptable: true, delivery: "queued" }).tone).toBe("success");
-    expect(invitationResultMessage({ email: "a@x.test", status: "invited", invitationId: "i", expiresAt: 1, acceptable: false, delivery: "queued" }).text).toContain("signup policy would refuse");
+    expect(invitationResultMessage({ email: "a@x.test", status: "invited", invitationId: "i", expiresAt: 1, acceptable: false, delivery: "queued" }).text).toContain("allowlist does not include this address");
     expect(invitationResultMessage({ email: "a@x.test", status: "invited", invitationId: "i", expiresAt: 1, acceptable: true, delivery: "failed" }).text).toContain("Resend");
     expect(invitationResultMessage({ email: "a@x.test", status: "already-member" }).text).toBe("Already has an active app account.");
     expect(invitationResultMessage({ email: "a@x.test", status: "suspended" }).text).toContain("Resume");

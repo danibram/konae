@@ -104,7 +104,7 @@ A Deployment whose application shell and runtime require a signed-in Runtime Act
 _Avoid_: Password-protected app
 
 **Signup Policy**:
-The per-Deployment rule for who may create a Runtime Actor account: Open (anyone), Invitation only (only through an Invitation), Closed (no new accounts, and no Invitation can be accepted) or Allowlist (exact emails or `@domain` entries, kept as an advanced option). Public Deployments start Open and Private Deployments start Closed; a first release may name another. The Project Owner chooses it in the publish dialog on a first release and changes it later in the editor's Auth > Users view or with `signup_policy_set`, which needs `manage_users`, and a republish never changes it except to close an Open app made private. The Kernel checks it again when an account verifies and when an Invitation is accepted.
+The per-Deployment rule for who may create a Runtime Actor account: Open (anyone), Invitation only (only through an Invitation), Closed (nobody signs up, and an Invitation the owner sends can still be accepted) or Allowlist (exact emails or `@domain` entries, kept as an advanced option). Public Deployments start Open and Private Deployments start Closed; a first release may name another. The Project Owner chooses it in the publish dialog on a first release and changes it later in the editor's Auth > Users view or with `signup_policy_set`, which needs `manage_users`, and a republish never changes it except to close an Open app made private. The Kernel checks it again when an account verifies and when an Invitation is accepted.
 _Avoid_: Invite list, access grant
 
 **Invitation**:

@@ -42,7 +42,7 @@ It runs these flows and exits 0 when all of them pass:
 1. `littlebox build` on this Capsule, to see what the CLI makes of a multi-page app.
 2. A release whose `contact.send` ends in `RETURNING id`, which must be refused at planning.
 3. The first release, public, signup Closed.
-4. A stranger's signup, an invitation accepted under Closed, the switch to Invitation only, the accepted invitation, the switch back to Closed, a second stranger.
+4. A stranger's signup, the owner's invitation under Closed, the curator's own signup, the accepted invitation, a second stranger.
 5. The curator uploads three public photographs and two private drafts.
 6. A visitor reads the gallery, the file list and a draft through every door.
 7. The curator publishes a draft.
@@ -55,7 +55,7 @@ It runs these flows and exits 0 when all of them pass:
 
 ## What worked
 
-- Closed signup from the first request. The Kernel refused every new account, and the curator's account came in through an Invitation once the owner opened Invitation only for the time it took to accept. After closing again the app has exactly one account (`app_users_list`) and the curator still signs in.
+- Closed signup from the first request. The Kernel refused every signup, the curator's own included, and the curator's account came in through the owner's Invitation with the policy still Closed (`acceptable: true`, then 200 on accept). The app has exactly one account (`app_users_list`) and the curator still signs in.
 - Drafts stayed invisible by every door a visitor has: `photos.published` leaves them out, `files_list` lists only the public files, `files_read` answers `File not found.` and `GET /_littlebox/files/<id>` answers 404.
 - Public photographs load in the page from `/_littlebox/files/<id>` as `image/png`, `inline`, with `Cross-Origin-Resource-Policy: same-origin`. Chrome reported no policy violation on any page, light or dark.
 - `contact.send` works for a signed-out visitor, from the page and over MCP. The 31st call from one address in 10 seconds answered `rate-limited` with `Retry-After: 1`, and a second address went through at once. Each sent message recorded one `contact.received` Signal with only `{ topic }`, and the curator read every message through `studio.messages`.
@@ -91,8 +91,8 @@ Rows with a status or a quoted message are answers the replay received. Rows tha
 | `littlebox publish` with a first signup policy | | No option. `publishLocal` sends no `initialSignupPolicy`, so a CLI-published public app starts Open. |
 | Publish `contact.send` with `... RETURNING id` | | `Action contact.send cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.` |
 | A visitor signs up while signup is Closed | 403 | `This app is not accepting new accounts for this email address.` The same text for everyone under Closed, though it reads as if the address were the problem. |
-| The invited curator accepts while signup is Closed | 403 | `This app is not accepting new accounts for this email address.` The invitation email was sent anyway, with `acceptable: false` in the owner's answer. |
-| Create the curator's account on an app that is Closed from its first release | | No primitive. Closed refuses both signup and invitations, and the owner cannot upload files or create an app account. The owner has to open Invitation only (or an Allowlist) for a moment, then close again. |
+| The invited curator accepts while signup is Closed | 200 | Fixed on 2026-11-06 (ADR-0011, note on Closed). The replay first recorded 403 `This app is not accepting new accounts for this email address.` with `acceptable: false`. An owner's invitation is now acceptable under Closed, and the replay asserts `acceptable: true` and the 200. |
+| Create the curator's account on an app that is Closed from its first release | | Fixed on 2026-11-06. The owner invites the curator and the policy stays Closed; the curator's own signup still answers 403. |
 | Mark the curator as the studio owner | | No primitive. `auth_session` answers `role: "member"` for the only account; the app cannot tell the curator from any other account, so the owner inserts the curator's user ID into `studio` with `database_execute`. Until then `photos.add` answers `{ changes: 0 }`. |
 | A visitor reads a draft over MCP (`files_read`) | | `File not found.` |
 | A visitor reads a draft at `GET /_littlebox/files/<id>` | 404 | `{"error":"File not found."}` |

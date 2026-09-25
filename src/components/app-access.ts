@@ -15,7 +15,7 @@ export type Tone = "neutral" | "accent" | "success" | "warning" | "danger";
 export const signupModeCopy: Record<SignupMode, { label: string; sentence: string; advanced?: true }> = {
   open: { label: "Open", sentence: "Anyone who opens the published app can create an app account." },
   invitation: { label: "Invitation only", sentence: "Only people you invite by email can create an app account, each with a link that works once within seven days." },
-  closed: { label: "Closed", sentence: "No one can create an app account or accept an invitation, and existing app accounts still sign in." },
+  closed: { label: "Closed", sentence: "No one can sign up, people you invite can still accept, and existing app accounts still sign in." },
   allowlist: { label: "Allowlist", sentence: "Only the emails and @domains you list can create an app account, and listing an address sends no invitation.", advanced: true },
 };
 
@@ -120,7 +120,7 @@ export function invitationResultMessage(result: InvitationResult): { label: stri
     case "invited": {
       const sent = result.delivery === "queued" ? "Invitation email handed to mail." : result.delivery === "failed" ? "The invitation exists but its email failed. Resend it." : "The invitation exists but no email left. Resend it.";
       const ok = result.delivery === "queued" && result.acceptable;
-      return { label: ok ? "Invited" : "Check", text: result.acceptable ? sent : `${sent} The current signup policy would refuse it; choose Invitation only or Open.`, tone: ok ? "success" : "warning" };
+      return { label: ok ? "Invited" : "Check", text: result.acceptable ? sent : `${sent} The allowlist does not include this address; add it or choose Invitation only.`, tone: ok ? "success" : "warning" };
     }
     case "already-invited":
       return { label: "Already invited", text: "Resend from the list to send a new link.", tone: "neutral" };
