@@ -130,7 +130,8 @@ export function deleteSecret(projectId: string, name: string) {
 }
 
 export type FileVisibility = "public" | "private";
-export type ApiKey = { keyId: string; name: string; actions: string[]; files: FileVisibility[]; createdAt: number; revokedAt: number | null };
+/** `revokedReason` is "import" for a key that arrived with an imported app, revoked; null when the owner revoked it or it is live. */
+export type ApiKey = { keyId: string; name: string; actions: string[]; files: FileVisibility[]; createdAt: number; revokedAt: number | null; revokedReason?: "import" | null };
 
 export function listApiKeys(deploymentId: string) {
   return platformMcp.call<{ deploymentId: string; keys: ApiKey[] }>("api_keys_list", { deploymentId });

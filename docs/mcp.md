@@ -284,13 +284,13 @@ Services with their own fixed signing scheme do not speak this one and need an a
 
 ```text
 api_keys_create { "deploymentId", "name", "actions": ["orders.receive"], "files": ["private"] }
-api_keys_list   { "deploymentId" }               metadata and revocation times, never the key
+api_keys_list   { "deploymentId" }               metadata, revocation times and reasons, never the key
 api_keys_revoke { "deploymentId", "keyId" }
 ```
 
 The editor's Auth > Integrations view sets, lists and deletes secrets by name and creates, lists and revokes keys, showing a new key once with a curl for each route it names and for the file read path.
 
-`api_keys_create` returns the key once. A key belongs to one Deployment and never to the owner, grants no administrative tool, and works only on HTTP routes and the file read path; the runtime MCP endpoint does not accept it. It may name actions that have an HTTP route and the file visibilities `public` and `private`. A key that names `private` reads every private file of its Deployment, because the owner who issues it can already read them through `project_export`. A Deployment holds at most 50 live keys. Each unknown or revoked key a client presents counts against that client address, as a wrong password does: after 10 in a minute on one Deployment, the Kernel answers `rate-limited` to every key from that address without looking it up, so guessing keys costs no more than one bucket per address. A valid key never uses the bucket up. The Kernel stores the SHA-256 hash in the Deployment's `identity.sqlite`, so `project_export` carries the keys' metadata and hashes with the accounts, and an import marks every key revoked, as it deletes sessions and challenges. `littlebox-kernel restore` keeps them live, since it restores the same installation.
+`api_keys_create` returns the key once. A key belongs to one Deployment and never to the owner, grants no administrative tool, and works only on HTTP routes and the file read path; the runtime MCP endpoint does not accept it. It may name actions that have an HTTP route and the file visibilities `public` and `private`. A key that names `private` reads every private file of its Deployment, because the owner who issues it can already read them through `project_export`. A Deployment holds at most 50 live keys. Each unknown or revoked key a client presents counts against that client address, as a wrong password does: after 10 in a minute on one Deployment, the Kernel answers `rate-limited` to every key from that address without looking it up, so guessing keys costs no more than one bucket per address. A valid key never uses the bucket up. The Kernel stores the SHA-256 hash in the Deployment's `identity.sqlite`, so `package_export` and `project_export` carry the keys' metadata and hashes with the accounts. A package leaves with every live key already revoked, and an import of either format marks any live key revoked, as it deletes sessions and challenges. `api_keys_list` on the destination shows each such key with `revokedReason: "import"`, its name, actions and file visibilities, so the owner knows which programs to issue a new key for; the editor's Integrations view lists them under "Revoked at import". A key the owner revoked has `revokedReason: null` and keeps its time. `littlebox-kernel restore` keeps keys live, since it restores the same installation.
 
 ### The file read path
 
@@ -462,7 +462,7 @@ Returning to managed authoring is not supported. To edit in Littlebox again, cre
 | Component | What it is | Limit |
 | --- | --- | --- |
 | `database` | The app database, copied with `VACUUM INTO` | 256 MiB |
-| `identity` | `identity.sqlite` without sessions, email links or API keys; `secure_delete` overwrites their pages | 64 MiB |
+| `identity` | `identity.sqlite` without sessions or email links, with every API key revoked at import; `secure_delete` overwrites the deleted pages | 64 MiB |
 | `files` | A ustar archive of `index.json` and one `<id>.blob` per file, in index order | 2 MiB per file, 20 MiB of file data |
 | `usage` | `usage.sqlite`, copied with `VACUUM INTO`. Present only when the Deployment recorded Usage or a Signal. A Kernel from before this component refuses a package that lists it | 128 MiB |
 
@@ -470,7 +470,7 @@ Returning to managed authoring is not supported. To edit in Littlebox again, cre
 
 Read each download with `transfer_read` and cancel it when done. The transfers expire after one hour like other owner transfers. They need `export_data`, not `read`, even though every credential of one owner shares the transfer pool. The audit log gets one `package_export` row and one `package_download` row per component at its first block, with the Deployment as target and the component as detail, plus a row for every refused read.
 
-To import, start each component upload with `transfer_begin` and `component` set to its name. A component upload may be as large as its limit in the table, and the Kernel refuses it at `transfer_begin` when the volume lacks that much space plus 64 MiB. Any other upload stays at 32 MiB. Write and complete it as usual, then send a release payload with `initialPackage`:
+To import, start each component upload with `transfer_begin` and `component` set to its name; `McpClient.upload(bytes, projectId, component)` in `src/mcp/client.ts` does that and writes the blocks. A component upload may be as large as its limit in the table, and the Kernel refuses it at `transfer_begin` when the volume lacks that much space plus 64 MiB. Any other upload stays at 32 MiB. Write and complete it as usual, then send a release payload with `initialPackage`:
 
 ```json
 { "project": {}, "visibility": "private", "artifact": {},
@@ -486,7 +486,7 @@ To import, start each component upload with `transfer_begin` and `component` set
 - the volume has room for the components, a schema check copy of the database and 64 MiB to spare;
 - the release's `schema.sql` and actions run against the imported database.
 
-`release_apply` copies each component into the new Deployment's folder, checking its SHA-256 as it copies, deletes sessions, email links and API keys again, and unpacks the files. The uploads stay intact until you cancel them, so a failed apply can be retried with a new plan. Repeating an applied plan returns its receipt and creates nothing. A `release_plan` that names a package this project already imported returns `{ planId, applied: true, packageId, receipt }` with the first plan, so `release_apply` with that plan returns the first receipt. A project that already has a Deployment refuses any other `initialPackage`, as it refuses the small format's initial state. The signup policy comes from the manifest unless the payload sets `initialSignupPolicy`.
+`release_apply` copies each component into the new Deployment's folder, checking its SHA-256 as it copies, deletes sessions and email links again, marks any live API key revoked at import, and unpacks the files. The uploads stay intact until you cancel them, so a failed apply can be retried with a new plan. Repeating an applied plan returns its receipt and creates nothing. A `release_plan` that names a package this project already imported returns `{ planId, applied: true, packageId, receipt }` with the first plan, so `release_apply` with that plan returns the first receipt. A project that already has a Deployment refuses any other `initialPackage`, as it refuses the small format's initial state. The signup policy comes from the manifest unless the payload sets `initialSignupPolicy`.
 
 | Refusal | Message |
 | --- | --- |
@@ -547,7 +547,8 @@ The audit log records each migration tool with the Deployment as target and the 
 | Carried | Not carried |
 | --- | --- |
 | Account IDs, password hashes, verified state and suspensions | Sessions, verification, recovery and invitation links |
-| Rows, files and their owners, Usage and Signals | API keys and route signing secrets |
+| Rows, files and their owners, Usage and Signals | Live API keys and route signing secrets |
+| API keys, revoked at import, with their names and scopes | |
 | Visibility and signup policy | Queued email; pending invitations keep their recipient and are resent |
 | The live artifact and `actions.json` | The origin's hostname; the destination builds one from its own origin |
 

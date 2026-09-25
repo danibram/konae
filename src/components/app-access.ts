@@ -1,4 +1,4 @@
-import type { AppInvitation, AppUserState, InvitationDelivery, InvitationResult, MailStatus, SignupMode } from "../deployments/client";
+import type { ApiKey, AppInvitation, AppUserState, InvitationDelivery, InvitationResult, MailStatus, SignupMode } from "../deployments/client";
 import type { DeploymentVisibility } from "../deployments/manifest";
 import { parseServerActionSource, type ServerActionDefinition } from "../kernel/actions";
 
@@ -229,6 +229,24 @@ export function routeCurl(appUrl: string, action: RouteAction, key = KEY_PLACEHO
 /** A curl command for the file read path. The file ID comes from the app's upload. */
 export function fileCurl(appUrl: string, key = KEY_PLACEHOLDER): string {
   return `curl -OJ -H "Authorization: Bearer ${key}" "${appUrl.replace(/\/$/, "")}/_littlebox/files/<file id>"`;
+}
+
+/**
+ * What the Integrations view says about revoked keys. A key that arrived with
+ * an imported app is listed apart, with what it could call, because its
+ * program stopped working when the app moved and needs a new key here.
+ */
+export function revokedKeyNotes(keys: Pick<ApiKey, "name" | "actions" | "files" | "revokedAt" | "revokedReason">[]): string[] {
+  const revoked = keys.filter((key) => key.revokedAt);
+  const imported = revoked.filter((key) => key.revokedReason === "import");
+  const byOwner = revoked.filter((key) => key.revokedReason !== "import");
+  const notes: string[] = [];
+  if (byOwner.length) notes.push(`${byOwner.length === 1 ? "1 revoked key" : `${byOwner.length} revoked keys`}: ${byOwner.map((key) => key.name).join(", ")}.`);
+  if (imported.length) {
+    const scope = (key: (typeof imported)[number]) => [...key.actions, ...key.files.map((visibility) => `${visibility} files`)].join(", ");
+    notes.push(`Revoked at import, because keys do not work on another machine: ${imported.map((key) => `${key.name} (${scope(key)})`).join("; ")}. Create a new key for each program that still needs access.`);
+  }
+  return notes;
 }
 
 export function apiKeyProblem(name: string, actions: string[], files: string[]): string {

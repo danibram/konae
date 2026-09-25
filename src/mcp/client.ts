@@ -33,9 +33,15 @@ export class McpClient {
     return result.structuredContent.result as T;
   }
 
-  async upload(bytes: Uint8Array, projectId?: string): Promise<Transfer> {
+  /**
+   * Uploads bytes as one owner transfer. `component` names a Package
+   * component (`database`, `identity`, `files` or `usage`), which lets the
+   * upload reach that component's limit instead of 32 MiB; a release then
+   * names the transfer in `initialPackage.components`.
+   */
+  async upload(bytes: Uint8Array, projectId?: string, component?: string): Promise<Transfer> {
     const sha256 = await checksum(bytes);
-    const transfer = await this.call<Transfer>("transfer_begin", { size: bytes.length, sha256, ...(projectId ? { projectId } : {}) });
+    const transfer = await this.call<Transfer>("transfer_begin", { size: bytes.length, sha256, ...(projectId ? { projectId } : {}), ...(component ? { component } : {}) });
     try {
       for (let offset = 0; offset < bytes.length; offset += transfer.chunkBytes) {
         await this.call("transfer_write", { transferId: transfer.transferId, offset, data: encodeBase64(bytes.subarray(offset, offset + transfer.chunkBytes)) });

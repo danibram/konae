@@ -48,9 +48,9 @@ const MAX_FILE_INDEX_BYTES: u64 = 32 * MIB;
 /// Free space kept on the volume after a capture or an import.
 const SPACE_MARGIN: u64 = 64 * MIB;
 /// Rows that let someone in without a password. They never leave the origin
-/// and an import deletes any it finds. `api_keys` is deleted when an identity
-/// file has that table.
-const ACCESS_TABLES: [&str; 3] = ["app_sessions", "account_challenges", "api_keys"];
+/// and an import deletes any it finds. API keys travel instead, revoked at
+/// import, so the destination lists them (`http::revoke_imported_keys`).
+const ACCESS_TABLES: [&str; 2] = ["app_sessions", "account_challenges"];
 const EXCLUDED: [&str; 5] = [
     "app sessions",
     "verification, recovery and invitation links",
@@ -406,9 +406,10 @@ fn capture(folder: &Path, scratch: &Path) -> Result<Vec<(String, PathBuf, u64, S
         .collect()
 }
 
-/// Deletes sessions, open email links and API keys from an identity file.
-/// `secure_delete` overwrites the freed pages, so the token hashes do not
-/// stay in the file.
+/// Deletes sessions and open email links from an identity file and marks
+/// every live API key revoked at import. `secure_delete` overwrites the
+/// freed pages, so the session and link token hashes do not stay in the
+/// file. A key's hash stays with its revoked row; it opens nothing.
 pub(super) fn revoke_access(path: &Path) -> Result<usize> {
     let connection = Connection::open(path)?;
     connection.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON;")?;
@@ -422,6 +423,7 @@ pub(super) fn revoke_access(path: &Path) -> Result<usize> {
             removed += connection.execute(&format!("DELETE FROM \"{table}\""), [])?;
         }
     }
+    removed += super::http::revoke_imported_keys(&connection)?;
     Ok(removed)
 }
 
@@ -811,26 +813,41 @@ mod tests {
     }
 
     #[test]
-    fn identity_copies_lose_sessions_links_and_keys() {
+    fn identity_copies_lose_sessions_and_links_and_carry_keys_revoked() {
         let root = std::env::temp_dir().join(format!("littlebox-package-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("identity.sqlite");
         let db = Connection::open(&path).unwrap();
+        // The keys table as a Kernel from before `revoked_reason` wrote it.
         db.execute_batch(
             "CREATE TABLE app_users(id TEXT PRIMARY KEY); INSERT INTO app_users VALUES('u1');
              CREATE TABLE app_sessions(token_hash TEXT); INSERT INTO app_sessions VALUES('secret-session-hash');
              CREATE TABLE account_challenges(token_hash TEXT); INSERT INTO account_challenges VALUES('secret-link-hash');
-             CREATE TABLE api_keys(hash TEXT); INSERT INTO api_keys VALUES('secret-key-hash');",
+             CREATE TABLE api_keys(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+               actions TEXT NOT NULL, files TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER);
+             INSERT INTO api_keys VALUES('key-live', 'live-key-hash', 'Mirror', '[]', '[\"public\"]', 1, NULL);
+             INSERT INTO api_keys VALUES('key-old', 'old-key-hash', 'Old', '[]', '[\"public\"]', 1, 2);",
         )
         .unwrap();
         drop(db);
-        assert_eq!(revoke_access(&path).unwrap(), 3);
+        assert_eq!(revoke_access(&path).unwrap(), 3, "a session, a link and the live key");
         let bytes = std::fs::read(&path).unwrap();
-        for secret in ["secret-session-hash", "secret-link-hash", "secret-key-hash"] {
+        for secret in ["secret-session-hash", "secret-link-hash"] {
             assert!(!bytes.windows(secret.len()).any(|w| w == secret.as_bytes()), "{secret} survived");
         }
-        let users: i64 = Connection::open(&path).unwrap().query_row("SELECT COUNT(*) FROM app_users", [], |r| r.get(0)).unwrap();
+        let db = Connection::open(&path).unwrap();
+        let users: i64 = db.query_row("SELECT COUNT(*) FROM app_users", [], |r| r.get(0)).unwrap();
         assert_eq!(users, 1);
+        let keys: Vec<(String, Option<i64>, Option<String>)> = db
+            .prepare("SELECT id, revoked_at, revoked_reason FROM api_keys ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(matches!(&keys[0], (id, Some(at), Some(reason)) if id == "key-live" && *at > 2 && reason == "import"));
+        assert_eq!(keys[1], ("key-old".to_owned(), Some(2), None), "an owner's revocation keeps its time and has no reason");
+        assert_eq!(revoke_access(&path).unwrap(), 0, "a second pass changes nothing");
         std::fs::remove_dir_all(root).unwrap();
     }
 

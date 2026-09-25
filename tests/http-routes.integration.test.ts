@@ -306,8 +306,8 @@ describe("HTTP routes", () => {
     const copy = await release("http_routes_copy", { "schema.sql": schema, "actions.json": JSON.stringify(actions) }, {
       initialDatabase: state.initialDatabase, initialIdentity: state.initialIdentity, initialFiles: state.initialFiles,
     });
-    const keys = await owner.call<{ keys: { keyId: string; revokedAt: number | null }[] }>("api_keys_list", { deploymentId: copy.id });
-    expect(keys.keys.find(key => key.keyId === live.keyId)?.revokedAt).toBeNumber();
+    const keys = await owner.call<{ keys: { keyId: string; revokedAt: number | null; revokedReason: string | null }[] }>("api_keys_list", { deploymentId: copy.id });
+    expect(keys.keys.find(key => key.keyId === live.keyId)).toMatchObject({ revokedAt: expect.any(Number), revokedReason: "import" });
     expect(keys.keys.every(key => key.revokedAt !== null)).toBe(true);
     expect((await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "x" }), headers: { authorization: `Bearer ${live.key}` } }, copy.hostname)).status).toBe(401);
     expect((await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "x" }), headers: { authorization: `Bearer ${live.key}` } })).status).toBe(200);

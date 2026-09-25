@@ -130,14 +130,15 @@ async function sourcePackage(id: string, directory: string) {
   const upload = await writer.upload(new TextEncoder().encode("attachment bytes"));
   const file = await writer.call<{ id: string }>("files_upload", { transferId: upload.transferId, name: "note.txt", type: "text/plain" });
   await writer.cancel(upload.transferId);
+  const key = await owner.call<{ keyId: string; key: string }>("api_keys_create", { deploymentId: source.id, name: "Mirror", files: ["public"] });
   const exported = await owner.call<Exported>("package_export", { deploymentId: source.id });
-  return { source, cookie, fileId: file.id, exported, files: await download(owner, exported, directory) };
+  return { source, cookie, fileId: file.id, key, exported, files: await download(owner, exported, directory) };
 }
 
 describe("chunked package", () => {
   test("moves rows, accounts and files into a new app, drops sessions, and a repeated apply returns its receipt", async () => {
     const directory = await mkdtemp(path.join(root, "export-"));
-    const { source, cookie, fileId, exported, files } = await sourcePackage("pkg_source", directory);
+    const { source, cookie, fileId, key, exported, files } = await sourcePackage("pkg_source", directory);
     const manifest = exported.manifest;
     expect(manifest).toMatchObject({ format: "littlebox-package", version: 1, deploymentId: source.id, projectId: "pkg_source", visibility: "public", publishedRevision: 1, sourceAuthority: "external" });
     // The signup, the action and the upload above wrote a Usage store, which travels too.
@@ -149,6 +150,8 @@ describe("chunked package", () => {
     try {
       expect(identity.query("SELECT COUNT(*) n FROM app_users").get()).toEqual({ n: 1 });
       expect(identity.query("SELECT COUNT(*) n FROM app_sessions").get()).toEqual({ n: 0 });
+      // The key leaves already revoked, so the component opens nothing.
+      expect(identity.query("SELECT id, revoked_reason FROM api_keys WHERE revoked_at IS NOT NULL").all()).toEqual([{ id: key.keyId, revoked_reason: "import" }]);
     } finally { identity.close(); }
 
     await owner.call("project_create", { projectId: "pkg_target", name: "Imported" });
@@ -169,6 +172,11 @@ describe("chunked package", () => {
     expect(await moved.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Moved with the package" }]);
     expect(new TextDecoder().decode(await moved.download(await moved.call<Transfer>("files_read", { fileId })))).toBe("attachment bytes");
     expect(await runtime(first.receipt.hostname, cookie).call("auth_session")).toMatchObject({ role: "anonymous" });
+    // The destination lists the origin's key as revoked at import, and refuses it.
+    const keys = await owner.call<{ keys: { keyId: string; name: string; files: string[]; revokedAt: number | null; revokedReason: string | null }[] }>("api_keys_list", { deploymentId: first.receipt.id });
+    expect(keys.keys).toEqual([expect.objectContaining({ keyId: key.keyId, name: "Mirror", files: ["public"], revokedAt: expect.any(Number), revokedReason: "import" })]);
+    const refused = await fetch(`${url}/_littlebox/files/${fileId}`, { headers: { host: first.receipt.hostname, "x-forwarded-for": freshClient(), authorization: `Bearer ${key.key}` } });
+    expect(refused.status).toBe(401);
     for (const id of Object.values(components)) await owner.cancel(id);
   }, 60_000);
 

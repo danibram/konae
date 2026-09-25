@@ -4,7 +4,7 @@ import {
   createApiKey, deleteSecret, listApiKeys, listSecrets, revokeApiKey, setSecret,
   type ApiKey, type FileVisibility, type ProjectSecret,
 } from "../deployments/client";
-import { apiKeyProblem, fileCurl, routeActions, routeCurl, secretProblem, secretUsage, type RouteAction } from "./app-access";
+import { apiKeyProblem, fileCurl, revokedKeyNotes, routeActions, routeCurl, secretProblem, secretUsage, type RouteAction } from "./app-access";
 import { Badge, Button, Card, Dialog, EmptyState, Field, Input } from "./ui";
 import { message, signedOut, useConfirm } from "./useConfirm";
 import "./app-access.css";
@@ -206,7 +206,7 @@ function ApiKeysCard({ deploymentId, deploymentUrl, routes, onSignedOut }: { dep
           ))}
         </ul>
       )}
-      {revoked.length > 0 && <p className="access-note">{revoked.length === 1 ? "1 revoked key" : `${revoked.length} revoked keys`}: {revoked.map((key) => key.name).join(", ")}.</p>}
+      {revokedKeyNotes(revoked).map((note) => <p key={note} className="access-note">{note}</p>)}
 
       <fieldset className="access-create">
         <legend>New API key</legend>

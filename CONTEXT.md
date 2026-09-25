@@ -80,11 +80,11 @@ A consistent snapshot of every Deployment folder, with the owner and MCP stores,
 _Avoid_: backup (a Data panel snapshot of one app database), replica, mirror
 
 **Package**:
-The export of one Deployment's state: its database, its accounts without sessions, email links or API keys, its files, and its Usage and Signals when it has any, captured under the Deployment's locks. A versioned manifest lists each component with its size and SHA-256 and names the published revision. Each component travels as its own transfer, so no step holds a whole component in memory. An import verifies every component and installs the Package only into a project that has no Deployment yet; the same Package imported again returns the first import. Downloading one needs the `export_data` permission. A Migration's Package is version 2 and imports in Maintenance.
+The export of one Deployment's state: its database, its accounts without sessions or email links, its API keys revoked at import, its files, and its Usage and Signals when it has any, captured under the Deployment's locks. A versioned manifest lists each component with its size and SHA-256 and names the published revision. Each component travels as its own transfer, so no step holds a whole component in memory. An import verifies every component and installs the Package only into a project that has no Deployment yet; the same Package imported again returns the first import. Downloading one needs the `export_data` permission. A Migration's Package is version 2 and imports in Maintenance.
 _Avoid_: dump, full backup, export file (the kit that carries it is the export)
 
 **Migration**:
-The move of one Deployment to another installation so that exactly one installation takes its writes. The origin enters Maintenance, captures a Package with its live artifact, and is then confirmed, which retires it for seven days and reveals a confirmation, or cancelled, which resumes it. The destination imports the Package in Maintenance and leaves it only through activation with that confirmation. People sign in again with their passwords; sessions, links, API keys and signing secrets do not travel.
+The move of one Deployment to another installation so that exactly one installation takes its writes. The origin enters Maintenance, captures a Package with its live artifact, and is then confirmed, which retires it for seven days and reveals a confirmation, or cancelled, which resumes it. The destination imports the Package in Maintenance and leaves it only through activation with that confirmation. People sign in again with their passwords; sessions, links and signing secrets do not travel, and API keys arrive revoked.
 _Avoid_: replication, sync, transfer (a transfer is one upload or download)
 
 **Maintenance**:
@@ -116,7 +116,7 @@ Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a s
 _Avoid_: Owner, editor user
 
 **API Key**:
-A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It names the Server Actions it may call over their HTTP routes and the file visibilities it may read, and is sent as `Authorization: Bearer`. The Kernel stores its hash only. An export carries it and the import revokes it; a restore of a Copy keeps it valid.
+A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It names the Server Actions it may call over their HTTP routes and the file visibilities it may read, and is sent as `Authorization: Bearer`. The Kernel stores its hash only. A Package or a portable export carries its name, scope and hash, and the import marks it revoked at import, so the destination's owner sees which programs to issue new keys for; a restore of a Copy keeps it valid.
 _Avoid_: token (an Agent Credential), service account
 
 **Signing Secret**:

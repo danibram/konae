@@ -1446,7 +1446,9 @@ mod tests {
         let package = restored.join("package-import.sqlite");
         std::fs::copy(&identity, &package).unwrap();
         crate::package::revoke_access(&package).unwrap();
-        assert_eq!(count(&package, "SELECT COUNT(*) FROM api_keys"), 0, "a package import holds no key");
+        assert_eq!(count(&package, "SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL"), 0, "a package import holds no live key");
+        assert_eq!(count(&package, "SELECT COUNT(*) FROM api_keys WHERE id='key-live' AND revoked_reason='import'"), 1, "the live key arrives revoked at import");
+        assert_eq!(count(&package, "SELECT COUNT(*) FROM api_keys WHERE id='key-revoked' AND revoked_at=2 AND revoked_reason IS NULL"), 1);
         for path in [source, copies, restored] {
             let _ = std::fs::remove_dir_all(path);
         }

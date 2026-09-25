@@ -60,8 +60,8 @@ The yardstick: a person who does not write code, and a person who does, make the
 
 | Finding | Apps | Exact answer |
 | --- | --- | --- |
-| The package drops API keys, against what CONTEXT.md and docs/mcp.md say; the destination cannot see which programs had access | club | `{ keys: [] }` |
-| `McpClient.upload` has no `component` argument; the replay calls `transfer_begin` itself | club | |
+| The package drops API keys, against what CONTEXT.md and docs/mcp.md say; the destination cannot see which programs had access. Fixed: keys travel revoked at import and `api_keys_list` names them (ADR-0013, note on keys) | club | `{ keys: [] }`, now one key with `revokedReason: "import"` |
+| `McpClient.upload` has no `component` argument; the replay calls `transfer_begin` itself. Fixed: `upload(bytes, projectId, component)` | club | |
 | The development mailbox writes no subject or body, so the inviter's name cannot be checked without a transport | inbox | |
 
 ### Smaller

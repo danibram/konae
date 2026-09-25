@@ -19,7 +19,7 @@ Club is a members-only book club. The Project Owner invites people by email. Mem
 - `api_keys_create` with `files: ["public"]`, used with `Authorization: Bearer`.
 - Roles in SQL. The Project Owner promotes an organizer with `database_execute` after finding her user ID with `app_users_list`.
 - `POST /_littlebox/auth/recover` and `POST /_littlebox/auth/reset`.
-- `package_export`, then `transfer_begin` with `component`, and a first release with `initialPackage` on a second Kernel under a second Project Owner.
+- `package_export`, then `McpClient.upload` with `component`, and a first release with `initialPackage` on a second Kernel under a second Project Owner.
 - `littlebox contract` and `littlebox conform`.
 
 ## Run the replay
@@ -40,7 +40,7 @@ The origin Kernel listens on `LITTLEBOX_SHOWCASE_PORT` (default 19470) and the d
 - **API key.** A key with `files: ["public"]` reads a cover with `image/png` and the original bytes. It gets 404 for a private note and 401 on the runtime endpoint.
 - **Roles.** Ana's `books.schedule` changes one row. Ben's `books.schedule`, `books.remove` and `books.finish` change none, and the page shows "Nothing changed. Only an organizer can schedule a meeting, and the book must still be on the shortlist."
 - **Recovery.** The emailed link reset Cy's password. Her earlier session then answers "Sign in to use Littlebox MCP.", the old password fails, and the link works once.
-- **Package.** The Package held database, identity, files and usage. On the destination, Ana, Ben and Cy sign in with their passwords (Cy with the new one). Ana is still organizer, the rows match, the cover and the note have the same bytes, Ben still cannot read Ana's note, and Ben's organizer mutation still changes nothing. Ana's origin session and the origin's API key both answer 401 there. The Signup Policy arrived as Invitation only, and the invitation history arrived as three accepted invitations.
+- **Package.** The Package held database, identity, files and usage. On the destination, Ana, Ben and Cy sign in with their passwords (Cy with the new one). Ana is still organizer, the rows match, the cover and the note have the same bytes, Ben still cannot read Ana's note, and Ben's organizer mutation still changes nothing. Ana's origin session and the origin's API key both answer 401 there, and `api_keys_list` shows the key as "Cover mirror", public files, `revokedReason: "import"`. The Signup Policy arrived as Invitation only, and the invitation history arrived as three accepted invitations.
 - **Contract.** `littlebox conform` with Ben's session reports `67 passed, 0 failed, 0 skipped.` on the origin and again on the destination.
 
 ## Does zero changes instead of an authorization error hurt?
@@ -76,8 +76,8 @@ The predicate still holds on both Kernels. Nobody without the role changed a row
 | Recovery | The same recovery link a second time | 410 `{"error":"This link is invalid, expired or already used."}` |
 | Import | Ana's origin session cookie on the destination | `Sign in to use Littlebox MCP.` |
 | Import | The origin's API key on the destination's file read path | 401 `{"error":"invalid-api-key"}` |
-| Import | `api_keys_list` on the destination | `{ keys: [] }`. The Package's identity component drops API Keys entirely, so the destination's Project Owner cannot see which programs had access at the origin or which keys to reissue. The docs disagree. CONTEXT.md's Package entry says accounts travel "without ... API keys", while its API Key entry says "An export carries it and the import revokes it", and `docs/mcp.md` says the same of `project_export`. |
-| Import | Uploading a Package component with `McpClient.upload` | It has no `component` argument, so the replay calls `transfer_begin` with `component` itself, as `tests/package.integration.test.ts` does. The CLI's `export --with-data` kit and its `deploy.mjs` do this for a person who does not write code. |
+| Import | `api_keys_list` on the destination | Fixed on 2026-11-06. The replay first got `{ keys: [] }`, because the identity component dropped API keys, against what CONTEXT.md and `docs/mcp.md` said. The package now carries each key's name, scope and hash, revoked at import, and the replay asserts "Cover mirror" with `revokedReason: "import"`; the key itself still answers 401 `invalid-api-key`. |
+| Import | Uploading a Package component with `McpClient.upload` | Fixed on 2026-11-06. The replay first called `transfer_begin` with `component` itself; `McpClient.upload(bytes, projectId, component)` now names the component, and the replay uses it. |
 
 ## Choices in the page
 

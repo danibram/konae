@@ -249,12 +249,31 @@ pub(super) struct ApiKey {
     pub(super) files: Vec<String>,
 }
 
+/// Why an import revoked a key, in `api_keys.revoked_reason`. A key the
+/// owner revoked has no reason.
+pub(super) const REVOKED_AT_IMPORT: &str = "import";
+
 fn keys_table(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS api_keys(
            id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
-           actions TEXT NOT NULL, files TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER)",
-    )
+           actions TEXT NOT NULL, files TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER,
+           revoked_reason TEXT)",
+    )?;
+    add_revoked_reason(db)
+}
+
+/// Accounts files written before keys carried a reason lack the column.
+fn add_revoked_reason(db: &Connection) -> rusqlite::Result<()> {
+    let present: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('api_keys') WHERE name='revoked_reason')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !present {
+        db.execute_batch("ALTER TABLE api_keys ADD COLUMN revoked_reason TEXT")?;
+    }
+    Ok(())
 }
 
 fn identity_connection(state: &AppState, deployment: &Deployment) -> Result<Connection> {
@@ -291,13 +310,21 @@ fn find_key(state: &AppState, deployment: &Deployment, token: &str) -> Result<Op
     })
 }
 
-/// Marks every key of an imported identity database revoked. Exports written
-/// before keys existed have no table, and nothing to revoke.
-pub(super) fn revoke_imported_keys(db: &Connection) -> Result<()> {
-    if table_exists(db, "api_keys")? {
-        db.execute("UPDATE api_keys SET revoked_at=?1 WHERE revoked_at IS NULL", [now_ms() as i64])?;
+/// Marks every live key of an accounts file that is leaving or arriving as
+/// revoked at import. The rows stay, with their names, actions, files and
+/// hashes, so the destination's owner sees which programs had access and
+/// which keys to reissue; none of them opens anything. Keys the owner
+/// revoked keep their time and have no reason. Exports written before keys
+/// existed have no table, and nothing to revoke. Returns the keys revoked.
+pub(super) fn revoke_imported_keys(db: &Connection) -> Result<usize> {
+    if !table_exists(db, "api_keys")? {
+        return Ok(0);
     }
-    Ok(())
+    add_revoked_reason(db)?;
+    Ok(db.execute(
+        "UPDATE api_keys SET revoked_at=?1, revoked_reason=?2 WHERE revoked_at IS NULL",
+        rusqlite::params![now_ms() as i64, REVOKED_AT_IMPORT],
+    )?)
 }
 
 fn key_view(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
@@ -309,6 +336,7 @@ fn key_view(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         "files": parse(row.get(3)?),
         "createdAt": row.get::<_, i64>(4)?,
         "revokedAt": row.get::<_, Option<i64>>(5)?,
+        "revokedReason": row.get::<_, Option<String>>(6)?,
     }))
 }
 
@@ -320,7 +348,7 @@ pub(super) async fn api_keys_call(state: &AppState, deployment: &Deployment, nam
     match name {
         "api_keys_list" => {
             let mut query = db.prepare(
-                "SELECT id, name, actions, files, created_at, revoked_at FROM api_keys ORDER BY created_at DESC, id",
+                "SELECT id, name, actions, files, created_at, revoked_at, revoked_reason FROM api_keys ORDER BY created_at DESC, id",
             )?;
             let keys = query.query_map([], key_view)?.collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(json!({"deploymentId": deployment.id, "keys": keys}))

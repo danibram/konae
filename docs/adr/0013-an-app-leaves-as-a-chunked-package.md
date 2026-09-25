@@ -6,7 +6,7 @@ Status: accepted, 2026-11-06. Amends [ADR-0008](0008-authenticated-mcp-is-the-pl
 
 ## Decision
 
-`package_export` captures one Deployment under its project, data and identity locks with `VACUUM INTO` and a file copy, the code a scheduled copy uses. It writes three components, `database`, `identity` and `files`, and offers each as a download transfer. A manifest with a format name and version lists every component with its size and SHA-256 and names the published revision. The identity component leaves without sessions, email links or API keys.
+`package_export` captures one Deployment under its project, data and identity locks with `VACUUM INTO` and a file copy, the code a scheduled copy uses. It writes three components, `database`, `identity` and `files`, and offers each as a download transfer. A manifest with a format name and version lists every component with its size and SHA-256 and names the published revision. The identity component leaves without sessions or email links; API keys travel revoked, as the note of 2026-11-06 on keys says.
 
 An import uploads each component as a transfer started with its component name, which raises that transfer's size cap to the component's quota, and names the transfers in the release payload as `initialPackage`. `release_plan` checks the manifest, the checksums, SQLite integrity, the files against the accounts they name, and the free space before any Deployment exists. `release_apply` copies the components into the new Deployment's folder and checks each SHA-256 again as it copies. A project with a Deployment refuses a package. Repeating an applied plan returns its receipt, so an import cannot create a second app or second accounts.
 
@@ -30,3 +30,11 @@ The editor's own export still builds the small format in the browser. The OAuth 
 ## Note, 2026-11-06: migration packages
 
 [ADR-0014](0014-an-app-migrates-with-one-writer-at-a-time.md) adds a version 2 manifest: version 1 plus a `migration` stamp that `migration_begin` writes. The Kernel and `src/lib/portable-package.ts` accept both versions, require the stamp on version 2 and refuse it on version 1. A version 2 import starts paused until `migration_activate`. A `release_plan` with a package the project already imported now returns the first plan and its receipt instead of the refusal for a project that has a Deployment; any other package for that project is still refused.
+
+## Note, 2026-11-06: API keys travel revoked
+
+The identity component used to delete the `api_keys` table's rows with the sessions and links. The small format had carried keys and revoked them at import since ADR-0011's update, and CONTEXT.md and `docs/mcp.md` said both formats did, so a package import left the destination's owner with `{ keys: [] }` and no way to tell which programs had access at the origin (the club showcase app found it).
+
+A package now carries each key's name, actions, file visibilities, creation time and hash. The capture marks every live key revoked with `revoked_reason = 'import'` before the component is hashed, so the package opens nothing even on a Kernel that would not revoke it, and the install and `migration_activate` mark any live key again. Keys the owner revoked keep their time and no reason. `api_keys_list` returns `revokedReason`, and the editor lists those keys under "Revoked at import" with what each could call.
+
+We considered leaving the hash behind, since a revoked key never matches. We kept it: the small format already carries it, it is the SHA-256 of a 256-bit random token, and the row stays the same shape in both formats. A restore of a Copy is unchanged and keeps keys live. `identity_copies_lose_sessions_and_links_and_carry_keys_revoked` in `package.rs`, `tests/package.integration.test.ts` and the club replay check it.

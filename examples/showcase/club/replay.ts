@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
 import { chromium } from "playwright";
-import { McpClient, checksum, encodeBase64, type Transfer } from "../../../src/mcp/client";
+import { McpClient, type Transfer } from "../../../src/mcp/client";
 import { buildLocal, publishLocal } from "../../../scripts/littlebox";
 
 const repo = path.resolve(import.meta.dir, "../../..");
@@ -147,15 +147,6 @@ async function upload(client: McpClient, bytes: Uint8Array, name: string, type: 
   const transfer = await client.upload(bytes);
   try { return await client.call<{ id: string; visibility: string }>("files_upload", { transferId: transfer.transferId, name, type, ...(visibility ? { visibility } : {}) }); }
   finally { await client.cancel(transfer.transferId).catch(() => {}); }
-}
-/** A package component upload names its component, which McpClient.upload cannot. */
-async function uploadComponent(client: McpClient, bytes: Uint8Array, component: string, projectId: string) {
-  const transfer = await client.call<Transfer>("transfer_begin", { projectId, size: bytes.length, sha256: await checksum(bytes), component });
-  for (let offset = 0; offset < bytes.length; offset += transfer.chunkBytes) {
-    await client.call("transfer_write", { transferId: transfer.transferId, offset, data: encodeBase64(bytes.subarray(offset, offset + transfer.chunkBytes)) });
-  }
-  await client.call("transfer_complete", { transferId: transfer.transferId });
-  return transfer.transferId;
 }
 function cli(args: string[]) {
   const child = Bun.spawn(["bun", "run", path.join(repo, "scripts/littlebox.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
@@ -385,7 +376,7 @@ try {
   // Import into a second Kernel, under a second owner who never saw the origin.
   await destination.owner.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
   const components: Record<string, string> = {};
-  for (const content of exported.manifest.contents) components[content.name] = await uploadComponent(destination.owner, componentBytes[content.name], content.name, project.id);
+  for (const content of exported.manifest.contents) components[content.name] = (await destination.owner.upload(componentBytes[content.name], project.id, content.name)).transferId;
   const { artifact, files } = await buildLocal(root);
   const payload = { project: { ...project, files }, visibility: "private", artifact, initialPackage: { manifest: exported.manifest, components } };
   const payloadUpload = await destination.owner.upload(json(payload), project.id);
@@ -423,13 +414,14 @@ try {
   const originKeyBody = await originKey.json();
   assert.deepEqual([originKey.status, originKeyBody], [401, { error: "invalid-api-key" }]);
   refused("Import", "The origin's API key on the destination's file read path", `${originKey.status} ${JSON.stringify(originKeyBody)}`);
-  const keysOnB = await destination.owner.call<{ keys: Array<{ keyId: string; revokedAt: number | null }> }>("api_keys_list", { deploymentId: receiptB.id });
-  // The package's identity component leaves API keys out entirely, so the
-  // destination owner has no record of which keys existed at the origin.
-  assert.deepEqual(keysOnB.keys, []);
-  refused("Import", "api_keys_list on the destination after a package import", "`{ keys: [] }`: no metadata travels, revoked or not");
+  const keysOnB = await destination.owner.call<{ keys: Array<{ keyId: string; name: string; files: string[]; revokedAt: number | null; revokedReason: string | null }> }>("api_keys_list", { deploymentId: receiptB.id });
+  // The package carries each key's name, scope and hash, revoked at import,
+  // so the destination owner sees which programs had access and reissues.
+  assert.deepEqual(keysOnB.keys.map(({ keyId, name, files, revokedReason }) => ({ keyId, name, files, revokedReason })),
+    [{ keyId: key.keyId, name: "Cover mirror", files: ["public"], revokedReason: "import" }]);
+  assert.equal(typeof keysOnB.keys[0].revokedAt, "number");
   const invitationsOnB = await destination.owner.call<{ invitations: Array<{ status: string }> }>("app_invitations_list", { deploymentId: receiptB.id });
-  check("Import", `The destination serves ${receiptB.url} under invitation; Ana, Ben and Cy sign in with their passwords, the organizer role, rows, cover and note bytes are intact, Ben still cannot read Ana's note, origin sessions answer 401, the origin key answers invalid-api-key and the destination lists no keys. Invitation history travelled as ${invitationsOnB.invitations.map((item) => item.status).join(", ")}.`);
+  check("Import", `The destination serves ${receiptB.url} under invitation; Ana, Ben and Cy sign in with their passwords, the organizer role, rows, cover and note bytes are intact, Ben still cannot read Ana's note, origin sessions answer 401, the origin key answers invalid-api-key and the destination lists it as "Cover mirror", public files, revoked at import. Invitation history travelled as ${invitationsOnB.invitations.map((item) => item.status).join(", ")}.`);
 
   // The Action Contract and the conformance checks, through the CLI, against both Kernels.
   const [contractCode, , contractErr] = await cli(["contract", "--dir", root]);

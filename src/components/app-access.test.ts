@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { signupModes } from "../deployments/client";
 import {
-  apiKeyProblem, batchKey, defaultSignupMode, expiryText, fileCurl, firstPublishModes, invitationResultMessage, invitationView,
+  apiKeyProblem, batchKey, revokedKeyNotes, defaultSignupMode, expiryText, fileCurl, firstPublishModes, invitationResultMessage, invitationView,
   mailReadiness, parseEmailBatch, republishAccessNote, routeActions, routeCurl, secretProblem, secretUsage, signupModeCopy,
   userStateView, visibilityCopy,
 } from "./app-access";
@@ -177,6 +177,16 @@ describe("integrations", () => {
     expect(apiKeyProblem("", ["orders.list"], [])).toContain("Name");
     expect(apiKeyProblem("Billing", [], [])).toContain("at least one");
     expect(apiKeyProblem("Billing", [], ["private"])).toBe("");
+  });
+
+  test("lists keys revoked at import apart, with what each could call, so the owner knows what to reissue", () => {
+    const key = (name: string, revokedReason: "import" | null, actions: string[] = [], files: ("public" | "private")[] = []) =>
+      ({ name, actions, files, revokedAt: 5, revokedReason });
+    expect(revokedKeyNotes([{ ...key("Live", null), revokedAt: null }])).toEqual([]);
+    expect(revokedKeyNotes([key("Old", null)])).toEqual(["1 revoked key: Old."]);
+    const notes = revokedKeyNotes([key("Old", null), key("Mirror", "import", [], ["public"]), key("Orders", "import", ["orders.receive"])]);
+    expect(notes[0]).toBe("1 revoked key: Old.");
+    expect(notes[1]).toBe("Revoked at import, because keys do not work on another machine: Mirror (public files); Orders (orders.receive). Create a new key for each program that still needs access.");
   });
 
   test("builds the curl docs/mcp.md describes for each route", () => {
