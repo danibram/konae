@@ -2,11 +2,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { ignoreInGit, publishLocal } from "./littlebox";
+import { ignoreInGit, manifestSignupPolicy, publishLocal, signupPolicyWarning } from "./littlebox";
 
 /** A stand-in Kernel MCP endpoint that records tool calls and can fail chosen ones. */
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
 const failing = new Set<string>();
+/** Answers a test sets for one tool, over the defaults below. */
+const answers: Record<string, unknown> = {};
 let uploaded = "";
 let server: ReturnType<typeof Bun.serve>;
 
@@ -27,9 +29,9 @@ beforeAll(() => {
         project_create: { id: "app_test", name: "Test", slug: "test", manifest: {}, files: { "app.js": "" } },
         transfer_begin: { transferId: "transfer_1", size: 0, sha256: "", chunkBytes: 65_536 },
         release_plan: { planId: "plan_1" },
-        release_apply: { url: "http://test.localhost/" },
+        release_apply: { id: "dep_1", url: "http://test.localhost/" },
       };
-      return reply({ isError: false, structuredContent: { result: results[name] ?? {} } });
+      return reply({ isError: false, structuredContent: { result: answers[name] ?? results[name] ?? {} } });
     },
   });
 });
@@ -40,6 +42,7 @@ let directory: string;
 beforeEach(async () => {
   calls.length = 0;
   failing.clear();
+  for (const name of Object.keys(answers)) delete answers[name];
   uploaded = "";
   directory = await mkdtemp(path.join(tmpdir(), "littlebox-cli-"));
 });
@@ -106,6 +109,71 @@ describe("littlebox CLI", () => {
     expect(await run.exited).toBe(1);
     expect(await new Response(run.stderr).text()).toContain("Refusing to overwrite app.js");
     expect(calls.map((call) => call.name)).not.toContain("project_create");
+  });
+
+  test("a first release sends littlebox.json's signup policy and keeps it out of the project manifest", async () => {
+    await writeFile(path.join(directory, "app.js"), "console.log('hi');");
+    const manifest = { visibility: "private", signupPolicy: { mode: "allowlist", allowlist: ["@example.test"] } };
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest } };
+    const warnings: string[] = [];
+
+    await publishLocal(directory, config, "token", (message) => warnings.push(message));
+
+    const payload = JSON.parse(uploaded);
+    expect(payload.initialSignupPolicy).toEqual({ mode: "allowlist", allowlist: ["@example.test"] });
+    expect(payload.project.manifest).toEqual({ visibility: "private" });
+    expect(calls.find((call) => call.name === "project_create")!.arguments.manifest).toEqual({ visibility: "private" });
+    expect(calls.map((call) => call.name)).not.toContain("signup_policy_read");
+    expect(warnings).toEqual([]);
+  });
+
+  test("a republish sends no policy and warns, without failing, when the app has another", async () => {
+    await writeFile(path.join(directory, "app.js"), "console.log('hi');");
+    answers.project_inspect = { deployment: { id: "dep_1" } };
+    answers.signup_policy_read = { deploymentId: "dep_1", mode: "closed", allowlist: [] };
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: { signupPolicy: { mode: "invitation" } } } };
+    const warnings: string[] = [];
+
+    const receipt = await publishLocal(directory, config, "token", (message) => warnings.push(message));
+
+    expect(receipt.url).toBe("http://test.localhost/");
+    expect(JSON.parse(uploaded)).not.toHaveProperty("initialSignupPolicy");
+    expect(calls.find((call) => call.name === "signup_policy_read")!.arguments).toEqual({ deploymentId: "dep_1" });
+    expect(warnings).toEqual([
+      "littlebox.json asks for signup Invitation only, but this app has Closed. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Auth > Users view, or call signup_policy_set with a credential that holds manage_users.",
+    ]);
+
+    // The same policy, or a Kernel that cannot read it, publishes without a word.
+    for (const answer of [{ mode: "invitation", allowlist: ["kept@example.test"] }, undefined]) {
+      warnings.length = 0;
+      if (answer) answers.signup_policy_read = answer; else failing.add("signup_policy_read");
+      expect((await publishLocal(directory, config, "token", (message) => warnings.push(message))).url).toBe("http://test.localhost/");
+      expect(warnings).toEqual([]);
+    }
+  });
+
+  test("an allowlist differs when its entries do, ignoring case and order", () => {
+    const wanted = { mode: "allowlist" as const, allowlist: ["B@example.test", "@team.test"] };
+    expect(signupPolicyWarning(wanted, { mode: "allowlist", allowlist: ["@team.test", "b@example.test"] })).toBeUndefined();
+    expect(signupPolicyWarning(wanted, { mode: "allowlist", allowlist: ["@team.test"] })).toContain("but this app has Allowlist (@team.test)");
+  });
+
+  test("a signup policy littlebox.json cannot hold is refused before anything is sent", async () => {
+    expect(manifestSignupPolicy({})).toBeUndefined();
+    expect(manifestSignupPolicy({ signupPolicy: { mode: "closed" } })).toEqual({ mode: "closed", allowlist: [] });
+    expect(() => manifestSignupPolicy({ signupPolicy: { mode: "members" } })).toThrow('signupPolicy.mode must be "open", "invitation", "closed" or "allowlist"');
+    expect(() => manifestSignupPolicy({ signupPolicy: { mode: "allowlist", allowlist: "@example.test" } })).toThrow("must be a list of emails and @domains");
+    await writeFile(path.join(directory, "app.js"), "console.log('hi');");
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: { signupPolicy: "invitation" } } };
+    await expect(publishLocal(directory, config, "token")).rejects.toThrow("signupPolicy.mode");
+    expect(calls).toEqual([]);
+  });
+
+  test("init writes a private app that admits the people its owner invites", async () => {
+    const run = cli("init", "--dir", directory, "--url", origin());
+    expect(await run.exited).toBe(0);
+    const written = JSON.parse(await readFile(path.join(directory, "littlebox.json"), "utf8"));
+    expect(written.project.manifest).toMatchObject({ visibility: "private", signupPolicy: { mode: "invitation" } });
   });
 
   test("ignoreInGit adds an entry once", async () => {

@@ -10,7 +10,7 @@ import { createHmac } from "node:crypto";
 import initSqlJs from "sql.js";
 import { chromium } from "playwright";
 import { McpClient } from "../../../src/mcp/client";
-import { buildLocal } from "../../../scripts/littlebox";
+import { buildLocal, publishLocal } from "../../../scripts/littlebox";
 import { kernelTarget } from "../../../scripts/conform";
 import { createCapsuleValidator } from "../../../src/agent/gate";
 import { generateActionContract } from "../../../src/lib/action-contract";
@@ -98,12 +98,13 @@ try {
   }
   check("Validation Gate and Kernel", `Both pass the Capsule and both refuse ${Object.keys(refusals).join(", ")}. ${JSON.stringify(refusals)}`);
 
-  // 2. Publish public, with the Allowlist installed before the first request.
+  // 2. Publish public with `littlebox publish`, with the Allowlist from
+  // littlebox.json installed before the first request.
   await owner.call("project_create", { projectId: "showcase_booking", name: "Room board", slug: "booking", manifest: { version: 1, visibility: "public" } });
-  const unset = await refusal(publish("showcase_booking", "booking", capsule));
+  const unset = await refusal(publishWithCli("showcase_booking", "booking"));
   assert.match(unset, /signs with the secret panel_hook, which is not set/);
   await owner.call("secret_set", { projectId: "showcase_booking", name: "panel_hook", value: panelSecret });
-  const receipt = await publish("showcase_booking", "booking", capsule, { mode: "allowlist", allowlist: ["@office.example"] });
+  const receipt = await publishWithCli("showcase_booking", "booking", { mode: "allowlist", allowlist: ["@office.example"] });
   const deploymentId = receipt.id;
   const policy = await owner.call<{ mode: string; allowlist: string[] }>("signup_policy_read", { deploymentId });
   assert.equal(policy.mode, "allowlist");
@@ -111,7 +112,7 @@ try {
   const sql = (statement: string) => owner.call<any>("database_execute", { deploymentId, operation: "sql", input: { sql: statement } });
   // schema.sql may only create tables and indexes, so the owner adds the rooms.
   await sql("INSERT INTO rooms (id, name, seats) VALUES ('oak', 'Oak', 6), ('birch', 'Birch', 4), ('cedar', 'Cedar', 10), ('pine', 'Pine', 2)");
-  check("Publish", `Refused first with "${unset}"; published public at ${receipt.url} after secret_set, with initialSignupPolicy allowlist @office.example. The owner seeds rooms with database_execute.`);
+  check("Publish", `Refused first with "${unset}"; published public with littlebox publish at ${receipt.url} after secret_set, with littlebox.json's signupPolicy allowlist @office.example installed on the first release. The owner seeds rooms with database_execute.`);
 
   // 3. Allowlist by domain, and its refusal next to Closed's.
   const host = receipt.hostname;
@@ -369,6 +370,15 @@ async function publish(projectId: string, slug: string, files: Record<string, st
     const plan = await owner.call<{ planId: string }>("release_plan", { transferId: upload.transferId });
     return await owner.call<{ id: string; hostname: string; url: string }>("release_apply", { planId: plan.planId });
   } finally { await owner.cancel(upload.transferId); }
+}
+
+/** `littlebox publish` from a copy of this folder, with a token that holds read, write and publish and not manage_users. */
+async function publishWithCli(projectId: string, slug: string, signupPolicy?: { mode: string; allowlist: string[] }) {
+  const root = await copyOf(`cli-${projectId}-${crypto.randomUUID()}`);
+  const owner = new McpClient(`${url}/mcp`, { fetch: ownerFetch });
+  const { token } = await owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 600 });
+  const project = { id: projectId, name: projectId, slug, manifest: { version: 1, visibility: "public", ...(signupPolicy ? { signupPolicy } : {}) } };
+  return await publishLocal(root, { url, project }, token) as { id: string; hostname: string; url: string };
 }
 
 function ownerFetch(input: RequestInfo | URL, init?: RequestInit) {

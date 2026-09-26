@@ -17,6 +17,46 @@ import { checkEjectPackage, type EjectPlan, type EjectReceipt } from "../src/lib
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
 type Config = { url: string; project: Project };
+type SignupMode = "open" | "invitation" | "closed" | "allowlist";
+export type SignupPolicy = { mode: SignupMode; allowlist: string[] };
+
+const SIGNUP_MODES: readonly SignupMode[] = ["open", "invitation", "closed", "allowlist"];
+const MODE_LABELS: Record<SignupMode, string> = { open: "Open", invitation: "Invitation only", closed: "Closed", allowlist: "Allowlist" };
+/** What `init` writes: a private app that admits the people its owner invites. */
+export const INIT_SIGNUP_POLICY = { mode: "invitation" } as const;
+
+/**
+ * `project.manifest.signupPolicy` in littlebox.json: who may create an app
+ * account when the first release goes out. Checked before anything is sent;
+ * the Kernel checks the allowlist entries again.
+ */
+export function manifestSignupPolicy(manifest: Record<string, unknown>): SignupPolicy | undefined {
+  const value = manifest.signupPolicy as { mode?: unknown; allowlist?: unknown } | undefined;
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || !SIGNUP_MODES.includes(value.mode as SignupMode)) {
+    throw Error('littlebox.json project.manifest.signupPolicy.mode must be "open", "invitation", "closed" or "allowlist".');
+  }
+  const allowlist = value.allowlist ?? [];
+  if (!Array.isArray(allowlist) || !allowlist.every((entry) => typeof entry === "string")) {
+    throw Error("littlebox.json project.manifest.signupPolicy.allowlist must be a list of emails and @domains.");
+  }
+  return { mode: value.mode as SignupMode, allowlist };
+}
+
+function describePolicy(policy: SignupPolicy) {
+  return policy.mode === "allowlist" ? `Allowlist (${policy.allowlist.join(", ") || "empty"})` : MODE_LABELS[policy.mode];
+}
+
+/**
+ * The warning a republish prints when littlebox.json names another policy
+ * than the Deployment has. A publish never changes who may join an app that
+ * exists (docs/mcp.md, "Signup policy"), so the file and the app can differ.
+ */
+export function signupPolicyWarning(wanted: SignupPolicy, current: SignupPolicy): string | undefined {
+  const entries = (policy: SignupPolicy) => policy.allowlist.map((entry) => entry.trim().toLowerCase()).filter(Boolean).sort().join("\n");
+  if (wanted.mode === current.mode && (wanted.mode !== "allowlist" || entries(wanted) === entries(current))) return undefined;
+  return `littlebox.json asks for signup ${describePolicy(wanted)}, but this app has ${describePolicy(current)}. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Auth > Users view, or call signup_policy_set with a credential that holds manage_users.`;
+}
 
 function endpoint(url: string) { return new URL("/mcp", url).href; }
 async function json<T>(filename: string): Promise<T> { return JSON.parse(await readFile(filename, "utf8")); }
@@ -77,21 +117,42 @@ export async function buildLocal(root: string) {
   return { artifact, files };
 }
 
-export async function publishLocal(root: string, config: Config, token: string) {
+/**
+ * Builds and publishes. On a first release `project.manifest.signupPolicy`
+ * goes as `initialSignupPolicy`; on a later one the Kernel keeps the app's
+ * policy and `warn` gets one line when littlebox.json names another.
+ */
+export async function publishLocal(root: string, config: Config, token: string, warn: (message: string) => void = console.warn) {
   const client = new McpClient(endpoint(config.url), { token });
-  await client.call("project_create", { projectId: config.project.id, name: config.project.name, slug: config.project.slug, manifest: config.project.manifest });
+  const wanted = manifestSignupPolicy(config.project.manifest);
+  // The policy is not part of the Capsule manifest, so the Kernel's project record never holds an allowlist.
+  const { signupPolicy: _, ...manifest } = config.project.manifest;
+  const project = { ...config.project, manifest };
+  await client.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest });
+  const remote = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId: project.id });
+  const first = !remote.deployment;
   const { artifact, files } = await buildLocal(root);
-  const payload = { project: { ...config.project, files }, visibility: config.project.manifest.visibility ?? "private", artifact };
-  const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), config.project.id);
+  const payload = {
+    project: { ...project, files }, visibility: manifest.visibility ?? "private", artifact,
+    ...(first && wanted ? { initialSignupPolicy: wanted } : {}),
+  };
+  const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), project.id);
+  let receipt: { id: string; url: string };
   try {
     const plan = await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
     await writeFile(path.join(root, ".littlebox/release-plan.json"), JSON.stringify(plan, null, 2));
-    const receipt = await client.call<{ id: string; url: string }>("release_apply", { planId: plan.planId });
+    receipt = await client.call<{ id: string; url: string }>("release_apply", { planId: plan.planId });
     await writeFile(path.join(root, ".littlebox/deployment.json"), JSON.stringify(receipt, null, 2));
-    return receipt;
   } finally {
     try { await client.cancel(transfer.transferId); } catch (error) { console.warn(`Could not release the upload: ${error instanceof Error ? error.message : error}`); }
   }
+  if (!first && wanted) {
+    // Reading the policy needs only read. A Kernel that cannot answer leaves the publish as it is.
+    const current = await client.call<{ mode: SignupMode; allowlist?: string[] }>("signup_policy_read", { deploymentId: receipt.id }).catch(() => undefined);
+    const warning = current?.mode && signupPolicyWarning(wanted, { mode: current.mode, allowlist: current.allowlist ?? [] });
+    if (warning) warn(warning);
+  }
+  return receipt;
 }
 
 export async function exportLocal(root: string, config: Config, output: string, token?: string) {
@@ -286,7 +347,9 @@ async function main() {
       await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, source, { flag: "wx" });
     }
     const { files: _, ...metadata } = project;
-    await writeFile(path.join(root, "littlebox.json"), JSON.stringify({ url, project: metadata }, null, 2), { flag: "wx" });
+    // A new app starts private, and only people the owner invites can create an account.
+    const manifest = { ...metadata.manifest, visibility: "private", signupPolicy: INIT_SIGNUP_POLICY };
+    await writeFile(path.join(root, "littlebox.json"), JSON.stringify({ url, project: { ...metadata, manifest } }, null, 2), { flag: "wx" });
     await ignoreInGit(root, [".littlebox/", "node_modules/"]);
     console.log(`Created ${project.name} in ${root}.`);
     return;
@@ -348,11 +411,12 @@ async function main() {
     if (!ready) { child.kill(); throw Error("Development Kernel did not become ready."); }
     // The development Kernel opens signup below, which needs manage_users.
     const token = await login(url, "local-owner@littlebox.test", secret, { setupKey: secret }, ["read", "write", "publish", "manage_users"]);
-    const devConfig = { ...config, url };
+    // Development accounts come from signup, so the local app starts Open and a republish never warns.
+    const devConfig = { ...config, url, project: { ...config.project, manifest: { ...config.project.manifest, signupPolicy: { mode: "open" } } } };
     try {
       const first = await publishLocal(root, devConfig, token);
-      // A new private deployment starts with signup closed. The development Kernel is
-      // isolated and local, so let the developer create test accounts.
+      // dev-data kept from an earlier run may hold another policy. The development
+      // Kernel is isolated and local, so let the developer create test accounts.
       await new McpClient(endpoint(url), { token }).call("signup_policy_set", { deploymentId: first.id, mode: "open" });
       console.log(first.url);
       let working = false; let queued = false;

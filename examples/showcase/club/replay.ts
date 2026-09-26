@@ -163,16 +163,25 @@ try {
   const root = path.join(scratch, "club");
   await cp(import.meta.dir, root, { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
   const project = { id: "showcase_club", name: "Club", slug: "club", manifest: { version: 1, visibility: "private" } };
-  await writeFile(path.join(root, "littlebox.json"), JSON.stringify({ url: origin.url, project }, null, 2));
+  // littlebox.json names the first release's signup policy; publish sends it as initialSignupPolicy.
+  const cliProject = { ...project, manifest: { ...project.manifest, signupPolicy: { mode: "invitation" } } };
+  await writeFile(path.join(root, "littlebox.json"), JSON.stringify({ url: origin.url, project: cliProject }, null, 2));
   const publishToken = await origin.owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 600 });
-  const receiptA = await publishLocal(root, { url: origin.url, project }, publishToken.token) as Receipt;
+  const receiptA = await publishLocal(root, { url: origin.url, project: cliProject }, publishToken.token) as Receipt;
   const A = app(origin, receiptA);
   const firstPolicy = await origin.owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receiptA.id });
-  assert.equal(firstPolicy.mode, "closed");
-  await assert.rejects(new McpClient(`${origin.url}/mcp`, { token: publishToken.token }).call("signup_policy_set", { deploymentId: receiptA.id, mode: "invitation" }), /Unknown tool/);
-  refused("Signup policy", "CLI publish of a private app, then signup_policy_set with the publish token", "Policy starts Closed; the publish token gets `Unknown tool or insufficient permission.`");
-  await origin.owner.call("signup_policy_set", { deploymentId: receiptA.id, mode: "invitation" });
-  check("Publish", `littlebox publish deployed ${receiptA.url} as private with policy ${firstPolicy.mode}; the owner session switched it to invitation.`);
+  assert.equal(firstPolicy.mode, "invitation");
+  // A republish whose littlebox.json names another policy warns and changes nothing.
+  const warnings: string[] = [];
+  const openProject = { ...project, manifest: { ...project.manifest, signupPolicy: { mode: "open" } } };
+  await publishLocal(root, { url: origin.url, project: openProject }, publishToken.token, (line) => warnings.push(line));
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /asks for signup Open, but this app has Invitation only\..*Auth > Users.*signup_policy_set/);
+  assert.equal((await origin.owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receiptA.id })).mode, "invitation");
+  const publishOnlySet = await message(new McpClient(`${origin.url}/mcp`, { token: publishToken.token }).call("signup_policy_set", { deploymentId: receiptA.id, mode: "open" }));
+  assert.equal(publishOnlySet, "Unknown tool or insufficient permission.");
+  refused("Signup policy", "signup_policy_set with the CLI's publish token", publishOnlySet);
+  check("Publish", `littlebox publish deployed ${receiptA.url} as private with policy ${firstPolicy.mode} from littlebox.json, on a token without manage_users. A republish naming open warned "${warnings[0]}" and kept invitation.`);
 
   // A visitor gets the sign-in page and nothing else.
   const shell = await A.http("/");

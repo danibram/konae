@@ -191,7 +191,7 @@ bun run littlebox -- dev --dir /tmp/my-app
 bun run littlebox -- publish --dir /tmp/my-app
 ```
 
-The code stays in that folder. Development starts a separate local Rust Kernel with its own identities, files and database. `publish` deploys as private unless `littlebox.json` sets `project.manifest.visibility` to `"public"`. See [the MCP guide](./docs/mcp.md) for credentials, tools, limits and deployment configuration.
+The code stays in that folder. Development starts a separate local Rust Kernel with its own identities, files and database. `publish` deploys as private unless `littlebox.json` sets `project.manifest.visibility` to `"public"`. `project.manifest.signupPolicy` names who may create an app account on the first release; `init` writes private and `{ "mode": "invitation" }`, and a later publish that names another policy warns and changes nothing. See [the MCP guide](./docs/mcp.md) for credentials, tools, limits and deployment configuration.
 
 ## Mini-app SDK
 

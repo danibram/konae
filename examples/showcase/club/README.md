@@ -13,7 +13,7 @@ Club is a members-only book club. The Project Owner invites people by email. Mem
 
 ## Platform parts it uses
 
-- A Private Deployment, published by `publishLocal` in `scripts/littlebox.ts`, the function behind `littlebox publish`, then set to Invitation only with `signup_policy_set`.
+- A Private Deployment, published by `publishLocal` in `scripts/littlebox.ts`, the function behind `littlebox publish`, as Invitation only from `littlebox.json`'s `signupPolicy`, then a republish that names another policy.
 - `app_invitations_create`, the development mailbox and `POST /_littlebox/auth/accept`.
 - `miniapp.files.upload` with and without `visibility: "public"`, and `GET /_littlebox/files/<id>` with the app session cookie, as an `<img>` source for covers and a `fetch` for notes, under the app's Content Security Policy.
 - `api_keys_create` with `files: ["public"]`, used with `Authorization: Bearer`.
@@ -57,8 +57,8 @@ The predicate still holds on both Kernels. Nobody without the role changed a row
 
 | Area | Request | Answer |
 | --- | --- | --- |
-| Signup Policy | `publishLocal`, the function behind `littlebox publish`, on a private app | The Deployment starts Closed. `scripts/littlebox.ts` never sends `initialSignupPolicy`, so Invitation only needs a second step with a different credential. |
-| Signup Policy | `signup_policy_set` with the publish token | `Unknown tool or insufficient permission.` Changing the policy needs `manage_users`, which the CLI's publish token lacks. |
+| Signup Policy | `publishLocal`, the function behind `littlebox publish`, on a private app | Fixed on 2026-11-06. The Deployment started Closed because `scripts/littlebox.ts` never sent `initialSignupPolicy`, so Invitation only needed a second step with a different credential. `littlebox.json` now names `project.manifest.signupPolicy`; the replay publishes as Invitation only with the publish token alone, and a republish naming Open prints a warning that names the Users view and `signup_policy_set` and changes nothing. |
+| Signup Policy | `signup_policy_set` with the publish token | `Unknown tool or insufficient permission.` Changing an existing app's policy needs `manage_users`, which the CLI's publish token lacks. This is the intended split: a publish names only the first release's policy. |
 | Invitation only | `POST /_littlebox/auth/signup` from an uninvited address | 403 `{"error":"This app is not accepting new accounts for this email address."}` |
 | Private file | Ben's `files_read` of Ana's note | `File not found.` |
 | Private file | Ben's `GET /_littlebox/files/<note>` with his session | 404 `{"error":"File not found."}` |

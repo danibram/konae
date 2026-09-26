@@ -88,7 +88,7 @@ Rows with a status or a quoted message are answers the replay received. Rows tha
 | Attempt | Status | Exact answer |
 | --- | --- | --- |
 | `littlebox build` or `publish` on a Capsule with `about.html` | | No error. The artifact holds only `index.html`, built from `index.html` as a body fragment with `styles.css` and `app.js` inlined, so `about.html` is dropped and `/about.html` would serve the home page. The replay publishes the multi-file artifact over MCP, as the product-fit `docs` example does. |
-| `littlebox publish` with a first signup policy | | No option. `publishLocal` sends no `initialSignupPolicy`, so a CLI-published public app starts Open. |
+| `littlebox publish` with a first signup policy | | Fixed on 2026-11-06: `littlebox.json` names `project.manifest.signupPolicy` and `littlebox publish` sends it on the first release (the club and booking replays use it). This replay still publishes over MCP, because the CLI drops `about.html`. |
 | Publish `contact.send` with `... RETURNING id` | | `Action contact.send cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.` |
 | A visitor signs up while signup is Closed | 403 | `This app is not accepting new accounts for this email address.` The same text for everyone under Closed, though it reads as if the address were the problem. |
 | The invited curator accepts while signup is Closed | 200 | Fixed on 2026-11-06 (ADR-0011, note on Closed). The replay first recorded 403 `This app is not accepting new accounts for this email address.` with `acceptable: false`. An owner's invitation is now acceptable under Closed, and the replay asserts `acceptable: true` and the 200. |

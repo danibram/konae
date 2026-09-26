@@ -10,7 +10,7 @@ This app is a product probe. It uses Littlebox the way a creator would and recor
 | --- | --- |
 | Public Deployment with anonymous queries | `rooms.list` and `availability.day` answer a signed-out visitor with `{ room, hour }` only, no titles and no names |
 | Authenticated mutations | `bookings.create`, `bookings.cancel` and `staff.name` bind the caller with `{ "source": "actor", "field": "id" }` |
-| Allowlist signup by `@domain` | Installed on the first release with `initialSignupPolicy: { mode: "allowlist", allowlist: ["@office.example"] }` |
+| Allowlist signup by `@domain` | `littlebox.json` names `signupPolicy: { mode: "allowlist", allowlist: ["@office.example"] }` and `littlebox publish` installs it on the first release |
 | One SQL statement per action | `bookings.create` is one `INSERT ... WITH RECURSIVE ... SELECT` that writes every hour of the span or none |
 | CHECK constraints and a partial unique index | `schema.sql` refuses a fractional hour, an hour outside 08 to 17, an invalid date and a second holder of an hour |
 | HTTP route, unsigned | `GET /api/availability?day=YYYY-MM-DD` for a lobby screen |
@@ -34,7 +34,7 @@ It prints one `PASS` line per group and a JSON report, and exits 0 when all ten 
 
 ```text
 PASS Validation Gate and Kernel. Both pass the Capsule and both refuse a trigger that writes the booking log, a mutation that starts with WITH, two statements in one action, a view of free hours. [...]
-PASS Publish. Refused first with "Action panel.checkin signs with the secret panel_hook, which is not set for this project. Set it with secret_set before publishing."; published public at [...] after secret_set, with initialSignupPolicy allowlist @office.example.
+PASS Publish. Refused first with "Action panel.checkin signs with the secret panel_hook, which is not set for this project. Set it with secret_set before publishing."; published public with littlebox publish at [...] after secret_set, with littlebox.json's signupPolicy allowlist @office.example installed on the first release.
 PASS Allowlist signup. @office.example signs up. pat@elsewhere.example, sam@sub.office.example and, under Closed, cara@office.example all get 403 {"error":"This app is not accepting new accounts for this email address."}. Existing staff still sign in under Closed.
 PASS One-statement booking. A two-hour booking writes two rows in one INSERT ... WITH RECURSIVE ... SELECT. An overlap and a fractional hour, five hours, a span past 18:00, a past day, an impossible date, text that is not a date, an unknown room each return { changes: 0 } with no reason. [...]
 PASS Public and staff views. A visitor and GET /api/availability get only { room, hour }; titles and names need a session, and authenticated actions answer authentication-required. [...]
@@ -48,7 +48,7 @@ PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no
 ## What worked
 
 - **Allowlist by domain.** `ana@office.example` signs up. `pat@elsewhere.example` and `sam@sub.office.example` get exactly the answer a listed address gets under Closed: status 403 and `{"error":"This app is not accepting new accounts for this email address."}`. The replay compares the two bodies with `deepEqual`, so the refusal does not tell a stranger whether the domain or the policy stopped them. A domain entry does not match its subdomains. Closing signup does not sign out existing staff.
-- **The policy is in place before the first request.** The release payload carries `initialSignupPolicy`, so the public app never runs Open.
+- **The policy is in place before the first request.** `littlebox publish` sends littlebox.json's `signupPolicy` as `initialSignupPolicy`, so the public app never runs Open.
 - **Public reads stay narrow.** The anonymous query projects `room` and `hour` and nothing else; titles and names come only from `bookings.day`, which needs a session. A visitor calling `bookings.day`, `bookings.create` or `bookings.recent` gets `authentication-required`.
 - **A span of hours in one statement.** `bookings.create` generates the hours with a recursive CTE inside the `INSERT`'s `SELECT`, guards them with `WHERE`, and writes every hour or none. Cancelling is one `UPDATE ... WHERE booking_ref = ? AND user_id = ?` over all the rows of a booking. Another member's cancel changes 0 rows.
 - **No double booking.** Twenty rounds of two overlapping requests sent at once, and one round of ten requests for the same hour, each end with exactly one holder. The loser always gets `{ changes: 0 }`, never an error.
@@ -122,7 +122,7 @@ Messages are quoted exactly as the replay received them. "Gate" is the editor's 
 | An API key booking a room | Kernel | Not possible: keys work only on HTTP routes, and `bookings.create` is `authenticated`, which cannot declare `http` | A program, such as a calendar sync, cannot book on a person's behalf |
 | A webhook out to notify staff | none | No primitive exists | See [Notifying staff](#notifying-staff) |
 | Seeding rooms from `schema.sql` | Kernel | `schema.sql` may only create tables and indexes (docs/mcp.md; not run by the replay) | The owner inserts rooms with `database_execute` after the first publish |
-| `bun run littlebox -- publish` with an Allowlist | CLI | `publishLocal` in `scripts/littlebox.ts` sends no `initialSignupPolicy` | A public app published with the CLI starts Open until the owner calls `signup_policy_set`. The replay publishes over MCP to avoid that window |
+| `bun run littlebox -- publish` with an Allowlist | CLI | Fixed on 2026-11-06. `publishLocal` sent no `initialSignupPolicy`, so a public app published with the CLI started Open until the owner called `signup_policy_set`, and the replay published over MCP to avoid that window | `littlebox.json` now names `project.manifest.signupPolicy` and the replay publishes with `publishLocal` on a token without `manage_users`; the Allowlist is in place before the first request |
 | A whole-hour input | Kernel | No integer input type; `"type": "number"` accepts `13.5` | The statement checks `?4 = CAST(?4 AS INTEGER)`, and a CHECK on `typeof(slot)` backs it |
 | "Not in the past" in the office's time | Kernel | The `now` binding is UTC milliseconds; there is no time zone | The past-day check compares with the UTC date, so for a few hours around midnight it accepts or refuses a day by the wrong calendar. The app sends the browser's local date for its own lists |
 | The booker's name | Kernel | The `actor` binding has only `id` | The app keeps a `staff` table of display names each person sets for themselves. A name is not verified |

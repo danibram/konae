@@ -294,6 +294,7 @@ bun run littlebox -- dev --dir <this folder>\n\
 bun run littlebox -- publish --dir <this folder>\n\
 ```\n\n\
 `dev` runs the same Kernel locally with its own accounts and data. `publish` sends a Build Artifact through MCP with `release_plan` and `release_apply`.\n\n\
+A publish never changes who may create an app account. That stays in the editor's Auth > Users view and `signup_policy_set`. `project.manifest.signupPolicy` in `littlebox.json` names the policy of a first release only. This app has been released, so a publish from this folder sends no policy and warns when the file names a different one.\n\n\
 ## Schema\n\n\
 `schema.sql` is what the Kernel runs on every publish. It accepts additive changes only: new tables and indexes with `IF NOT EXISTS`. `schema.ts` is the Database Model the editor planned migrations from. Nothing reads it now, so the schema, its migrations and their compatibility with live data are yours. Back up the data before changing an existing table.\n\n\
 ## Going back\n\n\
@@ -314,6 +315,7 @@ mod tests {
         let text = super::readme("Notes", 3, "https://example.test");
         assert!(text.contains("revision 3"));
         assert!(text.contains("littlebox -- publish"));
+        assert!(text.contains("A publish never changes who may create an app account"), "the guide says where the signup policy changes");
         assert!(text.contains("--url https://example.test"));
     }
 }

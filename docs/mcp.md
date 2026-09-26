@@ -371,6 +371,15 @@ A published app runs under the Kernel's Content Security Policy, described in [t
 
 The build lives in `.littlebox/artifact.json`. Publishing transfers it over MCP, validates a plan against the project revision and applies it. The tool saves the plan and the receipt in `.littlebox`. The Kernel rejects a stale plan. Repeating a plan that was already applied returns its receipt. `publish` deploys as private unless `littlebox.json` sets `project.manifest.visibility` to `"public"`. A republish keeps the URL and database and stops serving files that the new artifact no longer contains.
 
+`project.manifest.signupPolicy` in `littlebox.json` names who may create an app account when the first release goes out, with the modes of [Signup policy](#signup-policy):
+
+```json
+{ "url": "http://localhost:4173", "project": { "id": "app_…", "name": "Tasks", "slug": "tasks",
+  "manifest": { "version": 1, "visibility": "private", "signupPolicy": { "mode": "invitation" } } } }
+```
+
+`allowlist` is a list of emails and `@domain` entries, needed only with `"mode": "allowlist"`. `init` writes `"visibility": "private"` and `{ "mode": "invitation" }`, so a new app admits only the people its owner invites. On a first release `publish` sends the policy as `initialSignupPolicy`, which needs only `publish`, and the Kernel installs it before the app serves a request. On a later release it sends none, because a publish never changes who may join; it reads the app's policy with `signup_policy_read` and, when it differs, prints one warning and still publishes: `littlebox.json asks for signup Open, but this app has Invitation only. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Auth > Users view, or call signup_policy_set with a credential that holds manage_users.` A mode other than the four, or an allowlist that is not a list of strings, stops `publish` before it sends anything. Without `signupPolicy` a first release gets the Kernel's default, Open for a public app and Closed for a private one. `dev` publishes its local copy as Open so you can sign up test accounts. The policy is not part of the Capsule manifest, so `publish` leaves it out of the project it sends.
+
 There is also `bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173`. It reads `LITTLEBOX_EMAIL` and `LITTLEBOX_PASSWORD` from the environment, obtains a 24-hour credential and stores it with `0600` permissions in `.littlebox/credentials.json`. `LITTLEBOX_INVITATION_CODE` lets it create the account if it does not exist yet, and `LITTLEBOX_SETUP_KEY` does so for an installation's first owner. On an installation that requires verification it stops and asks you to open the emailed link first. The command adds `.littlebox/` to `.gitignore`; do not copy credentials into the frontend.
 
 ## Action Contract
