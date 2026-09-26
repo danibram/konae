@@ -26,6 +26,7 @@ use uuid::Uuid;
 
 mod accounts;
 mod admission;
+mod artifact;
 mod auth;
 mod clerk;
 mod copies;
@@ -266,6 +267,9 @@ struct BuildArtifact {
     version: u8,
     entrypoint: String,
     files: HashMap<String, String>,
+    /// Paths whose value in `files` is base64; every other file is UTF-8 text.
+    #[serde(default)]
+    encodings: HashMap<String, String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -512,6 +516,13 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             "Artifact contains an invalid path.",
         );
     }
+    if let Err(message) = artifact::check_routing(&input.project.manifest) {
+        return error(StatusCode::BAD_REQUEST, &message);
+    }
+    let artifact_files = match artifact::decode(&input.artifact) {
+        Ok(files) => files,
+        Err(message) => return error(StatusCode::BAD_REQUEST, &message),
+    };
     let deployments = state.deployments.read().await;
     let existing = find_project_deployment(&deployments, &input.project.id);
     drop(deployments);
@@ -668,13 +679,13 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
     // New files go into a fresh version folder. Readers keep the previous
     // version until the deployment record switches to this one below.
     if let Err(error_value) =
-        stage_local_artifact(&state, &id, &artifact_version, &input.artifact.files).await
+        stage_local_artifact(&state, &id, &artifact_version, &artifact_files).await
     {
         remove_artifact_version(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
     if let Err(error_value) =
-        upload_artifact(&state, &id, &artifact_version, input.artifact.files).await
+        upload_artifact(&state, &id, &artifact_version, artifact_files).await
     {
         remove_artifact_version(&state, &id, &artifact_version).await;
         return error(
@@ -700,7 +711,7 @@ async fn stage_local_artifact(
     state: &AppState,
     id: &str,
     version: &str,
-    files: &HashMap<String, String>,
+    files: &HashMap<String, Vec<u8>>,
 ) -> Result<()> {
     let root = artifact_root(state, id).join(version);
     for (path, contents) in files {
@@ -708,7 +719,7 @@ async fn stage_local_artifact(
         if let Some(parent) = local_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        tokio::fs::write(&local_path, contents.as_bytes()).await?;
+        tokio::fs::write(&local_path, contents).await?;
     }
     Ok(())
 }
@@ -717,7 +728,7 @@ async fn upload_artifact(
     state: &AppState,
     id: &str,
     version: &str,
-    files: HashMap<String, String>,
+    files: HashMap<String, Vec<u8>>,
 ) -> Result<()> {
     let Some(s3) = state.s3.as_ref() else {
         return Ok(());
@@ -733,7 +744,7 @@ async fn upload_artifact(
             .put_object()
             .bucket(&state.artifact_bucket)
             .key(format!("deployments/{id}/{version}/{path}"))
-            .body(ByteStream::from(contents.into_bytes()));
+            .body(ByteStream::from(contents));
         uploads.spawn(async move { request.send().await.map(|_| ()).map_err(anyhow::Error::from) });
     }
     while let Some(result) = uploads.join_next().await {
@@ -1372,15 +1383,28 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
             Err(response) => return response,
         }
     }
-    match read_artifact(&state, &deployment, &path).await {
-        Ok(bytes) => artifact_response(bytes, &path),
-        Err(_) if path != "index.html" => {
-            match read_artifact(&state, &deployment, "index.html").await {
-                Ok(bytes) => artifact_response(bytes, "index.html"),
-                Err(_) => error(StatusCode::NOT_FOUND, "Artifact not found."),
-            }
+    if artifact::kernel_path(&path) {
+        return artifact::not_found_page();
+    }
+    let routing = artifact::routing(&deployment.manifest);
+    for candidate in artifact::candidates(&path, routing) {
+        if let Ok(bytes) = read_artifact(&state, &deployment, &candidate).await {
+            return artifact_response(bytes, &candidate);
         }
-        Err(_) => error(StatusCode::NOT_FOUND, "Artifact not found."),
+    }
+    match routing {
+        artifact::Routing::Spa => match read_artifact(&state, &deployment, "index.html").await {
+            Ok(bytes) => artifact_response(bytes, "index.html"),
+            Err(_) => error(StatusCode::NOT_FOUND, "Artifact not found."),
+        },
+        artifact::Routing::Pages => match read_artifact(&state, &deployment, "404.html").await {
+            Ok(bytes) => {
+                let mut response = artifact_response(bytes, "404.html");
+                *response.status_mut() = StatusCode::NOT_FOUND;
+                response
+            }
+            Err(_) => artifact::not_found_page(),
+        },
     }
 }
 
@@ -3049,14 +3073,27 @@ fn content_type(path: &str) -> &'static str {
         "json" | "map" => "application/json",
         "webmanifest" => "application/manifest+json",
         "txt" => "text/plain; charset=utf-8",
+        "md" => "text/markdown; charset=utf-8",
+        "csv" => "text/csv; charset=utf-8",
+        "xml" => "application/xml; charset=utf-8",
+        "rss" => "application/rss+xml; charset=utf-8",
+        "atom" => "application/atom+xml; charset=utf-8",
         "svg" => "image/svg+xml",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
         "webp" => "image/webp",
+        "avif" => "image/avif",
         "ico" => "image/x-icon",
+        "pdf" => "application/pdf",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
         "wasm" => "application/wasm",
         "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
         _ => "application/octet-stream",
     }
 }
@@ -3780,6 +3817,16 @@ mod tests {
             ("favicon.ico", "image/x-icon"),
             ("module.wasm", "application/wasm"),
             ("font.woff2", "font/woff2"),
+            ("font.woff", "font/woff"),
+            ("font.ttf", "font/ttf"),
+            ("font.otf", "font/otf"),
+            ("sitemap.xml", "application/xml; charset=utf-8"),
+            ("feed.rss", "application/rss+xml; charset=utf-8"),
+            ("feed.atom", "application/atom+xml; charset=utf-8"),
+            ("notes.md", "text/markdown; charset=utf-8"),
+            ("rows.csv", "text/csv; charset=utf-8"),
+            ("photo.avif", "image/avif"),
+            ("menu.pdf", "application/pdf"),
             ("archive.zip", "application/octet-stream"),
             ("LICENSE", "application/octet-stream"),
             ("dir.html/file", "application/octet-stream"),

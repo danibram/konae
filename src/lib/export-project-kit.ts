@@ -2,6 +2,8 @@ import deployScript from "./export-scripts/deploy.mjs?raw";
 import { createTar, normalizeArchivePath, type TarEntry } from "./tar";
 import { normalizeProjectPath } from "./project-files";
 import { runtimeScriptAttribute, type BuildArtifact } from "../runtime/artifact";
+import { runtimeFile } from "./static-artifact.js";
+import staticArtifactSource from "./static-artifact.js?raw";
 import type { MiniAppProject } from "./types";
 import type { PortableProjectState } from "../deployments/client";
 import { checkPackageManifest, type PackageManifest } from "./portable-package";
@@ -80,43 +82,65 @@ const packageManifest = `{
 }
 `;
 
-const buildScript = `import { access, readFile, writeFile } from 'node:fs/promises';
+// The kit rebuilds with the same static publishing contract as the CLI and
+// the editor: scripts/static-artifact.mjs is src/lib/static-artifact.js as is.
+const buildScript = `import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { build } from 'esbuild';
+import { assembleStaticArtifact } from './static-artifact.mjs';
 
 const root = process.cwd();
+const app = path.join(root, 'app');
 const artifactTemplate = JSON.parse(await readFile(path.join(root, 'littlebox/artifact.json'), 'utf8'));
-const entrypoint = await exists(path.join(root, 'app/src/main.ts')) ? 'src/main.ts' : 'app.js';
-if (!await exists(path.join(root, 'app', entrypoint))) throw new Error('Expected app/src/main.ts or app/app.js.');
-const result = await build({
-  entryPoints: [path.join(root, 'app', entrypoint)],
-  bundle: true,
-  write: false,
-  format: 'esm',
-  platform: 'browser',
-  target: 'es2022',
-  outdir: 'out',
+const project = JSON.parse(await readFile(path.join(root, 'littlebox/project.json'), 'utf8'));
+// The SDK the app was built with: runtime.js when a page loads it, else the marked script in index.html.
+const runtime = artifactTemplate.files['runtime.js']
+  ?? artifactTemplate.files['index.html']?.match(/<script data-littlebox-runtime>([\\s\\S]*?)<\\/script>/)?.[1];
+if (runtime === undefined) throw new Error('The exported artifact does not contain the Littlebox runtime.');
+const paths = await walk('');
+const artifact = await assembleStaticArtifact({
+  paths,
+  read: async (file) => {
+    const bytes = await readFile(path.join(app, file));
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { return new Uint8Array(bytes); }
+  },
+  compile: async () => {
+    const entry = paths.includes('src/main.ts') ? 'src/main.ts' : 'app.js';
+    if (!paths.includes(entry)) throw new Error('Expected app/src/main.ts or app/app.js.');
+    const { script, styles } = await bundle(entry);
+    const sourceStyles = paths.includes('styles.css') ? await readFile(path.join(app, 'styles.css'), 'utf8') : '';
+    return { script, styles: [sourceStyles, styles].filter(Boolean).join('\\n') };
+  },
+  bundle,
+  runtime,
+  routing: project.manifest?.routing,
 });
-const script = result.outputFiles.find((file) => file.path.endsWith('.js'))?.text;
-if (!script) throw new Error('The app build did not produce JavaScript.');
-const importedCss = result.outputFiles.find((file) => file.path.endsWith('.css'))?.text ?? '';
-const runtimeTag = artifactTemplate.files['index.html'].match(/<script data-littlebox-runtime>[\\s\\S]*?<\\/script>/)?.[0];
-if (!runtimeTag) throw new Error('The exported artifact does not contain the Littlebox runtime.');
-const body = await readOptional(path.join(root, 'app/index.html')) ?? '<main id=app></main>';
-const sourceStyles = await readOptional(path.join(root, 'app/styles.css')) ?? '';
-const styles = [sourceStyles, importedCss].filter(Boolean).join('\\n');
-const safeScript = script.replaceAll('</script', '<\\\\/script');
-const html = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>'
-  + styles + '</style></head><body>' + body + runtimeTag + '<script type="module">' + safeScript + '</script></body></html>';
-artifactTemplate.files = { 'index.html': html };
-await writeFile(path.join(root, 'littlebox/artifact.json'), JSON.stringify(artifactTemplate, null, 2));
+await writeFile(path.join(root, 'littlebox/artifact.json'), JSON.stringify(artifact, null, 2));
 console.log('Built littlebox/artifact.json');
 
-async function exists(file) {
-  try { await access(file); return true; } catch { return false; }
+async function bundle(entry) {
+  const result = await build({
+    entryPoints: [path.join(app, entry)],
+    bundle: true,
+    write: false,
+    format: 'esm',
+    platform: 'browser',
+    target: 'es2022',
+    outdir: 'out',
+  });
+  const script = result.outputFiles.find((file) => file.path.endsWith('.js'))?.text;
+  if (script === undefined) throw new Error('The app build did not produce JavaScript.');
+  return { script, styles: result.outputFiles.find((file) => file.path.endsWith('.css'))?.text ?? '' };
 }
-async function readOptional(file) {
-  try { return await readFile(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+async function walk(prefix) {
+  const result = [];
+  for (const entry of await readdir(path.join(app, prefix), { withFileTypes: true })) {
+    if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+    const relative = prefix ? prefix + '/' + entry.name : entry.name;
+    if (entry.isDirectory()) result.push(...await walk(relative));
+    else if (entry.isFile()) result.push(relative);
+  }
+  return result;
 }
 `;
 
@@ -254,7 +278,7 @@ export function projectExportEntries(
     throw new Error("The export requires a valid version 1 Build Artifact.");
   }
   // scripts/build.mjs finds the runtime by this marker; without it every rebuild would fail.
-  if (!artifact.files["index.html"].includes(`<script ${runtimeScriptAttribute}>`)) {
+  if (!artifact.files["index.html"].includes(`<script ${runtimeScriptAttribute}>`) && artifact.files[runtimeFile] === undefined) {
     throw new Error("The Build Artifact does not mark its Littlebox runtime script. Rebuild the project before exporting.");
   }
   const portableState = state instanceof Uint8Array ? { initialDatabase: state } : state;
@@ -282,6 +306,7 @@ export function projectExportEntries(
     version: artifact.version,
     entrypoint: artifact.entrypoint,
     files: artifact.files,
+    ...(artifact.encodings ? { encodings: artifact.encodings } : {}),
   };
   const entries: TarEntry[] = [
     { path: "README.md", contents: readme },
@@ -292,6 +317,7 @@ export function projectExportEntries(
     { path: ".gitignore", contents: ".env\ndata/\nnode_modules/\nlittlebox/initial-*\nlittlebox/package/\nlittlebox/import-state.json\n" },
     { path: "package.json", contents: packageManifest },
     { path: "scripts/build.mjs", contents: buildScript },
+    { path: "scripts/static-artifact.mjs", contents: staticArtifactSource },
     { path: "scripts/deploy.mjs", contents: deployScript },
     { path: "start.sh", contents: startScript, mode: 0o755 },
     { path: "littlebox/project.json", contents: JSON.stringify({

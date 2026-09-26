@@ -695,6 +695,36 @@ async fn settle(state: &AppState, deployment: &Deployment, wait: Duration) -> Re
     Ok(json!({"waitingFor": null, "settledAt": now_ms(), "mailEnded": ended}))
 }
 
+/// The files of a live artifact folder as a builder sends them: UTF-8 text as
+/// is, and a binary file, such as an image, as base64 named in `encodings`.
+fn live_artifact_files(root: &Path) -> Result<(serde_json::Map<String, Value>, serde_json::Map<String, Value>)> {
+    fn walk(root: &Path, directory: &Path, files: &mut serde_json::Map<String, Value>, encodings: &mut serde_json::Map<String, Value>) -> Result<()> {
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            if entry.file_type()?.is_dir() {
+                walk(root, &path, files, encodings)?;
+            } else if entry.file_type()?.is_file() {
+                let relative = path.strip_prefix(root)?.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
+                match String::from_utf8(std::fs::read(&path)?) {
+                    Ok(text) => {
+                        files.insert(relative, Value::String(text));
+                    }
+                    Err(binary) => {
+                        files.insert(relative.clone(), Value::String(encode_base64(binary.as_bytes())));
+                        encodings.insert(relative, Value::String("base64".into()));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    let mut files = serde_json::Map::new();
+    let mut encodings = serde_json::Map::new();
+    walk(root, root, &mut files, &mut encodings)?;
+    Ok((files, encodings))
+}
+
 /// The release payload that republishes the app as it is served: its live
 /// artifact, its actions and its visibility. It travels next to the package
 /// so the destination needs nothing else.
@@ -702,26 +732,7 @@ async fn release_payload(state: &AppState, owner: &Owner, deployment: &Deploymen
     let version = deployment.artifact_version.clone().context("This Deployment has no versioned artifact to migrate. Publish it once, then migrate.")?;
     let root = artifact_root(state, &deployment.id).join(&version);
     let (project, _) = owned_project(state, owner, &deployment.project_id, "export_data")?;
-    let files = tokio::task::spawn_blocking(move || -> Result<serde_json::Map<String, Value>> {
-        fn walk(root: &Path, directory: &Path, files: &mut serde_json::Map<String, Value>) -> Result<()> {
-            for entry in std::fs::read_dir(directory)? {
-                let entry = entry?;
-                let path = entry.path();
-                if entry.file_type()?.is_dir() {
-                    walk(root, &path, files)?;
-                } else if entry.file_type()?.is_file() {
-                    let relative = path.strip_prefix(root)?.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
-                    let text = String::from_utf8(std::fs::read(&path)?).with_context(|| format!("Artifact file {relative} is not text."))?;
-                    files.insert(relative, Value::String(text));
-                }
-            }
-            Ok(())
-        }
-        let mut files = serde_json::Map::new();
-        walk(&root, &root, &mut files)?;
-        Ok(files)
-    })
-    .await??;
+    let (files, encodings) = tokio::task::spawn_blocking(move || live_artifact_files(&root)).await??;
     ensure!(files.contains_key("index.html"), "The live artifact has no index.html.");
     let visibility = if is_private(deployment) { "private" } else { "public" };
     let slug = project["slug"].as_str().map(str::to_owned).unwrap_or_else(|| safe_slug(&deployment.project_name));
@@ -734,7 +745,7 @@ async fn release_payload(state: &AppState, owner: &Owner, deployment: &Deploymen
             "files": {"actions.json": deployment.actions},
         },
         "visibility": visibility,
-        "artifact": {"version": 1, "entrypoint": "index.html", "files": files},
+        "artifact": {"version": 1, "entrypoint": "index.html", "files": files, "encodings": encodings},
     }))?;
     ensure!((bytes.len() as u64) <= MAX_RELEASE_BYTES, "The live artifact exceeds the 26 MB release limit.");
     Ok(bytes)
@@ -1164,6 +1175,21 @@ mod tests {
         let shown = view(&marker).to_string();
         assert!(!shown.contains("secret-confirmation"), "{shown}");
         assert!(shown.contains("op-1"));
+    }
+
+    #[test]
+    fn a_live_artifact_travels_with_its_binary_files_as_base64() {
+        let root = std::env::temp_dir().join(format!("littlebox-live-artifact-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("img")).unwrap();
+        std::fs::write(root.join("index.html"), "<p>home</p>").unwrap();
+        std::fs::write(root.join("img/logo.png"), [0x89, b'P', b'N', b'G', 0xff, 0xfe]).unwrap();
+        let (files, encodings) = live_artifact_files(&root).unwrap();
+        assert_eq!(files["index.html"], json!("<p>home</p>"));
+        assert_eq!(encodings, json!({"img/logo.png": "base64"}).as_object().unwrap().clone());
+        // The payload decodes back to the same bytes the destination will serve.
+        let artifact: BuildArtifact = serde_json::from_value(json!({"version": 1, "entrypoint": "index.html", "files": files, "encodings": encodings})).unwrap();
+        assert_eq!(super::super::artifact::decode(&artifact).unwrap()["img/logo.png"], [0x89, b'P', b'N', b'G', 0xff, 0xfe]);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

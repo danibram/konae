@@ -43,8 +43,8 @@ The yardstick: a person who does not write code, and a person who does, make the
 
 | Finding | Apps | Exact answer |
 | --- | --- | --- |
-| `littlebox build` drops `about.html` without a word; a two-page app cannot be published from the CLI | gallery | artifact holds `index.html` only |
-| Every unknown GET path serves the home page with 200; extensionless paths do not resolve; `404.html` is never read | gallery | 200, home page |
+| `littlebox build` drops `about.html` without a word; a two-page app cannot be published from the CLI. Fixed 2026-11-06: every page at the root and under `pages/` publishes, and a missing reference stops the build | gallery | artifact holds `index.html` only |
+| Every unknown GET path serves the home page with 200; extensionless paths do not resolve; `404.html` is never read. Fixed 2026-11-06: 404 with `404.html`, `/about` serves `about.html`, `"routing": "spa"` keeps the old fallback | gallery | 200, home page |
 | `littlebox publish` sends no `initialSignupPolicy`: a public app starts Open, a private one Closed, and Invitation only needs a second credential with `manage_users`. Fixed: `littlebox.json` names `project.manifest.signupPolicy`, publish sends it on a first release and warns on a later one that differs | inbox, club, gallery, booking | `Unknown tool or insufficient permission.` |
 | An app Closed from its first release can admit no one, not even by invitation; the invitation is sent anyway with `acceptable: false`. Fixed: an owner's invitation is acceptable under Closed and a signup stays refused (ADR-0011, note on Closed) | gallery | 403, now 200 |
 | A file cannot be made public later or deleted; a draft is re-uploaded and the private copy keeps counting against the quota | gallery | no primitive |

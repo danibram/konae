@@ -44,7 +44,7 @@ The source lineage, schema, capability configuration and deployment history owne
 _Avoid_: App when referring specifically to editable source
 
 **Capsule**:
-The editable source of a Project taken as one unit. It is a nested source tree with an entrypoint, `app.js` or `src/main.ts`, from which relative imports are bundled, plus optional `index.html` and `styles.css`, the Database Model in `schema.ts` and the Server Action declarations in `actions.json`. It is the shape the editor and the agent read and write; what a Deployment serves is the Build Artifact built from it.
+The editable source of a Project taken as one unit. It is a nested source tree with an entrypoint, `app.js` or `src/main.ts`, from which relative imports are bundled, plus optional `index.html` and `styles.css`, the Database Model in `schema.ts` and the Server Action declarations in `actions.json`. Its pages are every `.html` at the root and under `pages/`, and files under `public/` are published as they are. It is the shape the editor and the agent read and write; what a Deployment serves is the Build Artifact built from it.
 _Avoid_: bundle, repo, the project files
 
 **Database Model**:
@@ -64,7 +64,7 @@ The irreversible transfer of a Managed Project's source and database-schema auth
 _Avoid_: Export, download
 
 **Build Artifact**:
-The validated, immutable static output of a Project revision that a Deployment serves. It contains no source authority, runtime database access or administrative capability. Under the Kernel's Content Security Policy its own inline scripts and same-origin files load, and inline event handler attributes and other origins do not.
+The validated, immutable static output of a Project revision that a Deployment serves. It contains no source authority, runtime database access or administrative capability. Under the Kernel's Content Security Policy its own inline scripts and same-origin files load, and inline event handler attributes and other origins do not. Every builder makes it by one rule set: each page with the SDK, the files the pages load and `public/`, with binary files as base64 named in `encodings`, and a build that names a file the Capsule does not hold is refused. Its routing mode is `pages` by default, where a path it does not hold answers 404 with its `404.html`, or `spa`, where such a path serves `index.html`. The Validation Gate does not judge an artifact; the builders refuse a bad reference, and the builders and the Kernel refuse a routing mode other than these two with the same words.
 _Avoid_: Project source, build cache
 
 **Declared Dependencies**:

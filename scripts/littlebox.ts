@@ -13,6 +13,7 @@ import {
   actionContractSchema, generateActionContract, renderActionContractMarkdown, serializeActionContract,
 } from "../src/lib/action-contract";
 import { checkEjectPackage, type EjectPlan, type EjectReceipt } from "../src/lib/eject-package";
+import { assembleStaticArtifact } from "../src/lib/static-artifact.js";
 
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
@@ -101,17 +102,55 @@ async function sources(root: string, prefix = ""): Promise<Record<string, string
   return result;
 }
 
-export async function buildLocal(root: string) {
-  const files = await sources(root);
-  const entry = files["src/main.ts"] !== undefined ? "src/main.ts" : "app.js";
+/**
+ * Every file the build may publish, text or binary. Dot folders and
+ * node_modules are skipped at any depth, and the folders the CLI and the
+ * Development Kernel write (dist, data, target) at the Capsule root.
+ */
+async function capsulePaths(root: string, prefix = ""): Promise<string[]> {
+  const result: string[] = [];
+  for (const entry of await readdir(path.join(root, prefix), { withFileTypes: true })) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+    if (!prefix && ["dist", "data", "target"].includes(entry.name)) continue;
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) result.push(...await capsulePaths(root, relative));
+    else if (entry.isFile() && !generatedFiles.has(relative)) result.push(relative);
+  }
+  return result;
+}
+
+/** A file as text when it is UTF-8, else as bytes, which the artifact carries as base64. */
+async function readCapsuleFile(root: string, relative: string): Promise<string | Uint8Array> {
+  const bytes = new Uint8Array(await readFile(path.join(root, relative)));
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return bytes; }
+}
+
+async function bundleModule(root: string, entry: string) {
   const result = await build({ entryPoints: [path.join(root, entry)], bundle: true, write: false, platform: "browser", format: "esm", target: "es2022", outdir: "out" });
   const script = result.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
-  if (!script) throw Error("The local builder produced no JavaScript.");
-  const styles = [files["styles.css"] ?? "", result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? ""].join("\n");
+  if (script === undefined) throw Error("The local builder produced no JavaScript.");
+  return { script, styles: result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? "" };
+}
+
+/**
+ * Builds the Capsule in `root` by the static publishing contract in
+ * src/lib/static-artifact.js, the rules the editor's build runs too.
+ */
+export async function buildLocal(root: string) {
+  const files = await sources(root);
+  const config = await json<Partial<Config>>(path.join(root, "littlebox.json")).catch(() => undefined);
   const sdk = await readFile(path.join(toolRoot, "src/mcp/runtime.js"), "utf8");
-  const safe = (text: string) => text.replaceAll("</script", "<\\/script");
-  const html = `<!doctype html><html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${styles}</style><body>${files["index.html"] ?? '<main id="app"></main>'}<script data-littlebox-runtime>${safe(sdk)}</script><script type="module">${safe(script)}</script></body></html>`;
-  const artifact = { version: 1, entrypoint: "index.html", files: { "index.html": html } };
+  const artifact = await assembleStaticArtifact({
+    paths: await capsulePaths(root),
+    read: (relative) => readCapsuleFile(root, relative),
+    compile: async () => {
+      const { script, styles } = await bundleModule(root, files["src/main.ts"] !== undefined ? "src/main.ts" : "app.js");
+      return { script, styles: [files["styles.css"] ?? "", styles].join("\n") };
+    },
+    bundle: (relative) => bundleModule(root, relative),
+    runtime: sdk,
+    routing: config?.project?.manifest?.routing,
+  });
   await mkdir(path.join(root, ".littlebox"), { recursive: true });
   await writeFile(path.join(root, ".littlebox/artifact.json"), JSON.stringify(artifact));
   return { artifact, files };
@@ -206,6 +245,11 @@ export async function exportLocal(root: string, config: Config, output: string, 
       databaseModel: { source: model, acceptedSource: model, revision: "external" },
     };
     const entries = projectExportEntries(project, artifact, kernelFiles, captured && { package: captured.package });
+    // The kit rebuilds from app/, so it also needs the files that are not
+    // source text: images, fonts and everything under public/.
+    for (const relative of await capsulePaths(root)) {
+      if (files[relative] === undefined) entries.push({ path: `app/${relative}`, contents: new Uint8Array(await readFile(path.join(root, relative))) });
+    }
     await writeTarFile(output, [...entries, ...(captured?.files ?? [])]);
     return output;
   } finally {

@@ -11,6 +11,8 @@ export type RuntimeActionDeclaration = {
 export type CapsuleManifest = {
   version: 1;
   visibility: DeploymentVisibility;
+  /** How the Kernel answers a path the artifact does not hold. Absent means "pages". */
+  routing?: "pages" | "spa";
   runtime: {
     database: {
       mode: "declared-actions";
@@ -74,6 +76,7 @@ export function normalizeManifest(value: unknown): CapsuleManifest {
   return {
     version: 1,
     visibility,
+    ...(candidate.routing === "pages" || candidate.routing === "spa" ? { routing: candidate.routing } : {}),
     runtime: {
       database: { mode: "declared-actions", actions: normalizedActions },
       auth: { mode: visibility === "private" || candidate.runtime?.auth?.mode === "required" ? "required" : "optional" },
