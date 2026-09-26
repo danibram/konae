@@ -10,7 +10,7 @@ export const runtimeClient = String.raw`
   const runtimeReady = new Promise((resolve) => { connectRuntime = resolve; });
 
   let capability;
-  const methods = { 'actions.invoke': 'actions_invoke', 'auth.session': 'auth_session', 'auth.signIn': 'preview_sign_in', 'auth.signOut': 'auth_logout', 'files.list': 'files_list', 'files.upload': 'preview_files_upload', 'runtime.ready': 'preview_ready', 'preview.error': 'preview_error' };
+  const methods = { 'actions.invoke': 'actions_invoke', 'auth.session': 'auth_session', 'auth.signIn': 'preview_sign_in', 'auth.signOut': 'auth_logout', 'files.list': 'files_list', 'files.upload': 'preview_files_upload', 'files.url': 'preview_files_url', 'files.update': 'files_update', 'files.delete': 'files_delete', 'runtime.ready': 'preview_ready', 'preview.error': 'preview_error' };
   function rpc(method, params = {}) {
     return new Promise((resolve, reject) => {
       const id = 'req_' + (++sequence);
@@ -100,6 +100,8 @@ export const runtimeClient = String.raw`
     files: {
       list: () => request('files.list'),
       upload: (file, options) => new Promise((resolve, reject) => {
+        const visibility = options && options.visibility !== undefined ? options.visibility : 'private';
+        if (visibility !== 'private' && visibility !== 'public') throw new Error('File visibility must be private or public.');
         const reader = new FileReader();
         reader.onerror = () => reject(reader.error);
         reader.onload = () => request('files.upload', {
@@ -107,10 +109,13 @@ export const runtimeClient = String.raw`
           type: file.type,
           size: file.size,
           dataUrl: reader.result,
-          visibility: options && options.visibility === 'public' ? 'public' : 'private'
+          visibility
         }).then(resolve, reject);
         reader.readAsDataURL(file);
-      })
+      }),
+      url: (fileId) => request('files.url', { fileId }),
+      update: (fileId, options) => request('files.update', { fileId, visibility: options && options.visibility }),
+      delete: (fileId) => request('files.delete', { fileId })
     }
   };
 })();`;

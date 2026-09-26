@@ -24,3 +24,18 @@ test("preview MCP lets a signed-out visitor list files and refuses uploads", asy
   expect(await call("preview_files_upload")).toMatchObject({ result: { isError: false } });
   expect(calls).toContain("files.upload");
 });
+
+test("preview MCP refuses a signed-out visitor's visibility change and delete, and lets files.url through", async () => {
+  let role = "anonymous";
+  const calls: string[] = [];
+  const host = { handle: async (name: string) => { calls.push(name); return name === "auth.session" ? { role } : "data:,"; } };
+  const call = (name: string) => handlePreviewMcp(host, { jsonrpc: "2.0", id: "f", method: "tools/call", params: { name, _meta: { "littlebox/capability": "secret" } } }, "secret");
+  for (const tool of ["files_update", "files_delete"]) {
+    expect(await call(tool)).toMatchObject({ result: { isError: true, content: [{ text: "authentication-required" }] } });
+  }
+  expect(await call("preview_files_url")).toMatchObject({ result: { isError: false, structuredContent: { result: "data:," } } });
+  expect(calls).toEqual(["auth.session", "auth.session", "files.url"]);
+  role = "member";
+  expect(await call("files_delete")).toMatchObject({ result: { isError: false } });
+  expect(calls).toContain("files.delete");
+});

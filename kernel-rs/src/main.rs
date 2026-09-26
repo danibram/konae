@@ -30,6 +30,7 @@ mod auth;
 mod clerk;
 mod copies;
 mod eject;
+mod files;
 mod http;
 mod invitations;
 mod limits;
@@ -3175,7 +3176,7 @@ mod tests {
         assert_eq!(input.initial_signup_policy.unwrap().mode, SignupMode::Closed);
     }
 
-    async fn login_test_state(root: &Path, visibility: &str) -> (AppState, HeaderMap) {
+    pub(crate) async fn login_test_state(root: &Path, visibility: &str) -> (AppState, HeaderMap) {
         let deployment = Deployment {
             id: Uuid::new_v4().to_string(),
             project_id: Uuid::new_v4().to_string(),
@@ -4097,7 +4098,7 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    fn signed_in(state: &AppState, deployment_id: &str, headers: &HeaderMap, email: &str) -> (HeaderMap, String) {
+    pub(crate) fn signed_in(state: &AppState, deployment_id: &str, headers: &HeaderMap, email: &str) -> (HeaderMap, String) {
         let auth = AuthService::open(
             state
                 .data_root
@@ -4115,7 +4116,7 @@ mod tests {
         (headers, session.user.user_id)
     }
 
-    async fn response_json(response: Response) -> Value {
+    pub(crate) async fn response_json(response: Response) -> Value {
         let bytes = axum::body::to_bytes(response.into_body(), 1_000_000).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }

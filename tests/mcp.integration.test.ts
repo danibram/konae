@@ -444,6 +444,21 @@ describe("authenticated MCP", () => {
     expect(await other.download(await other.call<any>("files_read", { fileId: shared.id }))).toEqual(sharedBytes);
     const download = await user.call<any>("files_read", { fileId: saved.id });
     expect(await user.download(download)).toEqual(file);
+    // Only the uploader changes or deletes a file. A file another user may not
+    // read answers as a missing one; one they read but did not upload says so.
+    await expect(other.call("files_update", { fileId: saved.id, visibility: "public" })).rejects.toThrow("File not found.");
+    await expect(other.call("files_delete", { fileId: shared.id })).rejects.toThrow("Only the person who uploaded this file may change or delete it.");
+    await expect(user.call("files_update", { fileId: saved.id, visibility: "organizers" })).rejects.toThrow("Value is outside the allowed choices.");
+    expect(await user.call("files_update", { fileId: saved.id, visibility: "public" })).toMatchObject({ id: saved.id, visibility: "public", ownerId: saved.ownerId });
+    expect(await other.download(await other.call<any>("files_read", { fileId: saved.id }))).toEqual(file);
+    expect((await fetch(`${url}/_littlebox/files/${saved.id}`, { headers: { host: receipt.hostname } })).status).toBe(200);
+    expect(await user.call("files_update", { fileId: saved.id, visibility: "private" })).toMatchObject({ visibility: "private" });
+    await expect(other.call("files_read", { fileId: saved.id })).rejects.toThrow("File not found");
+    expect(await user.call("files_delete", { fileId: shared.id })).toEqual({ id: shared.id, deleted: true });
+    await expect(other.call("files_read", { fileId: shared.id })).rejects.toThrow("File not found");
+    await expect(user.call("files_delete", { fileId: shared.id })).rejects.toThrow("File not found.");
+    expect((await fetch(`${url}/_littlebox/files/${shared.id}`, { headers: { host: receipt.hostname } })).status).toBe(404);
+    expect((await user.call<Array<{ id: string }>>("files_list")).map((listed) => listed.id)).toEqual([saved.id]);
     const exported = await alice.call<any>("database_export", { deploymentId: receipt.id });
     expect(new TextDecoder().decode((await alice.download(exported)).slice(0, 15))).toBe("SQLite format 3");
     await expect(alice.call("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: "ATTACH DATABASE '/tmp/other.sqlite' AS other;" } })).rejects.toThrow();
@@ -578,6 +593,8 @@ describe("authenticated MCP", () => {
     expect(await visitor.call("files_list")).toEqual([]);
     await expect(visitor.call("files_read", { fileId: crypto.randomUUID() })).rejects.toThrow("File not found");
     await expect(visitor.call("files_upload", { transferId: crypto.randomUUID(), name: "x.txt" })).rejects.toThrow("authentication-required");
+    await expect(visitor.call("files_update", { fileId: crypto.randomUUID(), visibility: "public" })).rejects.toThrow("authentication-required");
+    await expect(visitor.call("files_delete", { fileId: crypto.randomUUID() })).rejects.toThrow("authentication-required");
     await expect(visitor.call("transfer_begin", { size: 1, sha256: "a".repeat(64) })).rejects.toThrow("authentication-required");
     await expect(visitor.upload(new TextEncoder().encode("anonymous upload"))).rejects.toThrow("authentication-required");
     await expect(visitor.call("auth_logout")).rejects.toThrow("authentication-required");
@@ -654,10 +671,16 @@ describe("authenticated MCP", () => {
     await other.cancel(upload.transferId);
     await expect(other.call("files_upload", { transferId: crypto.randomUUID(), name: "missing.txt" })).rejects.toThrow();
     await expect(other.call("files_upload", { transferId: "not-a-uuid", name: "bad.txt" })).rejects.toThrow("Invalid transfer ID");
+    // A visibility change is not audited; a delete that removes a file is, once.
+    const savedId = (saved as { id: string }).id;
+    for (const visibility of ["public", "private", "public"]) await other.call("files_update", { fileId: savedId, visibility });
+    await other.call("files_delete", { fileId: savedId });
+    await expect(other.call("files_delete", { fileId: savedId })).rejects.toThrow("File not found.");
     const db = new Database(path.join(root, "mcp.sqlite"));
     try {
-      expect(db.query("SELECT COUNT(*) AS n FROM audit WHERE actor LIKE 'runtime:%' AND tool <> 'files_upload'").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM audit WHERE actor LIKE 'runtime:%' AND tool NOT IN ('files_upload', 'files_delete')").get()).toEqual({ n: 0 });
       expect(db.query("SELECT COUNT(*) AS n, SUM(ok) AS ok FROM audit WHERE actor LIKE 'runtime:%' AND tool = 'files_upload' AND target = ?1").get(receipt.id)).toEqual({ n: 1, ok: 1 });
+      expect(db.query("SELECT COUNT(*) AS n, SUM(ok) AS ok FROM audit WHERE actor LIKE 'runtime:%' AND tool = 'files_delete' AND target = ?1").get(receipt.id)).toEqual({ n: 1, ok: 1 });
       const applied = db.query("SELECT target, detail FROM audit WHERE tool='release_apply' AND target='rate_limit_proof'").get() as { detail: string };
       expect(applied.detail).toBe(`deployment ${receipt.id}`);
       const changed = db.query("SELECT detail FROM audit WHERE tool='signup_policy_set' AND detail IS NOT NULL ORDER BY id LIMIT 1").get() as { detail: string };

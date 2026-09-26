@@ -249,6 +249,12 @@ export class MiniAppRuntimeHost {
         return this.upload(payload);
       case "files.list":
         return this.visibleFiles();
+      case "files.url":
+        return this.fileUrl(payload);
+      case "files.update":
+        return this.updateFile(payload);
+      case "files.delete":
+        return this.deleteFile(payload);
       case "runtime.ready":
         return { ready: true };
       case "preview.error":
@@ -693,6 +699,8 @@ export class MiniAppRuntimeHost {
     const size = Number(candidate.size ?? 0);
     if (!url.startsWith("data:")) throw new Error("Only local data URLs are supported in this prototype.");
     if (size > 2 * 1024 * 1024) throw new Error("Local prototype files are limited to 2 MiB.");
+    const visibility = candidate.visibility ?? "private";
+    if (visibility !== "private" && visibility !== "public") throw new Error(badFileVisibility);
     const file: StoredFile = {
       id: crypto.randomUUID(),
       name: String(candidate.name ?? "file"),
@@ -700,7 +708,7 @@ export class MiniAppRuntimeHost {
       size,
       url,
       createdAt: Date.now(),
-      visibility: candidate.visibility === "public" ? "public" : "private",
+      visibility,
       ownerId: `${this.previewActor}_${this.appId}`,
     };
     const files = this.readFiles();
@@ -722,6 +730,42 @@ export class MiniAppRuntimeHost {
       }
       return [{ ...file, visibility }];
     });
+  }
+
+  /** The preview has no file path to serve, so files.url answers the stored data URL. */
+  private fileUrl(payload: unknown): string {
+    const id = requireFileId(payload);
+    const file = this.visibleFiles().find((candidate) => candidate.id === id);
+    if (!file) throw new Error("File not found.");
+    return file.url;
+  }
+
+  /** The uploader alone changes a file, with the Kernel's refusals in its order. */
+  private ownedFile(payload: unknown): { files: StoredFile[]; index: number } {
+    if (this.previewActor === "guest") throw new Error("authentication-required");
+    const id = requireFileId(payload);
+    if (!this.visibleFiles().some((file) => file.id === id)) throw new Error("File not found.");
+    const files = this.readFiles();
+    const index = files.findIndex((file) => file.id === id);
+    if (files[index].ownerId !== this.getRuntimeSession().userId) throw new Error(notFileUploader);
+    return { files, index };
+  }
+
+  private updateFile(payload: unknown) {
+    const visibility = (payload as { visibility?: unknown } | null)?.visibility;
+    if (visibility !== "private" && visibility !== "public") throw new Error(badFileVisibility);
+    const { files, index } = this.ownedFile(payload);
+    files[index] = { ...files[index], visibility };
+    localStorage.setItem(this.filesKey, JSON.stringify(files));
+    const { url: _url, ...file } = files[index];
+    return file;
+  }
+
+  private deleteFile(payload: unknown) {
+    const { files, index } = this.ownedFile(payload);
+    const [removed] = files.splice(index, 1);
+    localStorage.setItem(this.filesKey, JSON.stringify(files));
+    return { id: removed.id, deleted: true };
   }
 
   private readFiles(): StoredFile[] {
@@ -762,6 +806,15 @@ export class MiniAppRuntimeHost {
   private get databaseBackupsKey() {
     return `littlebox:database-backups:${this.appId}`;
   }
+}
+
+const badFileVisibility = "File visibility must be private or public.";
+const notFileUploader = "Only the person who uploaded this file may change or delete it.";
+
+function requireFileId(payload: unknown): string {
+  const id = (payload as { fileId?: unknown } | null)?.fileId;
+  if (typeof id !== "string" || !id) throw new Error("A file ID is required.");
+  return id;
 }
 
 function describeError(error: unknown): string {
