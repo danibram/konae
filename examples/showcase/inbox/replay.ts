@@ -106,7 +106,9 @@ try {
   }
 
   const compiled = await buildLocal(root);
-  const unsetSecret = await rejects(release(project, compiled.files, compiled.artifact), /which is not set for this project/);
+  // One refusal names both unset secrets, so one failed plan tells the owner everything to set.
+  const unsetSecret = await rejects(release(project, compiled.files, compiled.artifact), /which are not set for this project/);
+  assert.equal(unsetSecret, "Actions events.feed and events.receive sign with the secrets events_feed and events_webhook, which are not set for this project. Set each with secret_set before publishing.");
   refused("Publish before secret_set", unsetSecret);
   await owner.call("secret_set", { projectId: project.id, name: "events_webhook", value: webhookSecret });
   await owner.call("secret_set", { projectId: project.id, name: "events_feed", value: feedSecret });
@@ -117,7 +119,7 @@ try {
   const policy = await owner.call<{ mode: string; visibility: string }>("signup_policy_read", { deploymentId: inbox.id });
   assert.equal(policy.mode, "invitation");
   assert.equal(policy.visibility, "private");
-  pass("Publish", `The release names an unset secret and is refused; after secret_set it publishes private with signup by invitation at ${inbox.url}.`);
+  pass("Publish", `The release with both secrets unset is refused with one message naming both; after secret_set it publishes private with signup by invitation at ${inbox.url}.`);
 
   const host = (extra: Record<string, string> = {}) => ({ host: inbox.hostname, "x-forwarded-for": freshAddress(), ...extra });
   const runtime = (cookie?: string) => new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {

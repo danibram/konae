@@ -48,7 +48,7 @@ The last run passed all 12 checks and exited 0. `littlebox conform` reported `72
 
 ## What worked
 
-- A release that names an unset secret is refused at `release_plan`. After `secret_set` the app publishes private with signup by invitation, and `secrets_list` returns names without values.
+- A release whose two secrets are unset is refused at `release_plan` with one message that names both. After `secret_set` the app publishes private with signup by invitation, and `secrets_list` returns names without values.
 - With no session, `GET /` answers the Kernel's sign-in page and the runtime endpoint answers `Sign in to use Littlebox MCP.`, while `POST /hooks/events` stores a correctly signed event.
 - The route refuses a replayed signature, a wrong secret, a body changed after signing, a `t` 400 seconds old or ahead, and a missing signature. The owner's editor cookie does not replace the signature.
 - A key that names `events.feed` reads the rows and filters with `?after=`. A key that names only files gets 403. The runtime MCP endpoint does not accept keys. After `api_keys_revoke` the key gets `invalid-api-key`, and `api_keys_list` shows the revocation without the key.
@@ -76,7 +76,7 @@ The last run passed all 12 checks and exited 0. `littlebox conform` reported `72
 | 10 | Create a key that names nothing | Refused at creation, so there is no empty key to refuse on the route. The replay shows the 403 with a key that names only file visibilities | `Name at least one action or file visibility for the key.` |
 | 11 | Give a key the in-app list | Only routed actions can be named | `Action events.list has no HTTP route, so a key cannot call it.` |
 | 12 | Call the runtime MCP endpoint with a key | The endpoint takes app sessions only | 401 `{"error":"Sign in to use Littlebox MCP."}` |
-| 13 | Publish before setting the two secrets | The refusal names the first unset secret only, so a project with two needs two failed plans to learn both | `Action events.feed signs with the secret events_feed, which is not set for this project. Set it with secret_set before publishing.` |
+| 13 | Publish before setting the two secrets | Fixed on 2026-11-06. The refusal first named only the first unset secret, so a project with two needed two failed plans to learn both. It now names every unset secret and the actions that sign with them, and the replay asserts it | `Actions events.feed and events.receive sign with the secrets events_feed and events_webhook, which are not set for this project. Set each with secret_set before publishing.` |
 | 14 | Publish with `bun run littlebox -- publish` as invitation only | The CLI's release payload carries no `initialSignupPolicy`, so a private app starts Closed and the owner needs a `manage_users` credential for `signup_policy_set`. `dev` opens signup instead. The replay calls `release_plan` over MCP to set it on the first release | No error; read from `scripts/littlebox.ts` |
 | 15 | Check that the invitation names the inviting owner | The development mailbox writes `to`, `purpose`, `scope`, `link` and `expiresAt`, and no subject or body | Not checkable with the development transport |
 | 16 | Send a severity outside the CHECK | The sender receives SQLite's text, which shows the constraint | 400 `CHECK constraint failed: severity IN ('info', 'warning', 'critical')` |

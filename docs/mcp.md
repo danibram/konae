@@ -252,7 +252,7 @@ A key that names a signed action replaces the signature. A session cookie does n
 
 ### Signatures
 
-The owner sets the secret for the project before publishing. A release whose signature names an unset secret is refused when planned and again when applied, with `Action <name> signs with the secret <secret>, which is not set for this project. Set it with secret_set before publishing.` The editor cannot see secrets, so this is the one refusal the Validation Gate does not make.
+The owner sets the secret for the project before publishing. A release whose signature names an unset secret is refused when planned and again when applied, with `Action <name> signs with the secret <secret>, which is not set for this project. Set it with secret_set before publishing.` When several are unset, one refusal names every action and every secret: `Actions events.feed and events.receive sign with the secrets events_feed and events_webhook, which are not set for this project. Set each with secret_set before publishing.` The editor cannot see secrets, so this is the one refusal the Validation Gate does not make.
 
 ```text
 secret_set   { "projectId", "name": "orders_webhook", "value": "<16 to 512 printable characters, no spaces>" }

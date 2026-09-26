@@ -66,7 +66,7 @@ The yardstick: a person who does not write code, and a person who does, make the
 
 ### Smaller
 
-A suspended member's session answers as signed out and only the login route says suspended. A publish with two unset secrets names only the first. A stale timestamp and a wrong secret get the same answer. An actor-bound route refuses a visitor with 400 rather than 401. A signup with a password under required verification accepts and ignores the password. A signup for an active address answers 202 and tells no one. HEAD on a route answers 405 with a body HTTP drops. The Action Contract's Markdown omits the Signal.
+A suspended member's session answers as signed out and only the login route says suspended. A publish with two unset secrets names only the first (fixed: one refusal now names every unset secret). A stale timestamp and a wrong secret get the same answer. An actor-bound route refuses a visitor with 400 rather than 401. A signup with a password under required verification accepts and ignores the password. A signup for an active address answers 202 and tells no one. HEAD on a route answers 405 with a body HTTP drops. The Action Contract's Markdown omits the Signal.
 
 ## What to do first
 

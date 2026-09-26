@@ -91,12 +91,12 @@ describe("every documented message is one the code returns", () => {
   const kernel = readdirSync(path.join(root, "kernel-rs/src")).filter((file) => file.endsWith(".rs")).map((file) => read(`kernel-rs/src/${file}`)).join("\n");
   const preview = ["src/runtime/host.ts", "src/runtime/security.ts", "src/kernel/actions.ts", "src/mcp/preview.ts"].map(read).join("\n");
 
-  /** Matches a message in source: <key> or <name> stand for a Rust {key} or a JS ${...}, a number may be a JS ${...}. */
+  /** Matches a message in source: <key>, <name> or <names> stand for a Rust {key} or a JS ${...}, a number may be a JS ${...}. */
   function inSource(message: string, source: string) {
     const pattern = message
-      .split(/(<key>|<name>|\d+)/)
+      .split(/(<key>|<names>|<name>|\d+)/)
       .map((part) => {
-        if (part === "<key>" || part === "<name>") return String.raw`(?:\{\w+\}|\$\{[^}]+\})`;
+        if (part === "<key>" || part === "<name>" || part === "<names>") return String.raw`(?:\{\w+\}|\$\{[^}]+\})`;
         if (/^\d+$/.test(part)) return String.raw`(?:${part}|\$\{[^}]+\})`;
         return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       })

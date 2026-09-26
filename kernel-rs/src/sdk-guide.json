@@ -482,6 +482,16 @@
               "source": "kernel"
             },
             {
+              "message": "Actions <names> sign with the secret <name>, which is not set for this project. Set it with secret_set before publishing.",
+              "when": "publishing, and several actions sign with one secret the owner has not set",
+              "source": "kernel"
+            },
+            {
+              "message": "Actions <names> sign with the secrets <names>, which are not set for this project. Set each with secret_set before publishing.",
+              "when": "publishing, and more than one secret is unset; one refusal names every action and every secret",
+              "source": "kernel"
+            },
+            {
               "message": "invalid-signature",
               "when": "a signed route gets no signature, a wrong one, or a t more than 300 seconds from the Kernel's clock (401)",
               "source": "kernel"

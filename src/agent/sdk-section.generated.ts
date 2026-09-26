@@ -140,6 +140,8 @@ Refusals:
 - "Action <name> names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter." when the secret is not a secret name
 - "Action <name> has an invalid http binding." when http is not an object, has another key, or its signature has a key other than header and secret
 - "Action <name> signs with the secret <name>, which is not set for this project. Set it with secret_set before publishing." when publishing, and the owner has not set the secret; the editor cannot see secrets, so only the Kernel refuses this
+- "Actions <names> sign with the secret <name>, which is not set for this project. Set it with secret_set before publishing." when publishing, and several actions sign with one secret the owner has not set
+- "Actions <names> sign with the secrets <names>, which are not set for this project. Set each with secret_set before publishing." when publishing, and more than one secret is unset; one refusal names every action and every secret
 - "invalid-signature" when a signed route gets no signature, a wrong one, or a t more than 300 seconds from the Kernel's clock (401)
 - "replayed-signature" when the same signature arrives a second time (409)
 - "invalid-api-key" when Authorization carries an lbk_ key that is unknown or revoked (401)

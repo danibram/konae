@@ -242,6 +242,8 @@ Declared with `http` in `actions.json`. { "method": "GET" | "POST", "path": "/ap
 | `Action <name> names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter.` | the secret is not a secret name | Kernel | Same |
 | `Action <name> has an invalid http binding.` | http is not an object, has another key, or its signature has a key other than header and secret | Kernel | Same |
 | `Action <name> signs with the secret <name>, which is not set for this project. Set it with secret_set before publishing.` | publishing, and the owner has not set the secret; the editor cannot see secrets, so only the Kernel refuses this | Kernel | Never refuses |
+| `Actions <names> sign with the secret <name>, which is not set for this project. Set it with secret_set before publishing.` | publishing, and several actions sign with one secret the owner has not set | Kernel | Never refuses |
+| `Actions <names> sign with the secrets <names>, which are not set for this project. Set each with secret_set before publishing.` | publishing, and more than one secret is unset; one refusal names every action and every secret | Kernel | Never refuses |
 | `invalid-signature` | a signed route gets no signature, a wrong one, or a t more than 300 seconds from the Kernel's clock (401) | Kernel | Never refuses |
 | `replayed-signature` | the same signature arrives a second time (409) | Kernel | Never refuses |
 | `invalid-api-key` | Authorization carries an lbk_ key that is unknown or revoked (401) | Kernel | Never refuses |

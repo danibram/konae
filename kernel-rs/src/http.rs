@@ -171,17 +171,44 @@ fn secret_value(db: &Connection, project: &str, name: &str) -> Result<Option<Str
 pub(super) fn require_secrets(db: &Connection, project: &str, program: &ActionProgram) -> Result<()> {
     let mut names = program.actions.keys().collect::<Vec<_>>();
     names.sort();
+    let mut actions = Vec::new();
+    let mut secrets: Vec<String> = Vec::new();
     for name in names {
         let Ok(Some(HttpBinding { signature: Some(signature), .. })) = binding(name, &program.actions[name]) else {
             continue;
         };
-        let secret = &signature.secret;
-        anyhow::ensure!(
-            secret_value(db, project, secret)?.is_some(),
-            "Action {name} signs with the secret {secret}, which is not set for this project. Set it with secret_set before publishing."
-        );
+        if secret_value(db, project, &signature.secret)?.is_none() {
+            actions.push(name.clone());
+            if !secrets.contains(&signature.secret) {
+                secrets.push(signature.secret.clone());
+            }
+        }
     }
-    Ok(())
+    unset_secrets_message(&actions, &secrets).map_or(Ok(()), |message| Err(anyhow::anyhow!(message)))
+}
+
+/// One refusal that names every action whose secret is unset and every such
+/// secret, so an owner learns them all from one failed publish. One action
+/// keeps the sentence the SDK contract has listed since routes shipped.
+fn unset_secrets_message(actions: &[String], secrets: &[String]) -> Option<String> {
+    let list = |items: &[String]| match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    let (names, secret_names) = (list(actions), list(secrets));
+    match (actions, secrets) {
+        ([], _) => None,
+        ([action], [secret]) => Some(format!(
+            "Action {action} signs with the secret {secret}, which is not set for this project. Set it with secret_set before publishing."
+        )),
+        (_, [secret]) => Some(format!(
+            "Actions {names} sign with the secret {secret}, which is not set for this project. Set it with secret_set before publishing."
+        )),
+        _ => Some(format!(
+            "Actions {names} sign with the secrets {secret_names}, which are not set for this project. Set each with secret_set before publishing."
+        )),
+    }
 }
 
 /// `secrets_list`, `secret_set` and `secret_delete`. The caller has checked
@@ -1039,6 +1066,21 @@ mod tests {
         );
         secrets_call(&db, "project_a", None, "secret_set", &json!({"name": "orders_webhook", "value": "a-long-enough-secret"})).unwrap();
         require_secrets(&db, "project_a", &signed).unwrap();
+        let route = |path: &str, secret: &str| json!({"kind": "mutation", "access": "anonymous",
+            "statement": "INSERT INTO orders (external_id) VALUES (?1)", "bindings": [{"source": "input", "key": "id", "type": "string"}],
+            "http": {"method": "POST", "path": path, "signature": {"header": "X-Signature", "secret": secret}}});
+        let shared = program(&json!({"a.one": route("/one", "hook"), "b.two": route("/two", "hook")}));
+        assert_eq!(
+            require_secrets(&db, "project_a", &shared).unwrap_err().to_string(),
+            "Actions a.one and b.two sign with the secret hook, which is not set for this project. Set it with secret_set before publishing."
+        );
+        let three = program(&json!({"a.one": route("/one", "feed"), "b.two": route("/two", "orders_webhook"),
+            "c.three": route("/three", "hook"), "d.four": route("/four", "feed")}));
+        assert_eq!(
+            require_secrets(&db, "project_a", &three).unwrap_err().to_string(),
+            "Actions a.one, c.three and d.four sign with the secrets feed and hook, which are not set for this project. Set each with secret_set before publishing.",
+            "one refusal names every unset secret and leaves out the one that is set"
+        );
         assert!(require_secrets(&db, "project_b", &signed).is_err(), "secrets belong to one project");
         let listed = secrets_call(&db, "project_a", None, "secrets_list", &json!({})).unwrap();
         assert!(!listed.to_string().contains("a-long-enough-secret"), "a listing never shows a value");
