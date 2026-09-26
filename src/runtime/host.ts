@@ -585,9 +585,11 @@ export class MiniAppRuntimeHost {
     // The preview keeps no Usage store. A signal action runs no SQL and answers
     // as the Kernel does, which records the Signal on a Deployment.
     if (action.kind === "signal") return { recorded: true };
-    return action.kind === "query"
-      ? this.query({ sql: action.statement, params })
-      : this.execute({ sql: action.statement, params });
+    if (action.kind === "query") return this.query({ sql: action.statement, params });
+    const result = await this.execute({ sql: action.statement, params });
+    // A guarded mutation that changed no row is refused with its guard, as on a Deployment.
+    if (action.guard && result.changes === 0) throw new Error(action.guard);
+    return result;
   }
 
   private async execute(payload: unknown) {

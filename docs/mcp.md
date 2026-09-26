@@ -375,10 +375,11 @@ signals_read { "deploymentId", "name"?: "order.placed", "cursor"? }
 | `file_read` | | `files_read` or `GET /_littlebox/files/<id>` returns a file |
 | `signup` | | an account becomes active: a signup in local mode, an answered verification link or an accepted invitation |
 | `login` | | a password sign-in or an answered recovery link |
+| `refused` | the action | a mutation with a [guard](#guards) changed no row and the Kernel answered the guard, on `actions_invoke` or on its route |
 
-Nothing the Kernel refuses is counted: a call without the session it needs, an input the bindings reject, a statement SQLite refuses, a bad signature or a wrong password. The Kernel writes Usage off the request path. A response never waits for it, and when more than 16,384 entries are waiting the newest are dropped and logged. The two read tools wait up to five seconds for the queue to drain, so they include every call that finished before them.
+Nothing else the Kernel refuses is counted: a call without the session it needs, an input the bindings reject, a statement SQLite refuses, a bad signature or a wrong password. A guard's refusal is the app's own rule saying no, which the owner wants to see next to the calls that ran. The Kernel writes Usage off the request path. A response never waits for it, and when more than 16,384 entries are waiting the newest are dropped and logged. The two read tools wait up to five seconds for the queue to drain, so they include every call that finished before them.
 
-A Signal is a named occurrence a Server Action declares. It is recorded when that action succeeds, with properties taken from the input the action ran with:
+A Signal is a named occurrence a Server Action declares. It is recorded when that action succeeds, and for a mutation only when its statement changed at least one row, with properties taken from the input the action ran with:
 
 ```json
 "newsletter.join": {
@@ -389,13 +390,14 @@ A Signal is a named occurrence a Server Action declares. It is recorded when tha
 }
 ```
 
-A mutation may declare `signal` too, and records it after its statement succeeds. An action of `"kind": "signal"` runs no SQL and returns `{ "recorded": true }`; it has no statement and no `http`. There is no `miniapp.track`. The app records a Signal with `miniapp.actions.call`, so it goes through the same access check, input check and rate limit as any action. `signals_read` returns 100 Signals at a time, newest first, as `{ "signals": [{ "name", "at", "properties" }], "nextCursor" }`; pass `nextCursor` back as `cursor` for the next page.
+A mutation may declare `signal` too, and records it after its statement changes a row; a retry that stored nothing, or a refused attempt, records none. The property `actor` records the caller's ID instead of an input: the app user's ID, the API key's ID, or `null` for a visitor or a signed request, so the owner can count per person. An action that lists `actor` may not also have an input named `actor`. An action of `"kind": "signal"` runs no SQL and returns `{ "recorded": true }`; it has no statement and no `http`. There is no `miniapp.track`. The app records a Signal with `miniapp.actions.call`, so it goes through the same access check, input check and rate limit as any action. `signals_read` returns 100 Signals at a time, newest first, as `{ "signals": [{ "name", "at", "properties" }], "nextCursor" }`; pass `nextCursor` back as `cursor` for the next page.
 
 | Refusal | Message |
 | --- | --- |
 | A Signal on a query | `Action <name> is a query, so it cannot declare a signal. Declare it on a mutation or on a "kind": "signal" action.` |
 | A property that is not an input binding's key | `Action <name> names signal property <key>, which is not one of its input bindings.` |
 | A property listed twice | `Action <name> names signal property <key> twice.` |
+| `actor` listed while an input is named `actor` | `Action <name> names signal property actor, which records the caller's ID, and also has an input named actor. Rename the input.` |
 | More than 8 properties | `Action <name> names more than 8 signal properties.` |
 | A name that is not dot-separated lowercase words of up to 64 characters | `Action <name> names an invalid signal. Use dot-separated lowercase words, such as "order.placed", up to 64 characters.` |
 | `signal` that is not `{ name, properties? }` with a list of strings | `Action <name> has an invalid signal declaration.` |
@@ -408,6 +410,30 @@ A mutation may declare `signal` too, and records it after its statement succeeds
 | `signals_read` with a cursor it did not return | `Invalid cursor. Pass back the nextCursor of an earlier page.` |
 
 The Validation Gate and the Kernel refuse the same declarations with the same messages, from one case file, `kernel-rs/src/signal-cases.json`, that both test suites run. A signal action counts toward the action limit.
+
+### Guards
+
+An app writes its rules into a mutation's `WHERE`: the caller is an organizer, the slot is free, the event is still open. When the rule says no, the statement changes no row, and without more the caller gets `{ "changes": 0, "lastInsertId": 0 }`, the same answer as a request that had nothing to do. A mutation may declare the refusal:
+
+```json
+"members.promote": {
+  "kind": "mutation",
+  "access": "authenticated",
+  "guard": "Only an organizer can promote a member.",
+  "statement": "UPDATE members SET role = 'organizer' WHERE user_id = ?1 AND EXISTS (SELECT 1 FROM members WHERE user_id = ?2 AND role = 'organizer')",
+  "bindings": [{ "source": "input", "key": "member", "type": "string", "maxLength": 64 }, { "source": "actor", "field": "id" }]
+}
+```
+
+When the statement changes no row, the Kernel answers the guard as a refusal: a tool error with that text on `actions_invoke`, so `miniapp.actions.call` rejects with it, and `403 { "error": "<guard>" }` on the action's route. Usage counts it under `refused` and no Signal is recorded. The statement has run, and it changed nothing, so nothing is rolled back. Without a guard a mutation answers `{ changes: 0 }` as before. The editor preview refuses the same way. The Action Contract lists the guard among the action's errors, and `conform` probes it.
+
+| Declaration | Message |
+| --- | --- |
+| `guard` on a query | `Action <name> is a query, so it cannot declare a guard. Declare it on a mutation.` |
+| `guard` on a signal action | `Action <name> is a signal action, so it cannot declare a guard. Declare it on a mutation.` |
+| A guard that is not a string of 1 to 200 characters on one line | `Action <name> has an invalid guard. Use a message of 1 to 200 characters on one line.` |
+
+The Validation Gate and the Kernel parse the same cases from `kernel-rs/src/guard-cases.json`; `kernel-rs/src/guard.rs` holds the Kernel's side.
 
 The store keeps 400 days and at most 100,000 rows of totals, and the newest 50,000 Signals; past those bounds the oldest rows go first. A string property keeps its first 128 bytes. The scheduled copy and `package_export` carry the store; `project_export` does not. A Development Kernel started with `bun run littlebox -- dev` records the same way, in `.littlebox/dev-data/deployments/<id>/usage.sqlite`. The editor preview has no store: a signal action there returns `{ "recorded": true }` and nothing is kept.
 
@@ -440,7 +466,8 @@ For each Server Action the contract states:
 | `kind`, `access`, `actorBound` | Query or mutation, anonymous or authenticated, and whether a binding passes the caller's ID |
 | `inputs` | Each input key with its type, whether it is required or nullable, and a string's `maxLength` |
 | `output` | `rows` with the columns a query returns, each with its SQLite affinity, nullability and the table column it reads; or `changes` for `{ changes, lastInsertId }`. `signal` names the Signal a `signal` action records |
-| `signal` | For an action that records a Signal (ADR-0010): the Signal's name and the input keys copied into its properties |
+| `signal` | For an action that records a Signal (ADR-0010): the Signal's name and the input keys copied into its properties, with `actor` for the caller's ID |
+| `guard` | For a mutation that declares one: the refusal it answers when its statement changes no row, also listed under `errors` with status 403 on a route |
 | `runtime` | The endpoint, `/_littlebox/mcp`, the `actions_invoke` tool and the callers it accepts |
 | `http` | The route's method and path, how the input is read, the signature header, secret name and scheme, the callers it takes, the declared `callers` list and `onlyDoor`, when the route is the action's only door |
 | `errors` | The exact messages the Kernel answers with for this action, where they are seen, and the HTTP status on a route |
@@ -449,7 +476,7 @@ For each Server Action the contract states:
 
 Column names follow SQLite: the alias, or the column's own name. An expression without `AS`, such as `count(*)`, gets a key only SQLite would print, so the contract lists it under `unnamed`, `contract` prints a warning and the Validation Gate passes the Capsule with the same warning. Types come from `schema.sql` and SQLite does not enforce them. A column of a subquery or a table-valued function has a name and the type `unknown`. Error messages come from the SDK contract, whose test checks each one against the Kernel's source.
 
-`conform` is what a replacement backend would run. It calls every action through the runtime endpoint with generated inputs and checks the answer's shape, then probes each refusal the contract lists: an undeclared action, an undeclared, missing, mistyped, empty or overlong input, a caller without a session or without an ID, and on a route an unsigned, stale or replayed signature, a caller with no key or session where the route needs one, an unknown API key, a key the route does not take, an undeclared query or body key, a body that is not JSON and a POST to an unbound path. An action whose route is its only door is checked to refuse `actions_invoke` with `Action <name> answers only on its HTTP route, <method> <path>.`, and its inputs are probed on the route. A refusal passes only when the contract lists the message and the backend answers with it, with the contract's status on a route. `--token` carries an app session token, the value of the app session cookie; `LITTLEBOX_APP_EMAIL` and `LITTLEBOX_APP_PASSWORD` sign in for one instead. `--secret <name>=<value>` signs a route and may repeat, with a fresh nonce for each request. `--key` sends an API key to a route that takes one when no secret signs it, and an action that binds the caller's ID gets the key or, with `--token`, the session cookie. The generated inputs are a short unique string, the number 1 and `true`; a statement that reads a string as more than text, such as `json_each(?1)`, needs a real value, which `--inputs <file>` gives as JSON keyed by action name, for example `{ "items.jsonin": { "ids": "[1, 2]" } }`. A valid call refused with a message the contract does not list fails and says so. A check that needs a credential it was not given is reported as skipped, not passed. It runs every mutation once with real input, so point it at a test Deployment. It exits with 1 when any check fails.
+`conform` is what a replacement backend would run. It calls every action through the runtime endpoint with generated inputs and checks the answer's shape, then probes each refusal the contract lists: an undeclared action, an undeclared, missing, mistyped, empty or overlong input, a caller without a session or without an ID, and on a route an unsigned, stale or replayed signature, a caller with no key or session where the route needs one, an unknown API key, a key the route does not take, an undeclared query or body key, a body that is not JSON and a POST to an unbound path. A guarded mutation must answer its guard when its statement changes no row: `conform` sends the valid input, and again when the first call changed a row, and fails a backend that answers `{ changes: 0 }` instead; when both calls change a row it reports the check as skipped. An action whose route is its only door is checked to refuse `actions_invoke` with `Action <name> answers only on its HTTP route, <method> <path>.`, and its inputs are probed on the route. A refusal passes only when the contract lists the message and the backend answers with it, with the contract's status on a route. `--token` carries an app session token, the value of the app session cookie; `LITTLEBOX_APP_EMAIL` and `LITTLEBOX_APP_PASSWORD` sign in for one instead. `--secret <name>=<value>` signs a route and may repeat, with a fresh nonce for each request. `--key` sends an API key to a route that takes one when no secret signs it, and an action that binds the caller's ID gets the key or, with `--token`, the session cookie. The generated inputs are a short unique string, the number 1 and `true`; a statement that reads a string as more than text, such as `json_each(?1)`, needs a real value, which `--inputs <file>` gives as JSON keyed by action name, for example `{ "items.jsonin": { "ids": "[1, 2]" } }`. A valid call refused with a message the contract does not list fails and says so. A check that needs a credential it was not given is reported as skipped, not passed. It runs every mutation once with real input, so point it at a test Deployment. It exits with 1 when any check fails.
 
 ## Eject
 

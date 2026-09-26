@@ -53,6 +53,11 @@ export type ServerActionDefinition = RuntimeActionDeclaration & {
   bindings: ActionBinding[];
   http?: HttpBinding;
   signal?: SignalDeclaration;
+  /**
+   * The refusal a mutation answers with when its statement changes no row,
+   * instead of { changes: 0 }. See docs/mcp.md, "Guards".
+   */
+  guard?: string;
 };
 
 export type ServerActionProgram = {
@@ -124,6 +129,7 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
     const bindings = candidate.bindings.map((binding, index) => parseBinding(name, index, binding));
     const signal = parseSignal(name, kind, bindings, candidate.signal);
     const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http);
+    parseGuard(name, kind, candidate.guard);
     return { name, kind, access, statement: "", bindings, ...(signal ? { signal } : {}), ...(http ? { http } : {}) };
   }
   if (!kind || !access || typeof candidate.statement !== "string") throw new Error(`Invalid server action: ${name}`);
@@ -139,7 +145,25 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
   const bindings = candidate.bindings.map((binding, index) => parseBinding(name, index, binding));
   const signal = parseSignal(name, kind, bindings, candidate.signal);
   const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http);
-  return { name, kind, access, statement: candidate.statement.trim(), bindings, ...(signal ? { signal } : {}), ...(http ? { http } : {}) };
+  const guard = parseGuard(name, kind, candidate.guard);
+  return {
+    name, kind, access, statement: candidate.statement.trim(), bindings,
+    ...(signal ? { signal } : {}), ...(http ? { http } : {}), ...(guard ? { guard } : {}),
+  };
+}
+
+// The same checks and messages as kernel-rs/src/guard.rs `declaration`.
+// kernel-rs/src/guard-cases.json holds the cases both test suites run.
+const MAX_GUARD_LENGTH = 200;
+
+function parseGuard(name: string, kind: "query" | "mutation" | "signal", value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (kind !== "mutation") throw new Error(`Action ${name} is a ${kind === "query" ? "query" : "signal action"}, so it cannot declare a guard. Declare it on a mutation.`);
+  // Characters, not bytes or UTF-16 units, so both doors count an accented letter once.
+  if (typeof value !== "string" || !value.trim() || [...value].length > MAX_GUARD_LENGTH || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new Error(`Action ${name} has an invalid guard. Use a message of 1 to ${MAX_GUARD_LENGTH} characters on one line.`);
+  }
+  return value;
 }
 
 // The same checks, in the same order and with the same messages, as
@@ -147,6 +171,8 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
 // the cases both test suites run.
 const SIGNAL_NAME = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/;
 const MAX_SIGNAL_PROPERTIES = 8;
+/** The property that records the caller's ID: a user's, a key's, or null for a visitor or a signed request. */
+const SIGNAL_ACTOR = "actor";
 
 function parseSignal(name: string, kind: "query" | "mutation" | "signal", bindings: ActionBinding[], value: unknown): SignalDeclaration | undefined {
   if (value === undefined) {
@@ -171,7 +197,11 @@ function parseSignal(name: string, kind: "query" | "mutation" | "signal", bindin
   const seen = new Set<string>();
   for (const key of properties as string[]) {
     if (seen.has(key)) throw new Error(`Action ${name} names signal property ${key} twice.`);
-    if (!inputs.has(key)) throw new Error(`Action ${name} names signal property ${key}, which is not one of its input bindings.`);
+    // "actor" records the caller's ID, so it cannot also name an input.
+    if (key === SIGNAL_ACTOR && inputs.has(key)) {
+      throw new Error(`Action ${name} names signal property actor, which records the caller's ID, and also has an input named actor. Rename the input.`);
+    }
+    if (key !== SIGNAL_ACTOR && !inputs.has(key)) throw new Error(`Action ${name} names signal property ${key}, which is not one of its input bindings.`);
     seen.add(key);
   }
   return { name: record.name, properties: properties as string[] };

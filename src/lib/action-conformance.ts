@@ -141,6 +141,28 @@ export async function runConformance(contract: ActionContract, target: Conforman
     else record(name, check, "fail", `Answered ${answer.status} ${got === undefined ? preview(answer.body) : `"${got}"`} where the contract says ${error.status} "${message}".`);
   };
 
+  const guardChecked = new Set<string>();
+
+  /**
+   * Probes a guard: a guarded mutation that changes no row must answer its
+   * guard, never { changes: 0 }. The first answer may already be the guard;
+   * otherwise the same input is sent again, which changes no row for most
+   * statements (an UPDATE with a state check, an INSERT ... WHERE NOT EXISTS).
+   * When the second call changes a row too, conform cannot reach the guard.
+   */
+  async function checkGuard(action: ContractAction, result: unknown, message: string | undefined, again: () => Promise<{ result?: unknown; message?: string }>) {
+    guardChecked.add(action.name);
+    const check = "refuses with its guard when no row changes";
+    const judge = (answer: { result?: unknown; message?: string }) => {
+      if (answer.message === action.guard) { record(action.name, check, "pass", `Refused with "${answer.message}".`); return true; }
+      if (answer.message !== undefined) { record(action.name, check, "fail", `Refused with "${answer.message}" where the contract says "${action.guard}".`); return true; }
+      if (changesOf(answer.result) === 0) { record(action.name, check, "fail", `Answered ${preview(answer.result)} where the contract refuses with "${action.guard}".`); return true; }
+      return false;
+    };
+    if (judge({ result, message })) return;
+    if (!judge(await again())) record(action.name, check, "skip", "Both calls changed a row, so conform could not make the statement change nothing.");
+  }
+
   // The name no action declares.
   await expectRefusal(null, "refuses an undeclared action", ["Server action not declared.", "Sign in to use Littlebox MCP."],
     () => invoke(UNDECLARED_ACTION, {}, target.hasSession ? "session" : "visitor"));
@@ -169,6 +191,10 @@ export async function runConformance(contract: ActionContract, target: Conforman
       if (!answer.ok && answer.message === routeOnly && listedIn(action.errors, answer.message)) {
         runtimeClosed = true;
         record(name, "answers only on its route on this private Deployment", "pass", `Refused with "${answer.message}".`);
+      } else if (!answer.ok && action.guard && answer.message === action.guard) {
+        // The generated input matched no row, and the app's rule refused it as the contract says.
+        record(name, "answers a valid call", "pass", "Refused with its guard: the generated input changed no row.");
+        await checkGuard(action, undefined, answer.message, async () => ({}));
       } else if (!answer.ok) {
         const advice = answer.message === "Sign in to use Littlebox MCP." ? " The Deployment is private; pass --token."
           : listedIn([...action.errors, ...contract.errors], answer.message) ? ""
@@ -177,6 +203,9 @@ export async function runConformance(contract: ActionContract, target: Conforman
       } else {
         const problem = checkOutput(action, answer.result);
         record(name, "answers a valid call", problem ? "fail" : "pass", problem ?? describeOutput(action, answer.result));
+        if (action.guard && !problem) {
+          await checkGuard(action, answer.result, undefined, () => invoke(name, valid, caller).then((again) => again.ok ? { result: again.result } : { message: again.message }));
+        }
       }
       for (const input of runtimeClosed ? [] : action.inputs.filter((candidate) => candidate.nullable)) {
         const { [input.key]: _, ...rest } = valid;
@@ -270,11 +299,23 @@ export async function runConformance(contract: ActionContract, target: Conforman
         open = false;
         await expectRouteRefusal(action, "refuses a caller without a key or a session", "authentication-required", sent, answer);
         record(name, `answers ${http.method} ${http.path}`, "skip", "The Deployment is private, so the route takes an API key or a session; pass --key or --token.");
+      } else if (action.guard && answer.status === 403 && errorOf(answer.body) === action.guard) {
+        record(name, `answers ${http.method} ${http.path}${via}`, "pass", "Refused 403 with its guard: the generated input changed no row.");
+        if (!guardChecked.has(name)) await checkGuard(action, undefined, action.guard, async () => ({}));
       } else {
         const problem = answer.status !== 200 ? `Answered ${answer.status} ${preview(answer.body)}.` : result === undefined ? `Answered ${preview(answer.body)} without "result".` : checkOutput(action, result);
         record(name, `answers ${http.method} ${http.path}${via}`, problem ? "fail" : "pass", problem ?? describeOutput(action, result));
         // The same signed request a second time.
         if (proof === "signature" && answer.status === 200) await expectRouteRefusal(action, "refuses a replayed signature", "replayed-signature", sent);
+        if (action.guard && !problem && !guardChecked.has(name)) {
+          await checkGuard(action, result, undefined, async () => {
+            const again = await route(await prove(request(valid)));
+            const message = errorOf(again.body);
+            if (again.status === 403 && message !== undefined) return { message };
+            return again.status === 200 && again.body && typeof again.body === "object" && "result" in again.body
+              ? { result: (again.body as { result: unknown }).result } : { message: message ?? `HTTP ${again.status}` };
+          });
+        }
       }
     }
 
@@ -367,6 +408,10 @@ function matches(template: string, message: string): boolean {
   if (!/<(key|name)>/.test(template)) return false;
   const pattern = template.split(/<(?:key|name)>/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".+");
   return new RegExp(`^${pattern}$`).test(message);
+}
+
+function changesOf(result: unknown): number | undefined {
+  return result && typeof result === "object" && typeof (result as { changes?: unknown }).changes === "number" ? (result as { changes: number }).changes : undefined;
 }
 
 function errorOf(body: unknown): string | undefined {

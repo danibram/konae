@@ -887,9 +887,18 @@ async fn run_route(
     };
     match result {
         Ok(value) => {
+            let changed = match super::guard::outcome(name, action, &value) {
+                super::guard::Outcome::Refused(message) => {
+                    super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Refused(name.to_owned()));
+                    return refusal(StatusCode::FORBIDDEN, &message);
+                }
+                outcome => matches!(outcome, super::guard::Outcome::Changed),
+            };
             // A route counts under its method and path, not again as an action.
             super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Route(http.method.clone(), http.path.clone()));
-            super::usage::signal(&state.data_root, &deployment.id, name, action, &input);
+            if changed {
+                super::usage::signal(&state.data_root, &deployment.id, name, action, &input, caller.actor_id());
+            }
             let mut response = Json(json!({"result": value})).into_response();
             response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             response

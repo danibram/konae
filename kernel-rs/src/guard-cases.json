@@ -1,0 +1,255 @@
+[
+ {
+  "case": "a guard on a mutation",
+  "actions": {
+   "members.promote": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE members SET role = 'organizer' WHERE id = ?1 AND EXISTS (SELECT 1 FROM members WHERE id = ?2 AND role = 'organizer')",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "member",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ],
+    "guard": "Only an organizer can promote a member."
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a guard of exactly 200 characters",
+  "actions": {
+   "members.promote": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE members SET role = 'organizer' WHERE id = ?1 AND EXISTS (SELECT 1 FROM members WHERE id = ?2 AND role = 'organizer')",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "member",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ],
+    "guard": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a guard with accented letters counts characters",
+  "actions": {
+   "members.promote": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE members SET role = 'organizer' WHERE id = ?1 AND EXISTS (SELECT 1 FROM members WHERE id = ?2 AND role = 'organizer')",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "member",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ],
+    "guard": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a guard of 201 characters",
+  "actions": {
+   "members.promote": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE members SET role = 'organizer' WHERE id = ?1 AND EXISTS (SELECT 1 FROM members WHERE id = ?2 AND role = 'organizer')",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "member",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ],
+    "guard": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   }
+  },
+  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line."
+ },
+ {
+  "case": "an empty guard",
+  "actions": {
+   "members.promote": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE members SET role = 'organizer' WHERE id = ?1 AND EXISTS (SELECT 1 FROM members WHERE id = ?2 AND role = 'organizer')",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "member",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ],
+    "guard": ""
+   }
+  },
+  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line."
+ },
+ {
+  "case": "a guard of spaces",
+  "actions": {
+   "members.promote": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE members SET role = 'organizer' WHERE id = ?1 AND EXISTS (SELECT 1 FROM members WHERE id = ?2 AND role = 'organizer')",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "member",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ],
+    "guard": "   "
+   }
+  },
+  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line."
+ },
+ {
+  "case": "a guard on two lines",
+  "actions": {
+   "members.promote": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE members SET role = 'organizer' WHERE id = ?1 AND EXISTS (SELECT 1 FROM members WHERE id = ?2 AND role = 'organizer')",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "member",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ],
+    "guard": "Only an organizer\ncan promote."
+   }
+  },
+  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line."
+ },
+ {
+  "case": "a guard that is not a string",
+  "actions": {
+   "members.promote": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE members SET role = 'organizer' WHERE id = ?1 AND EXISTS (SELECT 1 FROM members WHERE id = ?2 AND role = 'organizer')",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "member",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ],
+    "guard": true
+   }
+  },
+  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line."
+ },
+ {
+  "case": "a guard on a query",
+  "actions": {
+   "members.list": {
+    "kind": "query",
+    "access": "authenticated",
+    "statement": "SELECT id FROM members LIMIT 50",
+    "bindings": [],
+    "guard": "Nothing to list."
+   }
+  },
+  "error": "Action members.list is a query, so it cannot declare a guard. Declare it on a mutation."
+ },
+ {
+  "case": "a guard on a signal action",
+  "actions": {
+   "members.seen": {
+    "kind": "signal",
+    "access": "authenticated",
+    "bindings": [],
+    "signal": {
+     "name": "member.seen"
+    },
+    "guard": "Not seen."
+   }
+  },
+  "error": "Action members.seen is a signal action, so it cannot declare a guard. Declare it on a mutation."
+ },
+ {
+  "case": "a guard with a signal and a route",
+  "actions": {
+   "events.acknowledge": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "UPDATE events SET acknowledged_at = 1 WHERE id = ?1 AND acknowledged_at IS NULL",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/api/acknowledge",
+     "callers": [
+      "key"
+     ]
+    },
+    "signal": {
+     "name": "event.acknowledged",
+     "properties": [
+      "id",
+      "actor"
+     ]
+    },
+    "guard": "That event is already acknowledged or does not exist."
+   }
+  },
+  "error": null
+ }
+]

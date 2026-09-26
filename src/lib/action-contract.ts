@@ -114,8 +114,14 @@ export type ContractAction = {
   actorBound: boolean;
   inputs: ContractInput[];
   output: ContractOutput;
-  /** The Signal the action records when it succeeds, with the input keys copied into its properties (ADR-0010). */
+  /**
+   * The Signal the action records when it succeeds, and for a mutation only
+   * when it changed a row, with the input keys copied into its properties and
+   * `actor` for the caller's ID (ADR-0010).
+   */
   signal?: { name: string; properties: string[] };
+  /** A mutation's refusal when its statement changes no row; it is listed among the errors too. */
+  guard?: string;
   runtime: { endpoint: string; tool: string; sdk: string; callers: ContractCaller[] };
   http?: ContractHttp;
   errors: ContractError[];
@@ -239,6 +245,7 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables): C
     inputs,
     output,
     ...(action.signal ? { signal: { name: action.signal.name, properties: [...action.signal.properties] } } : {}),
+    ...(action.guard ? { guard: action.guard } : {}),
     runtime: { ...RUNTIME, callers: http?.onlyDoor === "always" ? [] : runtimeCallers(access, Boolean(http)) },
     ...(http ? { http } : {}),
     errors: actionErrors(action, inputs, actorBound),
@@ -333,10 +340,12 @@ function actionErrors(action: ServerActionDefinition, inputs: ContractInput[], a
     }
   }
   if (action.kind === "query") errors.push(fromSdk("Query result exceeds 2 MiB or 1000 rows.", both));
+  // The app's own refusal: 403 on a route, set below with the route's statuses.
+  if (action.guard) errors.push({ message: action.guard, when: "the statement changes no row, so the action's rule refused the call. Usage counts it under refused and no Signal is recorded", via: both });
   errors.push(fromSdk("rate-limited", "runtime"));
   if (http) {
-    // A binding refusal answers 400 on a route.
-    for (const error of errors) if (error.via === "both" || error.via === "http") error.status = 400;
+    // A binding refusal answers 400 on a route, and a guard 403.
+    for (const error of errors) if (error.via === "both" || error.via === "http") error.status = error.message === action.guard ? 403 : 400;
     const takes = (caller: RouteCaller) => http.callers ? http.callers.includes(caller) : caller !== "session" || !http.signature;
     if (http.signature) {
       errors.push(fromSdk("invalid-signature", "http"));
@@ -730,6 +739,7 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
       }
     } else if (action.output.kind === "changes") {
       lines.push("`{ changes, lastInsertId }`, both integers.", "");
+      if (action.guard) lines.push(`When the statement changes no row the call is refused with \`${action.guard}\` instead.`, "");
     } else {
       lines.push(`Records the Signal \`${action.output.signal}\`.`, "");
     }
@@ -882,6 +892,7 @@ export function programFromContract(contract: ActionContract): ServerActionProgr
       statement: action.statement,
       bindings,
       ...(action.signal ? { signal: { name: action.signal.name, properties: [...action.signal.properties] } } : {}),
+      ...(action.guard ? { guard: action.guard } : {}),
       ...(action.http ? {
         http: {
           method: action.http.method,

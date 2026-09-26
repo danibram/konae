@@ -30,6 +30,7 @@ mod auth;
 mod clerk;
 mod copies;
 mod eject;
+mod guard;
 mod http;
 mod invitations;
 mod limits;
@@ -299,6 +300,9 @@ struct ActionDefinition {
     /// The Signal the action records, checked by `usage::declaration`.
     #[serde(default)]
     signal: Option<Value>,
+    /// A mutation's refusal when it changes no row, checked by `guard::declaration`.
+    #[serde(default)]
+    guard: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -868,12 +872,21 @@ async fn invoke_action(
             run_mutation(&db_path, action, params)
         }
     };
+    let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
     match result {
-        Ok(value) => {
-            usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
-            usage::signal(&state.data_root, &deployment.id, &name, action, &input);
-            Json(json!({"result": value})).into_response()
-        }
+        Ok(value) => match guard::outcome(&name, action, &value) {
+            guard::Outcome::Refused(message) => {
+                usage::count(&state.data_root, &deployment.id, usage::Operation::Refused(name.clone()));
+                error(StatusCode::FORBIDDEN, &message)
+            }
+            changed => {
+                usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
+                if matches!(changed, guard::Outcome::Changed) {
+                    usage::signal(&state.data_root, &deployment.id, &name, action, &input, actor_id);
+                }
+                Json(json!({"result": value})).into_response()
+            }
+        },
         Err(error_value) => error(StatusCode::BAD_REQUEST, &error_value.to_string()),
     }
 }
@@ -2270,6 +2283,7 @@ fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result
     if action.kind == "signal" {
         usage::declaration(name, action)?;
         http::binding(name, action)?;
+        guard::declaration(name, action)?;
         return Ok(());
     }
     sql_rules::check_statement(name, action)?;
@@ -2282,6 +2296,7 @@ fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result
     }
     usage::declaration(name, action)?;
     http::binding(name, action)?;
+    guard::declaration(name, action)?;
     Ok(())
 }
 
@@ -3216,6 +3231,7 @@ mod tests {
             bindings,
             http: None,
             signal: None,
+            guard: None,
         }
     }
 

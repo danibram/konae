@@ -131,6 +131,10 @@ _Avoid_: Runtime user, app user
 A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. It runs one SQL statement: a query starts with `SELECT`, a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, and a `WITH` clause sits inside the statement, never in front of it. The Validation Gate and the Kernel refuse a statement that breaks a rule with the same words. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for the callers the route takes, of a signed request, an API Key and a signed-in user; an `authenticated` action may not. An action whose route does not answer anyone answers only there, never through `miniapp.actions.call`.
 _Avoid_: Raw SQL endpoint
 
+**Guard**:
+A mutation's declared refusal, `"guard": "<message>"`, which the Kernel answers instead of `{ changes: 0 }` when the statement changes no row because the app's own rule in its `WHERE` said no. It is a tool error on the runtime endpoint and 403 on a route, counts under Usage's `refused` and records no Signal.
+_Avoid_: check constraint, validation error
+
 **Action Contract**:
 The generated description of a Capsule's Server Actions, `action-contract.json` with its JSON Schema and a Markdown rendering: for each action its inputs with types, nullability and limits, the columns a query returns or the `{ changes, lastInsertId }` a mutation returns, who may call it on the runtime endpoint and on its HTTP route, the errors the Kernel answers with and the limits that apply. It is written from `actions.json` and `schema.sql`, never edited, and travels in the export. The conformance runner (`littlebox conform`) calls every action against a backend and checks the answers against it, which is how a second backend would show it serves the same app.
 _Avoid_: API spec, OpenAPI document, schema dump
@@ -140,11 +144,11 @@ A namespace on `window.miniapp`, such as `auth`, `actions` or `files`, with a co
 _Avoid_: plugin, library, extension
 
 **Usage**:
-The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations: sessions opened, actions by name, HTTP routes by method and path, uploads, file reads, signups and logins. A refused call counts nothing. It lives in the Deployment's `usage.sqlite`, distinct from application rows, and only the Project Owner reads it.
+The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations: sessions opened, actions by name, HTTP routes by method and path, uploads, file reads, signups and logins. A refused call counts nothing, except a Guard's refusal, which counts under `refused` by action name. It lives in the Deployment's `usage.sqlite`, distinct from application rows, and only the Project Owner reads it.
 _Avoid_: analytics, telemetry, audit, metric
 
 **Signal**:
-A named occurrence the Capsule declares on a Server Action, with properties taken from that action's input bindings. The Kernel records it when the action succeeds, next to Usage and distinct from application rows. An action of kind `signal` records one and runs no SQL. The app calls it with `miniapp.actions.call`; only the Project Owner reads Signals.
+A named occurrence the Capsule declares on a Server Action, with properties taken from that action's input bindings and, as `actor`, the caller's ID. The Kernel records it when the action succeeds, and for a mutation only when it changed a row, next to Usage and distinct from application rows. An action of kind `signal` records one and runs no SQL. The app calls it with `miniapp.actions.call`; only the Project Owner reads Signals.
 _Avoid_: event, track, custom metric
 
 **Littlebox Kernel**:

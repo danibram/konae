@@ -35,6 +35,8 @@ pub(crate) const MAX_USAGE_ROWS: i64 = 100_000;
 /// Signals kept, oldest dropped first.
 pub(crate) const MAX_SIGNALS: i64 = 50_000;
 pub(crate) const MAX_SIGNAL_PROPERTIES: usize = 8;
+/// The property that records the caller's ID instead of an input.
+const SIGNAL_ACTOR: &str = "actor";
 /// A string property keeps at most this many bytes, cut at a character boundary.
 pub(crate) const MAX_PROPERTY_BYTES: usize = 128;
 const SIGNALS_PAGE: i64 = 100;
@@ -52,6 +54,9 @@ pub(crate) enum Operation {
     FileRead,
     Signup,
     Login,
+    /// A guarded mutation that changed no row, by action name. The one
+    /// refusal Usage counts: the app's own rule said no (`guard.rs`).
+    Refused(String),
 }
 
 impl Operation {
@@ -64,6 +69,7 @@ impl Operation {
             Operation::FileRead => ("file_read", String::new()),
             Operation::Signup => ("signup", String::new()),
             Operation::Login => ("login", String::new()),
+            Operation::Refused(name) => ("refused", name),
         }
     }
 }
@@ -110,11 +116,16 @@ pub(crate) fn count(data_root: &Path, deployment_id: &str, operation: Operation)
 }
 
 /// Records the action's Signal, if it declares one, from the input it ran
-/// with. Call it only after the action succeeded.
-pub(crate) fn signal(data_root: &Path, deployment_id: &str, action_name: &str, action: &ActionDefinition, input: &Value) {
+/// with and the caller's ID for an `actor` property. Call it only after the
+/// action succeeded and, for a mutation, changed a row.
+pub(crate) fn signal(data_root: &Path, deployment_id: &str, action_name: &str, action: &ActionDefinition, input: &Value, actor: Option<&str>) {
     let Ok(Some(declared)) = declaration(action_name, action) else { return };
     let mut properties = Map::new();
     for key in &declared.properties {
+        if key == SIGNAL_ACTOR {
+            properties.insert(key.clone(), actor.map_or(Value::Null, |id| Value::String(id.to_owned())));
+            continue;
+        }
         let value = match input.get(key) {
             Some(Value::String(text)) => Value::String(truncate(text, MAX_PROPERTY_BYTES).to_owned()),
             Some(value) => value.clone(),
@@ -374,7 +385,12 @@ pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Optio
         if !seen.insert(key.as_str()) {
             return Err(format!("Action {name} names signal property {key} twice."));
         }
-        if !inputs.contains(&key.as_str()) {
+        if key == SIGNAL_ACTOR && inputs.contains(&SIGNAL_ACTOR) {
+            return Err(format!(
+                "Action {name} names signal property actor, which records the caller's ID, and also has an input named actor. Rename the input."
+            ));
+        }
+        if key != SIGNAL_ACTOR && !inputs.contains(&key.as_str()) {
             return Err(format!("Action {name} names signal property {key}, which is not one of its input bindings."));
         }
     }
@@ -577,7 +593,7 @@ mod tests {
         count(&root, id, Operation::Route("POST".into(), "/hooks/orders".into()));
         count(&root, id, Operation::Login);
         let long = "é".repeat(100);
-        signal(&root, id, "orders.place", action, &json!({"id": long}));
+        signal(&root, id, "orders.place", action, &json!({"id": long}), None);
         // A Deployment folder that is gone gets no new file.
         count(&root, "deployment-gone", Operation::Session);
         flush();

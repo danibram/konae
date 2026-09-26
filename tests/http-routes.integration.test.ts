@@ -50,6 +50,25 @@ const actions = {
       bindings: [{ source: "actor", field: "id" }, { source: "input", key: "body", type: "string", maxLength: 200 }],
       http: { method: "POST", path: "/api/notes" },
     },
+    "notes.edit": {
+      kind: "mutation", access: "anonymous", guard: "That note is not yours, or it does not exist.",
+      statement: "UPDATE notes SET body = ?2 WHERE id = ?1 AND owner_id = ?3",
+      bindings: [{ source: "input", key: "id", type: "number" }, { source: "input", key: "body", type: "string", maxLength: 200 }, { source: "actor", field: "id" }],
+      http: { method: "POST", path: "/api/notes/edit" },
+      signal: { name: "note.edited", properties: ["id", "actor"] },
+    },
+    "notes.rename": {
+      kind: "mutation", access: "authenticated", guard: "That note is not yours, or it does not exist.",
+      statement: "UPDATE notes SET body = ?2 WHERE id = ?1 AND owner_id = ?3",
+      bindings: [{ source: "input", key: "id", type: "number" }, { source: "input", key: "body", type: "string", maxLength: 200 }, { source: "actor", field: "id" }],
+      signal: { name: "note.renamed", properties: ["id", "actor"] },
+    },
+    "notes.touch": {
+      kind: "mutation", access: "authenticated",
+      statement: "UPDATE notes SET body = body WHERE id = ?1 AND owner_id = ?2",
+      bindings: [{ source: "input", key: "id", type: "number" }, { source: "actor", field: "id" }],
+      signal: { name: "note.touched", properties: ["actor"] },
+    },
     "notes.mine": {
       kind: "query", access: "authenticated",
       statement: "SELECT body FROM notes WHERE owner_id = ?1 LIMIT 50",
@@ -360,6 +379,39 @@ describe("HTTP routes", () => {
     expect(keys.keys.every(key => key.revokedAt !== null)).toBe(true);
     expect((await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "x" }), headers: { authorization: `Bearer ${live.key}` } }, copy.hostname)).status).toBe(401);
     expect((await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "x" }), headers: { authorization: `Bearer ${live.key}` } })).status).toBe(200);
+  });
+
+  test("a guarded mutation that changes no row is refused, counted as refused and records no Signal", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const login = await route("/_littlebox/auth/login", { method: "POST", body: JSON.stringify({ email: "ana@routes.test", password }) });
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const ana = (await owner.call<{ users: { userId: string; email: string }[] }>("app_users_list", { deploymentId })).users.find((user) => user.email === "ana@routes.test")!.userId;
+    const member = new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+      const headers = new Headers(init?.headers); headers.set("host", host); headers.set("cookie", cookie);
+      return fetch(input, { ...init, headers });
+    } });
+    const [mine] = (await owner.call<{ rows: { id: number }[] }>("database_execute", { deploymentId, operation: "sql", input: { sql: `SELECT id FROM notes WHERE owner_id = '${ana}' LIMIT 1` } })).rows;
+    // The runtime endpoint: a tool error with the guard, then a change that records the Signal with the actor.
+    await expect(member.call("actions_invoke", { name: "notes.rename", input: { id: 999_999, body: "not mine" } })).rejects.toThrow("That note is not yours, or it does not exist.");
+    expect(await member.call("actions_invoke", { name: "notes.rename", input: { id: mine.id, body: "renamed" } })).toMatchObject({ changes: 1 });
+    // Without a guard a mutation that changes nothing still answers { changes: 0 }, and records no Signal.
+    expect(await member.call("actions_invoke", { name: "notes.touch", input: { id: 999_999 } })).toEqual({ changes: 0, lastInsertId: 0 });
+    // The route: 403 with the guard, then a change by the person's session.
+    const edit = (id: number, body: string) => route("/api/notes/edit", { method: "POST", body: JSON.stringify({ id, body }), headers: { cookie, "sec-fetch-site": "same-origin" } });
+    expect(await json(await edit(999_999, "not mine"))).toEqual({ status: 403, body: { error: "That note is not yours, or it does not exist." } });
+    expect((await json(await edit(mine.id, "edited"))).status).toBe(200);
+
+    const usage = await owner.call<{ totals: { kind: string; name: string; count: number }[] }>("usage_read", { deploymentId, from: today, to: today });
+    const total = (kind: string, name: string) => usage.totals.find((row) => row.kind === kind && row.name === name)?.count ?? 0;
+    expect(total("refused", "notes.rename")).toBe(1);
+    expect(total("refused", "notes.edit")).toBe(1);
+    expect(total("action", "notes.rename")).toBe(1);
+    expect(total("action", "notes.touch")).toBe(1);
+    expect(total("route", "POST /api/notes/edit")).toBe(1);
+    const signals = async (name: string) => (await owner.call<{ signals: { properties: Record<string, unknown> }[] }>("signals_read", { deploymentId, name })).signals;
+    expect((await signals("note.renamed")).map((signal) => signal.properties)).toEqual([{ id: mine.id, actor: ana }]);
+    expect((await signals("note.edited")).map((signal) => signal.properties)).toEqual([{ id: mine.id, actor: ana }]);
+    expect(await signals("note.touched")).toEqual([]);
   });
 
   test("anonymous callers share the runtime's rate limit per client address", async () => {

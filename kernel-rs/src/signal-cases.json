@@ -580,5 +580,94 @@
    }
   },
   "error": "Action newsletter.join must bind GET for a query and POST for a mutation."
+ },
+ {
+  "case": "a signal that records the actor",
+  "actions": {
+   "checkins.add": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO checkins (habit_id, user_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "habit",
+      "type": "number"
+     },
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ],
+    "signal": {
+     "name": "habit.completed",
+     "properties": [
+      "habit",
+      "actor"
+     ]
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a signal action that records the actor and binds none",
+  "actions": {
+   "page.liked": {
+    "kind": "signal",
+    "access": "anonymous",
+    "bindings": [],
+    "signal": {
+     "name": "page.liked",
+     "properties": [
+      "actor"
+     ]
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "an actor property next to an input named actor",
+  "actions": {
+   "notes.tag": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO tags (who) VALUES (?1)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "actor",
+      "type": "string",
+      "maxLength": 40
+     }
+    ],
+    "signal": {
+     "name": "note.tagged",
+     "properties": [
+      "actor"
+     ]
+    }
+   }
+  },
+  "error": "Action notes.tag names signal property actor, which records the caller's ID, and also has an input named actor. Rename the input."
+ },
+ {
+  "case": "the actor named twice",
+  "actions": {
+   "page.liked": {
+    "kind": "signal",
+    "access": "anonymous",
+    "bindings": [],
+    "signal": {
+     "name": "page.liked",
+     "properties": [
+      "actor",
+      "actor"
+     ]
+    }
+   }
+  },
+  "error": "Action page.liked names signal property actor twice."
  }
 ]

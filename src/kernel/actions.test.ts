@@ -188,3 +188,29 @@ describe("signals", () => {
     expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions }))).toThrow("A deployment may declare at most 50 server actions.");
   });
 });
+
+describe("guards", () => {
+  // kernel-rs/src/guard.rs runs the same cases against the Kernel's parser.
+  test("refuse the same declarations as the Kernel, with the same messages", async () => {
+    const cases: { case: string; actions: Record<string, unknown>; error: string | null }[] =
+      await Bun.file(new URL("../../kernel-rs/src/guard-cases.json", import.meta.url)).json();
+    expect(cases.length).toBeGreaterThanOrEqual(8);
+    for (const item of cases) {
+      let message: string | null = null;
+      try {
+        parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message, item.case).toBe(item.error);
+    }
+  });
+
+  test("keep the guard on the parsed mutation", () => {
+    const program = parseServerActionSource(JSON.stringify({ version: 1, actions: {
+      "members.promote": { kind: "mutation", access: "authenticated", guard: "Only an organizer can promote a member.",
+        statement: "UPDATE members SET role = 'organizer' WHERE id = ?1", bindings: [{ source: "actor", field: "id" }] },
+    } }));
+    expect(program.actions["members.promote"].guard).toBe("Only an organizer can promote a member.");
+  });
+});

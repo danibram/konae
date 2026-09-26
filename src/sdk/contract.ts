@@ -175,11 +175,12 @@ export const sdkContract = {
         {
           file: "actions.json",
           key: "signal",
-          summary: "{ \"name\": \"order.placed\", \"properties\"?: [\"input binding keys\"] } on a mutation, or on an action of \"kind\": \"signal\" that has access and bindings but no statement. When the action succeeds the Kernel records the Signal with the named inputs as its properties, in the Deployment's Usage store. A signal action runs no SQL and returns { recorded: true }. The owner reads Signals with signals_read; the app cannot. The Validation Gate and the Kernel refuse the same declarations with the same messages.",
+          summary: "{ \"name\": \"order.placed\", \"properties\"?: [\"input binding keys\", \"actor\"] } on a mutation, or on an action of \"kind\": \"signal\" that has access and bindings but no statement. When the action succeeds, and for a mutation only when it changed at least one row, the Kernel records the Signal with the named inputs as its properties, in the Deployment's Usage store. The property actor records the caller's ID: the user's, the API key's, or null for a visitor or a signed request. A signal action runs no SQL and returns { recorded: true }. The owner reads Signals with signals_read; the app cannot. The Validation Gate and the Kernel refuse the same declarations with the same messages.",
           errors: [
             { message: "Action <name> is a query, so it cannot declare a signal. Declare it on a mutation or on a \"kind\": \"signal\" action.", when: "the action is a query", source: "kernel" },
             { message: "Action <name> names signal property <key>, which is not one of its input bindings.", when: "a property is not the key of an input binding; actor, kernel and literal bindings have no key", source: "kernel" },
             { message: "Action <name> names signal property <key> twice.", when: "properties lists a key twice", source: "kernel" },
+            { message: "Action <name> names signal property actor, which records the caller's ID, and also has an input named actor. Rename the input.", when: "properties lists actor and an input binding's key is actor", source: "kernel" },
             { message: "Action <name> names more than 8 signal properties.", when: "properties lists more than 8 keys", source: "kernel" },
             { message: "Action <name> names an invalid signal. Use dot-separated lowercase words, such as \"order.placed\", up to 64 characters.", when: "the name has one word, a capital, a space, an empty part or more than 64 characters", source: "kernel" },
             { message: "Action <name> has an invalid signal declaration.", when: "signal is not an object, has a key other than name and properties, has no name, or properties is not a list of strings", source: "kernel" },
@@ -190,16 +191,30 @@ export const sdkContract = {
             "8 properties per Signal; a string property keeps its first 128 bytes",
             "a signal action counts toward the action limit like any other action",
             "a signal action cannot declare http",
+            "a mutation that changed no row records no Signal",
             "the Kernel keeps the newest 50,000 Signals per Deployment and drops the oldest",
+          ],
+        },
+        {
+          file: "actions.json",
+          key: "guard",
+          summary: "\"guard\": \"<message>\" on a mutation. When its statement changes no row, the Kernel refuses the call with that message instead of answering { changes: 0, lastInsertId: 0 }: a tool error for miniapp.actions.call, 403 on an HTTP route. Usage counts the call under refused, and no Signal is recorded. Write the app's rule into the statement's WHERE, such as \"the caller is an organizer\" or \"the slot is free\", and the guard is what the person sees when the rule says no. Without a guard a mutation answers { changes: 0 } as before. The Validation Gate and the Kernel refuse the same declarations with the same messages.",
+          errors: [
+            { message: "Action <name> is a query, so it cannot declare a guard. Declare it on a mutation.", when: "the action is a query", source: "kernel" },
+            { message: "Action <name> is a signal action, so it cannot declare a guard. Declare it on a mutation.", when: "the action is a signal action", source: "kernel" },
+            { message: "Action <name> has an invalid guard. Use a message of 1 to 200 characters on one line.", when: "guard is not a string, is empty or blank, is longer than 200 characters, or holds a line break or another control character", source: "kernel" },
+          ],
+          limits: [
+            "a guard is 1 to 200 characters on one line",
           ],
         },
       ],
       notes: [
         "A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.",
-        "A mutation action returns { changes, lastInsertId }. Read changed rows with a separate query.",
+        "A mutation action returns { changes, lastInsertId }. Read changed rows with a separate query. A mutation that declares a guard and changes no row is refused with the guard instead.",
         "The Action Contract, action-contract.json, lists every action with its inputs, the columns it returns, its errors and limits. It is written from actions.json and schema.sql by littlebox contract and carried in the export; an expression the SELECT returns without AS has no name in it, and the Validation Gate warns.",
         "To record that something happened, such as a signup to a newsletter or a finished lesson, declare a signal on the mutation that does it, or add an action of kind signal and call it with miniapp.actions.call. There is no other tracking call.",
-        "A call the Kernel refuses records no Signal and counts in no Usage total.",
+        "A call the Kernel refuses records no Signal and counts in no Usage total, except a guard's refusal, which Usage counts under refused.",
       ],
       calls: [
         {
