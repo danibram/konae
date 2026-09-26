@@ -262,12 +262,28 @@ try {
   const visitorCover = await A.http(`/_littlebox/files/${anaCover.id}`);
   assert.equal(visitorCover.status, 401);
   refused("Private Deployment", "A visitor's GET /_littlebox/files/<public cover>", `${visitorCover.status} ${await visitorCover.text()}`);
+  // A visitor of a private app is asked to sign in before any file is looked
+  // up, so a public cover, a private note and a missing ID answer alike.
+  for (const id of [anaNote.id, crypto.randomUUID()]) {
+    const visitorFile = await A.http(`/_littlebox/files/${id}`);
+    assert.deepEqual([visitorFile.status, await visitorFile.json()], [401, { error: "authentication-required" }]);
+  }
   // There is no visibility between "only me" and "every member". The runtime
-  // tool refuses any other value; the SDK documents that it stores private.
+  // tools refuse any other value, and so does the SDK (see Browser below).
   const sharedNote = await message(upload(ben, new TextEncoder().encode("For the organizers"), "for-organizers.txt", "text/plain", "organizers"));
   assert.equal(sharedNote, "Value is outside the allowed choices.");
   refused("File visibility", "files_upload with visibility \"organizers\" on the runtime endpoint", sharedNote);
-  check("Files", "Ben cannot read Ana's private note over MCP or HTTP, reads her public cover both ways, lists only what he may read, and a visitor gets 401.");
+  const sharedLater = await message(ben.call("files_update", { fileId: benNote.id, visibility: "organizers" }));
+  assert.equal(sharedLater, "Value is outside the allowed choices.");
+  refused("File visibility", "files_update of Ben's note with visibility \"organizers\"", sharedLater);
+  // An organizer role lives in the app's rows; the Kernel knows only the uploader.
+  const organizerDeletes = await message(ana.call("files_delete", { fileId: benCover.id }));
+  assert.equal(organizerDeletes, "Only the person who uploaded this file may change or delete it.");
+  refused("File lifecycle", "Ana (organizer) deletes Ben's public cover with files_delete", organizerDeletes);
+  const anaDeletesBenNote = await message(ana.call("files_delete", { fileId: benNote.id }));
+  assert.equal(anaDeletesBenNote, "File not found.");
+  refused("File lifecycle", "Ana deletes Ben's private note with files_delete", anaDeletesBenNote);
+  check("Files", "Ben cannot read Ana's private note over MCP or HTTP, reads her public cover both ways, and lists only what he may read. A visitor gets 401 for a public cover, a private note and a missing ID alike. Neither files_upload nor files_update accepts a visibility for organizers, and Ana's organizer role does not let her delete Ben's files.");
 
   // A program reads public covers with an API key scoped to public files.
   const key = await origin.owner.call<{ key: string; keyId: string }>("api_keys_create", { deploymentId: receiptA.id, name: "Cover mirror", files: ["public"] });
@@ -335,6 +351,18 @@ try {
         }, undefined, { timeout: 10_000 });
         await page.locator("#notes summary").first().click();
         await page.locator("#notes .note-text").filter({ hasText: benNoteText }).waitFor({ timeout: 10_000 });
+        if (!storage) {
+          // The SDK refuses a visibility the Kernel lacks instead of storing a private file.
+          const sdk = await page.evaluate(async (noteId) => {
+            const miniapp = (window as any).miniapp;
+            const before = (await miniapp.files.list()).length;
+            let refusal = "stored";
+            try { await miniapp.files.upload(new File(["For the organizers"], "for-organizers.txt", { type: "text/plain" }), { visibility: "organizers" }); } catch (error) { refusal = (error as Error).message; }
+            return { refusal, url: await miniapp.files.url(noteId), added: (await miniapp.files.list()).length - before };
+          }, benNote.id);
+          assert.deepEqual(sdk, { refusal: "File visibility must be private or public.", url: `/_littlebox/files/${benNote.id}`, added: 0 });
+          refused("File visibility", "miniapp.files.upload(file, { visibility: \"organizers\" }) in Ben's page", sdk.refusal);
+        }
         await page.locator('button[data-action="books.schedule"]').first().click();
         await page.locator("#status").filter({ hasText: "Only an organizer can schedule a meeting" }).waitFor({ timeout: 10_000 });
         assert.equal(await page.locator("#who-role").textContent(), "member");
@@ -347,7 +375,7 @@ try {
         await context.close();
       }
     } finally { await browser.close(); }
-    check("Browser", `Chrome signed Ben in through the Kernel's page, rendered both covers from /_littlebox/files, fetched his note, showed the organizer refusal, and reported no policy violation${shots ? `; screenshots in ${shots}` : ""}.`);
+    check("Browser", `Chrome signed Ben in through the Kernel's page, rendered both covers from /_littlebox/files, fetched his note from miniapp.files.url, saw the SDK refuse visibility "organizers" without storing a file, showed the organizer refusal, and reported no policy violation${shots ? `; screenshots in ${shots}` : ""}.`);
   }
 
   // Account recovery: the emailed link sets a new password and ends Cy's old session.

@@ -2,6 +2,7 @@
 // every visitor who reaches this script is a signed-in member of the app.
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// The path miniapp.files.url returns; a cover is drawn in a template, which cannot wait for it.
 const fileUrl = (id) => `/_littlebox/files/${encodeURIComponent(id)}`;
 
 const status = $("#status");
@@ -91,7 +92,7 @@ document.addEventListener("toggle", async (event) => {
   const details = event.target;
   if (!(details instanceof HTMLDetailsElement) || !details.open || details.dataset.loaded) return;
   const pre = details.querySelector("pre");
-  const response = await fetch(fileUrl(details.dataset.file));
+  const response = await fetch(await miniapp.files.url(details.dataset.file));
   pre.textContent = response.ok ? await response.text() : `This note could not be opened (${response.status}).`;
   details.dataset.loaded = "1";
 }, true);
