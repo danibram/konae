@@ -984,7 +984,8 @@ mod tests {
         assert_ne!(second.artifact_version, first.artifact_version);
         assert_eq!(route_parses(&second.id), 2, "a publish parses the new release");
         assert_eq!(get(&state, &second, "/api/total").await.0, StatusCode::OK);
-        assert_eq!(get(&state, &second, "/api/count").await, (StatusCode::OK, "<p>shell</p>".into()), "the old route is gone");
+        // The old path is no route and no artifact file, so it answers 404.
+        assert_eq!(get(&state, &second, "/api/count").await.0, StatusCode::NOT_FOUND, "the old route is gone");
         assert_eq!(route_parses(&second.id), 2);
 
         // A table cached for another revision is not used: a Kernel that

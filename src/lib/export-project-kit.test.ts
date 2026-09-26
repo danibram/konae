@@ -7,6 +7,7 @@ import { createHostedArtifact, type BuildArtifact } from "../runtime/artifact";
 import type { MiniAppProject } from "./types";
 import { buildProjectExport, type ExportFile } from "./export-project-kit";
 import { kernelFiles as bundledKernelFiles } from "./export-project-sources";
+import { assembleStaticArtifact } from "./static-artifact.js";
 
 const project: MiniAppProject = {
   id: "app_notes",
@@ -252,6 +253,57 @@ describe("buildProjectExport", () => {
       const runtime = html.match(/<script data-littlebox-runtime>([\s\S]*?)<\/script>/)?.[1] ?? "";
       expect(runtime).toContain("/_littlebox/mcp");
       expect(html.indexOf("window.ownerInline")).toBeLessThan(html.indexOf("<script data-littlebox-runtime>"));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("the exported build script rebuilds a multi-page app with the same rules, pages and binary files", async () => {
+    const page = (title: string, body: string) => `<!doctype html><html><head><title>${title}</title></head><body>${body}</body></html>`;
+    const sources: Record<string, string> = {
+      "index.html": page("Home", '<img src="/logo.png"><script type="module" src="/app.js"></script>'),
+      "about.html": page("About", '<script type="module" src="/app.js"></script>'),
+      "app.js": "document.body.dataset.ready = 'yes';",
+      "public/robots.txt": "User-agent: *",
+      "schema.sql": "",
+      "actions.json": "{\"version\":1,\"actions\":{}}",
+    };
+    const logo = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+    const held: Record<string, string | Uint8Array> = { ...sources, "logo.png": logo };
+    const built = await assembleStaticArtifact({
+      paths: Object.keys(held), read: async (file) => held[file],
+      compile: async () => { throw new Error("no fragment page here"); },
+      bundle: async () => ({ script: "document.body.dataset.ready = 'yes';", styles: "" }),
+      runtime: "window.miniapp={};",
+    });
+    const { entries } = buildProjectExport({ ...project, files: sources, manifest: { ...project.manifest, routing: "pages" } }, built, kernelFiles);
+    expect(JSON.parse(entries.find((entry) => entry.path === "littlebox/artifact.json")!.contents as string).encodings).toEqual({ "logo.png": "base64" });
+    const directory = await mkdtemp(path.join(tmpdir(), "littlebox-export-pages-"));
+    try {
+      for (const entry of [...entries, { path: "app/logo.png", contents: logo }]) {
+        const target = path.join(directory, entry.path);
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, entry.contents);
+      }
+      await symlink(path.resolve(import.meta.dir, "../../node_modules"), path.join(directory, "node_modules"), "dir");
+      await writeFile(path.join(directory, "app/about.html"), page("About us", '<script type="module" src="/app.js"></script>'));
+      const build = Bun.spawn(["node", "scripts/build.mjs"], { cwd: directory, stdout: "pipe", stderr: "pipe" });
+      const [exitCode, stderr] = await Promise.all([build.exited, new Response(build.stderr).text()]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      const rebuilt = JSON.parse(await readFile(path.join(directory, "littlebox/artifact.json"), "utf8")) as BuildArtifact;
+      expect(Object.keys(rebuilt.files).sort()).toEqual(["about.html", "app.js", "index.html", "logo.png", "robots.txt", "runtime.js"]);
+      expect(rebuilt.files["about.html"]).toContain("<title>About us</title>");
+      expect(rebuilt.files["about.html"]).toContain('<head><script src="/runtime.js"></script>');
+      expect(rebuilt.files["runtime.js"]).toBe("window.miniapp={};");
+      expect(rebuilt.files["logo.png"]).toBe(built.files["logo.png"]);
+      expect(rebuilt.encodings).toEqual({ "logo.png": "base64" });
+      expect(rebuilt.files["app.js"]).toContain("dataset.ready");
+
+      await writeFile(path.join(directory, "app/about.html"), page("About", '<img src="/team.jpg">'));
+      const refused = Bun.spawn(["node", "scripts/build.mjs"], { cwd: directory, stdout: "pipe", stderr: "pipe" });
+      expect(await refused.exited).not.toBe(0);
+      expect(await new Response(refused.stderr).text()).toContain("about.html references /team.jpg, but the Capsule holds no team.jpg.");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

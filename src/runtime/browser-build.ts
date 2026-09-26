@@ -2,23 +2,45 @@ import * as esbuild from "esbuild-wasm";
 import wasmUrl from "esbuild-wasm/esbuild.wasm?url";
 import type { MiniAppProject } from "../lib/types";
 import { normalizeProjectPath } from "../lib/project-files";
-import { createHostedArtifact, type BuildArtifact } from "./artifact";
+import { hostedRuntime, type BuildArtifact } from "./artifact";
+import { assembleStaticArtifact } from "../lib/static-artifact.js";
 
 let initialized: Promise<void> | undefined;
 
+/**
+ * The editor's door to the static publishing contract in
+ * src/lib/static-artifact.js, the same rules `littlebox build` runs. A Managed
+ * Project holds text files only, so a page that references an image the
+ * project does not hold is refused here as it would be by the CLI.
+ */
 export async function buildProjectInBrowser(project: MiniAppProject): Promise<BuildArtifact> {
-  const compiled = await compileProjectInBrowser(project);
-  return createHostedArtifact(compiled);
+  return assembleStaticArtifact({
+    paths: Object.keys(project.files),
+    read: async (path) => project.files[path],
+    compile: () => compileProjectInBrowser(project),
+    bundle: async (path) => bundleInBrowser(project.files, path),
+    runtime: hostedRuntime,
+    routing: project.manifest.routing,
+  });
 }
 
 export async function compileProjectInBrowser(project: MiniAppProject): Promise<{ body: string; styles: string; script: string }> {
+  const entrypoint = project.files["src/main.ts"] !== undefined ? "src/main.ts" : "app.js";
+  const { script, styles: importedCss } = await bundleInBrowser(project.files, entrypoint);
+  return {
+    body: project.files["index.html"] ?? "<main id=app></main>",
+    styles: [project.files["styles.css"] ?? "", importedCss].filter(Boolean).join("\n"),
+    script,
+  };
+}
+
+async function bundleInBrowser(files: Record<string, string>, entrypoint: string): Promise<{ script: string; styles: string }> {
   // A failed start (a wasm fetch that dropped, say) is not cached, or every later build would fail too.
   initialized ??= esbuild.initialize({ wasmURL: wasmUrl, worker: true }).catch((error) => {
     initialized = undefined;
     throw error;
   });
   await initialized;
-  const entrypoint = project.files["src/main.ts"] !== undefined ? "src/main.ts" : "app.js";
   const result = await esbuild.build({
     entryPoints: [entrypoint],
     bundle: true,
@@ -27,16 +49,11 @@ export async function compileProjectInBrowser(project: MiniAppProject): Promise<
     platform: "browser",
     target: "es2022",
     outdir: "out",
-    plugins: [projectFilesPlugin(project.files)],
+    plugins: [projectFilesPlugin(files)],
   });
   const script = result.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
   if (!script) throw new Error("The browser builder did not produce JavaScript.");
-  const importedCss = result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? "";
-  return {
-    body: project.files["index.html"] ?? "<main id=app></main>",
-    styles: [project.files["styles.css"] ?? "", importedCss].filter(Boolean).join("\n"),
-    script,
-  };
+  return { script, styles: result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? "" };
 }
 
 function projectFilesPlugin(files: Record<string, string>): esbuild.Plugin {

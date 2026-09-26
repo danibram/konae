@@ -371,6 +371,48 @@ A published app runs under the Kernel's Content Security Policy, described in [t
 
 The build lives in `.littlebox/artifact.json`. Publishing transfers it over MCP, validates a plan against the project revision and applies it. The tool saves the plan and the receipt in `.littlebox`. The Kernel rejects a stale plan. Repeating a plan that was already applied returns its receipt. `publish` deploys as private unless `littlebox.json` sets `project.manifest.visibility` to `"public"`. A republish keeps the URL and database and stops serving files that the new artifact no longer contains.
 
+### What the build publishes
+
+`littlebox build`, the editor's Publish and the exported kit's `npm run build` run one set of rules, `src/lib/static-artifact.js`, so the same Capsule gives the same artifact from every door.
+
+- A page is every `.html` file at the Capsule root and every `.html` file under `pages/`. A page under `pages/` is served without that prefix: `pages/guide/install.html` answers at `/guide/install.html` and `/guide/install`. An `.html` file anywhere else is not a page.
+- Every file under `public/` is served as it is, without the `public/` prefix: `public/robots.txt` answers at `/robots.txt`. Put a file there when no page names it, such as `sitemap.xml`, or when a script fetches it.
+- Any other Capsule file ships only when a page or a stylesheet a page loads names it: `<script src>`, `<link href>` with rel `stylesheet`, `icon`, `apple-touch-icon`, `mask-icon`, `manifest`, `preload`, `modulepreload` or `prefetch`, `src`, `srcset` and `poster` on `img`, `source`, `video`, `audio`, `track` and `embed`, and `url()` and `@import` in CSS, including `<style>` and `style=""`. A reference resolves against the page's served path, so `../logo.svg` on `/guide/install.html` names `logo.svg`. Links (`<a href>`), other origins, `data:` URLs and paths under `/_littlebox` are not followed. `schema.sql`, `actions.json` and every other file no page names stay out of the artifact.
+- A page that is a fragment, with no doctype and no `<html>`, is put in the Capsule document, as `index.html` always was: `styles.css` and the app bundled from `src/main.ts` or `app.js` inline, with the SDK inline before it. A page that is a whole document keeps its own head. The build puts `<script src="/runtime.js"></script>` first in its head unless the page already loads `/runtime.js`, and adds the SDK as `runtime.js`. A `<script type="module" src>` the page names is bundled with its imports and written at the same path.
+- A Capsule without `index.html` gets the fragment `<main id=app></main>`.
+- A binary file, such as an image or a font, travels as base64 and the artifact names it in `encodings`, for example `"encodings": { "logo.png": "base64" }`. The CLI reads any file. A Managed Project holds text files only, so the editor publishes text assets, and a page there that names an image the project does not hold is refused with the same words as the CLI.
+
+The build refuses, with the file and the path in the message:
+
+| Refusal | When |
+| --- | --- |
+| `about.html references /team.jpg, but the Capsule holds no team.jpg.` | A page or stylesheet names a file the Capsule does not hold |
+| `guide/a.html references ../../x.js, which leaves the Capsule.` | A reference climbs above the Capsule root |
+| `about.html and pages/about.html would both publish at /about.html. Keep one.` | Two Capsule files land on one path |
+| `public/_littlebox/x.txt would publish at /_littlebox/x.txt, under /_littlebox, which the Kernel keeps.` | A file lands under `/_littlebox`, `/oauth`, `/.well-known` or `/mcp` |
+| `The Capsule holds runtime.js, the name the build gives the Littlebox SDK. Rename it.` | The Capsule has its own `runtime.js` or `public/runtime.js` |
+| `index.html loads /src/main.ts as a module. A page loads JavaScript, so name a .js or .mjs file and let the build compile it.` | A module script names a file that is not `.js` or `.mjs` |
+| `app.js imports CSS. Link the stylesheet from the page instead.` | A document page's module imports a stylesheet |
+| `Routing must be "pages" or "spa".` | `routing` in the manifest has another value. The Kernel refuses it at `release_plan` with the same words |
+
+### How the Kernel answers a path
+
+`project.manifest.routing` in `littlebox.json`, or `routing` in the manifest of a release, chooses how a path the artifact does not hold is answered. It is `"pages"` when absent.
+
+| Request | `"pages"` | `"spa"` |
+| --- | --- | --- |
+| A file the artifact holds, such as `/about.html` or `/logo.png` | The file with its content type | The same |
+| `/about`, with no extension | `about.html` when the artifact holds it | `index.html` |
+| `/guide/` | `guide/index.html` when the artifact holds it | `index.html` |
+| Anything else | 404 with the artifact's `404.html`, or a small Kernel page when there is none | `index.html` with 200 |
+| A path under `/_littlebox` | Never an app file | Never an app file |
+
+An HTTP route still wins over an artifact file at its path for its method. `"spa"` is how every unknown path answered before 2026-11-06; use it for an app that routes in the browser.
+
+The content type follows the extension: HTML, CSS, JavaScript, JSON and source maps, `webmanifest`, text, Markdown, CSV, XML (`application/xml`), RSS, Atom, SVG, PNG, JPEG, GIF, WebP, AVIF, ICO, PDF, MP4, WebM, MP3, WASM, and WOFF2, WOFF, TTF and OTF fonts. Any other file is `application/octet-stream`, and every file is sent with `X-Content-Type-Options: nosniff`. A `HEAD` on an artifact file answers its headers with no body. Every HTML page, the second page and `404.html` included, gets the Content Security Policy with the hashes of its own inline scripts, and `/runtime.js` loads under `script-src 'self'`.
+
+The 16 MiB artifact limit counts the bytes the Kernel stores, after base64 is decoded. The Kernel refuses an encoding other than base64, an encoding for a file the artifact does not hold, and a file marked base64 that does not decode, each with the path in the message.
+
 There is also `bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173`. It reads `LITTLEBOX_EMAIL` and `LITTLEBOX_PASSWORD` from the environment, obtains a 24-hour credential and stores it with `0600` permissions in `.littlebox/credentials.json`. `LITTLEBOX_INVITATION_CODE` lets it create the account if it does not exist yet, and `LITTLEBOX_SETUP_KEY` does so for an installation's first owner. On an installation that requires verification it stops and asks you to open the emailed link first. The command adds `.littlebox/` to `.gitignore`; do not copy credentials into the frontend.
 
 ## Action Contract

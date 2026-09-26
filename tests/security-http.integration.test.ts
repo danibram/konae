@@ -186,11 +186,11 @@ describe("isolation of hosted code", () => {
     expect(policy.get("script-src")).not.toContain("'unsafe-eval'");
     expect(page.headers.get("x-frame-options")).toBe("DENY");
     expect(page.headers.get("strict-transport-security")).toBeNull();
-    // A sub-resource and the fallback for an unknown path carry the policy too.
+    // A sub-resource and the 404 for an unknown path carry the policy too.
     // The SVG's own script gets no hash, so it cannot run when opened directly.
-    for (const route of ["/logo.svg", "/some/client/route"]) {
+    for (const [route, status] of [["/logo.svg", 200], ["/some/client/route", 404]] as const) {
       const response = await fetch(url + route, { headers: { host } });
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(status);
       const scripts = directives(response.headers.get("content-security-policy")).get("script-src")!;
       expect(scripts).not.toContain("'unsafe-inline'");
       if (route === "/logo.svg") expect(scripts).toEqual(["'self'"]);

@@ -1454,8 +1454,7 @@ async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
         input.artifact.files.len() <= 1000,
         "Artifact has too many files."
     );
-    let mut total = 0;
-    for (path, content) in &input.artifact.files {
+    for path in input.artifact.files.keys() {
         anyhow::ensure!(
             safe_relative_path(path)
                 && !path.starts_with("_littlebox/")
@@ -1464,8 +1463,10 @@ async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
                 && path != "mcp",
             "Invalid or reserved artifact path."
         );
-        total += content.len();
     }
+    super::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
+    // The limit counts the bytes the Kernel stores, after base64 is decoded.
+    let total: usize = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?.values().map(Vec::len).sum();
     anyhow::ensure!(total <= 16 * 1024 * 1024, "Artifact exceeds 16 MiB.");
     let program: ActionProgram = serde_json::from_str(
         input
