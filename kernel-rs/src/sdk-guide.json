@@ -228,6 +228,11 @@
               "source": "kernel"
             },
             {
+              "message": "Action <name> answers only on its HTTP route, <key>.",
+              "when": "the action's route does not answer anyone: it declares a signature or callers, or it has no signature on a private Deployment. The preview refuses the first two only, since it has no visibility",
+              "source": "kernel"
+            },
+            {
               "message": "Missing action input: <key>",
               "when": "a required input is omitted",
               "source": "kernel"
@@ -417,9 +422,10 @@
       "name": "http",
       "summary": "Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.",
       "notes": [
-        "Only an action declared anonymous may bind a route, and the route answers whatever the Deployment's visibility. On a private app, a route without a signature is open to anyone who knows the path.",
-        "A route has three kinds of caller: a service that signs the request, a program that sends Authorization: Bearer with an API key the owner issued, and a person signed in to the app, from the app's own origin. An actor binding yields the key's ID or the user's ID; a signed request has no actor.",
-        "A signed route reads the declared header as t=<unix seconds>,v1=<hex HMAC-SHA256 of \"<t>.<raw body>\" keyed with the secret>. An API key that names the action replaces the signature.",
+        "Only an action declared anonymous may bind a route. A route has three kinds of caller: a service that signs the request (signature), a program that sends Authorization: Bearer with an API key the owner issued (key), and a person signed in to the app, from the app's own origin (session). An actor binding yields the key's ID or the user's ID; a signed request has no actor.",
+        "Without callers, a signed route takes the signature or a key, an unsigned route on a private app a key or a session, and an unsigned route on a public app anyone. A person whose session the route does not take must sign like any sender.",
+        "An action whose route does not answer anyone answers only on that route: miniapp.actions.call refuses it. The app's own page calls such a route with fetch, which sends the session cookie.",
+        "A signed route reads the declared header as t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256>. The MAC is keyed with the secret and covers t, the nonce, the method, the path, the canonical query string and the raw body, joined by newlines. The canonical query string is the pairs sorted by key, then value, written as application/x-www-form-urlencoded.",
         "The owner sets the secret with the secret_set admin tool before publishing. It never appears in actions.json, the Build Artifact or an export.",
         "GET /_littlebox/files/<id> returns a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it.",
         "The editor preview serves no routes. Run them on a Development Kernel with littlebox dev, or on a Deployment."
@@ -428,10 +434,10 @@
         {
           "file": "actions.json",
           "key": "http",
-          "summary": "{ \"method\": \"GET\" | \"POST\", \"path\": \"/api/items\", \"signature\"?: { \"header\": \"X-Signature\", \"secret\": \"items_webhook\" } } on an action declared anonymous. GET binds a query and maps the query string onto its input bindings by type; POST binds a mutation and reads a JSON object body. The route answers { result } with the rows or { changes, lastInsertId }, and { error } with a status code. The Validation Gate and the Kernel refuse the same declarations with the same messages.",
+          "summary": "{ \"method\": \"GET\" | \"POST\", \"path\": \"/api/items\", \"signature\"?: { \"header\": \"X-Signature\", \"secret\": \"items_webhook\" }, \"callers\"?: [\"signature\" | \"key\" | \"session\"] } on an action declared anonymous. GET binds a query and maps the query string onto its input bindings by type; POST binds a mutation and reads a JSON object body. callers names who may call the route; without it a signed route takes the signature or an API key, an unsigned route on a private Deployment an API key or a session, and an unsigned route on a public Deployment anyone. An action whose route does not answer anyone answers only on that route, never through miniapp.actions.call. The route answers { result } with the rows or { changes, lastInsertId }, and { error } with a status code. The Validation Gate and the Kernel refuse the same declarations with the same messages.",
           "limits": [
             "a POST body of 64 KiB",
-            "a signature's t within 300 seconds of the Kernel's clock, and each signature accepted once",
+            "a signature's t within 300 seconds of the Kernel's clock, a nonce of 1 to 64 letters, digits, - and _, and each signature accepted once",
             "the runtime endpoint's action rate limits: 30 per 10 seconds per client address without a key or session, 120 per 10 seconds per user or key",
             "50 live API keys per Deployment"
           ],
@@ -477,18 +483,53 @@
               "source": "kernel"
             },
             {
+              "message": "Action <name> has an invalid callers list. List one or more of \"signature\", \"key\" and \"session\", each once.",
+              "when": "callers is not a list, is empty, repeats a caller or names another one",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> lists \"signature\" among its callers but declares no signature.",
+              "when": "callers names signature and the binding has no signature",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> declares a signature, so its callers must include \"signature\".",
+              "when": "the binding has a signature and callers leaves it out",
+              "source": "kernel"
+            },
+            {
               "message": "Action <name> signs with the secret <name>, which is not set for this project. Set it with secret_set before publishing.",
               "when": "publishing, and the owner has not set the secret; the editor cannot see secrets, so only the Kernel refuses this",
               "source": "kernel"
             },
             {
               "message": "invalid-signature",
-              "when": "a signed route gets no signature, a wrong one, or a t more than 300 seconds from the Kernel's clock (401)",
+              "when": "a signed route gets no signature, a malformed one, or one whose MAC does not match (401)",
+              "source": "kernel"
+            },
+            {
+              "message": "stale-timestamp",
+              "when": "a signature's t is more than 300 seconds from the Kernel's clock; checked before the MAC, so it says nothing about the secret (401)",
+              "source": "kernel"
+            },
+            {
+              "message": "authentication-required",
+              "when": "a route that takes an API key or a session, and no signature, gets neither (401)",
+              "source": "kernel"
+            },
+            {
+              "message": "This route does not accept API keys.",
+              "when": "the route's callers leave out key and the request carries one (403)",
+              "source": "kernel"
+            },
+            {
+              "message": "An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.",
+              "when": "a request to the runtime endpoint carries an API key (403)",
               "source": "kernel"
             },
             {
               "message": "replayed-signature",
-              "when": "the same signature arrives a second time (409)",
+              "when": "the same signature arrives a second time; a retry signs again with a new nonce (409)",
               "source": "kernel"
             },
             {

@@ -7,7 +7,7 @@ import {
   runtimeLimits,
   validateRuntimeParams,
 } from "./security";
-import { parseServerActionSource, resolveServerAction, type ServerActionProgram } from "../kernel/actions";
+import { parseServerActionSource, resolveServerAction, routeCallers, type ServerActionProgram } from "../kernel/actions";
 import type { ApplyDatabaseMigrationInput } from "../database-lifecycle/contracts";
 
 export type StoredFile = {
@@ -570,6 +570,11 @@ export class MiniAppRuntimeHost {
     const declaration = this.actionProgram.actions[String(request.name)];
     if (!declaration && this.actionsFailure) {
       throw new Error(`Server action not declared: ${String(request.name)}. actions.json is invalid: ${this.actionsFailure}`);
+    }
+    // The preview has no visibility, so it refuses what every Deployment refuses:
+    // an action whose signed or callers-limited route is its only door.
+    if (declaration?.http && routeCallers(declaration.http, "public")) {
+      throw new Error(`Action ${declaration.name} answers only on its HTTP route, ${declaration.http.method} ${declaration.http.path}.`);
     }
     if (declaration && declaration.access !== "anonymous" && this.previewActor === "guest") {
       throw new Error("authentication-required");

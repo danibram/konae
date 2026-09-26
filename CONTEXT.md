@@ -100,7 +100,7 @@ A Deployment whose application shell may be opened without signing in. A signed-
 _Avoid_: Public database
 
 **Private Deployment**:
-A Deployment whose application shell and runtime require a signed-in Runtime Actor before anything loads or runs. The one exception is an HTTP route of an action declared `anonymous`, which answers by the action's access level and its signature, not by visibility. Its Signup Policy decides who may create that account.
+A Deployment whose application shell and runtime require a signed-in Runtime Actor before anything loads or runs. An HTTP route of an action declared `anonymous` answers to the callers it takes: a signed route to its signature or an API key, an unsigned one to an API key or a session unless it declares other `callers`. Its Signup Policy decides who may create that account.
 _Avoid_: Password-protected app
 
 **Signup Policy**:
@@ -116,11 +116,11 @@ Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a s
 _Avoid_: Owner, editor user
 
 **API Key**:
-A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It names the Server Actions it may call over their HTTP routes and the file visibilities it may read, and is sent as `Authorization: Bearer`. The Kernel stores its hash only. An export carries it and the import revokes it; a restore of a Copy keeps it valid.
+A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It names the Server Actions it may call over their HTTP routes and the file visibilities it may read, and is sent as `Authorization: Bearer`. The runtime endpoint refuses it. The Kernel stores its hash only. An export carries it and the import revokes it; a restore of a Copy keeps it valid.
 _Avoid_: token (an Agent Credential), service account
 
 **Signing Secret**:
-A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. A sender proves a request with an HMAC of its body under it. It never appears in `actions.json`, a Build Artifact or an export.
+A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. A sender proves a request with an HMAC under it of a timestamp, a nonce, the method, the path, the canonical query string and the body. It never appears in `actions.json`, a Build Artifact or an export.
 _Avoid_: webhook token, API Key
 
 **Project Owner**:
@@ -128,7 +128,7 @@ An authenticated workspace member allowed to edit a Project and administer its d
 _Avoid_: Runtime user, app user
 
 **Server Action**:
-A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. It runs one SQL statement: a query starts with `SELECT`, a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, and a `WITH` clause sits inside the statement, never in front of it. The Validation Gate and the Kernel refuse a statement that breaks a rule with the same words. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for a signed request, an API Key or a signed-in user; an `authenticated` action may not.
+A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. It runs one SQL statement: a query starts with `SELECT`, a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, and a `WITH` clause sits inside the statement, never in front of it. The Validation Gate and the Kernel refuse a statement that breaks a rule with the same words. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for the callers the route takes, of a signed request, an API Key and a signed-in user; an `authenticated` action may not. An action whose route does not answer anyone answers only there, never through `miniapp.actions.call`.
 _Avoid_: Raw SQL endpoint
 
 **Action Contract**:

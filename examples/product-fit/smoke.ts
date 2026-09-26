@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createHmac } from "node:crypto";
 import { chromium } from "playwright";
 import { McpClient } from "../../src/mcp/client";
+import { signRoute } from "../../src/lib/route-signature";
 import { buildLocal, publishLocal } from "../../scripts/littlebox";
 import { kernelTarget } from "../../scripts/conform";
 import { generateActionContract } from "../../src/lib/action-contract";
@@ -246,10 +246,12 @@ try {
   await sql("feed", "INSERT INTO incidents(title,body,started_at) VALUES('Maintenance','Planned work',1700000000000)");
   const feed = runtime("feed");
   assert.equal((await action(feed, "incidents.recent"))[0].title, "Maintenance");
-  assert.equal((await action(feed, "pings.receive", { source: "monitor", payload: '{"status":"ok"}' })).changes, 1);
+  // A signed route is its action's only door, so the runtime endpoint refuses it.
+  await assert.rejects(action(feed, "pings.receive", { source: "monitor", payload: '{"status":"ok"}' }), /answers only on its HTTP route, POST \/hooks\/pings/);
   const hook = await fetch(url + "/hook", { method: "POST", headers: { host: receipts.feed.hostname, "content-type": "application/json" }, body: '{"status":"ok"}' });
   assert.equal(hook.status, 405);
-  // A monitor posts with curl. The signature is HMAC-SHA256 of "<t>.<body>" with the owner's secret.
+  // A monitor posts with curl. The signature is HMAC-SHA256, keyed with the owner's secret,
+  // of t, a nonce, the method, the path, the canonical query and the body.
   const curl = async (body: string, signature?: string) => {
     const args = ["curl", "-s", "-o", "-", "-w", "\n%{http_code}", "-X", "POST", `${url}/hooks/pings`,
       "-H", `Host: ${receipts.feed.hostname}`, "-H", "Content-Type: application/json", "-H", `X-Forwarded-For: ${freshAddress()}`, "--data-binary", body];
@@ -261,10 +263,9 @@ try {
     return { status, body: JSON.parse(text) };
   };
   const ping = JSON.stringify({ source: "uptime", payload: '{"status":"ok"}' });
-  const at = Math.floor(Date.now() / 1000);
-  const signature = `t=${at},v1=${createHmac("sha256", pingsSecret).update(`${at}.${ping}`).digest("hex")}`;
+  const signature = await signRoute(pingsSecret, { method: "POST", path: "/hooks/pings", body: ping });
   assert.deepEqual(await curl(ping), { status: 401, body: { error: "invalid-signature" } });
-  assert.deepEqual(await curl(ping, signature), { status: 200, body: { result: { changes: 1, lastInsertId: 2 } } });
+  assert.deepEqual(await curl(ping, signature), { status: 200, body: { result: { changes: 1, lastInsertId: 1 } } });
   assert.deepEqual(await curl(ping, signature), { status: 409, body: { error: "replayed-signature" } });
   const incidents = await fetch(`${url}/api/incidents`, { headers: { host: receipts.feed.hostname, "x-forwarded-for": freshAddress() } });
   assert.equal(incidents.headers.get("content-type"), "application/json");
@@ -281,7 +282,7 @@ try {
     try { await action(feed, "incidents.recent"); } catch (error) { assert.match(String(error), /rate-limited/); refused++; }
   }
   assert(refused > 0);
-  check("API and webhook boundary", "JSON-RPC reads and writes work. curl's signed ping is stored once, the unsigned one and its replay are refused, GET /api/incidents returns rows, a key reads the private badge a visitor cannot, unknown POST paths return 405 and anonymous rate limits trip.");
+  check("API and webhook boundary", "JSON-RPC reads work and the signed action refuses JSON-RPC. curl's signed ping is stored once, the unsigned one and its replay are refused, GET /api/incidents returns rows, a key reads the private badge a visitor cannot, unknown POST paths return 405 and anonymous rate limits trip.");
 
   await sql("docs", "INSERT INTO pages(path,title,body) VALUES('/guide/install.html','Install the kiln','Install safely before firing')");
   assert.equal((await action(runtime("docs"), "pages.search", { q: "install" }))[0].title, "Install the kiln");

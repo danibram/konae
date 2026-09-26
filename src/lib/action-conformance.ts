@@ -9,6 +9,8 @@
  * caller gave no credential for is reported as skipped, never as passed.
  */
 import type { ActionContract, ContractAction, ContractColumn, ContractError } from "./action-contract";
+import type { RouteCaller } from "../kernel/actions";
+import { signRoute } from "./route-signature";
 
 export type RuntimeAnswer = { ok: true; result: unknown } | { ok: false; message: string };
 export type RouteAnswer = { status: number; body: unknown };
@@ -20,6 +22,8 @@ export type RouteRequest = {
   /** POST only: the raw body. */
   body?: string;
   headers?: Record<string, string>;
+  /** Sends the app session as a cookie from the app's own origin. */
+  session?: boolean;
 };
 
 export interface ConformanceTarget {
@@ -27,7 +31,7 @@ export interface ConformanceTarget {
   invoke(name: string, input: unknown, as: "session" | "visitor"): Promise<RuntimeAnswer>;
   /** Sends a request to the Deployment host, or is absent when routes are not tested. */
   route?(request: RouteRequest): Promise<RouteAnswer>;
-  /** Whether `invoke(..., "session")` carries a signed-in person. */
+  /** Whether `invoke(..., "session")` carries a signed-in person, and `route` can send their cookie. */
   hasSession: boolean;
   /** An API key the backend issued, sent as Authorization: Bearer. */
   key?: string;
@@ -123,7 +127,7 @@ export async function runConformance(contract: ActionContract, target: Conforman
   };
 
   /** Checks a route refusal by status and message. */
-  const expectRouteRefusal = async (action: ContractAction | null, check: string, message: string, request: RouteRequest) => {
+  const expectRouteRefusal = async (action: ContractAction | null, check: string, message: string, request: RouteRequest, answered?: RouteAnswer) => {
     const name = action?.name ?? "routes";
     const errors = action ? [...action.errors, ...contract.errors] : contract.errors;
     const error = errors.find((candidate) => candidate.via !== "runtime" && matches(candidate.message, message));
@@ -131,7 +135,7 @@ export async function runConformance(contract: ActionContract, target: Conforman
       record(name, check, "fail", `The contract does not list "${message}" for this route.`);
       return;
     }
-    const answer = await route(request);
+    const answer = answered ?? await route(request);
     const got = errorOf(answer.body);
     if (answer.status === error.status && got === message) record(name, check, "pass", `Answered ${answer.status} "${got}".`);
     else record(name, check, "fail", `Answered ${answer.status} ${got === undefined ? preview(answer.body) : `"${got}"`} where the contract says ${error.status} "${message}".`);
@@ -144,16 +148,28 @@ export async function runConformance(contract: ActionContract, target: Conforman
   for (const action of contract.actions) {
     const name = action.name;
     const valid = minimal(action);
+    const routeOnly = action.http ? `Action ${name} answers only on its HTTP route, ${action.http.method} ${action.http.path}.` : null;
+    if (action.http?.onlyDoor === "always") {
+      // The runtime endpoint refuses the action; its bindings are probed on the route.
+      await expectRefusal(action, "answers only on its route", [routeOnly!], () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
+      await checkRoute(action, valid);
+      continue;
+    }
     // A caller that gets past access and the actor binding.
     const caller: "session" | "visitor" | null = target.hasSession ? "session"
       : action.access === "anonymous" && !action.actorBound ? "visitor" : null;
+    // On a private Deployment an unsigned route is the action's only door too.
+    let runtimeClosed = false;
 
     // The answer for a valid call.
     if (!caller) {
       record(name, "answers a valid call", "skip", "Needs a signed-in person; pass --token.");
     } else {
       const answer = await invoke(name, valid, caller);
-      if (!answer.ok) {
+      if (!answer.ok && answer.message === routeOnly && listedIn(action.errors, answer.message)) {
+        runtimeClosed = true;
+        record(name, "answers only on its route on this private Deployment", "pass", `Refused with "${answer.message}".`);
+      } else if (!answer.ok) {
         const advice = answer.message === "Sign in to use Littlebox MCP." ? " The Deployment is private; pass --token."
           : listedIn([...action.errors, ...contract.errors], answer.message) ? ""
           : " The contract lists no such refusal, so the statement itself failed. If an input needs a particular form, such as JSON, give one with --inputs.";
@@ -162,7 +178,7 @@ export async function runConformance(contract: ActionContract, target: Conforman
         const problem = checkOutput(action, answer.result);
         record(name, "answers a valid call", problem ? "fail" : "pass", problem ?? describeOutput(action, answer.result));
       }
-      for (const input of action.inputs.filter((candidate) => candidate.nullable)) {
+      for (const input of runtimeClosed ? [] : action.inputs.filter((candidate) => candidate.nullable)) {
         const { [input.key]: _, ...rest } = valid;
         const omitted = await invoke(name, rest, caller);
         if (omitted.ok) record(name, `answers without the nullable ${input.key}`, checkOutput(action, omitted.result) ? "fail" : "pass", checkOutput(action, omitted.result) ?? "Answered.");
@@ -178,7 +194,9 @@ export async function runConformance(contract: ActionContract, target: Conforman
     }
 
     // What the bindings refuse.
-    if (!caller) {
+    if (runtimeClosed) {
+      // Probed on the route below.
+    } else if (!caller) {
       record(name, "refuses bad input", "skip", "Needs a signed-in person; pass --token.");
     } else {
       await expectRefusal(action, "refuses an undeclared input", [`Unexpected action input: ${UNEXPECTED_KEY}`], () => invoke(name, { ...valid, [UNEXPECTED_KEY]: 1 }, caller));
@@ -214,48 +232,68 @@ export async function runConformance(contract: ActionContract, target: Conforman
       return;
     }
     const secret = http.signature ? target.secrets?.[http.signature.secret] : undefined;
+    // Without declared callers, a signed route takes the signature or a key and an unsigned one a key or a session.
+    const takes = (caller: RouteCaller) => http.declaredCallers ? http.declaredCallers.includes(caller) : caller !== "session" || !http.signature;
     const request = (input: Record<string, unknown>, body?: string): RouteRequest => http.method === "GET"
       ? { method: "GET", path: http.path, query: Object.fromEntries(Object.entries(input).map(([key, value]) => [key, String(value)])) }
       : { method: "POST", path: http.path, body: body ?? JSON.stringify(input), headers: { "content-type": "application/json" } };
-    const signed = async (base: RouteRequest): Promise<RouteRequest> => {
-      if (!http.signature || secret === undefined) return base;
-      const t = now();
-      return { ...base, headers: { ...base.headers, [http.signature.header]: `t=${t},v1=${await hmac(secret, `${t}.${base.body ?? ""}`)}` } };
+    const sign = async (base: RouteRequest, at = now()): Promise<RouteRequest> => {
+      const query = new URLSearchParams(base.query ?? {}).toString();
+      const header = await signRoute(secret!, { method: base.method, path: base.path, query, body: base.body ?? "" }, at);
+      return { ...base, headers: { ...base.headers, [http.signature!.header]: header } };
     };
-    const routeCaller = !action.actorBound;
+    // The proof the valid call and the input probes carry. An action that binds
+    // the caller needs one with an ID: a key or a session.
+    type Proof = "signature" | "key" | "session" | "none";
+    const proofs: Proof[] = action.actorBound ? ["key", "session"] : ["signature", "key", "session", "none"];
+    const proof = proofs.find((candidate) => candidate === "signature" ? Boolean(http.signature && secret !== undefined)
+      : candidate === "key" ? takes("key") && Boolean(target.key)
+      : candidate === "session" ? takes("session") && target.hasSession
+      : !http.signature && !http.declaredCallers);
+    const prove = async (base: RouteRequest): Promise<RouteRequest> => proof === "signature" ? sign(base)
+      : proof === "key" ? { ...base, headers: { ...base.headers, authorization: `Bearer ${target.key}` } }
+      : proof === "session" ? { ...base, session: true }
+      : base;
+    const via = proof === "key" ? " with an API key" : proof === "session" ? " with a session" : "";
+    let open = Boolean(proof);
 
-    if (http.signature && secret === undefined && !target.key) {
-      record(name, `answers ${http.method} ${http.path}`, "skip", `Needs the ${http.signature.secret} secret (--secret ${http.signature.secret}=<value>) or an API key.`);
-    } else if (!routeCaller) {
-      record(name, `answers ${http.method} ${http.path}`, "skip", "Binds the caller's ID; a route caller with an ID needs an API key or a session cookie.");
+    if (!proof) {
+      const needs = action.actorBound ? "an API key or a session (--key or --token)"
+        : [http.signature ? `the ${http.signature.secret} secret (--secret ${http.signature.secret}=<value>)` : null, takes("key") ? "an API key (--key)" : null, takes("session") ? "a session (--token)" : null].filter(Boolean).join(" or ");
+      record(name, `answers ${http.method} ${http.path}`, "skip", `Needs ${needs}.`);
     } else {
-      const base = request(valid);
-      const viaKey = http.signature && secret === undefined;
-      const sent = viaKey ? { ...base, headers: { ...base.headers, authorization: `Bearer ${target.key}` } } : await signed(base);
+      const sent = await prove(request(valid));
       const answer = await route(sent);
       const result = answer.body && typeof answer.body === "object" && "result" in answer.body ? (answer.body as { result: unknown }).result : undefined;
-      const problem = answer.status !== 200 ? `Answered ${answer.status} ${preview(answer.body)}.` : result === undefined ? `Answered ${preview(answer.body)} without "result".` : checkOutput(action, result);
-      record(name, `answers ${http.method} ${http.path}${viaKey ? " with an API key" : ""}`, problem ? "fail" : "pass", problem ?? describeOutput(action, result));
-      // The same signed request a second time.
-      if (http.signature && !viaKey && answer.status === 200) await expectRouteRefusal(action, "refuses a replayed signature", "replayed-signature", sent);
+      if (proof === "none" && answer.status === 401 && errorOf(answer.body) === "authentication-required") {
+        // A private Deployment: the unsigned route takes a key or a session.
+        open = false;
+        await expectRouteRefusal(action, "refuses a caller without a key or a session", "authentication-required", sent, answer);
+        record(name, `answers ${http.method} ${http.path}`, "skip", "The Deployment is private, so the route takes an API key or a session; pass --key or --token.");
+      } else {
+        const problem = answer.status !== 200 ? `Answered ${answer.status} ${preview(answer.body)}.` : result === undefined ? `Answered ${preview(answer.body)} without "result".` : checkOutput(action, result);
+        record(name, `answers ${http.method} ${http.path}${via}`, problem ? "fail" : "pass", problem ?? describeOutput(action, result));
+        // The same signed request a second time.
+        if (proof === "signature" && answer.status === 200) await expectRouteRefusal(action, "refuses a replayed signature", "replayed-signature", sent);
+      }
     }
 
     if (http.signature) {
       await expectRouteRefusal(action, "refuses an unsigned request", "invalid-signature", request(valid));
+      if (secret !== undefined) await expectRouteRefusal(action, "refuses a stale timestamp", "stale-timestamp", await sign(request(valid), now() - 400));
+    } else if (http.declaredCallers) {
+      await expectRouteRefusal(action, "refuses a caller without a key or a session", "authentication-required", request(valid));
     }
     await expectRouteRefusal(action, "refuses an unknown API key", "invalid-api-key", { ...request(valid), headers: { ...request(valid).headers, authorization: "Bearer lbk_conformance_unknown" } });
-    if (!http.signature || secret !== undefined) {
-      await expectRouteRefusal(action, "refuses an undeclared input on the route", `Unexpected action input: ${UNEXPECTED_KEY}`, await signed(request({ ...valid, [UNEXPECTED_KEY]: 1 })));
+    if (!takes("key") && target.key) {
+      await expectRouteRefusal(action, "refuses an API key it does not take", "This route does not accept API keys.", { ...request(valid), headers: { ...request(valid).headers, authorization: `Bearer ${target.key}` } });
+    }
+    if (open) {
+      await expectRouteRefusal(action, "refuses an undeclared input on the route", `Unexpected action input: ${UNEXPECTED_KEY}`, await prove(request({ ...valid, [UNEXPECTED_KEY]: 1 })));
       if (http.method === "POST") {
-        await expectRouteRefusal(action, "refuses a body that is not JSON", "The request body must be a JSON object.", await signed(request(valid, "not json")));
+        await expectRouteRefusal(action, "refuses a body that is not JSON", "The request body must be a JSON object.", await prove(request(valid, "not json")));
       }
     }
-  }
-
-  async function hmac(secret: string, message: string): Promise<string> {
-    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-    const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message)));
-    return Array.from(mac, (byte) => byte.toString(16).padStart(2, "0")).join("");
   }
 
   // Every POST that names no route.

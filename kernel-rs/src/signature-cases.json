@@ -1,0 +1,50 @@
+[
+ {
+  "case": "a POST with a JSON body",
+  "secret": "orders_webhook_secret_0123",
+  "t": 1800000000,
+  "n": "a1b2c3",
+  "method": "POST",
+  "path": "/hooks/orders",
+  "query": "",
+  "body": "{\"id\":\"A-1\",\"total\":12}",
+  "canonicalQuery": "",
+  "header": "t=1800000000,n=a1b2c3,v1=f98077ac02ce01e2d373a2659983936c64bedf8bb0070a2f14eec5ea195b9e89"
+ },
+ {
+  "case": "a GET whose query is reordered and escaped",
+  "secret": "feed-secret-0123456",
+  "t": 1800000123,
+  "n": "Zx_9-q",
+  "method": "GET",
+  "path": "/api/events",
+  "query": "severity=critical&after=1&note=caf%C3%A9+au+lait&mark=x*y~",
+  "body": "",
+  "canonicalQuery": "after=1&mark=x*y%7E&note=caf%C3%A9+au+lait&severity=critical",
+  "header": "t=1800000123,n=Zx_9-q,v1=95b24745069cc965d96434d83a9f83d363a669558157182efd96129b70eb7ef4"
+ },
+ {
+  "case": "a GET with no query",
+  "secret": "feed-secret-0123456",
+  "t": 1800000124,
+  "n": "n",
+  "method": "GET",
+  "path": "/api/events",
+  "query": "",
+  "body": "",
+  "canonicalQuery": "",
+  "header": "t=1800000124,n=n,v1=bc83cce174c0fdc0f700569df152e526e01f739b8a13bc8aa998ff8701487640"
+ },
+ {
+  "case": "a POST body that holds newlines",
+  "secret": "orders_webhook_secret_0123",
+  "t": 1800000200,
+  "n": "retry-2",
+  "method": "POST",
+  "path": "/hooks/orders",
+  "query": "",
+  "body": "{\n  \"id\": \"A-2\"\n}",
+  "canonicalQuery": "",
+  "header": "t=1800000200,n=retry-2,v1=ffaed0857863e1639f9814543ed19c250396f00549d0eb8fe3aa07c8a0560044"
+ }
+]

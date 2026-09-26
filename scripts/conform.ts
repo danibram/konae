@@ -49,7 +49,14 @@ export function kernelTarget(options: KernelTargetOptions): ConformanceTarget {
     async route(request: RouteRequest) {
       const target = new URL(request.path, connect);
       for (const [key, value] of Object.entries(request.query ?? {})) target.searchParams.set(key, value);
-      const response = await hostFetch(target.href, { method: request.method, headers: request.headers, body: request.body });
+      const headers = new Headers(request.headers);
+      if (request.session && options.token) {
+        // The cookie a browser on the app's own origin would send.
+        const cookie = deployment.protocol === "https:" ? "__Host-littlebox_app_session" : "littlebox_app_session";
+        headers.set("cookie", `${cookie}=${options.token}`);
+        headers.set("sec-fetch-site", "same-origin");
+      }
+      const response = await hostFetch(target.href, { method: request.method, headers, body: request.body });
       const text = await response.text();
       let body: unknown = text;
       try { body = JSON.parse(text); } catch {}

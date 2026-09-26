@@ -828,6 +828,10 @@ async fn invoke_action(
         Some(value) => value,
         None => return error(StatusCode::NOT_FOUND, "Server action not declared."),
     };
+    // An action whose route does not answer anyone answers only there.
+    if let Some(route) = http::route_only(&name, action, is_private(&deployment)) {
+        return error(StatusCode::FORBIDDEN, &format!("Action {name} answers only on its HTTP route, {route}."));
+    }
     let actor = match authenticate_deployment(&state, &deployment, &headers) {
         Ok(actor) => actor,
         Err(response) => return response,

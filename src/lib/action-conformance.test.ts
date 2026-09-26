@@ -21,6 +21,8 @@ type Quirks = Partial<{
   acceptUnsigned: boolean;
   unsignedStatus: number;
   rateLimitFirst: number;
+  /** Answers as a private Deployment: an unsigned route takes a key or a session and is the action's only door. */
+  private: boolean;
 }>;
 
 /**
@@ -69,6 +71,9 @@ function fakeBackend(contract: ActionContract, quirks: Quirks = {}, session = tr
       const action = contract.actions.find((candidate) => candidate.name === name);
       if (!action) return { ok: false, message: "Server action not declared." };
       const actor = as === "session";
+      if ((action.http?.onlyDoor === "always" || (action.http && quirks.private)) && !quirks.anyoneMayCall) {
+        return { ok: false, message: `Action ${name} answers only on its HTTP route, ${action.http.method} ${action.http.path}.` };
+      }
       if (action.access === "authenticated" && !actor && !quirks.anyoneMayCall) return { ok: false, message: "authentication-required" };
       const refused = bind(action, input as Record<string, unknown>, actor || Boolean(quirks.anyoneMayCall));
       return refused ? { ok: false, message: refused } : { ok: true, result: answer(action) };
@@ -78,10 +83,12 @@ function fakeBackend(contract: ActionContract, quirks: Quirks = {}, session = tr
       const action = contract.actions.find((candidate) => candidate.http?.method === request.method && candidate.http.path === request.path);
       if (!action) return request.method === "POST" ? { status: 405, body: { error: "No route accepts POST on this path." } } : { status: 200, body: "<html>" };
       if (request.headers?.authorization?.startsWith("Bearer lbk_")) return { status: 401, body: { error: "invalid-api-key" } };
+      if (quirks.private && !action.http!.signature && !request.session) return { status: 401, body: { error: "authentication-required" } };
       const signature = action.http!.signature;
       if (signature) {
         const header = request.headers?.[signature.header];
         if (!header && !quirks.acceptUnsigned) return { status: quirks.unsignedStatus ?? 401, body: { error: "invalid-signature" } };
+        if (header && Math.abs(Number(/t=(\d+)/.exec(header)?.[1]) - 1_700_000_000) > 300) return { status: 401, body: { error: "stale-timestamp" } };
         if (header && seen.has(header)) return { status: 409, body: { error: "replayed-signature" } };
         if (header) seen.add(header);
       }
@@ -93,7 +100,7 @@ function fakeBackend(contract: ActionContract, quirks: Quirks = {}, session = tr
       else {
         try { input = JSON.parse(request.body ?? "{}"); } catch { return { status: 400, body: { error: "The request body must be a JSON object." } }; }
       }
-      const refused = bind(action, input, false);
+      const refused = bind(action, input, Boolean(request.session));
       return refused ? { status: 400, body: { error: refused } } : { status: 200, body: { result: answer(action) } };
     },
     secrets: { pings_webhook: "s3cret" },
@@ -162,6 +169,28 @@ describe("conformance runner", () => {
     ]);
     // Without a session, the access refusal is still checked.
     expect(report.results.filter((result) => result.check === "refuses a caller without a session" && result.outcome === "pass")).toHaveLength(3);
+  });
+
+  test("on a private Deployment, an unsigned route's action answers only there, and the route asks for a key or a session", async () => {
+    const contract = contractOf("feed");
+    const visitor = await runConformance(contract, fakeBackend(contract, { private: true }, false), noWait);
+    expect(failures(visitor)).toEqual([]);
+    const recent = visitor.results.filter((result) => result.action === "incidents.recent").map((result) => `${result.outcome} ${result.check}`);
+    expect(recent).toContain("pass refuses a caller without a key or a session");
+    expect(recent).toContain("skip answers GET /api/incidents");
+    const member = await runConformance(contract, fakeBackend(contract, { private: true }), noWait);
+    expect(failures(member)).toEqual([]);
+    const withSession = member.results.filter((result) => result.action === "incidents.recent").map((result) => `${result.outcome} ${result.check}`);
+    expect(withSession).toContain("pass answers only on its route on this private Deployment");
+    expect(withSession).toContain("pass answers GET /api/incidents with a session");
+  });
+
+  test("a signed route answers only on its route, and its stale timestamp is probed", async () => {
+    const contract = contractOf("feed");
+    const report = await runConformance(contract, fakeBackend(contract), noWait);
+    const checks = report.results.filter((result) => result.action === "pings.receive").map((result) => `${result.outcome} ${result.check}`);
+    expect(checks).toContain("pass answers only on its route");
+    expect(checks).toContain("pass refuses a stale timestamp");
   });
 
   test("waits out a rate limit and sends the call again", async () => {

@@ -10,13 +10,36 @@ type ActionBinding =
   | { source: "kernel"; field: "now" }
   | { source: "literal"; value: string | number | null };
 
+/** Who may call a route: a signed sender, a program with an API key, a person with a session. */
+export type RouteCaller = "signature" | "key" | "session";
+
 /** An action's HTTP route on its Deployment host. See docs/mcp.md, "HTTP routes". */
 export type HttpBinding = {
   method: "GET" | "POST";
   path: string;
   /** `secret` names a value the owner sets with `secret_set`; it is never in actions.json. */
   signature?: { header: string; secret: string };
+  /**
+   * The route's callers. Without it a signed route takes the signature or a
+   * key, an unsigned route on a private Deployment a key or a session, and an
+   * unsigned route on a public Deployment anyone. See `routeCallers`.
+   */
+  callers?: RouteCaller[];
 };
+
+const ROUTE_CALLERS: readonly RouteCaller[] = ["signature", "key", "session"];
+
+/**
+ * The callers a route accepts on a Deployment of the given visibility, or
+ * null when it answers anyone. An action whose route does not answer anyone
+ * answers only there, never through actions_invoke (ADR-0011, update of
+ * 2026-11-06). kernel-rs/src/http.rs `route_callers` is the same rule.
+ */
+export function routeCallers(http: HttpBinding, visibility: "public" | "private"): RouteCaller[] | null {
+  if (http.callers) return http.callers;
+  if (http.signature) return ["signature", "key"];
+  return visibility === "private" ? ["key", "session"] : null;
+}
 
 /**
  * A Signal the action records when it succeeds. Its properties name input
@@ -104,7 +127,7 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
     return { name, kind, access, statement: "", bindings, ...(signal ? { signal } : {}), ...(http ? { http } : {}) };
   }
   if (!kind || !access || typeof candidate.statement !== "string") throw new Error(`Invalid server action: ${name}`);
-  assertActionStatement(name, kind, candidate.statement);
+  assertActionStatement(name, kind === "query" ? "query" : "mutation", candidate.statement);
   assertRuntimeSql(kind === "query" ? "query" : "execute", candidate.statement);
   if (kind === "query") {
     const reason = unboundedQueryReason(candidate.statement);
@@ -167,7 +190,7 @@ function parseHttpBinding(name: string, kind: "query" | "mutation" | "signal", a
   const invalid = `Action ${name} has an invalid http binding.`;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(invalid);
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).some((key) => !["method", "path", "signature"].includes(key))) throw new Error(invalid);
+  if (Object.keys(record).some((key) => !["method", "path", "signature", "callers"].includes(key))) throw new Error(invalid);
   if (typeof record.path !== "string") throw new Error(invalid);
   if (!((record.method === "GET" && kind === "query") || (record.method === "POST" && kind === "mutation"))) {
     throw new Error(`Action ${name} must bind GET for a query and POST for a mutation.`);
@@ -195,6 +218,20 @@ function parseHttpBinding(name: string, kind: "query" | "mutation" | "signal", a
       throw new Error(`Action ${name} names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter.`);
     }
     binding.signature = { header: signature.header, secret: signature.secret };
+  }
+  if (record.callers !== undefined) {
+    const callers = record.callers;
+    if (!Array.isArray(callers) || callers.length === 0 || new Set(callers).size !== callers.length
+      || callers.some((caller) => !ROUTE_CALLERS.includes(caller as RouteCaller))) {
+      throw new Error(`Action ${name} has an invalid callers list. List one or more of "signature", "key" and "session", each once.`);
+    }
+    if (callers.includes("signature") && !binding.signature) {
+      throw new Error(`Action ${name} lists "signature" among its callers but declares no signature.`);
+    }
+    if (binding.signature && !callers.includes("signature")) {
+      throw new Error(`Action ${name} declares a signature, so its callers must include "signature".`);
+    }
+    binding.callers = callers as RouteCaller[];
   }
   return binding;
 }

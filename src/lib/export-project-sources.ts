@@ -11,6 +11,7 @@ import kernelEjectSource from "../../kernel-rs/src/eject.rs?raw";
 import kernelLimitsSource from "../../kernel-rs/src/limits.rs?raw";
 import kernelHttpSource from "../../kernel-rs/src/http.rs?raw";
 import kernelHttpBindingCases from "../../kernel-rs/src/http-binding-cases.json?raw";
+import kernelSignatureCases from "../../kernel-rs/src/signature-cases.json?raw";
 import kernelMailSource from "../../kernel-rs/src/mail.rs?raw";
 import kernelMigrationSource from "../../kernel-rs/src/migration.rs?raw";
 import kernelPackageSource from "../../kernel-rs/src/package.rs?raw";
@@ -43,6 +44,7 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/limits.rs", contents: kernelLimitsSource },
   { path: "kernel-rs/src/http.rs", contents: kernelHttpSource },
   { path: "kernel-rs/src/http-binding-cases.json", contents: kernelHttpBindingCases },
+  { path: "kernel-rs/src/signature-cases.json", contents: kernelSignatureCases },
   { path: "kernel-rs/src/mail.rs", contents: kernelMailSource },
   { path: "kernel-rs/src/migration.rs", contents: kernelMigrationSource },
   { path: "kernel-rs/src/package.rs", contents: kernelPackageSource },
