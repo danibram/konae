@@ -185,4 +185,46 @@ describe("runtime host", () => {
     const aliceList = await host.handle("files.list") as Array<{ id: string }>;
     expect(aliceList.map((file) => file.id)).toEqual([publicFile.id, privateFile.id]);
   });
+
+  test("an upload with an unknown visibility is refused instead of stored as private", async () => {
+    const host = new MiniAppRuntimeHost("files-visibility", schema, actions);
+    host.setPreviewActor("alice");
+    const payload = { name: "note.txt", type: "text/plain", size: 2, dataUrl: "data:text/plain,hi" };
+    for (const visibility of ["organizers", "Public", 1]) {
+      await expect(host.handle("files.upload", { ...payload, visibility })).rejects.toThrow("File visibility must be private or public.");
+    }
+    expect(host.getFiles()).toEqual([]);
+  });
+
+  test("the uploader publishes, hides and deletes a preview file, and files.url answers its data URL", async () => {
+    const host = new MiniAppRuntimeHost("files-lifecycle", schema, actions);
+    const payload = { name: "note.txt", type: "text/plain", size: 2, dataUrl: "data:text/plain,hi" };
+    host.setPreviewActor("alice");
+    const draft = await host.handle("files.upload", payload) as { id: string; ownerId: string };
+    expect(await host.handle("files.url", { fileId: draft.id })).toBe("data:text/plain,hi");
+    await expect(host.handle("files.url", {})).rejects.toThrow("A file ID is required.");
+    await expect(host.handle("files.update", { fileId: draft.id, visibility: "organizers" })).rejects.toThrow("File visibility must be private or public.");
+
+    host.setPreviewActor("bob");
+    await expect(host.handle("files.url", { fileId: draft.id })).rejects.toThrow("File not found.");
+    await expect(host.handle("files.update", { fileId: draft.id, visibility: "public" })).rejects.toThrow("File not found.");
+    await expect(host.handle("files.delete", { fileId: draft.id })).rejects.toThrow("File not found.");
+
+    host.setPreviewActor("alice");
+    const published = await host.handle("files.update", { fileId: draft.id, visibility: "public" }) as Record<string, unknown>;
+    expect(published).toMatchObject({ id: draft.id, visibility: "public", ownerId: draft.ownerId });
+    expect(published.url).toBeUndefined();
+    host.setPreviewActor("guest");
+    expect(await host.handle("files.url", { fileId: draft.id })).toBe("data:text/plain,hi");
+    await expect(host.handle("files.delete", { fileId: draft.id })).rejects.toThrow("authentication-required");
+    host.setPreviewActor("bob");
+    await expect(host.handle("files.delete", { fileId: draft.id })).rejects.toThrow("Only the person who uploaded this file may change or delete it.");
+    await expect(host.handle("files.update", { fileId: draft.id, visibility: "private" })).rejects.toThrow("Only the person who uploaded this file may change or delete it.");
+
+    host.setPreviewActor("alice");
+    expect(await host.handle("files.delete", { fileId: draft.id })).toEqual({ id: draft.id, deleted: true });
+    expect(host.getFiles()).toEqual([]);
+    await expect(host.handle("files.url", { fileId: draft.id })).rejects.toThrow("File not found.");
+    await expect(host.handle("files.delete", { fileId: draft.id })).rejects.toThrow("File not found.");
+  });
 });

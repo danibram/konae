@@ -70,7 +70,18 @@
     } finally { await call('transfer_cancel', { transferId: transfer.transferId }).catch(() => {}); }
   }
 
+  function fileId(id) {
+    if (typeof id !== 'string' || !id) throw Error('A file ID is required.');
+    return id;
+  }
+
+  function visibility(value) {
+    if (value !== 'private' && value !== 'public') throw Error('File visibility must be private or public.');
+    return value;
+  }
+
   async function upload(file, options) {
+    const chosen = options && options.visibility !== undefined ? visibility(options.visibility) : 'private';
     const bytes = new Uint8Array(await file.arrayBuffer());
     const transfer = await call('transfer_begin', { size: bytes.length, sha256: await checksum(bytes) });
     try {
@@ -78,8 +89,7 @@
         await call('transfer_write', { transferId: transfer.transferId, offset, data: base64(bytes.subarray(offset, offset + transfer.chunkBytes)) });
       }
       await call('transfer_complete', { transferId: transfer.transferId });
-      const saved = { transferId: transfer.transferId, name: file.name, type: file.type || 'application/octet-stream' };
-      if (options && options.visibility === 'public') saved.visibility = 'public';
+      const saved = { transferId: transfer.transferId, name: file.name, type: file.type || 'application/octet-stream', visibility: chosen };
       return download(await call('files_upload', saved));
     } finally { await call('transfer_cancel', { transferId: transfer.transferId }).catch(() => {}); }
   }
@@ -110,6 +120,11 @@
         return result;
       },
       upload,
+      // The Kernel serves the file on the app's own origin, which connect-src
+      // 'self' and img-src 'self' allow; a Blob URL cannot be fetched again.
+      url: async (id) => '/_littlebox/files/' + encodeURIComponent(fileId(id)),
+      update: async (id, options) => call('files_update', { fileId: fileId(id), visibility: visibility(options && options.visibility) }),
+      delete: async (id) => call('files_delete', { fileId: fileId(id) }),
     },
   };
   addEventListener('pagehide', () => { for (const url of urls) URL.revokeObjectURL(url); urls.clear(); });

@@ -5,15 +5,19 @@
 window.miniapp is the only host surface a Capsule has, in the editor preview and on every Deployment. Each module is a namespace on it. A published call is one or more MCP tool calls to the Deployment's runtime endpoint with the app session cookie.
 
 ```js
-const session = await miniapp.auth.session();             // { userId, name, role }; role is "anonymous" when signed out
-await miniapp.auth.signIn();                              // published login page, preview selects Alice
-await miniapp.auth.signOut();                             // revoke this app session
-const rows = await miniapp.actions.call("tasks.list");    // array of row objects
-await miniapp.actions.call("tasks.create", { title });    // { changes, lastInsertId }
-await miniapp.actions.call("lesson.finish", { lesson });  // a signal action: { recorded: true }
-const files = await miniapp.files.list();                 // that user's private files, plus public files
-const stored = await miniapp.files.upload(file);          // private to the signed-in user
+const session = await miniapp.auth.session();                    // { userId, name, role }; role is "anonymous" when signed out
+await miniapp.auth.signIn();                                     // published login page, preview selects Alice
+await miniapp.auth.signOut();                                    // revoke this app session
+const rows = await miniapp.actions.call("tasks.list");           // array of row objects
+await miniapp.actions.call("tasks.create", { title });           // { changes, lastInsertId }
+await miniapp.actions.call("lesson.finish", { lesson });         // a signal action: { recorded: true }
+const files = await miniapp.files.list();                        // that user's private files, plus public files
+const stored = await miniapp.files.upload(file);                 // private to the signed-in user
 const shared = await miniapp.files.upload(file, { visibility: "public" });
+image.src = await miniapp.files.url(photo.file_id);              // "/_littlebox/files/<id>"
+const text = await (await fetch(await miniapp.files.url(note.id))).text();
+await miniapp.files.update(draft.id, { visibility: "public" });  // the draft is now published under the same ID
+await miniapp.files.delete(note.file_id);                        // { id, deleted: true }
 ```
 
 There is nothing else: no fetch to other origins, no localStorage contract, no miniapp.db and no SQL from the browser, no miniapp.track and no analytics call: a Signal is declared on a Server Action and recorded when miniapp.actions.call runs it.
@@ -154,7 +158,9 @@ Small files stored by the Kernel for one Deployment. A file is private to the us
 
 - Only the uploader can list or read a private file.
 - On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.
-- There is no HTTP download path. The SDK downloads over MCP, checks the SHA-256 and returns a Blob URL.
+- files.list and files.upload download over MCP, check the SHA-256 and return a Blob URL. The page's policy allows connect-src 'self' only, so fetch cannot read a Blob URL again. To fetch a file, or to show one without downloading every file, use files.url. It returns the file's path GET /_littlebox/files/<id> on the app's own origin, which img, fetch and a link all reach.
+- The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the 20 MiB quota and its ID answers File not found from then on, through every door.
+- A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.
 
 ### miniapp.files.list()
 
@@ -193,13 +199,14 @@ Runtime MCP tools: `transfer_begin`, `transfer_write`, `transfer_complete`, `fil
 | Argument | Type | Required | Description |
 | --- | --- | --- | --- |
 | `file` | `File \| Blob` | Yes | The bytes to store, with its name and type |
-| `options.visibility` | `"public"` | No | Pass "public" only when every visitor of a public app may read the bytes; anything else stores a private file |
+| `options.visibility` | `"private" \| "public"` | No | "private", the default, keeps the file to the uploader. Pass "public" only when every visitor of a public app may read the bytes. Any other value is refused before the upload starts |
 
 Returns { id, name, type, size, visibility, createdAt, ownerId, url }. ownerId is present only on files the caller uploaded. url is a Blob URL; it keeps the type for image/png, image/jpeg, image/gif, image/webp and image/avif and is application/octet-stream otherwise.
 
 | Message | When | Source | Editor preview |
 | --- | --- | --- | --- |
 | `authentication-required` | no one is signed in | Kernel | Same |
+| `File visibility must be private or public.` | visibility is anything other than "private" or "public"; the SDK refuses before it sends anything | SDK | Same |
 | `Transfer size is outside the limit.` | the file is empty or larger than 2 MiB | Kernel | `Local prototype files are limited to 2 MiB.` |
 | `This deployment has reached its 20 MiB file quota.` | the Deployment's files would exceed 20 MiB together | Kernel | Never refuses |
 | `File not found.` | the file was removed or the actor may not read it | Kernel | Never refuses |
@@ -218,6 +225,81 @@ Limits:
 
 Editor preview: Stores the file in browser storage as a data URL, and accepts an empty file.
 
+### miniapp.files.url(fileId)
+
+The address of a stored file on the app's own origin, for an img src, a link or a fetch.
+
+Signed-out visitors on a public Deployment: allowed.
+
+Runtime MCP tools: none.
+
+| Argument | Type | Required | Description |
+| --- | --- | --- | --- |
+| `fileId` | `string` | Yes | The id of a file from files.list or files.upload, or one an action returned |
+
+Returns a Promise of the path "/_littlebox/files/<id>". Reading it answers the file's bytes with its own type when the caller may read it, 404 File not found when the file is missing, deleted or not theirs, and 401 authentication-required to a visitor of a private Deployment.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `A file ID is required.` | fileId is not a non-empty string | SDK | Same |
+| `File not found.` | reading the path, when the file does not exist, was deleted, or the caller may not read it (404) | Kernel | Same |
+| `authentication-required` | reading the path on a private Deployment without a session (401) | Kernel | Never refuses |
+
+Limits:
+
+- the path answers with Cache-Control: private, no-store and Cross-Origin-Resource-Policy: same-origin, so another site cannot embed it
+- PNG, JPEG, GIF, WebP and AVIF answer inline; every other type downloads as an attachment
+
+Editor preview: Returns the file's data URL from browser storage, and refuses at the call with File not found when the preview actor may not read the file.
+
+### miniapp.files.update(fileId, { visibility })
+
+Make a file the signed-in user uploaded public or private. Publishing a draft keeps its ID, so no second copy counts against the quota.
+
+Signed-out visitors on a public Deployment: refused.
+
+Runtime MCP tools: `files_update`.
+
+| Argument | Type | Required | Description |
+| --- | --- | --- | --- |
+| `fileId` | `string` | Yes | The id of a file the signed-in user uploaded |
+| `visibility` | `"private" \| "public"` | Yes | "public" lets every signed-in user, and every visitor of a public app, read the file; "private" keeps it to the uploader |
+
+Returns { id, name, type, size, visibility, createdAt, ownerId } with the new visibility. There is no url; the ID and its files.url path stay the same.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `authentication-required` | no one is signed in | Kernel | Same |
+| `A file ID is required.` | fileId is not a non-empty string | SDK | Same |
+| `File visibility must be private or public.` | visibility is anything other than "private" or "public"; the SDK refuses before it sends anything | SDK | Same |
+| `File not found.` | the file does not exist, was deleted, or the caller may not read it | Kernel | Same |
+| `Only the person who uploaded this file may change or delete it.` | the caller may read the file but did not upload it | Kernel | Same |
+
+### miniapp.files.delete(fileId)
+
+Delete a file the signed-in user uploaded. Its bytes are gone and its size stops counting against the Deployment's quota.
+
+Signed-out visitors on a public Deployment: refused.
+
+Runtime MCP tools: `files_delete`.
+
+| Argument | Type | Required | Description |
+| --- | --- | --- | --- |
+| `fileId` | `string` | Yes | The id of a file the signed-in user uploaded |
+
+Returns { id, deleted: true }.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `authentication-required` | no one is signed in | Kernel | Same |
+| `A file ID is required.` | fileId is not a non-empty string | SDK | Same |
+| `File not found.` | the file does not exist, was already deleted, or the caller may not read it | Kernel | Same |
+| `Only the person who uploaded this file may change or delete it.` | the caller may read the file but did not upload it | Kernel | Same |
+
+Limits:
+
+- a row that still names the file ID keeps it; the app removes that row with its own action
+
 ## The http module, declared, with no browser call
 
 Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.
@@ -226,7 +308,7 @@ Routes on the Deployment's own host for programs and other services: a JSON endp
 - A route has three kinds of caller: a service that signs the request, a program that sends Authorization: Bearer with an API key the owner issued, and a person signed in to the app, from the app's own origin. An actor binding yields the key's ID or the user's ID; a signed request has no actor.
 - A signed route reads the declared header as t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>" keyed with the secret>. An API key that names the action replaces the signature.
 - The owner sets the secret with the secret_set admin tool before publishing. It never appears in actions.json, the Build Artifact or an export.
-- GET /_littlebox/files/<id> returns a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it.
+- GET /_littlebox/files/<id>, the path miniapp.files.url returns, answers a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it. A visitor without a session on a private app gets 401 authentication-required before any file is looked up; every other caller who may not read the file gets 404 File not found, the same as for a missing or deleted one.
 - The editor preview serves no routes. Run them on a Development Kernel with littlebox dev, or on a Deployment.
 
 Declared with `http` in `actions.json`. { "method": "GET" | "POST", "path": "/api/items", "signature"?: { "header": "X-Signature", "secret": "items_webhook" } } on an action declared anonymous. GET binds a query and maps the query string onto its input bindings by type; POST binds a mutation and reads a JSON object body. The route answers { result } with the rows or { changes, lastInsertId }, and { error } with a status code. The Validation Gate and the Kernel refuse the same declarations with the same messages.

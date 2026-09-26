@@ -6,7 +6,7 @@ Club is a members-only book club. The Project Owner invites people by email. Mem
 
 | File | What it holds |
 | --- | --- |
-| `index.html`, `styles.css`, `app.js` | The page. `app.js` calls only `miniapp.auth`, `miniapp.actions` and `miniapp.files.upload`, plus `fetch` and `<img>` on `/_littlebox/files/<id>`. `styles.css` copies the design system's tokens as plain CSS and follows the system theme. |
+| `index.html`, `styles.css`, `app.js` | The page. `app.js` calls only `miniapp.auth`, `miniapp.actions`, `miniapp.files.upload` and `miniapp.files.url`, plus `fetch` and `<img>` on `/_littlebox/files/<id>`. `styles.css` copies the design system's tokens as plain CSS and follows the system theme. |
 | `schema.sql` | `members` (user ID, display name, role), `books` (title, author, cover file ID, status, meeting date) and `notes` (owner, book, file ID). |
 | `actions.json` | Ten authenticated Server Actions. Every query names a `LIMIT`. `books.schedule`, `books.finish` and `books.remove` check `role = 'organizer'` in their `WHERE`. |
 | `replay.ts` | Starts two Kernels, runs every flow below, asserts the results and the refusals, and removes both Kernels and their data when it exits. |
@@ -35,8 +35,8 @@ The origin Kernel listens on `LITTLEBOX_SHOWCASE_PORT` (default 19470) and the d
 ## What worked
 
 - **Invitation only.** A visitor gets the Kernel's sign-in page with "Only invited people can create an account" and no signup form. A signup from an uninvited address answers 403. Three invitations reached the mailbox, and each link set a password and returned a session.
-- **Private and public files.** Ben cannot read Ana's private note through `files_read` or the file read path. He reads her public cover both ways, byte for byte. `files_list` gives him the two covers and his own note. A visitor gets 401 from the file read path.
-- **Images under the policy.** Chrome signed Ben in through the Kernel's form, rendered both 120 by 180 covers from `/_littlebox/files/<id>`, fetched his note's text from the same path and reported no policy violation in light or dark.
+- **Private and public files.** Ben cannot read Ana's private note through `files_read` or the file read path. He reads her public cover both ways, byte for byte. `files_list` gives him the two covers and his own note. A visitor gets 401 from the file read path for a public cover, a private note and a missing ID alike.
+- **Images under the policy.** Chrome signed Ben in through the Kernel's form, rendered both 120 by 180 covers from `/_littlebox/files/<id>`, fetched his note's text from the path `miniapp.files.url` returned and reported no policy violation in light or dark.
 - **API key.** A key with `files: ["public"]` reads a cover with `image/png` and the original bytes. It gets 404 for a private note and 401 on the runtime endpoint.
 - **Roles.** Ana's `books.schedule` changes one row. Ben's `books.schedule`, `books.remove` and `books.finish` change none, and the page shows "Nothing changed. Only an organizer can schedule a meeting, and the book must still be on the shortlist."
 - **Recovery.** The emailed link reset Cy's password. Her earlier session then answers "Sign in to use Littlebox MCP.", the old password fails, and the link works once.
@@ -62,8 +62,12 @@ The predicate still holds on both Kernels. Nobody without the role changed a row
 | Invitation only | `POST /_littlebox/auth/signup` from an uninvited address | 403 `{"error":"This app is not accepting new accounts for this email address."}` |
 | Private file | Ben's `files_read` of Ana's note | `File not found.` |
 | Private file | Ben's `GET /_littlebox/files/<note>` with his session | 404 `{"error":"File not found."}` |
-| Private Deployment | A visitor's `GET /_littlebox/files/<public cover>` | 401 `{"error":"authentication-required"}`. The public `feed` example gets 404 for the same request on a public app. |
-| File visibility | `files_upload` with `visibility: "organizers"` on the runtime endpoint | `Value is outside the allowed choices.` Through the SDK the same option stores a private file without an error (`src/mcp/runtime.js` keeps only `"public"`). There is no visibility for "organizers" or "one other member", so a member cannot share a note with the organizer. |
+| Private Deployment | A visitor's `GET /_littlebox/files/<id>` for a public cover, a private note or a missing ID | 401 `{"error":"authentication-required"}` for all three. This is the documented rule. A visitor of a private app is asked to sign in before any file is looked up, and on a public app a file the visitor may not read answers 404, as a missing one. |
+| File visibility | `files_upload` with `visibility: "organizers"` on the runtime endpoint | `Value is outside the allowed choices.` There is no visibility for "organizers" or "one other member", so a member cannot share a note with the organizer. |
+| File visibility | `files_update` of Ben's note with `visibility: "organizers"` | `Value is outside the allowed choices.` |
+| File visibility | `miniapp.files.upload(file, { visibility: "organizers" })` in Ben's page | `File visibility must be private or public.` and no file stored. Before 2026-11-06 the SDK stored a private file without an error. |
+| File lifecycle | Ana (organizer) deletes Ben's public cover with `files_delete` | `Only the person who uploaded this file may change or delete it.` An organizer is a row in the app; the Kernel knows only the uploader, so a removed book's cover stays until its uploader deletes it. |
+| File lifecycle | Ana deletes Ben's private note with `files_delete` | `File not found.` |
 | API key | A key with `files: ["public"]` reads a private note | 404 `{"error":"File not found."}` |
 | API key | The same key on `/_littlebox/mcp` | 401 `{"error":"Sign in to use Littlebox MCP."}` |
 | API key | `api_keys_create` naming `books.list` | `Action books.list has no HTTP route, so a key cannot call it.` A program can read covers but cannot list which books they belong to without an anonymous route, and on a private app an anonymous route is open to anyone who knows the path. |
@@ -81,4 +85,4 @@ The predicate still holds on both Kernels. Nobody without the role changed a row
 
 ## Choices in the page
 
-The organizer buttons show for every member with an "Organizers only" hint, so a member can press one and see the refusal. A real club would hide them by role. The covers and notes load through `/_littlebox/files/<id>` rather than `miniapp.files.list()`, because `files.list` downloads every readable file on each call.
+The organizer buttons show for every member with an "Organizers only" hint, so a member can press one and see the refusal. A real club would hide them by role. The covers and notes load through `/_littlebox/files/<id>`, the path `miniapp.files.url` returns, rather than `miniapp.files.list()`, because `files.list` downloads every readable file on each call. The cover uses the path directly because the page draws it in a synchronous template.

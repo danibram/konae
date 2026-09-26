@@ -2,15 +2,19 @@
 
 export const sdkPromptSection = `# The miniapp SDK, the only host surface
 
-const session = await miniapp.auth.session();             // { userId, name, role }; role is "anonymous" when signed out
-await miniapp.auth.signIn();                              // published login page, preview selects Alice
-await miniapp.auth.signOut();                             // revoke this app session
-const rows = await miniapp.actions.call("tasks.list");    // array of row objects
-await miniapp.actions.call("tasks.create", { title });    // { changes, lastInsertId }
-await miniapp.actions.call("lesson.finish", { lesson });  // a signal action: { recorded: true }
-const files = await miniapp.files.list();                 // that user's private files, plus public files
-const stored = await miniapp.files.upload(file);          // private to the signed-in user
+const session = await miniapp.auth.session();                    // { userId, name, role }; role is "anonymous" when signed out
+await miniapp.auth.signIn();                                     // published login page, preview selects Alice
+await miniapp.auth.signOut();                                    // revoke this app session
+const rows = await miniapp.actions.call("tasks.list");           // array of row objects
+await miniapp.actions.call("tasks.create", { title });           // { changes, lastInsertId }
+await miniapp.actions.call("lesson.finish", { lesson });         // a signal action: { recorded: true }
+const files = await miniapp.files.list();                        // that user's private files, plus public files
+const stored = await miniapp.files.upload(file);                 // private to the signed-in user
 const shared = await miniapp.files.upload(file, { visibility: "public" });
+image.src = await miniapp.files.url(photo.file_id);              // "/_littlebox/files/<id>"
+const text = await (await fetch(await miniapp.files.url(note.id))).text();
+await miniapp.files.update(draft.id, { visibility: "public" });  // the draft is now published under the same ID
+await miniapp.files.delete(note.file_id);                        // { id, deleted: true }
 
 There is nothing else: no fetch to other origins, no localStorage contract, no miniapp.db and no SQL from the browser, no miniapp.track and no analytics call: a Signal is declared on a Server Action and recorded when miniapp.actions.call runs it.
 
@@ -85,7 +89,9 @@ Editor preview: Ignores the Deployment's visibility and rate limits, and keeps i
 Small files stored by the Kernel for one Deployment. A file is private to the user who uploaded it unless the upload asked for public.
 Only the uploader can list or read a private file.
 On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.
-There is no HTTP download path. The SDK downloads over MCP, checks the SHA-256 and returns a Blob URL.
+files.list and files.upload download over MCP, check the SHA-256 and return a Blob URL. The page's policy allows connect-src 'self' only, so fetch cannot read a Blob URL again. To fetch a file, or to show one without downloading every file, use files.url. It returns the file's path GET /_littlebox/files/<id> on the app's own origin, which img, fetch and a link all reach.
+The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the 20 MiB quota and its ID answers File not found from then on, through every door.
+A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.
 
 miniapp.files.list(): List and download every file the current actor may read. Returns an array of { id, name, type, size, visibility, createdAt, ownerId, url }. ownerId is present only on files the caller uploaded. url is a Blob URL; it keeps the type for image/png, image/jpeg, image/gif, image/webp and image/avif and is application/octet-stream otherwise.
 Refusals:
@@ -104,6 +110,7 @@ miniapp.files.upload(file, options): Store a File or Blob for the signed-in user
 Needs a signed-in user.
 Refusals:
 - "authentication-required" when no one is signed in
+- "File visibility must be private or public." when visibility is anything other than "private" or "public"; the SDK refuses before it sends anything
 - "Transfer size is outside the limit." when the file is empty or larger than 2 MiB
 - "This deployment has reached its 20 MiB file quota." when the Deployment's files would exceed 20 MiB together
 - "File not found." when the file was removed or the actor may not read it
@@ -119,6 +126,35 @@ Limits:
 - the name is cut to 180 characters with / and \\ replaced by -; a type of 128 characters or more, or with a character other than a letter, a digit or one of !#$&^_.+-/, becomes application/octet-stream
 Editor preview: Stores the file in browser storage as a data URL, and accepts an empty file.
 
+miniapp.files.url(fileId): The address of a stored file on the app's own origin, for an img src, a link or a fetch. Returns a Promise of the path "/_littlebox/files/<id>". Reading it answers the file's bytes with its own type when the caller may read it, 404 File not found when the file is missing, deleted or not theirs, and 401 authentication-required to a visitor of a private Deployment.
+Refusals:
+- "A file ID is required." when fileId is not a non-empty string
+- "File not found." when reading the path, when the file does not exist, was deleted, or the caller may not read it (404)
+- "authentication-required" when reading the path on a private Deployment without a session (401)
+Limits:
+- the path answers with Cache-Control: private, no-store and Cross-Origin-Resource-Policy: same-origin, so another site cannot embed it
+- PNG, JPEG, GIF, WebP and AVIF answer inline; every other type downloads as an attachment
+Editor preview: Returns the file's data URL from browser storage, and refuses at the call with File not found when the preview actor may not read the file.
+
+miniapp.files.update(fileId, { visibility }): Make a file the signed-in user uploaded public or private. Publishing a draft keeps its ID, so no second copy counts against the quota. Returns { id, name, type, size, visibility, createdAt, ownerId } with the new visibility. There is no url; the ID and its files.url path stay the same.
+Needs a signed-in user.
+Refusals:
+- "authentication-required" when no one is signed in
+- "A file ID is required." when fileId is not a non-empty string
+- "File visibility must be private or public." when visibility is anything other than "private" or "public"; the SDK refuses before it sends anything
+- "File not found." when the file does not exist, was deleted, or the caller may not read it
+- "Only the person who uploaded this file may change or delete it." when the caller may read the file but did not upload it
+
+miniapp.files.delete(fileId): Delete a file the signed-in user uploaded. Its bytes are gone and its size stops counting against the Deployment's quota. Returns { id, deleted: true }.
+Needs a signed-in user.
+Refusals:
+- "authentication-required" when no one is signed in
+- "A file ID is required." when fileId is not a non-empty string
+- "File not found." when the file does not exist, was already deleted, or the caller may not read it
+- "Only the person who uploaded this file may change or delete it." when the caller may read the file but did not upload it
+Limits:
+- a row that still names the file ID keeps it; the app removes that row with its own action
+
 ## The http module, declared, with no browser call
 
 Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.
@@ -126,7 +162,7 @@ Only an action declared anonymous may bind a route, and the route answers whatev
 A route has three kinds of caller: a service that signs the request, a program that sends Authorization: Bearer with an API key the owner issued, and a person signed in to the app, from the app's own origin. An actor binding yields the key's ID or the user's ID; a signed request has no actor.
 A signed route reads the declared header as t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>" keyed with the secret>. An API key that names the action replaces the signature.
 The owner sets the secret with the secret_set admin tool before publishing. It never appears in actions.json, the Build Artifact or an export.
-GET /_littlebox/files/<id> returns a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it.
+GET /_littlebox/files/<id>, the path miniapp.files.url returns, answers a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it. A visitor without a session on a private app gets 401 authentication-required before any file is looked up; every other caller who may not read the file gets 404 File not found, the same as for a missing or deleted one.
 The editor preview serves no routes. Run them on a Development Kernel with littlebox dev, or on a Deployment.
 
 Declared with "http" in actions.json: { "method": "GET" | "POST", "path": "/api/items", "signature"?: { "header": "X-Signature", "secret": "items_webhook" } } on an action declared anonymous. GET binds a query and maps the query string onto its input bindings by type; POST binds a mutation and reads a JSON object body. The route answers { result } with the rows or { changes, lastInsertId }, and { error } with a status code. The Validation Gate and the Kernel refuse the same declarations with the same messages.

@@ -5,7 +5,6 @@ const el = (tag, props = {}, children = []) => {
   node.append(...children);
   return node;
 };
-const fileUrl = (id) => `/_littlebox/files/${encodeURIComponent(id)}`;
 const day = (ms) => new Date(ms).toLocaleDateString("en-GB", { year: "numeric", month: "long", day: "numeric" });
 
 const session = await miniapp.auth.session();
@@ -30,8 +29,9 @@ async function showGallery() {
   const photos = await miniapp.actions.call("photos.published");
   status.textContent = photos.length ? "" : "No photographs are published yet.";
   status.hidden = photos.length > 0;
-  grid.replaceChildren(...photos.map((photo) => {
-    const img = el("img", { src: fileUrl(photo.file_id), alt: photo.title, loading: "lazy", width: 640, height: 480 });
+  const urls = await Promise.all(photos.map((photo) => miniapp.files.url(photo.file_id)));
+  grid.replaceChildren(...photos.map((photo, index) => {
+    const img = el("img", { src: urls[index], alt: photo.title, loading: "lazy", width: 640, height: 480 });
     const open = el("button", { type: "button", className: "tile" }, [img]);
     open.addEventListener("click", () => {
       viewer.querySelector("img").src = img.src;
@@ -86,8 +86,8 @@ async function showStudio() {
     const publish = data.get("publish") === "on";
     status.textContent = "Uploading…";
     try {
-      // Visibility is fixed at upload: a draft is a private file, a published photograph a public one.
-      const file = await miniapp.files.upload(data.get("file"), publish ? { visibility: "public" } : undefined);
+      // A draft is a private file and a published photograph a public one.
+      const file = await miniapp.files.upload(data.get("file"), { visibility: publish ? "public" : "private" });
       const caption = String(data.get("caption")).trim();
       const added = await miniapp.actions.call("photos.add", {
         file_id: file.id, title: String(data.get("title")).trim(), caption: caption || null, status: publish ? "published" : "draft",
@@ -105,14 +105,14 @@ async function showStudio() {
 }
 
 async function refreshStudio() {
-  const [photos, messages, files] = await Promise.all([
+  const [photos, messages] = await Promise.all([
     miniapp.actions.call("studio.photos"),
     miniapp.actions.call("studio.messages"),
-    miniapp.files.list(),
   ]);
-  const urls = new Map(files.map((file) => [file.id, file.url]));
   const drafts = photos.filter((photo) => photo.status === "draft");
-  $("#drafts").replaceChildren(...(drafts.length ? drafts.map((photo) => draftRow(photo, urls.get(photo.file_id))) : [el("li", { className: "muted", textContent: "No drafts." })]));
+  // files.url names the file's path, so a preview loads only the drafts shown.
+  const urls = await Promise.all(drafts.map((photo) => miniapp.files.url(photo.file_id)));
+  $("#drafts").replaceChildren(...(drafts.length ? drafts.map((photo, index) => draftRow(photo, urls[index])) : [el("li", { className: "muted", textContent: "No drafts." })]));
   $("#inbox").replaceChildren(...(messages.length ? messages.map((message) => el("li", { className: "card" }, [
     el("p", {}, [el("strong", { textContent: message.name }), ` · ${message.email} · ${message.topic} · ${day(message.received_at)}`]),
     el("p", { textContent: message.body }),
@@ -120,18 +120,19 @@ async function refreshStudio() {
 }
 
 function draftRow(photo, url) {
-  // A private file cannot become public, and the page cannot read a Blob URL's
-  // bytes back under connect-src 'self', so publishing asks for the file again.
-  const pick = el("input", { type: "file", accept: "image/*", hidden: true });
-  const publish = el("button", { type: "button", className: "secondary", textContent: "Publish…" });
+  // Publishing makes the draft's own file public, so no second copy is stored.
+  const publish = el("button", { type: "button", className: "secondary", textContent: "Publish" });
   const note = el("span", { className: "muted" });
-  publish.addEventListener("click", () => pick.click());
-  pick.addEventListener("change", async () => {
-    if (!pick.files?.[0]) return;
+  publish.addEventListener("click", async () => {
     note.textContent = "Publishing…";
     try {
-      const file = await miniapp.files.upload(pick.files[0], { visibility: "public" });
-      await miniapp.actions.call("photos.publish", { id: photo.id, file_id: file.id });
+      await miniapp.files.update(photo.file_id, { visibility: "public" });
+      const published = await miniapp.actions.call("photos.publish", { id: photo.id, file_id: photo.file_id });
+      if (published.changes === 0) {
+        // The row stayed a draft, so its file goes back to private.
+        await miniapp.files.update(photo.file_id, { visibility: "private" });
+        throw Error("this account is not the studio's curator");
+      }
       await refreshStudio();
       await showGallery();
     } catch (error) {
@@ -141,6 +142,6 @@ function draftRow(photo, url) {
   return el("li", { className: "card draft" }, [
     url ? el("img", { src: url, alt: photo.title, width: 120, height: 90 }) : el("span", { className: "muted", textContent: "No preview" }),
     el("div", {}, [el("strong", { textContent: photo.title }), el("p", { className: "muted", textContent: photo.caption ?? "" })]),
-    el("div", { className: "actions" }, [publish, pick, note]),
+    el("div", { className: "actions" }, [publish, note]),
   ]);
 }

@@ -21,7 +21,7 @@ This is a product probe. The app uses Littlebox's primitives as a creator would,
 
 - A Public Deployment whose first release sets `initialSignupPolicy` to Closed.
 - An Invitation, read from the development mailbox, to admit the curator's single account.
-- `files_upload` with `visibility: "public"` for published photographs and the default private visibility for drafts. Visitors read public files through `GET /_littlebox/files/<id>`, which the grid embeds as `<img>` under `img-src 'self'`.
+- `files_upload` with `visibility: "public"` for published photographs and `"private"` for drafts. Publishing a draft makes its own file public with `files_update` (`miniapp.files.update` in the page), and a stray upload goes with `files_delete`. Visitors read public files through `GET /_littlebox/files/<id>`, the path `miniapp.files.url` returns, which the grid embeds as `<img>` under `img-src 'self'`.
 - Anonymous queries (`photos.published`), authenticated queries and mutations gated by a `studio` row the owner seeds with `database_execute`.
 - `contact.send`, an anonymous mutation with the Signal `contact.received` carrying only the `topic`.
 - `feed.items`, an anonymous query bound to `GET /feed.json` with no signature.
@@ -46,12 +46,12 @@ It runs these flows and exits 0 when all of them pass:
 4. A stranger's signup, the owner's invitation under Closed, the curator's own signup, the accepted invitation, a second stranger.
 5. The curator uploads three public photographs and two private drafts.
 6. A visitor reads the gallery, the file list and a draft through every door.
-7. The curator publishes a draft.
+7. The curator publishes a draft by making its file public, and deletes a stray upload.
 8. `/feed.json` with GET, HEAD, POST and an undeclared query parameter.
 9. 40 contact messages from one address, then one from another, then the Signals and the inbox.
 10. Known and unknown paths on the multi-page artifact, and `HEAD /styles.css`.
 11. Usage.
-12. In Chrome, the home page in light and dark with every image loaded, the about page with a sent contact form, the signed-in studio, and an attempt to read an SDK Blob URL.
+12. In Chrome, the home page in light and dark with every image loaded, the about page with a sent contact form, the signed-in studio, and in the studio a `fetch` of `miniapp.files.url(draft)`, a draft published and hidden again with `miniapp.files.update`, and an upload with an unknown visibility.
 13. `littlebox contract`, then `littlebox conform` from the CLI with no credential, and the same checks in process.
 
 ## What worked
@@ -59,6 +59,8 @@ It runs these flows and exits 0 when all of them pass:
 - Closed signup from the first request. The Kernel refused every signup, the curator's own included, and the curator's account came in through the owner's Invitation with the policy still Closed (`acceptable: true`, then 200 on accept). The app has exactly one account (`app_users_list`) and the curator still signs in.
 - Drafts stayed invisible by every door a visitor has: `photos.published` leaves them out, `files_list` lists only the public files, `files_read` answers `File not found.` and `GET /_littlebox/files/<id>` answers 404.
 - Public photographs load in the page from `/_littlebox/files/<id>` as `image/png`, `inline`, with `Cross-Origin-Resource-Policy: same-origin`. Chrome reported no policy violation on any page, light or dark.
+- Publishing a draft keeps its file. `files_update` made the draft's file public under the same ID, `photos.publish` pointed the row at it, and the curator held 5 files for 5 photographs. A stray upload deleted with `files_delete` left `files_list`, answered `File not found.` to `files_read` and 404 at the file path, and stopped counting against the 20 MiB quota.
+- In the studio, `fetch(await miniapp.files.url(draft))` answered 200 `image/png` with the draft's bytes under `connect-src 'self'`, and the draft previews load from the same path instead of from `miniapp.files.list()`, which downloads every file.
 - `contact.send` works for a signed-out visitor, from the page and over MCP. The 31st call from one address in 10 seconds answered `rate-limited` with `Retry-After: 1`, and a second address went through at once. Each sent message recorded one `contact.received` Signal with only `{ topic }`, and the curator read every message through `studio.messages`.
 - `GET /feed.json` answers any program with no signature and no key: 200, `application/json`, the four published photographs newest first, with image paths that load. `HEAD` answers 405 with `Allow: GET`. `POST` answers 405 with `Allow: GET` and `No route accepts POST on this path.`
 - A mutation with `RETURNING` is refused at `release_plan`.
@@ -100,9 +102,10 @@ Rows with a status or a quoted message are answers the replay received. Rows tha
 | A visitor reads a draft over MCP (`files_read`) | | `File not found.` |
 | A visitor reads a draft at `GET /_littlebox/files/<id>` | 404 | `{"error":"File not found."}` |
 | A visitor uploads a file (`transfer_begin`) | | `authentication-required` |
-| Make a private draft's file public, or delete the private copy | | No primitive. The runtime file tools are `files_list`, `files_read` and `files_upload`. Publishing a draft uploads the bytes again as public; the private copy stays and counts against the 20 MiB quota. |
-| Read a draft's SDK Blob URL with `fetch()` to upload it again as public | | `TypeError: Failed to fetch`; Chrome: `Connecting to 'blob:http://gallery-….localhost:19620/…' violates the following Content Security Policy directive: "connect-src 'self'". The action has been blocked.` The studio asks the curator to pick the file again instead. |
-| Show draft previews in the studio | | Works. `miniapp.files.list()` downloads every file the curator may read, public ones included, on each call. |
+| A visitor makes a draft public (`files_update`) | | `authentication-required` |
+| `files_update` with `visibility: "friends"` | | `Value is outside the allowed choices.` |
+| Delete a file that was already deleted (`files_delete`) | | `File not found.` |
+| `miniapp.files.upload(file, { visibility: "organizers" })` in the page | | `File visibility must be private or public.` The SDK refuses before it sends anything. Before 2026-11-06 it stored a private file without a word. |
 | `HEAD /feed.json` | 405 | `Allow: GET` and an empty body. HTTP drops the body of a HEAD answer, so `A route does not answer HEAD. Send GET.` from the docs never reaches the caller. |
 | `POST /feed.json` | 405 | `{"error":"No route accepts POST on this path."}` with `Allow: GET` |
 | `GET /feed.json?page=2` | 400 | `{"error":"Unexpected action input: page"}` |

@@ -96,7 +96,7 @@ The suspensions of accounts and revocations of API keys, each written to every c
 _Avoid_: audit log (that stays on the volume)
 
 **Public Deployment**:
-A Deployment whose application shell may be opened without signing in. A signed-out visitor may call Server Actions declared `anonymous`, and may list and read files marked public. Uploads require a Runtime Actor session, and private files a session or an API Key that names them. Public visibility of the Deployment grants no database access and no access to private files.
+A Deployment whose application shell may be opened without signing in. A signed-out visitor may call Server Actions declared `anonymous`, and may list and read files marked public. Uploads, and changing a file's visibility or deleting it, require a Runtime Actor session and only the uploader may do the last two; private files need a session or an API Key that names them. Public visibility of the Deployment grants no database access and no access to private files.
 _Avoid_: Public database
 
 **Private Deployment**:

@@ -446,6 +446,20 @@ fn runtime_tools() -> Vec<Value> {
             &["transferId", "name"],
             false,
         ),
+        tool(
+            "files_update",
+            "Make a file you uploaded public or private. Only its uploader may change it.",
+            json!({"fileId":{"type":"string"},"visibility":{"type":"string","enum":["private","public"]}}),
+            &["fileId", "visibility"],
+            false,
+        ),
+        tool(
+            "files_delete",
+            "Delete a file you uploaded. Its size stops counting against the Deployment's quota and a later read answers File not found. Only its uploader may delete it.",
+            json!({"fileId":{"type":"string"}}),
+            &["fileId"],
+            false,
+        ),
     ];
     tools.extend(transfer_tools(true));
     tools.extend(account_tools());
@@ -809,8 +823,9 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
             };
             // Each audit row costs a write to the shared mcp.sqlite, so app users
             // must not decide how fast it grows. Owner calls are audited here.
-            // Of the app-user calls, only an upload that stores a new file is,
-            // inside runtime_call: the transfer caps bound how often that happens.
+            // Of the app-user calls, only an upload that stores a new file and
+            // a delete that removes one are, inside runtime_call: the transfer
+            // caps bound how often uploads happen, and each file goes once.
             if !runtime {
                 match export_transfer.as_ref().filter(|_| name == "transfer_read") {
                     // One row per component download, written at its first
@@ -1073,7 +1088,7 @@ async fn admin_call(
             }
         }),
         "platform_describe" => Ok(
-            json!({"name":"Littlebox","protocolVersion":VERSION,"sourceAuthority":"external","runtimeEndpoint":"/_littlebox/mcp","chunkBytes":CHUNK,"maxTransferBytes":MAX_TRANSFER,"workflow":["project_create","build locally","transfer_begin/write/complete","release_plan","release_apply"],"runtimeTools":["auth_session","actions_invoke","files_list","files_read","files_upload"],"localDevelopment":"Use bun run littlebox -- init, build, dev, or publish. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything."}),
+            json!({"name":"Littlebox","protocolVersion":VERSION,"sourceAuthority":"external","runtimeEndpoint":"/_littlebox/mcp","chunkBytes":CHUNK,"maxTransferBytes":MAX_TRANSFER,"workflow":["project_create","build locally","transfer_begin/write/complete","release_plan","release_apply"],"runtimeTools":["auth_session","actions_invoke","files_list","files_read","files_upload","files_update","files_delete"],"localDevelopment":"Use bun run littlebox -- init, build, dev, or publish. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything."}),
         ),
         "mail_status" => super::mail::status_tool(state, a["refresh"].as_bool().unwrap_or(false)).await,
         "session_inspect" => Ok(
@@ -1617,6 +1632,18 @@ async fn runtime_call(
             // Failed uploads and receipt replays leave no row.
             let result = Ok(result);
             audit(state, principal, name, &a, app, None, &result);
+            result
+        }
+        "files_update" => {
+            let response = super::files::update_file(state, headers, a["fileId"].as_str().unwrap(), a["visibility"].as_str()).await;
+            response_value(response).await
+        }
+        "files_delete" => {
+            let result = response_value(super::files::delete_file(state, headers, a["fileId"].as_str().unwrap()).await).await;
+            // Each file is deleted once, so like uploads these rows stay bounded.
+            if result.is_ok() {
+                audit(state, principal, name, &a, app, None, &result);
+            }
             result
         }
         _ => anyhow::bail!("Unknown runtime tool."),

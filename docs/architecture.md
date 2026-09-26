@@ -79,7 +79,7 @@ On a public Deployment a signed-out visitor may call the actions declared `anony
 
 A public deployment may contain private user records. Public means its HTML, CSS and JavaScript are public; it never means the database is public. A private deployment also protects the application shell, but still requires per-action authorization because authenticated users need not share the same data.
 
-An upload is private to the uploading app user unless the upload sets visibility to public. Another account cannot read a private file. On a public Deployment, visitors can read public files. On a private Deployment, any signed-in app user can read public files. `GET /_littlebox/files/<id>` serves a file to a caller allowed to read it: a signed-in user from the app's own origin, a visitor for a public file of a public Deployment, or an API key that names the file's visibility. There is no unauthenticated object URL, and nothing is served from the bucket.
+An upload is private to the uploading app user unless the upload sets visibility to public. Another account cannot read a private file. On a public Deployment, visitors can read public files. On a private Deployment, any signed-in app user can read public files. `GET /_littlebox/files/<id>` serves a file to a caller allowed to read it: a signed-in user from the app's own origin, a visitor for a public file of a public Deployment, or an API key that names the file's visibility; `miniapp.files.url` returns that path. Only the uploader changes a file's visibility or deletes it, with `files_update` and `files_delete` in `kernel-rs/src/files.rs`, and a deleted file frees its share of the quota. There is no unauthenticated object URL, and nothing is served from the bucket.
 
 ### Database boundary
 

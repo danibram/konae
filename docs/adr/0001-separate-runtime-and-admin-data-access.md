@@ -7,3 +7,5 @@ This boundary prevents downloading or querying the database outside declared act
 ## Update, 2026-10-23: anonymous actions and signup policy
 
 ADR-0008 first required a session for every runtime operation. That rule is now refined. On a public Deployment, a signed-out visitor may call Server Actions declared with access `anonymous`. Actions declared `authenticated`, files and uploads still require an app session, and on a private Deployment nothing runs without a login. Each Deployment also has a signup policy (Open, Allowlist or Closed) that decides who can create an app account. The boundary in this ADR is unchanged: browsers reach data only through named Server Actions that the Kernel authorizes.
+
+> Update, 2026-11-06: Files changed by their uploader after upload, through `files_update` and `files_delete`, stay on the Runtime Interface under the same per-actor rule. ADR-0008 records the decision.

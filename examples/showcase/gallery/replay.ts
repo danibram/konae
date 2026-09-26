@@ -275,15 +275,35 @@ try {
   refused("A visitor uploads a file (transfer_begin)", visitorUpload);
   pass("Visitor view", `photos.published returns 3 rows, files_list lists the 3 public files, a draft answers "${draftRead}" over MCP and 404 at the file path, a public file answers 200 image/png inline with CORP same-origin, and studio actions answer "${studioAsVisitor}".`);
 
-  // Publishing a draft: a file's visibility is fixed, so the curator uploads the bytes again as public.
-  const republished = await upload(images[3], "photo-4.png", "public");
-  assert.equal((await action(curator, "photos.publish", { id: drafts[0].id, file_id: republished.id })).changes, 1);
+  // Publishing a draft makes its own file public; nothing is uploaded twice.
+  const madePublic = await curator.call<{ id: string; visibility: string; url?: string }>("files_update", { fileId: drafts[0].fileId, visibility: "public" });
+  assert.equal(madePublic.id, drafts[0].fileId);
+  assert.equal(madePublic.visibility, "public");
+  assert.equal((await action(curator, "photos.publish", { id: drafts[0].id, file_id: drafts[0].fileId })).changes, 1);
   assert.equal((await action(visitor, "photos.published")).length, 4);
-  assert.equal((await get(`/_littlebox/files/${drafts[0].fileId}`)).status, 404);
-  const curatorFiles = await curator.call<any[]>("files_list");
-  assert.equal(curatorFiles.length, 6);
-  refused("Make a private draft's file public, or delete the private copy", "No primitive: the runtime tools are files_list, files_read and files_upload. The curator uploads the bytes again; the private copy stays and counts against the 20 MiB quota.");
-  pass("Publish a draft", `The curator uploads the draft's bytes again as public and photos.publish points the row at the new file. The curator now holds ${curatorFiles.length} files for 5 photographs; the old private copy is still stored and still 404 to visitors.`);
+  const publishedDraft = await get(`/_littlebox/files/${drafts[0].fileId}`);
+  assert.equal(publishedDraft.status, 200);
+  assert.deepEqual(new Uint8Array(await publishedDraft.arrayBuffer()), images[3]);
+  assert.equal((await curator.call<any[]>("files_list")).length, 5);
+  const visitorUpdate = await errorText(visitor.call("files_update", { fileId: drafts[1].fileId, visibility: "public" }));
+  assert.equal(visitorUpdate, "authentication-required");
+  refused("A visitor makes a draft public (files_update)", visitorUpdate);
+  const unknownVisibility = await errorText(curator.call("files_update", { fileId: drafts[1].fileId, visibility: "friends" }));
+  assert.equal(unknownVisibility, "Value is outside the allowed choices.");
+  refused("files_update with visibility \"friends\"", unknownVisibility);
+  // A wrong upload is deleted, and its bytes stop counting against the quota.
+  const stray = await upload(images[4], "wrong-crop.png");
+  assert.equal((await curator.call<any[]>("files_list")).length, 6);
+  assert.deepEqual(await curator.call("files_delete", { fileId: stray.id }), { id: stray.id, deleted: true });
+  assert.equal((await curator.call<any[]>("files_list")).length, 5);
+  const deletedRead = await errorText(curator.call("files_read", { fileId: stray.id }));
+  assert.equal(deletedRead, "File not found.");
+  const deletedHttp = await appFetch(freshAddress(), curatorCookie)(`${url}/_littlebox/files/${stray.id}`);
+  assert.equal(deletedHttp.status, 404);
+  const deletedAgain = await errorText(curator.call("files_delete", { fileId: stray.id }));
+  assert.equal(deletedAgain, "File not found.");
+  refused("Delete a file that was already deleted (files_delete)", deletedAgain);
+  pass("Publish a draft", `files_update makes the draft's own file public under the same ID and photos.publish points the row at it, so the curator holds 5 files for 5 photographs. A stray upload is deleted with files_delete: files_list drops it, files_read answers "${deletedRead}", the file path answers 404, and its size no longer counts against the 20 MiB quota.`);
 
   // /feed.json: a public GET route any program reads without a signature or a key.
   const feed = await fetch(`${url}/feed.json`, { headers: { host, "x-forwarded-for": freshAddress(), origin: "https://reader.example" } });
@@ -426,16 +446,25 @@ try {
       assert.equal(await studio.page.locator("#drafts .draft").count(), 1);
       if (shots) await studio.page.screenshot({ path: path.join(shots, "gallery-studio-light.png"), fullPage: true });
       assert.deepEqual(studio.violations, [], "The studio view broke under the Content Security Policy.");
-      // Reading a draft's bytes back from the Blob URL the SDK returns, to upload them as public.
-      const blobRead = await studio.page.evaluate(async () => {
-        const files = await (window as any).miniapp.files.list();
-        try { await fetch(files[0].url); return "read"; } catch (error) { return String(error); }
-      });
+      // The page re-reads a draft's bytes from files.url, publishes and hides it
+      // through the SDK, and the SDK refuses a visibility the Kernel lacks.
+      const sdk = await studio.page.evaluate(async (draftId) => {
+        const miniapp = (window as any).miniapp;
+        const url = await miniapp.files.url(draftId);
+        const response = await fetch(url);
+        const bytes = (await response.arrayBuffer()).byteLength;
+        const published = (await miniapp.files.update(draftId, { visibility: "public" })).visibility;
+        const hidden = (await miniapp.files.update(draftId, { visibility: "private" })).visibility;
+        let refusal = "stored";
+        try { await miniapp.files.upload(new Blob([new Uint8Array([1])], { type: "image/png" }), { visibility: "organizers" }); } catch (error) { refusal = (error as Error).message; }
+        return { url, status: response.status, type: response.headers.get("content-type"), bytes, published, hidden, refusal, files: (await miniapp.files.list()).length };
+      }, drafts[1].fileId);
+      assert.deepEqual(sdk, { url: `/_littlebox/files/${drafts[1].fileId}`, status: 200, type: "image/png", bytes: images[4].byteLength, published: "public", hidden: "private", refusal: "File visibility must be private or public.", files: 5 });
+      refused("miniapp.files.upload(file, { visibility: \"organizers\" }) in the page", sdk.refusal);
       await studio.page.waitForTimeout(300);
-      const blobViolation = studio.violations.find((text) => /connect-src/.test(text)) ?? "";
-      refused("Read a draft's Blob URL with fetch() to re-upload it as public", `${blobRead}; ${blobViolation || "no violation reported"}`);
+      assert.deepEqual(studio.violations, [], "Reading a file through files.url broke under the Content Security Policy.");
       await studio.context.close();
-      pass("Chrome", `The home page in light and dark, about.html with a sent contact form, and the signed-in studio load with no policy violation; every grid image loads from /_littlebox/files/<id> at 640px. fetch() of the SDK's Blob URL answers "${blobRead}".`);
+      pass("Chrome", `The home page in light and dark, about.html with a sent contact form, and the signed-in studio load with no policy violation; every grid image loads from /_littlebox/files/<id> at 640px. In the studio, fetch(await miniapp.files.url(draft)) answers ${sdk.status} ${sdk.type} with ${sdk.bytes} bytes under connect-src 'self', files.update publishes and hides the draft, and files.upload refuses visibility "organizers" before sending anything.`);
     } finally { await browser.close(); }
   }
 

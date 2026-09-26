@@ -9,6 +9,7 @@ import kernelInvitationsSource from "../../kernel-rs/src/invitations.rs?raw";
 import kernelClerkSource from "../../kernel-rs/src/clerk.rs?raw";
 import kernelCopiesSource from "../../kernel-rs/src/copies.rs?raw";
 import kernelEjectSource from "../../kernel-rs/src/eject.rs?raw";
+import kernelFilesSource from "../../kernel-rs/src/files.rs?raw";
 import kernelLimitsSource from "../../kernel-rs/src/limits.rs?raw";
 import kernelHttpSource from "../../kernel-rs/src/http.rs?raw";
 import kernelHttpBindingCases from "../../kernel-rs/src/http-binding-cases.json?raw";
@@ -40,6 +41,7 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/clerk.rs", contents: kernelClerkSource },
   { path: "kernel-rs/src/copies.rs", contents: kernelCopiesSource },
   { path: "kernel-rs/src/eject.rs", contents: kernelEjectSource },
+  { path: "kernel-rs/src/files.rs", contents: kernelFilesSource },
   { path: "kernel-rs/src/limits.rs", contents: kernelLimitsSource },
   { path: "kernel-rs/src/http.rs", contents: kernelHttpSource },
   { path: "kernel-rs/src/http-binding-cases.json", contents: kernelHttpBindingCases },

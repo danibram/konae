@@ -95,6 +95,11 @@ const download: SdkError[] = [
   { message: "File checksum mismatch.", when: "the downloaded bytes do not match the SHA-256 the Kernel announced", source: "sdk", preview: null },
 ];
 
+const noFileId: SdkError = { message: "A file ID is required.", when: "fileId is not a non-empty string", source: "sdk" };
+const badVisibility: SdkError = { message: "File visibility must be private or public.", when: "visibility is anything other than \"private\" or \"public\"; the SDK refuses before it sends anything", source: "sdk" };
+const notUploader: SdkError = { message: "Only the person who uploaded this file may change or delete it.", when: "the caller may read the file but did not upload it", source: "kernel" };
+const unreadable: SdkError = { message: "File not found.", when: "the file does not exist, was deleted, or the caller may not read it", source: "kernel" };
+
 const fileShape = "{ id, name, type, size, visibility, createdAt, ownerId, url }. ownerId is present only on files the caller uploaded. url is a Blob URL; it keeps the type for image/png, image/jpeg, image/gif, image/webp and image/avif and is application/octet-stream otherwise";
 
 export const sdkContract = {
@@ -251,7 +256,9 @@ export const sdkContract = {
       notes: [
         "Only the uploader can list or read a private file.",
         "On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.",
-        "There is no HTTP download path. The SDK downloads over MCP, checks the SHA-256 and returns a Blob URL.",
+        "files.list and files.upload download over MCP, check the SHA-256 and return a Blob URL. The page's policy allows connect-src 'self' only, so fetch cannot read a Blob URL again. To fetch a file, or to show one without downloading every file, use files.url. It returns the file's path GET /_littlebox/files/<id> on the app's own origin, which img, fetch and a link all reach.",
+        "The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the 20 MiB quota and its ID answers File not found from then on, through every door.",
+        "A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.",
       ],
       calls: [
         {
@@ -278,11 +285,12 @@ export const sdkContract = {
           tools: ["transfer_begin", "transfer_write", "transfer_complete", "files_upload", "transfer_cancel", "files_read", "transfer_read"],
           args: [
             { name: "file", type: "File | Blob", required: true, description: "The bytes to store, with its name and type" },
-            { name: "options.visibility", type: "\"public\"", required: false, description: "Pass \"public\" only when every visitor of a public app may read the bytes; anything else stores a private file" },
+            { name: "options.visibility", type: "\"private\" | \"public\"", required: false, description: "\"private\", the default, keeps the file to the uploader. Pass \"public\" only when every visitor of a public app may read the bytes. Any other value is refused before the upload starts" },
           ],
           returns: fileShape,
           errors: [
             { message: "authentication-required", when: "no one is signed in", source: "kernel" },
+            badVisibility,
             { message: "Transfer size is outside the limit.", when: "the file is empty or larger than 2 MiB", source: "kernel", preview: ["Local prototype files are limited to 2 MiB."] },
             { message: "This deployment has reached its 20 MiB file quota.", when: "the Deployment's files would exceed 20 MiB together", source: "kernel", preview: null },
             ...download,
@@ -298,6 +306,67 @@ export const sdkContract = {
             { code: "const shared = await miniapp.files.upload(file, { visibility: \"public\" });" },
           ],
           preview: "Stores the file in browser storage as a data URL, and accepts an empty file.",
+        },
+        {
+          name: "url",
+          signature: "miniapp.files.url(fileId)",
+          summary: "The address of a stored file on the app's own origin, for an img src, a link or a fetch.",
+          signedOut: true,
+          tools: [],
+          args: [{ name: "fileId", type: "string", required: true, description: "The id of a file from files.list or files.upload, or one an action returned" }],
+          returns: "a Promise of the path \"/_littlebox/files/<id>\". Reading it answers the file's bytes with its own type when the caller may read it, 404 File not found when the file is missing, deleted or not theirs, and 401 authentication-required to a visitor of a private Deployment",
+          errors: [
+            noFileId,
+            { ...unreadable, when: "reading the path, when the file does not exist, was deleted, or the caller may not read it (404)", status: 404 },
+            { message: "authentication-required", when: "reading the path on a private Deployment without a session (401)", source: "kernel", status: 401, preview: null },
+          ],
+          limits: [
+            "the path answers with Cache-Control: private, no-store and Cross-Origin-Resource-Policy: same-origin, so another site cannot embed it",
+            "PNG, JPEG, GIF, WebP and AVIF answer inline; every other type downloads as an attachment",
+          ],
+          examples: [
+            { code: "image.src = await miniapp.files.url(photo.file_id);", comment: "\"/_littlebox/files/<id>\"" },
+            { code: "const text = await (await fetch(await miniapp.files.url(note.id))).text();" },
+          ],
+          preview: "Returns the file's data URL from browser storage, and refuses at the call with File not found when the preview actor may not read the file.",
+        },
+        {
+          name: "update",
+          signature: "miniapp.files.update(fileId, { visibility })",
+          summary: "Make a file the signed-in user uploaded public or private. Publishing a draft keeps its ID, so no second copy counts against the quota.",
+          signedOut: false,
+          tools: ["files_update"],
+          args: [
+            { name: "fileId", type: "string", required: true, description: "The id of a file the signed-in user uploaded" },
+            { name: "visibility", type: "\"private\" | \"public\"", required: true, description: "\"public\" lets every signed-in user, and every visitor of a public app, read the file; \"private\" keeps it to the uploader" },
+          ],
+          returns: "{ id, name, type, size, visibility, createdAt, ownerId } with the new visibility. There is no url; the ID and its files.url path stay the same",
+          errors: [
+            { message: "authentication-required", when: "no one is signed in", source: "kernel" },
+            noFileId,
+            badVisibility,
+            unreadable,
+            notUploader,
+          ],
+          limits: [],
+          examples: [{ code: "await miniapp.files.update(draft.id, { visibility: \"public\" });", comment: "the draft is now published under the same ID" }],
+        },
+        {
+          name: "delete",
+          signature: "miniapp.files.delete(fileId)",
+          summary: "Delete a file the signed-in user uploaded. Its bytes are gone and its size stops counting against the Deployment's quota.",
+          signedOut: false,
+          tools: ["files_delete"],
+          args: [{ name: "fileId", type: "string", required: true, description: "The id of a file the signed-in user uploaded" }],
+          returns: "{ id, deleted: true }",
+          errors: [
+            { message: "authentication-required", when: "no one is signed in", source: "kernel" },
+            noFileId,
+            { ...unreadable, when: "the file does not exist, was already deleted, or the caller may not read it" },
+            notUploader,
+          ],
+          limits: ["a row that still names the file ID keeps it; the app removes that row with its own action"],
+          examples: [{ code: "await miniapp.files.delete(note.file_id);", comment: "{ id, deleted: true }" }],
         },
       ],
     },
@@ -346,7 +415,7 @@ export const sdkContract = {
         "A route has three kinds of caller: a service that signs the request, a program that sends Authorization: Bearer with an API key the owner issued, and a person signed in to the app, from the app's own origin. An actor binding yields the key's ID or the user's ID; a signed request has no actor.",
         "A signed route reads the declared header as t=<unix seconds>,v1=<hex HMAC-SHA256 of \"<t>.<raw body>\" keyed with the secret>. An API key that names the action replaces the signature.",
         "The owner sets the secret with the secret_set admin tool before publishing. It never appears in actions.json, the Build Artifact or an export.",
-        "GET /_littlebox/files/<id> returns a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it.",
+        "GET /_littlebox/files/<id>, the path miniapp.files.url returns, answers a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it. A visitor without a session on a private app gets 401 authentication-required before any file is looked up; every other caller who may not read the file gets 404 File not found, the same as for a missing or deleted one.",
         "The editor preview serves no routes. Run them on a Development Kernel with littlebox dev, or on a Deployment.",
       ],
     },

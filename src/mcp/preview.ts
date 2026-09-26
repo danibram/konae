@@ -7,11 +7,14 @@ const methods: Record<string, string> = {
   auth_logout: "auth.signOut",
   files_list: "files.list",
   preview_files_upload: "files.upload",
+  preview_files_url: "files.url",
+  files_update: "files.update",
+  files_delete: "files.delete",
   preview_ready: "runtime.ready",
   preview_error: "preview.error",
 };
 
-const fileTools = new Set(["files.upload"]);
+const fileTools = new Set(["files.upload", "files.update", "files.delete"]);
 
 export type PreviewMcpRequest = {
   jsonrpc: "2.0";
@@ -30,8 +33,9 @@ export async function handlePreviewMcp(host: Pick<MiniAppRuntimeHost, "handle">,
   const method = request.params?.name && methods[request.params.name];
   if (!method) return error(-32602, "Unknown preview tool.");
   try {
-    // Uploads require a signed-in preview actor. Listing is allowed and the
-    // host returns only public files plus that actor's private files.
+    // Uploads, visibility changes and deletes require a signed-in preview
+    // actor. Listing and files.url are allowed and the host returns only
+    // public files plus that actor's private files.
     if (fileTools.has(method) && (await host.handle("auth.session", undefined) as { role?: string }).role === "anonymous") {
       throw new Error("authentication-required");
     }
