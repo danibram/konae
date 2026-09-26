@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHmac } from "node:crypto";
@@ -28,16 +28,6 @@ const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)
 function check(scenario: string, result: string) {
   observations.push({ scenario, result });
   console.log(`PASS ${scenario}. ${result}`);
-}
-
-async function tree(root: string, prefix = ""): Promise<Record<string, string>> {
-  const files: Record<string, string> = {};
-  for (const entry of await readdir(path.join(root, prefix), { withFileTypes: true })) {
-    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) Object.assign(files, await tree(root, relative));
-    else files[relative] = await readFile(path.join(root, relative), "utf8");
-  }
-  return files;
 }
 
 try {
@@ -79,10 +69,7 @@ try {
     const project = { id: `product_fit_${name}`, name, slug: name, manifest: { version: 1, visibility: name === "board" ? "private" : "public" } };
     await owner.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
     if (name === "feed") await owner.call("secret_set", { projectId: project.id, name: "pings_webhook", value: pingsSecret });
-    const compiled = name === "docs" ? {
-      artifact: { version: 1, entrypoint: "index.html", files: { ...await tree(path.join(root, "site")), "runtime.js": await readFile(path.join(repo, "src/mcp/runtime.js"), "utf8") } },
-      files: { "schema.sql": await readFile(path.join(root, "schema.sql"), "utf8"), "actions.json": await readFile(path.join(root, "actions.json"), "utf8") },
-    } : await buildLocal(root);
+    const compiled = await buildLocal(root);
     const upload = await owner.upload(bytes({ project: { ...project, files: compiled.files }, visibility: project.manifest.visibility, artifact: compiled.artifact }), project.id);
     try {
       const plan = await owner.call<{ planId: string }>("release_plan", { transferId: upload.transferId });
@@ -287,9 +274,15 @@ try {
   assert.equal((await action(runtime("docs"), "pages.search", { q: "install" }))[0].title, "Install the kiln");
   assert.match(await (await getPage("docs", "/guide/install.html")).text(), /<title>Install/);
   const missing = await getPage("docs", "/missing-page");
+  assert.equal(missing.status, 404);
+  assert.doesNotMatch(await missing.text(), /<title>Home/);
   const pretty = await getPage("docs", "/guide/install");
+  assert.equal(pretty.status, 200);
+  assert.match(await pretty.text(), /<title>Install/);
   const sitemap = await getPage("docs", "/sitemap.xml");
-  check("Static docs", `Search and .html pages work. Missing route status ${missing.status}; pretty URL serves install=${/<title>Install/.test(await pretty.text())}; sitemap type=${sitemap.headers.get("content-type")}.`);
+  assert.equal(sitemap.headers.get("content-type"), "application/xml; charset=utf-8");
+  assert.equal((await getPage("docs", "/robots.txt")).status, 200);
+  check("Static docs", `littlebox build publishes the pages, pages/guide/ at /guide/ and public/; search works. Missing route status ${missing.status}; /guide/install serves the install page; sitemap type=${sitemap.headers.get("content-type")}.`);
 
   const retryRoot = path.join(scratch, "retry");
   await cp(path.join(import.meta.dir, "launch"), retryRoot, { recursive: true });

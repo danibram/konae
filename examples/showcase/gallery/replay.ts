@@ -121,27 +121,25 @@ try {
     return fetch(input, { ...init, headers });
   } });
 
-  // The CLI builder makes one index.html from a body fragment. It drops about.html.
+  // littlebox build publishes every page at the Capsule root with the files they load.
   const cliCopy = path.join(scratch, "cli-build");
   await cp(here, cliCopy, { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
-  const cliBuild = await buildLocal(cliCopy);
-  assert.deepEqual(Object.keys(cliBuild.artifact.files), ["index.html"]);
-  assert(!("about.html" in cliBuild.artifact.files));
-  refused("`littlebox build` / `publish` on a Capsule with about.html", "No error. The artifact holds only index.html, so /about.html would serve the home page.");
-  pass("CLI build", `littlebox build writes an artifact with ${Object.keys(cliBuild.artifact.files).join(", ")} only: styles.css and app.js are inlined into it, and about.html is dropped.`);
+  const { artifact } = await buildLocal(cliCopy);
+  assert.deepEqual(Object.keys(artifact.files).sort(), ["404.html", "about.html", "app.js", "index.html", "runtime.js", "styles.css"]);
+  assert(!("schema.sql" in artifact.files) && !("actions.json" in artifact.files));
+  pass("CLI build", `littlebox build writes an artifact with ${Object.keys(artifact.files).sort().join(", ")}: the three pages, the stylesheet and module they load, and the SDK. schema.sql and actions.json stay out.`);
+  // A page that names a file the Capsule does not hold stops the build with the path.
+  const brokenCopy = path.join(scratch, "cli-broken");
+  await cp(cliCopy, brokenCopy, { recursive: true });
+  await writeFile(path.join(brokenCopy, "about.html"), (await readFile(path.join(brokenCopy, "about.html"), "utf8")).replace("</main>", '<img src="/portrait.jpg" alt=""></main>'));
+  const brokenBuild = await errorText(buildLocal(brokenCopy));
+  assert.equal(brokenBuild, "about.html references /portrait.jpg, but the Capsule holds no portrait.jpg.");
+  refused("`littlebox build` with about.html naming a missing /portrait.jpg", brokenBuild);
 
-  // The multi-page artifact, assembled the way the docs example in product-fit does.
   const source = async (name: string) => readFile(path.join(here, name), "utf8");
   const capsule = {
-    "index.html": await source("index.html"), "about.html": await source("about.html"), "styles.css": await source("styles.css"),
+    "index.html": await source("index.html"), "about.html": await source("about.html"), "404.html": await source("404.html"), "styles.css": await source("styles.css"),
     "app.js": await source("app.js"), "schema.sql": await source("schema.sql"), "actions.json": await source("actions.json"),
-  };
-  const artifact = {
-    version: 1, entrypoint: "index.html",
-    files: {
-      "index.html": capsule["index.html"], "about.html": capsule["about.html"], "styles.css": capsule["styles.css"],
-      "app.js": capsule["app.js"], "runtime.js": await readFile(path.join(repo, "src/mcp/runtime.js"), "utf8"),
-    },
   };
   const project = { id: "showcase_gallery", name: "Gallery", slug: "gallery", manifest: { version: 1, visibility: "public" } };
   await owner.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
@@ -366,13 +364,17 @@ try {
   const at = (route: string) => walk.find((entry) => entry.path === route)!;
   assert.equal(at("/about.html").title, "About · Lena Varga");
   assert.equal(at("/").title, "Lena Varga · Photographs");
-  assert.equal(at("/missing-page").status, 200);
-  assert.equal(at("/missing-page").title, "Lena Varga · Photographs");
-  assert.equal(at("/about").title, "Lena Varga · Photographs");
-  refused("GET /missing-page (expecting 404)", "No error: 200 with the home page. Every unknown GET path serves index.html.", 200);
-  refused("GET /about (extensionless)", "No error: 200 with the home page, not about.html.", 200);
-  refused("Ship a 404.html for unknown paths", "No primitive: the Kernel falls back to index.html and never reads 404.html.");
-  pass("Multi-page artifact", `about.html serves its own page; /missing-page answers ${at("/missing-page").status} with the home page, /about and /about/ answer ${at("/about").status} and ${at("/about/").status} with "${at("/about").title}" and "${at("/about/").title}".`);
+  assert.equal(at("/about").status, 200);
+  assert.equal(at("/about").title, "About · Lena Varga");
+  for (const missing of ["/about/", "/missing-page", "/photos/2026/fog.jpg", "/feed"]) {
+    assert.equal(at(missing).status, 404, missing);
+    assert.equal(at(missing).title, "Not found · Lena Varga", missing);
+  }
+  assert.equal(at("/styles.css").type, "text/css; charset=utf-8");
+  const headStyles = await get("/styles.css", { method: "HEAD" });
+  assert.equal(headStyles.status, 200);
+  assert.equal(headStyles.headers.get("content-type"), "text/css; charset=utf-8");
+  pass("Multi-page artifact", `about.html serves its own page at /about.html and /about; /missing-page, /about/, /photos/2026/fog.jpg and /feed answer 404 with 404.html ("${at("/missing-page").title}"), never the home page. HEAD /styles.css answers ${headStyles.status} text/css.`);
 
   // Usage counts the route under its method and path.
   const today = new Date().toISOString().slice(0, 10);

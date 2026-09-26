@@ -20,7 +20,7 @@ The runner sets the feed's signing secret, publishes all eight examples, then ch
 | `portfolio` | Authenticated upload and checksum-verified download, public gallery | The photo upload stays private to the potter. Visitors read the inline copy. A file uploaded as public can be read without that copy |
 | `poll` | Anonymous votes, allowed choices, totals and hourly aggregation | Browser local storage discourages repeat votes but cannot prevent them |
 | `feed` | Anonymous JSON-RPC reads and writes, rate limiting, a signed ping sent with `curl` to `POST /hooks/pings`, an unsigned and a replayed ping refused, `GET /api/incidents` as JSON, a status badge embedded from `/_littlebox/files/<id>`, a private badge read by an API key and refused to a visitor | A sender must compute Littlebox's signature (`t=<seconds>,v1=<HMAC-SHA256>`); a service with its own fixed scheme needs an adapter. Unknown POST paths such as `/hook` return 405 |
-| `docs` | Multi-file artifact, a guide page, SQL-backed search | Publish uses raw MCP; missing paths return the home page with 200, pretty URLs do not resolve the guide, and XML uses octet-stream |
+| `docs` | Multi-page artifact from `littlebox build` (`pages/guide/` and `public/`), a guide page, SQL-backed search | Missing paths answer 404, `/guide/install` serves the guide and `sitemap.xml` is `application/xml` since 2026-11-06 |
 | `probe` | Nullable search input, omitted/null/filtered values and action declarations | This is a contract probe rather than an end-user app |
 
 The runner also fails nine release plans through the CLI, repairs the schema, and publishes with the same credential. That checks upload cleanup against the Kernel's real transfer quota. It separately verifies that a mutation with `RETURNING` fails release planning with a useful error. Last, it writes each example's Action Contract and runs the conformance checks of `bun run littlebox -- conform` against the Kernel serving it, then runs the CLI once from a contract file on disk; every check must pass and none may be skipped.
@@ -35,6 +35,6 @@ cp -R examples/product-fit/journal/. /tmp/my-journal/
 bun run littlebox -- dev --dir /tmp/my-journal --port 8796
 ```
 
-`init` needs an owner credential, as described in [the MCP guide](../../docs/mcp.md). The local development command uses its own accounts and data. The docs fixture requires its multi-file publish step from `smoke.ts`; the normal CLI builder creates one HTML artifact.
+`init` needs an owner credential, as described in [the MCP guide](../../docs/mcp.md). The local development command uses its own accounts and data. The docs fixture publishes with the normal CLI builder: its guide pages sit under `pages/` and its `sitemap.xml` and `robots.txt` under `public/`.
 
 The gallery's inline image is the copy a visitor sees when the photo stayed private to the uploader. A file uploaded as public can be read without that copy. The team board likewise demonstrates authorization with SQL predicates; display names are not verified identity.

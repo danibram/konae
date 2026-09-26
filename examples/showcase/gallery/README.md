@@ -10,6 +10,7 @@ This is a product probe. The app uses Littlebox's primitives as a creator would,
 | --- | --- |
 | `index.html` | The gallery grid, a lightbox, and the curator's studio (upload, drafts, messages), shown only when signed in |
 | `about.html` | The about page and the contact form |
+| `404.html` | The page every unknown path answers with, status 404 |
 | `app.js` | One module for both pages; each part runs when its elements exist |
 | `styles.css` | Plain CSS with the design system's neutral surfaces, one indigo accent, and a dark scheme from `prefers-color-scheme` |
 | `schema.sql` | `studio` (the curator's user ID), `photos` (draft or published), `messages` |
@@ -24,7 +25,7 @@ This is a product probe. The app uses Littlebox's primitives as a creator would,
 - Anonymous queries (`photos.published`), authenticated queries and mutations gated by a `studio` row the owner seeds with `database_execute`.
 - `contact.send`, an anonymous mutation with the Signal `contact.received` carrying only the `topic`.
 - `feed.items`, an anonymous query bound to `GET /feed.json` with no signature.
-- A multi-file Build Artifact: `index.html`, `about.html`, `styles.css`, `app.js` and the SDK as `runtime.js`.
+- A multi-page Build Artifact from `littlebox build`: `index.html`, `about.html`, `404.html`, the `styles.css` and `app.js` they load, and the SDK as `runtime.js`.
 - `signals_read`, `usage_read`, `littlebox contract` and `littlebox conform`.
 
 ## Run the replay
@@ -39,7 +40,7 @@ The default port is 19620. The replay builds the Kernel offline, starts it on th
 
 It runs these flows and exits 0 when all of them pass:
 
-1. `littlebox build` on this Capsule, to see what the CLI makes of a multi-page app.
+1. `littlebox build` on this Capsule, then on a copy whose about page names a missing image.
 2. A release whose `contact.send` ends in `RETURNING id`, which must be refused at planning.
 3. The first release, public, signup Closed.
 4. A stranger's signup, an invitation accepted under Closed, the switch to Invitation only, the accepted invitation, the switch back to Closed, a second stranger.
@@ -48,7 +49,7 @@ It runs these flows and exits 0 when all of them pass:
 7. The curator publishes a draft.
 8. `/feed.json` with GET, HEAD, POST and an undeclared query parameter.
 9. 40 contact messages from one address, then one from another, then the Signals and the inbox.
-10. Known and unknown paths on the multi-page artifact.
+10. Known and unknown paths on the multi-page artifact, and `HEAD /styles.css`.
 11. Usage.
 12. In Chrome, the home page in light and dark with every image loaded, the about page with a sent contact form, the signed-in studio, and an attempt to read an SDK Blob URL.
 13. `littlebox contract`, then `littlebox conform` from the CLI with no credential, and the same checks in process.
@@ -62,7 +63,9 @@ It runs these flows and exits 0 when all of them pass:
 - `GET /feed.json` answers any program with no signature and no key: 200, `application/json`, the four published photographs newest first, with image paths that load. `HEAD` answers 405 with `Allow: GET`. `POST` answers 405 with `Allow: GET` and `No route accepts POST on this path.`
 - A mutation with `RETURNING` is refused at `release_plan`.
 - `usage_read` counted `GET /feed.json` once; the refused 400 and 405 requests counted nothing.
-- `about.html` serves its own page, and the SDK and the contact form run on it.
+- `littlebox build` publishes the three pages, `styles.css`, `app.js` and the SDK, and leaves out `schema.sql` and `actions.json`. The replay publishes that artifact as it is.
+- `about.html` serves its own page at `/about.html` and `/about`, and the SDK and the contact form run on it with no policy violation.
+- Every path the artifact does not hold answers 404 with `404.html`, never the home page. `HEAD /styles.css` answers 200 with `text/css`.
 - conform with no credential passed every check it could run.
 
 ## Unknown paths on a multi-page site
@@ -72,14 +75,14 @@ It runs these flows and exits 0 when all of them pass:
 | `/` | 200 | text/html | Lena Varga · Photographs |
 | `/index.html` | 200 | text/html | Lena Varga · Photographs |
 | `/about.html` | 200 | text/html | About · Lena Varga |
-| `/about` | 200 | text/html | Lena Varga · Photographs |
-| `/about/` | 200 | text/html | Lena Varga · Photographs |
-| `/missing-page` | 200 | text/html | Lena Varga · Photographs |
-| `/photos/2026/fog.jpg` | 200 | text/html | Lena Varga · Photographs |
+| `/about` | 200 | text/html | About · Lena Varga |
+| `/about/` | 404 | text/html | Not found · Lena Varga |
+| `/missing-page` | 404 | text/html | Not found · Lena Varga |
+| `/photos/2026/fog.jpg` | 404 | text/html | Not found · Lena Varga |
 | `/styles.css` | 200 | text/css | |
-| `/feed` | 200 | text/html | Lena Varga · Photographs |
+| `/feed` | 404 | text/html | Not found · Lena Varga |
 
-Every GET path that is neither an artifact file nor a route serves `index.html` with 200 (`serve_key` in `kernel-rs/src/main.rs`). Extensionless paths do not resolve to `<path>.html` or `<path>/index.html`. There is no 404 for a page, so a mistyped link and a broken image both get the home page's HTML.
+An exact file answers first, and a path with no extension answers with its `.html` page. Every other path answers 404 with the artifact's `404.html` (`kernel-rs/src/artifact.rs`). `/about/` asks for `about/index.html`, which the gallery does not have. Before 2026-11-06 every path the artifact did not hold served `index.html` with 200.
 
 ## What the primitives refused or could not do
 
@@ -87,7 +90,7 @@ Rows with a status or a quoted message are answers the replay received. Rows tha
 
 | Attempt | Status | Exact answer |
 | --- | --- | --- |
-| `littlebox build` or `publish` on a Capsule with `about.html` | | No error. The artifact holds only `index.html`, built from `index.html` as a body fragment with `styles.css` and `app.js` inlined, so `about.html` is dropped and `/about.html` would serve the home page. The replay publishes the multi-file artifact over MCP, as the product-fit `docs` example does. |
+| `littlebox build` on a copy whose `about.html` names `/portrait.jpg`, which the Capsule does not hold | | `about.html references /portrait.jpg, but the Capsule holds no portrait.jpg.` |
 | `littlebox publish` with a first signup policy | | No option. `publishLocal` sends no `initialSignupPolicy`, so a CLI-published public app starts Open. |
 | Publish `contact.send` with `... RETURNING id` | | `Action contact.send cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.` |
 | A visitor signs up while signup is Closed | 403 | `This app is not accepting new accounts for this email address.` The same text for everyone under Closed, though it reads as if the address were the problem. |
@@ -109,9 +112,6 @@ Rows with a status or a quoted message are answers the replay received. Rows tha
 | Message 31 from one address within 10 seconds (`contact.send` over MCP) | 200 | `rate-limited`, as a JSON-RPC result with `isError: true` and `Retry-After: 1`. A route answers 429; the runtime endpoint answers 200. |
 | A tighter limit for `contact.send` alone, such as 3 an hour | | No primitive. `actions.json` declares no rate limit; every anonymous action shares 30 calls per 10 seconds per address, which lets one address send about 260,000 messages a day. |
 | `contact.send` with topic `spam` | | `CHECK constraint failed: topic IN ('commission', 'print', 'other')`. Inputs have type and length but no allowed values, so the CHECK in `schema.sql` is the only guard and its SQLite text reaches the visitor. |
-| `GET /missing-page`, expecting 404 | 200 | No error. The home page is served. |
-| `GET /about`, extensionless | 200 | No error. The home page is served, not `about.html`. |
-| Ship a `404.html` for unknown paths | | No primitive. The Kernel falls back to `index.html` and never reads `404.html`. |
 | The `contact.received` Signal in `action-contract.md` | | Missing. `action-contract.json` has `"signal": {"name":"contact.received","properties":["topic"]}`; the Markdown rendering never mentions it. |
 | The HEAD answer of `/feed.json` in the Action Contract | | Missing. The contract lists no 405 for `feed.items`, and conform does not probe HEAD. |
 
