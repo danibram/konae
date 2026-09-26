@@ -48,7 +48,7 @@
 
   <details class="howto">
     <summary>How events arrive</summary>
-    <p>Services post JSON to <code>POST /hooks/events</code> on this app's host, signed in the <code>X-Inbox-Signature</code> header as <code>t=&lt;unix seconds&gt;,v1=&lt;HMAC-SHA256 of "&lt;t&gt;.&lt;body&gt;"&gt;</code> with the inbox's signing secret. The body is <code>{ "source", "id", "severity", "title", "body"? }</code>, and severity is <code>info</code>, <code>warning</code> or <code>critical</code>. A repeated <code>source</code> and <code>id</code> is stored once.</p>
+    <p>Services post JSON to <code>POST /hooks/events</code> on this app's host, signed in the <code>X-Inbox-Signature</code> header as <code>t=&lt;unix seconds&gt;,n=&lt;nonce&gt;,v1=&lt;HMAC-SHA256&gt;</code> with the inbox's signing secret, over <code>t</code>, the nonce, the method, the path, the query string and the body, one per line. The body is <code>{ "source", "id", "severity", "title", "body"? }</code>, and severity is <code>info</code>, <code>warning</code> or <code>critical</code>. A repeated <code>source</code> and <code>id</code> is stored once.</p>
     <p>Programs read <code>GET /api/events?after=&lt;id&gt;</code> with an API key the owner issued, sent as <code>Authorization: Bearer</code>.</p>
   </details>
 </div>

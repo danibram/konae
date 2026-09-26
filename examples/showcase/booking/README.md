@@ -15,7 +15,8 @@ This app is a product probe. It uses Littlebox the way a creator would and recor
 | CHECK constraints and a partial unique index | `schema.sql` refuses a fractional hour, an hour outside 08 to 17, an invalid date and a second holder of an hour |
 | HTTP route, unsigned | `GET /api/availability?day=YYYY-MM-DD` for a lobby screen |
 | HTTP route, signed, with an API key | `POST /api/checkin`, signed with the `panel_hook` secret, or called with a key that names `panel.checkin` |
-| Signals | `booking.created` and `booking.cancelled`, read by the owner with `signals_read` |
+| Guards | `bookings.create` and `bookings.cancel` declare the sentence a refused call answers with |
+| Signals | `booking.created`, which names the booker as `actor`, and `booking.cancelled`, read by the owner with `signals_read` |
 | Action Contract and `conform` | Generated from `actions.json` and `schema.sql`, run with a session token and with an API key |
 
 The owner adds rooms with `database_execute`, because `schema.sql` may only create tables and indexes.
@@ -30,18 +31,18 @@ LITTLEBOX_SHOWCASE_PORT=19473 bun run examples/showcase/booking/replay.ts
 
 The replay builds the Kernel offline, starts it on `LITTLEBOX_SHOWCASE_PORT` (default 19470) with a random setup key and a data directory under the system temp folder, and deletes both on exit. It refuses to start when something already answers on the port. `LITTLEBOX_SHOWCASE_BROWSER=0` skips Chrome. `LITTLEBOX_SHOWCASE_SCREENSHOTS=<dir>` writes `booking-visitor-light.png`, `booking-staff-light.png` and `booking-staff-dark.png` there.
 
-It prints one `PASS` line per group and a JSON report, and exits 0 when all ten hold. The last run printed these lines, trimmed where marked `[...]`:
+It prints one `PASS` line per group and a JSON report, and exits 0 when all ten hold. The last run, on 2026-11-06 after the route, guard and SQL rule fixes, printed these lines, trimmed where marked `[...]`:
 
 ```text
-PASS Validation Gate and Kernel. Both pass the Capsule and both refuse a trigger that writes the booking log, a mutation that starts with WITH, two statements in one action, a view of free hours. [...]
+PASS Validation Gate and Kernel. Both pass the Capsule and both refuse a trigger that writes the booking log, a mutation that starts with WITH, two statements in one action, a view of free hours with the same sentence. [...]
 PASS Publish. Refused first with "Action panel.checkin signs with the secret panel_hook, which is not set for this project. Set it with secret_set before publishing."; published public at [...] after secret_set, with initialSignupPolicy allowlist @office.example.
 PASS Allowlist signup. @office.example signs up. pat@elsewhere.example, sam@sub.office.example and, under Closed, cara@office.example all get 403 {"error":"This app is not accepting new accounts for this email address."}. Existing staff still sign in under Closed.
-PASS One-statement booking. A two-hour booking writes two rows in one INSERT ... WITH RECURSIVE ... SELECT. An overlap and a fractional hour, five hours, a span past 18:00, a past day, an impossible date, text that is not a date, an unknown room each return { changes: 0 } with no reason. [...]
-PASS Public and staff views. A visitor and GET /api/availability get only { room, hour }; titles and names need a session, and authenticated actions answer authentication-required. [...]
-PASS Double booking under concurrency. 20 rounds of two overlapping bookings sent together: one wins with 2 rows, the other gets { changes: 0 } (2/0, 0/2). Ten requests for one hour: 1,0,0,0,0,0,0,0,0,0. Owner SQL counts 1 holder.
-PASS Signals. 61 bookings.create calls answered without error and 61 booking.created Signals exist, though only 24 bookings were made: a mutation that changed nothing still records its Signal.
-PASS Check-in route. POST /api/checkin refuses an unsigned body (401 invalid-signature) and accepts a signature or the panel's API key. [...] A signed-out visitor calls panel.checkin through actions_invoke with no signature and checks in a booking (changes 1).
-PASS Action Contract. [...] conform --token --secret: "84 passed, 0 failed, 0 skipped.". conform --token --key: "81 passed, 0 failed, 0 skipped, 1 rate-limit waits.". conform --key alone: "35 passed, 0 failed, 14 skipped, 1 rate-limit waits.".
+PASS One-statement booking. A two-hour booking writes two rows in one INSERT ... WITH RECURSIVE ... SELECT. An overlap and a fractional hour, five hours, a span past 18:00, a past day, an impossible date, text that is not a date, an unknown room each are refused with the guard "Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours."; the statement still cannot say which rule failed. [...]
+PASS Public and staff views. A visitor and GET /api/availability get only { room, hour }; titles and names need a session, and authenticated actions answer authentication-required. Ben sees Ana's title, is refused with the cancel guard on her booking, and books the hours she freed. [...]
+PASS Double booking under concurrency. 20 rounds of two overlapping bookings sent together: one wins with 2 rows, the other is refused with the guard (2/0, 0/2, 0 standing for the guard). Ten requests for one hour: 0,0,0,0,1,0,0,0,0,0. Owner SQL counts 1 holder.
+PASS Signals. 61 bookings.create calls: 24 bookings made and 24 booking.created Signals, each naming the booker as actor. Usage counts the 37 guard refusals under refused.
+PASS Check-in route. POST /api/checkin refuses an unsigned body (401 invalid-signature) and a stale t (401 stale-timestamp), and accepts a signature or the panel's API key. [...] The runtime endpoint refuses the key with 403 [...]. A visitor and a staff member calling panel.checkin through actions_invoke get "Action panel.checkin answers only on its HTTP route, POST /api/checkin.".
+PASS Action Contract. [...] conform --token --secret: "76 passed, 0 failed, 0 skipped.". conform --token --key: "74 passed, 0 failed, 0 skipped.". conform --key alone: "26 passed, 0 failed, 14 skipped, 1 rate-limit waits.".
 PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no policy violation or page error; staff book two hours from the grid. [...]
 ```
 
@@ -50,10 +51,10 @@ PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no
 - **Allowlist by domain.** `ana@office.example` signs up. `pat@elsewhere.example` and `sam@sub.office.example` get exactly the answer a listed address gets under Closed: status 403 and `{"error":"This app is not accepting new accounts for this email address."}`. The replay compares the two bodies with `deepEqual`, so the refusal does not tell a stranger whether the domain or the policy stopped them. A domain entry does not match its subdomains. Closing signup does not sign out existing staff.
 - **The policy is in place before the first request.** The release payload carries `initialSignupPolicy`, so the public app never runs Open.
 - **Public reads stay narrow.** The anonymous query projects `room` and `hour` and nothing else; titles and names come only from `bookings.day`, which needs a session. A visitor calling `bookings.day`, `bookings.create` or `bookings.recent` gets `authentication-required`.
-- **A span of hours in one statement.** `bookings.create` generates the hours with a recursive CTE inside the `INSERT`'s `SELECT`, guards them with `WHERE`, and writes every hour or none. Cancelling is one `UPDATE ... WHERE booking_ref = ? AND user_id = ?` over all the rows of a booking. Another member's cancel changes 0 rows.
-- **No double booking.** Twenty rounds of two overlapping requests sent at once, and one round of ten requests for the same hour, each end with exactly one holder. The loser always gets `{ changes: 0 }`, never an error.
+- **A span of hours in one statement.** `bookings.create` generates the hours with a recursive CTE inside the `INSERT`'s `SELECT`, guards them with `WHERE`, and writes every hour or none. Cancelling is one `UPDATE ... WHERE booking_ref = ? AND user_id = ?` over all the rows of a booking. Another member's cancel changes 0 rows and is refused with the cancel guard.
+- **No double booking.** Twenty rounds of two overlapping requests sent at once, and one round of ten requests for the same hour, each end with exactly one holder. The loser always gets the create guard, never SQLite's text.
 - **Backstops in the schema.** Owner SQL that skips the action's `WHERE` still meets `UNIQUE constraint failed: bookings.room_id, bookings.day, bookings.slot` and `CHECK constraint failed: typeof(slot) = 'integer' AND slot BETWEEN 8 AND 17`.
-- **Routes.** `GET /api/availability` returns the visitor's rows as JSON. `POST /api/checkin` refuses an unsigned body with 401 `invalid-signature` and accepts a signature or the panel's API key. A staff session cookie sent without a signature gets 401 too.
+- **Routes.** `GET /api/availability` returns the visitor's rows as JSON. `POST /api/checkin` refuses an unsigned body with 401 `invalid-signature`, a stale `t` with 401 `stale-timestamp`, and accepts a signature or the panel's API key. A staff session cookie sent without a signature gets 401 too, and `panel.checkin` answers only on its route.
 - **Content Security Policy.** The visitor page and the staff page load in Chrome under the Kernel's policy with no violation and no page error, and a staff member books two hours by clicking the grid.
 
 ## Atomic booking and the one-statement rule
@@ -61,9 +62,9 @@ PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no
 The obvious model has two tables: a `slots` table that holds one row per room and hour, and a `bookings` table that records who booked what, plus a log of changes. A booking writes one `bookings` row and N `slots` rows, and a cancel deletes the slots and writes a log row. Littlebox runs exactly one SQL statement per action, so none of those pairs can be one action:
 
 - A second statement in the same action is refused: `Action bookings.cancel must contain one statement.`
-- A trigger that writes the second table is refused by the schema authorizer: `schema may only create tables and indexes: not authorized`.
-- A view over the bookings is refused the same way.
-- A mutation must begin with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, so `WITH span AS (...) INSERT ...` is refused with `Action bookings.create contains disallowed SQL.` The same CTE placed after `INSERT INTO bookings (...)` passes, which is the form this app uses.
+- A trigger that writes the second table is refused, since 2026-11-06 at both doors with `schema.sql may only create tables and indexes, but it contains CREATE TRIGGER.`
+- A view over the bookings is refused the same way, naming `CREATE VIEW`.
+- A mutation must begin with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, so `WITH span AS (...) INSERT ...` is refused, since 2026-11-06 at both doors with `Action bookings.create is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Put the WITH clause after INSERT INTO <table> (<columns>), or inside a subquery.` The same CTE placed after `INSERT INTO bookings (...)` passes, which is the form this app uses.
 - Two actions called one after the other are two transactions. A failure between them leaves the first write in place, and nothing in the SDK groups them.
 
 The compromise is one `bookings` table where each row is one hour held, carrying the booking's metadata. `booking_ref` (room, day, start hour and creation time) groups the rows of one booking. Cancelling sets `cancelled_at` instead of deleting, so the cancelled rows stay as the activity log the second table would have held, and the unique index on `(room_id, day, slot)` is partial, `WHERE cancelled_at IS NULL`, so a cancelled hour can be booked again. The title and the requester are copied onto every hour of the booking. That duplication is the cost.
@@ -72,16 +73,16 @@ Which guard answers depends on who writes:
 
 | Guard | Answer | When it fires |
 | --- | --- | --- |
-| `WHERE` in `bookings.create` (room exists, valid date, not in the past, whole hours, 1 to 4 hours, ends by 18:00) | `{ changes: 0 }` | Every invalid request through the action |
-| `NOT EXISTS` over the span in the same `WHERE` | `{ changes: 0 }` | Any overlap, including the loser of a race |
+| `WHERE` in `bookings.create` (room exists, valid date, not in the past, whole hours, 1 to 4 hours, ends by 18:00) | The guard, `Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours.` Before 2026-11-06, `{ changes: 0 }` | Every invalid request through the action |
+| `NOT EXISTS` over the span in the same `WHERE` | The same guard | Any overlap, including the loser of a race |
 | Partial unique index `bookings_one_holder` | `UNIQUE constraint failed: ...`, and the whole multi-row insert rolls back | Only if two statements interleave, or the owner writes SQL directly |
 | `CHECK` on `day` and `slot` | `CHECK constraint failed: ...` | Only on owner SQL; the action's `WHERE` stops bad input first |
 
 ## Double booking under concurrency
 
-The replay sends conflicting `bookings.create` calls from two staff sessions with `Promise.allSettled`. Exactly one wins every time, and the loser gets `{ changes: 0 }`.
+The replay sends conflicting `bookings.create` calls from two staff sessions with `Promise.allSettled`. Exactly one wins every time, and the loser is refused with the create guard.
 
-The guarantee comes from two places. The Kernel holds a per-Deployment database lock around every action statement, on the runtime endpoint (`kernel-rs/src/main.rs:852`) and on HTTP routes (`kernel-rs/src/http.rs:778`), so the `NOT EXISTS` check and the insert of one request never interleave with another's. The partial unique index holds even without the lock, because SQLite checks it inside the statement. The Action Contract does not state that actions are serialized. A replacement backend that runs statements in parallel would still refuse the second holder, but the loser would see SQLite's `UNIQUE constraint failed` text instead of `{ changes: 0 }`, and `conform` would not notice the difference.
+The guarantee comes from two places. The Kernel holds a per-Deployment database lock around every action statement, on the runtime endpoint (`kernel-rs/src/main.rs:852`) and on HTTP routes (`kernel-rs/src/http.rs:778`), so the `NOT EXISTS` check and the insert of one request never interleave with another's. The partial unique index holds even without the lock, because SQLite checks it inside the statement. The Action Contract does not state that actions are serialized. A replacement backend that runs statements in parallel would still refuse the second holder, but the loser would see SQLite's `UNIQUE constraint failed` text instead of the guard, and `conform` would not notice the difference.
 
 ## Notifying staff
 
@@ -96,7 +97,7 @@ What the app does instead:
 
 - The staff view has a Recent activity list, the ten most recently changed bookings, cancellations included. The open board reloads it every 30 seconds while the tab is visible.
 - A lobby screen can poll `GET /api/availability`.
-- The owner can read `booking.created` and `booking.cancelled` Signals. Those also count calls that changed nothing; see the table below.
+- The owner can read `booking.created` and `booking.cancelled` Signals. Since 2026-11-06 they count only calls that changed a row, and `booking.created` names who booked.
 
 A person who does not have the board open learns about a booking when they next open it.
 
@@ -106,19 +107,19 @@ Messages are quoted exactly as the replay received them. "Gate" is the editor's 
 
 | What the app tried | Door | Exact answer | Consequence |
 | --- | --- | --- | --- |
-| A trigger on `bookings` that writes a log row | Kernel | `schema may only create tables and indexes: not authorized` | One action writes one table. See [the compromise](#atomic-booking-and-the-one-statement-rule) |
-| The same trigger | Gate | `schema.sql may only create tables and indexes, but it contains CREATE TRIGGER. The Kernel applies schema.sql with an authorizer that allows CREATE TABLE and CREATE [UNIQUE] INDEX and nothing else, [...]` | Both doors refuse, with different text |
-| A view of taken hours | Kernel | `schema may only create tables and indexes: not authorized` | Each query repeats its own filter |
-| The same view | Gate | `schema.sql may only create tables and indexes, but it contains CREATE VIEW. [...]` | Different text again |
-| A mutation that opens with `WITH span AS (...) INSERT ...` | Kernel | `Action bookings.create contains disallowed SQL.` | Put the CTE after `INSERT INTO t (...)`, which passes |
-| The same mutation | Gate | `actions.json is not a valid server action program. Runtime execute only allows: DELETE, INSERT, REPLACE, UPDATE. Use schema.sql for structural changes.` | The Gate's hint points at schema.sql, which is not where a CTE belongs |
+| A trigger on `bookings` that writes a log row | Kernel | `schema.sql may only create tables and indexes, but it contains CREATE TRIGGER.` (fixed on 2026-11-06; before, `schema may only create tables and indexes: not authorized`) | One action writes one table. See [the compromise](#atomic-booking-and-the-one-statement-rule) |
+| The same trigger | Gate | `schema.sql may only create tables and indexes, but it contains CREATE TRIGGER.`, with a detail that explains the authorizer | Fixed on 2026-11-06: the Kernel gives the same sentence |
+| A view of taken hours | Kernel | `schema.sql may only create tables and indexes, but it contains CREATE VIEW.` (fixed on 2026-11-06) | Each query repeats its own filter |
+| The same view | Gate | `schema.sql may only create tables and indexes, but it contains CREATE VIEW.` | Fixed on 2026-11-06: the same sentence at both doors |
+| A mutation that opens with `WITH span AS (...) INSERT ...` | Kernel | `Action bookings.create is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Put the WITH clause after INSERT INTO <table> (<columns>), or inside a subquery.` (fixed on 2026-11-06; before, `contains disallowed SQL.`) | Put the CTE after `INSERT INTO t (...)`, which passes |
+| The same mutation | Gate | `actions.json is not a valid server action program.` with the Kernel's sentence as its detail | Fixed on 2026-11-06: the hint points at the `INSERT`, not at schema.sql |
 | A cancel that also writes a second statement | Kernel | `Action bookings.cancel must contain one statement.` | No multi-statement transaction from the app |
-| The same action | Gate | `actions.json is not a valid server action program. Server actions must contain exactly one SQL statement.` | Same rule, different text |
-| Telling the requester why a booking failed | Kernel | `{ changes: 0 }`, nothing else | Overlap, past day, bad date, unknown room, too many hours and a span past 18:00 all look the same. `RETURNING` is refused (`Action <name> cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.`) and there are no triggers to `RAISE`. Letting the unique index fail instead would show staff `UNIQUE constraint failed: bookings.room_id, bookings.day, bookings.slot` |
-| Counting bookings with a Signal on `bookings.create` | Kernel | No refusal. 61 calls, 61 `booking.created` Signals, 24 bookings made | A Signal on a mutation records whenever the statement ran without error, including `{ changes: 0 }`. The owner cannot tell a booking from a refused attempt |
-| Protecting `panel.checkin` with a signature | Kernel | No refusal. A signed-out visitor calls it through `actions_invoke` with no signature and gets `{ changes: 1 }` | The signature guards only `POST /api/checkin`. Any visitor of a public app can check in any booking through the runtime endpoint. Making the action `authenticated` closes that door and the route with it: `Action <name> is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route.` The contract does list "visitor" on the runtime endpoint for this action |
-| A staff member checking in from the app with their session | Kernel | 401 `{"error":"invalid-signature"}` | Matches docs/mcp.md: a person needs the signature too. The contract's route section lists "person (the app session cookie, from the app's own origin)" as a caller without saying the signature is still required. A 401 on an action with no actor binding does not show whether the Kernel read the cookie at all |
-| The panel's API key on the runtime endpoint | Kernel | No refusal. `availability.day` answers as for a visitor; `bookings.mine` answers `authentication-required` | docs/mcp.md says the runtime endpoint "does not accept" a key. It ignores it instead, so a misconfigured program gets visitor data without an error |
+| The same action | Gate | `actions.json is not a valid server action program.` with `Action bookings.cancel must contain one statement.` as its detail | Fixed on 2026-11-06: same rule, same text |
+| Telling the requester why a booking failed | Kernel | Fixed on 2026-11-06 in part: the guard `Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours.` Before, `{ changes: 0 }` | One statement still cannot say which rule failed, so the guard names them all; overlap, past day, bad date, unknown room, too many hours and a span past 18:00 get one sentence. `RETURNING` is refused (`Action <name> cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.`) and there are no triggers to `RAISE`. Letting the unique index fail instead would show staff `UNIQUE constraint failed: bookings.room_id, bookings.day, bookings.slot` |
+| Counting bookings with a Signal on `bookings.create` | Kernel | Fixed on 2026-11-06: 61 calls, 24 bookings, 24 `booking.created` Signals naming the booker, and 37 refusals under Usage's `refused`. Before, 61 Signals | A Signal on a mutation records only when a row changed |
+| Protecting `panel.checkin` with a signature | Kernel | Fixed on 2026-11-06: `Action panel.checkin answers only on its HTTP route, POST /api/checkin.` for a visitor and for staff. Before, `{ changes: 1 }` with no signature | A signed route is its action's only door. The contract lists no runtime caller for the action |
+| A staff member checking in from the app with their session | Kernel | 401 `{"error":"invalid-signature"}` | Matches docs/mcp.md: a signed route takes the signature or a key unless its `callers` list `"session"`. Since 2026-11-06 the contract's route section lists only the callers the route takes |
+| The panel's API key on the runtime endpoint | Kernel | Fixed on 2026-11-06: 403 `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.` Before, visitor answers with no error | A misconfigured program learns where its key works |
 | An API key booking a room | Kernel | Not possible: keys work only on HTTP routes, and `bookings.create` is `authenticated`, which cannot declare `http` | A program, such as a calendar sync, cannot book on a person's behalf |
 | A webhook out to notify staff | none | No primitive exists | See [Notifying staff](#notifying-staff) |
 | Seeding rooms from `schema.sql` | Kernel | `schema.sql` may only create tables and indexes (docs/mcp.md; not run by the replay) | The owner inserts rooms with `database_execute` after the first publish |
@@ -127,7 +128,7 @@ Messages are quoted exactly as the replay received them. "Gate" is the editor's 
 | "Not in the past" in the office's time | Kernel | The `now` binding is UTC milliseconds; there is no time zone | The past-day check compares with the UTC date, so for a few hours around midnight it accepts or refuses a day by the wrong calendar. The app sends the browser's local date for its own lists |
 | The booker's name | Kernel | The `actor` binding has only `id` | The app keeps a `staff` table of display names each person sets for themselves. A name is not verified |
 | Typed columns in the Action Contract | `contract` | No warning and no `unnamed` entry, but 7 columns typed `unknown` | `bookings.day.booked_by`, `bookings.day.mine`, `bookings.mine.start`, `bookings.recent.start`, `bookings.recent.booked_by`, `bookings.recent.created_at`, `bookings.recent.cancelled_at`. Every expression column is aliased, so all are named; their types come from `coalesce`, `min`, `max` and a comparison, which the contract does not infer |
-| `conform` with an API key alone | `conform` | `35 passed, 0 failed, 14 skipped` | Authenticated actions need `--token`. With both `--token` and `--key`, the key is sent only to a signed route whose secret was not given |
+| `conform` with an API key alone | `conform` | `26 passed, 0 failed, 14 skipped` | Authenticated actions need `--token`. With both `--token` and `--key`, the key is sent only to a signed route whose secret was not given |
 
 ## Action Contract and conform
 
@@ -135,11 +136,13 @@ Messages are quoted exactly as the replay received them. "Gate" is the editor's 
 
 | Run | Result |
 | --- | --- |
-| `--token <session> --secret panel_hook=<secret>` | 84 passed, 0 failed, 0 skipped |
-| `--token <session> --key <panel key>` | 81 passed, 0 failed, 0 skipped |
-| `--key <panel key>` alone | 35 passed, 0 failed, 14 skipped |
+| `--token <session> --secret panel_hook=<secret>` | 76 passed, 0 failed, 0 skipped |
+| `--token <session> --key <panel key>` | 74 passed, 0 failed, 0 skipped |
+| `--key <panel key>` alone | 26 passed, 0 failed, 14 skipped |
 
-It also runs the same contract in-process with the token and the key from fresh client addresses, with 0 failed. `conform` runs every mutation once with generated input. Here `bookings.create` gets a day that is not a date and answers `{ changes: 0 }`, and `panel.checkin` matches no booking, so the run leaves the board unchanged.
+The counts fell on 2026-11-06 because `panel.checkin` answers only on its route, so its inputs are probed there and not on the runtime endpoint.
+
+It also runs the same contract in-process with the token and the key from fresh client addresses, with 0 failed. `conform` runs every mutation once with generated input. Here `bookings.create` gets a day that is not a date and is refused with its guard, which `conform` checks, and `panel.checkin` matches no booking, so the run leaves the board unchanged.
 
 Every expression the queries return carries an `AS` alias, so the contract names every column and lists nothing under `unnamed`. Seven of those columns have the type `unknown`, listed in the table above.
 

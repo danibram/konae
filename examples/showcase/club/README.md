@@ -37,21 +37,21 @@ The origin Kernel listens on `LITTLEBOX_SHOWCASE_PORT` (default 19470) and the d
 - **Invitation only.** A visitor gets the Kernel's sign-in page with "Only invited people can create an account" and no signup form. A signup from an uninvited address answers 403. Three invitations reached the mailbox, and each link set a password and returned a session.
 - **Private and public files.** Ben cannot read Ana's private note through `files_read` or the file read path. He reads her public cover both ways, byte for byte. `files_list` gives him the two covers and his own note. A visitor gets 401 from the file read path.
 - **Images under the policy.** Chrome signed Ben in through the Kernel's form, rendered both 120 by 180 covers from `/_littlebox/files/<id>`, fetched his note's text from the same path and reported no policy violation in light or dark.
-- **API key.** A key with `files: ["public"]` reads a cover with `image/png` and the original bytes. It gets 404 for a private note and 401 on the runtime endpoint.
-- **Roles.** Ana's `books.schedule` changes one row. Ben's `books.schedule`, `books.remove` and `books.finish` change none, and the page shows "Nothing changed. Only an organizer can schedule a meeting, and the book must still be on the shortlist."
+- **API key.** A key with `files: ["public"]` reads a cover with `image/png` and the original bytes. It gets 404 for a private note, and the runtime endpoint refuses it with 403 and says where keys work.
+- **Roles.** Ana's `books.schedule` changes one row. Ben's `books.schedule`, `books.remove` and `books.finish` change none and are refused with each action's guard, and the page shows "Only an organizer can schedule a meeting, and the book must still be on the shortlist." Usage counts Ana's call under `action` and Ben's two schedules under `refused`.
 - **Recovery.** The emailed link reset Cy's password. Her earlier session then answers "Sign in to use Littlebox MCP.", the old password fails, and the link works once.
-- **Package.** The Package held database, identity, files and usage. On the destination, Ana, Ben and Cy sign in with their passwords (Cy with the new one). Ana is still organizer, the rows match, the cover and the note have the same bytes, Ben still cannot read Ana's note, and Ben's organizer mutation still changes nothing. Ana's origin session and the origin's API key both answer 401 there. The Signup Policy arrived as Invitation only, and the invitation history arrived as three accepted invitations.
-- **Contract.** `littlebox conform` with Ben's session reports `67 passed, 0 failed, 0 skipped.` on the origin and again on the destination.
+- **Package.** The Package held database, identity, files and usage. On the destination, Ana, Ben and Cy sign in with their passwords (Cy with the new one). Ana is still organizer, the rows match, the cover and the note have the same bytes, Ben still cannot read Ana's note, and Ben's organizer mutation is still refused with its guard. Ana's origin session and the origin's API key both answer 401 there. The Signup Policy arrived as Invitation only, and the invitation history arrived as three accepted invitations.
+- **Contract.** `littlebox conform` with Ben's session reported `70 passed, 0 failed, 0 skipped.` on the origin and again on the destination on 2026-11-06, including a guard check for each organizer action.
 
 ## Does zero changes instead of an authorization error hurt?
 
-Yes, in three places the replay checks.
+It did, in three places the first replay checked, and the guard fixed on 2026-11-06 answers each.
 
-1. The page cannot say why nothing happened. `books.schedule` from a member and `books.schedule` on a book that does not exist both answer `{ changes: 0, lastInsertId: 0 }`. The refusal text has to hedge ("and the book must still be on the shortlist") because the app cannot tell the cases apart.
-2. Usage records the refused calls as successful. After Ben's two schedules that changed nothing and Ana's one that worked, `usage_read` counts `books.schedule` 3 times. A Project Owner reading Usage sees three schedules.
-3. The Action Contract lists no refusal for a role check, so `conform` passes every organizer action as a member, with zero changes. A replacement backend that dropped the role check would also pass.
+1. The page could not say why nothing happened: a member's `books.schedule` answered `{ changes: 0, lastInsertId: 0 }`. Each organizer action now declares a guard, so the call is refused with "Only an organizer can schedule a meeting, and the book must still be on the shortlist." The sentence still hedges, because one statement cannot tell a missing role from a book that does not exist; both change no row.
+2. Usage recorded the refused calls as successful: `books.schedule` counted 3 times. Now it counts Ana's one under `action` and Ben's two under `refused`.
+3. The Action Contract listed no refusal for a role check, so `conform` passed a backend that dropped it. The contract now lists each guard, and `conform` fails a backend that answers `{ changes: 0 }` where the guard should refuse.
 
-The predicate still holds on both Kernels. Nobody without the role changed a row. The cost is that only the person who wrote the SQL knows that a 0 meant "refused".
+The predicate still holds on both Kernels. Nobody without the role changed a row.
 
 ## What the platform refused or could not do
 
@@ -65,9 +65,9 @@ The predicate still holds on both Kernels. Nobody without the role changed a row
 | Private Deployment | A visitor's `GET /_littlebox/files/<public cover>` | 401 `{"error":"authentication-required"}`. The public `feed` example gets 404 for the same request on a public app. |
 | File visibility | `files_upload` with `visibility: "organizers"` on the runtime endpoint | `Value is outside the allowed choices.` Through the SDK the same option stores a private file without an error (`src/mcp/runtime.js` keeps only `"public"`). There is no visibility for "organizers" or "one other member", so a member cannot share a note with the organizer. |
 | API key | A key with `files: ["public"]` reads a private note | 404 `{"error":"File not found."}` |
-| API key | The same key on `/_littlebox/mcp` | 401 `{"error":"Sign in to use Littlebox MCP."}` |
+| API key | The same key on `/_littlebox/mcp` | Fixed on 2026-11-06: 403 `{"error":"An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session."}`. Before, 401 `{"error":"Sign in to use Littlebox MCP."}` |
 | API key | `api_keys_create` naming `books.list` | `Action books.list has no HTTP route, so a key cannot call it.` A program can read covers but cannot list which books they belong to without an anonymous route, and on a private app an anonymous route is open to anyone who knows the path. |
-| Roles in SQL | Ben (member) calls `books.schedule`, `books.remove`, `books.finish` | `{ changes: 0, lastInsertId: 0 }`, the same answer as `books.schedule` on a book that does not exist |
+| Roles in SQL | Ben (member) calls `books.schedule`, `books.remove`, `books.finish` | Fixed on 2026-11-06: each guard, such as `Only an organizer can remove a book.` `books.schedule` on a book that does not exist gets the same schedule guard. Before, `{ changes: 0, lastInsertId: 0 }` |
 | Roles in SQL | Ana (organizer) calls `app_invitations_create` on the runtime endpoint | `Unknown tool or insufficient permission.` The organizer is a row in the app's database. Only the Project Owner holds `manage_users`, so the club's organizer cannot invite a new member. |
 | Roles in SQL | Promoting an organizer | An `actor` binding yields only the user ID, so the app's database never sees an email. The Project Owner reads `app_users_list`, copies the user ID and pastes it into a `database_execute` SQL string. That operation takes no bound parameters. |
 | Usage | `usage_read` after two refused schedules and one real one | `books.schedule` counted 3 calls. Nothing separates the two that changed nothing. |

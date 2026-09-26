@@ -38,7 +38,7 @@
         { "source": "input", "key": "device", "type": "string", "maxLength": 20 },
         { "source": "kernel", "field": "now" }
       ],
-      "signal": { "name": "habit.completed", "properties": ["habitId", "day", "device"] }
+      "signal": { "name": "habit.completed", "properties": ["habitId", "day", "device", "actor"] }
     },
     "checkins.remove": {
       "kind": "mutation",
@@ -98,7 +98,7 @@
         { "source": "input", "key": "device", "type": "string", "maxLength": 20 },
         { "source": "kernel", "field": "now" }
       ],
-      "signal": { "name": "habit.completed", "properties": ["habitId", "day", "device"] }
+      "signal": { "name": "habit.completed", "properties": ["habitId", "day", "device", "actor"] }
     }
   }
 }

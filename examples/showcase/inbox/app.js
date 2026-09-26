@@ -78,13 +78,11 @@ async function load() {
 async function acknowledge(event, button) {
   button.disabled = true;
   try {
-    const { changes } = await miniapp.actions.call("events.acknowledge", { id: event.id });
-    // The Signal is a second call: properties come from inputs, so it records
-    // the event and its severity, and the Kernel cannot bind who acknowledged it.
-    if (changes === 1) await miniapp.actions.call("events.acknowledged", { id: event.id, severity: event.severity });
-    else show("Someone acknowledged this event first.");
+    // The action records event.acknowledged with the actor when it changes the row,
+    // and its guard refuses when someone acknowledged the event first.
+    await miniapp.actions.call("events.acknowledge", { id: event.id });
   } catch (error) {
-    show(`Could not acknowledge: ${error.message}`);
+    show(error.message);
   }
   await load();
 }

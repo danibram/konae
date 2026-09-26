@@ -11,19 +11,13 @@ function say(message, tone = "info") {
   status.hidden = !message;
 }
 
-// Organizer actions check the role in their WHERE clause. The Kernel answers a
-// refused mutation with { changes: 0 }, the same answer as a missing row, so
-// the page can only say that nothing changed and why that usually happens.
-const organizerOnly = {
-  "books.schedule": "Nothing changed. Only an organizer can schedule a meeting, and the book must still be on the shortlist.",
-  "books.finish": "Nothing changed. Only an organizer can mark the current book as finished.",
-  "books.remove": "Nothing changed. Only an organizer can remove a book.",
-};
+// Organizer actions check the role in their WHERE clause and declare a guard,
+// so a refused call rejects with the action's own sentence.
 async function mutate(name, input, done) {
   try {
-    const result = await miniapp.actions.call(name, input);
-    if (result.changes === 0) say(organizerOnly[name] ?? "Nothing changed.", "refused");
-    else { say(done, "ok"); await render(); }
+    await miniapp.actions.call(name, input);
+    say(done, "ok");
+    await render();
   } catch (error) {
     say(error.message, "refused");
   }
