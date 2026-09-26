@@ -47,8 +47,8 @@ The yardstick: a person who does not write code, and a person who does, make the
 | Every unknown GET path serves the home page with 200; extensionless paths do not resolve; `404.html` is never read | gallery | 200, home page |
 | `littlebox publish` sends no `initialSignupPolicy`: a public app starts Open, a private one Closed, and Invitation only needs a second credential with `manage_users` | inbox, club, gallery, booking | `Unknown tool or insufficient permission.` |
 | An app Closed from its first release can admit no one, not even by invitation; the invitation is sent anyway with `acceptable: false` | gallery | 403 |
-| A file cannot be made public later or deleted; a draft is re-uploaded and the private copy keeps counting against the quota | gallery | no primitive |
-| The SDK's Blob URL cannot be re-read with `fetch` under `connect-src 'self'` | gallery | `violates ... "connect-src 'self'"` |
+| Fixed 2026-11-06. A file cannot be made public later or deleted; a draft is re-uploaded and the private copy keeps counting against the quota | gallery | Now `files_update` and `files_delete`, uploader only; a deleted file frees its quota and reads as `File not found.` |
+| Fixed 2026-11-06. The SDK's Blob URL cannot be re-read with `fetch` under `connect-src 'self'` | gallery | `violates ... "connect-src 'self'"`. Now `miniapp.files.url(fileId)` returns `/_littlebox/files/<id>`, which `fetch` reads under the same policy |
 | A route always answers `{ "result": [rows] }`; no feed shape, no absolute URLs (the statement cannot read the origin), no CORS, `no-store` on everything | gallery | |
 | No per-action rate limit: every anonymous action shares 30 calls per 10 seconds per address, about 260,000 contact messages a day from one address | gallery | |
 | Inputs have type and length but no allowed values and no integer type; a CHECK is the only guard and its SQLite text reaches the visitor | gallery, booking, inbox | `CHECK constraint failed: ...` |
@@ -66,6 +66,8 @@ The yardstick: a person who does not write code, and a person who does, make the
 
 ### Smaller
 
+Fixed 2026-11-06: the SDK stored a private file when `visibility` was anything but `"public"` (club); it now refuses with `File visibility must be private or public.` A visitor's 401 on a private app's file path against 404 on a public one (club) is now the documented rule: 401 before any lookup on a private Deployment, 404 for a file the caller may not read.
+
 A suspended member's session answers as signed out and only the login route says suspended. A publish with two unset secrets names only the first. A stale timestamp and a wrong secret get the same answer. An actor-bound route refuses a visitor with 400 rather than 401. A signup with a password under required verification accepts and ignores the password. A signup for an active address answers 202 and tells no one. HEAD on a route answers 405 with a body HTTP drops. The Action Contract's Markdown omits the Signal.
 
 ## What to do first
@@ -75,7 +77,7 @@ A suspended member's session answers as signed out and only the login route says
 3. One refusal text per rule at both doors, with a test that walks every shared case through the Gate and the Kernel and compares the words, as `http-binding-cases.json` and `signal-cases.json` already do for two groups.
 4. The static publishing contract from product-fit: multi-page artifacts in the CLI, 404, extensionless paths, `404.html`.
 5. Initial signup policy in `littlebox publish` and `littlebox.json`; invitations allowed under Closed when the owner sends them.
-6. File lifecycle: publish and delete.
+6. File lifecycle: publish and delete. Done 2026-11-06: `files_update`, `files_delete` and `miniapp.files.url`.
 7. Keys in the package, and the docs made true either way.
 
 Items 1 to 3 touch `http.rs`, `usage.rs`, `actions.ts` and the Gate together and go as one delivery. Items 4 to 7 are disjoint and can run in parallel.
