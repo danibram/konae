@@ -173,7 +173,8 @@ export async function runConformance(contract: ActionContract, target: Conforman
     const routeOnly = action.http ? `Action ${name} answers only on its HTTP route, ${action.http.method} ${action.http.path}.` : null;
     if (action.http?.onlyDoor === "always") {
       // The runtime endpoint refuses the action; its bindings are probed on the route.
-      await expectRefusal(action, "answers only on its route", [routeOnly!], () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
+      // A visitor of a private Deployment is stopped before the action, with "Sign in".
+      await expectRefusal(action, "answers only on its route", [routeOnly!, "Sign in to use Littlebox MCP."], () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
       await checkRoute(action, valid);
       continue;
     }
@@ -274,16 +275,19 @@ export async function runConformance(contract: ActionContract, target: Conforman
     // The proof the valid call and the input probes carry. An action that binds
     // the caller needs one with an ID: a key or a session.
     type Proof = "signature" | "key" | "session" | "none";
-    const proofs: Proof[] = action.actorBound ? ["key", "session"] : ["signature", "key", "session", "none"];
-    const proof = proofs.find((candidate) => candidate === "signature" ? Boolean(http.signature && secret !== undefined)
+    // An unsigned route without callers answers anyone on a public Deployment,
+    // so it is tried with no proof first; a key or a session follows on a private one.
+    const usable = (candidate: Proof) => candidate === "signature" ? Boolean(http.signature && secret !== undefined)
       : candidate === "key" ? takes("key") && Boolean(target.key)
       : candidate === "session" ? takes("session") && target.hasSession
-      : !http.signature && !http.declaredCallers);
+      : !http.signature && !http.declaredCallers;
+    const proofs: Proof[] = action.actorBound ? ["key", "session"] : ["signature", "none", "key", "session"];
+    let proof = proofs.find(usable);
+    const fallback = (["key", "session"] as Proof[]).find(usable);
     const prove = async (base: RouteRequest): Promise<RouteRequest> => proof === "signature" ? sign(base)
       : proof === "key" ? { ...base, headers: { ...base.headers, authorization: `Bearer ${target.key}` } }
       : proof === "session" ? { ...base, session: true }
       : base;
-    const via = proof === "key" ? " with an API key" : proof === "session" ? " with a session" : "";
     let open = Boolean(proof);
 
     if (!proof) {
@@ -291,13 +295,21 @@ export async function runConformance(contract: ActionContract, target: Conforman
         : [http.signature ? `the ${http.signature.secret} secret (--secret ${http.signature.secret}=<value>)` : null, takes("key") ? "an API key (--key)" : null, takes("session") ? "a session (--token)" : null].filter(Boolean).join(" or ");
       record(name, `answers ${http.method} ${http.path}`, "skip", `Needs ${needs}.`);
     } else {
-      const sent = await prove(request(valid));
-      const answer = await route(sent);
-      const result = answer.body && typeof answer.body === "object" && "result" in answer.body ? (answer.body as { result: unknown }).result : undefined;
+      let sent = await prove(request(valid));
+      let answer = await route(sent);
       if (proof === "none" && answer.status === 401 && errorOf(answer.body) === "authentication-required") {
         // A private Deployment: the unsigned route takes a key or a session.
-        open = false;
         await expectRouteRefusal(action, "refuses a caller without a key or a session", "authentication-required", sent, answer);
+        proof = fallback;
+        if (proof) {
+          sent = await prove(request(valid));
+          answer = await route(sent);
+        }
+      }
+      const via = proof === "key" ? " with an API key" : proof === "session" ? " with a session" : "";
+      const result = answer.body && typeof answer.body === "object" && "result" in answer.body ? (answer.body as { result: unknown }).result : undefined;
+      if (!proof) {
+        open = false;
         record(name, `answers ${http.method} ${http.path}`, "skip", "The Deployment is private, so the route takes an API key or a session; pass --key or --token.");
       } else if (action.guard && answer.status === 403 && errorOf(answer.body) === action.guard) {
         record(name, `answers ${http.method} ${http.path}${via}`, "pass", "Refused 403 with its guard: the generated input changed no row.");

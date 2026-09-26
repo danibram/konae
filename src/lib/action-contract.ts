@@ -190,6 +190,7 @@ export function contractFromProgram(program: ServerActionProgram, schemaSource: 
     ...(project ? { project: { id: project.id, name: project.name } } : {}),
     errors: [
       fromSdk("Server action not declared.", "runtime"),
+      { ...fromSdk("Sign in to use Littlebox MCP.", "runtime"), when: "the Deployment is private and the caller has no session, whatever the action's name" },
       fromSdk("Arguments must be an object.", "runtime"),
       fromSdk("No route accepts POST on this path.", "http"),
     ],
