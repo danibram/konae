@@ -62,7 +62,7 @@ The predicate still holds on both Kernels. Nobody without the role changed a row
 | Invitation only | `POST /_littlebox/auth/signup` from an uninvited address | 403 `{"error":"This app is not accepting new accounts for this email address."}` |
 | Private file | Ben's `files_read` of Ana's note | `File not found.` |
 | Private file | Ben's `GET /_littlebox/files/<note>` with his session | 404 `{"error":"File not found."}` |
-| Private Deployment | A visitor's `GET /_littlebox/files/<id>` for a public cover, a private note or a missing ID | 401 `{"error":"authentication-required"}` for all three. This is the documented rule: a visitor of a private app is asked to sign in before any file is looked up, and on a public app a file the visitor may not read answers 404, as a missing one. |
+| Private Deployment | A visitor's `GET /_littlebox/files/<id>` for a public cover, a private note or a missing ID | 401 `{"error":"authentication-required"}` for all three. This is the documented rule. A visitor of a private app is asked to sign in before any file is looked up, and on a public app a file the visitor may not read answers 404, as a missing one. |
 | File visibility | `files_upload` with `visibility: "organizers"` on the runtime endpoint | `Value is outside the allowed choices.` There is no visibility for "organizers" or "one other member", so a member cannot share a note with the organizer. |
 | File visibility | `files_update` of Ben's note with `visibility: "organizers"` | `Value is outside the allowed choices.` |
 | File visibility | `miniapp.files.upload(file, { visibility: "organizers" })` in Ben's page | `File visibility must be private or public.` and no file stored. Before 2026-11-06 the SDK stored a private file without an error. |
