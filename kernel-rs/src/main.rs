@@ -40,6 +40,7 @@ mod oauth;
 mod package;
 mod recovery;
 mod security;
+mod sql_rules;
 mod usage;
 use auth::{AuthError, AuthService, AuthUser};
 use limits::{Guards, trusted_proxies};
@@ -2267,23 +2268,7 @@ fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result
         http::binding(name, action)?;
         return Ok(());
     }
-    let sql = action.statement.trim();
-    if sql.matches(';').count() > 1 || (sql.contains(';') && !sql.ends_with(';')) {
-        return Err(format!("Action {name} must contain one statement."));
-    }
-    let first = sql
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_ascii_uppercase();
-    let allowed = if action.kind == "query" {
-        first == "SELECT"
-    } else {
-        ["INSERT", "UPDATE", "DELETE", "REPLACE"].contains(&first.as_str())
-    };
-    if !allowed {
-        return Err(format!("Action {name} contains disallowed SQL."));
-    }
+    sql_rules::check_statement(name, action)?;
     if action.kind == "query" {
         if let Some(reason) = unbounded_query_reason(&action.statement) {
             return Err(format!(
@@ -2481,6 +2466,9 @@ fn apply_additive_schema(path: &Path, schema: &str, program: &ActionProgram) -> 
     let mut connection = Connection::open(path)?;
     // Runs before the authorizer below, which refuses every pragma.
     limit_database_size(&connection, MAX_APP_DATABASE_BYTES)?;
+    if let Some(refusal) = sql_rules::schema_refusal(schema) {
+        anyhow::bail!(refusal);
+    }
     let transaction = connection.transaction()?;
     transaction.authorizer(Some(|context: AuthContext<'_>| match context.action {
         AuthAction::CreateTable { .. } | AuthAction::CreateIndex { .. } => Authorization::Allow,

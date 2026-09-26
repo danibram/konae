@@ -204,6 +204,23 @@ Input bindings in `actions.json` require a value by default. Add `"nullable": tr
 
 Calling this action with `{}` returns the actor's rows up to the limit; `{ "q": "trip" }` filters them. Mutation actions return `{ "changes", "lastInsertId" }`. They cannot use SQL `RETURNING`; publication and the Validation Gate reject it. Use a separate query to read the changed rows.
 
+### Statement rules
+
+An action runs one SQL statement. A query starts with `SELECT` and a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, after any leading comment. The Validation Gate and the Kernel refuse a statement that breaks a rule with the same message, from one case file, `kernel-rs/src/sql-rule-cases.json`, that both test suites run. `kernel-rs/src/sql_rules.rs` and `src/kernel/sql-rules.ts` hold the checks.
+
+| Statement | Message |
+| --- | --- |
+| A query that opens with `WITH` | `Action <name> is a query, so it must start with SELECT. Move the WITH clause into a subquery, as in SELECT ... FROM (WITH ... SELECT ...).` |
+| A mutation that opens with `WITH` | `Action <name> is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Put the WITH clause after INSERT INTO <table> (<columns>), or inside a subquery.` |
+| A `CREATE`, `ALTER` or `DROP`, such as a trigger or a view | `Action <name> is a query, so it must start with SELECT. Tables and indexes belong in schema.sql, and Littlebox runs no triggers or views.`, or the same rule for a mutation |
+| Any other first word | `Action <name> is a query, so it must start with SELECT.` or `Action <name> is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE.` |
+| Anything after the first `;` but comments and whitespace | `Action <name> must contain one statement.` |
+| `RETURNING` on a mutation | `Action <name> cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.` |
+| A query that reads rows with no top-level `LIMIT` | `Action <name> reads rows and has no LIMIT. Add a LIMIT. ...`, with the reason the [query bound](./adr/0009-the-gate-and-the-kernel-share-one-query-bound.md) gives, such as `uses OVER, which keeps one result row per stored row` |
+| A trigger, a view or a row in `schema.sql` | `schema.sql may only create tables and indexes, but it contains CREATE TRIGGER.`, naming each refused statement as `CREATE VIEW`, `INSERT` and so on |
+
+A `WITH` clause is allowed inside the statement: `INSERT INTO bookings (room_id, slot) WITH span(slot) AS (...) SELECT ...` and `SELECT ... FROM (WITH ... SELECT ...) LIMIT 50` both pass. A keyword or a `;` inside a string, a quoted name or a comment does not count.
+
 ## HTTP routes
 
 An action declared `anonymous` may answer one method and path on its Deployment's host. This is how a project receives a webhook or serves a JSON endpoint without a server of its own. `kernel-rs/src/http.rs` implements it; the [ADR-0011 update of 2026-11-06](./adr/0011-one-verified-account-core-for-creators-and-app-users.md) records the decision.

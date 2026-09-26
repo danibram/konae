@@ -128,7 +128,7 @@ An authenticated workspace member allowed to edit a Project and administer its d
 _Avoid_: Runtime user, app user
 
 **Server Action**:
-A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for a signed request, an API Key or a signed-in user; an `authenticated` action may not.
+A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. It runs one SQL statement: a query starts with `SELECT`, a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, and a `WITH` clause sits inside the statement, never in front of it. The Validation Gate and the Kernel refuse a statement that breaks a rule with the same words. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for a signed request, an API Key or a signed-in user; an `authenticated` action may not.
 _Avoid_: Raw SQL endpoint
 
 **Action Contract**:

@@ -37,10 +37,10 @@ describe("server actions", () => {
   test("rejects structural and multi-statement SQL", () => {
     expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions: {
       "notes.drop": { kind: "mutation", access: "anonymous", statement: "DROP TABLE notes", bindings: [] },
-    } }))).toThrow("only allows");
+    } }))).toThrow("Tables and indexes belong in schema.sql");
     expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions: {
       "notes.list": { kind: "query", access: "anonymous", statement: "SELECT * FROM notes; DELETE FROM notes", bindings: [] },
-    } }))).toThrow("exactly one");
+    } }))).toThrow("Action notes.list must contain one statement.");
   });
 
   test("nullable inputs bind omitted values and explicit null as SQL null", () => {

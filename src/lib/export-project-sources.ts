@@ -16,6 +16,8 @@ import kernelMigrationSource from "../../kernel-rs/src/migration.rs?raw";
 import kernelPackageSource from "../../kernel-rs/src/package.rs?raw";
 import kernelRecoverySource from "../../kernel-rs/src/recovery.rs?raw";
 import kernelSecuritySource from "../../kernel-rs/src/security.rs?raw";
+import kernelSqlRulesSource from "../../kernel-rs/src/sql_rules.rs?raw";
+import kernelSqlRuleCases from "../../kernel-rs/src/sql-rule-cases.json?raw";
 import kernelUsageSource from "../../kernel-rs/src/usage.rs?raw";
 import kernelSignalCases from "../../kernel-rs/src/signal-cases.json?raw";
 import kernelCargoLock from "../../kernel-rs/Cargo.lock?raw";
@@ -47,6 +49,8 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/recovery.rs", contents: kernelRecoverySource },
   { path: "kernel-rs/src/sdk-guide.json", contents: kernelSdkGuide },
   { path: "kernel-rs/src/security.rs", contents: kernelSecuritySource },
+  { path: "kernel-rs/src/sql_rules.rs", contents: kernelSqlRulesSource },
+  { path: "kernel-rs/src/sql-rule-cases.json", contents: kernelSqlRuleCases },
   { path: "kernel-rs/src/usage.rs", contents: kernelUsageSource },
   { path: "kernel-rs/src/signal-cases.json", contents: kernelSignalCases },
 ];

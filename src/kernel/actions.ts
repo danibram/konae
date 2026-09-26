@@ -1,7 +1,7 @@
 import type { RuntimeActionDeclaration } from "../deployments/manifest";
 import { unboundedQueryReason } from "../lib/query-bound";
 import { assertRuntimeSql, validateRuntimeParams } from "../runtime/security";
-import { sqlTokens } from "../lib/sql-tokens";
+import { assertActionStatement } from "./sql-rules";
 
 type ActionBinding =
   | { source: "input"; key: string; type: "string"; maxLength?: number; nullable?: boolean }
@@ -104,16 +104,8 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
     return { name, kind, access, statement: "", bindings, ...(signal ? { signal } : {}), ...(http ? { http } : {}) };
   }
   if (!kind || !access || typeof candidate.statement !== "string") throw new Error(`Invalid server action: ${name}`);
+  assertActionStatement(name, kind, candidate.statement);
   assertRuntimeSql(kind === "query" ? "query" : "execute", candidate.statement);
-  assertSingleStatement(candidate.statement);
-  const tokens = sqlTokens(candidate.statement);
-  if (kind === "mutation" && tokens.some((token, index) => {
-    const previous = tokens[index - 1];
-    const parameter = previous?.kind === "symbol" && [":", "@", "$"].includes(previous.text);
-    return token.kind === "word" && token.depth === 0 && token.text.toUpperCase() === "RETURNING" && !parameter;
-  })) {
-    throw new Error(`Action ${name} cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.`);
-  }
   if (kind === "query") {
     const reason = unboundedQueryReason(candidate.statement);
     if (reason) {
@@ -262,36 +254,4 @@ function resolveBinding(binding: ActionBinding, input: Record<string, unknown>, 
   }
   if (typeof value !== "boolean") throw new Error(`${binding.key} must be a boolean.`);
   return value ? 1 : 0;
-}
-
-function assertSingleStatement(sql: string) {
-  let quote: "'" | '"' | "`" | "]" | null = null;
-  let terminated = false;
-  for (let index = 0; index < sql.length; index += 1) {
-    const char = sql[index];
-    const next = sql[index + 1];
-    if (!quote && char === "-" && next === "-") {
-      index = sql.indexOf("\n", index + 2);
-      if (index === -1) break;
-      continue;
-    }
-    if (!quote && char === "/" && next === "*") {
-      const end = sql.indexOf("*/", index + 2);
-      if (end === -1) throw new Error("Unterminated SQL comment.");
-      index = end + 1;
-      continue;
-    }
-    if (!quote && (char === "'" || char === '"' || char === "`" || char === "[")) {
-      quote = char === "[" ? "]" : char;
-      continue;
-    }
-    if (quote && char === quote) {
-      if (next === quote && quote !== "]") { index += 1; continue; }
-      quote = null;
-      continue;
-    }
-    if (!quote && char === ";") { terminated = true; continue; }
-    if (terminated && !/\s/.test(char)) throw new Error("Server actions must contain exactly one SQL statement.");
-  }
-  if (quote) throw new Error("Unterminated SQL string.");
 }
