@@ -1500,14 +1500,7 @@ async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("actions.json is required."))?,
     )?;
     anyhow::ensure!(program.version == 1, "Unsupported action version.");
-    anyhow::ensure!(
-        program.actions.len() <= 100,
-        "A project may declare at most 100 actions."
-    );
-    for (name, action) in &program.actions {
-        validate_action(name, action).map_err(anyhow::Error::msg)?;
-    }
-    super::http::validate_routes(&program).map_err(anyhow::Error::msg)?;
+    super::action_shape::check_program(&program).map_err(anyhow::Error::msg)?;
     super::http::require_secrets(&store(state)?, &input.project.id, &program)?;
     let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
     let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);

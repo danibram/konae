@@ -21,7 +21,7 @@ describe("system prompt", () => {
       "never receives SQL",
       "miniapp.actions.call",
       "validate_capsule",
-      "At most 50 actions",
+      "At most 100 actions",
       '"source": "actor"',
       '"nullable": true',
       "mutation statements using RETURNING fail validation",

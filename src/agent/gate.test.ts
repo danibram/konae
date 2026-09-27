@@ -438,3 +438,47 @@ END;`,
     expect(result.errors.some((error) => error.message.includes("does not run on the current database"))).toBe(true);
   });
 });
+
+describe("the gate and the Kernel refuse the same actions.json", () => {
+  // Every table and column the shared case files name, so a statement the
+  // Kernel accepts also prepares here and only the declaration is judged.
+  const caseSchema = [
+    "CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, external_id TEXT, total REAL, paid INTEGER, user_id TEXT, created_at INTEGER, note TEXT);",
+    "CREATE TABLE IF NOT EXISTS members (id TEXT PRIMARY KEY, role TEXT);",
+    "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT, user_id TEXT);",
+    "CREATE TABLE IF NOT EXISTS bookings (slot INTEGER, user_id TEXT, room_id INTEGER, cancelled_at INTEGER);",
+    "CREATE TABLE IF NOT EXISTS log (user_id TEXT);",
+    "CREATE TABLE IF NOT EXISTS tags (who TEXT);",
+    "CREATE TABLE IF NOT EXISTS joins (source TEXT);",
+    "CREATE TABLE IF NOT EXISTS checkins (habit_id INTEGER, user_id TEXT, day INTEGER);",
+    "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, acknowledged_at INTEGER);",
+  ].join("\n");
+
+  // signature-cases.json holds HMAC vectors for a route's sender, not
+  // declarations, so src/lib/route-signature.test.ts runs it instead.
+  const files = ["action-cases.json", "sql-rule-cases.json", "http-binding-cases.json", "signal-cases.json", "guard-cases.json"];
+
+  for (const file of files) {
+    test(`every case in kernel-rs/src/${file}`, async () => {
+      const cases: { case: string; actions?: Record<string, unknown>; schema?: string; error: string | null }[] =
+        await Bun.file(new URL(`../../kernel-rs/src/${file}`, import.meta.url)).json();
+      expect(cases.length).toBeGreaterThan(5);
+      for (const item of cases) {
+        if (item.schema !== undefined) {
+          // A schema.sql case: the gate's own stage names the refusal.
+          const result = await validator.validate(capsule({ "schema.sql": item.schema, "actions.json": actions({ version: 1, actions: {} }) }));
+          expect(result.errors.map((error) => error.message), item.case).toEqual(item.error === null ? [] : [item.error]);
+          continue;
+        }
+        const result = await validator.validate(capsule({ "schema.sql": caseSchema, "actions.json": actions({ version: 1, actions: item.actions }) }));
+        if (item.error === null) {
+          expect(result.errors, item.case).toEqual([]);
+        } else {
+          expect(result.errors.map((error) => error.detail), item.case).toEqual([item.error]);
+          // The model reads the formatted result, so the Kernel's words reach it.
+          expect(formatValidation(result), item.case).toContain(item.error);
+        }
+      }
+    });
+  }
+});

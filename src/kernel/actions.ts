@@ -78,14 +78,25 @@ export function parseServerActionSource(source: string): ServerActionProgram {
     throw new Error("actions.json must use server action format version 1.");
   }
 
+  // The same checks, in the same order and with the same messages, as
+  // kernel-rs/src/action_shape.rs `check_program`. Sorted names make both doors
+  // name the same action when two are wrong.
+  const declared = record.actions as Record<string, unknown>;
+  if (Object.keys(declared).length > MAX_ACTIONS) throw new Error(`A project may declare at most ${MAX_ACTIONS} actions.`);
+  const parsed = new Map(Object.keys(declared).sort().map((name) => [name, parseAction(name, declared[name])]));
+  // The program keeps the order actions.json writes them in.
   const actions: Record<string, ServerActionDefinition> = {};
-  for (const [name, value] of Object.entries(record.actions as Record<string, unknown>)) {
-    actions[name] = parseAction(name, value);
-  }
+  for (const name of Object.keys(declared)) actions[name] = parsed.get(name)!;
   assertDistinctRoutes(actions);
-  if (Object.keys(actions).length > 50) throw new Error("A deployment may declare at most 50 server actions.");
   return { version: 1, actions };
 }
+
+// kernel-rs/src/action-cases.json holds the shape cases both test suites run.
+const MAX_ACTIONS = 100;
+const MAX_ACTION_NAME = 100;
+const ACTION_NAME = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/;
+const MAX_STATEMENT_BYTES = 20_000;
+const MAX_BINDINGS = 100;
 
 export function actionDeclarations(program: ServerActionProgram): RuntimeActionDeclaration[] {
   return Object.values(program.actions).map(({ name, kind, access }) => ({ name, kind, access }));
@@ -112,42 +123,45 @@ export function resolveServerAction(
 }
 
 function parseAction(name: string, value: unknown): ServerActionDefinition {
-  if (!/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/.test(name)) throw new Error(`Invalid server action name: ${name}`);
+  if (name.length > MAX_ACTION_NAME || !ACTION_NAME.test(name)) throw new Error(`Invalid server action name: ${name}`);
   if (!value || typeof value !== "object") throw new Error(`Invalid server action: ${name}`);
   const candidate = value as Record<string, unknown>;
-  const kind = candidate.kind === "query" || candidate.kind === "mutation" || candidate.kind === "signal" ? candidate.kind : null;
   if (candidate.access === "granted") {
     // Reserved for per-grant access; the Kernel refuses to deploy it until grants exist.
     throw new Error(`Action ${name} uses "access": "granted", which the Kernel does not support yet. Use "anonymous" or "authenticated".`);
   }
   const access = candidate.access === "anonymous" || candidate.access === "authenticated" ? candidate.access : null;
-  if (kind === "signal" && access) {
+  if (!access) throw new Error(`Action ${name} has an invalid access. Use "anonymous" or "authenticated".`);
+  const kind = candidate.kind === "query" || candidate.kind === "mutation" || candidate.kind === "signal" ? candidate.kind : null;
+  if (!kind) throw new Error(`Action ${name} has an invalid kind. Use "query", "mutation" or "signal".`);
+  if (!Array.isArray(candidate.bindings)) throw new Error(`Action ${name} requires a bindings array.`);
+  const bindings = candidate.bindings.map((binding, index) => parseBinding(name, index, binding));
+  if (kind !== "signal" && typeof candidate.statement !== "string") throw new Error(`Invalid server action: ${name}`);
+  const statementBytes = typeof candidate.statement === "string" ? new TextEncoder().encode(candidate.statement).length : 0;
+  if (statementBytes > MAX_STATEMENT_BYTES || bindings.length > MAX_BINDINGS) throw new Error(`Action ${name} exceeds statement or binding limits.`);
+  if (kind === "signal") {
     if (candidate.statement !== undefined && !(typeof candidate.statement === "string" && !candidate.statement.trim())) {
       throw new Error(`Action ${name} is a signal action, so it runs no SQL and cannot declare a statement.`);
     }
-    if (!Array.isArray(candidate.bindings)) throw new Error(`Action ${name} requires a bindings array.`);
-    const bindings = candidate.bindings.map((binding, index) => parseBinding(name, index, binding));
     const signal = parseSignal(name, kind, bindings, candidate.signal);
     const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http);
     parseGuard(name, kind, candidate.guard);
     return { name, kind, access, statement: "", bindings, ...(signal ? { signal } : {}), ...(http ? { http } : {}) };
   }
-  if (!kind || !access || typeof candidate.statement !== "string") throw new Error(`Invalid server action: ${name}`);
-  assertActionStatement(name, kind === "query" ? "query" : "mutation", candidate.statement);
-  assertRuntimeSql(kind === "query" ? "query" : "execute", candidate.statement);
+  const statement = candidate.statement as string;
+  assertActionStatement(name, kind === "query" ? "query" : "mutation", statement);
+  assertRuntimeSql(kind === "query" ? "query" : "execute", statement);
   if (kind === "query") {
-    const reason = unboundedQueryReason(candidate.statement);
+    const reason = unboundedQueryReason(statement);
     if (reason) {
       throw new Error(`Action ${name} ${reason} Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.`);
     }
   }
-  if (!Array.isArray(candidate.bindings)) throw new Error(`Action ${name} requires a bindings array.`);
-  const bindings = candidate.bindings.map((binding, index) => parseBinding(name, index, binding));
   const signal = parseSignal(name, kind, bindings, candidate.signal);
   const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http);
   const guard = parseGuard(name, kind, candidate.guard);
   return {
-    name, kind, access, statement: candidate.statement.trim(), bindings,
+    name, kind, access, statement: statement.trim(), bindings,
     ...(signal ? { signal } : {}), ...(http ? { http } : {}), ...(guard ? { guard } : {}),
   };
 }
@@ -281,8 +295,8 @@ function assertDistinctRoutes(actions: Record<string, ServerActionDefinition>) {
 function parseBinding(actionName: string, index: number, value: unknown): ActionBinding {
   if (!value || typeof value !== "object") throw new Error(`Invalid binding ${index} in ${actionName}.`);
   const binding = value as Record<string, unknown>;
-  if (binding.nullable !== undefined && (typeof binding.nullable !== "boolean" || binding.source !== "input")) {
-    throw new Error(`Invalid nullable option in ${actionName}.`);
+  if (binding.nullable !== undefined && typeof binding.nullable !== "boolean" || binding.nullable === true && binding.source !== "input") {
+    throw new Error(`Action ${actionName} has an invalid nullable input binding.`);
   }
   if (binding.source === "input" && typeof binding.key === "string") {
     const nullable = typeof binding.nullable === "boolean" ? binding.nullable : undefined;
@@ -295,8 +309,9 @@ function parseBinding(actionName: string, index: number, value: unknown): Action
   }
   if (binding.source === "actor" && binding.field === "id") return { source: "actor", field: "id" };
   if (binding.source === "kernel" && binding.field === "now") return { source: "kernel", field: "now" };
-  if (binding.source === "literal" && (binding.value === null || typeof binding.value === "string" || typeof binding.value === "number")) {
-    return { source: "literal", value: binding.value };
+  // An absent value and null both bind NULL, as on the Kernel.
+  if (binding.source === "literal" && (binding.value === undefined || binding.value === null || typeof binding.value === "string" || typeof binding.value === "number")) {
+    return { source: "literal", value: binding.value ?? null };
   }
   throw new Error(`Invalid binding ${index} in ${actionName}.`);
 }

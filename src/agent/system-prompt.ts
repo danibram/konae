@@ -42,7 +42,7 @@ actions.json format:
 }
 
 Rules the Validation Gate checks for you:
-- Action names are lowercase dotted, e.g. tasks.list, notes.create. At most 50 actions.
+- Action names are lowercase dotted, e.g. tasks.list, notes.create. At most 100 actions.
 - "kind": "query" statements must start with SELECT. "kind": "mutation" statements must start with INSERT, UPDATE, DELETE or REPLACE.
 - Exactly one statement per action. No structural SQL (CREATE, ALTER, DROP, PRAGMA) — schema changes belong in schema.sql.
 - Every ? placeholder needs one binding, in statement order. Binding forms:
