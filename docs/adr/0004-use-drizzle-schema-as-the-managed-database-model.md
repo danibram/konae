@@ -1,6 +1,6 @@
 # Use a Drizzle schema as the Managed Project database model
 
-Status: accepted
+Status: accepted, 2026-10-21. Amends [ADR-0003](0003-in-browser-agent-on-pi-agent-core.md): the agent edits `schema.ts`, not `schema.sql`.
 
 Every Managed Project will expose a constrained Drizzle `schema.ts` as its canonical, editable Database Model. Users and agents iterate on that model in the Littlebox editor; Littlebox derives SQL migrations, validation artifacts and database backups through one managed database-lifecycle module. Generated SQL remains reviewable and portable, but it is not a second editable source of truth.
 
@@ -20,7 +20,7 @@ The database-lifecycle module hides Drizzle Kit, migration bookkeeping and persi
 6. Apply the ordered SQL migration through Drizzle's migration machinery and record the new model revision only after it succeeds.
 7. Verify the resulting schema and retain the pre-migration backup as its recovery point.
 
-Physical snapshot, retention and restore remain the responsibility of the database persistence adapter—SQLite files, D1 or another provider—not Drizzle. Keeping them inside the same lifecycle operation prevents publication, administration and the Development Kernel from implementing different safety sequences.
+Physical snapshot, retention and restore remain the responsibility of the database persistence adapter, such as SQLite files or D1, not of Drizzle. Keeping them inside the same lifecycle operation prevents publication, administration and the Development Kernel from implementing different safety sequences.
 
 Managed users and agents may inspect generated migrations and SQL schema snapshots but cannot edit them independently, run `drizzle-kit` or provide a database connection. Existing `schema.sql` Projects receive a one-time, verified Drizzle baseline derived from their materialized SQLite schema; their original SQL is retained in history but stops being the active Database Model. This decision supersedes only ADR-0003's assumption that the agent edits `schema.sql`; its scratch workspace, agent loop and Validation Gate remain in force.
 

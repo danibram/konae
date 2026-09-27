@@ -75,7 +75,7 @@ The validated, immutable static output of a Project revision that a Deployment s
 _Avoid_: Project source, build cache
 
 **Declared Dependencies**:
-The libraries a Managed Capsule states it needs, written as intent by its owner or the agent. Littlebox resolves them against pinned, browser-compatible versions and generates the manifest and lock the build consumes; the generated pair is reviewable and exportable but is not a second editable source of truth.
+The libraries a Managed Capsule states it needs, written as intent by its owner or the agent. Littlebox resolves them against pinned, browser-compatible versions and generates the manifest and lock the build consumes; the generated pair is reviewable and exportable but is not a second editable source of truth. Not built yet: ADR-0007 decides it, and today a Capsule imports only its own files.
 _Avoid_: package.json, lockfile (those name the generated form, not the authority)
 
 **Deployment**:
