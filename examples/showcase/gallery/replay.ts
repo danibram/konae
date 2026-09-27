@@ -219,7 +219,9 @@ try {
   const curator = runtime(curatorCookie);
   const curatorSession = await curator.call<{ userId: string; role: string }>("auth_session");
   assert.equal(curatorSession.role, "member");
-  assert.equal((await curator.call<any>("actions_invoke", { name: "photos.add", input: { file_id: "none", title: "Before the studio row", caption: null, status: "draft" } })).changes, 0);
+  // Before the owner names the curator in the studio table, photos.add's guard refuses her.
+  const beforeStudio = await errorText(curator.call<any>("actions_invoke", { name: "photos.add", input: { file_id: "none", title: "Before the studio row", caption: null, status: "draft" } }));
+  assert.equal(beforeStudio, "Only the studio's curator can add photographs.");
   await owner.call("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: `INSERT INTO studio (user_id) VALUES ('${curatorSession.userId.replaceAll("'", "''")}')` } });
 
   const upload = async (bytes: Uint8Array, name: string, visibility?: "public") => {
@@ -247,7 +249,7 @@ try {
   }
   const drafts = stored.filter((photo) => photo.status === "draft");
   assert.equal((await action(curator, "studio.photos")).length, 5);
-  pass("Curator uploads", "The curator stores three public photographs and two private drafts; photos.add changed nothing before the owner added the account to the studio table.");
+  pass("Curator uploads", "The curator stores three public photographs and two private drafts; photos.add was refused with its guard before the owner added the account to the studio table.");
 
   // A visitor sees published photographs only, by every door.
   const visitor = runtime();
@@ -279,7 +281,10 @@ try {
   const madePublic = await curator.call<{ id: string; visibility: string; url?: string }>("files_update", { fileId: drafts[0].fileId, visibility: "public" });
   assert.equal(madePublic.id, drafts[0].fileId);
   assert.equal(madePublic.visibility, "public");
-  assert.equal((await action(curator, "photos.publish", { id: drafts[0].id, file_id: drafts[0].fileId })).changes, 1);
+  assert.equal((await action(curator, "photos.publish", { id: drafts[0].id })).changes, 1);
+  // The row keeps its own file, so publish takes only the photograph's ID, and a second publish is refused.
+  assert.equal(await errorText(action(curator, "photos.publish", { id: drafts[0].id })), "Only the studio's curator can publish, and only a photograph that is still a draft.");
+  assert.equal(await errorText(action(curator, "photos.publish", { id: drafts[0].id, file_id: stored[0].fileId })), "Unexpected action input: file_id");
   assert.equal((await action(visitor, "photos.published")).length, 4);
   const publishedDraft = await get(`/_littlebox/files/${drafts[0].fileId}`);
   assert.equal(publishedDraft.status, 200);
@@ -303,7 +308,7 @@ try {
   const deletedAgain = await errorText(curator.call("files_delete", { fileId: stray.id }));
   assert.equal(deletedAgain, "File not found.");
   refused("Delete a file that was already deleted (files_delete)", deletedAgain);
-  pass("Publish a draft", `files_update makes the draft's own file public under the same ID and photos.publish points the row at it, so the curator holds 5 files for 5 photographs. A stray upload is deleted with files_delete: files_list drops it, files_read answers "${deletedRead}", the file path answers 404, and its size no longer counts against the 20 MiB quota.`);
+  pass("Publish a draft", `files_update makes the draft's own file public under the same ID and photos.publish marks the row published, a second publish is refused with its guard, so the curator holds 5 files for 5 photographs. A stray upload is deleted with files_delete: files_list drops it, files_read answers "${deletedRead}", the file path answers 404, and its size no longer counts against the 20 MiB quota.`);
 
   // /feed.json: a public GET route any program reads without a signature or a key.
   const feed = await fetch(`${url}/feed.json`, { headers: { host, "x-forwarded-for": freshAddress(), origin: "https://reader.example" } });
@@ -463,8 +468,21 @@ try {
       refused("miniapp.files.upload(file, { visibility: \"organizers\" }) in the page", sdk.refusal);
       await studio.page.waitForTimeout(300);
       assert.deepEqual(studio.violations, [], "Reading a file through files.url broke under the Content Security Policy.");
+      // The owner takes the account out of the studio table while the studio page is open.
+      // A refused upload leaves no file, and a refused publish puts the draft's file back to private.
+      await owner.call("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: "DELETE FROM studio" } });
+      await studio.page.locator("#upload input[name=file]").setInputFiles({ name: "late.png", mimeType: "image/png", buffer: Buffer.from(images[0]) });
+      await studio.page.getByLabel("Title").fill("After the studio row");
+      await studio.page.getByRole("button", { name: "Add photograph" }).click();
+      await studio.page.locator("#upload-status").filter({ hasText: "Only the studio's curator can add photographs." }).waitFor({ timeout: 10_000 });
+      assert.equal(await studio.page.evaluate(async () => (await (window as any).miniapp.files.list()).length), 5, "A refused photograph leaves no file.");
+      await studio.page.locator("#drafts .draft").getByRole("button", { name: "Publish" }).click();
+      await studio.page.locator("#drafts .draft").filter({ hasText: "Only the studio's curator can publish" }).waitFor({ timeout: 10_000 });
+      assert.equal((await get(`/_littlebox/files/${drafts[1].fileId}`)).status, 404, "A refused publish leaves the draft's file private.");
+      await owner.call("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: `INSERT INTO studio (user_id) VALUES ('${curatorSession.userId.replaceAll("'", "''")}')` } });
+      assert.deepEqual(studio.violations, [], "The refused upload and publish broke under the Content Security Policy.");
       await studio.context.close();
-      pass("Chrome", `The home page in light and dark, about.html with a sent contact form, and the signed-in studio load with no policy violation; every grid image loads from /_littlebox/files/<id> at 640px. In the studio, fetch(await miniapp.files.url(draft)) answers ${sdk.status} ${sdk.type} with ${sdk.bytes} bytes under connect-src 'self', files.update publishes and hides the draft, and files.upload refuses visibility "organizers" before sending anything.`);
+      pass("Chrome", `The home page in light and dark, about.html with a sent contact form, and the signed-in studio load with no policy violation; with the account out of the studio table, a refused upload deletes its file and a refused publish leaves the draft private; every grid image loads from /_littlebox/files/<id> at 640px. In the studio, fetch(await miniapp.files.url(draft)) answers ${sdk.status} ${sdk.type} with ${sdk.bytes} bytes under connect-src 'self', files.update publishes and hides the draft, and files.upload refuses visibility "organizers" before sending anything.`);
     } finally { await browser.close(); }
   }
 
