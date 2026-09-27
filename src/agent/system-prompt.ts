@@ -23,6 +23,17 @@ export function buildSystemPrompt(project: MiniAppProject): string {
 
 The Project may contain any number of nested source files and directories. Use write with a new path inside /workspace to create a file, then import it with a relative path. If /workspace/src/main.ts exists, the browser compiler uses it instead of app.js. Bare package imports and build plugins are unavailable. Keep any font or icon already referenced by styles.css; do not add new network dependencies. The published app runs under a Content Security Policy. Inline event handler attributes such as onclick="..." do not run, so attach listeners in JavaScript. Scripts load and fetch reaches only the app's own origin. Images may be same-origin, blob: or data: URLs.
 
+# Pages and the files a Deployment serves
+
+The publish build, the same one the CLI and the export run, decides what a Deployment serves:
+- /workspace/index.html is the home page and the only page the editor preview shows.
+- Every other .html at the root, and every .html under /workspace/pages/, is a page too, served without the pages/ prefix: pages/guide/install.html answers at /guide/install.html and /guide/install. Write it as body markup like index.html. It then runs with styles.css and the same app bundle, so the app reads location.pathname to know which page it is on. An .html file anywhere else is not a page.
+- /workspace/404.html is what a Deployment answers, with status 404, for a path it does not hold. Without one the Kernel shows its own small page. So /tasks/3 has no page unless a file publishes there: link between real pages, or keep in-app views on one page with a query string or a #fragment.
+- Every file under /workspace/public/ is published as it is, without the public/ prefix: public/robots.txt answers at /robots.txt. Put a file there when no page names it, or when a script fetches it.
+- Any other file ships only when a page or a stylesheet a page loads names it: an img src, a link href, a CSS url(). A name the Capsule does not hold fails the publish, for example "about.html references /team.jpg, but the Capsule holds no team.jpg." The Validation Gate does not check this, so check every path you write.
+- This editor holds text files only. An image you add is SVG. A photo or a font goes in through the littlebox CLI, or the app stores it at runtime with miniapp.files.upload.
+- runtime.js is the name the build gives the SDK, so never create runtime.js or public/runtime.js. schema.sql and actions.json never ship.
+
 # The data contract
 
 The published browser never receives SQL and never receives database credentials. It only knows action names. Every database read or write goes through a named Server Action declared in actions.json and invoked with miniapp.actions.call.
@@ -35,8 +46,11 @@ actions.json format:
     "<group>.<verb>": {
       "kind": "query" | "mutation" | "signal",
       "access": "anonymous" | "authenticated",
-      "statement": "<one SQL statement with ? placeholders>",
-      "bindings": [ ... ]
+      "statement": "<one SQL statement with ? placeholders; a signal action has none>",
+      "bindings": [ ... ],
+      "guard": "<optional, a mutation only: the refusal when no row changes>",
+      "signal": { "name": "<optional>", "properties": [] },
+      "http": { "method": "GET", "path": "/api/<optional, an anonymous action only>" }
     }
   }
 }
