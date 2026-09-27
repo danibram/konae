@@ -153,7 +153,7 @@ The replay with `LITTLEBOX_SHOWCASE_SCREENSHOTS` set writes the visitor's grid i
 <details>
 <summary>The Markdown Action Contract</summary>
 
-### Action Contract
+## Action Contract
 
 Generated from actions.json and schema.sql. action-contract.json is the machine-readable form and action-contract.schema.json its schema. Do not edit either; change the Capsule and generate them again.
 
@@ -163,7 +163,7 @@ Generated from actions.json and schema.sql. action-contract.json is the machine-
 - Column types are SQLite affinities read from schema.sql. SQLite does not enforce them, so a value can still arrive as another JSON type when it was stored as one.
 - Nullability follows NOT NULL and INTEGER PRIMARY KEY in schema.sql. A column read through the right side of a LEFT JOIN is nullable.
 - A SQLite error, such as a UNIQUE constraint, is returned with SQLite's own text.
-- On a private Deployment every runtime call needs a session, including anonymous actions. An HTTP route answers by the action's access level whatever the visibility.
+- On a private Deployment every runtime call needs a session, including anonymous actions. An HTTP route answers the callers it takes: without a callers list, a signed route takes the signature or an API key, and an unsigned one anyone on a public Deployment and an API key or a session on a private one. An action whose route does not answer anyone answers only there.
 
 | Action | Kind | Access | HTTP |
 | --- | --- | --- | --- |
@@ -178,7 +178,7 @@ Generated from actions.json and schema.sql. action-contract.json is the machine-
 | `staff.me` | query | authenticated |  |
 | `staff.name` | mutation | authenticated |  |
 
-#### availability.day
+### availability.day
 
 A query declared anonymous.
 
@@ -186,13 +186,13 @@ A query declared anonymous.
 SELECT room_id AS room, slot AS hour FROM bookings WHERE day = ?1 AND cancelled_at IS NULL ORDER BY room_id, slot LIMIT 500
 ```
 
-##### Input
+#### Input
 
 | Key | Type | Required | Limit |
 | --- | --- | --- | --- |
 | `day` | string | yes | 10 UTF-16 code units |
 
-##### Output
+#### Output
 
 An array of row objects.
 
@@ -201,18 +201,21 @@ An array of row objects.
 | `room` | text | no | bookings.room_id |
 | `hour` | integer | no | bookings.slot |
 
-##### Callers
+#### Callers
 
-Runtime endpoint: visitor (none; a public Deployment only; actor none); person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
+Runtime endpoint: visitor (none; a public Deployment only; actor none); person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; a public Deployment only, since on a private one the action answers only on its route; actor user id).
 
 HTTP route `GET /api/availability` on the Deployment host. Input is the query string, each value typed by its input's declared type. It answers `{ "result": ... }` with the same output, or `{ "error": "<message>" }` with a status.
 
-Callers: visitor (none; actor none); service (Authorization: Bearer <API key that names this action>; it replaces the signature; actor key id); person (the app session cookie, from the app's own origin; actor user id).
+Callers: visitor (none; a public Deployment only; actor none); service (Authorization: Bearer <API key that names this action>; actor key id); person (the app session cookie, from the app's own origin; actor user id).
 
-##### Errors
+On a private Deployment the route takes an API key or a session and is the action's only door: the runtime endpoint refuses it there.
+
+#### Errors
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
+| `Action availability.day answers only on its HTTP route, GET /api/availability.` |  | runtime | the Deployment is private and the route has no signature |
 | `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session |
 | `Unexpected action input: <key>` | 400 | both | input has a key no input binding declares |
 | `Missing action input: day` | 400 | both | a required input is omitted |
@@ -220,19 +223,20 @@ Callers: visitor (none; actor none); service (Authorization: Bearer <API key tha
 | `day is too long.` | 400 | both | a string input is longer than its maxLength in UTF-16 code units |
 | `Query result exceeds 2 MiB or 1000 rows.` | 400 | both | a query produces more than 1000 rows or more than 2 MiB of JSON |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
+| `authentication-required` | 401 | http | the Deployment is private and the request carries neither an API key nor a session |
 | `invalid-api-key` | 401 | http | Authorization carries an lbk_ key that is unknown or revoked (401) |
 | `This API key may not call availability.day.` | 403 | http | the key does not name the route's action (403) |
 | `Repeated query parameter: <key>` | 400 | http | a GET names one input twice (400) |
 | `rate-limited` | 429 | http | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
 
-##### Limits
+#### Limits
 
 - LIMIT 500 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
 - 2 seconds per statement.
 - 30 calls per 10 seconds for a visitor, per client address and Deployment.
 - 120 calls per 10 seconds for a signed-in person or API key, each.
 
-#### bookings.cancel
+### bookings.cancel
 
 A mutation declared authenticated. It binds the caller's ID, so a caller without one is refused.
 
@@ -240,21 +244,23 @@ A mutation declared authenticated. It binds the caller's ID, so a caller without
 UPDATE bookings SET cancelled_at = ?3 WHERE booking_ref = ?1 AND user_id = ?2 AND cancelled_at IS NULL
 ```
 
-##### Input
+#### Input
 
 | Key | Type | Required | Limit |
 | --- | --- | --- | --- |
 | `ref` | string | yes | 120 UTF-16 code units |
 
-##### Output
+#### Output
 
 `{ changes, lastInsertId }`, both integers.
 
-##### Callers
+When the statement changes no row the call is refused with `Nothing to cancel. The booking is not yours, or it is already cancelled.` instead.
+
+#### Callers
 
 Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
 
-##### Errors
+#### Errors
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
@@ -264,15 +270,16 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 | `Missing action input: ref` |  | runtime | a required input is omitted |
 | `ref must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
 | `ref is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
+| `Nothing to cancel. The booking is not yours, or it is already cancelled.` |  | runtime | the statement changes no row, so the action's rule refused the call. Usage counts it under refused and no Signal is recorded |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
 
-##### Limits
+#### Limits
 
 - 2 seconds per statement.
 - 30 calls per 10 seconds for a visitor, per client address and Deployment.
 - 120 calls per 10 seconds for a signed-in person or API key, each.
 
-#### bookings.create
+### bookings.create
 
 A mutation declared authenticated. It binds the caller's ID, so a caller without one is refused.
 
@@ -288,7 +295,7 @@ WHERE r.id = ?2
   AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.room_id = ?2 AND b.day = ?3 AND b.slot >= ?4 AND b.slot < ?4 + ?5 AND b.cancelled_at IS NULL)
 ```
 
-##### Input
+#### Input
 
 | Key | Type | Required | Limit |
 | --- | --- | --- | --- |
@@ -298,15 +305,17 @@ WHERE r.id = ?2
 | `hours` | number | yes |  |
 | `title` | string | yes | 80 UTF-16 code units |
 
-##### Output
+#### Output
 
 `{ changes, lastInsertId }`, both integers.
 
-##### Callers
+When the statement changes no row the call is refused with `Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours.` instead.
+
+#### Callers
 
 Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
 
-##### Errors
+#### Errors
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
@@ -326,15 +335,16 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 | `Missing action input: title` |  | runtime | a required input is omitted |
 | `title must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
 | `title is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
+| `Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours.` |  | runtime | the statement changes no row, so the action's rule refused the call. Usage counts it under refused and no Signal is recorded |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
 
-##### Limits
+#### Limits
 
 - 2 seconds per statement.
 - 30 calls per 10 seconds for a visitor, per client address and Deployment.
 - 120 calls per 10 seconds for a signed-in person or API key, each.
 
-#### bookings.day
+### bookings.day
 
 A query declared authenticated. It binds the caller's ID, so a caller without one is refused.
 
@@ -342,13 +352,13 @@ A query declared authenticated. It binds the caller's ID, so a caller without on
 SELECT b.booking_ref AS ref, b.room_id AS room, b.slot AS hour, b.title AS title, coalesce(s.display, 'A colleague') AS booked_by, b.user_id = ?1 AS mine, b.checked_in_at AS checked_in_at FROM bookings b LEFT JOIN staff s ON s.user_id = b.user_id WHERE b.day = ?2 AND b.cancelled_at IS NULL ORDER BY b.room_id, b.slot LIMIT 500
 ```
 
-##### Input
+#### Input
 
 | Key | Type | Required | Limit |
 | --- | --- | --- | --- |
 | `day` | string | yes | 10 UTF-16 code units |
 
-##### Output
+#### Output
 
 An array of row objects.
 
@@ -362,11 +372,11 @@ An array of row objects.
 | `mine` | unknown | unknown |  |
 | `checked_in_at` | integer | yes | bookings.checked_in_at |
 
-##### Callers
+#### Callers
 
 Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
 
-##### Errors
+#### Errors
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
@@ -379,14 +389,14 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 | `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
 
-##### Limits
+#### Limits
 
 - LIMIT 500 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
 - 2 seconds per statement.
 - 30 calls per 10 seconds for a visitor, per client address and Deployment.
 - 120 calls per 10 seconds for a signed-in person or API key, each.
 
-#### bookings.mine
+### bookings.mine
 
 A query declared authenticated. It binds the caller's ID, so a caller without one is refused.
 
@@ -394,13 +404,13 @@ A query declared authenticated. It binds the caller's ID, so a caller without on
 SELECT booking_ref AS ref, room_id AS room, day, min(slot) AS start, count(*) AS hours, title FROM bookings WHERE user_id = ?1 AND day >= ?2 AND cancelled_at IS NULL GROUP BY booking_ref ORDER BY day, start LIMIT 50
 ```
 
-##### Input
+#### Input
 
 | Key | Type | Required | Limit |
 | --- | --- | --- | --- |
 | `from` | string | yes | 10 UTF-16 code units |
 
-##### Output
+#### Output
 
 An array of row objects.
 
@@ -413,11 +423,11 @@ An array of row objects.
 | `hours` | integer | no |  |
 | `title` | text | no | bookings.title |
 
-##### Callers
+#### Callers
 
 Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
 
-##### Errors
+#### Errors
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
@@ -430,14 +440,14 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 | `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
 
-##### Limits
+#### Limits
 
 - LIMIT 50 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
 - 2 seconds per statement.
 - 30 calls per 10 seconds for a visitor, per client address and Deployment.
 - 120 calls per 10 seconds for a signed-in person or API key, each.
 
-#### bookings.recent
+### bookings.recent
 
 A query declared authenticated.
 
@@ -445,11 +455,11 @@ A query declared authenticated.
 SELECT b.booking_ref AS ref, b.room_id AS room, b.day AS day, min(b.slot) AS start, count(*) AS hours, b.title AS title, coalesce(s.display, 'A colleague') AS booked_by, max(b.created_at) AS created_at, max(b.cancelled_at) AS cancelled_at FROM bookings b LEFT JOIN staff s ON s.user_id = b.user_id GROUP BY b.booking_ref ORDER BY max(coalesce(b.cancelled_at, b.created_at)) DESC LIMIT 10
 ```
 
-##### Input
+#### Input
 
 None. Send `{}`.
 
-##### Output
+#### Output
 
 An array of row objects.
 
@@ -465,11 +475,11 @@ An array of row objects.
 | `created_at` | unknown | unknown |  |
 | `cancelled_at` | unknown | unknown |  |
 
-##### Callers
+#### Callers
 
 Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
 
-##### Errors
+#### Errors
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
@@ -479,14 +489,14 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 | `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
 
-##### Limits
+#### Limits
 
 - LIMIT 10 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
 - 2 seconds per statement.
 - 30 calls per 10 seconds for a visitor, per client address and Deployment.
 - 120 calls per 10 seconds for a signed-in person or API key, each.
 
-#### panel.checkin
+### panel.checkin
 
 A mutation declared anonymous.
 
@@ -494,7 +504,7 @@ A mutation declared anonymous.
 UPDATE bookings SET checked_in_at = ?4 WHERE room_id = ?1 AND day = ?2 AND slot = ?3 AND cancelled_at IS NULL AND checked_in_at IS NULL
 ```
 
-##### Input
+#### Input
 
 | Key | Type | Required | Limit |
 | --- | --- | --- | --- |
@@ -502,51 +512,55 @@ UPDATE bookings SET checked_in_at = ?4 WHERE room_id = ?1 AND day = ?2 AND slot 
 | `day` | string | yes | 10 UTF-16 code units |
 | `hour` | number | yes |  |
 
-##### Output
+#### Output
 
 `{ changes, lastInsertId }`, both integers.
 
-##### Callers
+#### Callers
 
-Runtime endpoint: visitor (none; a public Deployment only; actor none); person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
+Runtime endpoint: none; the action answers only on its route.
 
 HTTP route `POST /api/checkin` on the Deployment host. Input is a JSON object body of at most 64 KiB. It answers `{ "result": ... }` with the same output, or `{ "error": "<message>" }` with a status.
 
-A signed request carries `X-Panel-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>" keyed with the secret>`. The secret is named `panel_hook` and set by the owner; it is never in this file. `t` must be within 300 seconds of the server's clock, and each signature is accepted once.
+A signed request carries `X-Panel-Signature: t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256, keyed with the secret, of t, n, the method, the path, the canonical query string and the raw body, joined by newlines>`. The secret is named `panel_hook` and set by the owner; it is never in this file. `t` must be within 300 seconds of the server's clock, and each signature is accepted once.
 
-Callers: visitor (the X-Panel-Signature signature; actor none); service (Authorization: Bearer <API key that names this action>; it replaces the signature; actor key id); person (the app session cookie, from the app's own origin; actor user id).
+Callers: visitor (the X-Panel-Signature signature; actor none); service (Authorization: Bearer <API key that names this action>; it replaces the signature; actor key id).
 
-##### Errors
+The route is the action's only door: the runtime endpoint refuses it.
+
+#### Errors
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
+| `Action panel.checkin answers only on its HTTP route, POST /api/checkin.` |  | runtime | always: the route declares a signature or callers |
 | `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` | 400 | both | input has a key no input binding declares |
-| `Missing action input: room` | 400 | both | a required input is omitted |
-| `room must be a non-empty string.` | 400 | both | a string input is not a string, or is empty or only whitespace |
-| `room is too long.` | 400 | both | a string input is longer than its maxLength in UTF-16 code units |
-| `Missing action input: day` | 400 | both | a required input is omitted |
-| `day must be a non-empty string.` | 400 | both | a string input is not a string, or is empty or only whitespace |
-| `day is too long.` | 400 | both | a string input is longer than its maxLength in UTF-16 code units |
-| `Missing action input: hour` | 400 | both | a required input is omitted |
-| `hour must be a number.` | 400 | both | a number input is not a JSON number |
+| `Unexpected action input: <key>` | 400 | http | input has a key no input binding declares |
+| `Missing action input: room` | 400 | http | a required input is omitted |
+| `room must be a non-empty string.` | 400 | http | a string input is not a string, or is empty or only whitespace |
+| `room is too long.` | 400 | http | a string input is longer than its maxLength in UTF-16 code units |
+| `Missing action input: day` | 400 | http | a required input is omitted |
+| `day must be a non-empty string.` | 400 | http | a string input is not a string, or is empty or only whitespace |
+| `day is too long.` | 400 | http | a string input is longer than its maxLength in UTF-16 code units |
+| `Missing action input: hour` | 400 | http | a required input is omitted |
+| `hour must be a number.` | 400 | http | a number input is not a JSON number |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-| `invalid-signature` | 401 | http | a signed route gets no signature, a wrong one, or a t more than 300 seconds from the Kernel's clock (401) |
-| `replayed-signature` | 409 | http | the same signature arrives a second time (409) |
+| `invalid-signature` | 401 | http | a signed route gets no signature, a malformed one, or one whose MAC does not match (401) |
+| `stale-timestamp` | 401 | http | a signature's t is more than 300 seconds from the Kernel's clock; checked before the MAC, so it says nothing about the secret (401) |
+| `replayed-signature` | 409 | http | the same signature arrives a second time; a retry signs again with a new nonce (409) |
 | `invalid-api-key` | 401 | http | Authorization carries an lbk_ key that is unknown or revoked (401) |
 | `This API key may not call panel.checkin.` | 403 | http | the key does not name the route's action (403) |
 | `The request body exceeds 64 KiB.` | 413 | http | a POST body is larger (413) |
 | `The request body must be a JSON object.` | 400 | http | a POST body does not parse as JSON (400) |
 | `rate-limited` | 429 | http | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
 
-##### Limits
+#### Limits
 
 - 2 seconds per statement.
 - 30 calls per 10 seconds for a visitor, per client address and Deployment.
 - 120 calls per 10 seconds for a signed-in person or API key, each.
 - A route body of at most 64 KiB.
 
-#### rooms.list
+### rooms.list
 
 A query declared anonymous.
 
@@ -554,11 +568,11 @@ A query declared anonymous.
 SELECT id, name, seats FROM rooms ORDER BY name LIMIT 50
 ```
 
-##### Input
+#### Input
 
 None. Send `{}`.
 
-##### Output
+#### Output
 
 An array of row objects.
 
@@ -568,11 +582,11 @@ An array of row objects.
 | `name` | text | no | rooms.name |
 | `seats` | integer | no | rooms.seats |
 
-##### Callers
+#### Callers
 
 Runtime endpoint: visitor (none; a public Deployment only; actor none); person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
 
-##### Errors
+#### Errors
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
@@ -581,14 +595,14 @@ Runtime endpoint: visitor (none; a public Deployment only; actor none); person (
 | `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
 
-##### Limits
+#### Limits
 
 - LIMIT 50 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
 - 2 seconds per statement.
 - 30 calls per 10 seconds for a visitor, per client address and Deployment.
 - 120 calls per 10 seconds for a signed-in person or API key, each.
 
-#### staff.me
+### staff.me
 
 A query declared authenticated. It binds the caller's ID, so a caller without one is refused.
 
@@ -596,11 +610,11 @@ A query declared authenticated. It binds the caller's ID, so a caller without on
 SELECT display FROM staff WHERE user_id = ?1 LIMIT 1
 ```
 
-##### Input
+#### Input
 
 None. Send `{}`.
 
-##### Output
+#### Output
 
 An array of row objects.
 
@@ -608,11 +622,11 @@ An array of row objects.
 | --- | --- | --- | --- |
 | `display` | text | no | staff.display |
 
-##### Callers
+#### Callers
 
 Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
 
-##### Errors
+#### Errors
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
@@ -622,14 +636,14 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 | `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
 
-##### Limits
+#### Limits
 
 - LIMIT 1 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
 - 2 seconds per statement.
 - 30 calls per 10 seconds for a visitor, per client address and Deployment.
 - 120 calls per 10 seconds for a signed-in person or API key, each.
 
-#### staff.name
+### staff.name
 
 A mutation declared authenticated. It binds the caller's ID, so a caller without one is refused.
 
@@ -637,21 +651,21 @@ A mutation declared authenticated. It binds the caller's ID, so a caller without
 INSERT INTO staff (user_id, display) VALUES (?1, ?2) ON CONFLICT(user_id) DO UPDATE SET display = excluded.display
 ```
 
-##### Input
+#### Input
 
 | Key | Type | Required | Limit |
 | --- | --- | --- | --- |
 | `display` | string | yes | 60 UTF-16 code units |
 
-##### Output
+#### Output
 
 `{ changes, lastInsertId }`, both integers.
 
-##### Callers
+#### Callers
 
 Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
 
-##### Errors
+#### Errors
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
@@ -663,17 +677,18 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 | `display is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
 
-##### Limits
+#### Limits
 
 - 2 seconds per statement.
 - 30 calls per 10 seconds for a visitor, per client address and Deployment.
 - 120 calls per 10 seconds for a signed-in person or API key, each.
 
-#### Any action
+### Any action
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
 | `Server action not declared.` |  | runtime | actions.json declares no action with that name |
+| `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session, whatever the action's name |
 | `Arguments must be an object.` |  | runtime | input is not an object, e.g. null |
 | `No route accepts POST on this path.` | 405 | http | a POST reaches a path no action binds (405) |
 
