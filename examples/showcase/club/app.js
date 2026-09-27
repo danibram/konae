@@ -6,6 +6,31 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&
 const fileUrl = (id) => `/_littlebox/files/${encodeURIComponent(id)}`;
 
 const status = $("#status");
+// Every status line reads a failure the same way. A refusal's message is the
+// sentence to show; the rate limit answers with a code and an unreachable
+// Kernel with a browser error, so those two get a sentence here.
+function reason(error) {
+  if (error?.message === "rate-limited") return "Too many requests just now. Wait a few seconds and try again.";
+  if (error instanceof TypeError && /fetch|network|load failed/i.test(error.message)) return "The club could not reach its server. Check the connection and try again.";
+  return error?.message ?? String(error);
+}
+const localDay = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+
+// A form's submit button stays disabled until its call answers, so a second
+// press cannot store the same book or note twice.
+async function busy(form, work) {
+  const button = form.querySelector("button[type=submit]");
+  button.disabled = true;
+  try { await work(); } finally { button.disabled = false; }
+}
+
+// A file uploaded for an action the club then refused is deleted, so it does
+// not stay behind counting against the uploader's quota.
+async function attach(file, options, use) {
+  const stored = await miniapp.files.upload(file, options);
+  try { return await use(stored); }
+  catch (error) { await miniapp.files.delete(stored.id).catch(() => {}); throw error; }
+}
 function say(message, tone = "info") {
   status.textContent = message;
   status.dataset.tone = tone;
@@ -20,7 +45,7 @@ async function mutate(name, input, done) {
     say(done, "ok");
     await render();
   } catch (error) {
-    say(error.message, "refused");
+    say(reason(error), "refused");
   }
 }
 
@@ -86,9 +111,13 @@ document.addEventListener("toggle", async (event) => {
   const details = event.target;
   if (!(details instanceof HTMLDetailsElement) || !details.open || details.dataset.loaded) return;
   const pre = details.querySelector("pre");
-  const response = await fetch(await miniapp.files.url(details.dataset.file));
-  pre.textContent = response.ok ? await response.text() : `This note could not be opened (${response.status}).`;
-  details.dataset.loaded = "1";
+  try {
+    const response = await fetch(await miniapp.files.url(details.dataset.file));
+    pre.textContent = response.ok ? await response.text() : `This note could not be opened (${response.status}).`;
+    if (response.ok) details.dataset.loaded = "1";
+  } catch (error) {
+    pre.textContent = `This note could not be opened. ${reason(error)}`;
+  }
 }, true);
 
 document.addEventListener("click", (event) => {
@@ -96,7 +125,8 @@ document.addEventListener("click", (event) => {
   if (!button) return;
   const id = Number(button.dataset.id);
   if (button.dataset.action === "books.schedule") {
-    const meetsOn = new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10);
+    // Two weeks from today on the organizer's own calendar, not the UTC date.
+    const meetsOn = localDay(new Date(new Date().setDate(new Date().getDate() + 14)));
     mutate("books.schedule", { id, meetsOn }, `Scheduled for ${meetsOn}.`);
   } else if (button.dataset.action === "books.finish") {
     mutate("books.finish", { id }, "Marked as finished.");
@@ -108,8 +138,10 @@ document.addEventListener("click", (event) => {
 $("#join-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const display = new FormData(event.target).get("display").trim();
-  try { await miniapp.actions.call("me.join", { display }); await boot(); say(`Welcome, ${display}.`, "ok"); }
-  catch (error) { say(error.message, "refused"); }
+  await busy(event.target, async () => {
+    try { await miniapp.actions.call("me.join", { display }); await boot(); say(`Welcome, ${display}.`, "ok"); }
+    catch (error) { say(reason(error), "refused"); }
+  });
 });
 
 $("#propose-form").addEventListener("submit", async (event) => {
@@ -117,16 +149,21 @@ $("#propose-form").addEventListener("submit", async (event) => {
   const form = event.target;
   const data = new FormData(form);
   const file = data.get("cover");
-  try {
-    let coverFileId = null;
-    // A cover is public inside this private app: every signed-in member reads it.
-    if (file instanceof File && file.size > 0) coverFileId = (await miniapp.files.upload(file, { visibility: "public" })).id;
-    const result = await miniapp.actions.call("books.propose", { title: data.get("title").trim(), author: data.get("author").trim(), coverFileId });
-    if (result.changes === 0) { say("Join the club before proposing a book.", "refused"); return; }
-    form.reset();
-    say("Proposed.", "ok");
-    await render();
-  } catch (error) { say(error.message, "refused"); }
+  const book = { title: data.get("title").trim(), author: data.get("author").trim() };
+  await busy(form, async () => {
+    try {
+      // A cover is public inside this private app: every signed-in member reads it.
+      // books.propose declares a guard, so a refused proposal rejects with its sentence.
+      if (file instanceof File && file.size > 0) {
+        await attach(file, { visibility: "public" }, (cover) => miniapp.actions.call("books.propose", { ...book, coverFileId: cover.id }));
+      } else {
+        await miniapp.actions.call("books.propose", { ...book, coverFileId: null });
+      }
+      form.reset();
+      say("Proposed.", "ok");
+      await render();
+    } catch (error) { say(reason(error), "refused"); }
+  });
 });
 
 $("#note-form").addEventListener("submit", async (event) => {
@@ -136,14 +173,16 @@ $("#note-form").addEventListener("submit", async (event) => {
   const bookId = Number(data.get("book"));
   const title = form.querySelector("select").selectedOptions[0]?.textContent ?? "book";
   const name = `note-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60)}.txt`;
-  try {
-    // Private is the default: only this member can list or read the file.
-    const stored = await miniapp.files.upload(new File([data.get("body")], name, { type: "text/plain" }));
-    await miniapp.actions.call("notes.add", { bookId, fileId: stored.id, name });
-    form.reset();
-    say("Note saved. Only you can open it.", "ok");
-    await render();
-  } catch (error) { say(error.message, "refused"); }
+  await busy(form, async () => {
+    try {
+      // Private is the default: only this member can list or read the file.
+      await attach(new File([data.get("body")], name, { type: "text/plain" }), undefined,
+        (stored) => miniapp.actions.call("notes.add", { bookId, fileId: stored.id, name }));
+      form.reset();
+      say("Note saved. Only you can open it.", "ok");
+      await render();
+    } catch (error) { say(reason(error), "refused"); }
+  });
 });
 
 $("#sign-out").addEventListener("click", async () => {
@@ -151,4 +190,4 @@ $("#sign-out").addEventListener("click", async () => {
   location.reload();
 });
 
-boot().catch((error) => say(error.message, "refused"));
+boot().catch((error) => say(reason(error), "refused"));
