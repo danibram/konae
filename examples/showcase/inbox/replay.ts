@@ -10,9 +10,9 @@ import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createHmac } from "node:crypto";
 import initSqlJs from "sql.js";
 import { McpClient, McpError } from "../../../src/mcp/client";
+import { signRoute } from "../../../src/lib/route-signature";
 import { buildLocal } from "../../../scripts/littlebox";
 import { createCapsuleValidator } from "../../../src/agent/gate";
 import { starterProject } from "../../../src/lib/starter";
@@ -107,8 +107,9 @@ try {
 
   const compiled = await buildLocal(root);
   // One refusal names both unset secrets, so one failed plan tells the owner everything to set.
-  const unsetSecret = await rejects(release(project, compiled.files, compiled.artifact), /which are not set for this project/);
-  assert.equal(unsetSecret, "Actions events.feed and events.receive sign with the secrets events_feed and events_webhook, which are not set for this project. Set each with secret_set before publishing.");
+  // The feed takes an API key, so only the webhook names a secret now.
+  const unsetSecret = await rejects(release(project, compiled.files, compiled.artifact), /which is not set for this project/);
+  assert.equal(unsetSecret, "Action events.receive signs with the secret events_webhook, which is not set for this project. Set it with secret_set before publishing.");
   refused("Publish before secret_set", unsetSecret);
   await owner.call("secret_set", { projectId: project.id, name: "events_webhook", value: webhookSecret });
   await owner.call("secret_set", { projectId: project.id, name: "events_feed", value: feedSecret });
@@ -140,8 +141,8 @@ try {
   assert.equal(strangerSignup.status, 403);
   refused("A stranger signs up on an Invitation only app", (await strangerSignup.json()).error, 403);
 
-  const sign = (body: string, secret = webhookSecret, at = Math.floor(Date.now() / 1000)) =>
-    `t=${at},v1=${createHmac("sha256", secret).update(`${at}.${body}`).digest("hex")}`;
+  const sign = (body: string, secret = webhookSecret, at = Math.floor(Date.now() / 1000), nonce?: string) =>
+    signRoute(secret, { method: "POST", path: "/hooks/events", body }, at, nonce);
   const post = async (body: string, signature?: string, extra: Record<string, string> = {}) => {
     const headers: Record<string, string> = host({ "content-type": "application/json", ...extra });
     if (signature) headers["x-inbox-signature"] = signature;
@@ -151,50 +152,55 @@ try {
   let delivered = 0;
   const deliver = async (event: object) => {
     const body = JSON.stringify(event);
-    const answer = await post(body, sign(body));
+    const answer = await post(body, await sign(body));
     assert.equal(answer.status, 200, JSON.stringify(answer.body));
     delivered++;
     return answer.body.result as { changes: number; lastInsertId: number };
   };
 
   const first = JSON.stringify({ source: "billing", id: "inv-4471", severity: "critical", title: "Card processor declines every charge", body: "Gateway answers 502 since 09:12 UTC." });
-  const firstSignature = sign(first);
+  const firstAt = Math.floor(Date.now() / 1000);
+  const firstSignature = await sign(first, webhookSecret, firstAt, "first-delivery");
   const accepted = await post(first, firstSignature);
   assert.deepEqual(accepted, { status: 200, body: { result: { changes: 1, lastInsertId: 1 } } });
   delivered++;
   const replayed = await post(first, firstSignature);
   assert.deepEqual(replayed, { status: 409, body: { error: "replayed-signature" } });
   refused("The same signed request sent twice", replayed.body.error, replayed.status);
-  const wrongKey = await post(first, sign(first, "not-the-inbox-secret-at-all"));
+  const wrongKey = await post(first, await sign(first, "not-the-inbox-secret-at-all"));
   assert.deepEqual(wrongKey, { status: 401, body: { error: "invalid-signature" } });
   refused("A request signed with another secret", wrongKey.body.error, wrongKey.status);
-  const tampered = await post(first.replace("critical", "info"), sign(first));
+  const tampered = await post(first.replace("critical", "info"), await sign(first));
   assert.deepEqual(tampered, { status: 401, body: { error: "invalid-signature" } });
   refused("A body changed after signing", tampered.body.error, tampered.status);
-  const stale = await post(first, sign(first, webhookSecret, Math.floor(Date.now() / 1000) - 400));
-  assert.deepEqual(stale, { status: 401, body: { error: "invalid-signature" } });
+  // A t outside the window has its own answer, whatever the secret, so a sender with a skewed clock can tell.
+  const stale = await post(first, await sign(first, webhookSecret, Math.floor(Date.now() / 1000) - 400));
+  assert.deepEqual(stale, { status: 401, body: { error: "stale-timestamp" } });
   refused("A correct signature with t 400 seconds old", stale.body.error, stale.status);
-  const future = await post(first, sign(first, webhookSecret, Math.floor(Date.now() / 1000) + 400));
-  assert.deepEqual(future, { status: 401, body: { error: "invalid-signature" } });
+  const staleWrongKey = await post(first, await sign(first, "not-the-inbox-secret-at-all", Math.floor(Date.now() / 1000) - 400));
+  assert.deepEqual(staleWrongKey, stale, "A stale t answers the same whatever the secret.");
+  const future = await post(first, await sign(first, webhookSecret, Math.floor(Date.now() / 1000) + 400));
+  assert.deepEqual(future, { status: 401, body: { error: "stale-timestamp" } });
   const unsigned = await post(first);
   assert.deepEqual(unsigned, { status: 401, body: { error: "invalid-signature" } });
   refused("An unsigned request", unsigned.body.error, unsigned.status);
 
-  // A retry is the same body and, inside the same second, the same signature, so it
-  // reads as a replay. A sender that signs its retry with a later t gets 200 and
-  // the ON CONFLICT clause stores nothing new.
-  const sameSecond = await post(first, sign(first, webhookSecret, Number(firstSignature.slice(2, firstSignature.indexOf(",")))));
-  assert.deepEqual(sameSecond, { status: 409, body: { error: "replayed-signature" } });
-  const retry = await post(first, sign(first, webhookSecret, Math.floor(Date.now() / 1000) - 5));
+  // A retry in the same second signs again with a new nonce, so it is a new request:
+  // 200, and the ON CONFLICT clause stores nothing new. So does one with a later t.
+  const sameSecond = await post(first, await sign(first, webhookSecret, firstAt, "first-delivery-retry"));
+  assert.deepEqual(sameSecond, { status: 200, body: { result: { changes: 0, lastInsertId: 0 } } });
+  delivered++;
+  const retry = await post(first, await sign(first, webhookSecret, Math.floor(Date.now() / 1000) - 5));
   assert.deepEqual(retry, { status: 200, body: { result: { changes: 0, lastInsertId: 0 } } });
   delivered++;
+  const storedNothing = 2;
   const badSeverity = JSON.stringify({ source: "billing", id: "inv-4472", severity: "urgent", title: "Unknown severity" });
-  const checkFailed = await post(badSeverity, sign(badSeverity));
+  const checkFailed = await post(badSeverity, await sign(badSeverity));
   assert.equal(checkFailed.status, 400);
   assert.match(checkFailed.body.error, /CHECK constraint failed/);
   refused("A severity outside the CHECK constraint", checkFailed.body.error, 400);
   const extraField = JSON.stringify({ source: "billing", id: "inv-4473", severity: "info", title: "Extra field", priority: 2 });
-  const undeclared = await post(extraField, sign(extraField));
+  const undeclared = await post(extraField, await sign(extraField));
   assert.deepEqual(undeclared, { status: 400, body: { error: "Unexpected action input: priority" } });
   refused("A sender payload with a field the action does not declare", undeclared.body.error, 400);
   // A route belongs to the Deployment; the editor's own login cookie does not replace a signature.
@@ -205,7 +211,7 @@ try {
   await deliver({ source: "deploys", id: "rel-812", severity: "info", title: "Release 812 reached production" });
   await deliver({ source: "uptime", id: "chk-web", severity: "critical", title: "www returns 503 in two regions", body: "Failing checks from Frankfurt and Virginia." });
   await deliver({ source: "backups", id: "nightly-1106", severity: "info", title: "Nightly copy finished", body: "1.8 GiB in 4 min." });
-  pass("Signed webhook on a private app", `With no session the shell answers the sign-in page, yet POST /hooks/events stores ${delivered - 1} events (one retry stored nothing); replayed, wrong-secret, tampered, stale (t-400 s), future and unsigned requests are refused.`);
+  pass("Signed webhook on a private app", `With no session the shell answers the sign-in page, yet POST /hooks/events stores ${delivered - storedNothing} events; two retries, one in the same second with a new nonce, answer 200 and store nothing. Replayed, wrong-secret, tampered and unsigned requests are refused, and a stale or future t answers stale-timestamp.`);
 
   // ------------------------------------------------------- Keyed read route
   const feed = async (query = "", authorization?: string) => {
@@ -214,8 +220,9 @@ try {
     const response = await fetch(`${url}/api/events${query}`, { headers });
     return { status: response.status, body: await response.json() as any };
   };
+  // events.feed declares "callers": ["key"], so a caller without a key is refused.
   const anonymousFeed = await feed();
-  assert.deepEqual(anonymousFeed, { status: 401, body: { error: "invalid-signature" } });
+  assert.deepEqual(anonymousFeed, { status: 401, body: { error: "authentication-required" } });
   refused("GET /api/events with no key", anonymousFeed.body.error, 401);
   const emptyKey = await rejects(owner.call("api_keys_create", { deploymentId: inbox.id, name: "Nothing", actions: [], files: [] }), /Name at least one/);
   refused("api_keys_create naming no action and no file visibility", emptyKey);
@@ -243,8 +250,9 @@ try {
     method: "POST", headers: host({ "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${reader.key}` }),
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "actions_invoke", arguments: { name: "events.list", input: {} } } }),
   });
-  assert.notEqual(keyOnRuntime.status, 200);
-  refused("An API key on the runtime MCP endpoint", `${keyOnRuntime.status} ${(await keyOnRuntime.text()).slice(0, 160)}`, keyOnRuntime.status);
+  const keyOnRuntimeBody = await keyOnRuntime.json() as { error: string };
+  assert.deepEqual({ status: keyOnRuntime.status, body: keyOnRuntimeBody }, { status: 403, body: { error: "An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session." } });
+  refused("An API key on the runtime MCP endpoint", keyOnRuntimeBody.error, keyOnRuntime.status);
   await owner.call("api_keys_revoke", { deploymentId: inbox.id, keyId: reader.keyId });
   const revoked = await feed("", reader.key);
   assert.deepEqual(revoked, { status: 401, body: { error: "invalid-api-key" } });
@@ -253,26 +261,44 @@ try {
   assert(keys.keys.find((key) => key.keyId === reader.keyId)?.revokedAt, "api_keys_list shows the revocation.");
   assert(!JSON.stringify(keys).includes(reader.key));
   const routeReads = 2;
-  pass("Keyed read route", "A key naming events.feed reads 5 rows and filters with ?after; a key naming nothing cannot be created; a files-only key gets 403; the runtime endpoint ignores keys; after revocation the key gets 401 invalid-api-key.");
+  pass("Keyed read route", "events.feed declares callers [\"key\"]: a caller without a key gets 401 authentication-required, a key naming events.feed reads 5 rows and filters with ?after, a key naming nothing cannot be created, a files-only key gets 403, the runtime endpoint refuses keys with 403, and after revocation the key gets 401 invalid-api-key.");
 
-  // A private app's unsigned GET route answers anyone. A second project shows it.
-  const openRoot = path.join(scratch, "inbox-open");
-  await cp(root, openRoot, { recursive: true });
-  const openActions = JSON.parse(await readFile(path.join(openRoot, "actions.json"), "utf8"));
-  delete openActions.actions["events.feed"].http.signature;
-  await writeFile(path.join(openRoot, "actions.json"), JSON.stringify(openActions, null, 2));
-  const openProject = { id: "showcase_inbox_open", name: "Inbox without a read signature", slug: "inbox-open", manifest: { version: 1, visibility: "private" } };
-  await owner.call("project_create", { projectId: openProject.id, name: openProject.name, slug: openProject.slug, manifest: openProject.manifest });
-  await owner.call("secret_set", { projectId: openProject.id, name: "events_webhook", value: webhookSecret });
-  const openBuild = await buildLocal(openRoot);
-  const open = await release(openProject, openBuild.files, openBuild.artifact);
-  await owner.call("database_execute", { deploymentId: open.id, operation: "sql", input: { sql: "INSERT INTO events(source, external_id, severity, title, body, received_at) VALUES('payroll','run-11','critical','Payroll export failed','Bank file rejected',0)" } });
+  // Two more projects change only events.feed: one without callers, one signed.
+  const variant = async (id: string, slug: string, feedHttp: Record<string, unknown>, secrets: Record<string, string>) => {
+    const variantRoot = path.join(scratch, slug);
+    await cp(root, variantRoot, { recursive: true });
+    const variantActions = JSON.parse(await readFile(path.join(variantRoot, "actions.json"), "utf8"));
+    variantActions.actions["events.feed"].http = feedHttp;
+    await writeFile(path.join(variantRoot, "actions.json"), JSON.stringify(variantActions, null, 2));
+    const variantProject = { id, name: slug, slug, manifest: { version: 1, visibility: "private" } };
+    await owner.call("project_create", { projectId: id, name: slug, slug, manifest: variantProject.manifest });
+    for (const [name, value] of Object.entries(secrets)) await owner.call("secret_set", { projectId: id, name, value });
+    const variantBuild = await buildLocal(variantRoot);
+    const receipt = await release(variantProject, variantBuild.files, variantBuild.artifact);
+    await owner.call("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: "INSERT INTO events(source, external_id, severity, title, body, received_at) VALUES('payroll','run-11','critical','Payroll export failed','Bank file rejected',0)" } });
+    return { receipt, root: variantRoot };
+  };
+  // Without callers or a signature, a private app's GET route takes a key or a session, as its shell does.
+  const open = (await variant("showcase_inbox_open", "inbox-open", { method: "GET", path: "/api/events" }, { events_webhook: webhookSecret })).receipt;
   const openShell = await fetch(`${url}/`, { headers: { host: open.hostname } });
   assert.match(await openShell.text(), /<title>Sign in<\/title>/);
-  const leaked = await fetch(`${url}/api/events`, { headers: { host: open.hostname, "x-forwarded-for": freshAddress() } });
-  assert.equal(leaked.status, 200);
-  assert.equal((await leaked.json() as any).result[0].title, "Payroll export failed");
-  pass("Unsigned read route on a private app", "With the GET route's signature removed, a request with no session and no key reads the private app's rows while its shell still asks for sign-in. Only a signature, which a key replaces, makes the route key-only.");
+  const unproven = await fetch(`${url}/api/events`, { headers: { host: open.hostname, "x-forwarded-for": freshAddress() } });
+  assert.deepEqual({ status: unproven.status, body: await unproven.json() }, { status: 401, body: { error: "authentication-required" } });
+  pass("Unsigned read route on a private app", "With no callers and no signature, GET /api/events on a private app answers 401 authentication-required to a request with no session and no key, as its shell asks for sign-in.");
+
+  // A signed GET: the MAC covers the method, the path and the query string, and a nonce keeps two requests in one second apart.
+  const signedVariant = await variant("showcase_inbox_signed", "inbox-signed", { method: "GET", path: "/api/events", signature: { header: "X-Inbox-Signature", secret: "events_feed" } }, { events_webhook: webhookSecret, events_feed: feedSecret });
+  const signedHost = signedVariant.receipt.hostname;
+  const signedGet = (query: string, signature: string) => fetch(`${url}/api/events${query ? `?${query}` : ""}`, { headers: { host: signedHost, "x-forwarded-for": freshAddress(), "x-inbox-signature": signature } });
+  const feedAt = Math.floor(Date.now() / 1000);
+  const forAfterOne = await signRoute(feedSecret, { method: "GET", path: "/api/events", query: "after=0" }, feedAt, "feed-a");
+  assert.equal((await signedGet("after=0", forAfterOne)).status, 200);
+  const otherQuery = await signedGet("after=4", forAfterOne);
+  assert.deepEqual({ status: otherQuery.status, body: await otherQuery.json() }, { status: 401, body: { error: "invalid-signature" } }, "A signature for one query does not fit another.");
+  const sameSecondOther = await signRoute(feedSecret, { method: "GET", path: "/api/events", query: "after=0" }, feedAt, "feed-b");
+  assert.equal((await signedGet("after=0", sameSecondOther)).status, 200, "Two signed GETs in one second differ by their nonce.");
+  assert.equal((await signedGet("after=0", forAfterOne)).status, 409, "The first signature, sent again, is a replay.");
+  pass("Signed GET route", "A GET signed for ?after=0 answers 200 and the same header on ?after=4 answers 401 invalid-signature; a second GET in the same second with a new nonce answers 200, and the first header sent again answers 409.");
 
   // ------------------------------------------------------- Team by invitation
   const invited = await owner.call<{ policy: any; results: Array<{ email: string; status: string; invitationId: string; acceptable: boolean; delivery: string }> }>(
@@ -327,28 +353,29 @@ try {
   const emptyFilter = await rejects(action(anaClient, "events.list", { severity: "" }), "severity must be a non-empty string.");
   refused("events.list with severity set to an empty string", emptyFilter);
 
+  const ackGuard = "Someone acknowledged this event first, or it does not exist.";
   const ack = await action(anaClient, "events.acknowledge", { id: id["inv-4471"] });
   assert.equal(ack.changes, 1);
-  assert.deepEqual(await action(anaClient, "events.acknowledged", { id: id["inv-4471"], severity: "critical" }), { recorded: true });
-  assert.equal((await action(benClient, "events.acknowledge", { id: id["inv-4471"] })).changes, 0);
+  // A second acknowledgement changes no row, so the guard refuses it and no Signal is recorded.
+  await rejects(action(benClient, "events.acknowledge", { id: id["inv-4471"] }), ackGuard);
   assert.equal((await action(benClient, "events.acknowledge", { id: id["rel-812"] })).changes, 1);
-  assert.deepEqual(await action(benClient, "events.acknowledged", { id: id["rel-812"], severity: "info" }), { recorded: true });
   const openOnly = await action<any[]>(anaClient, "events.list", { state: "open" });
   assert.deepEqual(openOnly.map((row) => row.external_id), ["nightly-1106", "chk-web", "chk-api-eu"]);
   const done = await action<any[]>(benClient, "events.list", { state: "acknowledged", severity: "critical" });
   assert.deepEqual(done.map((row) => [row.external_id, row.acknowledged_by_email]), [["inv-4471", "ana@team.example"]]);
   assert.deepEqual(await action(anaClient, "events.counts"), [{ total: 5, acknowledged: 2 }]);
-  pass("In-app list", "events.list with {} and with explicit nulls returns the same 5 rows, severity and state filters narrow them, a second acknowledgement changes nothing, and counts follow.");
+  pass("In-app list", `events.list with {} and with explicit nulls returns the same 5 rows, severity and state filters narrow them, a second acknowledgement is refused with "${ackGuard}", and counts follow.`);
 
-  // A signed-in member reaches the anonymous webhook action without its signature.
-  const memberReceive = await action(benClient, "events.receive", { source: "ben", id: "typed-by-hand", severity: "critical", title: "Typed by a member, no signature" });
-  assert.equal(memberReceive.changes, 1);
-  // A Signal action does not know whether its mutation ran.
-  assert.deepEqual(await action(benClient, "events.acknowledged", { id: 999, severity: "critical" }), { recorded: true });
+  // The signed webhook route is its action's only door, so a member cannot store an event through actions_invoke.
+  const memberReceive = await rejects(action(benClient, "events.receive", { source: "ben", id: "typed-by-hand", severity: "critical", title: "Typed by a member, no signature" }),
+    "Action events.receive answers only on its HTTP route, POST /hooks/events.");
+  refused("A member calls events.receive through actions_invoke", memberReceive);
+  // The Signal lives on the mutation now, so an event nobody acknowledged records nothing.
+  await rejects(action(benClient, "events.acknowledge", { id: 999 }), ackGuard);
   // members.hello trusts the email the page sends.
   assert.equal((await action(benClient, "members.hello", { email: "ana@team.example" })).changes, 1);
   await action(benClient, "members.hello", { email: "ben@team.example" });
-  pass("What the actions let a member do", "A signed-in member stores an event through actions_invoke on the signed webhook action with no signature, records event.acknowledged for event 999 that no one acknowledged, and can claim another member's email in members.hello.");
+  pass("What the actions let a member do", `A member calling events.receive through actions_invoke gets "${memberReceive}"; acknowledging event 999 is refused with the guard and records no Signal; members.hello still lets a member claim another member's email.`);
 
   // ------------------------------------------------------------- Suspension
   const benId = users.users.find((user) => user.email === "ben@team.example")!.userId;
@@ -365,7 +392,7 @@ try {
   assert.equal(benAccept.status, 410);
   const reinvite = await owner.call<{ results: Array<{ status: string }> }>("app_invitations_create", { deploymentId: inbox.id, emails: ["ben@team.example"], idempotencyKey: "inbox-reinvite-ben" });
   assert.equal(reinvite.results[0].status, "suspended");
-  assert.equal((await action<any[]>(anaClient, "events.list")).length, 6);
+  assert.equal((await action<any[]>(anaClient, "events.list")).length, 5);
   const anaLogin = await appPost("/_littlebox/auth/login", { email: "ana@team.example", password });
   assert.equal(anaLogin.status, 200);
   pass("Suspension", "After app_user_suspend, Ben's open session is refused, the right password answers 403, the shell asks for sign-in again, and a new invitation to that address answers suspended. Ana's session and sign-in keep working.");
@@ -394,17 +421,20 @@ try {
   const total = (kind: string, name = "") => usage.totals.find((row) => row.kind === kind && row.name === name)?.count ?? 0;
   assert.equal(total("route", "POST /hooks/events"), delivered, "Only accepted webhook calls count.");
   assert.equal(total("route", "GET /api/events"), routeReads, "Only keyed reads that ran count.");
-  assert.equal(total("action", "events.acknowledged"), 3);
-  assert.equal(total("action", "events.receive"), 1, "The member's actions_invoke call counts as an action.");
+  assert.equal(total("action", "events.acknowledge"), 2);
+  assert.equal(total("refused", "events.acknowledge"), 2, "The guard's two refusals count under refused.");
+  assert.equal(total("action", "events.receive"), 0, "The member's refused actions_invoke call counts nothing.");
   assert.equal(total("signup"), 2);
   const received = await owner.call<{ signals: Array<{ name: string; at: number; properties: Record<string, unknown> }> }>("signals_read", { deploymentId: inbox.id, name: "event.received" });
   const acknowledged = await owner.call<{ signals: Array<{ name: string; properties: Record<string, unknown> }> }>("signals_read", { deploymentId: inbox.id, name: "event.acknowledged" });
-  assert.equal(received.signals.length, delivered + 1, "Every successful receive records a Signal, the stored-nothing retry included.");
+  assert.equal(received.signals.length, delivered - storedNothing, "Only a receive that stored a row records a Signal.");
   assert.deepEqual(received.signals.at(-1)!.properties, { source: "billing", severity: "critical" });
-  assert.deepEqual(acknowledged.signals.map((signal) => signal.properties.id).sort((a: any, b: any) => a - b), [id["inv-4471"], id["rel-812"], 999]);
+  const anaId = users.users.find((user) => user.email === "ana@team.example")!.userId;
+  assert.deepEqual(acknowledged.signals.map((signal) => [signal.properties.id, signal.properties.actor]).sort((a: any, b: any) => a[0] - b[0]),
+    [[id["inv-4471"], anaId], [id["rel-812"], benId]]);
   const runtimeUsage = await rejects(anaClient.call("usage_read", { deploymentId: inbox.id, from: today, to: today }), /.+/);
   refused("An app user calls usage_read on the runtime endpoint", runtimeUsage);
-  pass("Usage and Signals", `usage_read counts ${delivered} POST /hooks/events and ${routeReads} GET /api/events, none of the refused requests, 2 signups; signals_read returns ${received.signals.length} event.received (the retry that stored nothing included) and 3 event.acknowledged (event 999 included).`);
+  pass("Usage and Signals", `usage_read counts ${delivered} POST /hooks/events and ${routeReads} GET /api/events, none of the refused requests, 2 events.acknowledge and 2 refused by its guard, 2 signups; signals_read returns ${received.signals.length} event.received, one per stored event, and 2 event.acknowledged naming Ana and Ben as actor.`);
 
   // ----------------------------------------------------------------- Browser
   if (process.env.LITTLEBOX_SHOWCASE_BROWSER !== "0") {
@@ -456,18 +486,17 @@ try {
   assert.equal(await contract.exited, 0, await new Response(contract.stderr).text());
   const written = JSON.parse(await readFile(path.join(contractDir, "action-contract.json"), "utf8"));
   assert.deepEqual(written.actions.map((item: { name: string }) => item.name).sort(),
-    ["events.acknowledge", "events.acknowledged", "events.counts", "events.feed", "events.list", "events.receive", "members.hello"]);
+    ["events.acknowledge", "events.counts", "events.feed", "events.list", "events.receive", "members.hello"]);
   const inputsFile = path.join(scratch, "conform-inputs.json");
   await writeFile(inputsFile, JSON.stringify({
     "events.receive": { severity: "info" },
     "events.list": { severity: "info", state: "open" },
-    "events.acknowledged": { severity: "info" },
   }));
   const anaToken = (await appPost("/_littlebox/auth/login", { email: "ana@team.example", password })).headers.get("set-cookie")!.split(";")[0].split("=").slice(1).join("=");
   const conformKey = await owner.call<{ key: string }>("api_keys_create", { deploymentId: inbox.id, name: "Conformance", actions: ["events.feed", "events.receive"] });
-  const runConform = async (secrets: string[]) => {
-    const child = cli(["conform", "--url", inbox.url, "--contract", path.join(contractDir, "action-contract.json"),
-      "--token", anaToken, ...secrets.flatMap((secret) => ["--secret", secret]), "--key", conformKey.key, "--inputs", inputsFile]);
+  const runConform = async (secrets: string[], target = inbox.url, contractFile = path.join(contractDir, "action-contract.json"), credentials = ["--token", anaToken, "--key", conformKey.key]) => {
+    const child = cli(["conform", "--url", target, "--contract", contractFile,
+      ...credentials, ...secrets.flatMap((secret) => ["--secret", secret]), "--inputs", inputsFile]);
     const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     const lines = out.trim().split("\n");
     return { code, out: out + err, totals: lines.at(-1) ?? "", failures: lines.filter((line) => line.startsWith("FAIL")) };
@@ -476,23 +505,17 @@ try {
   const keyed = await runConform([`events_webhook=${webhookSecret}`]);
   assert.equal(keyed.code, 0, keyed.out);
   assert.match(keyed.totals, /^\d+ passed, 0 failed, 0 skipped/);
-  // Signing the GET route instead: its MAC covers "<t>." and no query string, so two
-  // signed GETs inside one second carry the same signature and the second is a replay.
-  // A new second, so this run's "not json" probe cannot repeat the previous run's signature.
-  await Bun.sleep(1_100);
-  const signed = await runConform([`events_webhook=${webhookSecret}`, `events_feed=${feedSecret}`]);
-  // Whether a probe lands in the same second as the one before it is timing, so the
-  // count may vary; every failure is a 409 replay where the contract expects a 400.
-  assert(signed.failures.every((line) => line.includes('Answered 409 "replayed-signature" where the contract says 400')), signed.out);
-  for (const line of signed.failures) refused("conform signs GET /api/events instead of using the key", line.slice(5), 409);
-  // conform signed GETs moments ago; an earlier t gives a signature no one has sent.
-  const feedAt = Math.floor(Date.now() / 1000) - 7;
-  const feedSignature = sign("", feedSecret, feedAt);
-  const signedFeed = (query: string) => fetch(`${url}/api/events${query}`, { headers: host({ "x-inbox-signature": feedSignature }) });
-  assert.equal((await signedFeed("?after=1")).status, 200);
-  const otherQuery = await signedFeed("?after=4");
-  assert.equal(otherQuery.status, 409, "The signature does not depend on the query, so a second query in the same second is a replay.");
-  pass("Action Contract", `littlebox contract writes 7 actions. littlebox conform against the private Deployment, reading the GET route with its key, reports "${keyed.totals}". With the feed secret instead it reports "${signed.totals}": the signed GET's MAC does not cover the query string.`);
+  // The signed variant's contract, checked with both secrets and no other credential:
+  // every signed probe carries its own nonce, so none lands as a replay of another.
+  const signedContractDir = path.join(scratch, "signed-contract");
+  await cp(signedVariant.root, signedContractDir, { recursive: true });
+  const signedContract = cli(["contract", "--dir", signedContractDir]);
+  assert.equal(await signedContract.exited, 0, await new Response(signedContract.stderr).text());
+  const signed = await runConform([`events_webhook=${webhookSecret}`, `events_feed=${feedSecret}`], signedVariant.receipt.url, path.join(signedContractDir, "action-contract.json"), []);
+  assert.equal(signed.code, 0, signed.out);
+  assert.match(signed.totals, /^\d+ passed, 0 failed, \d+ skipped/);
+  assert(signed.out.includes("PASS events.feed: answers GET /api/events."), signed.out);
+  pass("Action Contract", `littlebox contract writes 6 actions. littlebox conform against the private Deployment, reading the GET route with its key, reports "${keyed.totals}". Against the signed variant with both secrets and no session it reports "${signed.totals}": the signed GET and POST probes each carry a fresh nonce.`);
 
   console.log(JSON.stringify({ app: "inbox", checks: passes.length, refusals }, null, 2));
 } finally {

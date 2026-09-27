@@ -1,0 +1,270 @@
+[
+ {
+  "case": "a query that opens with WITH",
+  "actions": {
+   "habits.streaks": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "WITH RECURSIVE days(d) AS (SELECT 1 UNION ALL SELECT d + 1 FROM days WHERE d < 30) SELECT d FROM days LIMIT 30",
+    "bindings": []
+   }
+  },
+  "error": "Action habits.streaks is a query, so it must start with SELECT. Move the WITH clause into a subquery, as in SELECT ... FROM (WITH ... SELECT ...)."
+ },
+ {
+  "case": "the same CTE inside a subquery",
+  "actions": {
+   "habits.streaks": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT d FROM (WITH RECURSIVE days(d) AS (SELECT 1 UNION ALL SELECT d + 1 FROM days WHERE d < 30) SELECT d FROM days) LIMIT 30",
+    "bindings": []
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a mutation that opens with WITH",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "WITH span(slot) AS (SELECT 9) INSERT INTO bookings (slot, user_id) SELECT slot, ?1 FROM span",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ]
+   }
+  },
+  "error": "Action bookings.create is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Put the WITH clause after INSERT INTO <table> (<columns>), or inside a subquery."
+ },
+ {
+  "case": "the same CTE after INSERT INTO",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (slot, user_id) WITH span(slot) AS (SELECT 9) SELECT slot, ?1 FROM span",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ]
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a second statement",
+  "actions": {
+   "bookings.cancel": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE bookings SET cancelled_at = 1 WHERE user_id = ?1; INSERT INTO log (user_id) VALUES (?1)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ]
+   }
+  },
+  "error": "Action bookings.cancel must contain one statement."
+ },
+ {
+  "case": "a second semicolon",
+  "actions": {
+   "bookings.cancel": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE bookings SET cancelled_at = 1 WHERE user_id = ?1;;",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ]
+   }
+  },
+  "error": "Action bookings.cancel must contain one statement."
+ },
+ {
+  "case": "a semicolon inside a string",
+  "actions": {
+   "notes.add": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO notes (body, user_id) VALUES ('a; b', ?1)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ]
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a trailing semicolon and a comment",
+  "actions": {
+   "notes.add": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO notes (body, user_id) VALUES ('a', ?1); -- done",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ]
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a comment before SELECT",
+  "actions": {
+   "notes.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "/* newest first */ SELECT id FROM notes ORDER BY id DESC LIMIT 20",
+    "bindings": []
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a trigger written as an action",
+  "actions": {
+   "bookings.log": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "CREATE TRIGGER log_bookings AFTER INSERT ON bookings BEGIN INSERT INTO log (user_id) VALUES (NEW.user_id); END",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ]
+   }
+  },
+  "error": "Action bookings.log is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Tables and indexes belong in schema.sql, and Littlebox runs no triggers or views."
+ },
+ {
+  "case": "a view written as an action",
+  "actions": {
+   "bookings.taken": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "CREATE VIEW taken AS SELECT room_id FROM bookings",
+    "bindings": []
+   }
+  },
+  "error": "Action bookings.taken is a query, so it must start with SELECT. Tables and indexes belong in schema.sql, and Littlebox runs no triggers or views."
+ },
+ {
+  "case": "a SELECT declared as a mutation",
+  "actions": {
+   "notes.add": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "SELECT id FROM notes WHERE user_id = ?1 LIMIT 1",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ]
+   }
+  },
+  "error": "Action notes.add is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE."
+ },
+ {
+  "case": "RETURNING on a mutation",
+  "actions": {
+   "notes.add": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO notes (body, user_id) VALUES ('a', ?1) RETURNING id",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ]
+   }
+  },
+  "error": "Action notes.add cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows."
+ },
+ {
+  "case": "RETURNING as a named parameter",
+  "actions": {
+   "notes.add": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO notes (body) VALUES (:returning)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "body",
+      "type": "string"
+     }
+    ]
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a window function without a LIMIT",
+  "actions": {
+   "habits.streaks": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT habit_id, max(run) AS best FROM (SELECT habit_id, row_number() OVER (PARTITION BY habit_id ORDER BY day) AS run FROM checkins) GROUP BY habit_id",
+    "bindings": []
+   }
+  },
+  "error": "Action habits.streaks uses OVER, which keeps one result row per stored row, and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+ },
+ {
+  "case": "a window function with a LIMIT",
+  "actions": {
+   "habits.streaks": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT habit_id, max(run) AS best FROM (SELECT habit_id, row_number() OVER (PARTITION BY habit_id ORDER BY day) AS run FROM checkins) GROUP BY habit_id LIMIT 100",
+    "bindings": []
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "schema.sql with tables and indexes",
+  "schema": "CREATE TABLE IF NOT EXISTS bookings (id INTEGER PRIMARY KEY, room_id INTEGER NOT NULL, day TEXT NOT NULL, slot INTEGER NOT NULL, cancelled_at INTEGER);\nCREATE UNIQUE INDEX IF NOT EXISTS bookings_one_holder ON bookings (room_id, day, slot) WHERE cancelled_at IS NULL;",
+  "error": null
+ },
+ {
+  "case": "schema.sql with a trigger",
+  "schema": "CREATE TABLE IF NOT EXISTS bookings (id INTEGER PRIMARY KEY, room_id INTEGER NOT NULL);\nCREATE TABLE IF NOT EXISTS log (id INTEGER PRIMARY KEY, booking_id INTEGER);\nCREATE TRIGGER IF NOT EXISTS log_bookings AFTER INSERT ON bookings BEGIN INSERT INTO log (booking_id) VALUES (NEW.id); END;",
+  "error": "schema.sql may only create tables and indexes, but it contains CREATE TRIGGER."
+ },
+ {
+  "case": "schema.sql with a view",
+  "schema": "CREATE TABLE IF NOT EXISTS bookings (id INTEGER PRIMARY KEY, room_id INTEGER NOT NULL, cancelled_at INTEGER);\nCREATE VIEW IF NOT EXISTS taken AS SELECT room_id FROM bookings WHERE cancelled_at IS NULL;",
+  "error": "schema.sql may only create tables and indexes, but it contains CREATE VIEW."
+ },
+ {
+  "case": "schema.sql with a trigger and a view",
+  "schema": "CREATE TABLE IF NOT EXISTS bookings (id INTEGER PRIMARY KEY, cancelled_at INTEGER);\nCREATE VIEW IF NOT EXISTS live AS SELECT id FROM bookings WHERE cancelled_at IS NULL;\nCREATE TRIGGER IF NOT EXISTS stamp AFTER UPDATE ON bookings BEGIN UPDATE bookings SET cancelled_at = 1 WHERE id = NEW.id; END;",
+  "error": "schema.sql may only create tables and indexes, but it contains CREATE VIEW, CREATE TRIGGER."
+ },
+ {
+  "case": "schema.sql that seeds a row",
+  "schema": "CREATE TABLE IF NOT EXISTS rooms (id INTEGER PRIMARY KEY, name TEXT NOT NULL);\nINSERT INTO rooms (name) VALUES ('Atlas');",
+  "error": "schema.sql may only create tables and indexes, but it contains INSERT."
+ }
+]

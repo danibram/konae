@@ -294,33 +294,40 @@ try {
   assert.equal(keyNote.status, 404);
   refused("API key", "A key scoped to public files reads a private note", `${keyNote.status} ${await keyNote.text()}`);
   const keyOnMcp = await A.http("/_littlebox/mcp", { method: "POST", bearer: key.key, headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
-  assert.equal(keyOnMcp.status, 401);
-  refused("API key", "The same key on the runtime MCP endpoint", `${keyOnMcp.status} ${await keyOnMcp.text()}`);
+  assert.equal(keyOnMcp.status, 403);
+  const keyOnMcpText = await keyOnMcp.text();
+  assert.equal(JSON.parse(keyOnMcpText).error, "An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.");
+  refused("API key", "The same key on the runtime MCP endpoint", `${keyOnMcp.status} ${keyOnMcpText}`);
   const keyForQuery = await message(origin.owner.call("api_keys_create", { deploymentId: receiptA.id, name: "Book list", actions: ["books.list"] }));
   refused("API key", "api_keys_create naming books.list, an authenticated action with no route", keyForQuery);
-  check("API key", "A key scoped to public files reads a cover with Authorization: Bearer, gets 404 for a private note and 401 on the runtime endpoint.");
+  check("API key", "A key scoped to public files reads a cover with Authorization: Bearer, gets 404 for a private note, and the runtime endpoint refuses it with 403 and says where keys work.");
 
-  // Roles in SQL: a member's organizer mutation changes nothing and raises nothing.
-  assert.deepEqual(await action(ben, "books.schedule", { id: dispossessed, meetsOn: "2026-11-20" }), { changes: 0, lastInsertId: 0 });
-  assert.deepEqual(await action(ben, "books.remove", { id: solaris }), { changes: 0, lastInsertId: 0 });
-  assert.deepEqual(await action(ben, "books.schedule", { id: 999_999, meetsOn: "2026-11-20" }), { changes: 0, lastInsertId: 0 });
+  // Roles in SQL: each organizer mutation declares a guard, so a member's call is refused with the app's sentence.
+  const scheduleGuard = "Only an organizer can schedule a meeting, and the book must still be on the shortlist.";
+  assert.equal(await message(action(ben, "books.schedule", { id: dispossessed, meetsOn: "2026-11-20" })), scheduleGuard);
+  assert.equal(await message(action(ben, "books.remove", { id: solaris })), "Only an organizer can remove a book.");
+  // The guard cannot tell a missing book from a missing role: both change no row.
+  assert.equal(await message(action(ben, "books.schedule", { id: 999_999, meetsOn: "2026-11-20" })), scheduleGuard);
   assert.equal((await action(ben, "books.list")).length, 2);
   assert.equal((await action(ana, "books.schedule", { id: dispossessed, meetsOn: "2026-11-20" })).changes, 1);
-  assert.equal((await action(ben, "books.finish", { id: dispossessed })).changes, 0);
-  refused("Roles in SQL", "Ben (member) calls books.schedule, books.remove and books.finish", "`{ changes: 0, lastInsertId: 0 }`, the same answer as books.schedule on a book that does not exist");
-  // Usage counts a zero-change mutation as a successful call.
+  assert.equal(await message(action(ben, "books.finish", { id: dispossessed })), "Only an organizer can mark the current book as finished.");
+  refused("Roles in SQL", "Ben (member) calls books.schedule, books.remove and books.finish", `Each is refused with its guard, such as "${scheduleGuard}". books.schedule on a book that does not exist gets the same sentence`);
+  // Usage counts the organizer's schedule as an action and the two guard refusals under refused.
   const today = new Date().toISOString().slice(0, 10);
   let scheduled = 0;
-  for (const deadline = Date.now() + 5_000; scheduled < 3 && Date.now() < deadline; await Bun.sleep(100)) {
+  let refusedSchedules = 0;
+  for (const deadline = Date.now() + 5_000; refusedSchedules < 2 && Date.now() < deadline; await Bun.sleep(100)) {
     const usage = await origin.owner.call<{ totals: Array<{ kind: string; name: string; count: number }> }>("usage_read", { deploymentId: receiptA.id, from: today, to: today });
     scheduled = usage.totals.find((total) => total.kind === "action" && total.name === "books.schedule")?.count ?? 0;
+    refusedSchedules = usage.totals.find((total) => total.kind === "refused" && total.name === "books.schedule")?.count ?? 0;
   }
-  assert.equal(scheduled, 3);
+  assert.equal(scheduled, 1);
+  assert.equal(refusedSchedules, 2);
   // An organizer is an app role; inviting stays with the Kernel owner.
   const organizerInvites = await message(ana.call("app_invitations_create", { deploymentId: receiptA.id, emails: ["dee@club.example.test"], idempotencyKey: "organizer-invite-01" }));
   refused("Roles in SQL", "Ana (organizer) calls app_invitations_create on the runtime endpoint", organizerInvites);
   refused("Usage", "usage_read after Ben's two refused schedules and Ana's one", `books.schedule counted ${scheduled} calls; nothing separates the two that changed nothing`);
-  check("Roles", "Ben's schedule, remove and finish change zero rows, the same answer a missing book gets; Ana's schedule changes one.");
+  check("Roles", "Ben's schedule, remove and finish are refused with their guards, and a missing book gets the schedule guard too; Ana's schedule changes one. Usage counts 1 books.schedule action and 2 refused.");
 
   if (process.env.LITTLEBOX_SHOWCASE_BROWSER !== "0") {
     // Ben signs in through the Kernel's own page, sees the covers from the
@@ -441,7 +448,7 @@ try {
   assert.equal(new TextDecoder().decode(await anaOnB.download(await anaOnB.call<Transfer>("files_read", { fileId: anaNote.id }))), anaNoteText);
   assert.equal(await message(benOnB.call("files_read", { fileId: anaNote.id })), "File not found.");
   assert.equal((await B.http(`/_littlebox/files/${anaNote.id}`, { cookie: benB.cookie })).status, 404);
-  assert.equal((await action(benOnB, "books.finish", { id: dispossessed })).changes, 0);
+  assert.equal(await message(action(benOnB, "books.finish", { id: dispossessed })), "Only an organizer can mark the current book as finished.");
   assert.equal((await action(anaOnB, "books.finish", { id: dispossessed })).changes, 1);
 
   const originSession = await message(B.runtime(cookies.ana).call("auth_session"));

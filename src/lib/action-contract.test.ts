@@ -72,7 +72,7 @@ describe("action contract for the product-fit examples", () => {
     expect(queries).toBe(16);
   });
 
-  test("the feed's routes carry method, path, signature scheme and three callers", () => {
+  test("the feed's routes carry method, path, signature scheme and the callers each takes", () => {
     const feed = examples.find((example) => example.name === "feed")!;
     const { contract } = generateActionContract({ actionsSource: feed.actions, schemaSource: feed.schema });
     const pings = contract.actions.find((action) => action.name === "pings.receive")!;
@@ -81,15 +81,24 @@ describe("action contract for the product-fit examples", () => {
       path: "/hooks/pings",
       signature: { header: "X-Signature", secret: "pings_webhook", windowSeconds: 300, acceptedOnce: true },
     });
-    expect(pings.http!.callers.map((caller) => caller.kind)).toEqual(["visitor", "service", "person"]);
+    // A signed route takes the signature or a key, and is the action's only door.
+    expect(pings.http!.callers.map((caller) => caller.kind)).toEqual(["visitor", "service"]);
+    expect(pings.http!.onlyDoor).toBe("always");
+    expect(pings.runtime.callers).toEqual([]);
+    expect(pings.errors.find((error) => error.message === "Action pings.receive answers only on its HTTP route, POST /hooks/pings.")).toMatchObject({ via: "runtime" });
+    expect(pings.errors.find((error) => error.message === "stale-timestamp")).toMatchObject({ status: 401, via: "http" });
     expect(pings.output).toEqual({ kind: "changes", fields: ["changes", "lastInsertId"] });
     expect(pings.errors.find((error) => error.message === "invalid-signature")).toMatchObject({ status: 401, via: "http" });
-    expect(pings.errors.find((error) => error.message === "Missing action input: source")).toMatchObject({ status: 400, via: "both" });
+    expect(pings.errors.find((error) => error.message === "Missing action input: source")).toMatchObject({ status: 400, via: "http" });
     expect(pings.limits.maxRequestBytes).toBe(64 * 1024);
     const recent = contract.actions.find((action) => action.name === "incidents.recent")!;
     expect(recent.http).toMatchObject({ method: "GET", path: "/api/incidents" });
     expect(recent.http!.signature).toBeUndefined();
     expect(recent.errors.some((error) => error.message === "invalid-signature")).toBe(false);
+    // Unsigned, it answers anyone on a public Deployment and takes a key or a session on a private one.
+    expect(recent.http!.onlyDoor).toBe("on a private Deployment");
+    expect(recent.http!.callers.map((caller) => caller.kind)).toEqual(["visitor", "service", "person"]);
+    expect(recent.errors.find((error) => error.message === "authentication-required" && error.via === "http")).toMatchObject({ status: 401 });
     expect(recent.limits).toMatchObject({ bound: "limit", limit: 50, maxRows: 1000 });
   });
 

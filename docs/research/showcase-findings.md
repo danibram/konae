@@ -12,7 +12,7 @@ The yardstick: a person who does not write code, and a person who does, make the
 - A signed route refused a bad signature, a stale timestamp and a replay; a key scoped to nothing could not be created; a revoked key was refused.
 - One multi-row booking was atomic, and under 20 races and one burst of ten, exactly one booking won each time, because the Kernel serializes actions per Deployment and a partial unique index backs it.
 - Eject kept sessions and rows; a package import kept IDs, passwords, rows, files, roles and the policy; a restore kept data, keys and Signals and signed everyone out.
-- The Action Contract named every column in four apps and `conform` passed 67 to 84 checks per app against a real Kernel.
+- The Action Contract named every column in four apps and `conform` passed 67 to 84 checks per app against a real Kernel. After the fixes of 2026-11-06 it passes 42 in inbox, whose two routed actions are now probed on their routes only, 70 in club, 76 in booking and 87 in habits, with none skipped.
 
 ## What hurt, by job
 
@@ -20,23 +20,23 @@ The yardstick: a person who does not write code, and a person who does, make the
 
 | Finding | Apps | Exact answer |
 | --- | --- | --- |
-| An unsigned GET route on a private app hands its rows to anyone. No declaration says "key required" | inbox | 200 with rows, no session or key |
-| A signed route's action is callable without the signature through `actions_invoke`: a member stored a webhook event, a visitor of a public app checked in a booking | inbox, booking | `{ "changes": 1 }` |
-| The signature covers the timestamp and the body, not the method, path or query string; two signed GETs in one second collide and a captured signature works for any query | inbox | 409 `replayed-signature` |
-| A refused role check answers like a missing row. Usage counts it as a success and the contract has no refusal for it, so `conform` would pass a backend that dropped the check | club, booking | `{ changes: 0, lastInsertId: 0 }` |
-| The runtime endpoint ignores an API key instead of refusing it | booking | anonymous actions answer as for a visitor |
+| An unsigned GET route on a private app hands its rows to anyone. No declaration says "key required". Fixed on 2026-11-06: `"callers"` names who may call a route, and a private app's unsigned route defaults to a key or a session | inbox | 401 `authentication-required`. Was 200 with rows, no session or key |
+| A signed route's action is callable without the signature through `actions_invoke`: a member stored a webhook event, a visitor of a public app checked in a booking. Fixed on 2026-11-06: an action whose route does not answer anyone answers only there | inbox, booking | `Action events.receive answers only on its HTTP route, POST /hooks/events.` Was `{ "changes": 1 }` |
+| The signature covers the timestamp and the body, not the method, path or query string; two signed GETs in one second collide and a captured signature works for any query. Fixed on 2026-11-06: the MAC covers the method, the path, the canonical query string and a nonce | inbox | 401 `invalid-signature` for another query; 200 for a second request in the same second. Was 409 `replayed-signature` |
+| A refused role check answers like a missing row. Usage counts it as a success and the contract has no refusal for it, so `conform` would pass a backend that dropped the check. Fixed on 2026-11-06: a mutation may declare a `guard` | club, booking | `Only an organizer can remove a book.`, counted under Usage's `refused` and probed by `conform`. Was `{ changes: 0, lastInsertId: 0 }` |
+| The runtime endpoint ignores an API key instead of refusing it. Fixed on 2026-11-06 | booking | 403 `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.` Was visitor answers |
 | A role inside the app has no bridge to administration: an organizer cannot invite; the owner promotes by pasting a user ID into a `database_execute` string with no bound parameters | club, gallery | `Unknown tool or insufficient permission.` |
 
 ### Job 3: the same checks at both doors
 
 | Finding | Apps | Exact answer |
 | --- | --- | --- |
-| Gate and Kernel refuse the same thing with different words: a leading `WITH`, a trigger, a view, a second statement | habits, booking | Gate: `Runtime query only allows: SELECT. Use schema.sql for structural changes.` Kernel: `Action habits.streaks contains disallowed SQL.` |
-| The Gate's hint for a CTE points at `schema.sql`, which is not where a CTE belongs | booking | `Runtime execute only allows: DELETE, INSERT, REPLACE, UPDATE. Use schema.sql for structural changes.` |
-| A Signal is recorded when its mutation changed no row: 12 of 8, 61 of 24, and a `signal` action records for an event that does not exist | inbox, habits, booking | `{ "recorded": true }` |
-| A Signal cannot carry the actor, so the owner cannot count per person | inbox, habits | `names signal property user, which is not one of its input bindings.` |
+| Gate and Kernel refuse the same thing with different words: a leading `WITH`, a trigger, a view, a second statement. Fixed on 2026-11-06: both run `kernel-rs/src/sql-rule-cases.json` | habits, booking | `Action habits.streaks is a query, so it must start with SELECT. Move the WITH clause into a subquery, as in SELECT ... FROM (WITH ... SELECT ...).` at both doors. Was Gate `Runtime query only allows: SELECT. ...`, Kernel `... contains disallowed SQL.` |
+| The Gate's hint for a CTE points at `schema.sql`, which is not where a CTE belongs. Fixed on 2026-11-06 | booking | `... Put the WITH clause after INSERT INTO <table> (<columns>), or inside a subquery.` Was `... Use schema.sql for structural changes.` |
+| A Signal is recorded when its mutation changed no row: 12 of 8, 61 of 24, and a `signal` action records for an event that does not exist. Fixed on 2026-11-06: a mutation records its Signal only when it changed a row, and the inbox moved its Signal onto the guarded mutation | inbox, habits, booking | 8 of 8, 24 of 24. Was `{ "recorded": true }` |
+| A Signal cannot carry the actor, so the owner cannot count per person. Fixed on 2026-11-06: `actor` among a Signal's properties records the caller's ID | inbox, habits | `{ ..., "actor": "<user or key ID>" }`. Was `names signal property user, which is not one of its input bindings.` |
 | The `actor` binding yields an ID and no email or name, so apps store a self-declared email, and one member stored another's | inbox, booking | `{ "changes": 1 }` |
-| `conform` skips actor-bound routes even with `--key`, and fails signed probes that land in the same second | habits, inbox | `SKIP ... Binds the caller's ID` |
+| `conform` skips actor-bound routes even with `--key`, and fails signed probes that land in the same second. Fixed on 2026-11-06: it sends the key or the session to such routes, and each signed probe carries its own nonce | habits, inbox | `87 passed, 0 failed, 0 skipped.` Was `SKIP ... Binds the caller's ID` |
 | Seven aliased expression columns are typed `unknown` with no warning | booking | |
 
 ### Job 1 and 2: both people make the same app
@@ -68,13 +68,13 @@ The yardstick: a person who does not write code, and a person who does, make the
 
 Fixed 2026-11-06. The SDK stored a private file when `visibility` was anything but `"public"` (club); it now refuses with `File visibility must be private or public.` A visitor's 401 on a private app's file path against 404 on a public one (club) is now the documented rule: 401 before any lookup on a private Deployment, 404 for a file the caller may not read.
 
-A suspended member's session answers as signed out and only the login route says suspended. A publish with two unset secrets names only the first (fixed: one refusal now names every unset secret). A stale timestamp and a wrong secret get the same answer. An actor-bound route refuses a visitor with 400 rather than 401. A signup with a password under required verification accepts and ignores the password. A signup for an active address answers 202 and tells no one. HEAD on a route answers 405 with a body HTTP drops. The Action Contract's Markdown omits the Signal.
+A suspended member's session answers as signed out and only the login route says suspended. A publish with two unset secrets names only the first (fixed: one refusal now names every unset secret). A stale timestamp and a wrong secret got the same answer, fixed on 2026-11-06 with `stale-timestamp`. An actor-bound route refuses a visitor with 400 rather than 401. A signup with a password under required verification accepts and ignores the password. A signup for an active address answers 202 and tells no one. HEAD on a route answers 405 with a body HTTP drops. The Action Contract's Markdown omits the Signal.
 
 ## What to do first
 
-1. Bind a signed route to its action: an action with a signature or a key requirement is not callable through `actions_invoke`, and a route on a private app without a signature requires a key or a session. Include method, path and query in the MAC and add a nonce. This is the only finding that opens data the app meant to close.
-2. Make a refused mutation visible: a declared `refuse` clause, or a convention that `changes: 0` with a declared guard answers `forbidden`, so the page, Usage, the Signal and the contract all see a refusal. Record Signals only when `changes > 0`, and let a Signal name the actor.
-3. One refusal text per rule at both doors, with a test that walks every shared case through the Gate and the Kernel and compares the words, as `http-binding-cases.json` and `signal-cases.json` already do for two groups.
+1. Done on 2026-11-06, see the ADR-0011 update "a route binds its action". Bind a signed route to its action: an action with a signature or a key requirement is not callable through `actions_invoke`, and a route on a private app without a signature requires a key or a session. Include method, path and query in the MAC and add a nonce. This is the only finding that opens data the app meant to close.
+2. Done on 2026-11-06, see the ADR-0010 update. Make a refused mutation visible: a declared `refuse` clause, or a convention that `changes: 0` with a declared guard answers `forbidden`, so the page, Usage, the Signal and the contract all see a refusal. Record Signals only when `changes > 0`, and let a Signal name the actor.
+3. Done on 2026-11-06, see the ADR-0009 note. One refusal text per rule at both doors, with a test that walks every shared case through the Gate and the Kernel and compares the words, as `http-binding-cases.json` and `signal-cases.json` already do for two groups.
 4. The static publishing contract from product-fit: multi-page artifacts in the CLI, 404, extensionless paths, `404.html`.
 5. Initial signup policy in `littlebox publish` and `littlebox.json`; invitations allowed under Closed when the owner sends them.
 6. File lifecycle: publish and delete. Done 2026-11-06: `files_update`, `files_delete` and `miniapp.files.url`.

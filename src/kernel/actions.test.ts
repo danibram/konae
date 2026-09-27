@@ -37,10 +37,10 @@ describe("server actions", () => {
   test("rejects structural and multi-statement SQL", () => {
     expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions: {
       "notes.drop": { kind: "mutation", access: "anonymous", statement: "DROP TABLE notes", bindings: [] },
-    } }))).toThrow("only allows");
+    } }))).toThrow("Tables and indexes belong in schema.sql");
     expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions: {
       "notes.list": { kind: "query", access: "anonymous", statement: "SELECT * FROM notes; DELETE FROM notes", bindings: [] },
-    } }))).toThrow("exactly one");
+    } }))).toThrow("Action notes.list must contain one statement.");
   });
 
   test("nullable inputs bind omitted values and explicit null as SQL null", () => {
@@ -186,5 +186,31 @@ describe("signals", () => {
     expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions }))).not.toThrow();
     actions["page.like"] = { kind: "signal", access: "anonymous", bindings: [], signal: { name: "page.liked" } };
     expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions }))).toThrow("A deployment may declare at most 50 server actions.");
+  });
+});
+
+describe("guards", () => {
+  // kernel-rs/src/guard.rs runs the same cases against the Kernel's parser.
+  test("refuse the same declarations as the Kernel, with the same messages", async () => {
+    const cases: { case: string; actions: Record<string, unknown>; error: string | null }[] =
+      await Bun.file(new URL("../../kernel-rs/src/guard-cases.json", import.meta.url)).json();
+    expect(cases.length).toBeGreaterThanOrEqual(8);
+    for (const item of cases) {
+      let message: string | null = null;
+      try {
+        parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message, item.case).toBe(item.error);
+    }
+  });
+
+  test("keep the guard on the parsed mutation", () => {
+    const program = parseServerActionSource(JSON.stringify({ version: 1, actions: {
+      "members.promote": { kind: "mutation", access: "authenticated", guard: "Only an organizer can promote a member.",
+        statement: "UPDATE members SET role = 'organizer' WHERE id = ?1", bindings: [{ source: "actor", field: "id" }] },
+    } }));
+    expect(program.actions["members.promote"].guard).toBe("Only an organizer can promote a member.");
   });
 });

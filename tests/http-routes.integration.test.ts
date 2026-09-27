@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { createHmac } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient } from "../src/mcp/client";
+import { signRoute } from "../src/lib/route-signature";
 
-// The HTTP module against a real Kernel: routes on a private Deployment,
-// signatures, API keys, the file read path, and keys revoked by an import.
+// The HTTP module against a real Kernel: routes on a private Deployment and
+// the callers each one takes, signatures, API keys, the file read path, and
+// keys revoked by an import.
 
 setDefaultTimeout(60_000);
 
@@ -37,11 +38,36 @@ const actions = {
       bindings: [{ source: "input", key: "min", type: "number", nullable: true }],
       http: { method: "GET", path: "/api/orders" },
     },
+    "orders.void": {
+      kind: "mutation", access: "anonymous",
+      statement: "DELETE FROM orders WHERE external_id = ?1",
+      bindings: [{ source: "input", key: "id", type: "string", maxLength: 64 }],
+      http: { method: "POST", path: "/hooks/void", signature: { header: "X-Signature", secret: "orders_webhook" }, callers: ["signature"] },
+    },
     "notes.add": {
       kind: "mutation", access: "anonymous",
       statement: "INSERT INTO notes (owner_id, body) VALUES (?1, ?2)",
       bindings: [{ source: "actor", field: "id" }, { source: "input", key: "body", type: "string", maxLength: 200 }],
       http: { method: "POST", path: "/api/notes" },
+    },
+    "notes.edit": {
+      kind: "mutation", access: "anonymous", guard: "That note is not yours, or it does not exist.",
+      statement: "UPDATE notes SET body = ?2 WHERE id = ?1 AND owner_id = ?3",
+      bindings: [{ source: "input", key: "id", type: "number" }, { source: "input", key: "body", type: "string", maxLength: 200 }, { source: "actor", field: "id" }],
+      http: { method: "POST", path: "/api/notes/edit" },
+      signal: { name: "note.edited", properties: ["id", "actor"] },
+    },
+    "notes.rename": {
+      kind: "mutation", access: "authenticated", guard: "That note is not yours, or it does not exist.",
+      statement: "UPDATE notes SET body = ?2 WHERE id = ?1 AND owner_id = ?3",
+      bindings: [{ source: "input", key: "id", type: "number" }, { source: "input", key: "body", type: "string", maxLength: 200 }, { source: "actor", field: "id" }],
+      signal: { name: "note.renamed", properties: ["id", "actor"] },
+    },
+    "notes.touch": {
+      kind: "mutation", access: "authenticated",
+      statement: "UPDATE notes SET body = body WHERE id = ?1 AND owner_id = ?2",
+      bindings: [{ source: "input", key: "id", type: "number" }, { source: "actor", field: "id" }],
+      signal: { name: "note.touched", properties: ["actor"] },
     },
     "notes.mine": {
       kind: "query", access: "authenticated",
@@ -66,8 +92,8 @@ function release(id: string, files: Record<string, string>, initial: object = {}
   })();
 }
 
-function signed(body: string, at = Math.floor(Date.now() / 1000), key = secret) {
-  return `t=${at},v1=${createHmac("sha256", key).update(`${at}.${body}`).digest("hex")}`;
+function signed(body: string, at = Math.floor(Date.now() / 1000), key = secret, nonce?: string) {
+  return signRoute(key, { method: "POST", path: "/hooks/orders", body }, at, nonce);
 }
 
 function route(pathname: string, init: { method?: string; body?: string; headers?: Record<string, string> } = {}, on = host) {
@@ -133,7 +159,7 @@ describe("HTTP routes", () => {
   test("a release naming an unset secret is refused, then publishes once the owner sets it", async () => {
     const files = { "schema.sql": schema, "actions.json": JSON.stringify(actions) };
     await expect(release("http_routes", files)).rejects.toThrow(
-      "Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing.");
+      "Actions orders.receive and orders.void sign with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing.");
     await owner.call("secret_set", { projectId: "http_routes", name: "orders_webhook", value: secret });
     const listed = await owner.call<{ secrets: { name: string }[] }>("secrets_list", { projectId: "http_routes" });
     expect(listed.secrets.map(item => item.name)).toEqual(["orders_webhook"]);
@@ -142,7 +168,7 @@ describe("HTTP routes", () => {
     host = receipt.hostname;
     deploymentId = receipt.id;
     await expect(owner.call("secret_delete", { projectId: "http_routes", name: "orders_webhook" })).rejects.toThrow(
-      "The published action orders.receive signs with orders_webhook. Publish without that signature before deleting the secret.");
+      "The published action orders.receive, orders.void signs with orders_webhook. Publish without that signature before deleting the secret.");
   });
 
   test("the Kernel refuses at publish what the Gate refuses, with the same message", async () => {
@@ -156,11 +182,11 @@ describe("HTTP routes", () => {
       "Actions notes.add and orders.receive both bind POST /hooks/orders.");
   });
 
-  test("an anonymous route answers on a private Deployment while its shell stays behind sign-in", async () => {
+  test("an unsigned route on a private Deployment needs a key or a session, as its shell needs sign-in", async () => {
     expect(await (await route("/")).text()).toContain("Sign in to this app");
     expect(await (await route("/elsewhere")).text()).toContain("Sign in to this app");
     const listed = await json(await route("/api/orders"));
-    expect(listed).toEqual({ status: 200, body: { result: [] } });
+    expect(listed).toEqual({ status: 401, body: { error: "authentication-required" } });
     const unknown = await route("/hooks/unknown", { method: "POST", body: "{}" });
     expect(unknown.status).toBe(405);
     expect(unknown.headers.get("allow")).toBe("GET, HEAD");
@@ -181,26 +207,37 @@ describe("HTTP routes", () => {
     const body = JSON.stringify({ id: "A-1", total: 12.5 });
     const refusedWith = async (headers: Record<string, string>, sent = body) => json(await route("/hooks/orders", { method: "POST", body: sent, headers }));
     expect(await refusedWith({})).toEqual({ status: 401, body: { error: "invalid-signature" } });
-    expect(await refusedWith({ "x-signature": signed(body) }, JSON.stringify({ id: "A-1", total: 99 }))).toEqual({ status: 401, body: { error: "invalid-signature" } });
-    expect(await refusedWith({ "x-signature": signed(body, Math.floor(Date.now() / 1000) - 301) })).toEqual({ status: 401, body: { error: "invalid-signature" } });
-    expect(await refusedWith({ "x-signature": signed(body, undefined, "another-secret-0123456789") })).toEqual({ status: 401, body: { error: "invalid-signature" } });
-    const header = signed(body);
+    expect(await refusedWith({ "x-signature": await signed(body) }, JSON.stringify({ id: "A-1", total: 99 }))).toEqual({ status: 401, body: { error: "invalid-signature" } });
+    // A stale t has its own answer, whatever the secret, so a sender with a skewed clock can tell.
+    expect(await refusedWith({ "x-signature": await signed(body, Math.floor(Date.now() / 1000) - 301) })).toEqual({ status: 401, body: { error: "stale-timestamp" } });
+    expect(await refusedWith({ "x-signature": await signed(body, Math.floor(Date.now() / 1000) + 301, "another-secret-0123456789") })).toEqual({ status: 401, body: { error: "stale-timestamp" } });
+    expect(await refusedWith({ "x-signature": await signed(body, undefined, "another-secret-0123456789") })).toEqual({ status: 401, body: { error: "invalid-signature" } });
+    const elsewhere = await signRoute(secret, { method: "POST", path: "/hooks/void", body });
+    expect(await refusedWith({ "x-signature": elsewhere })).toEqual({ status: 401, body: { error: "invalid-signature" } });
+    const now = Math.floor(Date.now() / 1000);
+    const header = await signed(body, now, secret, "first");
     expect(await refusedWith({ "x-signature": header })).toEqual({ status: 200, body: { result: { changes: 1, lastInsertId: 1 } } });
     expect(await refusedWith({ "x-signature": header })).toEqual({ status: 409, body: { error: "replayed-signature" } });
+    // A retry in the same second with a new nonce is a new request.
+    const retry = await json(await route("/hooks/orders", { method: "POST", body, headers: { "x-signature": await signed(body, now, secret, "retry") } }));
+    expect(retry).toEqual({ status: 200, body: { result: { changes: 1, lastInsertId: 2 } } });
+    await owner.call("database_execute", { deploymentId, operation: "sql", input: { sql: "DELETE FROM orders WHERE id = 2" } });
     const second = JSON.stringify({ id: "B-2", total: 3 });
-    expect((await refusedWith({ "x-signature": signed(second) }, second)).status).toBe(200);
+    expect((await refusedWith({ "x-signature": await signed(second) }, second)).status).toBe(200);
     const extra = JSON.stringify({ id: "C-3", total: 1, note: "x" });
-    expect(await refusedWith({ "x-signature": signed(extra) }, extra)).toEqual({ status: 400, body: { error: "Unexpected action input: note" } });
+    expect(await refusedWith({ "x-signature": await signed(extra) }, extra)).toEqual({ status: 400, body: { error: "Unexpected action input: note" } });
     expect((await route("/hooks/orders", { method: "POST", body: "x".repeat(64 * 1024 + 1) })).status).toBe(413);
   });
 
   test("a GET route maps its query string onto typed bindings", async () => {
-    expect(await json(await route("/api/orders"))).toEqual({ status: 200, body: { result: [{ external_id: "A-1", total: 12.5 }, { external_id: "B-2", total: 3 }] } });
-    expect(await json(await route("/api/orders?min=10"))).toEqual({ status: 200, body: { result: [{ external_id: "A-1", total: 12.5 }] } });
-    expect(await json(await route("/api/orders?min=ten"))).toEqual({ status: 400, body: { error: "min must be a number." } });
-    expect(await json(await route("/api/orders?other=1"))).toEqual({ status: 400, body: { error: "Unexpected action input: other" } });
-    expect(await json(await route("/api/orders?min=1&min=2"))).toEqual({ status: 400, body: { error: "Repeated query parameter: min" } });
-    const response = await route("/api/orders");
+    const reader = await owner.call<{ key: string }>("api_keys_create", { deploymentId, name: "Query reader", actions: ["orders.list"] });
+    const get = (pathname: string) => route(pathname, { headers: { authorization: `Bearer ${reader.key}` } });
+    expect(await json(await get("/api/orders"))).toEqual({ status: 200, body: { result: [{ external_id: "A-1", total: 12.5 }, { external_id: "B-2", total: 3 }] } });
+    expect(await json(await get("/api/orders?min=10"))).toEqual({ status: 200, body: { result: [{ external_id: "A-1", total: 12.5 }] } });
+    expect(await json(await get("/api/orders?min=ten"))).toEqual({ status: 400, body: { error: "min must be a number." } });
+    expect(await json(await get("/api/orders?other=1"))).toEqual({ status: 400, body: { error: "Unexpected action input: other" } });
+    expect(await json(await get("/api/orders?min=1&min=2"))).toEqual({ status: 400, body: { error: "Repeated query parameter: min" } });
+    const response = await get("/api/orders");
     expect(response.headers.get("content-type")).toBe("application/json");
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
@@ -221,11 +258,14 @@ describe("HTTP routes", () => {
     expect(await json(await route("/api/orders", { headers: bearer }))).toEqual({ status: 403, body: { error: "This API key may not call orders.list." } });
     expect(await json(await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "x" }), headers: { authorization: "Bearer lbk_unknown" } })))
       .toEqual({ status: 401, body: { error: "invalid-api-key" } });
-    // Without a key or a session, an action that binds the actor has nobody to bind.
+    // On a private Deployment an unsigned route takes a key or a session, and nothing else.
     expect(await json(await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "x" }) })))
-      .toEqual({ status: 400, body: { error: "This action requires an authenticated actor." } });
+      .toEqual({ status: 401, body: { error: "authentication-required" } });
+    // A route whose callers leave out "key" refuses every key, before the action is checked.
+    expect(await json(await route("/hooks/void", { method: "POST", body: JSON.stringify({ id: "K-1" }), headers: bearer })))
+      .toEqual({ status: 403, body: { error: "This route does not accept API keys." } });
     const listed = await owner.call<{ keys: Record<string, unknown>[] }>("api_keys_list", { deploymentId });
-    expect(listed.keys.map(key => key.keyId)).toEqual([issued.keyId]);
+    expect(listed.keys.map(key => key.keyId)).toContain(issued.keyId);
     expect(JSON.stringify(listed)).not.toContain(issued.key);
     await owner.call("api_keys_revoke", { deploymentId, keyId: issued.keyId });
     expect((await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "x" }), headers: bearer })).status).toBe(401);
@@ -258,9 +298,37 @@ describe("HTTP routes", () => {
     expect(own.status).toBe(200);
     for (const site of ["same-site", "cross-site"]) {
       expect(await json(await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "forged" }), headers: { cookie, "sec-fetch-site": site } })))
-        .toEqual({ status: 400, body: { error: "This action requires an authenticated actor." } });
+        .toEqual({ status: 401, body: { error: "authentication-required" } });
     }
-    expect((await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "forged" }), headers: { cookie, origin: "http://other-app.localhost" } })).status).toBe(400);
+    expect((await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "forged" }), headers: { cookie, origin: "http://other-app.localhost" } })).status).toBe(401);
+    // A signed route keeps asking the person for its signature.
+    expect(await json(await route("/hooks/orders", { method: "POST", body: JSON.stringify({ id: "S-1", total: 1 }), headers: { cookie, "sec-fetch-site": "same-origin" } })))
+      .toEqual({ status: 401, body: { error: "invalid-signature" } });
+  });
+
+  test("an action whose route does not answer anyone answers only on its route", async () => {
+    const signup = await route("/_littlebox/auth/login", { method: "POST", body: JSON.stringify({ email: "ana@routes.test", password }) });
+    const cookie = signup.headers.get("set-cookie")!.split(";")[0];
+    const member = new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+      const headers = new Headers(init?.headers); headers.set("host", host); headers.set("cookie", cookie);
+      return fetch(input, { ...init, headers });
+    } });
+    await expect(member.call("actions_invoke", { name: "orders.receive", input: { id: "M-1", total: 1 } }))
+      .rejects.toThrow("Action orders.receive answers only on its HTTP route, POST /hooks/orders.");
+    await expect(member.call("actions_invoke", { name: "orders.list", input: {} }))
+      .rejects.toThrow("Action orders.list answers only on its HTTP route, GET /api/orders.");
+    expect(await member.call("actions_invoke", { name: "notes.mine", input: {} })).toEqual([{ body: "mine" }]);
+    // The same person reads the unsigned route with the session cookie, from the app's origin.
+    expect((await route("/api/orders", { headers: { cookie, "sec-fetch-site": "same-origin" } })).status).toBe(200);
+  });
+
+  test("the runtime endpoint refuses an API key and says where it works", async () => {
+    const issued = await owner.call<{ key: string }>("api_keys_create", { deploymentId, name: "Misplaced", actions: ["orders.list"] });
+    const response = await route("/_littlebox/mcp", {
+      method: "POST", headers: { authorization: `Bearer ${issued.key}`, accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "actions_invoke", arguments: { name: "orders.list", input: {} } } }),
+    });
+    expect(await json(response)).toEqual({ status: 403, body: { error: "An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session." } });
   });
 
   test("the file read path applies the file's visibility to each caller", async () => {
@@ -313,12 +381,47 @@ describe("HTTP routes", () => {
     expect((await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "x" }), headers: { authorization: `Bearer ${live.key}` } })).status).toBe(200);
   });
 
+  test("a guarded mutation that changes no row is refused, counted as refused and records no Signal", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const login = await route("/_littlebox/auth/login", { method: "POST", body: JSON.stringify({ email: "ana@routes.test", password }) });
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const ana = (await owner.call<{ users: { userId: string; email: string }[] }>("app_users_list", { deploymentId })).users.find((user) => user.email === "ana@routes.test")!.userId;
+    const member = new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+      const headers = new Headers(init?.headers); headers.set("host", host); headers.set("cookie", cookie);
+      return fetch(input, { ...init, headers });
+    } });
+    const [mine] = (await owner.call<{ rows: { id: number }[] }>("database_execute", { deploymentId, operation: "sql", input: { sql: `SELECT id FROM notes WHERE owner_id = '${ana}' LIMIT 1` } })).rows;
+    // The runtime endpoint: a tool error with the guard, then a change that records the Signal with the actor.
+    await expect(member.call("actions_invoke", { name: "notes.rename", input: { id: 999_999, body: "not mine" } })).rejects.toThrow("That note is not yours, or it does not exist.");
+    expect(await member.call("actions_invoke", { name: "notes.rename", input: { id: mine.id, body: "renamed" } })).toMatchObject({ changes: 1 });
+    // Without a guard a mutation that changes nothing still answers { changes: 0 }, and records no Signal.
+    expect(await member.call("actions_invoke", { name: "notes.touch", input: { id: 999_999 } })).toEqual({ changes: 0, lastInsertId: 0 });
+    // The route: 403 with the guard, then a change by the person's session.
+    const edit = (id: number, body: string) => route("/api/notes/edit", { method: "POST", body: JSON.stringify({ id, body }), headers: { cookie, "sec-fetch-site": "same-origin" } });
+    expect(await json(await edit(999_999, "not mine"))).toEqual({ status: 403, body: { error: "That note is not yours, or it does not exist." } });
+    expect((await json(await edit(mine.id, "edited"))).status).toBe(200);
+
+    const usage = await owner.call<{ totals: { kind: string; name: string; count: number }[] }>("usage_read", { deploymentId, from: today, to: today });
+    const total = (kind: string, name: string) => usage.totals.find((row) => row.kind === kind && row.name === name)?.count ?? 0;
+    expect(total("refused", "notes.rename")).toBe(1);
+    expect(total("refused", "notes.edit")).toBe(1);
+    expect(total("action", "notes.rename")).toBe(1);
+    expect(total("action", "notes.touch")).toBe(1);
+    expect(total("route", "POST /api/notes/edit")).toBe(1);
+    const signals = async (name: string) => (await owner.call<{ signals: { properties: Record<string, unknown> }[] }>("signals_read", { deploymentId, name })).signals;
+    expect((await signals("note.renamed")).map((signal) => signal.properties)).toEqual([{ id: mine.id, actor: ana }]);
+    expect((await signals("note.edited")).map((signal) => signal.properties)).toEqual([{ id: mine.id, actor: ana }]);
+    expect(await signals("note.touched")).toEqual([]);
+  });
+
   test("anonymous callers share the runtime's rate limit per client address", async () => {
+    // A caller without a key or a session is refused on this private route,
+    // and still counts against its address before the refusal.
     const statuses: number[] = [];
     for (let i = 0; i < 31; i++) {
       statuses.push((await route("/api/orders", { headers: { "x-forwarded-for": "198.18.2.1" } })).status);
     }
-    expect(statuses.slice(0, 30).every(status => status === 200)).toBe(true);
+    expect(statuses.slice(0, 30).every(status => status === 401)).toBe(true);
     const limited = await route("/api/orders", { headers: { "x-forwarded-for": "198.18.2.1" } });
     expect(limited.status).toBe(429);
     expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
@@ -326,7 +429,7 @@ describe("HTTP routes", () => {
 
   test("a signature accepted before a Kernel restart is refused after it", async () => {
     const body = JSON.stringify({ id: "R-1", total: 7 });
-    const header = signed(body);
+    const header = await signed(body);
     const send = async () => json(await route("/hooks/orders", { method: "POST", body, headers: { "x-signature": header } }));
     expect((await send()).status).toBe(200);
     kernel.kill();

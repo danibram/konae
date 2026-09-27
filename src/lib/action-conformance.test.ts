@@ -21,6 +21,10 @@ type Quirks = Partial<{
   acceptUnsigned: boolean;
   unsignedStatus: number;
   rateLimitFirst: number;
+  /** Answers as a private Deployment: an unsigned route takes a key or a session and is the action's only door. */
+  private: boolean;
+  /** Answers { changes: 0 } where a guarded mutation should refuse with its guard. */
+  dropGuard: boolean;
 }>;
 
 /**
@@ -49,8 +53,15 @@ function fakeBackend(contract: ActionContract, quirks: Quirks = {}, session = tr
     }
     return null;
   };
+  // A guarded mutation changes a row the first time and nothing after, as an UPDATE with a state check does.
+  const ran = new Map<string, number>();
   const answer = (action: ContractAction): unknown => {
-    if (action.output.kind === "changes") return { changes: 1, lastInsertId: 7 };
+    if (action.output.kind === "changes") {
+      const times = (ran.get(action.name) ?? 0) + 1;
+      ran.set(action.name, times);
+      if (action.guard && times > 1) return quirks.dropGuard ? { changes: 0, lastInsertId: 0 } : { guard: action.guard };
+      return { changes: 1, lastInsertId: 7 };
+    }
     if (action.output.kind !== "rows") return null;
     const row: Record<string, unknown> = {};
     for (const column of action.output.columns) {
@@ -69,19 +80,26 @@ function fakeBackend(contract: ActionContract, quirks: Quirks = {}, session = tr
       const action = contract.actions.find((candidate) => candidate.name === name);
       if (!action) return { ok: false, message: "Server action not declared." };
       const actor = as === "session";
+      if ((action.http?.onlyDoor === "always" || (action.http && quirks.private)) && !quirks.anyoneMayCall) {
+        return { ok: false, message: `Action ${name} answers only on its HTTP route, ${action.http.method} ${action.http.path}.` };
+      }
       if (action.access === "authenticated" && !actor && !quirks.anyoneMayCall) return { ok: false, message: "authentication-required" };
       const refused = bind(action, input as Record<string, unknown>, actor || Boolean(quirks.anyoneMayCall));
-      return refused ? { ok: false, message: refused } : { ok: true, result: answer(action) };
+      if (refused) return { ok: false, message: refused };
+      const result = answer(action) as { guard?: string };
+      return result?.guard ? { ok: false, message: result.guard } : { ok: true, result };
     },
     async route(request: RouteRequest) {
       target.calls += 1;
       const action = contract.actions.find((candidate) => candidate.http?.method === request.method && candidate.http.path === request.path);
       if (!action) return request.method === "POST" ? { status: 405, body: { error: "No route accepts POST on this path." } } : { status: 200, body: "<html>" };
       if (request.headers?.authorization?.startsWith("Bearer lbk_")) return { status: 401, body: { error: "invalid-api-key" } };
+      if (quirks.private && !action.http!.signature && !request.session) return { status: 401, body: { error: "authentication-required" } };
       const signature = action.http!.signature;
       if (signature) {
         const header = request.headers?.[signature.header];
         if (!header && !quirks.acceptUnsigned) return { status: quirks.unsignedStatus ?? 401, body: { error: "invalid-signature" } };
+        if (header && Math.abs(Number(/t=(\d+)/.exec(header)?.[1]) - 1_700_000_000) > 300) return { status: 401, body: { error: "stale-timestamp" } };
         if (header && seen.has(header)) return { status: 409, body: { error: "replayed-signature" } };
         if (header) seen.add(header);
       }
@@ -93,8 +111,10 @@ function fakeBackend(contract: ActionContract, quirks: Quirks = {}, session = tr
       else {
         try { input = JSON.parse(request.body ?? "{}"); } catch { return { status: 400, body: { error: "The request body must be a JSON object." } }; }
       }
-      const refused = bind(action, input, false);
-      return refused ? { status: 400, body: { error: refused } } : { status: 200, body: { result: answer(action) } };
+      const refused = bind(action, input, Boolean(request.session));
+      if (refused) return { status: 400, body: { error: refused } };
+      const result = answer(action) as { guard?: string };
+      return result?.guard ? { status: 403, body: { error: result.guard } } : { status: 200, body: { result } };
     },
     secrets: { pings_webhook: "s3cret" },
   };
@@ -162,6 +182,49 @@ describe("conformance runner", () => {
     ]);
     // Without a session, the access refusal is still checked.
     expect(report.results.filter((result) => result.check === "refuses a caller without a session" && result.outcome === "pass")).toHaveLength(3);
+  });
+
+  test("on a private Deployment, an unsigned route's action answers only there, and the route asks for a key or a session", async () => {
+    const contract = contractOf("feed");
+    const visitor = await runConformance(contract, fakeBackend(contract, { private: true }, false), noWait);
+    expect(failures(visitor)).toEqual([]);
+    const recent = visitor.results.filter((result) => result.action === "incidents.recent").map((result) => `${result.outcome} ${result.check}`);
+    expect(recent).toContain("pass refuses a caller without a key or a session");
+    expect(recent).toContain("skip answers GET /api/incidents");
+    const member = await runConformance(contract, fakeBackend(contract, { private: true }), noWait);
+    expect(failures(member)).toEqual([]);
+    const withSession = member.results.filter((result) => result.action === "incidents.recent").map((result) => `${result.outcome} ${result.check}`);
+    expect(withSession).toContain("pass answers only on its route on this private Deployment");
+    expect(withSession).toContain("pass answers GET /api/incidents with a session");
+  });
+
+  test("a signed route answers only on its route, and its stale timestamp is probed", async () => {
+    const contract = contractOf("feed");
+    const report = await runConformance(contract, fakeBackend(contract), noWait);
+    const checks = report.results.filter((result) => result.action === "pings.receive").map((result) => `${result.outcome} ${result.check}`);
+    expect(checks).toContain("pass answers only on its route");
+    expect(checks).toContain("pass refuses a stale timestamp");
+  });
+
+  test("a guarded mutation must answer its guard when nothing changes, never { changes: 0 }", async () => {
+    const { contract } = generateActionContract({
+      schemaSource: "CREATE TABLE IF NOT EXISTS members (id TEXT PRIMARY KEY, role TEXT NOT NULL);",
+      actionsSource: JSON.stringify({ version: 1, actions: {
+        "members.promote": {
+          kind: "mutation", access: "authenticated", guard: "Only an organizer can promote a member.",
+          statement: "UPDATE members SET role = 'organizer' WHERE id = ?1 AND EXISTS (SELECT 1 FROM members WHERE id = ?2 AND role = 'organizer')",
+          bindings: [{ source: "input", key: "member", type: "string", maxLength: 64 }, { source: "actor", field: "id" }],
+        },
+      } }),
+    });
+    const promote = contract.actions[0];
+    expect(promote.guard).toBe("Only an organizer can promote a member.");
+    expect(promote.errors.find((error) => error.message === promote.guard)).toMatchObject({ via: "runtime" });
+    const honest = await runConformance(contract, fakeBackend(contract), noWait);
+    expect(failures(honest)).toEqual([]);
+    expect(honest.results.find((result) => result.check === "refuses with its guard when no row changes")).toMatchObject({ outcome: "pass" });
+    const dropped = await runConformance(contract, fakeBackend(contract, { dropGuard: true }), noWait);
+    expect(failures(dropped).map((result) => result.detail)).toEqual(['Answered {"changes":0,"lastInsertId":0} where the contract refuses with "Only an organizer can promote a member.".']);
   });
 
   test("waits out a rate limit and sends the call again", async () => {

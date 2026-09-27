@@ -4,9 +4,9 @@
 //!
 //! An `http` key in `actions.json` binds one action to one method and path.
 //! The action keeps its access level, bindings, query bound and rate limit.
-//! Only `anonymous` actions may bind a route, and the route answers whatever
-//! the Deployment's visibility (ADR-0011, update of 2026-11-06). A route has
-//! three kinds of caller, resolved before any SQL runs:
+//! Only `anonymous` actions may bind a route (ADR-0011, updates of
+//! 2026-11-06). A route has three kinds of caller, resolved before any SQL
+//! runs:
 //!
 //! | Caller            | Proof                                  | Actor ID       |
 //! | ----------------- | -------------------------------------- | -------------- |
@@ -14,9 +14,12 @@
 //! | Owner's program   | `Authorization: Bearer lbk_...`        | the key's ID   |
 //! | Signed-in person  | the app session cookie, same origin    | the user's ID  |
 //!
-//! A binding that declares a signature requires a valid one unless the caller
-//! presents an API key that names the action. docs/mcp.md, "HTTP routes",
-//! states the signature scheme a sender computes.
+//! The binding's `callers` names which proofs the route takes. Without it, a
+//! signed route takes the signature or a key, an unsigned route on a private
+//! Deployment a key or a session, and an unsigned route on a public one
+//! anyone (`route_callers`). An action whose route does not answer anyone
+//! answers only there: `actions_invoke` refuses it (`route_only`).
+//! docs/mcp.md, "HTTP routes", states the signature scheme a sender computes.
 
 use super::*;
 use std::sync::{Arc, OnceLock};
@@ -44,6 +47,8 @@ pub(super) struct HttpBinding {
     pub(super) method: String,
     pub(super) path: String,
     pub(super) signature: Option<SignatureBinding>,
+    /// The declared callers, each of "signature", "key" and "session".
+    pub(super) callers: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,13 +59,14 @@ pub(super) struct SignatureBinding {
 
 const RESERVED_SEGMENTS: [&str; 4] = ["_littlebox", "oauth", ".well-known", "mcp"];
 const UNSIGNABLE_HEADERS: [&str; 5] = ["authorization", "cookie", "host", "content-type", "content-length"];
+const ROUTE_CALLERS: [&str; 3] = ["signature", "key", "session"];
 
 /// Parses and checks one action's `http` key. `Ok(None)` when it has none.
 pub(super) fn binding(name: &str, action: &ActionDefinition) -> Result<Option<HttpBinding>, String> {
     let Some(value) = action.http.as_ref() else { return Ok(None) };
     let invalid = || format!("Action {name} has an invalid http binding.");
     let record = value.as_object().ok_or_else(invalid)?;
-    if record.keys().any(|key| !["method", "path", "signature"].contains(&key.as_str())) {
+    if record.keys().any(|key| !["method", "path", "signature", "callers"].contains(&key.as_str())) {
         return Err(invalid());
     }
     let path = record.get("path").and_then(Value::as_str).ok_or_else(invalid)?;
@@ -110,7 +116,55 @@ pub(super) fn binding(name: &str, action: &ActionDefinition) -> Result<Option<Ht
             Some(SignatureBinding { header: header.to_owned(), secret: secret.to_owned() })
         }
     };
-    Ok(Some(HttpBinding { method: method.to_owned(), path: path.to_owned(), signature }))
+    let callers = match record.get("callers") {
+        None => None,
+        Some(value) => {
+            let invalid_callers = || {
+                format!(r#"Action {name} has an invalid callers list. List one or more of "signature", "key" and "session", each once."#)
+            };
+            let items = value.as_array().filter(|items| !items.is_empty()).ok_or_else(invalid_callers)?;
+            let mut callers: Vec<String> = Vec::new();
+            for item in items {
+                let caller = item.as_str().filter(|caller| ROUTE_CALLERS.contains(caller)).ok_or_else(invalid_callers)?;
+                if callers.iter().any(|seen| seen == caller) {
+                    return Err(invalid_callers());
+                }
+                callers.push(caller.to_owned());
+            }
+            let signs = callers.iter().any(|caller| caller == "signature");
+            if signs && signature.is_none() {
+                return Err(format!(r#"Action {name} lists "signature" among its callers but declares no signature."#));
+            }
+            if !signs && signature.is_some() {
+                return Err(format!(r#"Action {name} declares a signature, so its callers must include "signature"."#));
+            }
+            Some(callers)
+        }
+    };
+    Ok(Some(HttpBinding { method: method.to_owned(), path: path.to_owned(), signature, callers }))
+}
+
+/// The callers a route accepts on a Deployment, or `None` when it answers
+/// anyone. Without a `callers` list, a signed route takes the signature or a
+/// key, an unsigned route on a private Deployment a key or a session, and an
+/// unsigned route on a public Deployment anyone. `routeCallers` in
+/// src/kernel/actions.ts is the same rule.
+pub(super) fn route_callers(http: &HttpBinding, private: bool) -> Option<Vec<String>> {
+    if let Some(callers) = &http.callers {
+        return Some(callers.clone());
+    }
+    if http.signature.is_some() {
+        return Some(vec!["signature".into(), "key".into()]);
+    }
+    private.then(|| vec!["key".into(), "session".into()])
+}
+
+/// The route an action answers on when that is its only door: its route does
+/// not answer anyone, so `actions_invoke` refuses it (ADR-0011, update of
+/// 2026-11-06). `None` when the action has no route or its route is open.
+pub(super) fn route_only(name: &str, action: &ActionDefinition, private: bool) -> Option<String> {
+    let http = binding(name, action).ok().flatten()?;
+    route_callers(&http, private).map(|_| format!("{} {}", http.method, http.path))
 }
 
 fn valid_path(path: &str) -> bool {
@@ -511,11 +565,14 @@ fn refusal(status: StatusCode, message: &str) -> Response {
 }
 
 // ---------------------------------------------------------------------------
-// Signatures. The header carries `t=<unix seconds>,v1=<hex HMAC-SHA256>`, the
-// MAC is over `<t>.<raw body>` with the secret as key, and `t` must be within
-// SIGNATURE_WINDOW_SECONDS of the Kernel's clock. A verified signature is
-// remembered for twice the window in the Deployment's identity.sqlite, so the
-// same request is refused if replayed, across Kernel restarts too.
+// Signatures. The header carries `t=<unix seconds>,n=<nonce>,v1=<hex
+// HMAC-SHA256>`. The MAC is keyed with the secret and covers, joined by "\n",
+// `t`, the nonce, the method, the path, the canonical query string and the raw
+// body. `t` must be within SIGNATURE_WINDOW_SECONDS of the Kernel's clock. A
+// verified signature is remembered for twice the window in the Deployment's
+// identity.sqlite, so the same request is refused if replayed, across Kernel
+// restarts too. The nonce makes two requests in one second differ, and a
+// sender signs a retry with a new one.
 //
 // identity.sqlite rather than usage.sqlite: Usage is written by one background
 // thread that drops entries when its queue is full, and a replay check must
@@ -528,16 +585,44 @@ fn refusal(status: StatusCode, message: &str) -> Response {
 pub(super) enum SignatureCheck {
     Valid,
     Invalid,
+    /// `t` is outside the window. Checked before the MAC, so it says nothing
+    /// about the secret.
+    Stale,
     Replayed,
 }
 
+/// What a signature covers besides `t` and the nonce.
+pub(super) struct SignedRequest<'a> {
+    pub(super) method: &'a str,
+    pub(super) path: &'a str,
+    /// The raw query string, without `?`.
+    pub(super) query: &'a str,
+    pub(super) body: &'a [u8],
+}
+
+/// The query string as a signature covers it: its pairs sorted by key, then
+/// value, and written back as `application/x-www-form-urlencoded`, so the
+/// order and the escaping a sender chose do not change the MAC.
+pub(super) fn canonical_query(query: &str) -> String {
+    let mut pairs: Vec<(String, String)> = url::form_urlencoded::parse(query.as_bytes()).into_owned().collect();
+    pairs.sort();
+    url::form_urlencoded::Serializer::new(String::new()).extend_pairs(pairs).finish()
+}
+
+fn signed_message(timestamp: u64, nonce: &str, request: &SignedRequest<'_>) -> Vec<u8> {
+    let head = format!("{timestamp}\n{nonce}\n{}\n{}\n{}\n", request.method, request.path, canonical_query(request.query));
+    [head.as_bytes(), request.body].concat()
+}
+
+fn valid_nonce(nonce: &str) -> bool {
+    (1..=64).contains(&nonce.len()) && nonce.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
 #[cfg(test)]
-pub(super) fn sign(secret: &str, timestamp: u64, body: &[u8]) -> String {
+pub(super) fn sign(secret: &str, timestamp: u64, nonce: &str, request: &SignedRequest<'_>) -> String {
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes());
-    let mut context = ring::hmac::Context::with_key(&key);
-    context.update(format!("{timestamp}.").as_bytes());
-    context.update(body);
-    hex::encode(context.sign().as_ref())
+    let tag = ring::hmac::sign(&key, &signed_message(timestamp, nonce, request));
+    format!("t={timestamp},n={nonce},v1={}", hex::encode(tag.as_ref()))
 }
 
 fn signatures_table(db: &Connection) -> rusqlite::Result<()> {
@@ -548,25 +633,26 @@ fn signatures_table(db: &Connection) -> rusqlite::Result<()> {
     )
 }
 
-/// Checks a signature for the route at `path` and records it in `db`, the
-/// Deployment's identity store. Entries older than twice the window are
-/// pruned on the way: a `t` that old is refused before the lookup.
+/// Checks a signature for `request` and records it in `db`, the Deployment's
+/// identity store. Entries older than twice the window are pruned on the
+/// way: a `t` that old is refused before the lookup.
 pub(super) fn verify_signature(
     db: &Connection,
-    path: &str,
+    request: &SignedRequest<'_>,
     secret: &str,
     header_value: Option<&str>,
-    body: &[u8],
     now: u64,
 ) -> Result<SignatureCheck> {
     let Some(value) = header_value else { return Ok(SignatureCheck::Invalid) };
     let mut timestamp = None;
+    let mut nonce = None;
     let mut tags = Vec::new();
     for part in value.split(',') {
         match part.trim().split_once('=') {
             Some(("t", digits)) if !digits.is_empty() && digits.len() <= 12 && digits.bytes().all(|b| b.is_ascii_digit()) => {
                 timestamp = digits.parse::<u64>().ok();
             }
+            Some(("n", text)) if valid_nonce(text) => nonce = Some(text.to_owned()),
             Some(("v1", tag)) => {
                 if let Ok(bytes) = hex::decode(tag) {
                     tags.push(bytes);
@@ -575,12 +661,12 @@ pub(super) fn verify_signature(
             _ => {}
         }
     }
-    let Some(timestamp) = timestamp else { return Ok(SignatureCheck::Invalid) };
+    let (Some(timestamp), Some(nonce)) = (timestamp, nonce) else { return Ok(SignatureCheck::Invalid) };
     if timestamp.abs_diff(now) > SIGNATURE_WINDOW_SECONDS {
-        return Ok(SignatureCheck::Invalid);
+        return Ok(SignatureCheck::Stale);
     }
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes());
-    let message = [format!("{timestamp}.").as_bytes(), body].concat();
+    let message = signed_message(timestamp, &nonce, request);
     let Some(tag) = tags.iter().find(|tag| ring::hmac::verify(&key, &message, tag).is_ok()) else {
         return Ok(SignatureCheck::Invalid);
     };
@@ -589,7 +675,7 @@ pub(super) fn verify_signature(
     db.execute("DELETE FROM route_signatures WHERE seen_at < ?1", [cutoff])?;
     let inserted = db.execute(
         "INSERT INTO route_signatures(path, tag, seen_at) VALUES(?1, ?2, ?3) ON CONFLICT(path, tag) DO NOTHING",
-        rusqlite::params![path, hex::encode(tag), now as i64],
+        rusqlite::params![request.path, hex::encode(tag), now as i64],
     )?;
     Ok(if inserted == 1 { SignatureCheck::Valid } else { SignatureCheck::Replayed })
 }
@@ -700,12 +786,13 @@ pub(super) async fn get_route(State(state): State<AppState>, AxumPath(relative):
                 response.headers_mut().insert(header::ALLOW, HeaderValue::from_static("GET"));
                 return response;
             }
-            let input = match query_input(&table.program, name, request.uri().query().unwrap_or("")) {
+            let raw_query = request.uri().query().unwrap_or("");
+            let input = match query_input(&table.program, name, raw_query) {
                 Ok(input) => input,
                 Err(message) => return refusal(StatusCode::BAD_REQUEST, &message),
             };
             let client = state.guards.client_ip(peer(&request), request.headers());
-            return run_route(&state, &deployment, &table, name, http, request.headers(), client, input, b"").await;
+            return run_route(&state, &deployment, &table, name, http, request.headers(), client, input, raw_query, b"").await;
         }
     }
     // Every other GET keeps serving the Build Artifact.
@@ -724,11 +811,12 @@ pub(super) async fn post_route(State(state): State<AppState>, request: Request) 
     let Some((name, http)) = table.find("POST", &path) else { return not_allowed(table.allowed(&path)) };
     let client = state.guards.client_ip(peer(&request), request.headers());
     let headers = request.headers().clone();
+    let raw_query = request.uri().query().unwrap_or("").to_owned();
     let body = match axum::body::to_bytes(request.into_body(), MAX_BODY_BYTES).await {
         Ok(body) => body,
         Err(_) => return refusal(StatusCode::PAYLOAD_TOO_LARGE, "The request body exceeds 64 KiB."),
     };
-    run_route(&state, &deployment, &table, name, http, &headers, client, Value::Null, &body).await
+    run_route(&state, &deployment, &table, name, http, &headers, client, Value::Null, &raw_query, &body).await
 }
 
 /// Turns a query string into action input, typed by the action's bindings, so
@@ -776,16 +864,25 @@ async fn run_route(
     headers: &HeaderMap,
     client: std::net::IpAddr,
     query: Value,
+    raw_query: &str,
     body: &[u8],
 ) -> Response {
-    let caller = match resolve_caller(state, deployment, headers, client) {
+    let mut caller = match resolve_caller(state, deployment, headers, client) {
         Ok(caller) => caller,
         Err(response) => return response,
     };
-    if let Caller::Key(key) = &caller {
-        if !key.actions.iter().any(|action| action == name) {
+    // `None` answers anyone. Otherwise each proof counts only when the route
+    // lists it: a key the route does not take is refused, and a session it
+    // does not take leaves the person a visitor who must sign.
+    let callers = route_callers(http, is_private(deployment));
+    let accepts = |proof: &str| callers.as_ref().is_none_or(|list| list.iter().any(|caller| caller == proof));
+    match &caller {
+        Caller::Key(_) if !accepts("key") => return refusal(StatusCode::FORBIDDEN, "This route does not accept API keys."),
+        Caller::Key(key) if !key.actions.iter().any(|action| action == name) => {
             return refusal(StatusCode::FORBIDDEN, &format!("This API key may not call {name}."));
         }
+        Caller::Person(_) if !accepts("session") => caller = Caller::Visitor,
+        _ => {}
     }
     // Rate limits match the runtime endpoint: one bucket per client address
     // for callers with no account, one per user or key otherwise.
@@ -797,18 +894,24 @@ async fn run_route(
     if let Err(wait) = limited {
         return rate_limited(wait);
     }
-    if let (Some(signature), false) = (&http.signature, matches!(caller, Caller::Key(_))) {
+    let signs = matches!(caller, Caller::Visitor) && callers.is_some();
+    if signs && !accepts("signature") {
+        return refusal(StatusCode::UNAUTHORIZED, "authentication-required");
+    }
+    if let (Some(signature), true) = (&http.signature, signs) {
         let secret = match super::mcp::store(state).and_then(|db| secret_value(&db, &deployment.project_id, &signature.secret)) {
             Ok(Some(secret)) => secret,
             Ok(None) => return refusal(StatusCode::SERVICE_UNAVAILABLE, "The route's signing secret is not set."),
             Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
         };
         let header_value = headers.get(signature.header.as_str()).and_then(|value| value.to_str().ok());
+        let signed = SignedRequest { method: &http.method, path: &http.path, query: raw_query, body };
         let checked = identity_connection(state, deployment)
-            .and_then(|db| verify_signature(&db, &http.path, &secret, header_value, body, now_ms() / 1000));
+            .and_then(|db| verify_signature(&db, &signed, &secret, header_value, now_ms() / 1000));
         match checked {
             Ok(SignatureCheck::Valid) => {}
             Ok(SignatureCheck::Invalid) => return refusal(StatusCode::UNAUTHORIZED, "invalid-signature"),
+            Ok(SignatureCheck::Stale) => return refusal(StatusCode::UNAUTHORIZED, "stale-timestamp"),
             Ok(SignatureCheck::Replayed) => return refusal(StatusCode::CONFLICT, "replayed-signature"),
             Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
         }
@@ -839,9 +942,18 @@ async fn run_route(
     };
     match result {
         Ok(value) => {
+            let changed = match super::guard::outcome(name, action, &value) {
+                super::guard::Outcome::Refused(message) => {
+                    super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Refused(name.to_owned()));
+                    return refusal(StatusCode::FORBIDDEN, &message);
+                }
+                outcome => matches!(outcome, super::guard::Outcome::Changed),
+            };
             // A route counts under its method and path, not again as an action.
             super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Route(http.method.clone(), http.path.clone()));
-            super::usage::signal(&state.data_root, &deployment.id, name, action, &input);
+            if changed {
+                super::usage::signal(&state.data_root, &deployment.id, name, action, &input, caller.actor_id());
+            }
             let mut response = Json(json!({"result": value})).into_response();
             response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             response
@@ -940,34 +1052,78 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let file = root.join("identity.sqlite");
         let open = || Connection::open(&file).unwrap();
+        let secret = "orders-secret-0123";
         let body = br#"{"id":"A-1","total":12}"#;
+        let post = |path: &'static str| SignedRequest { method: "POST", path, query: "", body };
         let now = 1_800_000_000;
-        let header = format!("t={now},v1={}", sign("orders-secret-0123", now, body));
-        let verify = |db: &Connection, path: &str, secret: &str, header: Option<&str>, body: &[u8], at: u64| {
-            verify_signature(db, path, secret, header, body, at).unwrap()
+        let header = sign(secret, now, "n1", &post("/hooks/orders"));
+        let verify = |db: &Connection, request: &SignedRequest<'_>, secret: &str, header: Option<&str>, at: u64| {
+            verify_signature(db, request, secret, header, at).unwrap()
         };
-        assert_eq!(verify(&open(), "/hooks/orders", "orders-secret-0123", Some(&header), body, now + 10), SignatureCheck::Valid);
+        assert_eq!(verify(&open(), &post("/hooks/orders"), secret, Some(&header), now + 10), SignatureCheck::Valid);
         // A new connection stands in for a restarted Kernel.
-        assert_eq!(verify(&open(), "/hooks/orders", "orders-secret-0123", Some(&header), body, now + 20), SignatureCheck::Replayed);
-        assert_eq!(verify(&open(), "/hooks/other", "orders-secret-0123", Some(&header), body, now + 20), SignatureCheck::Valid, "each path keeps its own");
+        assert_eq!(verify(&open(), &post("/hooks/orders"), secret, Some(&header), now + 20), SignatureCheck::Replayed);
+        // The same second with another nonce is another request, which is how a sender retries.
+        let retry = sign(secret, now, "n2", &post("/hooks/orders"));
+        assert_eq!(verify(&open(), &post("/hooks/orders"), secret, Some(&retry), now + 20), SignatureCheck::Valid);
         let db = open();
-        assert_eq!(verify(&db, "/hooks/fresh", "orders-secret-0123", Some(&header), body, now + 301), SignatureCheck::Invalid, "stale");
-        assert_eq!(verify(&db, "/hooks/fresh", "orders-secret-0123", Some(&header), body, now - 301), SignatureCheck::Invalid, "future");
-        assert_eq!(verify(&db, "/hooks/fresh", "another-secret-0123", Some(&header), body, now), SignatureCheck::Invalid, "wrong secret");
-        assert_eq!(verify(&db, "/hooks/fresh", "orders-secret-0123", Some(&header), br#"{"id":"A-1","total":99}"#, now), SignatureCheck::Invalid, "tampered body");
-        let moved = format!("t={},v1={}", now + 1, sign("orders-secret-0123", now, body));
-        assert_eq!(verify(&db, "/hooks/fresh", "orders-secret-0123", Some(&moved), body, now), SignatureCheck::Invalid, "timestamp is signed");
-        assert_eq!(verify(&db, "/hooks/fresh", "orders-secret-0123", None, body, now), SignatureCheck::Invalid, "missing");
-        assert_eq!(verify(&db, "/hooks/fresh", "orders-secret-0123", Some("v1=00"), body, now), SignatureCheck::Invalid, "no timestamp");
-        assert_eq!(verify(&db, "/hooks/fresh", "orders-secret-0123", Some(&header), body, now), SignatureCheck::Valid);
+        assert_eq!(verify(&db, &post("/hooks/other"), secret, Some(&header), now), SignatureCheck::Invalid, "the path is signed");
+        let get = SignedRequest { method: "GET", path: "/hooks/orders", query: "", body };
+        assert_eq!(verify(&db, &get, secret, Some(&header), now), SignatureCheck::Invalid, "the method is signed");
+        let fresh = |n: &str| sign(secret, now, n, &post("/hooks/fresh"));
+        assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some(&fresh("a")), now + 301), SignatureCheck::Stale, "stale");
+        assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some(&fresh("a")), now - 301), SignatureCheck::Stale, "future");
+        assert_eq!(verify(&db, &post("/hooks/fresh"), "another-secret-0123", Some(&fresh("a")), now + 301), SignatureCheck::Stale, "a stale t is refused before the MAC");
+        assert_eq!(verify(&db, &post("/hooks/fresh"), "another-secret-0123", Some(&fresh("a")), now), SignatureCheck::Invalid, "wrong secret");
+        let tampered = SignedRequest { body: br#"{"id":"A-1","total":99}"#, ..post("/hooks/fresh") };
+        assert_eq!(verify(&db, &tampered, secret, Some(&fresh("a")), now), SignatureCheck::Invalid, "tampered body");
+        let moved = fresh("a").replacen(&format!("t={now}"), &format!("t={}", now + 1), 1);
+        assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some(&moved), now), SignatureCheck::Invalid, "t is signed");
+        let renonced = fresh("a").replacen("n=a", "n=b", 1);
+        assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some(&renonced), now), SignatureCheck::Invalid, "the nonce is signed");
+        let no_nonce = fresh("a").replacen("n=a,", "", 1);
+        assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some(&no_nonce), now), SignatureCheck::Invalid, "a nonce is required");
+        assert_eq!(verify(&db, &post("/hooks/fresh"), secret, None, now), SignatureCheck::Invalid, "missing");
+        assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some("n=a,v1=00"), now), SignatureCheck::Invalid, "no timestamp");
+        assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some(&fresh("a")), now), SignatureCheck::Valid);
         let stored = |db: &Connection| db.query_row("SELECT COUNT(*) FROM route_signatures", [], |row| row.get::<_, i64>(0)).unwrap();
         assert_eq!(stored(&db), 3);
         // A verification past twice the window prunes what came before it.
         let later = now + 2 * SIGNATURE_WINDOW_SECONDS + 30;
-        let fresh = format!("t={later},v1={}", sign("orders-secret-0123", later, body));
-        assert_eq!(verify(&db, "/hooks/orders", "orders-secret-0123", Some(&fresh), body, later), SignatureCheck::Valid);
+        let late = sign(secret, later, "n3", &post("/hooks/orders"));
+        assert_eq!(verify(&db, &post("/hooks/orders"), secret, Some(&late), later), SignatureCheck::Valid);
         assert_eq!(stored(&db), 1);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_signature_covers_the_query_string_in_any_order_and_escaping() {
+        let db = Connection::open_in_memory().unwrap();
+        let secret = "feed-secret-0123456";
+        let now = 1_800_000_000;
+        let get = |query: &'static str| SignedRequest { method: "GET", path: "/api/events", query, body: b"" };
+        let header = sign(secret, now, "q1", &get("after=1&severity=critical"));
+        assert_eq!(verify_signature(&db, &get("after=4&severity=critical"), secret, Some(&header), now).unwrap(), SignatureCheck::Invalid);
+        assert_eq!(verify_signature(&db, &get("severity=critical&after=1"), secret, Some(&header), now).unwrap(), SignatureCheck::Valid);
+        assert_eq!(canonical_query("b=caf%C3%A9+au+lait&a=x%2Ay~"), "a=x*y%7E&b=caf%C3%A9+au+lait");
+    }
+
+    /// The signer in src/lib/route-signature.ts computes the same headers.
+    #[test]
+    fn the_signature_vectors_match_the_editors_signer() {
+        let vectors: Vec<Value> = serde_json::from_str(include_str!("signature-cases.json")).unwrap();
+        assert!(vectors.len() >= 3);
+        for vector in vectors {
+            let request = SignedRequest {
+                method: vector["method"].as_str().unwrap(),
+                path: vector["path"].as_str().unwrap(),
+                query: vector["query"].as_str().unwrap(),
+                body: vector["body"].as_str().unwrap().as_bytes(),
+            };
+            assert_eq!(canonical_query(request.query), vector["canonicalQuery"].as_str().unwrap(), "{}", vector["case"]);
+            let header = sign(vector["secret"].as_str().unwrap(), vector["t"].as_u64().unwrap(), vector["n"].as_str().unwrap(), &request);
+            assert_eq!(header, vector["header"].as_str().unwrap(), "{}", vector["case"]);
+        }
     }
 
     fn test_state(root: &std::path::Path) -> AppState {

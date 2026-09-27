@@ -19,7 +19,7 @@
     "events.feed": {
       "kind": "query",
       "access": "anonymous",
-      "http": { "method": "GET", "path": "/api/events", "signature": { "header": "X-Inbox-Signature", "secret": "events_feed" } },
+      "http": { "method": "GET", "path": "/api/events", "callers": ["key"] },
       "statement": "SELECT id, source, external_id, severity, title, received_at, acknowledged_at FROM events WHERE (?1 IS NULL OR id > ?1) ORDER BY id LIMIT 100",
       "bindings": [
         { "source": "input", "key": "after", "type": "number", "nullable": true }
@@ -43,21 +43,14 @@
     "events.acknowledge": {
       "kind": "mutation",
       "access": "authenticated",
+      "guard": "Someone acknowledged this event first, or it does not exist.",
+      "signal": { "name": "event.acknowledged", "properties": ["id", "actor"] },
       "statement": "UPDATE events SET acknowledged_by = ?2, acknowledged_at = ?3 WHERE id = ?1 AND acknowledged_at IS NULL",
       "bindings": [
         { "source": "input", "key": "id", "type": "number" },
         { "source": "actor", "field": "id" },
         { "source": "kernel", "field": "now" }
       ]
-    },
-    "events.acknowledged": {
-      "kind": "signal",
-      "access": "authenticated",
-      "bindings": [
-        { "source": "input", "key": "id", "type": "number" },
-        { "source": "input", "key": "severity", "type": "string", "maxLength": 10 }
-      ],
-      "signal": { "name": "event.acknowledged", "properties": ["id", "severity"] }
     },
     "members.hello": {
       "kind": "mutation",

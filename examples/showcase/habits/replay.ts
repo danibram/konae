@@ -132,7 +132,7 @@ try {
   const program = JSON.parse(sources["actions.json"]);
   const streakSql: string = program.actions["habits.streaks"].statement;
   // Three programs the doors must refuse: the streak without its LIMIT, a
-  // recursive calendar, and a Signal that tries to name the account.
+  // recursive calendar, and a Signal that names an input it does not have.
   const variants: Record<string, (actions: any) => void> = {
     unbounded: (actions) => { actions["habits.streaks"].statement = streakSql.replace(/ LIMIT 20$/, ""); },
     recursive: (actions) => { actions["habits.streaks"].statement = "WITH RECURSIVE d(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM d WHERE n < 7) SELECT n AS day_offset FROM d WHERE ?1 IS NOT NULL AND ?2 IS NOT NULL LIMIT 7"; },
@@ -147,7 +147,7 @@ try {
     gateRefusals[name] = result.errors[0].detail ?? result.errors[0].message;
   }
   assert.match(gateRefusals.unbounded, /uses OVER, which keeps one result row per stored row, and has no LIMIT/);
-  assert.match(gateRefusals.recursive, /Runtime query only allows: SELECT/);
+  assert.equal(gateRefusals.recursive, "Action habits.streaks is a query, so it must start with SELECT. Move the WITH clause into a subquery, as in SELECT ... FROM (WITH ... SELECT ...).");
   assert.match(gateRefusals.signalActor, /Action checkins.add names signal property user, which is not one of its input bindings\./);
 
   // ------------------------------------------------------------ the Kernel
@@ -174,11 +174,11 @@ try {
     } finally { await owner.cancel(upload.transferId).catch(() => {}); }
   }
   assert.match(kernelRefusals.unbounded, /uses OVER, which keeps one result row per stored row, and has no LIMIT/);
-  assert.match(kernelRefusals.recursive, /contains disallowed SQL/);
+  assert.equal(kernelRefusals.recursive, gateRefusals.recursive);
   assert.equal(kernelRefusals.signalActor, gateRefusals.signalActor);
   assert.equal(kernelRefusals.unbounded, gateRefusals.unbounded);
   check("Streak SQL within the LIMIT rules",
-    `The Gate passes the capsule and both doors refuse the streak query without its top-level LIMIT. A WITH RECURSIVE calendar is refused by both, with different words: Gate "${gateRefusals.recursive}", Kernel "${kernelRefusals.recursive}". A Signal property that is not an input key is refused by both with "${kernelRefusals.signalActor}"`);
+    `The Gate passes the capsule and both doors refuse the streak query without its top-level LIMIT. A WITH RECURSIVE calendar that leads the statement is refused by both with "${kernelRefusals.recursive}". A Signal property that is neither an input key nor actor is refused by both with "${kernelRefusals.signalActor}"; the capsule's Signals list actor and pass`);
 
   // ------------------------------------------------- the editor's managed path
   // project_sources_save and release_plan/apply in the shapes the editor sends.
@@ -368,11 +368,13 @@ try {
     if (!page.nextCursor) break;
     cursor = page.nextCursor;
   }
-  // Every call that ran its statement records one, whether or not a row changed.
-  const zeroChangeSignals = signals.length - completions;
-  assert.equal(signals.length, 12, JSON.stringify(signals.map((s) => s.properties)));
-  assert(signals.some((signal) => signal.properties.day === utcDay(-45)), "A check-in outside the window that changed nothing still records its Signal.");
-  assert(signals.every((signal) => Object.keys(signal.properties).sort().join() === "day,device,habitId"));
+  // Only a call that added a row records one, and it names who checked in.
+  assert.equal(signals.length, completions, JSON.stringify(signals.map((s) => s.properties)));
+  assert(!signals.some((signal) => signal.properties.day === utcDay(-45)), "A check-in outside the window changed nothing and records no Signal.");
+  assert(signals.every((signal) => Object.keys(signal.properties).sort().join() === "actor,day,device,habitId"));
+  const actors = signals.map((signal) => signal.properties.actor);
+  assert.equal(actors.filter((actor) => actor === anaSession.userId).length, completions - 1, "Ana's check-ins name her.");
+  assert.equal(actors.filter((actor) => actor === key.keyId).length, 1, "The key's check-in names the key.");
   const usage = await owner.call<{ days: { day: string; kind: string; name: string; count: number }[]; totals: { kind: string; name: string; count: number }[] }>("usage_read", { deploymentId: receipt.id, from: utcDay(-1), to: utcDay(1) });
   const total = (kind: string, name = "") => usage.totals.find((row) => row.kind === kind && row.name === name)?.count ?? 0;
   assert.equal(total("action", "checkins.add"), 9);
@@ -385,7 +387,7 @@ try {
   await assert.rejects(anaPhone.call("signals_read", { deploymentId: receipt.id }), (error: Error) => error.message === runtimeUsage);
   const dailyCheckins = usage.days.filter((row) => row.kind === "action" && row.name === "checkins.add");
   check("Signals and Usage",
-    `signals_read returns ${signals.length} habit.completed Signals with habitId, day and device; ${completions} of the calls added a row, ${zeroChangeSignals} changed nothing and still recorded one, including Ben's attempt on Ana's habit and a key's. usage_read gives checkins.add ${total("action", "checkins.add")} on ${dailyCheckins.map((row) => row.day).join(", ")}, POST /api/checkins ${total("route", "POST /api/checkins")}, signup ${total("signup")}, login ${total("login")}, session ${total("session")}. An app session calling usage_read or signals_read gets "${runtimeUsage}".`);
+    `signals_read returns ${signals.length} habit.completed Signals with habitId, day, device and actor, one for each of the ${completions} calls that added a row; the calls that changed nothing, Ben's attempt on Ana's habit and a key's among them, record none. ${completions - 1} name Ana and 1 names the key. usage_read gives checkins.add ${total("action", "checkins.add")} on ${dailyCheckins.map((row) => row.day).join(", ")}, POST /api/checkins ${total("route", "POST /api/checkins")}, signup ${total("signup")}, login ${total("login")}, session ${total("session")}. An app session calling usage_read or signals_read gets "${runtimeUsage}".`);
 
   // --------------------------------------------------- Action Contract and conform
   const conformEmail = "conform@habits.test";
@@ -410,12 +412,12 @@ try {
   const [conformCode, conformOut, conformErr] = await cli(["conform", "--url", receipt.url, "--contract", path.join(contractDir, "action-contract.json"), "--token", conformToken, "--key", key.key]);
   const conformTotals = conformOut.trim().split("\n").at(-1)!;
   assert.equal(conformCode, 0, conformOut + conformErr);
-  // conform skips a route that binds the caller's ID even when it holds a key; the replay checked those three routes with the key above.
-  const conformSkipped = conformOut.split("\n").filter((line) => line.startsWith("SKIP"));
-  assert.match(conformTotals, /^\d+ passed, 0 failed, 3 skipped/);
-  assert.deepEqual(conformSkipped.map((line) => line.split(":")[0]).sort(), ["SKIP checkins.log", "SKIP habits.import", "SKIP habits.mine"]);
-  assert(conformSkipped.every((line) => line.endsWith("Binds the caller's ID; a route caller with an ID needs an API key or a session cookie.")));
-  check("Action Contract", `littlebox contract writes 10 actions${contractErr.trim() ? ` with warnings: ${contractErr.trim()}` : " with no warning"}; littlebox conform reports "${conformTotals}" and skips the three actor-bound routes although it was given an API key.`);
+  // conform sends the key to the three routes that bind the caller's ID.
+  assert.match(conformTotals, /^\d+ passed, 0 failed, 0 skipped/);
+  for (const routeName of ["checkins.log", "habits.import", "habits.mine"]) {
+    assert(conformOut.split("\n").some((line) => line.startsWith(`PASS ${routeName}: answers`) && line.includes("with an API key")), `${routeName} with the key:\n${conformOut}`);
+  }
+  check("Action Contract", `littlebox contract writes 10 actions${contractErr.trim() ? ` with warnings: ${contractErr.trim()}` : " with no warning"}; littlebox conform reports "${conformTotals}" and calls the three actor-bound routes with the API key.`);
 
   // ------------------------------------------------------------------ Eject
   const lifecycle = await owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish", "manage_lifecycle"], projectIds: [projectId], ttlSeconds: 3600 });
@@ -478,7 +480,9 @@ try {
   assert.deepEqual((await action(anaRestored, "habits.streaks", { today })).map((row: any) => [row.current_streak, row.total_days]), [[5, 6], [1, 1]]);
   const keyAfter = await route("GET", "/api/habits", undefined, bearer);
   assert.equal(keyAfter.status, 200);
-  assert.deepEqual(keyAfter.body.result.map((row: any) => row.name), ["Stretch"]);
+  // conform added one habit with the key too, so the key reads Stretch and that one.
+  assert(keyAfter.body.result.map((row: any) => row.name).includes("Stretch"), JSON.stringify(keyAfter.body));
+  assert.equal(keyAfter.body.result.length, 2);
   const restoredSignals = await restoredOwner.call<{ signals: unknown[]; nextCursor: string | null }>("signals_read", { deploymentId: receipt.id, name: "habit.completed" });
   assert.equal(restoredSignals.signals.length, signalCountBefore);
   let restoredRefusal = "";

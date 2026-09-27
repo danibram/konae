@@ -10,14 +10,19 @@ import kernelClerkSource from "../../kernel-rs/src/clerk.rs?raw";
 import kernelCopiesSource from "../../kernel-rs/src/copies.rs?raw";
 import kernelEjectSource from "../../kernel-rs/src/eject.rs?raw";
 import kernelFilesSource from "../../kernel-rs/src/files.rs?raw";
+import kernelGuardSource from "../../kernel-rs/src/guard.rs?raw";
+import kernelGuardCases from "../../kernel-rs/src/guard-cases.json?raw";
 import kernelLimitsSource from "../../kernel-rs/src/limits.rs?raw";
 import kernelHttpSource from "../../kernel-rs/src/http.rs?raw";
 import kernelHttpBindingCases from "../../kernel-rs/src/http-binding-cases.json?raw";
+import kernelSignatureCases from "../../kernel-rs/src/signature-cases.json?raw";
 import kernelMailSource from "../../kernel-rs/src/mail.rs?raw";
 import kernelMigrationSource from "../../kernel-rs/src/migration.rs?raw";
 import kernelPackageSource from "../../kernel-rs/src/package.rs?raw";
 import kernelRecoverySource from "../../kernel-rs/src/recovery.rs?raw";
 import kernelSecuritySource from "../../kernel-rs/src/security.rs?raw";
+import kernelSqlRulesSource from "../../kernel-rs/src/sql_rules.rs?raw";
+import kernelSqlRuleCases from "../../kernel-rs/src/sql-rule-cases.json?raw";
 import kernelUsageSource from "../../kernel-rs/src/usage.rs?raw";
 import kernelSignalCases from "../../kernel-rs/src/signal-cases.json?raw";
 import kernelCargoLock from "../../kernel-rs/Cargo.lock?raw";
@@ -42,15 +47,20 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/copies.rs", contents: kernelCopiesSource },
   { path: "kernel-rs/src/eject.rs", contents: kernelEjectSource },
   { path: "kernel-rs/src/files.rs", contents: kernelFilesSource },
+  { path: "kernel-rs/src/guard.rs", contents: kernelGuardSource },
+  { path: "kernel-rs/src/guard-cases.json", contents: kernelGuardCases },
   { path: "kernel-rs/src/limits.rs", contents: kernelLimitsSource },
   { path: "kernel-rs/src/http.rs", contents: kernelHttpSource },
   { path: "kernel-rs/src/http-binding-cases.json", contents: kernelHttpBindingCases },
+  { path: "kernel-rs/src/signature-cases.json", contents: kernelSignatureCases },
   { path: "kernel-rs/src/mail.rs", contents: kernelMailSource },
   { path: "kernel-rs/src/migration.rs", contents: kernelMigrationSource },
   { path: "kernel-rs/src/package.rs", contents: kernelPackageSource },
   { path: "kernel-rs/src/recovery.rs", contents: kernelRecoverySource },
   { path: "kernel-rs/src/sdk-guide.json", contents: kernelSdkGuide },
   { path: "kernel-rs/src/security.rs", contents: kernelSecuritySource },
+  { path: "kernel-rs/src/sql_rules.rs", contents: kernelSqlRulesSource },
+  { path: "kernel-rs/src/sql-rule-cases.json", contents: kernelSqlRuleCases },
   { path: "kernel-rs/src/usage.rs", contents: kernelUsageSource },
   { path: "kernel-rs/src/signal-cases.json", contents: kernelSignalCases },
 ];

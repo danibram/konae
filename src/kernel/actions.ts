@@ -1,7 +1,7 @@
 import type { RuntimeActionDeclaration } from "../deployments/manifest";
 import { unboundedQueryReason } from "../lib/query-bound";
 import { assertRuntimeSql, validateRuntimeParams } from "../runtime/security";
-import { sqlTokens } from "../lib/sql-tokens";
+import { assertActionStatement } from "./sql-rules";
 
 type ActionBinding =
   | { source: "input"; key: string; type: "string"; maxLength?: number; nullable?: boolean }
@@ -10,13 +10,36 @@ type ActionBinding =
   | { source: "kernel"; field: "now" }
   | { source: "literal"; value: string | number | null };
 
+/** Who may call a route: a signed sender, a program with an API key, a person with a session. */
+export type RouteCaller = "signature" | "key" | "session";
+
 /** An action's HTTP route on its Deployment host. See docs/mcp.md, "HTTP routes". */
 export type HttpBinding = {
   method: "GET" | "POST";
   path: string;
   /** `secret` names a value the owner sets with `secret_set`; it is never in actions.json. */
   signature?: { header: string; secret: string };
+  /**
+   * The route's callers. Without it a signed route takes the signature or a
+   * key, an unsigned route on a private Deployment a key or a session, and an
+   * unsigned route on a public Deployment anyone. See `routeCallers`.
+   */
+  callers?: RouteCaller[];
 };
+
+const ROUTE_CALLERS: readonly RouteCaller[] = ["signature", "key", "session"];
+
+/**
+ * The callers a route accepts on a Deployment of the given visibility, or
+ * null when it answers anyone. An action whose route does not answer anyone
+ * answers only there, never through actions_invoke (ADR-0011, update of
+ * 2026-11-06). kernel-rs/src/http.rs `route_callers` is the same rule.
+ */
+export function routeCallers(http: HttpBinding, visibility: "public" | "private"): RouteCaller[] | null {
+  if (http.callers) return http.callers;
+  if (http.signature) return ["signature", "key"];
+  return visibility === "private" ? ["key", "session"] : null;
+}
 
 /**
  * A Signal the action records when it succeeds. Its properties name input
@@ -30,6 +53,11 @@ export type ServerActionDefinition = RuntimeActionDeclaration & {
   bindings: ActionBinding[];
   http?: HttpBinding;
   signal?: SignalDeclaration;
+  /**
+   * The refusal a mutation answers with when its statement changes no row,
+   * instead of { changes: 0 }. See docs/mcp.md, "Guards".
+   */
+  guard?: string;
 };
 
 export type ServerActionProgram = {
@@ -101,19 +129,12 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
     const bindings = candidate.bindings.map((binding, index) => parseBinding(name, index, binding));
     const signal = parseSignal(name, kind, bindings, candidate.signal);
     const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http);
+    parseGuard(name, kind, candidate.guard);
     return { name, kind, access, statement: "", bindings, ...(signal ? { signal } : {}), ...(http ? { http } : {}) };
   }
   if (!kind || !access || typeof candidate.statement !== "string") throw new Error(`Invalid server action: ${name}`);
+  assertActionStatement(name, kind === "query" ? "query" : "mutation", candidate.statement);
   assertRuntimeSql(kind === "query" ? "query" : "execute", candidate.statement);
-  assertSingleStatement(candidate.statement);
-  const tokens = sqlTokens(candidate.statement);
-  if (kind === "mutation" && tokens.some((token, index) => {
-    const previous = tokens[index - 1];
-    const parameter = previous?.kind === "symbol" && [":", "@", "$"].includes(previous.text);
-    return token.kind === "word" && token.depth === 0 && token.text.toUpperCase() === "RETURNING" && !parameter;
-  })) {
-    throw new Error(`Action ${name} cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.`);
-  }
   if (kind === "query") {
     const reason = unboundedQueryReason(candidate.statement);
     if (reason) {
@@ -124,7 +145,25 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
   const bindings = candidate.bindings.map((binding, index) => parseBinding(name, index, binding));
   const signal = parseSignal(name, kind, bindings, candidate.signal);
   const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http);
-  return { name, kind, access, statement: candidate.statement.trim(), bindings, ...(signal ? { signal } : {}), ...(http ? { http } : {}) };
+  const guard = parseGuard(name, kind, candidate.guard);
+  return {
+    name, kind, access, statement: candidate.statement.trim(), bindings,
+    ...(signal ? { signal } : {}), ...(http ? { http } : {}), ...(guard ? { guard } : {}),
+  };
+}
+
+// The same checks and messages as kernel-rs/src/guard.rs `declaration`.
+// kernel-rs/src/guard-cases.json holds the cases both test suites run.
+const MAX_GUARD_LENGTH = 200;
+
+function parseGuard(name: string, kind: "query" | "mutation" | "signal", value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (kind !== "mutation") throw new Error(`Action ${name} is a ${kind === "query" ? "query" : "signal action"}, so it cannot declare a guard. Declare it on a mutation.`);
+  // Characters, not bytes or UTF-16 units, so both doors count an accented letter once.
+  if (typeof value !== "string" || !value.trim() || [...value].length > MAX_GUARD_LENGTH || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new Error(`Action ${name} has an invalid guard. Use a message of 1 to ${MAX_GUARD_LENGTH} characters on one line.`);
+  }
+  return value;
 }
 
 // The same checks, in the same order and with the same messages, as
@@ -132,6 +171,8 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
 // the cases both test suites run.
 const SIGNAL_NAME = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/;
 const MAX_SIGNAL_PROPERTIES = 8;
+/** The property that records the caller's ID: a user's, a key's, or null for a visitor or a signed request. */
+const SIGNAL_ACTOR = "actor";
 
 function parseSignal(name: string, kind: "query" | "mutation" | "signal", bindings: ActionBinding[], value: unknown): SignalDeclaration | undefined {
   if (value === undefined) {
@@ -156,7 +197,11 @@ function parseSignal(name: string, kind: "query" | "mutation" | "signal", bindin
   const seen = new Set<string>();
   for (const key of properties as string[]) {
     if (seen.has(key)) throw new Error(`Action ${name} names signal property ${key} twice.`);
-    if (!inputs.has(key)) throw new Error(`Action ${name} names signal property ${key}, which is not one of its input bindings.`);
+    // "actor" records the caller's ID, so it cannot also name an input.
+    if (key === SIGNAL_ACTOR && inputs.has(key)) {
+      throw new Error(`Action ${name} names signal property actor, which records the caller's ID, and also has an input named actor. Rename the input.`);
+    }
+    if (key !== SIGNAL_ACTOR && !inputs.has(key)) throw new Error(`Action ${name} names signal property ${key}, which is not one of its input bindings.`);
     seen.add(key);
   }
   return { name: record.name, properties: properties as string[] };
@@ -175,7 +220,7 @@ function parseHttpBinding(name: string, kind: "query" | "mutation" | "signal", a
   const invalid = `Action ${name} has an invalid http binding.`;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(invalid);
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).some((key) => !["method", "path", "signature"].includes(key))) throw new Error(invalid);
+  if (Object.keys(record).some((key) => !["method", "path", "signature", "callers"].includes(key))) throw new Error(invalid);
   if (typeof record.path !== "string") throw new Error(invalid);
   if (!((record.method === "GET" && kind === "query") || (record.method === "POST" && kind === "mutation"))) {
     throw new Error(`Action ${name} must bind GET for a query and POST for a mutation.`);
@@ -203,6 +248,20 @@ function parseHttpBinding(name: string, kind: "query" | "mutation" | "signal", a
       throw new Error(`Action ${name} names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter.`);
     }
     binding.signature = { header: signature.header, secret: signature.secret };
+  }
+  if (record.callers !== undefined) {
+    const callers = record.callers;
+    if (!Array.isArray(callers) || callers.length === 0 || new Set(callers).size !== callers.length
+      || callers.some((caller) => !ROUTE_CALLERS.includes(caller as RouteCaller))) {
+      throw new Error(`Action ${name} has an invalid callers list. List one or more of "signature", "key" and "session", each once.`);
+    }
+    if (callers.includes("signature") && !binding.signature) {
+      throw new Error(`Action ${name} lists "signature" among its callers but declares no signature.`);
+    }
+    if (binding.signature && !callers.includes("signature")) {
+      throw new Error(`Action ${name} declares a signature, so its callers must include "signature".`);
+    }
+    binding.callers = callers as RouteCaller[];
   }
   return binding;
 }
@@ -262,36 +321,4 @@ function resolveBinding(binding: ActionBinding, input: Record<string, unknown>, 
   }
   if (typeof value !== "boolean") throw new Error(`${binding.key} must be a boolean.`);
   return value ? 1 : 0;
-}
-
-function assertSingleStatement(sql: string) {
-  let quote: "'" | '"' | "`" | "]" | null = null;
-  let terminated = false;
-  for (let index = 0; index < sql.length; index += 1) {
-    const char = sql[index];
-    const next = sql[index + 1];
-    if (!quote && char === "-" && next === "-") {
-      index = sql.indexOf("\n", index + 2);
-      if (index === -1) break;
-      continue;
-    }
-    if (!quote && char === "/" && next === "*") {
-      const end = sql.indexOf("*/", index + 2);
-      if (end === -1) throw new Error("Unterminated SQL comment.");
-      index = end + 1;
-      continue;
-    }
-    if (!quote && (char === "'" || char === '"' || char === "`" || char === "[")) {
-      quote = char === "[" ? "]" : char;
-      continue;
-    }
-    if (quote && char === quote) {
-      if (next === quote && quote !== "]") { index += 1; continue; }
-      quote = null;
-      continue;
-    }
-    if (!quote && char === ";") { terminated = true; continue; }
-    if (terminated && !/\s/.test(char)) throw new Error("Server actions must contain exactly one SQL statement.");
-  }
-  if (quote) throw new Error("Unterminated SQL string.");
 }

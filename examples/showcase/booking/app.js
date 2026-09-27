@@ -125,14 +125,13 @@ $("#book").addEventListener("submit", async (event) => {
   const hours = Number($("#hours").value);
   try {
     const result = await miniapp.actions.call("bookings.create", { room: picked.room, day, start: picked.hour, hours, title: $("#title").value.trim() });
-    // The statement inserts nothing when any hour in the span is taken, the
-    // day has passed or the span runs past 18:00. It cannot say which.
-    if (result.changes === 0) say("Not booked. Someone holds one of those hours, or the span runs past 18:00. The board now shows the latest state.", "error");
-    else say(`Booked ${result.changes} hour${result.changes > 1 ? "s" : ""}.`, "ok");
+    say(`Booked ${result.changes} hour${result.changes > 1 ? "s" : ""}.`, "ok");
     closeForm();
     await render();
   } catch (error) {
+    // A booking that inserts nothing is refused with the action's guard, which names the rules.
     say(error.message, "error");
+    await render();
   } finally {
     button.disabled = false;
   }
@@ -141,8 +140,8 @@ $("#mine").addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-cancel]");
   if (!button) return;
   button.disabled = true;
-  const result = await run("bookings.cancel", { ref: button.dataset.cancel });
-  if (result) say(result.changes ? "Booking cancelled. The hours are free again." : "Nothing to cancel.", result.changes ? "ok" : "error");
+  // A cancel that changes nothing is refused with the action's guard, which run() shows.
+  await run("bookings.cancel", { ref: button.dataset.cancel }, "Booking cancelled. The hours are free again.");
 });
 const go = (next) => { day = next; picked = null; $("#book").hidden = true; say(""); render(); };
 $("#prev").addEventListener("click", () => go(shiftDay(day, -1)));

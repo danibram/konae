@@ -206,9 +206,26 @@ Input bindings in `actions.json` require a value by default. Add `"nullable": tr
 
 Calling this action with `{}` returns the actor's rows up to the limit; `{ "q": "trip" }` filters them. Mutation actions return `{ "changes", "lastInsertId" }`. They cannot use SQL `RETURNING`; publication and the Validation Gate reject it. Use a separate query to read the changed rows.
 
+### Statement rules
+
+An action runs one SQL statement. A query starts with `SELECT` and a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, after any leading comment. The Validation Gate and the Kernel refuse a statement that breaks a rule with the same message, from one case file, `kernel-rs/src/sql-rule-cases.json`, that both test suites run. `kernel-rs/src/sql_rules.rs` and `src/kernel/sql-rules.ts` hold the checks.
+
+| Statement | Message |
+| --- | --- |
+| A query that opens with `WITH` | `Action <name> is a query, so it must start with SELECT. Move the WITH clause into a subquery, as in SELECT ... FROM (WITH ... SELECT ...).` |
+| A mutation that opens with `WITH` | `Action <name> is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Put the WITH clause after INSERT INTO <table> (<columns>), or inside a subquery.` |
+| A `CREATE`, `ALTER` or `DROP`, such as a trigger or a view | `Action <name> is a query, so it must start with SELECT. Tables and indexes belong in schema.sql, and Littlebox runs no triggers or views.`, or the same rule for a mutation |
+| Any other first word | `Action <name> is a query, so it must start with SELECT.` or `Action <name> is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE.` |
+| Anything after the first `;` but comments and whitespace | `Action <name> must contain one statement.` |
+| `RETURNING` on a mutation | `Action <name> cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.` |
+| A query that reads rows with no top-level `LIMIT` | `Action <name> reads rows and has no LIMIT. Add a LIMIT. ...`, with the reason the [query bound](./adr/0009-the-gate-and-the-kernel-share-one-query-bound.md) gives, such as `uses OVER, which keeps one result row per stored row` |
+| A trigger, a view or a row in `schema.sql` | `schema.sql may only create tables and indexes, but it contains CREATE TRIGGER.`, naming each refused statement as `CREATE VIEW`, `INSERT` and so on |
+
+A `WITH` clause is allowed inside the statement: `INSERT INTO bookings (room_id, slot) WITH span(slot) AS (...) SELECT ...` and `SELECT ... FROM (WITH ... SELECT ...) LIMIT 50` both pass. A keyword or a `;` inside a string, a quoted name or a comment does not count.
+
 ## HTTP routes
 
-An action declared `anonymous` may answer one method and path on its Deployment's host. This is how a project receives a webhook or serves a JSON endpoint without a server of its own. `kernel-rs/src/http.rs` implements it; the [ADR-0011 update of 2026-11-06](./adr/0011-one-verified-account-core-for-creators-and-app-users.md) records the decision.
+An action declared `anonymous` may answer one method and path on its Deployment's host. This is how a project receives a webhook or serves a JSON endpoint without a server of its own. `kernel-rs/src/http.rs` implements it; the [ADR-0011 updates of 2026-11-06](./adr/0011-one-verified-account-core-for-creators-and-app-users.md) record the decisions.
 
 ```json
 "orders.receive": {
@@ -223,20 +240,23 @@ An action declared `anonymous` may answer one method and path on its Deployment'
 }
 ```
 
-A query binds `GET` and a mutation binds `POST`. A path starts with `/` and has segments of letters, digits, `.`, `_`, `~` and `-`, up to 200 characters, with no `.` or `..` segment and no trailing slash. Paths under `/_littlebox`, `/oauth`, `/.well-known` and `/mcp` belong to the Kernel. Two actions may share a path only with different methods. A binding wins over an artifact file at the same path for its method; every other `GET` still serves the Build Artifact, and a `POST` to a path no action binds answers 405. A `HEAD` on a `GET` route answers 405 rather than running the query to drop its rows. The Kernel reads a Deployment's routes from `actions.json` once per release, so a request for a static file does not parse it. The Validation Gate and the Kernel refuse the same declarations with the same messages, from one case file, `kernel-rs/src/http-binding-cases.json`, that both test suites run. An `authenticated` action may not declare `http`.
+A query binds `GET` and a mutation binds `POST`. An optional `"callers"` list, described under [Who may call a route](#who-may-call-a-route), names the proofs the route takes. A path starts with `/` and has segments of letters, digits, `.`, `_`, `~` and `-`, up to 200 characters, with no `.` or `..` segment and no trailing slash. Paths under `/_littlebox`, `/oauth`, `/.well-known` and `/mcp` belong to the Kernel. Two actions may share a path only with different methods. A binding wins over an artifact file at the same path for its method; every other `GET` still serves the Build Artifact, and a `POST` to a path no action binds answers 405. A `HEAD` on a `GET` route answers 405 rather than running the query to drop its rows. The Kernel reads a Deployment's routes from `actions.json` once per release, so a request for a static file does not parse it. The Validation Gate and the Kernel refuse the same declarations with the same messages, from one case file, `kernel-rs/src/http-binding-cases.json`, that both test suites run. An `authenticated` action may not declare `http`.
 
-The route answers by the action's access level, not by the Deployment's visibility. On a private app, a route still answers to a caller with no session, so a route without a signature is open to anyone who knows the path. The action keeps its bindings, its query bound and the runtime endpoint's rate limits. A call that succeeds counts in [Usage](#usage-and-signals) under the route's method and path, and records the action's Signal if it declares one. A `GET` maps the query string onto the input bindings by their declared type, so `?min=10` binds the number 10; a `POST` reads a JSON object of at most 64 KiB. Inputs the action does not declare are refused, as with `miniapp.actions.call`, so a sender whose payload carries other fields needs an action that declares them or an adapter.
+The route answers to the callers it takes, described below, and on a private app an unsigned route takes an API key or a session, never a caller with neither. The action keeps its bindings, its query bound and the runtime endpoint's rate limits. A call that succeeds counts in [Usage](#usage-and-signals) under the route's method and path, and records the action's Signal if it declares one. A `GET` maps the query string onto the input bindings by their declared type, so `?min=10` binds the number 10; a `POST` reads a JSON object of at most 64 KiB. Inputs the action does not declare are refused, as with `miniapp.actions.call`, so a sender whose payload carries other fields needs an action that declares them or an adapter.
 
 | Answer | Status | When |
 | --- | --- | --- |
 | `{ "result": [rows] }` or `{ "result": { "changes", "lastInsertId" } }` | 200 | The action ran. Every answer carries `Cache-Control: no-store` |
 | `{ "error": "<binding message>" }` | 400 | An input is missing, unexpected or of the wrong type, the body is not a JSON object, or a query parameter repeats |
-| `{ "error": "invalid-signature" }` | 401 | A signed route got no signature, a wrong one, or one whose `t` is more than 300 seconds from the Kernel's clock |
+| `{ "error": "invalid-signature" }` | 401 | A route that needs the signature from this caller got none, a malformed one, or one whose MAC does not match |
+| `{ "error": "stale-timestamp" }` | 401 | The signature's `t` is more than 300 seconds from the Kernel's clock. Checked before the MAC, so it says nothing about the secret |
+| `{ "error": "authentication-required" }` | 401 | A route that takes an API key or a session, and no signature, got neither |
 | `{ "error": "invalid-api-key" }` | 401 | The bearer token starts with `lbk_` and names no live key of this Deployment |
+| `{ "error": "This route does not accept API keys." }` | 403 | The route's `callers` leave out `key` and the request carries a live key |
 | `{ "error": "This API key may not call <action>." }` | 403 | The key does not name the action |
 | `{ "error": "No route accepts POST on this path." }` | 405 | No action binds the path for `POST`. `Allow` is `GET` on a path a query binds, `GET, HEAD` elsewhere |
 | `{ "error": "A route does not answer HEAD. Send GET." }` | 405 | A `HEAD` reaches a path a query binds. It is refused before the caller is resolved and before any SQL, with `Allow: GET`. `HEAD` on every other path serves the Build Artifact's headers as before |
-| `{ "error": "replayed-signature" }` | 409 | The same signature arrived before, on this path, in the last 600 seconds, before or after a Kernel restart |
+| `{ "error": "replayed-signature" }` | 409 | The same signature arrived before, on this path, in the last 600 seconds, before or after a Kernel restart. A sender signs a retry again, with a new nonce |
 | `{ "error": "The request body exceeds 64 KiB." }` | 413 | |
 | `{ "error": "rate-limited" }` | 429 | With `Retry-After`. 30 calls per 10 seconds per client address without a key or session, 120 per user or key, shared with `actions_invoke`. Also after 10 unknown or revoked `lbk_` keys from one client address to one Deployment in a minute: from then on any key from that address, a valid one included, is refused without a lookup until the bucket refills, on routes and on the file read path |
 
@@ -244,13 +264,40 @@ The route answers by the action's access level, not by the Deployment's visibili
 
 The Kernel resolves the caller before any SQL runs.
 
-| Caller | Proof | Actor ID for an `actor` binding |
-| --- | --- | --- |
-| A service | The signature the binding declares | None, so an action that binds the actor refuses |
-| A program the owner wrote | `Authorization: Bearer lbk_...`, an API key that names the action | The key's ID, `key_...` |
-| A person | The app session cookie, sent from the app's own origin | The app user's ID |
+| Caller | `callers` entry | Proof | Actor ID for an `actor` binding |
+| --- | --- | --- | --- |
+| A service | `"signature"` | The signature the binding declares | None, so an action that binds the actor refuses |
+| A program the owner wrote | `"key"` | `Authorization: Bearer lbk_...`, an API key that names the action | The key's ID, `key_...` |
+| A person | `"session"` | The app session cookie, sent from the app's own origin | The app user's ID |
 
-A key that names a signed action replaces the signature. A session cookie does not: a signed route needs its signature from a person too. The Kernel uses the cookie only when the request comes from the app's own origin. Every app host is same-site with the others, so `SameSite=Lax` alone would let one app's page call another app's route as its signed-in user; a request whose `Sec-Fetch-Site` is `same-site` or `cross-site`, or whose `Origin` is another host, runs as a visitor.
+`"callers"` lists one or more of the three, each once. `"signature"` belongs in it exactly when the binding declares a signature. Without the list:
+
+| Route | Callers |
+| --- | --- |
+| Signed | `["signature", "key"]` |
+| Unsigned, on a private Deployment | `["key", "session"]` |
+| Unsigned, on a public Deployment | anyone, a visitor with no proof included |
+
+A key the route does not take is refused with 403. A session the route does not take counts for nothing, so the person is a visitor and needs the signature like any sender. The Kernel uses the cookie only when the request comes from the app's own origin. Every app host is same-site with the others, so `SameSite=Lax` alone would let one app's page call another app's route as its signed-in user; a request whose `Sec-Fetch-Site` is `same-site` or `cross-site`, or whose `Origin` is another host, runs as a visitor.
+
+```json
+"events.feed": {
+  "kind": "query", "access": "anonymous",
+  "http": { "method": "GET", "path": "/api/events", "callers": ["key"] },
+  "statement": "SELECT id, title FROM events WHERE (?1 IS NULL OR id > ?1) ORDER BY id LIMIT 100",
+  "bindings": [{ "source": "input", "key": "after", "type": "number", "nullable": true }]
+}
+```
+
+An action whose route does not answer anyone answers only there. `actions_invoke`, and so `miniapp.actions.call`, refuses it with `Action <name> answers only on its HTTP route, <method> <path>.`: always for a signed route or one that declares `callers`, and on a private Deployment for an unsigned one. A webhook action is therefore not a second door for members or visitors, and the app's own page reads a private route with `fetch`, which sends the session cookie. The editor preview has no visibility and refuses the first two cases only.
+
+The Validation Gate and the Kernel refuse the same `callers` declarations with the same messages, from `kernel-rs/src/http-binding-cases.json`:
+
+| Declaration | Message |
+| --- | --- |
+| `callers` that is not a non-empty list of distinct `"signature"`, `"key"` and `"session"` | `Action <name> has an invalid callers list. List one or more of "signature", "key" and "session", each once.` |
+| `"signature"` without a declared signature | `Action <name> lists "signature" among its callers but declares no signature.` |
+| A signature that `callers` leaves out | `Action <name> declares a signature, so its callers must include "signature".` |
 
 ### Signatures
 
@@ -267,17 +314,21 @@ Secrets belong to the project and live in `mcp.sqlite`, next to the project regi
 The sender puts this in the declared header:
 
 ```text
-t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw request body>", keyed with the secret>
+t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256, keyed with the secret, of:
+<t>\n<nonce>\n<METHOD>\n<path>\n<canonical query string>\n<raw request body>>
 ```
 
-The Kernel recomputes the MAC over the exact bytes it received, compares it in constant time, refuses a `t` more than 300 seconds before or after its clock, and remembers each accepted signature for 600 seconds so a replay inside the window answers 409. The memory is a `route_signatures` table in the Deployment's `identity.sqlite`, so a Kernel restart does not forget it, and an export carries it with the accounts, so the destination refuses a request captured on its way to the origin. `t` is inside the MAC, so moving it invalidates the signature. More than one `v1=` may be sent while a secret rotates. A shell sender with OpenSSL:
+The nonce is 1 to 64 letters, digits, `-` and `_`, fresh for each request, so two requests in one second differ and a retry is signed again rather than refused as a replay. The canonical query string is the request's query pairs sorted by key, then value, and written as `application/x-www-form-urlencoded`: spaces as `+`, and every byte but letters, digits, `*`, `-`, `.` and `_` as `%XX`. It is empty for a request with no query. The method and the path are the route's, so a signature for one route or one query does not fit another.
+
+The Kernel refuses a `t` more than 300 seconds before or after its clock with `stale-timestamp` before it looks at the MAC. It then recomputes the MAC over the exact bytes it received, compares it in constant time, and remembers each accepted signature for 600 seconds so a replay inside the window answers 409. `src/lib/route-signature.ts` signs the same way, and `kernel-rs/src/signature-cases.json` holds vectors both sides check. The memory is a `route_signatures` table in the Deployment's `identity.sqlite`, so a Kernel restart does not forget it, and an export carries it with the accounts, so the destination refuses a request captured on its way to the origin. `t` and the nonce are inside the MAC, so changing either invalidates the signature. More than one `v1=` may be sent while a secret rotates. A shell sender with OpenSSL:
 
 ```sh
 body='{"id":"A-1","total":12}'
 t=$(date +%s)
-sig=$(printf '%s.%s' "$t" "$body" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.* //')
+n=$(openssl rand -hex 12)
+sig=$(printf '%s\n%s\n%s\n%s\n%s\n%s' "$t" "$n" POST /hooks/orders "" "$body" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.* //')
 curl -X POST "https://orders-1a2b3c.example.net/hooks/orders" \
-  -H 'Content-Type: application/json' -H "X-Signature: t=$t,v1=$sig" --data-binary "$body"
+  -H 'Content-Type: application/json' -H "X-Signature: t=$t,n=$n,v1=$sig" --data-binary "$body"
 ```
 
 Services with their own fixed signing scheme do not speak this one and need an adapter. `littlebox-kernel restore` brings back the table as the copy held it, so a signature accepted after that copy is accepted once more if it is replayed while its `t` is still within 300 seconds of the Kernel's clock.
@@ -292,7 +343,7 @@ api_keys_revoke { "deploymentId", "keyId" }
 
 The editor's Auth > Integrations view sets, lists and deletes secrets by name and creates, lists and revokes keys, showing a new key once with a curl for each route it names and for the file read path.
 
-`api_keys_create` returns the key once. A key belongs to one Deployment and never to the owner, grants no administrative tool, and works only on HTTP routes and the file read path; the runtime MCP endpoint does not accept it. It may name actions that have an HTTP route and the file visibilities `public` and `private`. A key that names `private` reads every private file of its Deployment, because the owner who issues it can already read them through `project_export`. A Deployment holds at most 50 live keys. Each unknown or revoked key a client presents counts against that client address, as a wrong password does: after 10 in a minute on one Deployment, the Kernel answers `rate-limited` to every key from that address without looking it up, so guessing keys costs no more than one bucket per address. A valid key never uses the bucket up. The Kernel stores the SHA-256 hash in the Deployment's `identity.sqlite`, so `package_export` and `project_export` carry the keys' metadata and hashes with the accounts. A package leaves with every live key already revoked, and an import of either format marks any live key revoked, as it deletes sessions and challenges. `api_keys_list` on the destination shows each such key with `revokedReason: "import"`, its name, actions and file visibilities, so the owner knows which programs to issue a new key for; the editor's Integrations view lists them under "Revoked at import". A key the owner revoked has `revokedReason: null` and keeps its time. `littlebox-kernel restore` keeps keys live, since it restores the same installation.
+`api_keys_create` returns the key once. A key belongs to one Deployment and never to the owner, grants no administrative tool, and works only on HTTP routes and the file read path. The runtime MCP endpoint refuses a request that carries one with 403 `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.`, so a misconfigured program learns why instead of getting a visitor's answers. It may name actions that have an HTTP route and the file visibilities `public` and `private`. A key that names `private` reads every private file of its Deployment, because the owner who issues it can already read them through `project_export`. A Deployment holds at most 50 live keys. Each unknown or revoked key a client presents counts against that client address, as a wrong password does: after 10 in a minute on one Deployment, the Kernel answers `rate-limited` to every key from that address without looking it up, so guessing keys costs no more than one bucket per address. A valid key never uses the bucket up. The Kernel stores the SHA-256 hash in the Deployment's `identity.sqlite`, so `package_export` and `project_export` carry the keys' metadata and hashes with the accounts. A package leaves with every live key already revoked, and an import of either format marks any live key revoked, as it deletes sessions and challenges. `api_keys_list` on the destination shows each such key with `revokedReason: "import"`, its name, actions and file visibilities, so the owner knows which programs to issue a new key for; the editor's Integrations view lists them under "Revoked at import". A key the owner revoked has `revokedReason: null` and keeps its time. `littlebox-kernel restore` keeps keys live, since it restores the same installation.
 
 ### The file read path
 
@@ -326,10 +377,11 @@ signals_read { "deploymentId", "name"?: "order.placed", "cursor"? }
 | `file_read` | | `files_read` or `GET /_littlebox/files/<id>` returns a file |
 | `signup` | | an account becomes active: a signup in local mode, an answered verification link or an accepted invitation |
 | `login` | | a password sign-in or an answered recovery link |
+| `refused` | the action | a mutation with a [guard](#guards) changed no row and the Kernel answered the guard, on `actions_invoke` or on its route |
 
-Nothing the Kernel refuses is counted: a call without the session it needs, an input the bindings reject, a statement SQLite refuses, a bad signature or a wrong password. The Kernel writes Usage off the request path. A response never waits for it, and when more than 16,384 entries are waiting the newest are dropped and logged. The two read tools wait up to five seconds for the queue to drain, so they include every call that finished before them.
+Nothing else the Kernel refuses is counted: a call without the session it needs, an input the bindings reject, a statement SQLite refuses, a bad signature or a wrong password. A guard's refusal is the app's own rule saying no, which the owner wants to see next to the calls that ran. The Kernel writes Usage off the request path. A response never waits for it, and when more than 16,384 entries are waiting the newest are dropped and logged. The two read tools wait up to five seconds for the queue to drain, so they include every call that finished before them.
 
-A Signal is a named occurrence a Server Action declares. It is recorded when that action succeeds, with properties taken from the input the action ran with:
+A Signal is a named occurrence a Server Action declares. It is recorded when that action succeeds, and for a mutation only when its statement changed at least one row, with properties taken from the input the action ran with:
 
 ```json
 "newsletter.join": {
@@ -340,13 +392,14 @@ A Signal is a named occurrence a Server Action declares. It is recorded when tha
 }
 ```
 
-A mutation may declare `signal` too, and records it after its statement succeeds. An action of `"kind": "signal"` runs no SQL and returns `{ "recorded": true }`; it has no statement and no `http`. There is no `miniapp.track`. The app records a Signal with `miniapp.actions.call`, so it goes through the same access check, input check and rate limit as any action. `signals_read` returns 100 Signals at a time, newest first, as `{ "signals": [{ "name", "at", "properties" }], "nextCursor" }`; pass `nextCursor` back as `cursor` for the next page.
+A mutation may declare `signal` too, and records it after its statement changes a row; a retry that stored nothing, or a refused attempt, records none. The property `actor` records the caller's ID instead of an input: the app user's ID, the API key's ID, or `null` for a visitor or a signed request, so the owner can count per person. An action that lists `actor` may not also have an input named `actor`. An action of `"kind": "signal"` runs no SQL and returns `{ "recorded": true }`; it has no statement and no `http`. There is no `miniapp.track`. The app records a Signal with `miniapp.actions.call`, so it goes through the same access check, input check and rate limit as any action. `signals_read` returns 100 Signals at a time, newest first, as `{ "signals": [{ "name", "at", "properties" }], "nextCursor" }`; pass `nextCursor` back as `cursor` for the next page.
 
 | Refusal | Message |
 | --- | --- |
 | A Signal on a query | `Action <name> is a query, so it cannot declare a signal. Declare it on a mutation or on a "kind": "signal" action.` |
 | A property that is not an input binding's key | `Action <name> names signal property <key>, which is not one of its input bindings.` |
 | A property listed twice | `Action <name> names signal property <key> twice.` |
+| `actor` listed while an input is named `actor` | `Action <name> names signal property actor, which records the caller's ID, and also has an input named actor. Rename the input.` |
 | More than 8 properties | `Action <name> names more than 8 signal properties.` |
 | A name that is not dot-separated lowercase words of up to 64 characters | `Action <name> names an invalid signal. Use dot-separated lowercase words, such as "order.placed", up to 64 characters.` |
 | `signal` that is not `{ name, properties? }` with a list of strings | `Action <name> has an invalid signal declaration.` |
@@ -359,6 +412,30 @@ A mutation may declare `signal` too, and records it after its statement succeeds
 | `signals_read` with a cursor it did not return | `Invalid cursor. Pass back the nextCursor of an earlier page.` |
 
 The Validation Gate and the Kernel refuse the same declarations with the same messages, from one case file, `kernel-rs/src/signal-cases.json`, that both test suites run. A signal action counts toward the action limit.
+
+### Guards
+
+An app writes its rules into a mutation's `WHERE`: the caller is an organizer, the slot is free, the event is still open. When the rule says no, the statement changes no row, and without more the caller gets `{ "changes": 0, "lastInsertId": 0 }`, the same answer as a request that had nothing to do. A mutation may declare the refusal:
+
+```json
+"members.promote": {
+  "kind": "mutation",
+  "access": "authenticated",
+  "guard": "Only an organizer can promote a member.",
+  "statement": "UPDATE members SET role = 'organizer' WHERE user_id = ?1 AND EXISTS (SELECT 1 FROM members WHERE user_id = ?2 AND role = 'organizer')",
+  "bindings": [{ "source": "input", "key": "member", "type": "string", "maxLength": 64 }, { "source": "actor", "field": "id" }]
+}
+```
+
+When the statement changes no row, the Kernel answers the guard as a refusal: a tool error with that text on `actions_invoke`, so `miniapp.actions.call` rejects with it, and `403 { "error": "<guard>" }` on the action's route. Usage counts it under `refused` and no Signal is recorded. The statement has run, and it changed nothing, so nothing is rolled back. Without a guard a mutation answers `{ changes: 0 }` as before. The editor preview refuses the same way. The Action Contract lists the guard among the action's errors, and `conform` probes it.
+
+| Declaration | Message |
+| --- | --- |
+| `guard` on a query | `Action <name> is a query, so it cannot declare a guard. Declare it on a mutation.` |
+| `guard` on a signal action | `Action <name> is a signal action, so it cannot declare a guard. Declare it on a mutation.` |
+| A guard that is not a string of 1 to 200 characters on one line | `Action <name> has an invalid guard. Use a message of 1 to 200 characters on one line.` |
+
+The Validation Gate and the Kernel parse the same cases from `kernel-rs/src/guard-cases.json`; `kernel-rs/src/guard.rs` holds the Kernel's side.
 
 The store keeps 400 days and at most 100,000 rows of totals, and the newest 50,000 Signals; past those bounds the oldest rows go first. A string property keeps its first 128 bytes. The scheduled copy and `package_export` carry the store; `project_export` does not. A Development Kernel started with `bun run littlebox -- dev` records the same way, in `.littlebox/dev-data/deployments/<id>/usage.sqlite`. The editor preview has no store: a signal action there returns `{ "recorded": true }` and nothing is kept.
 
@@ -442,16 +519,17 @@ For each Server Action the contract states:
 | `kind`, `access`, `actorBound` | Query or mutation, anonymous or authenticated, and whether a binding passes the caller's ID |
 | `inputs` | Each input key with its type, whether it is required or nullable, and a string's `maxLength` |
 | `output` | `rows` with the columns a query returns, each with its SQLite affinity, nullability and the table column it reads; or `changes` for `{ changes, lastInsertId }`. `signal` names the Signal a `signal` action records |
-| `signal` | For an action that records a Signal (ADR-0010): the Signal's name and the input keys copied into its properties |
+| `signal` | For an action that records a Signal (ADR-0010): the Signal's name and the input keys copied into its properties, with `actor` for the caller's ID |
+| `guard` | For a mutation that declares one: the refusal it answers when its statement changes no row, also listed under `errors` with status 403 on a route |
 | `runtime` | The endpoint, `/_littlebox/mcp`, the `actions_invoke` tool and the callers it accepts |
-| `http` | The route's method and path, how the input is read, the signature header, secret name and scheme, and the three kinds of caller |
+| `http` | The route's method and path, how the input is read, the signature header, secret name and scheme, the callers it takes, the declared `callers` list and `onlyDoor`, when the route is the action's only door |
 | `errors` | The exact messages the Kernel answers with for this action, where they are seen, and the HTTP status on a route |
 | `limits` | The top-level `LIMIT`, or that the query returns one row, the 1000-row and 2 MiB cap, the 2-second statement deadline, the two rate limits and a route's 64 KiB body |
 | `statement`, `bindings` | The SQL and the order its parameters bind in, so the contract converts back to the same `actions.json` program |
 
 Column names follow SQLite: the alias, or the column's own name. An expression without `AS`, such as `count(*)`, gets a key only SQLite would print, so the contract lists it under `unnamed`, `contract` prints a warning and the Validation Gate passes the Capsule with the same warning. Types come from `schema.sql` and SQLite does not enforce them. A column of a subquery or a table-valued function has a name and the type `unknown`. Error messages come from the SDK contract, whose test checks each one against the Kernel's source.
 
-`conform` is what a replacement backend would run. It calls every action through the runtime endpoint with generated inputs and checks the answer's shape, then probes each refusal the contract lists: an undeclared action, an undeclared, missing, mistyped, empty or overlong input, a caller without a session or without an ID, and on a route an unsigned or replayed signature, an unknown API key, an undeclared query or body key, a body that is not JSON and a POST to an unbound path. A refusal passes only when the contract lists the message and the backend answers with it, with the contract's status on a route. `--token` carries an app session token, the value of the app session cookie; `LITTLEBOX_APP_EMAIL` and `LITTLEBOX_APP_PASSWORD` sign in for one instead. `--secret <name>=<value>` signs a route and may repeat; `--key` sends an API key to a signed route whose secret was not given. The generated inputs are a short unique string, the number 1 and `true`; a statement that reads a string as more than text, such as `json_each(?1)`, needs a real value, which `--inputs <file>` gives as JSON keyed by action name, for example `{ "items.jsonin": { "ids": "[1, 2]" } }`. A valid call refused with a message the contract does not list fails and says so. A check that needs a credential it was not given is reported as skipped, not passed. It runs every mutation once with real input, so point it at a test Deployment. It exits with 1 when any check fails.
+`conform` is what a replacement backend would run. It calls every action through the runtime endpoint with generated inputs and checks the answer's shape, then probes each refusal the contract lists: an undeclared action, an undeclared, missing, mistyped, empty or overlong input, a caller without a session or without an ID, and on a route an unsigned, stale or replayed signature, a caller with no key or session where the route needs one, an unknown API key, a key the route does not take, an undeclared query or body key, a body that is not JSON and a POST to an unbound path. A guarded mutation must answer its guard when its statement changes no row: `conform` sends the valid input, and again when the first call changed a row, and fails a backend that answers `{ changes: 0 }` instead; when both calls change a row it reports the check as skipped. An action whose route is its only door is checked to refuse `actions_invoke` with `Action <name> answers only on its HTTP route, <method> <path>.`, and its inputs are probed on the route. A refusal passes only when the contract lists the message and the backend answers with it, with the contract's status on a route. `--token` carries an app session token, the value of the app session cookie; `LITTLEBOX_APP_EMAIL` and `LITTLEBOX_APP_PASSWORD` sign in for one instead. `--secret <name>=<value>` signs a route and may repeat, with a fresh nonce for each request. `--key` sends an API key to a route that takes one when no secret signs it, and an action that binds the caller's ID gets the key or, with `--token`, the session cookie. The generated inputs are a short unique string, the number 1 and `true`; a statement that reads a string as more than text, such as `json_each(?1)`, needs a real value, which `--inputs <file>` gives as JSON keyed by action name, for example `{ "items.jsonin": { "ids": "[1, 2]" } }`. A valid call refused with a message the contract does not list fails and says so. A check that needs a credential it was not given is reported as skipped, not passed. It runs every mutation once with real input, so point it at a test Deployment. It exits with 1 when any check fails.
 
 ## Eject
 

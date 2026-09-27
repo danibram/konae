@@ -104,6 +104,10 @@ impl Owner {
     }
 }
 
+/// The answer to an API key on the runtime endpoint.
+const API_KEY_ON_RUNTIME: &str =
+    "An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.";
+
 fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(header::AUTHORIZATION)?
@@ -618,6 +622,11 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
         let Some(deployment) = deployment_for(&state, &headers).await else {
             return error(StatusCode::NOT_FOUND, "Deployment not found.");
         };
+        // A key would otherwise read as an unknown session token, and the
+        // program would get a visitor's answers without knowing why.
+        if bearer(&headers).is_some_and(|token| token.starts_with("lbk_")) {
+            return error(StatusCode::FORBIDDEN, API_KEY_ON_RUNTIME);
+        }
         match authenticate_deployment(&state, &deployment, &headers) {
             Ok(Some(user)) => {
                 principal = format!("runtime:{}:{}", deployment.id, user.user_id);
@@ -1078,7 +1087,7 @@ async fn admin_call(
             // Rendered from src/sdk/contract.ts by `bun run sdk:render`.
             "sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,
             "actions" => {
-                json!({"filename":"actions.json","format":{"version":1,"actions":{"items.list":{"kind":"query","access":"authenticated","statement":"SELECT id,title FROM items WHERE user_id=?1 LIMIT 50","bindings":[{"source":"actor","field":"id"}]},"items.create":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO items(title,user_id) VALUES(?1,?2)","bindings":[{"source":"input","key":"title","type":"string","maxLength":200},{"source":"actor","field":"id"}]}}},"rules":"SQL and typed bindings stay server-side. Declare schema in schema.sql for artifact publication. Runtime calls only send the declared action name and input. Add nullable:true to an input binding to bind omitted values or explicit null as SQL NULL; supplied strings remain non-empty and all supplied values retain their type checks. Mutations return changes and lastInsertId, so read rows with a query instead of mutation RETURNING, which publication rejects. A query that reads rows needs a top-level LIMIT. A total with count, sum, avg, min or max and no GROUP BY does not. An anonymous action may add http:{method:'GET' for a query or 'POST' for a mutation,path,signature?:{header,secret}} to answer on that path of its Deployment host; the sdk topic's http module describes routes, signatures, API keys and secret_set. A mutation may add signal:{name:'order.placed',properties:[input keys]} to record a Signal when it succeeds, and kind:'signal' with access, bindings and signal but no statement records one without SQL. The owner reads them with signals_read and Usage with usage_read."})
+                json!({"filename":"actions.json","format":{"version":1,"actions":{"items.list":{"kind":"query","access":"authenticated","statement":"SELECT id,title FROM items WHERE user_id=?1 LIMIT 50","bindings":[{"source":"actor","field":"id"}]},"items.create":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO items(title,user_id) VALUES(?1,?2)","bindings":[{"source":"input","key":"title","type":"string","maxLength":200},{"source":"actor","field":"id"}]}}},"rules":"SQL and typed bindings stay server-side. Declare schema in schema.sql for artifact publication. Runtime calls only send the declared action name and input. Add nullable:true to an input binding to bind omitted values or explicit null as SQL NULL; supplied strings remain non-empty and all supplied values retain their type checks. Mutations return changes and lastInsertId, so read rows with a query instead of mutation RETURNING, which publication rejects. A query that reads rows needs a top-level LIMIT. A total with count, sum, avg, min or max and no GROUP BY does not. An anonymous action may add http:{method:'GET' for a query or 'POST' for a mutation,path,signature?:{header,secret},callers?:['signature'|'key'|'session']} to answer on that path of its Deployment host; an action whose route does not answer anyone answers only there, not through actions_invoke. The sdk topic's http module describes routes, callers, signatures, API keys and secret_set. A mutation may add guard:'<sentence>' so a statement that changes no row is refused with it instead of answering changes 0. A mutation may add signal:{name:'order.placed',properties:[input keys or 'actor']} to record a Signal when it changes a row, and kind:'signal' with access, bindings and signal but no statement records one without SQL. The owner reads them with signals_read and Usage with usage_read."})
             }
             "publishing" => {
                 json!({"steps":["Create project identity with project_create. Keep its id, slug and manifest locally.","Build static HTML/CSS/JS locally. Inject the SDK using the local builder.","Upload JSON {project:{id,name,slug,files,manifest},visibility,artifact:{version:1,entrypoint:'index.html',files:{...}}} using transfer_begin with projectId, byte size and sha256, then transfer_write and transfer_complete.","Call release_plan with transferId, inspect its planId and expectedRevision, then call release_apply with planId.","Save the receipt and cancel the temporary transfer."],"concurrency":"An obsolete plan is rejected. Repeating an applied plan returns the same receipt.","access":"A first release may add initialSignupPolicy {mode, allowlist} with mode open, invitation, closed or allowlist; the Kernel installs it before the app serves. When the owner's request leaves access open for an app with accounts, propose visibility private and mode invitation. Later changes need manage_users and signup_policy_set. Invite people with app_invitations_create only when the owner asks, because it sends email."})

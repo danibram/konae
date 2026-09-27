@@ -416,5 +416,228 @@
    }
   },
   "error": "Action orders.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter."
+ },
+ {
+  "case": "a GET route for keys only",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM orders LIMIT 50",
+    "bindings": [],
+    "http": {
+     "method": "GET",
+     "path": "/api/orders",
+     "callers": [
+      "key"
+     ]
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a GET route for keys and sessions",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM orders LIMIT 50",
+    "bindings": [],
+    "http": {
+     "method": "GET",
+     "path": "/api/orders",
+     "callers": [
+      "key",
+      "session"
+     ]
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a signed route that also takes a session",
+  "actions": {
+   "orders.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/orders",
+     "signature": {
+      "header": "X-Signature",
+      "secret": "orders_webhook"
+     },
+     "callers": [
+      "signature",
+      "session"
+     ]
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a signed route for the signature alone",
+  "actions": {
+   "orders.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/orders",
+     "signature": {
+      "header": "X-Signature",
+      "secret": "orders_webhook"
+     },
+     "callers": [
+      "signature"
+     ]
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "an empty callers list",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM orders LIMIT 50",
+    "bindings": [],
+    "http": {
+     "method": "GET",
+     "path": "/api/orders",
+     "callers": []
+    }
+   }
+  },
+  "error": "Action orders.list has an invalid callers list. List one or more of \"signature\", \"key\" and \"session\", each once."
+ },
+ {
+  "case": "an unknown caller",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM orders LIMIT 50",
+    "bindings": [],
+    "http": {
+     "method": "GET",
+     "path": "/api/orders",
+     "callers": [
+      "anyone"
+     ]
+    }
+   }
+  },
+  "error": "Action orders.list has an invalid callers list. List one or more of \"signature\", \"key\" and \"session\", each once."
+ },
+ {
+  "case": "a caller listed twice",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM orders LIMIT 50",
+    "bindings": [],
+    "http": {
+     "method": "GET",
+     "path": "/api/orders",
+     "callers": [
+      "key",
+      "key"
+     ]
+    }
+   }
+  },
+  "error": "Action orders.list has an invalid callers list. List one or more of \"signature\", \"key\" and \"session\", each once."
+ },
+ {
+  "case": "callers that are not a list",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM orders LIMIT 50",
+    "bindings": [],
+    "http": {
+     "method": "GET",
+     "path": "/api/orders",
+     "callers": "key"
+    }
+   }
+  },
+  "error": "Action orders.list has an invalid callers list. List one or more of \"signature\", \"key\" and \"session\", each once."
+ },
+ {
+  "case": "the signature as a caller with no signature",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM orders LIMIT 50",
+    "bindings": [],
+    "http": {
+     "method": "GET",
+     "path": "/api/orders",
+     "callers": [
+      "signature",
+      "key"
+     ]
+    }
+   }
+  },
+  "error": "Action orders.list lists \"signature\" among its callers but declares no signature."
+ },
+ {
+  "case": "a signature the callers leave out",
+  "actions": {
+   "orders.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 64
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/orders",
+     "signature": {
+      "header": "X-Signature",
+      "secret": "orders_webhook"
+     },
+     "callers": [
+      "key"
+     ]
+    }
+   }
+  },
+  "error": "Action orders.receive declares a signature, so its callers must include \"signature\"."
  }
 ]

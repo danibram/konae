@@ -100,7 +100,7 @@ A Deployment whose application shell may be opened without signing in. A signed-
 _Avoid_: Public database
 
 **Private Deployment**:
-A Deployment whose application shell and runtime require a signed-in Runtime Actor before anything loads or runs. The one exception is an HTTP route of an action declared `anonymous`, which answers by the action's access level and its signature, not by visibility. Its Signup Policy decides who may create that account.
+A Deployment whose application shell and runtime require a signed-in Runtime Actor before anything loads or runs. An HTTP route of an action declared `anonymous` answers to the callers it takes: a signed route to its signature or an API key, an unsigned one to an API key or a session unless it declares other `callers`. Its Signup Policy decides who may create that account.
 _Avoid_: Password-protected app
 
 **Signup Policy**:
@@ -116,11 +116,11 @@ Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a s
 _Avoid_: Owner, editor user
 
 **API Key**:
-A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It names the Server Actions it may call over their HTTP routes and the file visibilities it may read, and is sent as `Authorization: Bearer`. The Kernel stores its hash only. A Package or a portable export carries its name, scope and hash, and the import marks it revoked at import, so the destination's owner sees which programs to issue new keys for; a restore of a Copy keeps it valid.
+A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It names the Server Actions it may call over their HTTP routes and the file visibilities it may read, and is sent as `Authorization: Bearer`. The runtime endpoint refuses it. The Kernel stores its hash only. A Package or a portable export carries its name, scope and hash, and the import marks it revoked at import, so the destination's owner sees which programs to issue new keys for; a restore of a Copy keeps it valid.
 _Avoid_: token (an Agent Credential), service account
 
 **Signing Secret**:
-A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. A sender proves a request with an HMAC of its body under it. It never appears in `actions.json`, a Build Artifact or an export.
+A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. A sender proves a request with an HMAC under it of a timestamp, a nonce, the method, the path, the canonical query string and the body. It never appears in `actions.json`, a Build Artifact or an export.
 _Avoid_: webhook token, API Key
 
 **Project Owner**:
@@ -128,8 +128,12 @@ An authenticated workspace member allowed to edit a Project and administer its d
 _Avoid_: Runtime user, app user
 
 **Server Action**:
-A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for a signed request, an API Key or a signed-in user; an `authenticated` action may not.
+A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. It runs one SQL statement: a query starts with `SELECT`, a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, and a `WITH` clause sits inside the statement, never in front of it. The Validation Gate and the Kernel refuse a statement that breaks a rule with the same words. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for the callers the route takes, of a signed request, an API Key and a signed-in user; an `authenticated` action may not. An action whose route does not answer anyone answers only there, never through `miniapp.actions.call`.
 _Avoid_: Raw SQL endpoint
+
+**Guard**:
+A mutation's declared refusal, `"guard": "<message>"`, which the Kernel answers instead of `{ changes: 0 }` when the statement changes no row because the app's own rule in its `WHERE` said no. It is a tool error on the runtime endpoint and 403 on a route, counts under Usage's `refused` and records no Signal.
+_Avoid_: check constraint, validation error
 
 **Action Contract**:
 The generated description of a Capsule's Server Actions, `action-contract.json` with its JSON Schema and a Markdown rendering: for each action its inputs with types, nullability and limits, the columns a query returns or the `{ changes, lastInsertId }` a mutation returns, who may call it on the runtime endpoint and on its HTTP route, the errors the Kernel answers with and the limits that apply. It is written from `actions.json` and `schema.sql`, never edited, and travels in the export. The conformance runner (`littlebox conform`) calls every action against a backend and checks the answers against it, which is how a second backend would show it serves the same app.
@@ -140,11 +144,11 @@ A namespace on `window.miniapp`, such as `auth`, `actions` or `files`, with a co
 _Avoid_: plugin, library, extension
 
 **Usage**:
-The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations: sessions opened, actions by name, HTTP routes by method and path, uploads, file reads, signups and logins. A refused call counts nothing. It lives in the Deployment's `usage.sqlite`, distinct from application rows, and only the Project Owner reads it.
+The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations: sessions opened, actions by name, HTTP routes by method and path, uploads, file reads, signups and logins. A refused call counts nothing, except a Guard's refusal, which counts under `refused` by action name. It lives in the Deployment's `usage.sqlite`, distinct from application rows, and only the Project Owner reads it.
 _Avoid_: analytics, telemetry, audit, metric
 
 **Signal**:
-A named occurrence the Capsule declares on a Server Action, with properties taken from that action's input bindings. The Kernel records it when the action succeeds, next to Usage and distinct from application rows. An action of kind `signal` records one and runs no SQL. The app calls it with `miniapp.actions.call`; only the Project Owner reads Signals.
+A named occurrence the Capsule declares on a Server Action, with properties taken from that action's input bindings and, as `actor`, the caller's ID. The Kernel records it when the action succeeds, and for a mutation only when it changed a row, next to Usage and distinct from application rows. An action of kind `signal` records one and runs no SQL. The app calls it with `miniapp.actions.call`; only the Project Owner reads Signals.
 _Avoid_: event, track, custom metric
 
 **Littlebox Kernel**:

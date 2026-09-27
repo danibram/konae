@@ -67,6 +67,7 @@
     "bookings.create": {
       "kind": "mutation",
       "access": "authenticated",
+      "guard": "Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours.",
       "statement": "INSERT INTO bookings (booking_ref, room_id, day, slot, user_id, title, created_at)\nWITH RECURSIVE span(slot) AS (SELECT ?4 UNION ALL SELECT slot + 1 FROM span WHERE slot + 1 < ?4 + min(?5, 4))\nSELECT printf('%s/%s/%d/%d', r.id, ?3, ?4, ?7), r.id, ?3, span.slot, ?1, ?6, ?7\nFROM rooms r, span\nWHERE r.id = ?2\n  AND date(?3) IS ?3 AND ?3 >= date(?7 / 1000, 'unixepoch')\n  AND ?4 = CAST(?4 AS INTEGER) AND ?5 = CAST(?5 AS INTEGER)\n  AND ?4 >= 8 AND ?5 BETWEEN 1 AND 4 AND ?4 + ?5 <= 18\n  AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.room_id = ?2 AND b.day = ?3 AND b.slot >= ?4 AND b.slot < ?4 + ?5 AND b.cancelled_at IS NULL)",
       "bindings": [
         {
@@ -112,13 +113,15 @@
           "room",
           "day",
           "start",
-          "hours"
+          "hours",
+          "actor"
         ]
       }
     },
     "bookings.cancel": {
       "kind": "mutation",
       "access": "authenticated",
+      "guard": "Nothing to cancel. The booking is not yours, or it is already cancelled.",
       "statement": "UPDATE bookings SET cancelled_at = ?3 WHERE booking_ref = ?1 AND user_id = ?2 AND cancelled_at IS NULL",
       "bindings": [
         {

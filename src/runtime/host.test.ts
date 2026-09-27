@@ -124,6 +124,29 @@ describe("runtime host", () => {
     expect(await host.handle("actions.invoke", { name: "notes.count" })).toEqual([{ total: 1 }]);
   });
 
+  test("a guarded mutation that changes no row is refused with its guard, and a route-only action is refused", async () => {
+    const guarded = JSON.stringify({
+      version: 1,
+      actions: {
+        "slots.take": {
+          kind: "mutation", access: "anonymous", guard: "That slot is taken.",
+          statement: "INSERT INTO slots (slot) SELECT ?1 WHERE NOT EXISTS (SELECT 1 FROM slots WHERE slot = ?1)",
+          bindings: [{ source: "input", key: "slot", type: "number" }],
+        },
+        "slots.hook": {
+          kind: "mutation", access: "anonymous", statement: "INSERT INTO slots (slot) VALUES (?1)",
+          bindings: [{ source: "input", key: "slot", type: "number" }],
+          http: { method: "POST", path: "/hooks/slots", signature: { header: "X-Signature", secret: "slots_hook" } },
+        },
+      },
+    });
+    const host = new MiniAppRuntimeHost("guard", "CREATE TABLE IF NOT EXISTS slots (slot INTEGER NOT NULL);", guarded);
+    expect(await host.handle("actions.invoke", { name: "slots.take", input: { slot: 9 } })).toEqual({ changes: 1, lastInsertId: 1 });
+    await expect(host.handle("actions.invoke", { name: "slots.take", input: { slot: 9 } })).rejects.toThrow("That slot is taken.");
+    await expect(host.handle("actions.invoke", { name: "slots.hook", input: { slot: 10 } }))
+      .rejects.toThrow("Action slots.hook answers only on its HTTP route, POST /hooks/slots.");
+  });
+
   /**
    * The Kernel binds an integer-valued number as INTEGER and measures maxLength
    * in UTF-16 code units, which is what JavaScript's string length counts.

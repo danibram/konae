@@ -32,6 +32,7 @@ mod clerk;
 mod copies;
 mod eject;
 mod files;
+mod guard;
 mod http;
 mod invitations;
 mod limits;
@@ -42,6 +43,7 @@ mod oauth;
 mod package;
 mod recovery;
 mod security;
+mod sql_rules;
 mod usage;
 use auth::{AuthError, AuthService, AuthUser};
 use limits::{Guards, trusted_proxies};
@@ -303,6 +305,9 @@ struct ActionDefinition {
     /// The Signal the action records, checked by `usage::declaration`.
     #[serde(default)]
     signal: Option<Value>,
+    /// A mutation's refusal when it changes no row, checked by `guard::declaration`.
+    #[serde(default)]
+    guard: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -839,6 +844,10 @@ async fn invoke_action(
         Some(value) => value,
         None => return error(StatusCode::NOT_FOUND, "Server action not declared."),
     };
+    // An action whose route does not answer anyone answers only there.
+    if let Some(route) = http::route_only(&name, action, is_private(&deployment)) {
+        return error(StatusCode::FORBIDDEN, &format!("Action {name} answers only on its HTTP route, {route}."));
+    }
     let actor = match authenticate_deployment(&state, &deployment, &headers) {
         Ok(actor) => actor,
         Err(response) => return response,
@@ -875,12 +884,21 @@ async fn invoke_action(
             run_mutation(&db_path, action, params)
         }
     };
+    let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
     match result {
-        Ok(value) => {
-            usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
-            usage::signal(&state.data_root, &deployment.id, &name, action, &input);
-            Json(json!({"result": value})).into_response()
-        }
+        Ok(value) => match guard::outcome(&name, action, &value) {
+            guard::Outcome::Refused(message) => {
+                usage::count(&state.data_root, &deployment.id, usage::Operation::Refused(name.clone()));
+                error(StatusCode::FORBIDDEN, &message)
+            }
+            changed => {
+                usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
+                if matches!(changed, guard::Outcome::Changed) {
+                    usage::signal(&state.data_root, &deployment.id, &name, action, &input, actor_id);
+                }
+                Json(json!({"result": value})).into_response()
+            }
+        },
         Err(error_value) => error(StatusCode::BAD_REQUEST, &error_value.to_string()),
     }
 }
@@ -2290,25 +2308,10 @@ fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result
     if action.kind == "signal" {
         usage::declaration(name, action)?;
         http::binding(name, action)?;
+        guard::declaration(name, action)?;
         return Ok(());
     }
-    let sql = action.statement.trim();
-    if sql.matches(';').count() > 1 || (sql.contains(';') && !sql.ends_with(';')) {
-        return Err(format!("Action {name} must contain one statement."));
-    }
-    let first = sql
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_ascii_uppercase();
-    let allowed = if action.kind == "query" {
-        first == "SELECT"
-    } else {
-        ["INSERT", "UPDATE", "DELETE", "REPLACE"].contains(&first.as_str())
-    };
-    if !allowed {
-        return Err(format!("Action {name} contains disallowed SQL."));
-    }
+    sql_rules::check_statement(name, action)?;
     if action.kind == "query" {
         if let Some(reason) = unbounded_query_reason(&action.statement) {
             return Err(format!(
@@ -2318,6 +2321,7 @@ fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result
     }
     usage::declaration(name, action)?;
     http::binding(name, action)?;
+    guard::declaration(name, action)?;
     Ok(())
 }
 
@@ -2506,6 +2510,9 @@ fn apply_additive_schema(path: &Path, schema: &str, program: &ActionProgram) -> 
     let mut connection = Connection::open(path)?;
     // Runs before the authorizer below, which refuses every pragma.
     limit_database_size(&connection, MAX_APP_DATABASE_BYTES)?;
+    if let Some(refusal) = sql_rules::schema_refusal(schema) {
+        anyhow::bail!(refusal);
+    }
     let transaction = connection.transaction()?;
     transaction.authorizer(Some(|context: AuthContext<'_>| match context.action {
         AuthAction::CreateTable { .. } | AuthAction::CreateIndex { .. } => Authorization::Allow,
@@ -3262,6 +3269,7 @@ mod tests {
             bindings,
             http: None,
             signal: None,
+            guard: None,
         }
     }
 

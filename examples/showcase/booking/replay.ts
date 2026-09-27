@@ -6,10 +6,10 @@ import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createHmac } from "node:crypto";
 import initSqlJs from "sql.js";
 import { chromium } from "playwright";
 import { McpClient } from "../../../src/mcp/client";
+import { signRoute } from "../../../src/lib/route-signature";
 import { buildLocal, publishLocal } from "../../../scripts/littlebox";
 import { kernelTarget } from "../../../scripts/conform";
 import { createCapsuleValidator } from "../../../src/agent/gate";
@@ -95,8 +95,11 @@ try {
     assert(!judged.ok, `The gate accepted ${name}.`);
     const kernelSaid = await refusal(publish("showcase_booking_probe", "booking-probe", files));
     refusals[name] = { gate: judged.errors.map((error) => [error.message, (error as any).detail].filter(Boolean).join(" ")).join(" "), kernel: kernelSaid };
+    // One rule, one sentence: the Gate's refusal for actions.json is its detail, for schema.sql its message.
+    const [first] = judged.errors;
+    assert.equal(first.stage === "actions" ? (first as any).detail : first.message, kernelSaid, `${name}: the Gate and the Kernel must give the same sentence.`);
   }
-  check("Validation Gate and Kernel", `Both pass the Capsule and both refuse ${Object.keys(refusals).join(", ")}. ${JSON.stringify(refusals)}`);
+  check("Validation Gate and Kernel", `Both pass the Capsule and both refuse ${Object.keys(refusals).join(", ")} with the same sentence. ${JSON.stringify(refusals)}`);
 
   // 2. Publish public with `littlebox publish`, with the Allowlist from
   // littlebox.json installed before the first request.
@@ -156,10 +159,22 @@ try {
 
   // 4. One statement books a span of hours, or nothing.
   const day = utcDay(14);
+  const notBooked = "Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours.";
   let createCalls = 0;
-  const book = async (client: McpClient, input: Record<string, unknown>) => { createCalls++; return call<{ changes: number }>(client, "bookings.create", { title: "Planning", ...input }); };
+  let createRefused = 0;
+  // A booking that inserts nothing is refused with the action's guard; book() answers 0 for it.
+  const book = async (client: McpClient, input: Record<string, unknown>) => {
+    createCalls++;
+    try {
+      return await call<{ changes: number }>(client, "bookings.create", { title: "Planning", ...input });
+    } catch (error) {
+      assert.equal(message(error), notBooked);
+      createRefused++;
+      return { changes: 0 };
+    }
+  };
   assert.equal((await book(ana, { room: "oak", day, start: 9, hours: 2, title: "Quarterly planning" })).changes, 2);
-  assert.equal((await book(ben, { room: "oak", day, start: 10, hours: 2 })).changes, 0, "An overlapping span must insert nothing.");
+  assert.equal((await book(ben, { room: "oak", day, start: 10, hours: 2 })).changes, 0, "An overlapping span must be refused.");
   assert.equal((await book(ben, { room: "oak", day, start: 11, hours: 1, title: "Interview" })).changes, 1);
   const noops: Record<string, Record<string, unknown>> = {
     "a fractional hour": { room: "oak", day, start: 13.5, hours: 1 },
@@ -170,12 +185,12 @@ try {
     "text that is not a date": { room: "birch", day: "tomorrow", start: 9, hours: 1 },
     "an unknown room": { room: "attic", day, start: 9, hours: 1 },
   };
-  for (const [name, input] of Object.entries(noops)) assert.equal((await book(ana, input)).changes, 0, `${name} must insert nothing.`);
+  for (const [name, input] of Object.entries(noops)) assert.equal((await book(ana, input)).changes, 0, `${name} must be refused.`);
   const backstopUnique = await refusal(sql(`INSERT INTO bookings (booking_ref, room_id, day, slot, user_id, title, created_at) VALUES ('owner', 'oak', '${day}', 9, 'owner', 'Direct', 0)`));
   const backstopCheck = await refusal(sql(`INSERT INTO bookings (booking_ref, room_id, day, slot, user_id, title, created_at) VALUES ('owner', 'pine', '${day}', 9.5, 'owner', 'Direct', 0)`));
   assert.match(backstopUnique, /UNIQUE constraint failed: bookings.room_id, bookings.day, bookings.slot/);
   assert.match(backstopCheck, /CHECK constraint failed/);
-  check("One-statement booking", `A two-hour booking writes two rows in one INSERT ... WITH RECURSIVE ... SELECT. An overlap and ${Object.keys(noops).join(", ")} each return { changes: 0 } with no reason. Owner SQL past the WHERE meets the partial unique index ("${backstopUnique}") and the CHECK ("${backstopCheck}").`);
+  check("One-statement booking", `A two-hour booking writes two rows in one INSERT ... WITH RECURSIVE ... SELECT. An overlap and ${Object.keys(noops).join(", ")} each are refused with the guard "${notBooked}"; the statement still cannot say which rule failed. Owner SQL past the WHERE meets the partial unique index ("${backstopUnique}") and the CHECK ("${backstopCheck}").`);
 
   // 5. What a visitor sees, and what staff see.
   const publicRows = await call<any[]>(visitor, "availability.day", { day });
@@ -191,12 +206,12 @@ try {
   assert.deepEqual(benView.map((row) => [row.hour, row.title, row.booked_by, row.mine]), [[9, "Quarterly planning", "Ana", 0], [10, "Quarterly planning", "Ana", 0], [11, "Interview", "Ben", 1]]);
   const [planning] = await call<any[]>(ana, "bookings.mine", { from: utcDay(0) });
   assert.deepEqual([planning.room, planning.start, planning.hours], ["oak", 9, 2]);
-  assert.equal((await call(ben, "bookings.cancel", { ref: planning.ref })).changes, 0, "Ben cannot cancel Ana's booking.");
+  assert.equal(await refusal(call(ben, "bookings.cancel", { ref: planning.ref })), "Nothing to cancel. The booking is not yours, or it is already cancelled.", "Ben cannot cancel Ana's booking.");
   assert.equal((await call(ana, "bookings.cancel", { ref: planning.ref })).changes, 2);
   assert.equal((await book(ben, { room: "oak", day, start: 9, hours: 2, title: "Retro" })).changes, 2, "Cancelled hours are free again.");
   const recent = await call<any[]>(ben, "bookings.recent");
   assert(recent.some((row) => row.ref === planning.ref && row.cancelled_at), "The cancellation stays in the activity list.");
-  check("Public and staff views", "A visitor and GET /api/availability get only { room, hour }; titles and names need a session, and authenticated actions answer authentication-required. Ben sees Ana's title, cannot cancel her booking, and books the hours she freed. The cancelled row stays for the activity list.");
+  check("Public and staff views", "A visitor and GET /api/availability get only { room, hour }; titles and names need a session, and authenticated actions answer authentication-required. Ben sees Ana's title, is refused with the cancel guard on her booking, and books the hours she freed. The cancelled row stays for the activity list.");
 
   // 6. Two staff members race for overlapping hours.
   let raceWins = 0;
@@ -210,7 +225,7 @@ try {
     const changes = settled.map((result) => result.status === "fulfilled" ? result.value.changes : `error: ${message(result.reason)}`);
     outcomes.push(changes.join("/"));
     assert.equal(changes.filter((value) => value === 2).length, 1, `Round ${round}: exactly one booking must win, got ${changes}.`);
-    assert.equal(changes.filter((value) => value === 0).length, 1, `Round ${round}: the loser must insert nothing, got ${changes}.`);
+    assert.equal(changes.filter((value) => value === 0).length, 1, `Round ${round}: the loser must be refused with the guard, got ${changes}.`);
     raceWins++;
   }
   const crowdDay = utcDay(60);
@@ -219,9 +234,9 @@ try {
   assert.equal(crowdChanges.filter((value) => value === 1).length, 1, `Exactly one of ten must win, got ${crowdChanges}.`);
   assert.equal(crowdChanges.filter((value) => value === 0).length, 9);
   const held = await sql(`SELECT count(*) AS n FROM bookings WHERE room_id = 'pine' AND day = '${crowdDay}' AND cancelled_at IS NULL`);
-  check("Double booking under concurrency", `${raceWins} rounds of two overlapping bookings sent together: one wins with 2 rows, the other gets { changes: 0 } (${[...new Set(outcomes)].join(", ")}). Ten requests for one hour: ${crowdChanges.join(",")}. Owner SQL counts ${held.rows[0].n} holder.`);
+  check("Double booking under concurrency", `${raceWins} rounds of two overlapping bookings sent together: one wins with 2 rows, the other is refused with the guard (${[...new Set(outcomes)].join(", ")}, 0 standing for the guard). Ten requests for one hour: ${crowdChanges.join(",")}. Owner SQL counts ${held.rows[0].n} holder.`);
 
-  // 7. Signals record even when the statement inserted nothing.
+  // 7. Signals record only when a booking inserted rows, and carry who booked. Refusals count in Usage.
   const signals: any[] = [];
   let cursor: string | undefined;
   do {
@@ -230,9 +245,15 @@ try {
     cursor = page.nextCursor ?? undefined;
   } while (cursor);
   const booked = Number((await sql("SELECT count(DISTINCT booking_ref) AS n FROM bookings")).rows[0].n);
-  assert.equal(signals.length, createCalls, "booking.created records once per create call that did not error.");
-  assert(booked < createCalls);
-  check("Signals", `${createCalls} bookings.create calls answered without error and ${signals.length} booking.created Signals exist, though only ${booked} bookings were made: a mutation that changed nothing still records its Signal.`);
+  assert.equal(signals.length, booked, "booking.created records once per booking that inserted rows.");
+  assert.equal(createCalls - createRefused, booked);
+  const staffIds = new Set((await sql("SELECT DISTINCT user_id FROM bookings")).rows.map((row: any) => row.user_id));
+  assert(signals.every((signal) => staffIds.has(signal.properties.actor)), "Each Signal names the staff member who booked.");
+  const today = new Date().toISOString().slice(0, 10);
+  const usage = await owner.call<{ totals: Array<{ kind: string; name: string; count: number }> }>("usage_read", { deploymentId, from: today, to: today });
+  const refusedCount = usage.totals.find((row) => row.kind === "refused" && row.name === "bookings.create")?.count ?? 0;
+  assert.equal(refusedCount, createRefused, "Usage counts each guard refusal under refused.");
+  check("Signals", `${createCalls} bookings.create calls: ${booked} bookings made and ${booked} booking.created Signals, each naming the booker as actor. Usage counts the ${refusedCount} guard refusals under refused.`);
 
   // 8. The signed check-in route for a door panel, with a key or a signature.
   const panel = await owner.call<{ key: string; id?: string; keyId?: string }>("api_keys_create", { deploymentId, name: "Door panel", actions: ["panel.checkin"] });
@@ -241,27 +262,32 @@ try {
     return { status: response.status, body: await response.json() };
   };
   const signedBody = JSON.stringify({ room: "oak", day, hour: 9 });
-  const t = Math.floor(Date.now() / 1000);
-  const signature = `t=${t},v1=${createHmac("sha256", panelSecret).update(`${t}.${signedBody}`).digest("hex")}`;
+  const signature = await signRoute(panelSecret, { method: "POST", path: "/api/checkin", body: signedBody });
   assert.deepEqual(await post({ room: "oak", day, hour: 9 }), { status: 401, body: { error: "invalid-signature" } });
+  // A t outside the window has its own answer, so a panel with a skewed clock can tell.
+  const stale = await signRoute(panelSecret, { method: "POST", path: "/api/checkin", body: signedBody }, Math.floor(Date.now() / 1000) - 400);
+  assert.deepEqual(await post({ room: "oak", day, hour: 9 }, { "x-panel-signature": stale }), { status: 401, body: { error: "stale-timestamp" } });
   const signed = await fetch(`${url}/api/checkin`, { method: "POST", headers: { host, "content-type": "application/json", "x-forwarded-for": freshAddress(), "x-panel-signature": signature }, body: signedBody });
   assert.equal(signed.status, 200);
   assert.equal((await signed.json()).result.changes, 1);
   const byKey = await post({ room: "oak", day, hour: 10 }, { authorization: `Bearer ${panel.key}` });
   assert.equal(byKey.status, 200);
   assert.equal(byKey.body.result.changes, 1);
-  const keyClient = runtime(undefined, panel.key);
-  // The runtime endpoint does not refuse a key. It ignores it and answers as it would a visitor.
-  assert.deepEqual(await call(keyClient, "availability.day", { day }), await call(visitor, "availability.day", { day }));
-  const keyOnRuntime = await refusal(call(keyClient, "bookings.mine", { from: day }));
-  assert.equal(keyOnRuntime, "authentication-required");
+  // The runtime endpoint refuses a key and says where keys work.
+  const keyOnRuntimeResponse = await fetch(`${url}/_littlebox/mcp`, {
+    method: "POST", headers: { host, "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${panel.key}`, "x-forwarded-for": freshAddress() },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "actions_invoke", arguments: { name: "availability.day", input: { day } } } }),
+  });
+  const keyOnRuntime = { status: keyOnRuntimeResponse.status, body: await keyOnRuntimeResponse.json() };
+  assert.deepEqual(keyOnRuntime, { status: 403, body: { error: "An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session." } });
   // A signed-in person from the app's own origin still needs the signature.
   const byPerson = await post({ room: "oak", day, hour: 11 }, { cookie: anaSignup.cookie!, origin: receipt.url, "sec-fetch-site": "same-origin" });
   assert.deepEqual(byPerson, { status: 401, body: { error: "invalid-signature" } });
-  // The same action through the runtime endpoint needs no signature at all.
-  const unsignedRuntime = await call<{ changes: number }>(visitor, "panel.checkin", { room: "oak", day, hour: 11 });
-  assert.equal(unsignedRuntime.changes, 1);
-  check("Check-in route", `POST /api/checkin refuses an unsigned body (401 invalid-signature) and accepts a signature or the panel's API key. A staff session cookie without a signature gets 401 invalid-signature. On the runtime endpoint the key is ignored: anonymous actions answer as for a visitor and bookings.mine answers "${keyOnRuntime}". A signed-out visitor calls panel.checkin through actions_invoke with no signature and checks in a booking (changes ${unsignedRuntime.changes}).`);
+  // The signed route is the action's only door, so the runtime endpoint refuses it for a visitor and for staff.
+  const unsignedRuntime = await refusal(call(visitor, "panel.checkin", { room: "oak", day, hour: 11 }));
+  assert.equal(unsignedRuntime, "Action panel.checkin answers only on its HTTP route, POST /api/checkin.");
+  assert.equal(await refusal(call(ana, "panel.checkin", { room: "oak", day, hour: 11 })), unsignedRuntime);
+  check("Check-in route", `POST /api/checkin refuses an unsigned body (401 invalid-signature) and a stale t (401 stale-timestamp), and accepts a signature or the panel's API key. A staff session cookie without a signature gets 401 invalid-signature. The runtime endpoint refuses the key with ${keyOnRuntime.status} "${keyOnRuntime.body.error}". A visitor and a staff member calling panel.checkin through actions_invoke get "${unsignedRuntime}".`);
 
   // 9. The Action Contract, and conform with a session token and with an API key.
   const contractDir = await copyOf("contract");

@@ -15,7 +15,7 @@
  * Error messages are not written here. They come from the SDK contract in
  * src/sdk/contract.ts, whose test checks each against the Kernel's source.
  */
-import { parseServerActionSource, type HttpBinding, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
+import { parseServerActionSource, type HttpBinding, type RouteCaller, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
 import { sdkContract, type SdkError } from "../sdk/contract";
 import { sqlStatementTokens, sqlTokens, type SqlToken } from "./sql-tokens";
 import contractSchema from "./action-contract.schema.json";
@@ -76,6 +76,14 @@ export type ContractHttp = {
   input: string;
   signature?: { header: string; secret: string; scheme: string; windowSeconds: number; acceptedOnce: true };
   callers: ContractCaller[];
+  /** The `callers` list actions.json declares, when it declares one. */
+  declaredCallers?: RouteCaller[];
+  /**
+   * When the route is the action's only door, so the runtime endpoint refuses
+   * the action: always for a signed route or one with declared callers, and on
+   * a private Deployment for an unsigned one (ADR-0011, update of 2026-11-06).
+   */
+  onlyDoor: "always" | "on a private Deployment";
 };
 
 export type ContractError = {
@@ -106,8 +114,14 @@ export type ContractAction = {
   actorBound: boolean;
   inputs: ContractInput[];
   output: ContractOutput;
-  /** The Signal the action records when it succeeds, with the input keys copied into its properties (ADR-0010). */
+  /**
+   * The Signal the action records when it succeeds, and for a mutation only
+   * when it changed a row, with the input keys copied into its properties and
+   * `actor` for the caller's ID (ADR-0010).
+   */
   signal?: { name: string; properties: string[] };
+  /** A mutation's refusal when its statement changes no row; it is listed among the errors too. */
+  guard?: string;
   runtime: { endpoint: string; tool: string; sdk: string; callers: ContractCaller[] };
   http?: ContractHttp;
   errors: ContractError[];
@@ -142,7 +156,7 @@ const MAX_ROUTE_BODY = 64 * 1024;
 const SIGNATURE_WINDOW = 300;
 
 const RUNTIME = { endpoint: "/_littlebox/mcp", tool: "actions_invoke", sdk: "miniapp.actions.call" };
-const SIGNATURE_SCHEME = "t=<unix seconds>,v1=<hex HMAC-SHA256 of \"<t>.<raw body>\" keyed with the secret>";
+const SIGNATURE_SCHEME = "t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256, keyed with the secret, of t, n, the method, the path, the canonical query string and the raw body, joined by newlines>";
 
 /**
  * Writes the contract for a Capsule's actions.json and schema.sql. Throws the
@@ -176,6 +190,7 @@ export function contractFromProgram(program: ServerActionProgram, schemaSource: 
     ...(project ? { project: { id: project.id, name: project.name } } : {}),
     errors: [
       fromSdk("Server action not declared.", "runtime"),
+      { ...fromSdk("Sign in to use Littlebox MCP.", "runtime"), when: "the Deployment is private and the caller has no session, whatever the action's name" },
       fromSdk("Arguments must be an object.", "runtime"),
       fromSdk("No route accepts POST on this path.", "http"),
     ],
@@ -186,7 +201,7 @@ export function contractFromProgram(program: ServerActionProgram, schemaSource: 
       "Column types are SQLite affinities read from schema.sql. SQLite does not enforce them, so a value can still arrive as another JSON type when it was stored as one.",
       "Nullability follows NOT NULL and INTEGER PRIMARY KEY in schema.sql. A column read through the right side of a LEFT JOIN is nullable.",
       "A SQLite error, such as a UNIQUE constraint, is returned with SQLite's own text.",
-      "On a private Deployment every runtime call needs a session, including anonymous actions. An HTTP route answers by the action's access level whatever the visibility.",
+      "On a private Deployment every runtime call needs a session, including anonymous actions. An HTTP route answers the callers it takes: without a callers list, a signed route takes the signature or an API key, and an unsigned one anyone on a public Deployment and an API key or a session on a private one. An action whose route does not answer anyone answers only there.",
     ],
   };
   return { contract, warnings };
@@ -231,7 +246,8 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables): C
     inputs,
     output,
     ...(action.signal ? { signal: { name: action.signal.name, properties: [...action.signal.properties] } } : {}),
-    runtime: { ...RUNTIME, callers: runtimeCallers(access) },
+    ...(action.guard ? { guard: action.guard } : {}),
+    runtime: { ...RUNTIME, callers: http?.onlyDoor === "always" ? [] : runtimeCallers(access, Boolean(http)) },
     ...(http ? { http } : {}),
     errors: actionErrors(action, inputs, actorBound),
     limits: actionLimits(action),
@@ -240,17 +256,22 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables): C
   };
 }
 
-function runtimeCallers(access: "anonymous" | "authenticated"): ContractCaller[] {
-  const person: ContractCaller = { kind: "person", proof: "the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>", actor: "user id" };
+function runtimeCallers(access: "anonymous" | "authenticated", routed: boolean): ContractCaller[] {
+  const session = "the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>";
+  const person: ContractCaller = { kind: "person", proof: routed ? `${session}; a public Deployment only, since on a private one the action answers only on its route` : session, actor: "user id" };
   return access === "anonymous"
     ? [{ kind: "visitor", proof: "none; a public Deployment only", actor: "none" }, person]
     : [person];
 }
 
 function contractHttp(http: HttpBinding, kind: "query" | "mutation" | "signal"): ContractHttp {
-  const visitor: ContractCaller = http.signature
-    ? { kind: "visitor", proof: `the ${http.signature.header} signature`, actor: "none" }
-    : { kind: "visitor", proof: "none", actor: "none" };
+  const declared = http.callers;
+  const takes = (caller: RouteCaller) => declared ? declared.includes(caller) : caller !== "session" || !http.signature;
+  const callers: ContractCaller[] = [];
+  if (http.signature) callers.push({ kind: "visitor", proof: `the ${http.signature.header} signature`, actor: "none" });
+  else if (!declared) callers.push({ kind: "visitor", proof: "none; a public Deployment only", actor: "none" });
+  if (takes("key")) callers.push({ kind: "service", proof: `Authorization: Bearer <API key that names this action>${http.signature ? "; it replaces the signature" : ""}`, actor: "key id" });
+  if (takes("session")) callers.push({ kind: "person", proof: "the app session cookie, from the app's own origin", actor: "user id" });
   return {
     method: http.method,
     path: http.path,
@@ -260,11 +281,9 @@ function contractHttp(http: HttpBinding, kind: "query" | "mutation" | "signal"):
     ...(http.signature ? {
       signature: { header: http.signature.header, secret: http.signature.secret, scheme: SIGNATURE_SCHEME, windowSeconds: SIGNATURE_WINDOW, acceptedOnce: true as const },
     } : {}),
-    callers: [
-      visitor,
-      { kind: "service", proof: "Authorization: Bearer <API key that names this action>; it replaces the signature", actor: "key id" },
-      { kind: "person", proof: "the app session cookie, from the app's own origin", actor: "user id" },
-    ],
+    callers,
+    ...(declared ? { declaredCallers: [...declared] } : {}),
+    onlyDoor: http.signature || declared ? "always" : "on a private Deployment",
   };
 }
 
@@ -273,6 +292,14 @@ function contractHttp(http: HttpBinding, kind: "query" | "mutation" | "signal"):
 const actionsCall = sdkContract.modules.find((module) => module.name === "actions")!.calls.find((call) => call.name === "call")!;
 const httpDeclaration = sdkContract.modules.find((module) => module.name === "http")!.declarations.find((declaration) => declaration.key === "http")!;
 const sdkErrors: readonly SdkError[] = [...sdkContract.errors, ...actionsCall.errors, ...(httpDeclaration.errors ?? [])];
+
+/** A refusal the http module lists with its status, for a message the runtime also uses without one. */
+function httpError(message: string): ContractError {
+  const errors: readonly SdkError[] = httpDeclaration.errors ?? [];
+  const error = errors.find((candidate) => candidate.message === message && candidate.status !== undefined);
+  if (!error) throw new Error(`The http module has no route error "${message}".`);
+  return { message: error.message, when: error.when, via: "http", status: error.status };
+}
 
 function fromSdk(message: string, via: ContractError["via"], values: Record<string, string> = {}): ContractError {
   const error = sdkErrors.find((candidate) => candidate.message === message);
@@ -287,8 +314,17 @@ function fromSdk(message: string, via: ContractError["via"], values: Record<stri
 }
 
 function actionErrors(action: ServerActionDefinition, inputs: ContractInput[], actorBound: boolean): ContractError[] {
-  const both = action.http ? "both" : "runtime";
+  const http = action.http;
+  const onlyDoor = http ? Boolean(http.signature || http.callers) : false;
+  // A binding refusal is seen wherever the action runs: on its route alone when that is its only door.
+  const both = !http ? "runtime" : onlyDoor ? "http" : "both";
   const errors: ContractError[] = [];
+  if (http) {
+    errors.push({
+      ...fromSdk("Action <name> answers only on its HTTP route, <key>.", "runtime", { name: action.name, key: `${http.method} ${http.path}` }),
+      when: onlyDoor ? "always: the route declares a signature or callers" : "the Deployment is private and the route has no signature",
+    });
+  }
   if (action.access === "authenticated") errors.push(fromSdk("authentication-required", "runtime"));
   errors.push({ ...fromSdk("Sign in to use Littlebox MCP.", "runtime"), when: "the Deployment is private and the caller has no session" });
   if (actorBound && action.access === "anonymous") errors.push(fromSdk("This action requires an authenticated actor.", both));
@@ -305,17 +341,26 @@ function actionErrors(action: ServerActionDefinition, inputs: ContractInput[], a
     }
   }
   if (action.kind === "query") errors.push(fromSdk("Query result exceeds 2 MiB or 1000 rows.", both));
+  // The app's own refusal: 403 on a route, set below with the route's statuses.
+  if (action.guard) errors.push({ message: action.guard, when: "the statement changes no row, so the action's rule refused the call. Usage counts it under refused and no Signal is recorded", via: both });
   errors.push(fromSdk("rate-limited", "runtime"));
-  if (action.http) {
-    const http = action.http;
-    // A binding refusal answers 400 on a route.
-    for (const error of errors) if (error.via === "both") error.status = 400;
+  if (http) {
+    // A binding refusal answers 400 on a route, and a guard 403.
+    for (const error of errors) if (error.via === "both" || error.via === "http") error.status = error.message === action.guard ? 403 : 400;
+    const takes = (caller: RouteCaller) => http.callers ? http.callers.includes(caller) : caller !== "session" || !http.signature;
     if (http.signature) {
       errors.push(fromSdk("invalid-signature", "http"));
+      errors.push(fromSdk("stale-timestamp", "http"));
       errors.push(fromSdk("replayed-signature", "http"));
+    } else {
+      errors.push({
+        ...httpError("authentication-required"),
+        when: http.callers ? "the request carries neither an API key nor a session the route takes" : "the Deployment is private and the request carries neither an API key nor a session",
+      });
     }
     errors.push(fromSdk("invalid-api-key", "http"));
-    errors.push(fromSdk("This API key may not call <name>.", "http", { name: action.name }));
+    if (takes("key")) errors.push(fromSdk("This API key may not call <name>.", "http", { name: action.name }));
+    else errors.push(fromSdk("This route does not accept API keys.", "http"));
     if (http.method === "POST") {
       errors.push(fromSdk("The request body exceeds 64 KiB.", "http"));
       errors.push(fromSdk("The request body must be a JSON object.", "http"));
@@ -695,11 +740,12 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
       }
     } else if (action.output.kind === "changes") {
       lines.push("`{ changes, lastInsertId }`, both integers.", "");
+      if (action.guard) lines.push(`When the statement changes no row the call is refused with \`${action.guard}\` instead.`, "");
     } else {
       lines.push(`Records the Signal \`${action.output.signal}\`.`, "");
     }
     lines.push("### Callers", "");
-    lines.push(`Runtime endpoint: ${action.runtime.callers.map(describeCaller).join("; ")}.`, "");
+    lines.push(`Runtime endpoint: ${action.runtime.callers.length ? action.runtime.callers.map(describeCaller).join("; ") : "none; the action answers only on its route"}.`, "");
     if (action.http) {
       const http = action.http;
       lines.push(`HTTP route \`${http.method} ${http.path}\` on the Deployment host. Input is ${http.input}. It answers \`{ "result": ... }\` with the same output, or \`{ "error": "<message>" }\` with a status.`, "");
@@ -707,6 +753,9 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
         lines.push(`A signed request carries \`${http.signature.header}: ${http.signature.scheme}\`. The secret is named \`${http.signature.secret}\` and set by the owner; it is never in this file. \`t\` must be within ${http.signature.windowSeconds} seconds of the server's clock, and each signature is accepted once.`, "");
       }
       lines.push(`Callers: ${http.callers.map(describeCaller).join("; ")}.`, "");
+      lines.push(http.onlyDoor === "always"
+        ? "The route is the action's only door: the runtime endpoint refuses it."
+        : "On a private Deployment the route takes an API key or a session and is the action's only door: the runtime endpoint refuses it there.", "");
     }
     lines.push("### Errors", "");
     lines.push("| Message | Status | Seen on | When |", "| --- | --- | --- | --- |");
@@ -844,11 +893,13 @@ export function programFromContract(contract: ActionContract): ServerActionProgr
       statement: action.statement,
       bindings,
       ...(action.signal ? { signal: { name: action.signal.name, properties: [...action.signal.properties] } } : {}),
+      ...(action.guard ? { guard: action.guard } : {}),
       ...(action.http ? {
         http: {
           method: action.http.method,
           path: action.http.path,
           ...(action.http.signature ? { signature: { header: action.http.signature.header, secret: action.http.signature.secret } } : {}),
+          ...(action.http.declaredCallers ? { callers: [...action.http.declaredCallers] } : {}),
         },
       } : {}),
     };

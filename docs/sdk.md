@@ -86,18 +86,19 @@ Editor preview: Switches to the signed-out state and returns the anonymous sessi
 The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.
 
 - A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.
-- A mutation action returns { changes, lastInsertId }. Read changed rows with a separate query.
+- A mutation action returns { changes, lastInsertId }. Read changed rows with a separate query. A mutation that declares a guard and changes no row is refused with the guard instead.
 - The Action Contract, action-contract.json, lists every action with its inputs, the columns it returns, its errors and limits. It is written from actions.json and schema.sql by littlebox contract and carried in the export; an expression the SELECT returns without AS has no name in it, and the Validation Gate warns.
 - To record that something happened, such as a signup to a newsletter or a finished lesson, declare a signal on the mutation that does it, or add an action of kind signal and call it with miniapp.actions.call. There is no other tracking call.
-- A call the Kernel refuses records no Signal and counts in no Usage total.
+- A call the Kernel refuses records no Signal and counts in no Usage total, except a guard's refusal, which Usage counts under refused.
 
-Declared with `signal` in `actions.json`. { "name": "order.placed", "properties"?: ["input binding keys"] } on a mutation, or on an action of "kind": "signal" that has access and bindings but no statement. When the action succeeds the Kernel records the Signal with the named inputs as its properties, in the Deployment's Usage store. A signal action runs no SQL and returns { recorded: true }. The owner reads Signals with signals_read; the app cannot. The Validation Gate and the Kernel refuse the same declarations with the same messages.
+Declared with `signal` in `actions.json`. { "name": "order.placed", "properties"?: ["input binding keys", "actor"] } on a mutation, or on an action of "kind": "signal" that has access and bindings but no statement. When the action succeeds, and for a mutation only when it changed at least one row, the Kernel records the Signal with the named inputs as its properties, in the Deployment's Usage store. The property actor records the caller's ID: the user's, the API key's, or null for a visitor or a signed request. A signal action runs no SQL and returns { recorded: true }. The owner reads Signals with signals_read; the app cannot. The Validation Gate and the Kernel refuse the same declarations with the same messages.
 
 | Message | When | Source | Editor preview |
 | --- | --- | --- | --- |
 | `Action <name> is a query, so it cannot declare a signal. Declare it on a mutation or on a "kind": "signal" action.` | the action is a query | Kernel | Same |
 | `Action <name> names signal property <key>, which is not one of its input bindings.` | a property is not the key of an input binding; actor, kernel and literal bindings have no key | Kernel | Same |
 | `Action <name> names signal property <key> twice.` | properties lists a key twice | Kernel | Same |
+| `Action <name> names signal property actor, which records the caller's ID, and also has an input named actor. Rename the input.` | properties lists actor and an input binding's key is actor | Kernel | Same |
 | `Action <name> names more than 8 signal properties.` | properties lists more than 8 keys | Kernel | Same |
 | `Action <name> names an invalid signal. Use dot-separated lowercase words, such as "order.placed", up to 64 characters.` | the name has one word, a capital, a space, an empty part or more than 64 characters | Kernel | Same |
 | `Action <name> has an invalid signal declaration.` | signal is not an object, has a key other than name and properties, has no name, or properties is not a list of strings | Kernel | Same |
@@ -109,7 +110,20 @@ Limits:
 - 8 properties per Signal; a string property keeps its first 128 bytes
 - a signal action counts toward the action limit like any other action
 - a signal action cannot declare http
+- a mutation that changed no row records no Signal
 - the Kernel keeps the newest 50,000 Signals per Deployment and drops the oldest
+
+Declared with `guard` in `actions.json`. "guard": "<message>" on a mutation. When its statement changes no row, the Kernel refuses the call with that message instead of answering { changes: 0, lastInsertId: 0 }: a tool error for miniapp.actions.call, 403 on an HTTP route. Usage counts the call under refused, and no Signal is recorded. Write the app's rule into the statement's WHERE, such as "the caller is an organizer" or "the slot is free", and the guard is what the person sees when the rule says no. Without a guard a mutation answers { changes: 0 } as before. The Validation Gate and the Kernel refuse the same declarations with the same messages.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `Action <name> is a query, so it cannot declare a guard. Declare it on a mutation.` | the action is a query | Kernel | Same |
+| `Action <name> is a signal action, so it cannot declare a guard. Declare it on a mutation.` | the action is a signal action | Kernel | Same |
+| `Action <name> has an invalid guard. Use a message of 1 to 200 characters on one line.` | guard is not a string, is empty or blank, is longer than 200 characters, or holds a line break or another control character | Kernel | Same |
+
+Limits:
+
+- a guard is 1 to 200 characters on one line
 
 ### miniapp.actions.call(name, input = {})
 
@@ -135,6 +149,7 @@ Returns an array of row objects for a query action, { changes, lastInsertId } fo
 | `Expected a string.` | name is not a string | Kernel | `Server action not declared: <name>` |
 | `Unexpected action input: <key>` | input has a key no input binding declares | Kernel | Same |
 | `This action requires an authenticated actor.` | an anonymous action binds the actor id and no one is signed in | Kernel | Same |
+| `Action <name> answers only on its HTTP route, <key>.` | the action's route does not answer anyone: it declares a signature or callers, or it has no signature on a private Deployment. The preview refuses the first two only, since it has no visibility | Kernel | Same |
 | `Missing action input: <key>` | a required input is omitted | Kernel | `<key> must be a non-empty string.` or `<key> must be a finite number.` or `<key> must be a boolean.` |
 | `<key> must be a non-empty string.` | a string input is not a string, or is empty or only whitespace | Kernel | Same |
 | `<key> is too long.` | a string input is longer than its maxLength in UTF-16 code units | Kernel | Same |
@@ -304,14 +319,15 @@ Limits:
 
 Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.
 
-- Only an action declared anonymous may bind a route, and the route answers whatever the Deployment's visibility. On a private app, a route without a signature is open to anyone who knows the path.
-- A route has three kinds of caller: a service that signs the request, a program that sends Authorization: Bearer with an API key the owner issued, and a person signed in to the app, from the app's own origin. An actor binding yields the key's ID or the user's ID; a signed request has no actor.
-- A signed route reads the declared header as t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>" keyed with the secret>. An API key that names the action replaces the signature.
+- Only an action declared anonymous may bind a route. A route has three kinds of caller: a service that signs the request (signature), a program that sends Authorization: Bearer with an API key the owner issued (key), and a person signed in to the app, from the app's own origin (session). An actor binding yields the key's ID or the user's ID; a signed request has no actor.
+- Without callers, a signed route takes the signature or a key, an unsigned route on a private app a key or a session, and an unsigned route on a public app anyone. A person whose session the route does not take must sign like any sender.
+- An action whose route does not answer anyone answers only on that route: miniapp.actions.call refuses it. The app's own page calls such a route with fetch, which sends the session cookie.
+- A signed route reads the declared header as t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256>. The MAC is keyed with the secret and covers t, the nonce, the method, the path, the canonical query string and the raw body, joined by newlines. The canonical query string is the pairs sorted by key, then value, written as application/x-www-form-urlencoded.
 - The owner sets the secret with the secret_set admin tool before publishing. It never appears in actions.json, the Build Artifact or an export.
 - GET /_littlebox/files/<id>, the path miniapp.files.url returns, answers a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it. A visitor without a session on a private app gets 401 authentication-required before any file is looked up; every other caller who may not read the file gets 404 File not found, the same as for a missing or deleted one.
 - The editor preview serves no routes. Run them on a Development Kernel with littlebox dev, or on a Deployment.
 
-Declared with `http` in `actions.json`. { "method": "GET" | "POST", "path": "/api/items", "signature"?: { "header": "X-Signature", "secret": "items_webhook" } } on an action declared anonymous. GET binds a query and maps the query string onto its input bindings by type; POST binds a mutation and reads a JSON object body. The route answers { result } with the rows or { changes, lastInsertId }, and { error } with a status code. The Validation Gate and the Kernel refuse the same declarations with the same messages.
+Declared with `http` in `actions.json`. { "method": "GET" | "POST", "path": "/api/items", "signature"?: { "header": "X-Signature", "secret": "items_webhook" }, "callers"?: ["signature" | "key" | "session"] } on an action declared anonymous. GET binds a query and maps the query string onto its input bindings by type; POST binds a mutation and reads a JSON object body. callers names who may call the route; without it a signed route takes the signature or an API key, an unsigned route on a private Deployment an API key or a session, and an unsigned route on a public Deployment anyone. An action whose route does not answer anyone answers only on that route, never through miniapp.actions.call. The route answers { result } with the rows or { changes, lastInsertId }, and { error } with a status code. The Validation Gate and the Kernel refuse the same declarations with the same messages.
 
 | Message | When | Source | Editor preview |
 | --- | --- | --- | --- |
@@ -323,11 +339,18 @@ Declared with `http` in `actions.json`. { "method": "GET" | "POST", "path": "/ap
 | `Action <name> has an invalid signature header.` | the header is not 1 to 64 letters, digits and -, or is Authorization, Cookie, Host, Content-Type or Content-Length | Kernel | Same |
 | `Action <name> names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter.` | the secret is not a secret name | Kernel | Same |
 | `Action <name> has an invalid http binding.` | http is not an object, has another key, or its signature has a key other than header and secret | Kernel | Same |
+| `Action <name> has an invalid callers list. List one or more of "signature", "key" and "session", each once.` | callers is not a list, is empty, repeats a caller or names another one | Kernel | Same |
+| `Action <name> lists "signature" among its callers but declares no signature.` | callers names signature and the binding has no signature | Kernel | Same |
+| `Action <name> declares a signature, so its callers must include "signature".` | the binding has a signature and callers leaves it out | Kernel | Same |
 | `Action <name> signs with the secret <name>, which is not set for this project. Set it with secret_set before publishing.` | publishing, and the owner has not set the secret; the editor cannot see secrets, so only the Kernel refuses this | Kernel | Never refuses |
 | `Actions <names> sign with the secret <name>, which is not set for this project. Set it with secret_set before publishing.` | publishing, and several actions sign with one secret the owner has not set | Kernel | Never refuses |
 | `Actions <names> sign with the secrets <names>, which are not set for this project. Set each with secret_set before publishing.` | publishing, and more than one secret is unset; one refusal names every action and every secret | Kernel | Never refuses |
-| `invalid-signature` | a signed route gets no signature, a wrong one, or a t more than 300 seconds from the Kernel's clock (401) | Kernel | Never refuses |
-| `replayed-signature` | the same signature arrives a second time (409) | Kernel | Never refuses |
+| `invalid-signature` | a signed route gets no signature, a malformed one, or one whose MAC does not match (401) | Kernel | Never refuses |
+| `stale-timestamp` | a signature's t is more than 300 seconds from the Kernel's clock; checked before the MAC, so it says nothing about the secret (401) | Kernel | Never refuses |
+| `authentication-required` | a route that takes an API key or a session, and no signature, gets neither (401) | Kernel | Never refuses |
+| `This route does not accept API keys.` | the route's callers leave out key and the request carries one (403) | Kernel | Never refuses |
+| `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.` | a request to the runtime endpoint carries an API key (403) | Kernel | Never refuses |
+| `replayed-signature` | the same signature arrives a second time; a retry signs again with a new nonce (409) | Kernel | Never refuses |
 | `invalid-api-key` | Authorization carries an lbk_ key that is unknown or revoked (401) | Kernel | Never refuses |
 | `This API key may not call <name>.` | the key does not name the route's action (403) | Kernel | Never refuses |
 | `No route accepts POST on this path.` | a POST reaches a path no action binds (405) | Kernel | Never refuses |
@@ -340,6 +363,6 @@ Declared with `http` in `actions.json`. { "method": "GET" | "POST", "path": "/ap
 Limits:
 
 - a POST body of 64 KiB
-- a signature's t within 300 seconds of the Kernel's clock, and each signature accepted once
+- a signature's t within 300 seconds of the Kernel's clock, a nonce of 1 to 64 letters, digits, - and _, and each signature accepted once
 - the runtime endpoint's action rate limits: 30 per 10 seconds per client address without a key or session, 120 per 10 seconds per user or key
 - 50 live API keys per Deployment

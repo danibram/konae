@@ -7,7 +7,7 @@ import {
   runtimeLimits,
   validateRuntimeParams,
 } from "./security";
-import { parseServerActionSource, resolveServerAction, type ServerActionProgram } from "../kernel/actions";
+import { parseServerActionSource, resolveServerAction, routeCallers, type ServerActionProgram } from "../kernel/actions";
 import type { ApplyDatabaseMigrationInput } from "../database-lifecycle/contracts";
 
 export type StoredFile = {
@@ -577,6 +577,11 @@ export class MiniAppRuntimeHost {
     if (!declaration && this.actionsFailure) {
       throw new Error(`Server action not declared: ${String(request.name)}. actions.json is invalid: ${this.actionsFailure}`);
     }
+    // The preview has no visibility, so it refuses what every Deployment refuses:
+    // an action whose signed or callers-limited route is its only door.
+    if (declaration?.http && routeCallers(declaration.http, "public")) {
+      throw new Error(`Action ${declaration.name} answers only on its HTTP route, ${declaration.http.method} ${declaration.http.path}.`);
+    }
     if (declaration && declaration.access !== "anonymous" && this.previewActor === "guest") {
       throw new Error("authentication-required");
     }
@@ -586,9 +591,11 @@ export class MiniAppRuntimeHost {
     // The preview keeps no Usage store. A signal action runs no SQL and answers
     // as the Kernel does, which records the Signal on a Deployment.
     if (action.kind === "signal") return { recorded: true };
-    return action.kind === "query"
-      ? this.query({ sql: action.statement, params })
-      : this.execute({ sql: action.statement, params });
+    if (action.kind === "query") return this.query({ sql: action.statement, params });
+    const result = await this.execute({ sql: action.statement, params });
+    // A guarded mutation that changed no row is refused with its guard, as on a Deployment.
+    if (action.guard && result.changes === 0) throw new Error(action.guard);
+    return result;
   }
 
   private async execute(payload: unknown) {
