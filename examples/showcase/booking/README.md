@@ -15,8 +15,8 @@ This app is a product probe. It uses Littlebox the way a creator would and recor
 | CHECK constraints and a partial unique index | `schema.sql` refuses a fractional hour, an hour outside 08 to 17, an invalid date and a second holder of an hour |
 | HTTP route, unsigned | `GET /api/availability?day=YYYY-MM-DD` for a lobby screen |
 | HTTP route, signed, with an API key | `POST /api/checkin`, signed with the `panel_hook` secret, or called with a key that names `panel.checkin` |
-| Guards | `bookings.create` and `bookings.cancel` declare the sentence a refused call answers with |
-| Signals | `booking.created`, which names the booker as `actor`, and `booking.cancelled`, read by the owner with `signals_read` |
+| Guards | `bookings.create`, `bookings.cancel` and `panel.checkin` declare the sentence a refused call answers with |
+| Signals | `booking.created` and `booking.cancelled`, each naming the caller as `actor`, read by the owner with `signals_read` |
 | Action Contract and `conform` | Generated from `actions.json` and `schema.sql`, run with a session token and with an API key |
 
 The owner adds rooms with `database_execute`, because `schema.sql` may only create tables and indexes.
@@ -31,7 +31,7 @@ LITTLEBOX_SHOWCASE_PORT=19473 bun run examples/showcase/booking/replay.ts
 
 The replay builds the Kernel offline, starts it on `LITTLEBOX_SHOWCASE_PORT` (default 19470) with a random setup key and a data directory under the system temp folder, and deletes both on exit. It refuses to start when something already answers on the port. `LITTLEBOX_SHOWCASE_BROWSER=0` skips Chrome. `LITTLEBOX_SHOWCASE_SCREENSHOTS=<dir>` writes `booking-visitor-light.png`, `booking-staff-light.png` and `booking-staff-dark.png` there.
 
-It prints one `PASS` line per group and a JSON report, and exits 0 when all ten hold. The last run, on 2026-11-06 after the route, guard and SQL rule fixes, printed these lines, trimmed where marked `[...]`:
+It prints one `PASS` line per group and a JSON report, and exits 0 when all ten hold. The last run, on 2026-11-07 after the review of the examples, printed these lines, trimmed where marked `[...]`:
 
 ```text
 PASS Validation Gate and Kernel. Both pass the Capsule and both refuse a trigger that writes the booking log, a mutation that starts with WITH, two statements in one action, a view of free hours with the same sentence. [...]
@@ -39,11 +39,11 @@ PASS Publish. Refused first with "Action panel.checkin signs with the secret pan
 PASS Allowlist signup. @office.example signs up. pat@elsewhere.example, sam@sub.office.example and, under Closed, cara@office.example all get 403 {"error":"This app is not accepting new accounts for this email address."}. Existing staff still sign in under Closed.
 PASS One-statement booking. A two-hour booking writes two rows in one INSERT ... WITH RECURSIVE ... SELECT. An overlap and a fractional hour, five hours, a span past 18:00, a past day, an impossible date, text that is not a date, an unknown room each are refused with the guard "Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours."; the statement still cannot say which rule failed. [...]
 PASS Public and staff views. A visitor and GET /api/availability get only { room, hour }; titles and names need a session, and authenticated actions answer authentication-required. Ben sees Ana's title, is refused with the cancel guard on her booking, and books the hours she freed. [...]
-PASS Double booking under concurrency. 20 rounds of two overlapping bookings sent together: one wins with 2 rows, the other is refused with the guard (2/0, 0/2, 0 standing for the guard). Ten requests for one hour: 0,0,0,0,1,0,0,0,0,0. Owner SQL counts 1 holder.
-PASS Signals. 61 bookings.create calls: 24 bookings made and 24 booking.created Signals, each naming the booker as actor. Usage counts the 37 guard refusals under refused.
-PASS Check-in route. POST /api/checkin refuses an unsigned body (401 invalid-signature) and a stale t (401 stale-timestamp), and accepts a signature or the panel's API key. [...] The runtime endpoint refuses the key with 403 [...]. A visitor and a staff member calling panel.checkin through actions_invoke get "Action panel.checkin answers only on its HTTP route, POST /api/checkin.".
-PASS Action Contract. [...] conform --token --secret: "76 passed, 0 failed, 0 skipped.". conform --token --key: "74 passed, 0 failed, 0 skipped.". conform --key alone: "26 passed, 0 failed, 14 skipped, 1 rate-limit waits.".
-PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no policy violation or page error; staff book two hours from the grid. [...]
+PASS Double booking under concurrency. 20 rounds of two overlapping bookings sent together: one wins with 2 rows, the other is refused with the guard (2/0, 0/2, 0 standing for the guard). Ten requests for one hour: 0,0,1,0,0,0,0,0,0,0. Owner SQL counts 1 holder.
+PASS Signals. 62 bookings.create calls: 25 bookings made and 25 booking.created Signals, each naming the booker as actor. One booking.cancelled names the canceller. Usage counts the 37 guard refusals under refused.
+PASS Check-in route. POST /api/checkin refuses an unsigned body (401 invalid-signature) and a stale t (401 stale-timestamp), and accepts a signature or the panel's API key. A second check-in for the same hour and one for an hour nobody booked get 403 with the guard. [...] The runtime endpoint refuses the key with 403 [...]. A visitor and a staff member calling panel.checkin through actions_invoke get "Action panel.checkin answers only on its HTTP route, POST /api/checkin.".
+PASS Action Contract. [...] conform --token --secret: "76 passed, 0 failed, 0 skipped.". conform --token --key: "75 passed, 0 failed, 0 skipped.". conform --key alone: "27 passed, 0 failed, 14 skipped, 1 rate-limit waits.".
+PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no policy violation or page error; staff book two hours from the grid, and an offline day change shows a sentence instead of an unhandled error.
 ```
 
 ## What worked
@@ -54,8 +54,9 @@ PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no
 - **A span of hours in one statement.** `bookings.create` generates the hours with a recursive CTE inside the `INSERT`'s `SELECT`, guards them with `WHERE`, and writes every hour or none. Cancelling is one `UPDATE ... WHERE booking_ref = ? AND user_id = ?` over all the rows of a booking. Another member's cancel changes 0 rows and is refused with the cancel guard.
 - **No double booking.** Twenty rounds of two overlapping requests sent at once, and one round of ten requests for the same hour, each end with exactly one holder. The loser always gets the create guard, never SQLite's text.
 - **Backstops in the schema.** Owner SQL that skips the action's `WHERE` still meets `UNIQUE constraint failed: bookings.room_id, bookings.day, bookings.slot` and `CHECK constraint failed: typeof(slot) = 'integer' AND slot BETWEEN 8 AND 17`.
-- **Routes.** `GET /api/availability` returns the visitor's rows as JSON. `POST /api/checkin` refuses an unsigned body with 401 `invalid-signature`, a stale `t` with 401 `stale-timestamp`, and accepts a signature or the panel's API key. A staff session cookie sent without a signature gets 401 too, and `panel.checkin` answers only on its route.
+- **Routes.** `GET /api/availability` returns the visitor's rows as JSON. `POST /api/checkin` refuses an unsigned body with 401 `invalid-signature`, a stale `t` with 401 `stale-timestamp`, and accepts a signature or the panel's API key. A second check-in for the same hour, or one for an hour nobody booked, gets 403 with the guard `No booking holds this room at this hour, or it is already checked in.` instead of `{ changes: 0 }`. A staff session cookie sent without a signature gets 401 too, and `panel.checkin` answers only on its route.
 - **Content Security Policy.** The visitor page and the staff page load in Chrome under the Kernel's policy with no violation and no page error, and a staff member books two hours by clicking the grid.
+- **Errors on the page.** Every status line reads a failure through one `reason(error)` helper, the same in all five showcase apps. A refusal shows its own sentence, `rate-limited` becomes "Too many requests just now. Wait a few seconds and try again.", and a Kernel the browser cannot reach becomes "The board could not reach its server. Check the connection and try again." The replay takes the page offline and moves to the next day to prove the last one.
 
 ## Atomic booking and the one-statement rule
 
@@ -97,7 +98,7 @@ What the app does instead:
 
 - The staff view has a Recent activity list, the ten most recently changed bookings, cancellations included. The open board reloads it every 30 seconds while the tab is visible.
 - A lobby screen can poll `GET /api/availability`.
-- The owner can read `booking.created` and `booking.cancelled` Signals. Since 2026-11-06 they count only calls that changed a row, and `booking.created` names who booked.
+- The owner can read `booking.created` and `booking.cancelled` Signals. Since 2026-11-06 they count only calls that changed a row and `booking.created` names who booked; since 2026-11-07 `booking.cancelled` names who cancelled.
 
 A person who does not have the board open learns about a booking when they next open it.
 
@@ -125,10 +126,10 @@ Messages are quoted exactly as the replay received them. "Gate" is the editor's 
 | Seeding rooms from `schema.sql` | Kernel | `schema.sql` may only create tables and indexes (docs/mcp.md; not run by the replay) | The owner inserts rooms with `database_execute` after the first publish |
 | `bun run littlebox -- publish` with an Allowlist | CLI | Fixed on 2026-11-06. `publishLocal` sent no `initialSignupPolicy`, so a public app published with the CLI started Open until the owner called `signup_policy_set`, and the replay published over MCP to avoid that window | `littlebox.json` now names `project.manifest.signupPolicy` and the replay publishes with `publishLocal` on a token without `manage_users`; the Allowlist is in place before the first request |
 | A whole-hour input | Kernel | No integer input type; `"type": "number"` accepts `13.5` | The statement checks `?4 = CAST(?4 AS INTEGER)`, and a CHECK on `typeof(slot)` backs it |
-| "Not in the past" in the office's time | Kernel | The `now` binding is UTC milliseconds; there is no time zone | The past-day check compares with the UTC date, so for a few hours around midnight it accepts or refuses a day by the wrong calendar. The app sends the browser's local date for its own lists |
+| "Not in the past" in the office's time | Kernel | The `now` binding is UTC milliseconds; there is no time zone | Changed on 2026-11-07. The check compared with the UTC date, so in the evening west of UTC it refused the person's own today: at 21:00 in New York the UTC date is already tomorrow. It now accepts the UTC day before today, and the replay books it. The cost is the other side: east of UTC, just after midnight, yesterday is still accepted for a few hours. The page offers no past day and sends the browser's local date for its own lists |
 | The booker's name | Kernel | The `actor` binding has only `id` | The app keeps a `staff` table of display names each person sets for themselves. A name is not verified |
 | Typed columns in the Action Contract | `contract` | No warning and no `unnamed` entry, but 7 columns typed `unknown` | `bookings.day.booked_by`, `bookings.day.mine`, `bookings.mine.start`, `bookings.recent.start`, `bookings.recent.booked_by`, `bookings.recent.created_at`, `bookings.recent.cancelled_at`. Every expression column is aliased, so all are named; their types come from `coalesce`, `min`, `max` and a comparison, which the contract does not infer |
-| `conform` with an API key alone | `conform` | `26 passed, 0 failed, 14 skipped` | Authenticated actions need `--token`. With both `--token` and `--key`, the key is sent only to a signed route whose secret was not given |
+| `conform` with an API key alone | `conform` | `27 passed, 0 failed, 14 skipped` | Authenticated actions need `--token`. With both `--token` and `--key`, the key is sent only to a signed route whose secret was not given |
 
 ## Action Contract and conform
 
@@ -137,10 +138,10 @@ Messages are quoted exactly as the replay received them. "Gate" is the editor's 
 | Run | Result |
 | --- | --- |
 | `--token <session> --secret panel_hook=<secret>` | 76 passed, 0 failed, 0 skipped |
-| `--token <session> --key <panel key>` | 74 passed, 0 failed, 0 skipped |
-| `--key <panel key>` alone | 26 passed, 0 failed, 14 skipped |
+| `--token <session> --key <panel key>` | 75 passed, 0 failed, 0 skipped |
+| `--key <panel key>` alone | 27 passed, 0 failed, 14 skipped |
 
-The counts fell on 2026-11-06 because `panel.checkin` answers only on its route, so its inputs are probed there and not on the runtime endpoint.
+The counts fell on 2026-11-06 because `panel.checkin` answers only on its route, so its inputs are probed there and not on the runtime endpoint. The runs with a key gained one check on 2026-11-07, when `panel.checkin` declared its guard and `conform` probed it on the route.
 
 It also runs the same contract in-process with the token and the key from fresh client addresses, with 0 failed. `conform` runs every mutation once with generated input. Here `bookings.create` gets a day that is not a date and is refused with its guard, which `conform` checks, and `panel.checkin` matches no booking, so the run leaves the board unchanged.
 
@@ -289,7 +290,7 @@ WITH RECURSIVE span(slot) AS (SELECT ?4 UNION ALL SELECT slot + 1 FROM span WHER
 SELECT printf('%s/%s/%d/%d', r.id, ?3, ?4, ?7), r.id, ?3, span.slot, ?1, ?6, ?7
 FROM rooms r, span
 WHERE r.id = ?2
-  AND date(?3) IS ?3 AND ?3 >= date(?7 / 1000, 'unixepoch')
+  AND date(?3) IS ?3 AND ?3 >= date(?7 / 1000, 'unixepoch', '-1 day')
   AND ?4 = CAST(?4 AS INTEGER) AND ?5 = CAST(?5 AS INTEGER)
   AND ?4 >= 8 AND ?5 BETWEEN 1 AND 4 AND ?4 + ?5 <= 18
   AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.room_id = ?2 AND b.day = ?3 AND b.slot >= ?4 AND b.slot < ?4 + ?5 AND b.cancelled_at IS NULL)
@@ -516,6 +517,8 @@ UPDATE bookings SET checked_in_at = ?4 WHERE room_id = ?1 AND day = ?2 AND slot 
 
 `{ changes, lastInsertId }`, both integers.
 
+When the statement changes no row the call is refused with `No booking holds this room at this hour, or it is already checked in.` instead.
+
 #### Callers
 
 Runtime endpoint: none; the action answers only on its route.
@@ -543,6 +546,7 @@ The route is the action's only door: the runtime endpoint refuses it.
 | `day is too long.` | 400 | http | a string input is longer than its maxLength in UTF-16 code units |
 | `Missing action input: hour` | 400 | http | a required input is omitted |
 | `hour must be a number.` | 400 | http | a number input is not a JSON number |
+| `No booking holds this room at this hour, or it is already checked in.` | 403 | http | the statement changes no row, so the action's rule refused the call. Usage counts it under refused and no Signal is recorded |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
 | `invalid-signature` | 401 | http | a signed route gets no signature, a malformed one, or one whose MAC does not match (401) |
 | `stale-timestamp` | 401 | http | a signature's t is more than 300 seconds from the Kernel's clock; checked before the MAC, so it says nothing about the secret (401) |
