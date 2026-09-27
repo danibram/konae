@@ -420,7 +420,7 @@ pub(crate) fn admin_tools() -> Vec<Value> {
     vec![
         super::mcp::tool(
             "usage_read",
-            "Read a deployment's Usage: daily totals of the runtime operations the Kernel allowed (session, action, route, upload, file_read, signup, login) between two UTC dates written YYYY-MM-DD, both included, at most 400 days apart.",
+            "Read a deployment's Usage: daily totals of the runtime operations the Kernel allowed (session, action, route, upload, file_read, signup, login) and of guard refusals (refused, by action) between two UTC dates written YYYY-MM-DD, both included, at most 400 days apart.",
             json!({"deploymentId": text, "from": date, "to": date}),
             &["deploymentId", "from", "to"],
             true,

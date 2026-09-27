@@ -201,7 +201,7 @@ export function contractFromProgram(program: ServerActionProgram, schemaSource: 
       "Column types are SQLite affinities read from schema.sql. SQLite does not enforce them, so a value can still arrive as another JSON type when it was stored as one.",
       "Nullability follows NOT NULL and INTEGER PRIMARY KEY in schema.sql. A column read through the right side of a LEFT JOIN is nullable.",
       "A SQLite error, such as a UNIQUE constraint, is returned with SQLite's own text.",
-      "On a private Deployment every runtime call needs a session, including anonymous actions. An HTTP route answers by the action's access level whatever the visibility.",
+      "On a private Deployment every runtime call needs a session, including anonymous actions. An HTTP route answers the callers it takes: without a callers list, a signed route takes the signature or an API key, and an unsigned one anyone on a public Deployment and an API key or a session on a private one. An action whose route does not answer anyone answers only there.",
     ],
   };
   return { contract, warnings };
