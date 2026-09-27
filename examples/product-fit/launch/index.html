@@ -6,8 +6,8 @@
   <h1>Keep the walks<br>you want to <em>remember</em>.</h1>
   <p class="lede">Fieldnote is a small notebook for the routes, the weather and the things you noticed. No feed, no followers.</p>
   <form id="join" class="join">
-    <input id="email" type="email" placeholder="you@example.com" required autocomplete="email">
-    <input id="name" type="text" placeholder="First name (optional)" autocomplete="given-name">
+    <input id="email" type="email" placeholder="you@example.com" aria-label="Email" required maxlength="254" autocomplete="email">
+    <input id="name" type="text" placeholder="First name (optional)" aria-label="First name (optional)" maxlength="80" autocomplete="given-name">
     <button type="submit">Join the waitlist</button>
   </form>
   <p id="status" class="status" role="status" aria-live="polite"></p>
@@ -18,4 +18,4 @@
   <div><h3>Weather</h3><p>Each walk keeps the sky it happened under.</p></div>
   <div><h3>Noticings</h3><p>A bird, a bench, a smell. Short notes pinned to the map.</p></div>
 </section>
-<footer>Fieldnote is made by two people in a shed. <a href="/privacy">Privacy</a></footer>
+<footer>Fieldnote is made by two people in a shed.</footer>

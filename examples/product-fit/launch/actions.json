@@ -1,4 +1,4 @@
 {"version":1,"actions":{
- "waitlist.join":{"kind":"mutation","access":"anonymous","statement":"INSERT INTO waitlist(email,name,source,created_at) VALUES(?1,?2,?3,?4)","bindings":[{"source":"input","key":"email","type":"string","maxLength":254},{"source":"input","key":"name","type":"string","maxLength":80},{"source":"input","key":"source","type":"string","maxLength":80},{"source":"kernel","field":"now"}]},
+ "waitlist.join":{"kind":"mutation","access":"anonymous","guard":"That address is already on the list.","statement":"INSERT INTO waitlist(email,name,source,created_at) VALUES(lower(trim(?1)),?2,?3,?4) ON CONFLICT(email) DO NOTHING","bindings":[{"source":"input","key":"email","type":"string","maxLength":254},{"source":"input","key":"name","type":"string","maxLength":80},{"source":"input","key":"source","type":"string","maxLength":80},{"source":"kernel","field":"now"}]},
  "waitlist.count":{"kind":"query","access":"anonymous","statement":"SELECT count(*) AS n FROM waitlist","bindings":[]}
 }}
