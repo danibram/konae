@@ -2,17 +2,12 @@ import { ArrowLeft, Box, KeyRound, LogOut } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { platformMcp } from "../mcp/client";
 import { rememberOwnerEmail, useOwnerSession } from "./owner-session";
+import { safeReturnPath } from "./return-path";
 import { Badge, Button, Card, Field, Input, Select, Textarea } from "./ui";
 
 type Credential = { tokenId: string; scopes: string; expiresAt: number };
 type ClerkBrowser = { load: (options: object) => Promise<void>; session: { getToken: () => Promise<string | null> } | null; mountSignIn: (element: HTMLElement) => void; unmountSignIn: (element: HTMLElement) => void; addListener: (listener: () => void) => () => void; signOut: () => Promise<void> };
 declare global { interface Window { Clerk?: ClerkBrowser; __internal_ClerkUICtor?: unknown } }
-
-/** Accepts same-origin paths only, so a return link never sends the owner to another site. */
-function safeReturnPath(raw: string | null): string | null {
-  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.startsWith("/\\")) return null;
-  return raw;
-}
 
 /**
  * Owner sign-in for this installation, inside the editor so it looks like the
