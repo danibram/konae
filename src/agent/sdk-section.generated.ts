@@ -135,7 +135,7 @@ Limits:
 - 20 MiB of files per Deployment
 - 2 transfers at a time per user and 32 per Deployment; each expires after 10 minutes
 - the name is cut to 180 characters with / and \\ replaced by -; a type of 128 characters or more, or with a character other than a letter, a digit or one of !#$&^_.+-/, becomes application/octet-stream
-Editor preview: Stores the file in browser storage as a data URL, and accepts an empty file.
+Editor preview: Stores the file in browser storage as a data URL.
 
 miniapp.files.url(fileId): The address of a stored file on the app's own origin, for an img src, a link or a fetch. Returns a Promise of the path "/_littlebox/files/<id>". Reading it answers the file's bytes with its own type when the caller may read it, 404 File not found when the file is missing, deleted or not theirs, and 401 authentication-required to a visitor of a private Deployment.
 Refusals:

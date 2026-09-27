@@ -307,7 +307,7 @@ export const sdkContract = {
           errors: [
             { message: "authentication-required", when: "no one is signed in", source: "kernel" },
             badVisibility,
-            { message: "Transfer size is outside the limit.", when: "the file is empty or larger than 2 MiB", source: "kernel", preview: ["Local prototype files are limited to 2 MiB."] },
+            { message: "Transfer size is outside the limit.", when: "the file is empty or larger than 2 MiB", source: "kernel" },
             { message: "This deployment has reached its 20 MiB file quota.", when: "the Deployment's files would exceed 20 MiB together", source: "kernel", preview: null },
             ...download,
           ],
@@ -321,7 +321,7 @@ export const sdkContract = {
             { code: "const stored = await miniapp.files.upload(file);", comment: "private to the signed-in user" },
             { code: "const shared = await miniapp.files.upload(file, { visibility: \"public\" });" },
           ],
-          preview: "Stores the file in browser storage as a data URL, and accepts an empty file.",
+          preview: "Stores the file in browser storage as a data URL.",
         },
         {
           name: "url",

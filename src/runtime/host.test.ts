@@ -299,3 +299,23 @@ describe("the preview refuses miniapp.actions.call with the Kernel's words", () 
     expect(answer).toMatchObject({ result: { isError: true, content: [{ text: kernelMessage(template, fill as Record<string, string> | undefined) }] } });
   });
 });
+
+describe("the preview refuses miniapp.files.upload with the Kernel's words", () => {
+  const uploadErrors = sdkContract.modules.find((module) => module.name === "files")!.calls.find((call) => call.name === "upload")!.errors;
+
+  test.each([
+    ["an empty file", 0],
+    ["a file over 2 MiB", 2 * 1024 * 1024 + 1],
+  ])("%s", async (_, size) => {
+    const message = "Transfer size is outside the limit.";
+    expect(uploadErrors.find((error) => error.message === message)?.preview).toBeUndefined();
+    const host = new MiniAppRuntimeHost("upload", schema, actions);
+    host.setPreviewActor("alice");
+    const answer = await handlePreviewMcp(host, {
+      jsonrpc: "2.0", id: 1, method: "tools/call",
+      params: { name: "preview_files_upload", arguments: { name: "a.txt", type: "text/plain", size, dataUrl: "data:text/plain;base64," }, _meta: { "littlebox/capability": "cap" } },
+    }, "cap");
+    expect(answer).toMatchObject({ result: { isError: true, content: [{ text: message }] } });
+    expect(host.getFiles()).toEqual([]);
+  });
+});

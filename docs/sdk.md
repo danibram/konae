@@ -222,7 +222,7 @@ Returns { id, name, type, size, visibility, createdAt, ownerId, url }. ownerId i
 | --- | --- | --- | --- |
 | `authentication-required` | no one is signed in | Kernel | Same |
 | `File visibility must be private or public.` | visibility is anything other than "private" or "public"; the SDK refuses before it sends anything | SDK | Same |
-| `Transfer size is outside the limit.` | the file is empty or larger than 2 MiB | Kernel | `Local prototype files are limited to 2 MiB.` |
+| `Transfer size is outside the limit.` | the file is empty or larger than 2 MiB | Kernel | Same |
 | `This deployment has reached its 20 MiB file quota.` | the Deployment's files would exceed 20 MiB together | Kernel | Never refuses |
 | `File not found.` | the file was removed or the actor may not read it | Kernel | Never refuses |
 | `Too many active transfers. Cancel completed transfers before starting another.` | the actor already holds 2 transfers, or the Deployment holds 32 | Kernel | Never refuses |
@@ -238,7 +238,7 @@ Limits:
 - 2 transfers at a time per user and 32 per Deployment; each expires after 10 minutes
 - the name is cut to 180 characters with / and \ replaced by -; a type of 128 characters or more, or with a character other than a letter, a digit or one of !#$&^_.+-/, becomes application/octet-stream
 
-Editor preview: Stores the file in browser storage as a data URL, and accepts an empty file.
+Editor preview: Stores the file in browser storage as a data URL.
 
 ### miniapp.files.url(fileId)
 
