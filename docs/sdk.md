@@ -142,20 +142,20 @@ Returns an array of row objects for a query action, { changes, lastInsertId } fo
 
 | Message | When | Source | Editor preview |
 | --- | --- | --- | --- |
-| `Server action not declared.` | actions.json declares no action with that name | Kernel | `Server action not declared: <name>` |
+| `Server action not declared.` | actions.json declares no action with that name | Kernel | Same |
 | `authentication-required` | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_littlebox/login | Kernel | Same |
 | `rate-limited` | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user | Kernel | Never refuses |
-| `Arguments must be an object.` | input is not an object, e.g. null | Kernel | `Action input must be an object.` |
-| `Expected a string.` | name is not a string | Kernel | `Server action not declared: <name>` |
+| `Arguments must be an object.` | input is not an object, e.g. null | Kernel | Same |
+| `Expected a string.` | name is not a string | Kernel | Same |
 | `Unexpected action input: <key>` | input has a key no input binding declares | Kernel | Same |
 | `This action requires an authenticated actor.` | an anonymous action binds the actor id and no one is signed in | Kernel | Same |
 | `Action <name> answers only on its HTTP route, <key>.` | the action's route does not answer anyone: it declares a signature or callers, or it has no signature on a private Deployment. The preview refuses the first two only, since it has no visibility | Kernel | Same |
-| `Missing action input: <key>` | a required input is omitted | Kernel | `<key> must be a non-empty string.` or `<key> must be a finite number.` or `<key> must be a boolean.` |
+| `Missing action input: <key>` | a required input is omitted | Kernel | Same |
 | `<key> must be a non-empty string.` | a string input is not a string, or is empty or only whitespace | Kernel | Same |
 | `<key> is too long.` | a string input is longer than its maxLength in UTF-16 code units | Kernel | Same |
-| `<key> must be a number.` | a number input is not a JSON number | Kernel | `<key> must be a finite number.` |
+| `<key> must be a number.` | a number input is not a JSON number | Kernel | Same |
 | `<key> must be a boolean.` | a boolean input is not true or false | Kernel | Same |
-| `Query result exceeds 2 MiB or 1000 rows.` | a query produces more than 1000 rows or more than 2 MiB of JSON | Kernel | `Query returned more than 1000 rows. Add a LIMIT clause.` or `Query result is too large.` |
+| `Query result exceeds 2 MiB or 1000 rows.` | a query produces more than 1000 rows or more than 2 MiB of JSON | Kernel | Same |
 
 Limits:
 

@@ -109,7 +109,7 @@ export function resolveServerAction(
   context: { actorId: string | null; now?: number },
 ) {
   const action = program.actions[name];
-  if (!action) throw new Error(`Server action not declared: ${name}`);
+  if (!action) throw new Error("Server action not declared.");
   const values = input === undefined ? {} : input;
   if (!values || typeof values !== "object" || Array.isArray(values)) throw new Error("Action input must be an object.");
   const inputRecord = values as Record<string, unknown>;
@@ -325,13 +325,15 @@ function resolveBinding(binding: ActionBinding, input: Record<string, unknown>, 
   }
   const value = input[binding.key];
   if (binding.nullable && (value === undefined || value === null)) return null;
+  // The Kernel's words, kernel-rs/src/main.rs `resolve_bindings`, so the preview refuses as a Deployment does.
+  if (value === undefined) throw new Error(`Missing action input: ${binding.key}`);
   if (binding.type === "string") {
     if (typeof value !== "string" || !value.trim()) throw new Error(`${binding.key} must be a non-empty string.`);
     if (value.length > (binding.maxLength ?? 10_000)) throw new Error(`${binding.key} is too long.`);
     return value;
   }
   if (binding.type === "number") {
-    if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${binding.key} must be a finite number.`);
+    if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${binding.key} must be a number.`);
     return value;
   }
   if (typeof value !== "boolean") throw new Error(`${binding.key} must be a boolean.`);

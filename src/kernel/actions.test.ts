@@ -62,15 +62,16 @@ describe("server actions", () => {
     expect(() => params({ q: "" })).toThrow("non-empty");
     expect(() => params({ q: "longer" })).toThrow("too long");
     expect(() => params({ q: 1 })).toThrow("non-empty");
-    expect(() => params({ limit: "5" })).toThrow("finite number");
+    expect(() => params({ limit: "5" })).toThrow("limit must be a number.");
     expect(() => params({ done: 0 })).toThrow("boolean");
     expect(() => params({ other: null })).toThrow("Unexpected");
   });
 
-  test("required inputs still reject omitted values and null", () => {
+  test("required inputs still reject omitted values and null, in the Kernel's words", () => {
     const program = parseServerActionSource(source);
-    for (const input of [{}, { body: null }, { body: "" }]) {
-      expect(() => resolveServerAction(program, "notes.create", input, { actorId: "user_1" })).toThrow("non-empty");
+    expect(() => resolveServerAction(program, "notes.create", {}, { actorId: "user_1" })).toThrow("Missing action input: body");
+    for (const input of [{ body: null }, { body: "" }]) {
+      expect(() => resolveServerAction(program, "notes.create", input, { actorId: "user_1" })).toThrow("body must be a non-empty string.");
     }
   });
 

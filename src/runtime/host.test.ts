@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cloneStarter } from "../lib/starter";
+import { handlePreviewMcp } from "../mcp/preview";
+import { sdkContract } from "../sdk/contract";
 import { MiniAppRuntimeHost } from "./host";
 
 const localValues = new Map<string, string>();
@@ -249,5 +251,51 @@ describe("runtime host", () => {
     expect(host.getFiles()).toEqual([]);
     await expect(host.handle("files.url", { fileId: draft.id })).rejects.toThrow("File not found.");
     await expect(host.handle("files.delete", { fileId: draft.id })).rejects.toThrow("File not found.");
+  });
+});
+
+describe("the preview refuses miniapp.actions.call with the Kernel's words", () => {
+  const callErrors = sdkContract.modules.find((module) => module.name === "actions")!.calls.find((call) => call.name === "call")!.errors;
+  /** The contract's message for a refusal the preview shares with the Kernel, with its placeholders filled. */
+  function kernelMessage(template: string, fill: Record<string, string> = {}): string {
+    const error = callErrors.find((candidate) => candidate.message === template);
+    expect(error, template).toBeDefined();
+    // Absent means the preview answers with the same text as the Kernel.
+    expect(error!.preview, template).toBeUndefined();
+    return template.replace(/<(key|name)>/g, (_, slot: string) => fill[slot] ?? "");
+  }
+
+  const schema = "CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, title TEXT, qty REAL, done INTEGER, owner TEXT);";
+  const program = JSON.stringify({ version: 1, actions: {
+    "items.add": { kind: "mutation", access: "anonymous", statement: "INSERT INTO items (title, qty, done) VALUES (?1, ?2, ?3)", bindings: [
+      { source: "input", key: "title", type: "string", maxLength: 5 }, { source: "input", key: "qty", type: "number" }, { source: "input", key: "done", type: "boolean" }] },
+    "items.mine": { kind: "query", access: "anonymous", statement: "SELECT id FROM items WHERE owner = ?1 LIMIT 5", bindings: [{ source: "actor", field: "id" }] },
+    "items.private": { kind: "query", access: "authenticated", statement: "SELECT id FROM items LIMIT 5", bindings: [] },
+    "items.feed": { kind: "query", access: "anonymous", statement: "SELECT id FROM items LIMIT 5", bindings: [], http: { method: "GET", path: "/api/feed", callers: ["key"] } },
+    "items.many": { kind: "query", access: "anonymous", statement: "SELECT d FROM (WITH RECURSIVE n(d) AS (SELECT 1 UNION ALL SELECT d + 1 FROM n WHERE d < 1500) SELECT d FROM n) LIMIT 1500", bindings: [] },
+  } });
+
+  test.each([
+    ["an undeclared action", { name: "items.nope" }, ["Server action not declared."]],
+    ["a name that is not a string", { name: 5 }, ["Expected a string."]],
+    ["input that is null", { name: "items.add", input: null }, ["Arguments must be an object."]],
+    ["an input no binding declares", { name: "items.many", input: { extra: 1 } }, ["Unexpected action input: <key>", { key: "extra" }]],
+    ["an authenticated action and no one signed in", { name: "items.private" }, ["authentication-required"]],
+    ["an anonymous action that binds the actor and no one signed in", { name: "items.mine" }, ["This action requires an authenticated actor."]],
+    ["an action whose route is its only door", { name: "items.feed" }, ["Action <name> answers only on its HTTP route, <key>.", { name: "items.feed", key: "GET /api/feed" }]],
+    ["a required input left out", { name: "items.add", input: { qty: 1, done: true } }, ["Missing action input: <key>", { key: "title" }]],
+    ["an empty string", { name: "items.add", input: { title: " ", qty: 1, done: true } }, ["<key> must be a non-empty string.", { key: "title" }]],
+    ["a string past its maxLength", { name: "items.add", input: { title: "too long", qty: 1, done: true } }, ["<key> is too long.", { key: "title" }]],
+    ["a number sent as a string", { name: "items.add", input: { title: "a", qty: "1", done: true } }, ["<key> must be a number.", { key: "qty" }]],
+    ["a boolean sent as a number", { name: "items.add", input: { title: "a", qty: 1, done: 1 } }, ["<key> must be a boolean.", { key: "done" }]],
+    ["a result past 1000 rows", { name: "items.many" }, ["Query result exceeds 2 MiB or 1000 rows."]],
+  ] as const)("%s", async (_, args, [template, fill]) => {
+    const host = new MiniAppRuntimeHost("parity", schema, program);
+    host.setPreviewActor("guest");
+    const answer = await handlePreviewMcp(host, {
+      jsonrpc: "2.0", id: 1, method: "tools/call",
+      params: { name: "actions_invoke", arguments: args, _meta: { "littlebox/capability": "cap" } },
+    }, "cap");
+    expect(answer).toMatchObject({ result: { isError: true, content: [{ text: kernelMessage(template, fill as Record<string, string> | undefined) }] } });
   });
 });
