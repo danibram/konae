@@ -4,6 +4,8 @@ Littlebox is the guardrail that lets a person who does not write code, and a per
 
 ## Language
 
+Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key and SDK module. Usage, Signal and Action Contract keep their capitals, as the older terms do.
+
 **Account**:
 The authenticated identity and personal profile used to enter Littlebox and participate in Workspaces. An Account does not directly own runtime data or imply access to every Project.
 _Avoid_: Runtime Actor, Project Owner
@@ -17,8 +19,13 @@ A single-use, expiring proof sent by email, with one purpose (verification, invi
 _Avoid_: magic link, reset token
 
 **Invitation Code**:
-A single-use, expiring code the operator issues on the server with the Kernel executable, which admits one creator Account. The Kernel stores its hash and the creator it produced. It is not a Challenge: nobody receives it by email and it proves no address, so the account it creates still verifies its email. The installation key creates only the first creator; once any code exists it creates none.
+A single-use, expiring code the operator issues on the server with the Kernel executable, which admits one creator Account. The Kernel stores its hash and the creator it produced. It is not a Challenge, because nobody receives it by email and it proves no address, so the account it creates still verifies its email. The setup key creates only the first creator; once any code exists it creates none.
 _Avoid_: invite link, setup key, app invitation (the Deployment's own invitation is a Challenge)
+
+**Setup Key**:
+The installation secret in `LITTLEBOX_ADMIN_KEY` that creates the first creator Account while the installation has no account and no invitation code was ever issued. It never authenticates an MCP tool and never enters the editor bundle. The Kernel refuses to start on a reachable address while it is still the development default.
+_Avoid_: installation key, admin password, Agent Credential
+
 **Email Job**:
 One account email in the installation's queue: its purpose, recipient, scope, idempotency key and state, pending, accepted by the provider, delivered to the recipient's server or failed. It commits with its Challenge and is sent only while that Challenge is open. Delivered says a mail server took it, not that a person read it.
 _Avoid_: notification, message log
@@ -76,60 +83,64 @@ The published, addressable instance of a Project with its own hostname, visibili
 _Avoid_: Project, preview
 
 **Copy**:
-A consistent snapshot of every Deployment folder, with the owner and MCP stores, sent off the Kernel volume to a second disk or an S3 prefix on a schedule. With a copy secret, the files sent to S3 are encrypted. Each copy target also keeps the Revocation Record. Restore installs one Copy into an empty data directory, signs everyone out, ends every open email link and applies the Revocation Record, or holds the installation in Maintenance when it cannot read it. A Copy moves an installation; a Package moves one app.
+A consistent snapshot of every Deployment folder, with the owner, MCP and mail stores, sent off the Kernel volume to a second disk or an S3 prefix on a schedule. With a copy secret, the files sent to S3 are encrypted. Each copy target also keeps the revocation record. Restore installs one copy into an empty data directory, signs everyone out, ends every open Challenge and applies the revocation record, or holds the installation in maintenance when it cannot read it. A copy moves an installation; a package moves one app.
 _Avoid_: backup (a Data panel snapshot of one app database), replica, mirror
 
 **Package**:
-The export of one Deployment's state: its database, its accounts without sessions or email links, its API keys revoked at import, its files, and its Usage and Signals when it has any, captured under the Deployment's locks. A versioned manifest lists each component with its size and SHA-256 and names the published revision. Each component travels as its own transfer, so no step holds a whole component in memory. An import verifies every component and installs the Package only into a project that has no Deployment yet; the same Package imported again returns the first import. Downloading one needs the `export_data` permission. A Migration's Package is version 2 and imports in Maintenance.
+The export of one Deployment's state: its database, its accounts without sessions or email links, its API keys revoked at import, its files, and its Usage and Signals when it has any, captured under the Deployment's locks. A versioned manifest lists each component with its size and SHA-256 and names the published revision. Each component travels as its own transfer, so no step holds a whole component in memory. An import verifies every component and installs the package only into a project that has no Deployment yet; the same package imported again returns the first import. Downloading one needs the `export_data` permission. A migration's package is version 2 and imports in maintenance.
 _Avoid_: dump, full backup, export file (the kit that carries it is the export)
 
 **Migration**:
-The move of one Deployment to another installation so that exactly one installation takes its writes. The origin enters Maintenance, captures a Package with its live artifact, and is then confirmed, which retires it for seven days and reveals a confirmation, or cancelled, which resumes it. The destination imports the Package in Maintenance and leaves it only through activation with that confirmation. People sign in again with their passwords; sessions, links and signing secrets do not travel, and API keys arrive revoked.
+The move of one Deployment to another installation so that exactly one installation takes its writes. The origin enters maintenance and captures a package with its live artifact. It is then either confirmed, which retires it for good, shows a link to the new address for seven days and reveals a confirmation, or cancelled, which resumes it. The destination imports the package in maintenance and leaves it only through activation with that confirmation. People sign in again with their passwords; sessions, links and signing secrets do not travel, and API keys arrive revoked.
 _Avoid_: replication, sync, transfer (a transfer is one upload or download)
 
 **Maintenance**:
-The state of a Deployment that takes no writes: its host shows a page naming the operation, refuses actions, uploads, signups, sign-ins, recovery, invitations and HTTP routes, the owner cannot change it, and its email waits. A Migration and an unreconciled restore put Deployments in Maintenance. It is kept in the Deployment's folder, so a restart or a restore keeps it.
+The state of a Deployment that takes no writes. Its host shows a page naming the operation and refuses actions, uploads, signups, sign-ins, recovery, invitations and HTTP routes, the owner cannot change it, and its email waits. A migration keeps it in the Deployment's folder, `migration.json`, so a restart or a restore keeps it. A restore that cannot read the revocation record keeps it for the whole installation in `recovery-hold.json` until `littlebox-kernel reconcile` runs.
 _Avoid_: downtime, read-only mode (reads stop too)
 
 **Revocation Record**:
-The suspensions of accounts and revocations of API keys, each written to every copy target as it happens. A restore applies it so a Copy taken earlier cannot bring back what was revoked since; it never lifts a suspension.
+The suspensions of accounts and revocations of API keys, each written to every copy target as it happens. A restore applies it so a copy taken earlier cannot bring back what was revoked since; it never lifts a suspension.
 _Avoid_: audit log (that stays on the volume)
 
 **Public Deployment**:
-A Deployment whose application shell may be opened without signing in. A signed-out visitor may call Server Actions declared `anonymous`, and may list and read files marked public. Uploads, and changing a file's visibility or deleting it, require a Runtime Actor session and only the uploader may do the last two; private files need a session or an API Key that names them. Public visibility of the Deployment grants no database access and no access to private files.
+A Deployment whose application shell may be opened without signing in. A signed-out visitor may call Server Actions declared `anonymous`, and may list and read files marked public. Uploads, and changing a file's visibility or deleting it, require a Runtime Actor session and only the uploader may do the last two; private files need a session or an API key that names them. Public visibility of the Deployment grants no database access and no access to private files.
 _Avoid_: Public database
 
 **Private Deployment**:
-A Deployment whose application shell and runtime require a signed-in Runtime Actor before anything loads or runs. An HTTP route of an action declared `anonymous` answers to the callers it takes: a signed route to its signature or an API key, an unsigned one to an API key or a session unless it declares other `callers`. Its Signup Policy decides who may create that account.
+A Deployment whose application shell and runtime require a signed-in Runtime Actor before anything loads or runs. An HTTP route of an action declared `anonymous` answers to its callers. A signed route takes its signature or an API key, and an unsigned one takes an API key or a session unless it declares other `callers`. Its Signup Policy decides who may create that account.
 _Avoid_: Password-protected app
 
 **Signup Policy**:
-The per-Deployment rule for who may create a Runtime Actor account: Open (anyone), Invitation only (only through an Invitation), Closed (nobody signs up, and an Invitation the owner sends can still be accepted) or Allowlist (exact emails or `@domain` entries, kept as an advanced option). Public Deployments start Open and Private Deployments start Closed; a first release may name another. The Project Owner chooses it in the publish dialog on a first release and changes it later in the editor's Auth > Users view or with `signup_policy_set`, which needs `manage_users`, and a republish never changes it except to close an Open app made private. The Kernel checks it again when an account verifies and when an Invitation is accepted. An External Project names its first release's policy in `littlebox.json` as `project.manifest.signupPolicy`, and `littlebox publish` sends it only then.
+The per-Deployment rule for who may create a Runtime Actor account: Open (anyone), Invitation only (only through an invitation), Closed (nobody signs up, and an invitation the owner sends can still be accepted) or Allowlist (exact emails or `@domain` entries, kept as an advanced option). Public Deployments start Open and Private Deployments start Closed; a first release may name another. The Project Owner chooses it in the publish dialog on a first release and changes it later in the editor's Auth > Users view or with `signup_policy_set`, which needs `manage_users`, and a republish never changes it except to close an Open app made private. The Kernel checks it again when an account verifies and when an invitation is accepted. An External Project names its first release's policy in `littlebox.json` as `project.manifest.signupPolicy`, and `littlebox publish` sends it only then.
 _Avoid_: Invite list, access grant
 
 **Invitation**:
-The Project Owner's offer of an account on one Deployment to one email, sent as a seven-day Challenge. Accepting sets the password and activates the account in the transaction that rechecks the Signup Policy and the account's state. It never changes an active account's password or resumes a suspended one. A copy carries the Invitation as history without its link, and the destination resends it.
+The Project Owner's offer of an account on one Deployment to one email, sent as a seven-day Challenge. Accepting sets the password and activates the account in the transaction that rechecks the Signup Policy and the account's state. It never changes an active account's password or resumes a suspended one. A package, a portable export and a restore keep the invitation as history without its link, and the owner resends it.
 _Avoid_: invite code (that names creator admission), allowlist entry
 
 **Runtime Actor**:
-Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a signed-in app user, or a service holding an API Key. Its permissions are evaluated by server-side actions and never imply Project ownership. An `actor` binding yields the app user's ID or the key's ID, and nothing for a visitor.
+Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a signed-in app user, or a service holding an API key. Its permissions are evaluated by server-side actions and never imply Project ownership. An `actor` binding yields the app user's ID or the key's ID, and nothing for a visitor.
 _Avoid_: Owner, editor user
 
 **API Key**:
-A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It names the Server Actions it may call over their HTTP routes and the file visibilities it may read, and is sent as `Authorization: Bearer`. The runtime endpoint refuses it. The Kernel stores its hash only. A Package or a portable export carries its name, scope and hash, and the import marks it revoked at import, so the destination's owner sees which programs to issue new keys for; a restore of a Copy keeps it valid.
+A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It names the Server Actions it may call over their HTTP routes and the file visibilities it may read, and is sent as `Authorization: Bearer`. The runtime endpoint refuses it. The Kernel stores its hash only. A package or a portable export carries its name, scope and hash, and the import marks it revoked at import, so the destination's owner sees which programs to issue new keys for; a restore of a copy keeps it valid.
 _Avoid_: token (an Agent Credential), service account
 
 **Signing Secret**:
 A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. A sender proves a request with an HMAC under it of a timestamp, a nonce, the method, the path, the canonical query string and the body. It never appears in `actions.json`, a Build Artifact or an export.
-_Avoid_: webhook token, API Key
+_Avoid_: webhook token, API key
 
 **Project Owner**:
 An authenticated workspace member allowed to edit a Project and administer its data, schema, files, Usage and deployments.
 _Avoid_: Runtime user, app user
 
 **Server Action**:
-A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. It runs one SQL statement: a query starts with `SELECT`, a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, and a `WITH` clause sits inside the statement, never in front of it. The Validation Gate and the Kernel refuse a statement that breaks a rule with the same words. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for the callers the route takes, of a signed request, an API Key and a signed-in user; an `authenticated` action may not. An action whose route does not answer anyone answers only there, never through `miniapp.actions.call`.
+A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. It runs one SQL statement. A query starts with `SELECT`, a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, and a `WITH` clause sits inside the statement, never in front of it. The Validation Gate and the Kernel refuse a statement that breaks a rule with the same words. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for the callers the route takes, of a signed request, an API key and a signed-in user; an `authenticated` action may not. An action whose route does not answer anyone answers only there, never through `miniapp.actions.call`.
 _Avoid_: Raw SQL endpoint
+
+**Callers**:
+The kinds of caller an HTTP route takes, any of `"signature"` (a service that signs the request with the signing secret), `"key"` (an API key that names the action) and `"session"` (a signed-in app user), declared as `"callers"` on the route. Without the list a signed route takes a signature or a key, an unsigned route on a Private Deployment takes a key or a session, and an unsigned route on a Public Deployment answers anyone. An action whose route does not answer anyone answers only on that route. The Validation Gate and the Kernel parse the list from one case file.
+_Avoid_: principals, auth mode, access level (that is `anonymous` or `authenticated` on the action)
 
 **Guard**:
 A mutation's declared refusal, `"guard": "<message>"`, which the Kernel answers instead of `{ changes: 0 }` when the statement changes no row because the app's own rule in its `WHERE` said no. It is a tool error on the runtime endpoint and 403 on a route, counts under Usage's `refused` and records no Signal.
@@ -144,7 +155,7 @@ A namespace on `window.miniapp`, such as `auth`, `actions` or `files`, with a co
 _Avoid_: plugin, library, extension
 
 **Usage**:
-The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations: sessions opened, actions by name, HTTP routes by method and path, uploads, file reads, signups and logins. A refused call counts nothing, except a Guard's refusal, which counts under `refused` by action name. It lives in the Deployment's `usage.sqlite`, distinct from application rows, and only the Project Owner reads it.
+The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations: sessions opened, actions by name, HTTP routes by method and path, uploads, file reads, signups and logins. A refused call counts nothing, except a guard's refusal, which counts under `refused` by action name. It lives in the Deployment's `usage.sqlite`, distinct from application rows, and only the Project Owner reads it.
 _Avoid_: analytics, telemetry, audit, metric
 
 **Signal**:
@@ -172,9 +183,9 @@ The disposable copy of a Project's source that the agent reads and edits during 
 _Avoid_: Project, filesystem
 
 **Validation Gate**:
-The check that every agent-proposed change must pass before it is applied to a Project: the schema must be valid, a schema change must come with a migration that converges, and every Server Action that runs SQL must remain executable against the migrated schema. Applying is versioned and reversible.
+The check that every agent-proposed change must pass before it is applied to a Project. The schema must be valid, a schema change must come with a migration that converges, and every Server Action that runs SQL must remain executable against the migrated schema. Applying is versioned and reversible.
 _Avoid_: linter, preview
 
 **Agent Credential**:
-A Project Owner's revocable delegation that permits an external agent to perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity. Its permissions are `read`, `write`, `publish` and `export_data`; only `export_data` downloads accounts and data.
-_Avoid_: Runtime session, installation key
+A Project Owner's revocable delegation that permits an external agent to perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity. Its permissions are `read`, `write`, `publish`, `manage_users`, `export_data` and `manage_lifecycle`. Only `manage_users` lists, suspends and invites app accounts or changes a Signup Policy, only `export_data` downloads accounts and data, and only `manage_lifecycle` ejects or migrates a Project.
+_Avoid_: Runtime session, setup key

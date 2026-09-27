@@ -388,7 +388,7 @@ The editor's Auth section has three views: Rules, Users and Integrations. Users 
 
 The browser test publishes a private app with Invitation only from the dialog, invites an address in Auth > Users, reads the link from `mailbox.jsonl`, accepts it, signs out, signs in with the chosen password, sees the invitation Accepted and the app account Active, then saves a signing secret and creates an API key whose curl names the app's host.
 
-The plan asks the Users view to show each invitation as pending, accepted by the provider, delivered, failed or needing a resend. The Kernel records per invitation only whether the transport took the message (`queued`, `failed`, `not-sent`); the provider's accepted and delivered states exist per Email Job and as queue totals in `mail_status`, with no link from the invitation to its job. The view shows what the Kernel records and does not claim delivery. Joining an invitation to its Email Job is a Kernel change for a later delivery. Access pages served by the Kernel stayed out of scope.
+The plan asks the Users view to show each invitation as pending, accepted by the provider, delivered, failed or needing a resend. The Kernel records per invitation only whether the transport took the message (`queued`, `failed`, `not-sent`); the provider's accepted and delivered states exist per email job and as queue totals in `mail_status`, with no link from the invitation to its job. The view shows what the Kernel records and does not claim delivery. Joining an invitation to its email job is a Kernel change for a later delivery. Access pages served by the Kernel stayed out of scope.
 
 ### Delivery J, November 6, 2026
 

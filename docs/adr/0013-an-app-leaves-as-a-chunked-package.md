@@ -15,7 +15,7 @@ Downloading state needs a new permission, `export_data`. The owner's browser ses
 ## Considered options
 
 - **Raise the JSON package's cap.** Rejected because base64 in one JSON value grows the document by a third and both ends still hold it whole.
-- **Export the Deployment folder as a Copy.** Rejected because a Copy carries sessions, backups and Usage, and restores an installation, not one app into a project that already exists on the target.
+- **Export the Deployment folder as a copy.** Rejected because a copy carries sessions, backups and Usage, and restores an installation, not one app into a project that already exists on the target.
 - **One transfer for the whole package.** Rejected because each component has its own quota and checks, and a retry of one component should not resend the others.
 - **A table of imports with its own receipts.** Rejected because release plans already carry a receipt and an applied plan already answers a repeat.
 
@@ -37,4 +37,4 @@ The identity component used to delete the `api_keys` table's rows with the sessi
 
 A package now carries each key's name, actions, file visibilities, creation time and hash. The capture marks every live key revoked with `revoked_reason = 'import'` before the component is hashed, so the package opens nothing even on a Kernel that would not revoke it, and the install and `migration_activate` mark any live key again. Keys the owner revoked keep their time and no reason. `api_keys_list` returns `revokedReason`, and the editor lists those keys under "Revoked at import" with what each could call.
 
-We considered leaving the hash behind, since a revoked key never matches. We kept it: the small format already carries it, it is the SHA-256 of a 256-bit random token, and the row stays the same shape in both formats. A restore of a Copy is unchanged and keeps keys live. `identity_copies_lose_sessions_and_links_and_carry_keys_revoked` in `package.rs`, `tests/package.integration.test.ts` and the club replay check it.
+We considered leaving the hash behind, since a revoked key never matches. We kept it: the small format already carries it, it is the SHA-256 of a 256-bit random token, and the row stays the same shape in both formats. A restore of a copy is unchanged and keeps keys live. `identity_copies_lose_sessions_and_links_and_carry_keys_revoked` in `package.rs`, `tests/package.integration.test.ts` and the club replay check it.
