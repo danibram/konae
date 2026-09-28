@@ -10,9 +10,8 @@ import {
 import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { readSignupPolicy, type DeploymentReceipt, type SignupMode } from "../deployments/client";
-import type { DeploymentVisibility, RuntimeActionAccess } from "../deployments/manifest";
-import { parseServerActionSource } from "../kernel/actions";
-import { LIMIT_REFUSE_SENTENCE } from "../lib/query-bound";
+import type { DeploymentVisibility } from "../deployments/manifest";
+import { actionSentence, deployReadiness } from "./action-readiness";
 import type { MiniAppProject } from "../lib/types";
 import type { OwnerSession } from "./owner-session";
 import { defaultSignupMode, firstPublishModes, republishAccessNote, signupModeCopy, visibilityCopy } from "./app-access";
@@ -61,10 +60,10 @@ export function DeployDialog({ project, deployment, publishing, error, session, 
   const [chosenMode, setChosenMode] = useState<SignupMode | null>(null);
   const signupMode = chosenMode ?? defaultSignupMode(visibility);
   const publishedPolicy = usePublishedPolicy(republish && !deployment ? current?.id : undefined);
-  const actions = describedActions(project);
+  const { refusal, actions } = deployReadiness(project);
   const errorRef = useRef<HTMLDivElement>(null);
   const signedOut = session.state === "signed-out";
-  const listCanLeave = actions.every((action) => action.kind !== "query" || /\bLIMIT\s+\d+/i.test(action.statement ?? ""));
+  const listCanLeave = refusal === null;
 
   // A failed deploy says why where focus is, so a screen reader hears it and
   // the keyboard stays inside the dialog.
@@ -82,7 +81,7 @@ export function DeployDialog({ project, deployment, publishing, error, session, 
             <header className="publish-heading">
               <h2>Deploy {project.name}</h2>
               <p>Accounts, rows, and rules leave with this app. Export takes the same folder to another machine.</p>
-              <p className={`publish-limit${listCanLeave ? "" : " is-refused"}`}>{listCanLeave ? "This list stops at 100 rows. It can leave." : LIMIT_REFUSE_SENTENCE}</p>
+              <p className={`publish-limit${listCanLeave ? "" : " is-refused"}`}>{refusal ?? "Every query names its LIMIT. It can leave."}</p>
             </header>
 
             {republish && current ? (
@@ -204,28 +203,12 @@ export function DeployDialog({ project, deployment, publishing, error, session, 
   );
 }
 
-function describedActions(project: MiniAppProject): Array<{ name: string; kind: string; access: RuntimeActionAccess; statement?: string }> {
-  try {
-    return Object.values(parseServerActionSource(project.files["actions.json"] ?? "").actions);
-  } catch {
-    return project.manifest.runtime.database.actions;
-  }
-}
-
 function actionTitle(name: string): string {
   const verb = name.split(".").pop() ?? name;
   if (verb === "list") return "List the rows";
   if (verb === "create") return "Add a row";
   if (verb === "toggle") return "Mark a row done";
   return verb.replaceAll("_", " ");
-}
-
-function actionSentence(action: { name: string; kind: string; access: string; statement?: string }): string {
-  const who = action.access === "anonymous" ? "Anyone" : "A signed-in person";
-  const limit = action.statement?.match(/\bLIMIT\s+(\d+)/i);
-  if (action.kind === "query" && limit) return `${who} can run it. The list stops at ${limit[1]} rows.`;
-  if (action.kind === "query") return `${who} can run it. This list has no limit.`;
-  return `${who} can run it. It can leave.`;
 }
 
 function PublishedState({ deployment, onClose, onOpenUsers }: { deployment: DeploymentReceipt; onClose: () => void; onOpenUsers?: () => void }) {

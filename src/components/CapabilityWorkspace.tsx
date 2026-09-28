@@ -17,6 +17,7 @@ import { DatabaseStudio } from "./DatabaseStudio";
 import { AppUsersView } from "./AppUsersView";
 import { IntegrationsView } from "./IntegrationsView";
 import { authHeading } from "./auth-heading";
+import { deployReadiness } from "./action-readiness";
 
 export type AuthView = "rules" | "users" | "integrations";
 
@@ -125,6 +126,7 @@ function AuthPanel(props: Props) {
 
 function RulesView({ host, onFilesChanged, actionsSource, onSetAccess }: Props) {
   const [actor, setActor] = useState(host.getPreviewActor());
+  const refusal = actionsSource ? deployReadiness({ files: { "actions.json": actionsSource }, manifest: { runtime: { database: { actions: [] } } } }).refusal : null;
   const previewName = actor === "alice" ? "a signed-in person" : actor === "bob" ? "another signed-in person" : "someone who has not signed in";
   return (
     <>
@@ -132,6 +134,7 @@ function RulesView({ host, onFilesChanged, actionsSource, onSetAccess }: Props) 
         <span className="auth-avatar"><UserRound size={27} /></span>
         <div>
           <h3>{authHeading(rules(actionsSource))}</h3>
+          {refusal && <p className="cap-error">actions.json does not parse, so no rule can be shown or changed here. {refusal}</p>}
           <div className="auth-rules">
             {rules(actionsSource).map((action) => (
               <label key={action.name}>
