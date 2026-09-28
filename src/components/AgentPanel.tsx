@@ -146,10 +146,11 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings }: Props) {
             {footer.changedFiles.map((file) => <span key={file} className="agent-file-chip">{file}</span>)}
           </div>
           <p className="agent-proposal-state">
-            {footer.kind === "validated" && <><ShieldCheck size={13} /> {validationSummary(footer.checked)}{footer.changedFiles.includes("actions.json") ? " This list stops at 100 rows." : ""}</>}
+            {footer.kind === "validated" && <><ShieldCheck size={13} /> {validationSummary(footer.checked)}</>}
             {footer.kind === "unvalidated" && <><Loader2 size={13} className="spin" /> Waiting for the Validation Gate.</>}
             {footer.kind === "blocked" && <><CircleAlert size={13} /> <em>{footer.stage}</em> {footer.message}</>}
           </p>
+          {footer.kind === "blocked" && footer.detail && <p className="agent-proposal-detail">{footer.detail}</p>}
           <div className="agent-proposal-actions">
             <button className="agent-discard" onClick={thread.discard}>Discard</button>
             <button className="agent-apply" disabled={!footer.canApply || running} onClick={thread.apply}>

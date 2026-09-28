@@ -508,4 +508,43 @@ describe("littlebox agent", () => {
     // The model already knows those files: it made the change, so nothing is re-seeded.
     expect(last.lastMessage).not.toContain("/workspace/index.html");
   });
+
+  describe("a proposal that breaks a declaration rule is refused with the Kernel's words", () => {
+    const starterActions = JSON.parse(starterProject.files["actions.json"]) as { version: 1; actions: Record<string, Record<string, unknown>> };
+    /** The starter's actions.json with one action changed. */
+    function withAction(name: string, change: Record<string, unknown>): string {
+      const next = structuredClone(starterActions);
+      next.actions[name] = { ...next.actions[name], ...change };
+      return JSON.stringify(next, null, 2);
+    }
+
+    test.each([
+      [
+        "a guard on a query",
+        withAction("tasks.list", { guard: "Nothing to list." }),
+        "Action tasks.list is a query, so it cannot declare a guard. Declare it on a mutation.",
+      ],
+      [
+        "an HTTP route with callers on an authenticated action",
+        withAction("tasks.create", { access: "authenticated", http: { method: "POST", path: "/api/tasks", callers: ["key"] } }),
+        "Action tasks.create is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route.",
+      ],
+      [
+        "a signal property that is neither an input nor actor",
+        withAction("tasks.create", { signal: { name: "task.created", properties: ["title", "owner"] } }),
+        "Action tasks.create names signal property owner, which is not one of its input bindings.",
+      ],
+    ])("%s", async (_, source, kernelWords) => {
+      const write = { name: "write", arguments: { path: "/workspace/actions.json", content: source } };
+      const { agent, harness } = agentFor([call(write, { name: "validate_capsule", arguments: {} }), say("Listo.")]);
+
+      await agent.send("cambia las acciones");
+
+      // The model read the Kernel's sentence in its own validate_capsule result.
+      expect(harness.requests[1].lastMessage).toContain(kernelWords);
+      const gate = agent.applyGateStatus();
+      expect(gate.state).toBe("blocked");
+      expect(gate.state === "blocked" && gate.result.errors.map((error) => error.detail)).toEqual([kernelWords]);
+    });
+  });
 });
