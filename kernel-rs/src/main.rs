@@ -1191,6 +1191,7 @@ async fn upload_file(
         .unwrap_or("file")
         .replace(['/', '\\'], "-")
         .chars()
+        .filter(|character| !character.is_control())
         .take(180)
         .collect::<String>();
     let content_type = input
@@ -1249,6 +1250,9 @@ async fn upload_file(
             StatusCode::PAYLOAD_TOO_LARGE,
             "This deployment has reached its 20 MiB file quota.",
         );
+    }
+    if files.len() >= files::MAX_FILES {
+        return error(StatusCode::PAYLOAD_TOO_LARGE, files::TOO_MANY_FILES);
     }
     let id = Uuid::new_v4().to_string();
     let metadata = json!({
@@ -1335,7 +1339,7 @@ fn file_response(metadata: &Value, bytes: Vec<u8>) -> Response {
     let mut response = Response::new(Body::from(bytes));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_str(content_type)
+        HeaderValue::from_str(files::served_type(content_type))
             .unwrap_or(HeaderValue::from_static("application/octet-stream")),
     );
     response.headers_mut().insert(

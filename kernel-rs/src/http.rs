@@ -28,6 +28,11 @@ use std::sync::{Arc, OnceLock};
 pub(super) const MAX_BODY_BYTES: usize = 64 * 1024;
 /// How far a signature's timestamp may sit from the Kernel's clock, both ways.
 pub(super) const SIGNATURE_WINDOW_SECONDS: u64 = 300;
+/// `v1=` values a signature header may carry: one for the old secret and one
+/// for the new while a secret rotates. A value that is not a 32-byte hex
+/// HMAC-SHA256 is ignored.
+const MAX_SIGNATURE_TAGS: usize = 2;
+const SIGNATURE_TAG_BYTES: usize = 32;
 /// Live keys a Deployment may hold at once.
 const MAX_LIVE_KEYS: i64 = 50;
 const KEY_PREFIX: &str = "lbk_";
@@ -653,17 +658,21 @@ pub(super) fn verify_signature(
                 timestamp = digits.parse::<u64>().ok();
             }
             Some(("n", text)) if valid_nonce(text) => nonce = Some(text.to_owned()),
-            Some(("v1", tag)) => {
-                if let Ok(bytes) = hex::decode(tag) {
-                    tags.push(bytes);
-                }
-            }
+            Some(("v1", tag)) => match hex::decode(tag) {
+                Ok(bytes) if bytes.len() == SIGNATURE_TAG_BYTES => tags.push(bytes),
+                _ => {}
+            },
             _ => {}
         }
     }
     let (Some(timestamp), Some(nonce)) = (timestamp, nonce) else { return Ok(SignatureCheck::Invalid) };
     if timestamp.abs_diff(now) > SIGNATURE_WINDOW_SECONDS {
         return Ok(SignatureCheck::Stale);
+    }
+    // Each tag costs one MAC over the body, so a header cannot ask for more
+    // than a rotation needs.
+    if tags.len() > MAX_SIGNATURE_TAGS {
+        return Ok(SignatureCheck::Invalid);
     }
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes());
     let message = signed_message(timestamp, &nonce, request);
@@ -1086,8 +1095,15 @@ mod tests {
         assert_eq!(verify(&db, &post("/hooks/fresh"), secret, None, now), SignatureCheck::Invalid, "missing");
         assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some("n=a,v1=00"), now), SignatureCheck::Invalid, "no timestamp");
         assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some(&fresh("a")), now), SignatureCheck::Valid);
+        // A rotation sends two values; a third, or values that are not 32 bytes, cost no MAC.
+        let crowded = fresh("c").replacen("v1=", &format!("{}v1=", "v1=,v1=00,".repeat(5000)), 1);
+        assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some(&crowded), now), SignatureCheck::Valid, "short values are ignored");
+        let third = fresh("d").replacen("v1=", &format!("v1={0},v1={0},v1=", "ab".repeat(32)), 1);
+        assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some(&third), now), SignatureCheck::Invalid, "three tags");
+        let rotated = fresh("d").replacen("v1=", &format!("v1={},v1=", "ab".repeat(32)), 1);
+        assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some(&rotated), now), SignatureCheck::Valid, "two tags, the second one valid");
         let stored = |db: &Connection| db.query_row("SELECT COUNT(*) FROM route_signatures", [], |row| row.get::<_, i64>(0)).unwrap();
-        assert_eq!(stored(&db), 3);
+        assert_eq!(stored(&db), 5);
         // A verification past twice the window prunes what came before it.
         let later = now + 2 * SIGNATURE_WINDOW_SECONDS + 30;
         let late = sign(secret, later, "n3", &post("/hooks/orders"));

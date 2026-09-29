@@ -20,6 +20,11 @@
 
 use super::*;
 
+/// Files one Deployment may hold. A name keeps at most 180 characters and no
+/// control characters, so an index entry stays near 1 KiB and the whole
+/// index stays under the 16 MiB a package's file index may take.
+pub(super) const MAX_FILES: usize = 10_000;
+pub(super) const TOO_MANY_FILES: &str = "This deployment has reached its limit of 10,000 files. Delete files before uploading more.";
 pub(super) const NOT_UPLOADER: &str = "Only the person who uploaded this file may change or delete it.";
 const BAD_VISIBILITY: &str = "File visibility must be private or public.";
 
@@ -105,10 +110,40 @@ async fn change(state: &AppState, headers: &HeaderMap, id: &str, change: Change<
     Json(json!({"result": result})).into_response()
 }
 
+/// The `Content-Type` the file read path sends for a stored type.
+///
+/// The uploader chooses the stored type. `Content-Disposition: attachment` and
+/// the file's own `sandbox` policy stop a file that is opened as a page, but a
+/// page on the app's origin may still load the file as a `<script>`, a module
+/// or a worker, and the app policy's `script-src 'self'` allows the path. A
+/// browser runs that only when the type is a JavaScript type, so a JavaScript
+/// type, and the HTML, XML and SVG types that can carry script, are sent as
+/// `application/octet-stream`. The stored type is kept, and `files_list` still
+/// reports it.
+pub(super) fn served_type(stored: &str) -> &str {
+    let essence = stored.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    let scriptable = ["javascript", "ecmascript", "jscript", "livescript", "html", "xml", "svg"]
+        .iter()
+        .any(|word| essence.contains(word));
+    if scriptable || essence.is_empty() { "application/octet-stream" } else { stored }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tests::{login_test_state, response_json, signed_in};
+
+    #[test]
+    fn a_type_that_can_run_script_is_served_as_bytes() {
+        for stored in ["text/javascript", "TEXT/JavaScript", "application/javascript", "application/x-javascript",
+            "text/ecmascript", "text/jscript", "text/livescript", "text/html", "application/xhtml+xml",
+            "image/svg+xml", "text/xml", "application/xml", ""] {
+            assert_eq!(served_type(stored), "application/octet-stream", "{stored}");
+        }
+        for stored in ["image/png", "image/jpeg", "application/pdf", "text/plain", "text/csv", "application/json", "audio/mpeg"] {
+            assert_eq!(served_type(stored), stored);
+        }
+    }
 
     fn upload_body(size: usize, visibility: Option<&str>) -> Request {
         let mut value = json!({"name": "a.bin", "type": "application/octet-stream", "dataUrl": encode_base64(&vec![7u8; size])});
@@ -187,6 +222,24 @@ mod tests {
                 (StatusCode::NOT_FOUND, json!("File not found."))
             );
         }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_deployment_holds_a_bounded_number_of_files_with_bounded_names() {
+        let root = std::env::temp_dir().join(format!("littlebox-file-count-{}", Uuid::new_v4()));
+        let (state, visitor) = login_test_state(&root, "public").await;
+        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
+        // Control characters, which JSON writes six bytes each, are dropped.
+        let named = json!({"name": format!("{}a{}", "\u{1}".repeat(500), "\u{7f}"), "type": "text/plain", "dataUrl": encode_base64(b"x")});
+        let stored = response_json(upload_file(State(state.clone()), alice.clone(), Request::builder().body(Body::from(named.to_string())).unwrap()).await).await;
+        assert_eq!(stored["result"]["name"], "a");
+        let directory = root.join("deployments").join(&deployment.id).join("files");
+        let full: Vec<Value> = (0..MAX_FILES).map(|index| json!({"id": format!("{index:036}"), "name": "f", "type": "text/plain", "size": 1, "visibility": "private", "ownerId": "x"})).collect();
+        std::fs::write(directory.join("index.json"), serde_json::to_vec(&full).unwrap()).unwrap();
+        let refused = upload_file(State(state.clone()), alice.clone(), upload_body(1, None)).await;
+        assert_eq!(status_and_error(refused).await, (StatusCode::PAYLOAD_TOO_LARGE, json!(TOO_MANY_FILES)));
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
