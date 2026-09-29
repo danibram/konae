@@ -1,6 +1,8 @@
 # Put Littlebox to use, then grow the SDK by modules
 
-Revision of November 6, 2026. This plan has two parts. The first takes the current repository to a hosted installation the owner can trust with real data. The second makes the backend pieces reusable across projects by documenting them as modules of one SDK that both agents understand. It does not change accepted ADRs and does not describe functions as implemented when they are not.
+Revision of November 6, 2026. Status on 2026-11-07: deliveries 1, 2 and 5 to 8 have landed with the records below, and so has the Usage and Signals work of ADR-0010. Deliveries 3 and 4 have not started; they wait on the operator, who chooses and runs the host.
+
+This plan has two parts. The first takes the current repository to a hosted installation the owner can trust with real data. The second makes the backend pieces reusable across projects by documenting them as modules of one SDK that both agents understand. It does not change accepted ADRs and does not describe functions as implemented when they are not.
 
 The [launch plan](platform-launch.md) describes a public beta for invited creators. That scope stays valid and comes after this plan. Nothing here contradicts it; this plan is the shorter path to a single operator using Littlebox for their own projects.
 
@@ -21,7 +23,7 @@ The editor builds, the Kernel passes its tests and the local stack works. What s
 
 ### The disk is the authority
 
-Everything an app is lives on the Kernel's data directory, a Docker volume in production. Today a Deployment's folder holds `deployment.json`, `database.sqlite`, `identity.sqlite` and `files/`, while its Build Artifact and its backups sit in sibling trees keyed by the same ID, and S3 may hold a copy of the artifact and the record. This plan makes the folder the unit.
+Everything an app is lives on the Kernel's data directory, a Docker volume in production. Before delivery 2, a Deployment's folder held `deployment.json`, `database.sqlite`, `identity.sqlite` and `files/`, while its Build Artifact and its backups sat in sibling trees keyed by the same ID, and S3 could hold a copy of the artifact and the record. Delivery 2 made the folder the unit.
 
 ```text
 deployments/<id>/
@@ -38,14 +40,18 @@ A copy of the folder is the app. The export kit is that folder plus the Kernel. 
 
 ### Deliveries
 
-| Delivery | Work | Done when |
-| --- | --- | --- |
-| 1. Durable state | Commit the current tree. Add the missing Kernel source to the export kit. Fix the HTTPS cookie path and the two stale tests | `bun test`, `cargo test` and `bun run build` pass. `bun run tests/smoke/portable-export.ts` compiles the exported Kernel and signs in with the original account |
-| 2. One folder per app, copied off the volume | Move the artifact and the backups into the Deployment's folder. A consistent snapshot of the folder's three databases, then a copy of the whole folder to a second disk or an S3 prefix on a schedule, plus a restore command that installs a folder into an empty data directory. The Kernel already reads `databases/<id>/head.json` from the data bucket at startup and nothing writes it; this delivery replaces that path with the folder copy. Sessions are invalidated on restore | A Kernel started on a fresh volume with the copied folders serves the same apps with their artifact, accounts, rows and files. The check runs in a test, not by hand, against a disk target and an S3 target |
-| 3. Production recipe | One documented host with HTTPS, a real `LITTLEBOX_ADMIN_KEY`, `LITTLEBOX_TRUSTED_PROXIES`, S3 for artifacts and the data bucket from delivery 2. Verify the two Docker images on that host | The owner signs in, publishes a project from the editor and from the CLI, and the app answers on its hostname over HTTPS. The steps are in the README |
-| 4. Scope statement | Record in the README what this installation is for and what it is not: a single operator, known app users, Allowlist without email verification | A reader knows that strangers need the launch plan's deliveries 1 and 2 before they are let in |
+| Delivery | Work | Done when | Status |
+| --- | --- | --- | --- |
+| 1. Durable state | Commit the current tree. Add the missing Kernel source to the export kit. Fix the HTTPS cookie path and the two stale tests | `bun test`, `cargo test` and `bun run build` pass. `bun run tests/smoke/portable-export.ts` compiles the exported Kernel and signs in with the original account | Done, see the delivery 1 record |
+| 2. One folder per app, copied off the volume | Move the artifact and the backups into the Deployment's folder. A consistent snapshot of the folder's three databases, then a copy of the whole folder to a second disk or an S3 prefix on a schedule, plus a restore command that installs a folder into an empty data directory. The Kernel already reads `databases/<id>/head.json` from the data bucket at startup and nothing writes it; this delivery replaces that path with the folder copy. Sessions are invalidated on restore | A Kernel started on a fresh volume with the copied folders serves the same apps with their artifact, accounts, rows and files. The check runs in a test, not by hand, against a disk target and an S3 target | Done, see the delivery 2 record; the S3 target ran only against an emulator |
+| 3. Production recipe | One documented host with HTTPS, a real `LITTLEBOX_ADMIN_KEY`, `LITTLEBOX_TRUSTED_PROXIES`, S3 for artifacts and the data bucket from delivery 2. Verify the two Docker images on that host | The owner signs in, publishes a project from the editor and from the CLI, and the app answers on its hostname over HTTPS. The steps are in the README | Not started. Waits on the operator |
+| 4. Scope statement | Record in the README what this installation is for and what it is not: a single operator, known app users, Allowlist without email verification | A reader knows that strangers need the launch plan's deliveries 1 and 2 before they are let in | Not started. Waits on the operator, and the statement must now say that email verification exists |
 
-Clerk stays dormant while its variables are unset. The local owner account with the installation key is the operator account for this installation. Creator identity stays provider-independent: when creators beyond the operator are admitted, they get the same email and password accounts the Kernel already issues to app users, and Clerk or any OIDC provider is an optional adapter, never a requirement to sign in or to run an installation. Email, invitations, Eject and migration are not in this part.
+Clerk stays dormant while its variables are unset. The local owner account with the setup key is the operator account for this installation. Creator identity stays provider-independent: when creators beyond the operator are admitted, they get the same email and password accounts the Kernel already issues to app users, and Clerk or any OIDC provider is an optional adapter, never a requirement to sign in or to run an installation. Email, invitations, Eject and migration are not in this part.
+
+### Delivery 1 record
+
+Landed on 2026-11-06 in commit `b25d70c`, "Fix the export kit, app logout cookie, grant refusal and a stale test", and recorded in `c51f1aa`. The export kit carries `clerk.rs`, app sign-out over MCP clears the cookie, and the two stale tests pass; the starting-point table above names each. No run was written down when it landed. Every later record below ran its done-when commands, `bun test`, `cargo test`, `bun run build` and `bun run tests/smoke/portable-export.ts`, and they passed, so the exported Kernel compiles and signs in with the original account.
 
 ### Delivery 2 record
 
@@ -67,11 +73,11 @@ Delivery 1 first, alone. Delivery 2 before any data the owner cares about. Deliv
 
 ## Part 2. The SDK as modules
 
-### What exists
+### What existed before delivery 5
 
-The published app and the preview share one host surface, `window.miniapp`, in `src/mcp/runtime.js`. It has three modules today: `auth`, `actions` and `files`. The build agent learns it from a ten-line section of `src/agent/system-prompt.ts` that ends with "there is nothing else". An external agent learns the platform from `platform_describe` and `platform_guide` over MCP.
+The published app and the preview share one host surface, `window.miniapp`, in `src/mcp/runtime.js`. It had three modules then: `auth`, `actions` and `files`. The build agent learns it from a ten-line section of `src/agent/system-prompt.ts` that ends with "there is nothing else". An external agent learns the platform from `platform_describe` and `platform_guide` over MCP.
 
-Those three descriptions are written by hand in three places. They agree today because the surface is small. They will stop agreeing as soon as a fourth module lands.
+Those three descriptions were written by hand in three places. They agreed because the surface was small, and would have stopped agreeing as soon as a fourth module landed. Deliveries 5 and 6 render them from one contract.
 
 ### Decision
 
@@ -128,12 +134,12 @@ Assets stay on the platform. Uploads already have no HTTP download path and are 
 
 ### Deliveries
 
-| Delivery | Work | Done when |
-| --- | --- | --- |
-| 5. Module contract | Write the contract for `auth`, `actions` and `files` in one file under `docs/`. Each call lists inputs, outputs, errors and limits. Add a test that fails when `runtime.js`, `system-prompt.ts` or `platform_guide` name a call the contract does not, or miss one it does | The three readers agree by test, not by review |
-| 6. Rendered guidance | The SDK section of the build agent's prompt and the SDK topic of `platform_guide` are rendered from the contract file at build time | Editing the contract changes both; editing either by hand fails the test |
-| 7. HTTP module | The `http` key in `actions.json`, parsed in `src/kernel/actions.ts` and `kernel-rs/src/main.rs`. Routing, signature check, owner-set secrets, API keys as a `service` Runtime Actor, the file read path, Gate refusals. A product-fit example that receives a webhook, serves a JSON endpoint and embeds a private image through a key | The status feed example accepts a signed POST from `curl` and refuses an unsigned one. The replay in `examples/product-fit/smoke.ts` covers it. The contract file documents the module and the two agents receive it through delivery 6 |
-| 8. Portable action contract | For every project, generate a document of its actions with inputs, output shapes and HTTP bindings. Include it in the export kit | A second backend could run the same conformance checks. No second backend is built here |
+| Delivery | Work | Done when | Status |
+| --- | --- | --- | --- |
+| 5. Module contract | Write the contract for `auth`, `actions` and `files` in one file under `docs/`. Each call lists inputs, outputs, errors and limits. Add a test that fails when `runtime.js`, `system-prompt.ts` or `platform_guide` name a call the contract does not, or miss one it does | The three readers agree by test, not by review | Done, see the evidence for 5 and 6 |
+| 6. Rendered guidance | The SDK section of the build agent's prompt and the SDK topic of `platform_guide` are rendered from the contract file at build time | Editing the contract changes both; editing either by hand fails the test | Done, see the evidence for 5 and 6 |
+| 7. HTTP module | The `http` key in `actions.json`, parsed in `src/kernel/actions.ts` and `kernel-rs/src/main.rs`. Routing, signature check, owner-set secrets, API keys as a `service` Runtime Actor, the file read path, Gate refusals. A product-fit example that receives a webhook, serves a JSON endpoint and embeds a private image through a key | The status feed example accepts a signed POST from `curl` and refuses an unsigned one. The replay in `examples/product-fit/smoke.ts` covers it. The contract file documents the module and the two agents receive it through delivery 6 | Done, see the evidence for 7 |
+| 8. Portable action contract | For every project, generate a document of its actions with inputs, output shapes and HTTP bindings. Include it in the export kit | A second backend could run the same conformance checks. No second backend is built here | Done, see the evidence for 8 |
 
 ### Evidence for deliveries 5 and 6
 
@@ -278,7 +284,7 @@ Where this differs from the brief:
 - A route call counts under `route` with its method and path and not again under `action`, so the two kinds add up to the calls made.
 - `session` counts `auth_session`, which the SDK calls when an app opens. `signup` counts an account that becomes active, so a signup in required mode counts when its link is answered, and an accepted invitation counts too. `login` counts password sign-ins and answered recovery links.
 - A signal action may not declare `http`. Both parsers already refuse it with the method message, because a signal action is neither a query nor a mutation.
-- Property values are the inputs the action ran with. Actor, kernel and literal bindings have no key, so a Signal cannot carry who caused it.
+- Property values are the inputs the action ran with. Actor, kernel and literal bindings have no key, so a Signal could not carry who caused it. ADR-0010's update of the same day lets a Signal list `actor`.
 - A package lists `usage` only when the store exists, and a Kernel from before this delivery refuses a package that lists it. The exported kit carries the new Kernel, so a kit is unaffected.
 - The action cap was 50 in the Gate and 100 in the Kernel before this delivery. A signal action counts toward each; the two numbers still differ.
 

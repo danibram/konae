@@ -2,6 +2,8 @@
 
 Revision of November 6, 2026. This revision replaces the one of the same date that made a third-party identity provider the creator sign-in. It sets the scope, behaviour and order of delivery for the first hosted beta. It does not claim these functions exist and does not by itself change an accepted ADR. Where it differs from the [signup and invitations plan](signup-and-app-invitations.md), this document decides.
 
+Status on 2026-11-07: deliveries A to J have landed, F inside E, each with its evidence at the end of this document. Delivery K has not started and waits on the operator, who runs the production host, chooses the email provider account and admits the first creators.
+
 It comes after the [self-use plan](self-use-and-sdk-modules.md). That plan leaves a single operator with a trusted installation, copies off the volume and an SDK with a module contract. This one lets other people create apps on that installation and lets strangers sign up to those apps.
 
 ## What we launch
@@ -40,7 +42,7 @@ No external account enters an export or is needed to sign in to a migrated app. 
 
 ## One identity implementation, two scopes
 
-`kernel-rs/src/auth.rs` already issues verified-less accounts for app users and the owner page issues owner accounts behind the installation key. This plan makes one account core serve both.
+When this plan was written, `kernel-rs/src/auth.rs` issued unverified accounts for app users and the owner page issued owner accounts behind the setup key. Delivery A made one account core serve both.
 
 | Concern | Creator scope | App user scope |
 | --- | --- | --- |
@@ -119,7 +121,7 @@ Littlebox controls its origin and offers this procedure in the exported Kernel. 
 | Case | Decided behaviour |
 | --- | --- |
 | Eject and stay hosted | Accounts, sessions, email and URL continue; who maintains the sources changes |
-| Download a copy without migrating | The origin continues; any import stays disabled until the operator enables it |
+| Download a copy without migrating | The origin continues; any import stays disabled until the operator enables it. Delivery J pauses only a migration's package, as its evidence explains |
 | Clone only to develop | Code and fake data; real accounts are not copied by default |
 | Run two copies with real data | Independent installations; a password or suspension does not sync |
 | Keep the domain when migrating | Users keep the address but sign in again; keys and sessions rotate anyway |
@@ -149,7 +151,7 @@ The first hosted version uses Littlebox subdomains. Hosted custom domains are de
 
 ### Isolation of hosted code
 
-Once other people publish, hostile JavaScript runs on `<slug>-<id>.<suffix>`. The Kernel sends no security headers today. Before admission:
+Once other people publish, hostile JavaScript runs on `<slug>-<id>.<suffix>`. When this plan was written the Kernel sent no security headers; delivery D added the ones below. Before admission:
 
 - Every app response carries a Content Security Policy that allows the app's own origin and the Kernel runtime endpoint, blocks inline event handlers and foreign scripts, and sets `frame-ancestors` so an app cannot be framed by another origin and the editor cannot be framed by an app.
 - HSTS on every host behind TLS. The administrative cookie keeps the `__Host-` prefix so a `Domain=<suffix>` cookie set by an app never reaches the editor. App cookies use the same prefix on their own host.
@@ -184,25 +186,25 @@ Closing a creator's account is an explicit operation that shows the apps affecte
 
 ### Portability within the quotas
 
-The exporter combines state into a package of up to 16 MiB, while quotas let a database grow to 256 MiB, identity to 64 MiB and files to 20 MiB. An app the host accepts can stop being exportable. Before launch, replace the base64 JSON package with chunked transfers and a manifest, with per-component limits and a space check. Export and import cover the maximum quotas, also when the write quota is exhausted. The small existing format stays readable. The gap is not closed by hiding data or exporting only the accounts that fit.
+When this plan was written, the exporter combined state into a package of up to 16 MiB, while quotas let a database grow to 256 MiB, identity to 64 MiB and files to 20 MiB, so an app the host accepted could stop being exportable. Delivery H did what this section asks. Before launch, replace the base64 JSON package with chunked transfers and a manifest, with per-component limits and a space check. Export and import cover the maximum quotas, also when the write quota is exhausted. The small existing format stays readable. The gap is not closed by hiding data or exporting only the accounts that fit.
 
 ## Deliveries
 
 Each delivery has a verifiable result and the refusals it must produce. Dates are not estimated until the first delivery runs.
 
-| Delivery | Work | Done when | Must refuse |
-| --- | --- | --- | --- |
-| A. Verified account core | States, challenges with purpose and scope, verification, recovery, suspension, legacy migration in `auth.rs` and `main.rs`; the same core behind the owner page | A person of either scope signs up, verifies and enters; a suspended one cannot | A pending or suspended account getting a session; a challenge used twice, on another scope, after expiry or by GET; a third party's password surviving verification |
-| B. Email transport and queue | Persistent queue, Resend adapter, SMTP, development mailbox, provider events, limits | A queued message reaches a real inbox and its state is visible; a provider outage leaves it retryable | Sending with an unverified sender; exceeding a recipient, creator, app or global limit; a replayed or unsigned provider event |
-| C. Creator admission | Invitation codes issued, listed and revoked on the server; signup with code; installation key no longer a signup path; operator suspension for local accounts | A new creator enters with a code and without the installation key | A used, expired or revoked code; the installation key at signup once codes are active; a suspended creator's sessions, codes and MCP credentials |
-| D. Hosted code isolation | CSP, `frame-ancestors`, HSTS, cookie prefixes on app hosts, origin checks on administrative MCP | The tests in the isolation section pass against the Docker stack | An app framing the editor; an app cookie reaching the editor host; administrative MCP from an app origin |
-| E. App invitations and policies | Invitation only, invitation accept, resend, revoke, policy recheck in the acceptance transaction | An invited person sets a password and enters; an uninvited one cannot create an account | Acceptance under Closed; acceptance for a suspended account; two concurrent acceptances producing two accounts |
-| F. MCP user tools | `manage_users` and `export_data` permissions, `app_users_*` and `app_invitations_*` tools, idempotency keys, audit, initial policy in `release_plan` | An agent creates a private app, invites two people and both enter with no hidden administrative step | A project-limited token touching another project's users; `publish` changing policy without `manage_users`; a retried request creating a second invitation |
-| G. Editor screens | Users view, invitations, email states, publish dialog with visibility and signup, access pages for signup, pending verification, expired invitation and recovery | A creator does from the editor everything delivery F does over MCP | Messages that confuse creating an app with signing in to one |
-| H. Chunked export and import | Manifest, checksums, per-component limits, resumable import into an empty destination, `export_data` delegation | An app at its maximum quotas exports and imports without omitting data or loading the package into memory | Import over an existing app; a package with a bad checksum; export without `export_data` |
-| I. Eject on the server | Managed/External state on the server, expected revision, idempotent code package, refusal of Managed writes afterwards | Eject keeps production serving and refuses a Managed write from an old tab | A Managed write after Eject; Eject with a stale revision |
-| J. Migration and recovery | Persistent maintenance, receipts, activation, domain, own email, cancellation, encrypted remote copies | A rehearsed migration between two installations; a full restore on an empty volume within the rehearsal targets | Two writers active through the supported procedure; a restore that revives a revoked identity |
-| K. Beta operation | Quotas shown, alerts, account closing, documentation, production email, end-to-end rehearsal | Every opening criterion met with recorded evidence | Admitting a creator before a criterion is met |
+| Delivery | Work | Done when | Must refuse | Status |
+| --- | --- | --- | --- | --- |
+| A. Verified account core | States, challenges with purpose and scope, verification, recovery, suspension, legacy migration in `auth.rs` and `main.rs`; the same core behind the owner page | A person of either scope signs up, verifies and enters; a suspended one cannot | A pending or suspended account getting a session; a challenge used twice, on another scope, after expiry or by GET; a third party's password surviving verification | Done, evidence below |
+| B. Email transport and queue | Persistent queue, Resend adapter, SMTP, development mailbox, provider events, limits | A queued message reaches a real inbox and its state is visible; a provider outage leaves it retryable | Sending with an unverified sender; exceeding a recipient, creator, app or global limit; a replayed or unsigned provider event | Done, evidence below |
+| C. Creator admission | Invitation codes issued, listed and revoked on the server; signup with code; installation key no longer a signup path; operator suspension for local accounts | A new creator enters with a code and without the installation key | A used, expired or revoked code; the installation key at signup once codes are active; a suspended creator's sessions, codes and MCP credentials | Done, evidence below |
+| D. Hosted code isolation | CSP, `frame-ancestors`, HSTS, cookie prefixes on app hosts, origin checks on administrative MCP | The tests in the isolation section pass against the Docker stack | An app framing the editor; an app cookie reaching the editor host; administrative MCP from an app origin | Done, evidence below; not yet run against the Docker stack |
+| E. App invitations and policies | Invitation only, invitation accept, resend, revoke, policy recheck in the acceptance transaction | An invited person sets a password and enters; an uninvited one cannot create an account | Acceptance under Closed; acceptance for a suspended account; two concurrent acceptances producing two accounts | Done, evidence below |
+| F. MCP user tools | `manage_users` and `export_data` permissions, `app_users_*` and `app_invitations_*` tools, idempotency keys, audit, initial policy in `release_plan` | An agent creates a private app, invites two people and both enter with no hidden administrative step | A project-limited token touching another project's users; `publish` changing policy without `manage_users`; a retried request creating a second invitation | Done inside delivery E, whose evidence lists F's refusals |
+| G. Editor screens | Users view, invitations, email states, publish dialog with visibility and signup, access pages for signup, pending verification, expired invitation and recovery | A creator does from the editor everything delivery F does over MCP | Messages that confuse creating an app with signing in to one | Done, evidence below |
+| H. Chunked export and import | Manifest, checksums, per-component limits, resumable import into an empty destination, `export_data` delegation | An app at its maximum quotas exports and imports without omitting data or loading the package into memory | Import over an existing app; a package with a bad checksum; export without `export_data` | Done, evidence below |
+| I. Eject on the server | Managed/External state on the server, expected revision, idempotent code package, refusal of Managed writes afterwards | Eject keeps production serving and refuses a Managed write from an old tab | A Managed write after Eject; Eject with a stale revision | Done, evidence below |
+| J. Migration and recovery | Persistent maintenance, receipts, activation, domain, own email, cancellation, encrypted remote copies | A rehearsed migration between two installations; a full restore on an empty volume within the rehearsal targets | Two writers active through the supported procedure; a restore that revives a revoked identity | Done, evidence below; S3 copies and the full-volume restore targets not rehearsed |
+| K. Beta operation | Quotas shown, alerts, account closing, documentation, production email, end-to-end rehearsal | Every opening criterion met with recorded evidence | Admitting a creator before a criterion is met | Not started. Waits on the operator |
 
 ### Dependencies and parallel tracks
 
@@ -254,6 +256,21 @@ These must not appear as active controls or beta promises. First-version support
 As each delivery lands, the affected ADRs, MCP contracts and documentation are updated, and the evidence is recorded here without describing pending decisions as the current system.
 
 ## Evidence
+
+### Delivery A, November 6, 2026
+
+Merged from branch `deliv/A-verified-accounts`. `kernel-rs/src/auth.rs` holds the account core of both scopes and `kernel-rs/src/accounts.rs` the routes and pages a challenge link opens. [ADR-0011](../adr/0011-one-verified-account-core-for-creators-and-app-users.md) records the decision, and the README's verified accounts section and [the MCP guide](../mcp.md#verified-accounts) the behaviour. No evidence was written here when it landed; these are the tests that prove its refusals, all run by `cargo test --manifest-path kernel-rs/Cargo.toml`.
+
+| Refusal or result | Test |
+| --- | --- |
+| A pending account getting a session | `auth::tests::a_pending_account_gets_no_session_until_it_verifies` |
+| A suspended account getting a session or a challenge | `auth::tests::a_suspended_account_gets_no_session_and_no_challenge`, `accounts::tests::a_suspended_app_user_loses_every_session_and_gets_no_new_one` |
+| A challenge used twice, after expiry, on another scope or for another purpose | `auth::tests::a_challenge_is_refused_twice_after_expiry_on_another_scope_or_for_another_purpose`, `accounts::tests::a_link_does_nothing_on_another_app_the_creator_scope_or_another_purpose` |
+| A challenge answered by GET | `accounts::tests::app_signup_waits_for_verification_and_a_get_changes_nothing` |
+| A third party's password surviving verification | `auth::tests::a_third_partys_password_does_not_survive_verification` |
+| Two concurrent verifications activating twice | `auth::tests::two_concurrent_verifications_activate_once` |
+| Legacy accounts trusted without verification | `auth::tests::legacy_accounts_need_verification_and_keep_their_ids_and_rows` |
+| A person of either scope signs up, verifies and enters; a suspended one cannot | `accounts::tests::a_creator_signs_up_verifies_enters_and_a_suspended_one_cannot`, `accounts::tests::app_signup_waits_for_verification_and_a_get_changes_nothing` |
 
 ### Delivery C, November 6, 2026
 
