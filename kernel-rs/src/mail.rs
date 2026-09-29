@@ -781,8 +781,14 @@ impl MailQueue {
             .map_err(storage)?;
         let at = now();
         transaction.execute("DELETE FROM requests WHERE at <= ?1", [at - DAY_MS]).map_err(storage)?;
+        // The minute limit counts an address across the installation. The day
+        // limit counts it per scope, so requests on one app cannot use up the
+        // address's allowance for its other apps and for the editor.
         let recipient = hashed("recipient", admission.recipient);
-        let client = admission.client.map(|client| hashed("client", &client.to_string()));
+        let recipient_in_scope = hashed("recipient", &format!("{}|{}", admission.scope, admission.recipient));
+        // A client counts by the same key as every other limiter: one IPv6
+        // /64 is one client.
+        let client = admission.client.map(|client| hashed("client", &super::limits::client_key(client)));
         let requests = |dimension: &str, key: &str, since: i64| -> Result<u32, AuthError> {
             transaction
                 .query_row(
@@ -796,7 +802,7 @@ impl MailQueue {
         if requests("recipient", &recipient, at - 60_000)? >= limits.recipient_per_minute {
             return Err(AuthError::MailLimit("Too many emails to this address. Wait a minute and try again.".into()));
         }
-        if requests("recipient", &recipient, at - DAY_MS)? >= limits.recipient_per_day {
+        if requests("recipient-scope", &recipient_in_scope, at - DAY_MS)? >= limits.recipient_per_day {
             return Err(AuthError::MailLimit(
                 "This address has received the most account emails allowed today. Try again tomorrow.".into(),
             ));
@@ -807,7 +813,8 @@ impl MailQueue {
             }
         }
         check_job_budget(&transaction, "main", limits, admission.scope, admission.creator, at)?;
-        for (dimension, key) in std::iter::once(("recipient", &recipient)).chain(client.as_ref().map(|client| ("client", client))) {
+        let counted = [("recipient", &recipient), ("recipient-scope", &recipient_in_scope)];
+        for (dimension, key) in counted.into_iter().chain(client.as_ref().map(|client| ("client", client))) {
             transaction
                 .execute("INSERT INTO requests(dimension, key, at) VALUES (?1, ?2, ?3)", params![dimension, key, at])
                 .map_err(storage)?;
@@ -1790,6 +1797,36 @@ mod tests {
         assert!(message.contains("installation"), "{message}");
         let (at, message) = refused_at(Limits { client_per_hour: 3, ..base.clone() }, &distinct, true).await;
         assert_eq!(at, 3);
+        assert!(message.contains("network"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn requests_on_one_app_do_not_use_up_an_address_on_another_and_a_64_is_one_client() {
+        let fixture = fixture_with(Scripted::new(), Limits { recipient_per_minute: 100, ..Limits::default() }).await;
+        // Ten recoveries for an address with no account on one app send
+        // nothing, yet they reach that app's day limit for the address.
+        for _ in 0..10 {
+            accounts::recover_app(&fixture.state, &fixture.app, "victim@example.test", CLIENT).await.unwrap();
+            fixture.db().execute("UPDATE requests SET at = at - 61000", []).unwrap();
+        }
+        let blocked = accounts::recover_app(&fixture.state, &fixture.app, "victim@example.test", CLIENT).await;
+        assert!(matches!(&blocked, Err(AuthError::MailLimit(message)) if message.contains("today")), "{blocked:?}");
+        // The same person can still sign up on another app the same day.
+        fixture.signup(&fixture.other, "victim@example.test").await.unwrap();
+        assert_eq!(fixture.jobs().len(), 1);
+
+        // Addresses inside one IPv6 /64 share the client limit.
+        let limited = fixture_with(Scripted::new(), Limits { recipient_per_minute: 100, client_per_hour: 2, ..Limits::default() }).await;
+        let mut refused = None;
+        for index in 0..3u16 {
+            let client = IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0xdb8, 1, 2, 0, 0, 0, index + 1));
+            if let Err(error_value) = accounts::signup_app(&limited.state, &limited.app, &format!("p{index}@example.test"), client).await {
+                refused = Some((index, error_value.to_string()));
+                break;
+            }
+        }
+        let (index, message) = refused.expect("the third address in the /64 is refused");
+        assert_eq!(index, 2);
         assert!(message.contains("network"), "{message}");
     }
 

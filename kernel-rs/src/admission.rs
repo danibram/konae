@@ -718,6 +718,11 @@ mod tests {
         assert_eq!(taken.status(), StatusCode::CONFLICT);
         let next = fixture.signup(json!({"email": "bob@example.test", "password": PASSWORD, "code": other})).await;
         assert_eq!(next.status(), StatusCode::OK);
+        // Without a valid code, a taken email and a new one get the same refusal.
+        for email in ["ada@example.test", "nobody@example.test"] {
+            let guessed = fixture.signup(json!({"email": email, "password": PASSWORD, "code": "00000-00000-00000-00000-00000"})).await;
+            assert_eq!(message(guessed).await, (StatusCode::FORBIDDEN, CODE_REFUSED.to_owned()), "{email}");
+        }
     }
 
     #[tokio::test]

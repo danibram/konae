@@ -15,6 +15,8 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 const SESSION_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
+/// Open sessions one account may hold: a sign-in past this ends the oldest.
+const MAX_SESSIONS_PER_ACCOUNT: i64 = 20;
 /// A verification link stays valid for 24 hours.
 pub const VERIFICATION_TTL_SECONDS: i64 = 24 * 60 * 60;
 /// An invitation link stays valid for seven days.
@@ -316,6 +318,10 @@ impl AuthService {
             )
             .map_err(AuthError::Storage)?;
         if inserted == 0 {
+            // The admission decides first, so a request without a valid code
+            // gets the refusal a new email gets and learns nothing about who
+            // has an account. Dropping the transaction keeps a valid code.
+            admit(&transaction, None)?;
             return Err(AuthError::EmailTaken);
         }
         admit(&transaction, Some(&user.user_id))?;
@@ -891,6 +897,16 @@ fn issue_session(connection: &Connection, user: AuthUser) -> Result<AuthSession,
             params![hash_token(&token), user.user_id, expires_at],
         )
         .map_err(AuthError::Storage)?;
+    // Sign-ins are rate limited but succeed every time with the right
+    // password, so without a cap one account could fill the identity file.
+    // The oldest session beyond the cap ends.
+    connection
+        .execute(
+            "DELETE FROM app_sessions WHERE user_id = ?1 AND rowid NOT IN
+               (SELECT rowid FROM app_sessions WHERE user_id = ?1 ORDER BY expires_at DESC, rowid DESC LIMIT ?2)",
+            params![user.user_id, MAX_SESSIONS_PER_ACCOUNT],
+        )
+        .map_err(AuthError::Storage)?;
     Ok(AuthSession {
         token,
         user,
@@ -1023,6 +1039,10 @@ pub(crate) fn normalize_email(email: &str) -> Result<String, AuthError> {
         || domain.contains('@')
         || !domain.contains('.')
         || email.chars().any(char::is_whitespace)
+        // Mail libraries and providers read `name<a@b>`, comments and lists
+        // as address syntax, so `x<victim@b>` would reach victim@b as another
+        // account with its own limits. A plain address has none of these.
+        || email.chars().any(|c| c.is_control() || "<>()[],;:\\\"".contains(c))
     {
         return Err(AuthError::InvalidEmail);
     }
@@ -1106,6 +1126,15 @@ mod tests {
 
     struct TempDb(PathBuf);
 
+    #[test]
+    fn an_email_with_address_syntax_is_refused() {
+        assert_eq!(normalize_email(" Ana.B+club@Example.COM ").unwrap(), "ana.b+club@example.com");
+        for email in ["x<victim@example.com>", "victim@example.com>", "(c)victim@example.com", "victim@example.com,b",
+            "\"a b\"@example.com", "a;b@example.com", "a:b@example.com", "a\\b@example.com", "[a]@example.com", "a\u{7}@example.com"] {
+            assert!(matches!(normalize_email(email), Err(AuthError::InvalidEmail)), "{email}");
+        }
+    }
+
     impl TempDb {
         fn new() -> Self {
             let path =
@@ -1123,6 +1152,26 @@ mod tests {
             let _ = std::fs::remove_file(self.0.with_extension("sqlite-wal"));
             let _ = std::fs::remove_file(self.0.with_extension("sqlite-shm"));
         }
+    }
+
+    #[test]
+    fn a_sign_in_past_the_cap_ends_the_oldest_session_of_that_account_only() {
+        let app = TempDb::new();
+        let service = app.service();
+        let first = service.signup("one@example.test", "correct horse battery").unwrap();
+        let other = service.signup("two@example.test", "another correct password").unwrap();
+        let mut sessions = vec![first.token.clone()];
+        for _ in 1..MAX_SESSIONS_PER_ACCOUNT {
+            sessions.push(service.login("one@example.test", "correct horse battery").unwrap().token);
+        }
+        assert!(service.authenticate(Some(&first.token)).unwrap().is_some(), "the cap holds every session up to it");
+        service.login("one@example.test", "correct horse battery").unwrap();
+        assert!(service.authenticate(Some(&first.token)).unwrap().is_none(), "the oldest session ended");
+        assert!(service.authenticate(Some(&sessions[1])).unwrap().is_some());
+        assert!(service.authenticate(Some(&other.token)).unwrap().is_some(), "another account keeps its session");
+        let count: i64 = Connection::open(&app.0).unwrap()
+            .query_row("SELECT COUNT(*) FROM app_sessions WHERE user_id = ?1", [&first.user.user_id], |row| row.get(0)).unwrap();
+        assert_eq!(count, MAX_SESSIONS_PER_ACCOUNT);
     }
 
     #[test]
