@@ -1,3 +1,4 @@
+import { limitIndex } from "../lib/query-bound";
 import { sqlTokens } from "../lib/sql-tokens";
 
 type DeclaredAction = { name: string; kind: string; access: string; statement: string };
@@ -21,7 +22,7 @@ export function authHeading(actions: DeclaredAction[]): string {
 /** The literal row count after a top-level LIMIT, or null when it is a parameter or missing. */
 function topLevelLimit(statement: string): number | null {
   const top = sqlTokens(statement).filter((token) => token.depth === 0);
-  const at = top.findIndex((token) => token.kind === "word" && token.text.toUpperCase() === "LIMIT");
+  const at = limitIndex(top);
   const value = at === -1 ? undefined : top[at + 1];
   return value && value.kind !== "string" && /^\d+$/.test(value.text) ? Number(value.text) : null;
 }

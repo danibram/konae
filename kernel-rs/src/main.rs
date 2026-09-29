@@ -2335,7 +2335,7 @@ fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result
 fn unbounded_query_reason(sql: &str) -> Option<&'static str> {
     let tokens = sql_tokens(sql);
     let top: Vec<&SqlTok> = tokens.iter().filter(|token| token.depth == 0).collect();
-    if top.iter().any(|token| token.is_word("LIMIT")) {
+    if limit_index(&top).is_some() {
         return None;
     }
     if top.iter().any(|token| token.is_any(&["EXCEPT", "INTERSECT", "UNION"])) {
@@ -2359,6 +2359,16 @@ fn unbounded_query_reason(sql: &str) -> Option<&'static str> {
         return Some("reads rows and has no LIMIT.");
     }
     None
+}
+
+/// Where the LIMIT clause starts among the top-level tokens. `:limit`,
+/// `@limit` and `$limit` are named parameters, not the clause, as
+/// `limitIndex` in src/lib/query-bound.ts reads them.
+fn limit_index(top: &[&SqlTok]) -> Option<usize> {
+    top.iter().enumerate().position(|(index, token)| {
+        let parameter = index > 0 && [":", "@", "$"].iter().any(|symbol| top[index - 1].is_symbol(symbol));
+        token.is_word("LIMIT") && !parameter
+    })
 }
 
 fn aggregate_select_list(list: &[&SqlTok]) -> bool {

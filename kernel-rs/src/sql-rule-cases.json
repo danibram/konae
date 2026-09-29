@@ -266,5 +266,95 @@
   "case": "schema.sql that seeds a row",
   "schema": "CREATE TABLE IF NOT EXISTS rooms (id INTEGER PRIMARY KEY, name TEXT NOT NULL);\nINSERT INTO rooms (name) VALUES ('Atlas');",
   "error": "schema.sql may only create tables and indexes, but it contains INSERT."
+ },
+ {
+  "case": "a named parameter :limit is not a LIMIT",
+  "actions": {
+   "notes.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id, body FROM notes WHERE :limit IS NOT NULL",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "limit",
+      "type": "number"
+     }
+    ]
+   }
+  },
+  "error": "Action notes.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+ },
+ {
+  "case": "nor are @limit and $limit",
+  "actions": {
+   "notes.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM notes WHERE @limit > 0 OR $limit > 0",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "limit",
+      "type": "number"
+     }
+    ]
+   }
+  },
+  "error": "Action notes.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+ },
+ {
+  "case": "a LIMIT bound to a parameter still counts",
+  "actions": {
+   "notes.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM notes ORDER BY id LIMIT :limit",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "limit",
+      "type": "number"
+     }
+    ]
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a no-break space after the semicolon is a second statement, as SQLite reads it",
+  "actions": {
+   "notes.clear": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "DELETE FROM notes WHERE id = 1; ",
+    "bindings": []
+   }
+  },
+  "error": "Action notes.clear must contain one statement."
+ },
+ {
+  "case": "an unclosed comment at the end is not a second statement",
+  "actions": {
+   "notes.clear": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "DELETE FROM notes WHERE id = 1 /* note",
+    "bindings": []
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a comment after the semicolon is not a second statement",
+  "actions": {
+   "notes.clear": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "DELETE FROM notes WHERE id = 1; -- done\n/* and */",
+    "bindings": []
+   }
+  },
+  "error": null
  }
 ]

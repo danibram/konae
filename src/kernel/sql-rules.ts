@@ -15,7 +15,7 @@ export function assertActionStatement(name: string, kind: "query" | "mutation", 
   const word = first?.kind === "word" ? first.text.toUpperCase() : "";
   const startsRight = kind === "query" ? word === "SELECT" : MUTATION_WORDS.has(word);
   if (!startsRight) throw new Error(firstWordRefusal(name, kind, word));
-  assertSingleStatement(name, statement);
+  assertSingleStatement(name, tokens);
   if (kind === "mutation" && returnsRows(tokens)) {
     throw new Error(`Action ${name} cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.`);
   }
@@ -42,40 +42,12 @@ function returnsRows(tokens: SqlToken[]): boolean {
   });
 }
 
-/** Anything after the first `;` other than comments and whitespace is a second statement. */
-function assertSingleStatement(name: string, sql: string) {
-  let quote: "'" | '"' | "`" | "]" | null = null;
-  let terminated = false;
-  for (let index = 0; index < sql.length; index += 1) {
-    const char = sql[index];
-    const next = sql[index + 1];
-    if (!quote && char === "-" && next === "-") {
-      index = sql.indexOf("\n", index + 2);
-      if (index === -1) break;
-      continue;
-    }
-    if (!quote && char === "/" && next === "*") {
-      const end = sql.indexOf("*/", index + 2);
-      if (end === -1) throw new Error("Unterminated SQL comment.");
-      index = end + 1;
-      continue;
-    }
-    if (!quote && (char === "'" || char === '"' || char === "`" || char === "[")) {
-      if (terminated) throw new Error(`Action ${name} must contain one statement.`);
-      quote = char === "[" ? "]" : char;
-      continue;
-    }
-    if (quote && char === quote) {
-      if (next === quote && quote !== "]") { index += 1; continue; }
-      quote = null;
-      continue;
-    }
-    if (!quote && char === ";") {
-      if (terminated) throw new Error(`Action ${name} must contain one statement.`);
-      terminated = true;
-      continue;
-    }
-    if (terminated && !/\s/.test(char)) throw new Error(`Action ${name} must contain one statement.`);
-  }
-  if (quote) throw new Error("Unterminated SQL string.");
+/**
+ * A `;` token followed by any other token is a second statement, as the Kernel
+ * reads it. Comments and whitespace are not tokens; a character at or above
+ * U+0080, such as a no-break space, is part of a word, as SQLite reads it.
+ */
+function assertSingleStatement(name: string, tokens: SqlToken[]) {
+  const end = tokens.findIndex((token) => token.kind === "symbol" && token.text === ";");
+  if (end !== -1 && end + 1 < tokens.length) throw new Error(`Action ${name} must contain one statement.`);
 }

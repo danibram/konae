@@ -12,6 +12,20 @@ export function presentStatement(sql: string): string {
 }
 
 /**
+ * Where the LIMIT clause starts among a statement's top-level tokens, or -1.
+ * `:limit`, `@limit` and `$limit` are named parameters, not the clause, as
+ * the RETURNING rule in src/kernel/sql-rules.ts reads them. The Kernel's
+ * `limit_index` reads the same way.
+ */
+export function limitIndex(top: SqlToken[]): number {
+  return top.findIndex((token, index) => {
+    const previous = top[index - 1];
+    const parameter = previous?.kind === "symbol" && [":", "@", "$"].includes(previous.text);
+    return token.kind === "word" && token.depth === 0 && token.text.toUpperCase() === "LIMIT" && !parameter;
+  });
+}
+
+/**
  * Why a query action may not ship, or null when it may.
  * A LIMIT counts only at the top level. One inside a subquery, a string or a
  * comment does not bound the rows the caller receives. A query with no FROM
@@ -24,7 +38,7 @@ export function presentStatement(sql: string): string {
 export function unboundedQueryReason(sql: string): string | null {
   const tokens = sqlTokens(sql);
   const top = tokens.filter((token) => token.depth === 0);
-  if (hasWord(top, "LIMIT")) return null;
+  if (limitIndex(top) !== -1) return null;
 
   if (top.some((token) => token.kind === "word" && ["EXCEPT", "INTERSECT", "UNION"].includes(token.text.toUpperCase()))) {
     return "combines more than one query and has no LIMIT on the whole result.";
@@ -85,10 +99,6 @@ function aggregateSelectList(list: SqlToken[]): boolean {
     if (index < list.length && !(next.kind === "symbol" && next.text === ",")) return false;
   }
   return expressions > 0;
-}
-
-function hasWord(tokens: SqlToken[], word: string): boolean {
-  return indexOfWord(tokens, word) !== -1;
 }
 
 function indexOfWord(tokens: SqlToken[], word: string): number {

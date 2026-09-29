@@ -17,6 +17,7 @@
  */
 import { parseServerActionSource, type HttpBinding, type RouteCaller, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
 import { sdkContract, type SdkError } from "../sdk/contract";
+import { limitIndex } from "./query-bound";
 import { sqlStatementTokens, sqlTokens, type SqlToken } from "./sql-tokens";
 import contractSchema from "./action-contract.schema.json";
 
@@ -389,13 +390,13 @@ function actionLimits(action: ServerActionDefinition): ContractLimits {
 }
 
 function hasTopLevelLimit(sql: string): boolean {
-  return sqlTokens(sql).some((token) => token.depth === 0 && token.kind === "word" && token.text.toUpperCase() === "LIMIT");
+  return limitIndex(sqlTokens(sql).filter((token) => token.depth === 0)) !== -1;
 }
 
 /** The number after a top-level LIMIT, or null when it is a parameter or an expression. */
 function topLevelLimit(sql: string): number | null {
-  const tokens = sqlTokens(sql);
-  const index = tokens.findIndex((token) => token.depth === 0 && token.kind === "word" && token.text.toUpperCase() === "LIMIT");
+  const tokens = sqlTokens(sql).filter((token) => token.depth === 0);
+  const index = limitIndex(tokens);
   if (index === -1) return null;
   const next = tokens[index + 1];
   const after = tokens[index + 2];
