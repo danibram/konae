@@ -641,7 +641,13 @@ pub(super) async fn verify(state: &AppState, principal: &str, project_id: &str, 
                 content.name
             );
         }
-        integrity(&path("database").context("The package has no database.")?, "database")?;
+        let database = path("database").context("The package has no database.")?;
+        integrity(&database, "database")?;
+        let stored = Connection::open_with_flags(&database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .and_then(|db| super::sql_rules::stored_trigger_or_view(&db))?;
+        if let Some(refusal) = stored {
+            anyhow::bail!(refusal);
+        }
         let accounts = match path("identity") {
             Some(identity) => {
                 integrity(&identity, "accounts")?;

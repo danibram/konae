@@ -291,7 +291,7 @@ struct ActionProgram {
     actions: HashMap<String, ActionDefinition>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct ActionDefinition {
     kind: String,
     access: String,
@@ -310,7 +310,7 @@ struct ActionDefinition {
     guard: Option<Value>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ActionBinding {
     source: String,
@@ -878,11 +878,7 @@ async fn invoke_action(
         Ok(json!({"recorded": true}))
     } else {
         let _guard = database_lock(&state, &deployment.id).await;
-        if action.kind == "query" {
-            run_query(&db_path, action, params).map(Value::from)
-        } else {
-            run_mutation(&db_path, action, params)
-        }
+        run_action(db_path, action, params).await
     };
     let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
     match result {
@@ -2178,6 +2174,24 @@ async fn apply_migration(state: &AppState, id: &str, body: &Value) -> Result<Val
     Ok(json!({"backup":backup}))
 }
 
+/// Runs an action's statement on a blocking thread while the caller holds
+/// the Deployment's database lock. The statement deadline is checked between
+/// SQLite steps, and one step, such as `instr` or `replace` over two large
+/// values, can run past it. On a blocking thread that delays only this
+/// Deployment, never the async workers every other app shares.
+async fn run_action(path: PathBuf, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Value> {
+    let action = action.clone();
+    tokio::task::spawn_blocking(move || {
+        if action.kind == "query" {
+            run_query(&path, &action, params).map(Value::from)
+        } else {
+            run_mutation(&path, &action, params)
+        }
+    })
+    .await
+    .map_err(anyhow::Error::from)?
+}
+
 fn run_query(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Vec<Value>> {
     let connection = Connection::open(path)?;
     restrict_database(&connection)?;
@@ -2524,6 +2538,12 @@ fn apply_additive_schema(path: &Path, schema: &str, program: &ActionProgram) -> 
     let mut connection = Connection::open(path)?;
     // Runs before the authorizer below, which refuses every pragma.
     limit_database_size(&connection, MAX_APP_DATABASE_BYTES)?;
+    // An expression index or a CHECK runs once per stored row while the
+    // schema applies, so a value has the runtime's size limit here too, and
+    // the whole schema a deadline long enough to index a full database.
+    connection.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 2 * 1024 * 1024)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    connection.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
     if let Some(refusal) = sql_rules::schema_refusal(schema) {
         anyhow::bail!(refusal);
     }
@@ -2577,10 +2597,15 @@ fn initialize_database_from_base64(path: &Path, encoded: &str, maximum_bytes: us
     std::fs::write(&temp, &bytes)?;
     let check = Connection::open(&temp)?;
     let integrity: String = check.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    let stored = sql_rules::stored_trigger_or_view(&check)?;
     drop(check);
     if integrity != "ok" {
         let _ = std::fs::remove_file(&temp);
         anyhow::bail!("Initial database failed SQLite's integrity check.");
+    }
+    if let Some(refusal) = stored {
+        let _ = std::fs::remove_file(&temp);
+        anyhow::bail!(refusal);
     }
     std::fs::rename(temp, path)?;
     Ok(())
@@ -2953,6 +2978,9 @@ fn same_origin(headers: &HeaderMap) -> bool {
     }
 }
 
+/// The longest LIKE or GLOB pattern an action may compare.
+const MAX_LIKE_PATTERN_BYTES: i32 = 500;
+
 /// Each app database may grow to this size. Writes past it fail with
 /// "database or disk is full".
 const MAX_APP_DATABASE_BYTES: u64 = 256 * 1024 * 1024;
@@ -2986,10 +3014,18 @@ fn restrict_database(db: &Connection) -> Result<()> {
     db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 2 * 1024 * 1024)?;
     db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_SQL_LENGTH, 100_000)?;
     db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_ATTACHED, 0)?;
+    // LIKE and GLOB compare a value against the pattern inside one step, so
+    // the deadline below cannot stop them; a short pattern keeps that step
+    // short. SQLite's default is 50,000 bytes.
+    db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LIKE_PATTERN_LENGTH, MAX_LIKE_PATTERN_BYTES)?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     db.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
     db.authorizer(Some(|context: AuthContext<'_>| match context.action {
         AuthAction::Attach { .. } | AuthAction::Detach { .. } => Authorization::Deny,
+        // Littlebox runs no triggers or views, and Studio and migrations use
+        // this connection too, so neither can add one the Gate never saw.
+        AuthAction::CreateTrigger { .. } | AuthAction::CreateTempTrigger { .. } => Authorization::Deny,
+        AuthAction::CreateView { .. } | AuthAction::CreateTempView { .. } => Authorization::Deny,
         AuthAction::Pragma { pragma_name, .. } if !["table_info", "table_xinfo", "index_list", "index_info", "foreign_key_list", "foreign_key_check", "integrity_check", "quick_check"].contains(&pragma_name.to_ascii_lowercase().as_str()) => Authorization::Deny,
         AuthAction::Function { function_name } if denied_function(function_name) => Authorization::Deny,
         _ => Authorization::Allow,
@@ -3620,6 +3656,49 @@ mod tests {
         }
         let schema = "CREATE INDEX IF NOT EXISTS evil_index ON items(load_extension(name));";
         assert!(apply_additive_schema(&path, schema, &actions).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_schema_value_and_an_action_pattern_are_bounded_and_no_trigger_or_view_gets_in() {
+        let root = std::env::temp_dir().join(format!("littlebox-sql-bounds-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        initialize_database(&path).unwrap();
+        let actions = action_program(&[("items.list", "SELECT id FROM items LIMIT 5")]);
+        apply_additive_schema(&path, "CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT);", &actions).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection.execute("INSERT INTO items(name) VALUES ('a')", []).unwrap();
+        drop(connection);
+        // An index whose expression builds a 200 MB value per row hits the
+        // value limit instead of the memory of the Kernel.
+        let heavy = "CREATE INDEX IF NOT EXISTS heavy ON items(length(hex(zeroblob(200000000))));";
+        let error = apply_additive_schema(&path, heavy, &actions).unwrap_err().to_string();
+        assert!(error.contains("too big"), "{error}");
+
+        let db = Connection::open(&path).unwrap();
+        restrict_database(&db).unwrap();
+        let pattern = |length: usize| format!("SELECT 'x' LIKE '{}'", "%".repeat(length));
+        db.query_row(&pattern(MAX_LIKE_PATTERN_BYTES as usize), [], |row| row.get::<_, bool>(0)).unwrap();
+        let long = db.query_row(&pattern(MAX_LIKE_PATTERN_BYTES as usize + 1), [], |row| row.get::<_, bool>(0)).unwrap_err().to_string();
+        assert!(long.contains("pattern too complex"), "{long}");
+        // Studio and migrations open this connection too.
+        for statement in ["CREATE TRIGGER t AFTER INSERT ON items BEGIN DELETE FROM items; END", "CREATE VIEW v AS SELECT 1",
+            "CREATE TEMP TRIGGER t AFTER INSERT ON items BEGIN SELECT 1; END", "CREATE TEMP VIEW v AS SELECT 1"] {
+            assert!(db.execute_batch(statement).unwrap_err().to_string().contains("not authorized"), "{statement}");
+        }
+        drop(db);
+
+        // A database that arrives with a trigger is refused before it is installed.
+        let source = root.join("source.sqlite");
+        let db = Connection::open(&source).unwrap();
+        db.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY); CREATE TRIGGER copy AFTER INSERT ON items BEGIN DELETE FROM items; END;").unwrap();
+        drop(db);
+        let encoded = encode_base64(&std::fs::read(&source).unwrap());
+        let target = root.join("imported.sqlite");
+        let refused = initialize_database_from_base64(&target, &encoded, 16 * 1024 * 1024).unwrap_err().to_string();
+        assert_eq!(refused, "The database holds CREATE TRIGGER copy, and Littlebox runs no triggers or views. Drop it before importing.");
+        assert!(!target.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
