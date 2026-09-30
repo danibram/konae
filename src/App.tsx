@@ -1008,7 +1008,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             </ul>
           )}
           {ejectRecord && <EjectedNotice projectId={project.id} slug={project.slug} ejectedAt={ejectRecord.at} sourcesRevision={ejectRecord.sourcesRevision} />}
-          {activeFile === "actions.json" && <ActionReadout source={activeSource} />}
+          {activeFile === "actions.json" && <ActionReadout source={activeSource} visibility={project.manifest.visibility} />}
           {contractOpen ? <ActionContractView state={actionContract} /> : <div className="code-area">
             <div className="line-numbers" aria-hidden="true" ref={gutterRef}>
               {Array.from({ length: lines }, (_, index) => <span key={index}>{index + 1}</span>)}
@@ -1223,7 +1223,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         providers={PROVIDERS}
       />
 
-      {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} session={ownerSession} signInHref={signInHref} onClose={() => setDeployOpen(false)} current={activeDeployment} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} />}
+      {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} session={ownerSession} signInHref={signInHref} onClose={() => setDeployOpen(false)} current={activeDeployment} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
 
       <Dialog
         open={resetOpen}
@@ -1289,8 +1289,8 @@ function listedActions(source: string): number {
   }
 }
 
-function ActionReadout({ source }: { source: string }) {
-  const { refusal, lines } = actionReadout(source);
+function ActionReadout({ source, visibility }: { source: string; visibility: "public" | "private" }) {
+  const { refusal, lines } = actionReadout(source, visibility);
   return (
     <div className="action-readout-block">
       <p className={`action-check ${refusal ? "is-refused" : ""}`}>

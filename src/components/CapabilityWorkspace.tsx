@@ -11,15 +11,22 @@ import {
 import { useRef, useState } from "react";
 import type { DatabaseAdminHost, MiniAppRuntimeHost, StoredFile } from "../runtime/host";
 import type { DrizzleDatabaseModel } from "../lib/types";
-import { parseServerActionSource } from "../kernel/actions";
+import { parseServerActionSource, routeCallers } from "../kernel/actions";
 import { Button, EmptyState as UiEmptyState } from "./ui";
 import { DatabaseStudio } from "./DatabaseStudio";
 import { AppUsersView } from "./AppUsersView";
 import { IntegrationsView } from "./IntegrationsView";
 import { authHeading } from "./auth-heading";
-import { deployReadiness } from "./action-readiness";
+import { actionSentence, deployReadiness } from "./action-readiness";
 
 export type AuthView = "rules" | "users" | "integrations";
+
+/**
+ * The preview keeps these files in this browser only. A Deployment stores its
+ * own uploads, and Export takes those, so nothing here reaches either.
+ */
+export const previewUploadsNote =
+  "Files the preview app uploads, kept in this browser only. They do not publish and Export does not take them. A file every page shows, such as a logo, goes under public/ in Files.";
 
 type Props = {
   view: "database" | "files" | "auth";
@@ -95,7 +102,7 @@ function FilesPanel({ host, onFilesChanged }: Props) {
       )}
       {error && <div className="cap-error">{error}</div>}
       <div className="file-grid">
-        {files.length === 0 ? <EmptyState onUpload={() => inputRef.current?.click()} text="Add one when the app needs it, a logo or a CSV. Export takes it along." /> : files.map((file) => (
+        {files.length === 0 ? <EmptyState onUpload={() => inputRef.current?.click()} text={previewUploadsNote} /> : files.map((file) => (
           <article key={file.id} className="file-card">
             <div className="file-preview">{file.type.startsWith("image/") ? <img src={file.url} alt="" /> : <File size={27} />}</div>
             <div><strong>{file.name}</strong><small>{formatBytes(file.size)} · {file.type || "unknown"}</small></div>
@@ -124,7 +131,7 @@ function AuthPanel(props: Props) {
   );
 }
 
-function RulesView({ host, onFilesChanged, actionsSource, onSetAccess }: Props) {
+function RulesView({ host, onFilesChanged, actionsSource, onSetAccess, visibility = "public" }: Props) {
   const [actor, setActor] = useState(host.getPreviewActor());
   const refusal = actionsSource ? deployReadiness({ files: { "actions.json": actionsSource }, manifest: { runtime: { database: { actions: [] } } } }).refusal : null;
   const previewName = actor === "alice" ? "a signed-in person" : actor === "bob" ? "another signed-in person" : "someone who has not signed in";
@@ -133,20 +140,21 @@ function RulesView({ host, onFilesChanged, actionsSource, onSetAccess }: Props) 
       <div className="auth-card">
         <span className="auth-avatar"><UserRound size={27} /></span>
         <div>
-          <h3>{authHeading(rules(actionsSource))}</h3>
+          <h3>{authHeading(rules(actionsSource), visibility)}</h3>
           {refusal && <p className="cap-error">actions.json does not parse, so no rule can be shown or changed here. {refusal}</p>}
           <div className="auth-rules">
             {rules(actionsSource).map((action) => (
               <label key={action.name}>
                 <span>{actionTitle(action.name)}</span>
-                <select
+                {/* An action whose route is its only door has no access to choose here: its route's callers decide. */}
+                {action.http && routeCallers(action.http, visibility) ? <small>{actionSentence(action, visibility)}</small> : <select
                   aria-label={`Who can ${actionTitle(action.name).toLowerCase()}`}
                   value={action.access === "anonymous" ? "anonymous" : "authenticated"}
                   onChange={(event) => onSetAccess?.(action.name, event.target.value === "anonymous" ? "anonymous" : "authenticated")}
                 >
                   <option value="anonymous">Anyone</option>
                   <option value="authenticated">A signed-in person</option>
-                </select>
+                </select>}
               </label>
             ))}
           </div>

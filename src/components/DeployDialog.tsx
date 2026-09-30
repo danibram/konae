@@ -11,7 +11,7 @@ import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { readSignupPolicy, type DeploymentReceipt, type SignupMode } from "../deployments/client";
 import type { DeploymentVisibility } from "../deployments/manifest";
-import { actionSentence, deployReadiness } from "./action-readiness";
+import { actionSentence, deployReadiness, refusalNeedsSecret } from "./action-readiness";
 import type { MiniAppProject } from "../lib/types";
 import type { OwnerSession } from "./owner-session";
 import { defaultSignupMode, firstPublishModes, republishAccessNote, signupModeCopy, visibilityCopy } from "./app-access";
@@ -33,6 +33,8 @@ type Props = {
   onDeploy: (visibility: DeploymentVisibility, signupMode?: SignupMode) => void;
   onEditAuth: () => void;
   onOpenUsers?: () => void;
+  /** Opens Auth > Integrations, where the owner sets a signing secret. */
+  onOpenIntegrations?: () => void;
 };
 
 type PolicyRead = { status: "loading" } | { status: "ready"; mode: SignupMode } | { status: "unknown"; reason: string };
@@ -52,7 +54,7 @@ function usePublishedPolicy(deploymentId: string | undefined) {
   return policy;
 }
 
-export function DeployDialog({ project, deployment, publishing, error, session, signInHref, onClose, onDeploy, onEditAuth, current = null, onOpenUsers }: Props) {
+export function DeployDialog({ project, deployment, publishing, error, session, signInHref, onClose, onDeploy, onEditAuth, current = null, onOpenUsers, onOpenIntegrations }: Props) {
   const republish = Boolean(current);
   const [chosenVisibility, setVisibility] = useState<DeploymentVisibility>(project.manifest.visibility);
   // A republish keeps the access set in Auth > Users; only a first publish chooses here.
@@ -144,7 +146,7 @@ export function DeployDialog({ project, deployment, publishing, error, session, 
 
             <ul className="deploy-made">
               {actions.map((action) => (
-                <li key={action.name}><strong>{actionTitle(action.name)}</strong><span>{actionSentence(action)}</span></li>
+                <li key={action.name}><strong>{actionTitle(action.name)}</strong><span>{actionSentence(action, visibility)}</span></li>
               ))}
             </ul>
             <button type="button" className="deploy-auth-link" onClick={onEditAuth}>Change this in Auth</button>
@@ -163,6 +165,7 @@ export function DeployDialog({ project, deployment, publishing, error, session, 
                 <strong>Deployment failed</strong>
                 <span>{error}</span>
                 {signedOut && <a href={signInHref}>Sign in to deploy</a>}
+                {onOpenIntegrations && refusalNeedsSecret(error) && <button type="button" className="deploy-auth-link" onClick={onOpenIntegrations}>Set it in Auth &gt; Integrations</button>}
               </div>
             )}
 
