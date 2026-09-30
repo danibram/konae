@@ -37,3 +37,7 @@ Drizzle derivation checks an allowlist of syntax, then evaluates the model in a 
 ## Note, 2026-11-07: the audit log keeps rows per owner and per Deployment
 
 The audit log kept the newest 10,000 rows of the whole installation. A signed-in app user writes one row for each upload that stores a file and each delete that removes one, and a transfer slot frees as soon as it is cancelled, so an upload and delete loop of about 10,000 pairs pushed every owner's history out. Pruning now keeps the newest 10,000 rows of each owner, and of each Deployment's app users together, plus the 30-day age limit. A creator calling tools in a loop now replaces only their own rows too.
+
+## Note, 2026-11-07: visitors have their own transfer pool
+
+A signed-out visitor of a public app reads a public file through `files_read`, which holds a download transfer for 10 minutes. Visitors counted against the Deployment's pool of 32, two per client address, so 16 addresses or /64s held every slot and no signed-in user could upload. Visitors now share a pool of 16 of their own, and the signed-in pool of 32 does not count them.

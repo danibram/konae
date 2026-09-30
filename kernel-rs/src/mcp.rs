@@ -16,6 +16,9 @@ pub(super) fn owner_cookie_name(state: &AppState) -> &'static str {
 }
 const MAX_OWNER_TRANSFERS: usize = 128;
 const MAX_DEPLOYMENT_TRANSFERS: usize = 32;
+/// Active transfers the signed-out visitors of one Deployment share, apart
+/// from the signed-in users' pool.
+const MAX_VISITOR_TRANSFERS: usize = 16;
 /// Active transfers one owner credential may hold.
 pub(super) const MAX_OWNER_PRINCIPAL_TRANSFERS: usize = 8;
 /// Active transfers one app user may hold. Files are at most 2 MiB, so an app
@@ -1732,23 +1735,25 @@ pub(super) async fn new_transfer(state: &AppState, principal: &str, value: Value
     // runtime traffic cannot exhaust the slots owners need for releases and exports.
     // App user transfers also expire sooner, so abandoned ones free the
     // Deployment's pool quickly.
-    let (pool, limit, per_principal, ttl) = match principal.strip_prefix("runtime:") {
-        Some(rest) => (
-            format!("runtime:{}:", rest.split(':').next().unwrap_or("")),
-            MAX_DEPLOYMENT_TRANSFERS,
-            MAX_RUNTIME_PRINCIPAL_TRANSFERS,
-            RUNTIME_TRANSFER_TTL_MS,
-        ),
-        None => (
-            "owner:".to_owned(),
-            MAX_OWNER_TRANSFERS,
-            MAX_OWNER_PRINCIPAL_TRANSFERS,
-            OWNER_TRANSFER_TTL_MS,
-        ),
+    // Signed-out visitors of a public app, one principal per client address,
+    // share a smaller pool of their own, so visitors from a handful of
+    // networks cannot hold the slots signed-in users upload with.
+    let (pool, excluded, limit, per_principal, ttl) = match principal.strip_prefix("runtime:") {
+        Some(rest) => {
+            let deployment = rest.split(':').next().unwrap_or("");
+            let visitors = format!("runtime:{deployment}:anon:");
+            if principal.starts_with(&visitors) {
+                (visitors, None, MAX_VISITOR_TRANSFERS, MAX_RUNTIME_PRINCIPAL_TRANSFERS, RUNTIME_TRANSFER_TTL_MS)
+            } else {
+                (format!("runtime:{deployment}:"), Some(visitors), MAX_DEPLOYMENT_TRANSFERS, MAX_RUNTIME_PRINCIPAL_TRANSFERS, RUNTIME_TRANSFER_TTL_MS)
+            }
+        }
+        None => ("owner:".to_owned(), None, MAX_OWNER_TRANSFERS, MAX_OWNER_PRINCIPAL_TRANSFERS, OWNER_TRANSFER_TTL_MS),
     };
     let total: usize = db.query_row(
-        "SELECT COUNT(*) FROM transfers WHERE substr(principal,1,length(?1))=?1",
-        [&pool],
+        "SELECT COUNT(*) FROM transfers WHERE substr(principal,1,length(?1))=?1
+           AND (?2 IS NULL OR substr(principal,1,length(?2))<>?2)",
+        params![&pool, excluded],
         |r| r.get(0),
     )?;
     anyhow::ensure!(
@@ -2222,6 +2227,28 @@ async fn owner_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn visitors_cannot_hold_the_transfers_signed_in_users_need() {
+        let root = std::env::temp_dir().join(format!("littlebox-visitor-transfers-{}", Uuid::new_v4()));
+        let (state, _) = crate::tests::login_test_state(&root, "public").await;
+        let begin = |principal: String| { let state = state.clone(); async move { new_transfer(&state, &principal, json!({"direction": "download", "size": 1})).await } };
+        for client in 0..MAX_VISITOR_TRANSFERS / MAX_RUNTIME_PRINCIPAL_TRANSFERS {
+            for _ in 0..MAX_RUNTIME_PRINCIPAL_TRANSFERS {
+                begin(format!("runtime:d1:anon:198.51.100.{client}")).await.unwrap();
+            }
+        }
+        let refused = begin("runtime:d1:anon:203.0.113.9".into()).await.unwrap_err().to_string();
+        assert!(refused.contains("Too many active transfers"), "{refused}");
+        // Signed-in users still have their whole pool.
+        for user in 0..MAX_DEPLOYMENT_TRANSFERS / MAX_RUNTIME_PRINCIPAL_TRANSFERS {
+            for _ in 0..MAX_RUNTIME_PRINCIPAL_TRANSFERS {
+                begin(format!("runtime:d1:user-{user}")).await.unwrap();
+            }
+        }
+        assert!(begin("runtime:d1:user-extra".into()).await.is_err());
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
 
     #[tokio::test]
     async fn app_users_cannot_push_an_owners_rows_out_of_the_audit_log() {
