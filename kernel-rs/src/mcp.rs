@@ -49,6 +49,7 @@ pub(super) fn store(state: &AppState) -> Result<Connection> {
         CREATE TABLE IF NOT EXISTS transfers(id TEXT PRIMARY KEY, principal TEXT NOT NULL, body TEXT NOT NULL, expires INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, owner TEXT NOT NULL, project TEXT NOT NULL, revision INTEGER NOT NULL, transfer TEXT NOT NULL, expires INTEGER NOT NULL, receipt TEXT);
         CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, at INTEGER NOT NULL, actor TEXT NOT NULL, tool TEXT NOT NULL, target TEXT, ok INTEGER NOT NULL);
+        CREATE INDEX IF NOT EXISTS audit_actor ON audit(actor, id);
         CREATE TABLE IF NOT EXISTS file_receipts(transfer_id TEXT PRIMARY KEY, principal TEXT NOT NULL, request_hash TEXT NOT NULL, body TEXT NOT NULL);")?;
     let has_audience: bool = db
         .prepare("PRAGMA table_info(credentials)")?
@@ -957,9 +958,15 @@ fn audit(
         )?;
         let id = db.last_insert_rowid();
         if id % AUDIT_PRUNE_INTERVAL == 0 {
+            db.execute("DELETE FROM audit WHERE at<?1", [now_ms().saturating_sub(AUDIT_RETENTION_MS)])?;
+            // Each owner, and the app users of each Deployment together, keep
+            // their own newest rows, so an app user's uploads and deletes
+            // never push an owner's history out of the log.
+            let actor = text(principal);
+            let (low, high) = audit_partition(&actor);
             db.execute(
-                "DELETE FROM audit WHERE id<=?1 OR at<?2",
-                params![id.saturating_sub(AUDIT_MAX_ROWS), now_ms().saturating_sub(AUDIT_RETENTION_MS)],
+                "DELETE FROM audit WHERE actor>=?1 AND actor<?2 AND id<=(SELECT id FROM audit WHERE actor>=?1 AND actor<?2 ORDER BY id DESC LIMIT 1 OFFSET ?3)",
+                params![low, high, AUDIT_MAX_ROWS],
             )?;
         }
         Ok(())
@@ -967,6 +974,19 @@ fn audit(
     if let Err(error_value) = written {
         eprintln!("Could not write the audit row for {principal} {name}: {error_value}");
     }
+}
+
+/// The range of `actor` values that share one audit allowance: every app
+/// user of one Deployment (`runtime:<deployment>:...`), or one owner.
+fn audit_partition(actor: &str) -> (String, String) {
+    let prefix = actor
+        .strip_prefix("runtime:")
+        .and_then(|rest| rest.split_once(':'))
+        .map(|(deployment, _)| format!("runtime:{deployment}:"))
+        .unwrap_or_else(|| actor.to_owned());
+    // The smallest string after every string that starts with the prefix.
+    let high = if prefix.starts_with("runtime:") { format!("{};", &prefix[..prefix.len() - 1]) } else { format!("{prefix}\u{1}") };
+    (prefix, high)
 }
 
 fn unauthorized(state: &AppState, headers: &HeaderMap) -> Response {
@@ -2202,6 +2222,38 @@ async fn owner_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn app_users_cannot_push_an_owners_rows_out_of_the_audit_log() {
+        let root = std::env::temp_dir().join(format!("littlebox-audit-{}", Uuid::new_v4()));
+        let (state, _) = crate::tests::login_test_state(&root, "public").await;
+        let ok: Result<Value> = Ok(json!({}));
+        audit(&state, "owner:ana", "project_create", &json!({"projectId": "p1"}), None, None, &ok);
+        let rows = AUDIT_MAX_ROWS + 3 * AUDIT_PRUNE_INTERVAL;
+        {
+            let db = store(&state).unwrap();
+            let insert = "INSERT INTO audit(at,actor,tool,target,ok) VALUES(?1,?2,'files_upload','d1',1)";
+            for index in 0..rows - 1 {
+                db.execute(insert, params![now_ms(), format!("runtime:d1:user-{}", index % 7)]).unwrap();
+            }
+        }
+        // The next app user row lands on a prune.
+        let next = store(&state).unwrap().query_row("SELECT COALESCE(MAX(id),0)+1 FROM audit", [], |row| row.get::<_, i64>(0)).unwrap();
+        {
+            let db = store(&state).unwrap();
+            for _ in next..(next / AUDIT_PRUNE_INTERVAL + 1) * AUDIT_PRUNE_INTERVAL {
+                db.execute("INSERT INTO audit(at,actor,tool,target,ok) VALUES(?1,'runtime:d1:user-x','files_delete','d1',1)", [now_ms()]).unwrap();
+            }
+        }
+        audit(&state, "runtime:d1:user-y", "files_upload", &json!({}), Some("d1"), None, &ok);
+        let db = store(&state).unwrap();
+        let count = |actor: &str| db.query_row("SELECT COUNT(*) FROM audit WHERE actor LIKE ?1", [actor], |row| row.get::<_, i64>(0)).unwrap();
+        assert_eq!(count("owner:ana"), 1, "the owner's row survives");
+        assert_eq!(count("runtime:d1:%"), AUDIT_MAX_ROWS, "the Deployment's app users keep their newest rows");
+        assert_eq!(audit_partition("runtime:d1:user-1"), ("runtime:d1:".to_owned(), "runtime:d1;".to_owned()));
+        assert_eq!(audit_partition("owner:ana"), ("owner:ana".to_owned(), "owner:ana\u{1}".to_owned()));
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
 
     #[test]
     fn runtime_principals_never_see_owner_tools_and_anonymous_visitors_cannot_upload() {
