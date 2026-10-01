@@ -87,7 +87,8 @@ try {
   };
   assert.notEqual(variants["a mutation that starts with WITH"]["actions.json"], capsule["actions.json"]);
   await owner.call("project_create", { projectId: "showcase_booking_probe", name: "Booking probe", slug: "booking-probe", manifest: { version: 1, visibility: "public" } });
-  await owner.call("secret_set", { projectId: "showcase_booking_probe", name: "panel_hook", value: panelSecret });
+  // The probe holds its own value: the Kernel refuses one owner's second project with the same one.
+  await owner.call("secret_set", { projectId: "showcase_booking_probe", name: "panel_hook", value: `probe_${panelSecret}` });
   const refusals: Record<string, { gate: string; kernel: string }> = {};
   for (const [name, change] of Object.entries(variants)) {
     const files = { ...capsule, ...change };

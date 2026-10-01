@@ -370,7 +370,10 @@ describe("HTTP routes", () => {
     const exported = await owner.call<{ transferId: string; size: number; sha256: string }>("project_export", { deploymentId });
     const state = (JSON.parse(new TextDecoder().decode(await owner.download(exported as never))) as { result: Record<string, unknown> }).result;
     await owner.call("project_create", { projectId: "http_routes_copy", name: "HTTP routes copy" });
-    await owner.call("secret_set", { projectId: "http_routes_copy", name: "orders_webhook", value: secret });
+    // A signature names no app, so one owner's two projects cannot share a value.
+    await expect(owner.call("secret_set", { projectId: "http_routes_copy", name: "orders_webhook", value: secret }))
+      .rejects.toThrow("Another of your projects already uses this secret value.");
+    await owner.call("secret_set", { projectId: "http_routes_copy", name: "orders_webhook", value: `${secret}_copy` });
     const copy = await release("http_routes_copy", { "schema.sql": schema, "actions.json": JSON.stringify(actions) }, {
       initialDatabase: state.initialDatabase, initialIdentity: state.initialIdentity, initialFiles: state.initialFiles,
     });

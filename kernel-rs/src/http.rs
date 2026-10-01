@@ -270,6 +270,8 @@ fn unset_secrets_message(actions: &[String], secrets: &[String]) -> Option<Strin
     }
 }
 
+pub(super) const SECRET_REUSED: &str = "Another of your projects already uses this secret value. A signature does not name the app, so a request signed for one would be accepted by the other. Set a different value.";
+
 /// `secrets_list`, `secret_set` and `secret_delete`. The caller has checked
 /// that the owner may act on `project` and holds the project lock.
 pub(super) fn secrets_call(db: &Connection, project: &str, deployment: Option<&Deployment>, name: &str, a: &Value) -> Result<Value> {
@@ -290,6 +292,15 @@ pub(super) fn secrets_call(db: &Connection, project: &str, deployment: Option<&D
                 (16..=512).contains(&value.len()) && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte)),
                 "A secret value is 16 to 512 printable ASCII characters without spaces."
             );
+            // A signature names no app, so a request signed for one project
+            // would be accepted by another that holds the same value.
+            let reused: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM project_secrets s JOIN projects p ON p.id = s.project
+                   WHERE s.value = ?1 AND s.project <> ?2 AND p.owner = (SELECT owner FROM projects WHERE id = ?2))",
+                rusqlite::params![value, project],
+                |row| row.get(0),
+            )?;
+            anyhow::ensure!(!reused, SECRET_REUSED);
             db.execute(
                 "INSERT INTO project_secrets(project, name, value, updated_at) VALUES(?1, ?2, ?3, ?4)
                  ON CONFLICT(project, name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
@@ -1226,6 +1237,8 @@ mod tests {
     #[test]
     fn an_unset_secret_refuses_the_release() {
         let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL);
+            INSERT INTO projects VALUES ('project_a', 'ana', '{}'), ('project_b', 'ana', '{}'), ('project_c', 'ben', '{}');").unwrap();
         let signed = program(&json!({"orders.receive": {"kind": "mutation", "access": "anonymous",
             "statement": "INSERT INTO orders (external_id) VALUES (?1)", "bindings": [{"source": "input", "key": "id", "type": "string"}],
             "http": {"method": "POST", "path": "/hooks/orders", "signature": {"header": "X-Signature", "secret": "orders_webhook"}}}}));
@@ -1254,5 +1267,10 @@ mod tests {
         let listed = secrets_call(&db, "project_a", None, "secrets_list", &json!({})).unwrap();
         assert!(!listed.to_string().contains("a-long-enough-secret"), "a listing never shows a value");
         assert!(secrets_call(&db, "project_a", None, "secret_set", &json!({"name": "orders_webhook", "value": "short"})).is_err());
+        // One owner cannot give two projects the same value; another owner may hold it.
+        let reuse = secrets_call(&db, "project_b", None, "secret_set", &json!({"name": "hook", "value": "a-long-enough-secret"}));
+        assert_eq!(reuse.unwrap_err().to_string(), SECRET_REUSED);
+        secrets_call(&db, "project_c", None, "secret_set", &json!({"name": "hook", "value": "a-long-enough-secret"})).unwrap();
+        secrets_call(&db, "project_a", None, "secret_set", &json!({"name": "second", "value": "a-long-enough-secret"})).unwrap();
     }
 }

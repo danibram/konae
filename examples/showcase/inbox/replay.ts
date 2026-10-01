@@ -29,6 +29,11 @@ const setupKey = crypto.randomUUID();
 const password = crypto.randomUUID();
 const webhookSecret = `whk_${crypto.randomUUID().replaceAll("-", "")}`;
 const feedSecret = `feed_${crypto.randomUUID().replaceAll("-", "")}`;
+// A signature names no app, so the Kernel refuses one owner's second project
+// holding the same value; each variant project gets its own secrets.
+const openWebhookSecret = `whk_${crypto.randomUUID().replaceAll("-", "")}`;
+const signedWebhookSecret = `whk_${crypto.randomUUID().replaceAll("-", "")}`;
+const signedFeedSecret = `feed_${crypto.randomUUID().replaceAll("-", "")}`;
 const today = new Date().toISOString().slice(0, 10);
 
 let kernel: ReturnType<typeof Bun.spawn> | undefined;
@@ -279,7 +284,7 @@ try {
     return { receipt, root: variantRoot };
   };
   // Without callers or a signature, a private app's GET route takes a key or a session, as its shell does.
-  const open = (await variant("showcase_inbox_open", "inbox-open", { method: "GET", path: "/api/events" }, { events_webhook: webhookSecret })).receipt;
+  const open = (await variant("showcase_inbox_open", "inbox-open", { method: "GET", path: "/api/events" }, { events_webhook: openWebhookSecret })).receipt;
   const openShell = await fetch(`${url}/`, { headers: { host: open.hostname } });
   assert.match(await openShell.text(), /<title>Sign in<\/title>/);
   const unproven = await fetch(`${url}/api/events`, { headers: { host: open.hostname, "x-forwarded-for": freshAddress() } });
@@ -287,15 +292,15 @@ try {
   pass("Unsigned read route on a private app", "With no callers and no signature, GET /api/events on a private app answers 401 authentication-required to a request with no session and no key, as its shell asks for sign-in.");
 
   // A signed GET: the MAC covers the method, the path and the query string, and a nonce keeps two requests in one second apart.
-  const signedVariant = await variant("showcase_inbox_signed", "inbox-signed", { method: "GET", path: "/api/events", signature: { header: "X-Inbox-Signature", secret: "events_feed" } }, { events_webhook: webhookSecret, events_feed: feedSecret });
+  const signedVariant = await variant("showcase_inbox_signed", "inbox-signed", { method: "GET", path: "/api/events", signature: { header: "X-Inbox-Signature", secret: "events_feed" } }, { events_webhook: signedWebhookSecret, events_feed: signedFeedSecret });
   const signedHost = signedVariant.receipt.hostname;
   const signedGet = (query: string, signature: string) => fetch(`${url}/api/events${query ? `?${query}` : ""}`, { headers: { host: signedHost, "x-forwarded-for": freshAddress(), "x-inbox-signature": signature } });
   const feedAt = Math.floor(Date.now() / 1000);
-  const forAfterOne = await signRoute(feedSecret, { method: "GET", path: "/api/events", query: "after=0" }, feedAt, "feed-a");
+  const forAfterOne = await signRoute(signedFeedSecret, { method: "GET", path: "/api/events", query: "after=0" }, feedAt, "feed-a");
   assert.equal((await signedGet("after=0", forAfterOne)).status, 200);
   const otherQuery = await signedGet("after=4", forAfterOne);
   assert.deepEqual({ status: otherQuery.status, body: await otherQuery.json() }, { status: 401, body: { error: "invalid-signature" } }, "A signature for one query does not fit another.");
-  const sameSecondOther = await signRoute(feedSecret, { method: "GET", path: "/api/events", query: "after=0" }, feedAt, "feed-b");
+  const sameSecondOther = await signRoute(signedFeedSecret, { method: "GET", path: "/api/events", query: "after=0" }, feedAt, "feed-b");
   assert.equal((await signedGet("after=0", sameSecondOther)).status, 200, "Two signed GETs in one second differ by their nonce.");
   assert.equal((await signedGet("after=0", forAfterOne)).status, 409, "The first signature, sent again, is a replay.");
   pass("Signed GET route", "A GET signed for ?after=0 answers 200 and the same header on ?after=4 answers 401 invalid-signature; a second GET in the same second with a new nonce answers 200, and the first header sent again answers 409.");
@@ -511,7 +516,7 @@ try {
   await cp(signedVariant.root, signedContractDir, { recursive: true });
   const signedContract = cli(["contract", "--dir", signedContractDir]);
   assert.equal(await signedContract.exited, 0, await new Response(signedContract.stderr).text());
-  const signed = await runConform([`events_webhook=${webhookSecret}`, `events_feed=${feedSecret}`], signedVariant.receipt.url, path.join(signedContractDir, "action-contract.json"), []);
+  const signed = await runConform([`events_webhook=${signedWebhookSecret}`, `events_feed=${signedFeedSecret}`], signedVariant.receipt.url, path.join(signedContractDir, "action-contract.json"), []);
   assert.equal(signed.code, 0, signed.out);
   assert.match(signed.totals, /^\d+ passed, 0 failed, \d+ skipped/);
   assert(signed.out.includes("PASS events.feed: answers GET /api/events."), signed.out);

@@ -311,6 +311,8 @@ secrets_list { "projectId" }                      names and update times, never 
 secret_delete { "projectId", "name" }             refused while the published Deployment signs with it
 ```
 
+A signature names no app or host, so a request signed for one project would be accepted by another that holds the same value. `secret_set` therefore refuses a value that another project of the same owner already holds, with `Another of your projects already uses this secret value. A signature does not name the app, so a request signed for one would be accepted by the other. Set a different value.` A copy of an app for staging gets its own secret, and its sender signs with that one.
+
 Secrets belong to the project and live in `mcp.sqlite`, next to the project registry, because a first publish must find them before its Deployment exists. They never enter `actions.json`, the Build Artifact, a listing, the audit log or a portable export. On another installation the owner runs `project_create`, then `secret_set`, then the release.
 
 The sender puts this in the declared header:
