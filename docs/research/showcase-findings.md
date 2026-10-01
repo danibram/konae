@@ -81,3 +81,29 @@ A suspended member's session answers as signed out and only the login route says
 7. Keys in the package, and the docs made true either way.
 
 Items 1 to 3 touch `http.rs`, `usage.rs`, `actions.ts` and the Gate together and go as one delivery. Items 4 to 7 are disjoint and can run in parallel.
+
+## What the matrix adds
+
+Date: 2026-11-07. [The capability matrix](./capability-matrix.md) judges ten app shapes against 24 features, 240 cells, with six probes in [examples/probes](../../examples/probes/README.md) for the cells the showcase did not prove. 116 cells work, 77 work with a compromise and 47 are not possible. Of the 87 cells a shape cannot ship without, 16 are not possible, and only the public dataset has none.
+
+Five features account for those 16. Each primitive below is a declaration the Kernel reads from `actions.json` or the Deployment record and runs inside its one process, so no app gets a process of its own and no app runs code of its own, as the product rule in [the architecture](../architecture.md#product-rule) and [the plan](../plans/portable-personal-apps.md) require.
+
+| Feature | Shapes it blocks | Smallest primitive that unblocks it |
+| --- | --- | --- |
+| Email on an event | Landing page, team tool, community, form collector, integration hub, shop, two-sided app | A `notify` declaration on a mutation, recorded like a Signal when the statement changes a row and queued as an Email Job in the existing queue ([ADR-0012](../adr/0012-account-email-goes-through-a-persistent-queue.md)). It goes to the Project Owner or to the calling account, never to an address an input supplies, so the app cannot become a relay. The text is a template in `actions.json` with escaped input values, and the per-app limit of 100 a day holds. Sending to followers waits for a second form that takes account IDs from a query |
+| Scheduled or delayed work | Personal tracker, team tool, integration hub; degrades the blog and the shop | A `schedule` on a mutation with no input bindings, such as every 15 minutes or daily at a UTC time, that the Kernel's own timer runs under the Deployment's lock, as it already runs copies, with no actor and a Usage count under `scheduled`. With `notify` it sends a reminder: the scheduled statement marks due rows and the notice goes out for each change. A retry of an outbound call stays out, because no action calls out |
+| Custom domain | Landing page, blog or docs site, shop | A hostname alias per Deployment that the owner sets with a tool needing `publish`. The Kernel resolves it next to the generated hostname, treats it as the app's origin for the Origin check and the cookies, refuses one another Deployment holds, and carries it in the Package and a Migration. TLS stays with the operator's proxy |
+| Payments | Shop or booking board, two-sided app | The webhook primitive below. A payment then becomes a link to the provider's hosted page, which the page policy already lets through, and a verified webhook that marks the order paid with the guarded mutation the shop probe uses. Checkout inside the page stays out under `script-src 'self'` and `connect-src 'self'` |
+| Webhooks from outside services | Integration hub | A declared `scheme` on a route's signature: an HMAC of the body with an optional prefix such as `sha256=`, an HMAC of `<t>.<body>` read from a `t=...,v1=...` header, and Svix, which the Kernel already verifies for Resend. Each input binding may name a JSON pointer, `"from": "/repository/full_name"`, and the route ignores body fields no binding names. The Gate and the Kernel parse both from one case file, as `http-binding-cases.json` does today |
+
+The last two rows share one primitive, so four additions unblock all 16 cells. The next features down block no shape but degrade the most: search, `LIKE` only, in four shapes; realtime, polling only, in three; roles that only the owner's SQL can start and that never see an email, in three.
+
+The probes also found three places where the Gate and the Kernel answer the same declaration differently. Each touches the contract on both sides, so this review reports them for a delivery that changes `src/kernel/actions.ts`, `kernel-rs/src/main.rs`, docs/mcp.md and CONTEXT.md together:
+
+| Declaration | Validation Gate | Kernel |
+| --- | --- | --- |
+| `{ "source": "actor", "field": "email" }` | Refuses: `Invalid binding 1 in members.join.` | Publishes; every call answers `Unsupported binding source: actor` |
+| `"kind": "email"` | `Invalid server action: notes.mail` | `Action notes.mail has an unsupported kind.` |
+| `"schedule"` on a mutation, `"subscribe"` on a query | Passes and ignores it | Publishes and ignores it |
+
+The first is the one to fix first: a Capsule that the editor refuses publishes from the CLI and fails at its first call. The third matters once `schedule` becomes a primitive, because today an agent can write one and see both doors accept it.

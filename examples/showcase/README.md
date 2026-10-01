@@ -17,3 +17,5 @@ bun run examples/showcase/replay-all.ts
 ```
 
 Each README ends with a table of what the primitives refused or could not do, with the exact message. Those tables are consolidated in [the showcase findings](../../docs/research/showcase-findings.md). A passing replay with a long table is the expected result: the apps exist to find the edges.
+
+[The capability matrix](../../docs/research/capability-matrix.md) judges ten common app shapes against 24 features, citing these replays and the [probes](../probes/README.md) that cover what they do not.
