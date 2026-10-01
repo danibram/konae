@@ -176,5 +176,5 @@ The check that every agent-proposed change must pass before it is applied to a P
 _Avoid_: linter, preview
 
 **Agent Credential**:
-A Project Owner's revocable delegation that permits an external agent to perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity. Its permissions are `read`, `write`, `publish` and `export_data`; only `export_data` downloads accounts and data.
+A Project Owner's revocable delegation that permits an external agent to perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity. Its permissions are `read`, `write`, `publish`, `manage_users`, `export_data` and `manage_lifecycle`; only `export_data` downloads accounts and data, and only `manage_lifecycle` ejects or migrates a Project.
 _Avoid_: Runtime session, installation key
