@@ -33,6 +33,7 @@ mod copies;
 mod eject;
 mod files;
 mod guard;
+mod guide;
 mod http;
 mod invitations;
 mod limits;
