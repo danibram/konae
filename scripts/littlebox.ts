@@ -59,6 +59,42 @@ export function signupPolicyWarning(wanted: SignupPolicy, current: SignupPolicy)
   return `littlebox.json asks for signup ${describePolicy(wanted)}, but this app has ${describePolicy(current)}. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Auth > Users view, or call signup_policy_set with a credential that holds manage_users.`;
 }
 
+/**
+ * The scopes `login` asks for: read, write and publish always, and each
+ * permission a flag names. A delegated token cannot widen itself later, so
+ * the flags are the only way the CLI gets them.
+ */
+export function loginScopes(args: string[]) {
+  return ["read", "write", "publish",
+    ...(args.includes("--manage-users") ? ["manage_users"] : []),
+    ...(args.includes("--export-data") ? ["export_data"] : []),
+    ...(args.includes("--manage-lifecycle") ? ["manage_lifecycle"] : [])];
+}
+
+/** What `littlebox help` prints: every command with its options, in the order a project meets them. */
+export const HELP = `Usage: bun run littlebox -- <command> [options]
+
+login     --dir <folder> --url <Kernel URL> [--manage-users] [--export-data] [--manage-lifecycle]
+          Reads LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD, plus LITTLEBOX_INVITATION_CODE to create the
+          account with an operator's invitation code, or LITTLEBOX_SETUP_KEY for the first owner.
+          Saves a 24-hour token with read, write and publish in <folder>/.littlebox/credentials.json.
+          Each flag adds that permission: inviting app users, exporting live data, Eject and migration.
+init      --dir <empty folder> --name <name> --url <Kernel URL>   Registers a project and writes a template.
+dev       --dir <folder> [--port 8796]   Runs the app on a local Development Kernel and republishes on change.
+build     --dir <folder>                 Writes .littlebox/artifact.json.
+contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its schema and action-contract.md.
+publish   --dir <folder>                 Builds and publishes. Set each signing secret with secret_set first.
+conform   --url <app URL> --contract <file> [--token <app session>] [--key <API key>]
+          [--secret <name>=<value>] [--inputs <file>]
+          Calls every action and checks the answers against the contract. It runs each mutation once,
+          so point it at a test Deployment.
+export    --dir <folder> [--out <file>] [--with-data]   Writes a self-hosted kit; --with-data adds the
+          live package and needs a credential from login --export-data.
+eject     --dir <empty folder> --project <id> --url <Kernel URL> [--revision <n>]
+          Moves a Managed project's sources into the folder. Needs login --manage-lifecycle.
+
+Every command but login reads the credential from <folder>/.littlebox/credentials.json or LITTLEBOX_MCP_TOKEN.`;
+
 function endpoint(url: string) { return new URL("/mcp", url).href; }
 async function json<T>(filename: string): Promise<T> { return JSON.parse(await readFile(filename, "utf8")); }
 
@@ -354,9 +390,10 @@ async function main() {
   if (argv[0] === "--") argv.shift();
   const [command, ...args] = argv;
   if (!command || ["help", "--help"].includes(command)) {
-    console.log("Use login, init, build, dev, publish, export, eject, contract, or conform. Options include --dir, --url, --name, --port, and --out. Export --with-data includes live data, accounts, and files; it needs a credential from login --export-data or a token with export_data. contract writes action-contract.json, its schema and action-contract.md from actions.json and schema.sql. conform --url <app URL> --contract <file> calls every action on a Kernel and checks the answers against the contract; it runs each mutation once, so point it at a test Deployment. Add --token <app session token> to call authenticated actions, --key <API key> for routes, --secret <name>=<value> to sign a route, and --inputs <file> with input values by action where a generated string will not do.");
+    console.log(HELP);
     return;
   }
+  if (!["login", "init", "build", "contract", "conform", "eject", "export", "publish", "dev"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
   const option = (name: string, fallback?: string) => {
     const i = args.indexOf(`--${name}`);
     if (i < 0) return fallback;
@@ -369,7 +406,7 @@ async function main() {
     const url = option("url", process.env.LITTLEBOX_URL ?? "http://localhost:4173")!;
     const email = process.env.LITTLEBOX_EMAIL; const password = process.env.LITTLEBOX_PASSWORD;
     if (!email || !password) throw Error("Set LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD. To create the account, also set LITTLEBOX_INVITATION_CODE, or LITTLEBOX_SETUP_KEY for the first owner.");
-    const scopes = ["read", "write", "publish", ...(args.includes("--export-data") ? ["export_data"] : []), ...(args.includes("--manage-lifecycle") ? ["manage_lifecycle"] : [])];
+    const scopes = loginScopes(args);
     const token = await login(url, email, password, { code: process.env.LITTLEBOX_INVITATION_CODE, setupKey: process.env.LITTLEBOX_SETUP_KEY }, scopes);
     await mkdir(path.join(root, ".littlebox"), { recursive: true });
     await writeFile(path.join(root, ".littlebox/credentials.json"), JSON.stringify({ url, token }), { mode: 0o600 });
@@ -478,7 +515,6 @@ async function main() {
     } finally { child.kill(); }
     return;
   }
-  throw Error("Use login, init, build, dev, publish, export, eject, contract, or conform. Options include --dir, --url, --name, --port, and --out.");
 }
 
 if (import.meta.main) main().catch(error => { console.error(error.message); process.exitCode = 1; });
