@@ -204,7 +204,7 @@ try {
     [["Lead", "admin"], ["Member", "admin"], ["Developer", "member"], ["Member", "member"]]);
   await assert.rejects(action(lead, "members.promote", { id: idOf("Member") }), /and only one who is not an admin yet/);
   assert.equal((await action(member, "cards.delete", { id: card.id })).changes, 1);
-  check("Team board", "Three users obey SQL role checks with each guard's sentence, an outsider cannot sign up, the owner seeds the first admin, and promotion names a member's row, so a second member who picks the same display name is not promoted with it.");
+  check("Team board", "Four users obey SQL role checks with each guard's sentence, an outsider cannot sign up, the owner seeds the first admin, and promotion names a member's row, so a second member who picks the same display name is not promoted with it.");
 
   await owner.call("signup_policy_set", { deploymentId: receipts.portfolio.id, mode: "allowlist", allowlist: ["potter@example.test"] });
   const potter = await signupApp("portfolio", "potter@example.test");
