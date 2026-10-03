@@ -291,7 +291,7 @@ fn run(root: &Path, args: &[String], now: i64) -> Result<String> {
             );
             let (id, code, expires_at) = create(root, &note, ttl, now)?;
             Ok(format!(
-                "Invitation code, shown once: {code}\nID: {id}\nExpires: {}\nIt creates one creator account. The installation key no longer creates accounts on this installation.",
+                "Invitation code, shown once: {code}\nID: {id}\nExpires: {}\nIt creates one creator account. The setup key no longer creates accounts on this installation.",
                 timestamp(expires_at)
             ))
         }
@@ -582,6 +582,7 @@ mod tests {
             .cli(&["creator-code-create", "--expires-in", "2d", "--note", "For Ada"])
             .unwrap();
         assert!(created.starts_with("Invitation code, shown once: "));
+        assert!(created.ends_with("The setup key no longer creates accounts on this installation."), "{created}");
         let id = created.lines().nth(1).unwrap().trim_start_matches("ID: ").to_owned();
         let listed = fixture.cli(&["creator-code-list"]).unwrap();
         let row = listed.lines().nth(1).unwrap();

@@ -75,10 +75,10 @@ A suspended member's session answers as signed out and only the login route says
 1. Done on 2026-11-06, see the ADR-0011 update "a route binds its action". Bind a signed route to its action: an action with a signature or a key requirement is not callable through `actions_invoke`, and a route on a private app without a signature requires a key or a session. Include method, path and query in the MAC and add a nonce. This is the only finding that opens data the app meant to close.
 2. Done on 2026-11-06, see the ADR-0010 update. Make a refused mutation visible: a declared `refuse` clause, or a convention that `changes: 0` with a declared guard answers `forbidden`, so the page, Usage, the Signal and the contract all see a refusal. Record Signals only when `changes > 0`, and let a Signal name the actor.
 3. Done on 2026-11-06, see the ADR-0009 note. One refusal text per rule at both doors, with a test that walks every shared case through the Gate and the Kernel and compares the words, as `http-binding-cases.json` and `signal-cases.json` already do for two groups.
-4. The static publishing contract from product-fit: multi-page artifacts in the CLI, 404, extensionless paths, `404.html`.
-5. Initial signup policy in `littlebox publish` and `littlebox.json`; invitations allowed under Closed when the owner sends them.
+4. Done on 2026-11-06, see the ADR-0005 note on the static publishing contract. The static publishing contract from product-fit: multi-page artifacts in the CLI, 404, extensionless paths, `404.html`.
+5. Done on 2026-11-06, see the ADR-0011 note on Closed and `project.manifest.signupPolicy` in docs/mcp.md. Initial signup policy in `littlebox publish` and `littlebox.json`; invitations allowed under Closed when the owner sends them.
 6. File lifecycle: publish and delete. Done 2026-11-06: `files_update`, `files_delete` and `miniapp.files.url`.
-7. Keys in the package, and the docs made true either way.
+7. Done on 2026-11-06, see the ADR-0013 note on keys. Keys in the package, and the docs made true either way.
 
 Items 1 to 3 touch `http.rs`, `usage.rs`, `actions.ts` and the Gate together and go as one delivery. Items 4 to 7 are disjoint and can run in parallel.
 
