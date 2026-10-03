@@ -1,6 +1,6 @@
 # Walkthrough: from a credential to a migration over MCP
 
-This page takes one app through every operation an external agent performs on Littlebox: get an Agent Credential, create a project, run it on a Development Kernel, give it a second page, a signed webhook, an API Key, a guarded mutation, a Signal and a private file, publish it with a signup policy, invite a member, check it against its Action Contract, read its Usage and Signals, export it, import it on a second Kernel, eject a Managed Project, and begin and cancel a migration.
+This page takes one app through every operation an external agent performs on Littlebox: get an Agent Credential, create a project, run it on a Development Kernel, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, publish it with a signup policy, invite a member, check it against its Action Contract, read its Usage and Signals, export it, import it on a second Kernel, eject a Managed Project, and begin and cancel a migration.
 
 Every command and every answer below was recorded from real Kernels by `tests/mcp-walkthrough.integration.test.ts`, which fails when this page differs from what the Kernel answers. Values that change on every run appear as placeholders in angle brackets, such as `<project id>`. Kernel A answers on `http://localhost:4173`, Kernel B on `http://localhost:4174`, and the Development Kernel on `http://localhost:8796`. An app's host is `<slug>-<suffix>.localhost` on its Kernel's port.
 
@@ -19,7 +19,7 @@ littlebox-kernel creator-code-create --note 'Walkthrough agent'
 Invitation code, shown once: <invitation code>
 ID: <code id>
 Expires: <expiry>
-It creates one creator account. The installation key no longer creates accounts on this installation.
+It creates one creator account. The setup key no longer creates accounts on this installation.
 ```
 <!-- /walkthrough:operator -->
 
@@ -328,7 +328,7 @@ content-type: text/html; charset=utf-8
 
 ## 6. Write the app
 
-The app keeps orders that a shop posts to a signed webhook. Members sign in, see the orders and claim one; claiming an order twice is refused by the guard. An accounting program reads the orders with an API Key. `pages/about.html` is the second page and answers at `/about`.
+The app keeps orders that a shop posts to a signed webhook. Members sign in, see the orders and claim one; claiming an order twice is refused by the guard. An accounting program reads the orders with an API key. `pages/about.html` is the second page and answers at `/about`.
 
 <!-- walkthrough:files -->
 ```sh
@@ -507,7 +507,7 @@ Wrote the Action Contract for 4 actions to /tmp/orders/action-contract.json, wit
 ```
 <!-- /walkthrough:contract -->
 
-## 7. Set the Signing Secret, then publish
+## 7. Set the signing secret, then publish
 
 `orders.receive` signs with `orders_webhook`, which the project does not have yet, so the first publish is refused with what to do:
 
@@ -521,7 +521,7 @@ Action orders.receive signs with the secret orders_webhook, which is not set for
 ```
 <!-- /walkthrough:publish-refused -->
 
-A Signing Secret belongs to the project, never leaves the Kernel and is not part of the folder. Set it with `secret_set`:
+A signing secret belongs to the project, never leaves the Kernel and is not part of the folder. Set it with `secret_set`:
 
 <!-- walkthrough:secret -->
 ```json
@@ -955,7 +955,7 @@ content-type: application/json
 ```
 <!-- /walkthrough:file -->
 
-## 10. Issue an API Key
+## 10. Issue an API key
 
 `api_keys_create` returns the key once. This key may call `orders.feed` and reads no files, so the private invoice answers 404 to it, the same as a missing file.
 
@@ -1026,7 +1026,7 @@ content-type: application/json
 
 ## 11. Check the app against its contract
 
-`conform` calls every action through the runtime endpoint and the routes, and checks each answer and each refusal against `action-contract.json`. `--token` is the value of the app session cookie, `--key` an API Key, and `--secret` signs the webhook. It runs each mutation once, so point it at a test Deployment.
+`conform` calls every action through the runtime endpoint and the routes, and checks each answer and each refusal against `action-contract.json`. `--token` is the value of the app session cookie, `--key` an API key, and `--secret` signs the webhook. It runs each mutation once, so point it at a test Deployment.
 
 <!-- walkthrough:conform -->
 ```sh
@@ -1321,7 +1321,7 @@ Exporting needs `export_data`, which OAuth does not grant:
 
 ## 14. Import on a second Kernel
 
-The destination needs its own credential, the project under the same ID, and the Signing Secret, which does not travel. Without it, `release_plan` refuses the release as in step 7.
+The destination needs its own credential, the project under the same ID, and the signing secret, which does not travel. Without it, `release_plan` refuses the release as in step 7.
 
 <!-- walkthrough:second-kernel -->
 ```sh
@@ -1529,7 +1529,7 @@ Built .littlebox/artifact.json
 ```
 <!-- /walkthrough:import-release -->
 
-Sessions and email links stay behind, so the member signs in again with the same password and finds the same rows. The API Key arrives revoked, with its name and scope, so the owner knows which program needs a new one.
+Sessions and email links stay behind, so the member signs in again with the same password and finds the same rows. The API key arrives revoked, with its name and scope, so the owner knows which program needs a new one.
 
 <!-- walkthrough:import-check -->
 ```sh

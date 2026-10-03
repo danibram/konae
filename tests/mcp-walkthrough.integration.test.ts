@@ -305,7 +305,7 @@ describe("the MCP walkthrough", () => {
     expect((await run(["contract", "--dir", app()])).code).toBe(0);
   });
 
-  test("7. a Signing Secret, then publish with the policy littlebox.json names", async () => {
+  test("7. a signing secret, then publish with the policy littlebox.json names", async () => {
     r.step("publish-refused");
     const refused = await run(["publish", "--dir", app()]);
     expect(refused.code).toBe(1);
@@ -392,7 +392,7 @@ describe("the MCP walkthrough", () => {
     expect((await http("GET", a, `/_littlebox/files/${s.fileId}`, { host: s.hostname })).response.status).toBe(401);
   }, 60_000);
 
-  test("10. an API Key for the feed route", async () => {
+  test("10. an API key for the feed route", async () => {
     r.step("key");
     const created = await tool("api_keys_create", { deploymentId: s.deploymentId, name: "Accounting export", actions: ["orders.feed"], files: [] });
     s.key = (created.result as any).key;
