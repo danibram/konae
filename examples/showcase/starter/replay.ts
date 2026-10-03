@@ -511,7 +511,7 @@ try {
   assert.equal((await action(ana, "attachments.add", { fileId: brochure.id, name: brochure.name, size: brochure.size })).changes, 1);
   const photos = await upload(ana, new Uint8Array(2 * MiB).fill(7), "site-photos.bin", "application/octet-stream");
   assert.equal((await action(ana, "attachments.add", { fileId: photos.id, name: photos.name, size: photos.size })).changes, 1);
-  const [photosRow, brochureRow, draftRow] = await action(ana, "attachments.list");
+  const [photosRow, brochureRow] = await action(ana, "attachments.list");
 
   // The avatar is public: a visitor reads it inline.
   const visitorAvatar = await S.fileGet(avatar.id);
@@ -575,7 +575,6 @@ try {
   assert.equal(await message(ana.call("files_read", { fileId: photos.id })), "File not found.");
   for (const id of fillers) await ben.call("files_delete", { fileId: id });
   assert.deepEqual((await action(ana, "attachments.list")).map((row: any) => [row.name, row.public]), [["brochure.txt", 1], ["contract-draft.txt", 0]]);
-  void draftRow;
   check("Files", `Ana's avatar is public and a visitor reads it inline; her draft is private, so a visitor and Ben get 404 "File not found." as for a missing file, and Ben's files_update and files_delete are refused. Publishing the brochure takes files_update and attachments.publish, then downloads.list and a visitor read it. ${fillers.length - 1} of Ben's 2 MiB files plus Ana's 2 MiB attachment fill the quota and the next upload answers "${quotaRefusal}"; Ana deletes her attachment, the file path and files_read answer 404 and "File not found.", and Ben's same upload succeeds.`);
 
   // --------------------------------------- a guard and its refusal, for the page

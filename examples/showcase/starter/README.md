@@ -49,11 +49,14 @@ LITTLEBOX_SHOWCASE_BROWSER=0 LITTLEBOX_SHOWCASE_PORT=23450 bun run examples/show
 By hand, against a Kernel you started with `bun run dev:local`:
 
 ```sh
-bun run littlebox -- login --dir /tmp/starter --url http://localhost:4173
+LITTLEBOX_EMAIL=you@example.com LITTLEBOX_PASSWORD=... bun run littlebox -- login --dir /tmp/starter --url http://localhost:4173
 bun run littlebox -- init --dir /tmp/starter --name Starter --url http://localhost:4173
 cp examples/showcase/starter/{index.html,styles.css,app.js,favicon.svg,schema.sql,schema.ts,actions.json} /tmp/starter/
 # In /tmp/starter/littlebox.json set "visibility": "public" and "signupPolicy": { "mode": "open" },
-# delete the template's other files, then set the webhook's secret with secret_set and publish.
+# and delete the template's other files.
+# Set the webhook's secret before the first publish: in the editor's Auth > Integrations view, or over MCP
+# with an owner credential that holds publish: secret_set { "projectId": "<id in littlebox.json>",
+# "name": "status_webhook", "value": "<16 to 512 printable characters>" }.
 bun run littlebox -- publish --dir /tmp/starter
 ```
 

@@ -17,4 +17,4 @@ Each app has a `replay.ts` that starts its own Kernel, publishes the app, runs e
 bun run examples/showcase/replay-all.ts
 ```
 
-Each README ends with a table of what the primitives refused or could not do, with the exact message. Those tables are consolidated in [the showcase findings](../../docs/research/showcase-findings.md). A passing replay with a long table is the expected result: the apps exist to find the edges.
+Each README ends with a table of what the primitives refused or could not do, with the exact message. The first five tables are consolidated in [the showcase findings](../../docs/research/showcase-findings.md); starter's stands in its own README. A passing replay with a long table is the expected result: the apps exist to find the edges.
