@@ -1,0 +1,273 @@
+{
+  "version": 1,
+  "actions": {
+    "updates.list": {
+      "kind": "query",
+      "access": "anonymous",
+      "http": { "method": "GET", "path": "/api/updates" },
+      "statement": "SELECT u.id, u.title, u.body, u.source, u.published_at, p.display_name AS author FROM updates u LEFT JOIN profiles p ON p.user_id = u.author_id WHERE (?1 IS NULL OR u.id < ?1) AND (?2 IS NULL OR u.title LIKE '%' || ?2 || '%' OR u.body LIKE '%' || ?2 || '%') ORDER BY u.id DESC LIMIT 10",
+      "bindings": [
+        { "source": "input", "key": "before", "type": "number", "nullable": true },
+        { "source": "input", "key": "q", "type": "string", "maxLength": 60, "nullable": true }
+      ]
+    },
+    "status.list": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT component, state, detail, updated_at FROM status ORDER BY component LIMIT 20",
+      "bindings": []
+    },
+    "downloads.list": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT a.id, a.file_id, a.name, a.size, a.created_at, p.display_name AS owner_name FROM attachments a LEFT JOIN profiles p ON p.user_id = a.user_id WHERE a.public = 1 ORDER BY a.id DESC LIMIT 50",
+      "bindings": []
+    },
+    "downloads.opened": {
+      "kind": "signal",
+      "access": "anonymous",
+      "bindings": [
+        { "source": "input", "key": "fileId", "type": "string", "maxLength": 64 }
+      ],
+      "signal": { "name": "download.opened", "properties": ["fileId", "actor"] }
+    },
+    "updates.post": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": { "method": "POST", "path": "/api/updates", "callers": ["key"] },
+      "statement": "INSERT INTO updates (title, body, source, author_id, published_at) VALUES (?1, COALESCE(?2, ''), 'program', ?3, ?4)",
+      "bindings": [
+        { "source": "input", "key": "title", "type": "string", "maxLength": 120 },
+        { "source": "input", "key": "body", "type": "string", "maxLength": 4000, "nullable": true },
+        { "source": "actor", "field": "id" },
+        { "source": "kernel", "field": "now" }
+      ],
+      "signal": { "name": "update.posted", "properties": ["title", "actor"] }
+    },
+    "owners.appoint": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": { "method": "POST", "path": "/api/owners", "callers": ["key"] },
+      "guard": "No member has joined with that user ID, or they are the owner already.",
+      "statement": "UPDATE profiles SET role = 'owner' WHERE user_id = ?1 AND role <> 'owner'",
+      "bindings": [
+        { "source": "input", "key": "userId", "type": "string", "maxLength": 64 }
+      ],
+      "signal": { "name": "role.changed", "properties": ["userId", "actor"] }
+    },
+    "status.report": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": { "method": "POST", "path": "/hooks/status", "signature": { "header": "X-Starter-Signature", "secret": "status_webhook" } },
+      "statement": "INSERT INTO status (component, state, detail, updated_at) VALUES (?1, ?2, COALESCE(?3, ''), ?4) ON CONFLICT (component) DO UPDATE SET state = excluded.state, detail = excluded.detail, updated_at = excluded.updated_at WHERE status.state IS NOT excluded.state OR status.detail IS NOT excluded.detail",
+      "bindings": [
+        { "source": "input", "key": "component", "type": "string", "maxLength": 40 },
+        { "source": "input", "key": "state", "type": "string", "maxLength": 12 },
+        { "source": "input", "key": "detail", "type": "string", "maxLength": 200, "nullable": true },
+        { "source": "kernel", "field": "now" }
+      ],
+      "signal": { "name": "status.changed", "properties": ["component", "state", "actor"] }
+    },
+    "me.join": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO profiles (user_id, display_name, role, joined_at) VALUES (?1, ?2, 'member', ?3) ON CONFLICT (user_id) DO NOTHING",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "displayName", "type": "string", "maxLength": 40 },
+        { "source": "kernel", "field": "now" }
+      ],
+      "signal": { "name": "member.joined", "properties": ["actor"] }
+    },
+    "me.get": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT user_id, display_name, role, avatar_file_id, joined_at FROM profiles WHERE user_id = ?1 LIMIT 1",
+      "bindings": [
+        { "source": "actor", "field": "id" }
+      ]
+    },
+    "me.rename": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "Another member already uses that display name, or it is yours already.",
+      "statement": "UPDATE profiles SET display_name = ?2 WHERE user_id = ?1 AND display_name IS NOT ?2 AND NOT EXISTS (SELECT 1 FROM profiles other WHERE lower(other.display_name) = lower(?2) AND other.user_id <> ?1)",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "displayName", "type": "string", "maxLength": 40 }
+      ]
+    },
+    "me.avatar": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "UPDATE profiles SET avatar_file_id = ?2 WHERE user_id = ?1",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "fileId", "type": "string", "maxLength": 64, "nullable": true }
+      ]
+    },
+    "notes.list": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT id, title, body, created_at FROM notes WHERE user_id = ?1 AND (?2 IS NULL OR id < ?2) AND (?3 IS NULL OR title LIKE '%' || ?3 || '%' OR body LIKE '%' || ?3 || '%') ORDER BY id DESC LIMIT 20",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "before", "type": "number", "nullable": true },
+        { "source": "input", "key": "q", "type": "string", "maxLength": 60, "nullable": true }
+      ]
+    },
+    "notes.add": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO notes (user_id, title, body, created_at) VALUES (?1, ?2, COALESCE(?3, ''), ?4)",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "title", "type": "string", "maxLength": 120 },
+        { "source": "input", "key": "body", "type": "string", "maxLength": 4000, "nullable": true },
+        { "source": "kernel", "field": "now" }
+      ],
+      "signal": { "name": "note.added", "properties": ["actor"] }
+    },
+    "notes.remove": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "That note is not yours, or it is already gone.",
+      "statement": "DELETE FROM notes WHERE id = ?2 AND user_id = ?1",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "id", "type": "number" }
+      ]
+    },
+    "attachments.list": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT id, file_id, name, size, public, created_at FROM attachments WHERE user_id = ?1 ORDER BY id DESC LIMIT 50",
+      "bindings": [
+        { "source": "actor", "field": "id" }
+      ]
+    },
+    "attachments.add": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO attachments (user_id, file_id, name, size, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "fileId", "type": "string", "maxLength": 64 },
+        { "source": "input", "key": "name", "type": "string", "maxLength": 180 },
+        { "source": "input", "key": "size", "type": "number" },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "attachments.publish": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "Only the member who attached this file can publish it, and only once.",
+      "statement": "UPDATE attachments SET public = 1 WHERE id = ?2 AND user_id = ?1 AND public = 0",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "id", "type": "number" }
+      ],
+      "signal": { "name": "attachment.published", "properties": ["id", "actor"] }
+    },
+    "attachments.remove": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "That attachment is not yours, or it is already gone.",
+      "statement": "DELETE FROM attachments WHERE id = ?2 AND user_id = ?1",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "id", "type": "number" }
+      ]
+    },
+    "team.roster": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT p.user_id, p.display_name, p.role, p.avatar_file_id FROM profiles p WHERE p.role IN ('admin', 'owner') AND EXISTS (SELECT 1 FROM profiles caller WHERE caller.user_id = ?1 AND caller.role IN ('admin', 'owner')) ORDER BY p.display_name LIMIT 50",
+      "bindings": [
+        { "source": "actor", "field": "id" }
+      ]
+    },
+    "team.posts": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT t.id, t.body, t.created_at, p.display_name AS author FROM team_posts t LEFT JOIN profiles p ON p.user_id = t.author_id WHERE EXISTS (SELECT 1 FROM profiles caller WHERE caller.user_id = ?1 AND caller.role IN ('admin', 'owner')) AND (?2 IS NULL OR t.id < ?2) ORDER BY t.id DESC LIMIT 20",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "before", "type": "number", "nullable": true }
+      ]
+    },
+    "team.post": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "Only team admins can post in the team area.",
+      "statement": "INSERT INTO team_posts (author_id, body, created_at) SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM profiles caller WHERE caller.user_id = ?1 AND caller.role IN ('admin', 'owner'))",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "body", "type": "string", "maxLength": 2000 },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "updates.publish": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "Only team admins can publish an update.",
+      "statement": "INSERT INTO updates (title, body, source, author_id, published_at) SELECT ?2, COALESCE(?3, ''), 'team', ?1, ?4 WHERE EXISTS (SELECT 1 FROM profiles caller WHERE caller.user_id = ?1 AND caller.role IN ('admin', 'owner'))",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "title", "type": "string", "maxLength": 120 },
+        { "source": "input", "key": "body", "type": "string", "maxLength": 4000, "nullable": true },
+        { "source": "kernel", "field": "now" }
+      ],
+      "signal": { "name": "update.posted", "properties": ["title", "actor"] }
+    },
+    "members.list": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT p.user_id, p.display_name, p.role, p.avatar_file_id, p.joined_at FROM profiles p WHERE EXISTS (SELECT 1 FROM profiles caller WHERE caller.user_id = ?1 AND caller.role = 'owner') AND (?2 IS NULL OR p.display_name LIKE '%' || ?2 || '%') ORDER BY p.display_name LIMIT 100",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "q", "type": "string", "maxLength": 40, "nullable": true }
+      ]
+    },
+    "members.promote": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "Only the app's owner can make a member a team admin.",
+      "statement": "UPDATE profiles SET role = 'admin' WHERE user_id = ?2 AND role = 'member' AND EXISTS (SELECT 1 FROM profiles caller WHERE caller.user_id = ?1 AND caller.role = 'owner')",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "userId", "type": "string", "maxLength": 64 }
+      ],
+      "signal": { "name": "role.changed", "properties": ["userId", "actor"] }
+    },
+    "members.demote": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "Only the app's owner can return a team admin to member.",
+      "statement": "UPDATE profiles SET role = 'member' WHERE user_id = ?2 AND role = 'admin' AND EXISTS (SELECT 1 FROM profiles caller WHERE caller.user_id = ?1 AND caller.role = 'owner')",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "userId", "type": "string", "maxLength": 64 }
+      ],
+      "signal": { "name": "role.changed", "properties": ["userId", "actor"] }
+    },
+    "updates.remove": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "Only the app's owner can remove an update.",
+      "statement": "DELETE FROM updates WHERE id = ?2 AND EXISTS (SELECT 1 FROM profiles caller WHERE caller.user_id = ?1 AND caller.role = 'owner')",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "id", "type": "number" }
+      ]
+    },
+    "admin.stats": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT (SELECT COUNT(*) FROM profiles) AS members, (SELECT COUNT(*) FROM profiles WHERE role = 'admin') AS admins, (SELECT COUNT(*) FROM notes) AS notes, (SELECT COUNT(*) FROM attachments) AS attachments, (SELECT COUNT(*) FROM attachments WHERE public = 1) AS published, (SELECT COUNT(*) FROM updates) AS updates WHERE EXISTS (SELECT 1 FROM profiles caller WHERE caller.user_id = ?1 AND caller.role = 'owner') LIMIT 1",
+      "bindings": [
+        { "source": "actor", "field": "id" }
+      ]
+    }
+  }
+}
