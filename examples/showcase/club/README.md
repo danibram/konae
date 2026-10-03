@@ -63,7 +63,7 @@ The predicate still holds on both Kernels. Nobody without the role changed a row
 | Area | Request | Answer |
 | --- | --- | --- |
 | Signup Policy | `publishLocal`, the function behind `littlebox publish`, on a private app | Fixed on 2026-11-06. The Deployment started Closed because `scripts/littlebox.ts` never sent `initialSignupPolicy`, so Invitation only needed a second step with a different credential. `littlebox.json` now names `project.manifest.signupPolicy`; the replay publishes as Invitation only with the publish token alone, and a republish naming Open prints a warning that names the Users view and `signup_policy_set` and changes nothing. |
-| Signup Policy | `signup_policy_set` with the publish token | `Unknown tool or insufficient permission.` Changing an existing app's policy needs `manage_users`, which the CLI's publish token lacks. This is the intended split: a publish names only the first release's policy. |
+| Signup Policy | `signup_policy_set` with the publish token | `Unknown tool or insufficient permission. signup_policy_set needs a credential with manage_users. Run littlebox login with --manage-users, or use a token from token_create that includes it.` Changing an existing app's policy needs `manage_users`, which the CLI's publish token lacks. This is the intended split: a publish names only the first release's policy. |
 | Invitation only | `POST /_littlebox/auth/signup` from an uninvited address | 403 `{"error":"This app is not accepting new accounts for this email address."}` |
 | Private file | Ben's `files_read` of Ana's note | `File not found.` |
 | Private file | Ben's `GET /_littlebox/files/<note>` with his session | 404 `{"error":"File not found."}` |
