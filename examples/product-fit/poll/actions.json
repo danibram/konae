@@ -1,5 +1,5 @@
 {"version":1,"actions":{
- "votes.cast":{"kind":"mutation","access":"anonymous","statement":"INSERT INTO votes(choice, created_at) SELECT ?1, ?2 WHERE ?1 IN ('Tuesday','Thursday','Saturday','Sunday')","bindings":[{"source":"input","key":"choice","type":"string","maxLength":20},{"source":"kernel","field":"now"}]},
+ "votes.cast":{"kind":"mutation","access":"anonymous","guard":"Pick Tuesday, Thursday, Saturday or Sunday.","statement":"INSERT INTO votes(choice, created_at) SELECT ?1, ?2 WHERE ?1 IN ('Tuesday','Thursday','Saturday','Sunday')","bindings":[{"source":"input","key":"choice","type":"string","maxLength":20},{"source":"kernel","field":"now"}]},
  "votes.results":{"kind":"query","access":"anonymous","statement":"SELECT choice, count(*) AS n FROM votes GROUP BY choice ORDER BY n DESC LIMIT 20","bindings":[]},
  "votes.perhour":{"kind":"query","access":"anonymous","statement":"SELECT strftime('%Y-%m-%d %H', created_at / 1000, 'unixepoch') AS hour, count(*) AS n FROM votes GROUP BY hour ORDER BY hour DESC LIMIT 24","bindings":[]}
 }}

@@ -1,6 +1,6 @@
 # The Validation Gate and the Kernel share one query bound
 
-Status: accepted.
+Status: accepted, 2026-11-06. Amends no earlier ADR. The notes below tie it to the Action Contract and to the shared statement rules.
 
 A person who does not write SQL and a person who does both produce a Capsule. If only the editor refuses an unbounded query, an exported Kernel will publish it and fail later, when a caller asks for the rows. The app has to leave with the same rule it was built under.
 

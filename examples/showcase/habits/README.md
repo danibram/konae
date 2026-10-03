@@ -11,7 +11,7 @@ The app is a product probe. It uses Littlebox's primitives the way a creator wou
 | `index.html`, `styles.css`, `app.js` | The page. Plain CSS with the design system's neutral surfaces and indigo accent, light and dark from `prefers-color-scheme`. Listeners are attached in JavaScript, so the page runs under the Kernel's Content Security Policy. |
 | `schema.sql` | `habits` and `checkins`. A check-in's `day` is a `YYYY-MM-DD` string with a `CHECK`, unique per habit. |
 | `schema.ts` | The Database Model the editor would hold, matching `schema.sql`. |
-| `actions.json` | Ten Server Actions. Seven are `authenticated` and bind the actor. Three are `anonymous` with an HTTP route and also bind the actor, for an API key. |
+| `actions.json` | Ten Server Actions. Seven are `authenticated` and bind the actor. Three are `anonymous` with an HTTP route that declares `"callers": ["key"]` and also bind the actor, for an API key. `habits.create`, `habits.import` and `habits.archive` declare a guard. |
 | `replay.ts` | Starts its own Kernel, publishes the app and runs every flow below. |
 
 ## Primitives it uses
@@ -21,7 +21,8 @@ The app is a product probe. It uses Littlebox's primitives the way a creator wou
 - A `kernel.now` binding that limits check-ins to the last 30 days and tomorrow.
 - A streak computed in one `SELECT` with `ROW_NUMBER() OVER (...)` nested in two subqueries, under a top-level `LIMIT 20`.
 - The `habit.completed` Signal on `checkins.add` and on the `POST /api/checkins` route, with `habitId`, `day` and `device` as properties. The owner reads it with `signals_read` and the daily totals with `usage_read`.
-- HTTP routes `POST /api/habits`, `GET /api/habits` and `POST /api/checkins`, called with an API key from `api_keys_create`.
+- HTTP routes `POST /api/habits`, `GET /api/habits` and `POST /api/checkins`, each with `"callers": ["key"]`, called with an API key from `api_keys_create`.
+- Guards: the twenty-first habit is refused with `You already track 20 habits. Archive one first.`, and an archive that changes nothing with `This habit is already archived, or it is not yours.`
 - The editor's managed path, simulated over MCP: `project_create` with `sourceAuthority: "managed"`, `project_sources_save`, then `release_plan` and `release_apply` with the editor's payload.
 - `littlebox eject` and `littlebox publish` from the ejected folder.
 - A scheduled copy to `LITTLEBOX_COPY_DIR` and `littlebox-kernel restore` into an empty data directory.
@@ -48,25 +49,26 @@ The replay runs in this order:
 3. The owner saves the sources at revision 1 and publishes them as the editor would, public with Open signup.
 4. Ana and Ben sign up and verify through the mailbox. Ana signs in on a phone session and a laptop session.
 5. Ana creates habits and check-ins from both sessions. Ben tries to read and change them.
-6. The owner issues an API key for the three routes, and the replay calls them with the key, with no credential, and with Ana's cookie.
+6. The owner issues an API key for the three routes, and the replay calls them with the key, with no credential, and with Ana's cookie, which the routes refuse.
 7. The owner reads Signals and Usage.
 8. `littlebox contract` writes the Action Contract and `littlebox conform` runs it against the Deployment.
 9. `littlebox eject` writes the project into an empty folder. The replay changes the footer to "Build 2" and runs `littlebox publish` from that folder.
 10. The replay waits for a copy newer than the last write, stops the Kernel, restores the copy into an empty directory and starts a Kernel on it.
-11. Chrome loads the restored app signed out and signed in, in light and dark, and fails on any policy violation or page error.
+11. Chrome loads the restored app signed out and signed in, in light and dark, and fails on any policy violation or page error. Signed in, it double-presses Add habit and then adds the twenty-first habit.
 
 ## What worked
 
 - **Verified signup.** A signup answers 202 and sets no cookie. The pending account cannot sign in, and `actions_invoke` without a session answers `authentication-required`. A second signup for the pending address keeps the account ID, sends a new link and turns the first link into 410. After Ana verifies, a third signup for her address answers 202, sets no cookie and sends no mail. A guessed password answers 401, and both of Ana's sessions keep working.
 - **Two devices.** Two sessions of one account see the same habits and check-ins. A second check-in for the same day from the other device changes 0 rows because of the `UNIQUE (habit_id, day)` key.
-- **Rows bound to the actor.** Ben lists no habit, check-in or streak of Ana's. His archive, check-in and uncheck on her habit each change 0 rows. Sending `userId` as an input answers `Unexpected action input: userId`.
+- **Rows bound to the actor.** Ben lists no habit, check-in or streak of Ana's. His check-in and uncheck on her habit each change 0 rows, and his archive is refused with `This habit is already archived, or it is not yours.` Sending `userId` as an input answers `Unexpected action input: userId`. A check-in and an uncheck stay without a guard on purpose: a second tick of the same day from the other device is not an error.
 - **Streak in SQL.** With check-ins on days -6, -4, -3, -2, -1 and 0, the query returns current 5, best 5, total 6. The Gate and the Kernel accept it because of the top-level `LIMIT 20`.
-- **API key as owner.** `POST /api/habits` with the key stores a habit whose `user_id` is the key's ID, `key_...`. `GET /api/habits` with the key returns only that habit. A visitor gets 400 `This action requires an authenticated actor.` Ana's cookie runs the route as Ana when the request comes from the app's own origin, and as a visitor from another origin.
+- **API key as owner.** `POST /api/habits` with the key stores a habit whose `user_id` is the key's ID, `key_...`. `GET /api/habits` with the key returns only that habit. Since 2026-11-07 the routes declare `"callers": ["key"]`, the narrowest list for a phone shortcut: a visitor gets 401 `authentication-required` on POST and GET, and so does Ana's cookie from the app's own origin. The page checks in through `miniapp.actions.call`, never through the routes.
 - **Signals and Usage.** `signals_read` returns one `habit.completed` per check-in that added a row, with `habitId`, `day`, `device` and `actor`, the ID of the account or key that checked in. `usage_read` returns the day's totals by action, route, signup, login and session.
-- **Action Contract.** `littlebox contract` writes 10 actions with no warning. `littlebox conform` reported `87 passed, 0 failed, 0 skipped.` on 2026-11-06, calling the three actor-bound routes with the API key.
+- **Action Contract.** `littlebox contract` writes 10 actions with no warning. `littlebox conform` reported `71 passed, 0 failed, 2 skipped.` on 2026-11-07, calling the three actor-bound routes with the API key. The count fell from 87 because the routed actions answer only on their routes now, so their inputs are probed there and not on the runtime endpoint. The two skips are the guards of `habits.create` and `habits.import`: below the limit of 20, conform's second identical call inserts again and cannot make the statement change nothing. The Chrome pass proves the limit's guard.
 - **Eject.** The ejected folder holds `README.md`, `actions.json`, `app.js`, `index.html`, `littlebox.json`, `schema.sql`, `schema.ts` and `styles.css`, with `sourceAuthority: "external"` and the Kernel's URL. The republished build serves "Build 2" at the same URL. Ana's phone session, her rows and Ben's password survive. `project_sources_save` is refused, and `project_sources_read` returns the frozen sources with `readOnly: true`.
 - **Copy and restore.** The restored Kernel serves Build 2 and keeps the accounts, passwords, rows, streaks, Signals, the ejected state and the API key, which still reads `GET /api/habits`. It signs out Ana's sessions, the owner's session and the delegated token.
 - **Content Security Policy.** Chrome loads the signed-out gate and the signed-in page with no violation or page error.
+- **The page.** A double press of Add habit adds one habit, because the button stays disabled until the call answers. The twenty-first habit is refused on the page with the guard's sentence; before 2026-11-07 the page wrote that sentence itself from `{ changes: 0 }`. Every status line reads a failure through one `reason(error)` helper, the same in all five showcase apps.
 
 ## Usage the app cannot read
 
@@ -82,8 +84,8 @@ ADR-0010 v1 keeps Usage and Signals away from the app. That does not hurt the pe
 | Signals | Fixed on 2026-11-06: a mutation records its Signal only when it changed a row. | 8 Signals for 8 stored check-ins. Before, 12. |
 | Signals and Usage in the app | The runtime endpoint does not offer `usage_read` or `signals_read`, so the app cannot show the owner's totals or a person's own Signals. The replay calls both with Ana's app session. | `Unknown tool or insufficient permission.` |
 | API key | A key acts as itself, never as a person. Its rows belong to `key_...`. A phone shortcut holding a key cannot tick Ana's habit, and Littlebox has no per-user key. | `POST /api/checkins` with the key on Ana's habit answers `{ "result": { "changes": 0, ... } }`. |
-| HTTP route, no credential | An actor-bound route refuses a visitor with 400, not 401. | `{ "error": "This action requires an authenticated actor." }` |
-| HTTP route with a cookie | The Kernel compares `Origin` with `Host`. A hand-written client that sends `Host` without the port `Origin` carries runs as a visitor. A browser sends both and is not affected. | 400 `This action requires an authenticated actor.` |
+| HTTP route, no credential | Fixed in the app on 2026-11-07. An actor-bound route without `callers` refused a visitor with 400, not 401. The routes now declare `"callers": ["key"]`, so a visitor is refused before the action runs. A route that leaves `callers` out still answers 400. | 401 `{ "error": "authentication-required" }`. Before, 400 `{ "error": "This action requires an authenticated actor." }` |
+| HTTP route with a cookie | The Kernel compares `Origin` with `Host`, and a hand-written client that sent `Host` without the port `Origin` carries ran as a visitor. No longer reachable here: since 2026-11-07 the routes take only a key, so any cookie gets 401. | 401 `authentication-required`. Before, 400 `This action requires an authenticated actor.` |
 | `littlebox conform` | Fixed on 2026-11-06: the runner sends the key, or the session cookie, to a route that binds the caller's ID. | `PASS habits.import: answers POST /api/habits with an API key.` (same for `habits.mine` and `checkins.log`). Before, `SKIP ... Binds the caller's ID; ...` |
 | `littlebox conform` | It runs every mutation once with generated input, so it adds a habit for the session's account and one for the key on the Deployment it checks. | No refusal. The docs say to point it at a test Deployment. |
 | Required verification, signup | A `password` sent with a signup is accepted and ignored. The caller gets 202 and the password never signs in. | 202 `{ "result": { "status": "link-sent" } }`; login with that password answers 401. |

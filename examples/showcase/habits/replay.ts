@@ -315,14 +315,14 @@ try {
   assert.deepEqual(await action(benClient, "habits.list"), []);
   assert.deepEqual(await action(benClient, "checkins.since", { from: utcDay(-30) }), []);
   assert.deepEqual(await action(benClient, "habits.streaks", { today }), []);
-  assert.equal((await action(benClient, "habits.archive", { id: read.id })).changes, 0);
+  await assert.rejects(action(benClient, "habits.archive", { id: read.id }), /This habit is already archived, or it is not yours\./);
   assert.equal((await action(benClient, "checkins.add", { habitId: read.id, day: utcDay(-4), device: "laptop" })).changes, 0);
   assert.equal((await action(benClient, "checkins.remove", { habitId: read.id, day: today })).changes, 0);
   await assert.rejects(action(benClient, "habits.list", { userId: anaSession.userId }), /Unexpected action input: userId/);
   assert.equal((await action(benClient, "habits.create", { name: "Ben's habit" })).changes, 1);
   assert.deepEqual((await action(anaPhone, "habits.list")).map((row: any) => row.name), ["Read 20 pages", "Walk"]);
   assert.equal((await action(anaPhone, "checkins.since", { from: utcDay(-30) })).length, 6);
-  check("Rows bound to the actor", "Ben reads no habit, check-in or streak of Ana's; archive, check-in and uncheck on her habit change 0 rows; a userId input is refused with \"Unexpected action input: userId\"; Ana's rows are unchanged.");
+  check("Rows bound to the actor", "Ben reads no habit, check-in or streak of Ana's; archive, check-in and uncheck on her habit change 0 rows; a userId input is refused with \"Unexpected action input: userId\"; Ana's rows are unchanged. The archive is refused with its guard, \"This habit is already archived, or it is not yours.\"");
 
   // ------------------------------------------- an API key on an actor-bound route
   const key = await owner.call<{ key: string; keyId: string }>("api_keys_create", { deploymentId: receipt.id, name: "Phone shortcut", actions: ["habits.import", "habits.mine", "checkins.log"] });
@@ -343,22 +343,19 @@ try {
   const keyOwnCheckin = await route("POST", "/api/checkins", { habitId: 4, day: today, device: "shortcut" }, bearer);
   assert.equal(keyOwnCheckin.body.result.changes, 1);
   completions++;
+  // The three routes declare "callers": ["key"], so a visitor and a signed-in person are
+  // refused before the action runs, and an app session checks in through actions_invoke.
   const visitorRoute = await route("POST", "/api/habits", { name: "Nobody" });
-  assert.equal(visitorRoute.status, 400);
-  assert.equal(visitorRoute.body.error, "This action requires an authenticated actor.");
-  // The same route with Ana's cookie from the app's own origin runs as Ana.
+  assert.deepEqual(visitorRoute, { status: 401, body: { error: "authentication-required" } });
+  const visitorRead = await route("GET", "/api/habits");
+  assert.deepEqual(visitorRead, { status: 401, body: { error: "authentication-required" } });
   const anaRoute = await route("POST", "/api/checkins", { habitId: read.id, day: utcDay(-4), device: "route" }, { host: new URL(receipt.url).host, cookie: anaPhoneCookie, origin: appOrigin });
-  assert.equal(anaRoute.body.result?.changes, 1, JSON.stringify(anaRoute));
+  assert.deepEqual(anaRoute, { status: 401, body: { error: "authentication-required" } });
+  assert.equal((await action(anaPhone, "checkins.add", { habitId: read.id, day: utcDay(-4), device: "phone" })).changes, 1);
   completions++;
-  const foreignOrigin = await route("POST", "/api/checkins", { habitId: walk.id, day: utcDay(-1), device: "route" }, { host: new URL(receipt.url).host, cookie: anaPhoneCookie, origin: `http://other-app.localhost:${port}` });
-  assert.equal(foreignOrigin.status, 400, JSON.stringify(foreignOrigin));
-  assert.equal(foreignOrigin.body.error, "This action requires an authenticated actor.");
-  // A hand-written client whose Host lacks the port its Origin carries runs as a visitor too.
-  const portless = await route("POST", "/api/checkins", { habitId: walk.id, day: utcDay(-1), device: "route" }, { cookie: anaPhoneCookie, origin: appOrigin });
-  assert.deepEqual(portless, { status: 400, body: { error: "This action requires an authenticated actor." } });
   assert.deepEqual((await action(anaPhone, "habits.list")).map((row: any) => row.name), ["Read 20 pages", "Walk"]);
   check("API key on an actor-bound route",
-    `A key writes a habit whose owner is the key's ID ${key.keyId}; GET /api/habits with the key returns only that row; the key's check-in on Ana's habit changes 0 rows; a visitor gets 400 "${visitorRoute.body.error}". Ana's cookie from the app origin runs the route as Ana; from another origin it runs as a visitor (${foreignOrigin.status}).`);
+    `A key writes a habit whose owner is the key's ID ${key.keyId}; GET /api/habits with the key returns only that row; the key's check-in on Ana's habit changes 0 rows. The routes take only a key: a visitor gets ${visitorRoute.status} "${visitorRoute.body.error}" on POST and GET, and Ana's cookie from the app origin gets ${anaRoute.status} too.`);
 
   // --------------------------------------------------------- Signals and Usage
   const signals: { name: string; at: number; properties: Record<string, unknown> }[] = [];
@@ -377,8 +374,8 @@ try {
   assert.equal(actors.filter((actor) => actor === key.keyId).length, 1, "The key's check-in names the key.");
   const usage = await owner.call<{ days: { day: string; kind: string; name: string; count: number }[]; totals: { kind: string; name: string; count: number }[] }>("usage_read", { deploymentId: receipt.id, from: utcDay(-1), to: utcDay(1) });
   const total = (kind: string, name = "") => usage.totals.find((row) => row.kind === kind && row.name === name)?.count ?? 0;
-  assert.equal(total("action", "checkins.add"), 9);
-  assert.equal(total("route", "POST /api/checkins"), 3);
+  assert.equal(total("action", "checkins.add"), 10);
+  assert.equal(total("route", "POST /api/checkins"), 2);
   assert.equal(total("route", "POST /api/habits"), 1);
   assert.equal(total("signup"), 2);
   // The app's own session cannot read either store.
@@ -413,7 +410,11 @@ try {
   const conformTotals = conformOut.trim().split("\n").at(-1)!;
   assert.equal(conformCode, 0, conformOut + conformErr);
   // conform sends the key to the three routes that bind the caller's ID.
-  assert.match(conformTotals, /^\d+ passed, 0 failed, 0 skipped/);
+  // habits.create and habits.import guard an INSERT under a limit of 20; conform's second
+  // identical call inserts again, so it cannot reach the guard. The Chrome pass proves it.
+  assert.match(conformTotals, /^\d+ passed, 0 failed, 2 skipped/);
+  const conformSkips = conformOut.split("\n").filter((line) => line.startsWith("SKIP")).map((line) => line.slice(0, line.indexOf(". "))).sort();
+  assert.deepEqual(conformSkips, ["SKIP habits.create: refuses with its guard when no row changes", "SKIP habits.import: refuses with its guard when no row changes"], conformOut);
   for (const routeName of ["checkins.log", "habits.import", "habits.mine"]) {
     assert(conformOut.split("\n").some((line) => line.startsWith(`PASS ${routeName}: answers`) && line.includes("with an API key")), `${routeName} with the key:\n${conformOut}`);
   }
@@ -480,9 +481,10 @@ try {
   assert.deepEqual((await action(anaRestored, "habits.streaks", { today })).map((row: any) => [row.current_streak, row.total_days]), [[5, 6], [1, 1]]);
   const keyAfter = await route("GET", "/api/habits", undefined, bearer);
   assert.equal(keyAfter.status, 200);
-  // conform added one habit with the key too, so the key reads Stretch and that one.
+  // conform added two habits with the key, its valid call and the same call again to reach
+  // habits.import's guard, so the key reads Stretch and those two.
   assert(keyAfter.body.result.map((row: any) => row.name).includes("Stretch"), JSON.stringify(keyAfter.body));
-  assert.equal(keyAfter.body.result.length, 2);
+  assert.equal(keyAfter.body.result.length, 3);
   const restoredSignals = await restoredOwner.call<{ signals: unknown[]; nextCursor: string | null }>("signals_read", { deploymentId: receipt.id, name: "habit.completed" });
   assert.equal(restoredSignals.signals.length, signalCountBefore);
   let restoredRefusal = "";
@@ -530,8 +532,28 @@ try {
         }
         await context.close();
       }
+      // A double press adds one habit, and the twenty-first is refused with the guard's sentence.
+      const context = await browser.newContext({ viewport: { width: 720, height: 900 } });
+      await context.addCookies([{ name, value: value.join("="), url: receipt.url }]);
+      for (let i = 0; i < 15; i++) await action(anaRestored, "habits.create", { name: `Habit ${i + 3}` });
+      const page = await context.newPage();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      await page.goto(receipt.url, { waitUntil: "load" });
+      await page.locator(".habit").nth(16).waitFor({ timeout: 10_000 });
+      await page.locator("#name").fill("Floss");
+      await page.getByRole("button", { name: "Add habit" }).dblclick();
+      await page.locator("#status").filter({ hasText: "Added Floss." }).waitFor({ timeout: 10_000 });
+      assert.equal((await action<any[]>(anaRestored, "habits.list")).filter((row) => row.name === "Floss").length, 1, "A double press adds one habit.");
+      for (const extra of ["Habit 18", "Habit 19"]) await action(anaRestored, "habits.create", { name: extra });
+      await page.locator("#name").fill("Stretch");
+      await page.getByRole("button", { name: "Add habit" }).click();
+      await page.locator("#status.error").filter({ hasText: "You already track 20 habits. Archive one first." }).waitFor({ timeout: 10_000 });
+      assert.equal((await action<any[]>(anaRestored, "habits.list")).length, 20);
+      assert.deepEqual(pageErrors, []);
+      await context.close();
     } finally { await browser.close(); }
-    check("Content Security Policy", `The signed-out gate and Ana's signed-in page load in Chrome with no policy violation or page error, in light and dark.${screenshotDir ? ` Screenshots in ${screenshotDir}.` : ""}`);
+    check("Content Security Policy", `The signed-out gate and Ana's signed-in page load in Chrome with no policy violation or page error, in light and dark. A double press of Add habit adds one habit, and the twenty-first is refused on the page with the guard's sentence.${screenshotDir ? ` Screenshots in ${screenshotDir}.` : ""}`);
   }
 
   console.log(JSON.stringify({ app: "habits", checks: observations.length, observations }, null, 2));

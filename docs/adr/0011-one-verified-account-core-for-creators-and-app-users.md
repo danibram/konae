@@ -1,6 +1,6 @@
 # One verified account core for creators and app users
 
-Status: accepted, 2026-11-06. Amends [ADR-0002](0002-kernel-owns-identity-and-visibility.md).
+Status: accepted, 2026-11-06. Amends [ADR-0002](0002-kernel-owns-identity-and-visibility.md), and its HTTP update amends [ADR-0001](0001-separate-runtime-and-admin-data-access.md)'s rule that a private Deployment runs nothing without a login. [ADR-0012](0012-account-email-goes-through-a-persistent-queue.md) builds on it, and [ADR-0014](0014-an-app-migrates-with-one-writer-at-a-time.md) changes what a restore does with revocations made after a copy.
 
 ADR-0002 put identity in the Kernel for app users. The launch plan admits creators the Kernel did not invite and strangers to their apps, so an address someone typed can no longer stand for a person. Both kinds of account need proof of email, recovery and suspension, and an export must carry them to a machine with no identity provider.
 
@@ -61,11 +61,13 @@ The admin tools that list accounts, suspend them, invite and change the signup p
 
 We considered letting `release_plan` change an existing app's policy when the credential holds `manage_users`. We kept one path for changes, `signup_policy_set`, because a republish that silently carries a policy is how a publish-only agent would widen access, and a second path is a second place to get that check wrong.
 
-Note, 2026-11-06: account email now leaves through a persistent queue in `mail.sqlite`, recorded in [ADR-0012](0012-account-email-goes-through-a-persistent-queue.md). `AccountMail` stays as the transport seam the development mailbox and tests use. The identity store gained `request_signup_with` and `request_recovery_with`, which take a `ChallengeOutbox` that writes in the challenge's transaction.
+## Note, 2026-11-06: account email leaves through a queue
+
+Account email now leaves through a persistent queue in `mail.sqlite`, recorded in [ADR-0012](0012-account-email-goes-through-a-persistent-queue.md). `AccountMail` stays as the transport seam the development mailbox and tests use. The identity store gained `request_signup_with` and `request_recovery_with`, which take a `ChallengeOutbox` that writes in the challenge's transaction.
 
 ## Note, 2026-11-06: API keys on restore and on import
 
-A restore and an import treat API keys differently, and the difference follows who ends up holding the app. `littlebox-kernel restore` installs a Copy of the same installation for the same owner, after a lost volume or a move to a new host. It signs out every session and agent credential because the owner can sign in again in a minute, but it keeps API keys valid, because they sit in programs and services the owner may not control and the app is still the same app. An import, through a Package or the small export, puts the app in another installation, possibly under another owner, so it revokes every key: the package leaves the keys out and its import deletes any it finds, and the small format marks each one revoked.
+A restore and an import treat API keys differently, and the difference follows who ends up holding the app. `littlebox-kernel restore` installs a copy of the same installation for the same owner, after a lost volume or a move to a new host. It signs out every session and agent credential because the owner can sign in again in a minute, but it keeps API keys valid, because they sit in programs and services the owner may not control and the app is still the same app. An import, through a package or the small export, puts the app in another installation, possibly under another owner, so it revokes every key: the package leaves the keys out and its import deletes any it finds, and the small format marks each one revoked.
 
 A key the owner revoked after the copy was taken comes back live after a restore. The restore command says so and tells the operator to revoke it again. `a_restore_keeps_api_keys_live_and_an_import_revokes_them` in `kernel-rs/src/copies.rs` checks both paths on one accounts file, and `tests/http-routes.integration.test.ts` checks the import against a running Kernel.
 

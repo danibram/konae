@@ -5,6 +5,14 @@ const el = (tag, props = {}, children = []) => {
   node.append(...children);
   return node;
 };
+// Every status line reads a failure the same way. A refusal's message is the
+// sentence to show; the rate limit answers with a code and an unreachable
+// Kernel with a browser error, so those two get a sentence here.
+function reason(error) {
+  if (error?.message === "rate-limited") return "Too many requests just now. Wait a few seconds and try again.";
+  if (error instanceof TypeError && /fetch|network|load failed/i.test(error.message)) return "The site could not reach its server. Check the connection and try again.";
+  return error?.message ?? String(error);
+}
 const day = (ms) => new Date(ms).toLocaleDateString("en-GB", { year: "numeric", month: "long", day: "numeric" });
 
 const session = await miniapp.auth.session();
@@ -26,7 +34,14 @@ async function showGallery() {
   const status = $("#gallery-status");
   const grid = $("#grid");
   const viewer = $("#viewer");
-  const photos = await miniapp.actions.call("photos.published");
+  let photos;
+  try {
+    photos = await miniapp.actions.call("photos.published");
+  } catch (error) {
+    status.textContent = `The photographs could not be loaded. ${reason(error)}`;
+    status.hidden = false;
+    return;
+  }
   status.textContent = photos.length ? "" : "No photographs are published yet.";
   status.hidden = photos.length > 0;
   const urls = await Promise.all(photos.map((photo) => miniapp.files.url(photo.file_id)));
@@ -67,9 +82,7 @@ function wireContact(form) {
       status.textContent = "Thank you. The studio has your message.";
     } catch (error) {
       status.className = "error";
-      status.textContent = error.message === "rate-limited"
-        ? "Too many messages from your network just now. Wait a few seconds and send again."
-        : `The message was not sent: ${error.message}`;
+      status.textContent = `The message was not sent. ${reason(error)}`;
     } finally {
       button.disabled = false;
     }
@@ -84,21 +97,31 @@ async function showStudio() {
     event.preventDefault();
     const data = new FormData(form);
     const publish = data.get("publish") === "on";
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
     status.textContent = "Uploading…";
     try {
       // A draft is a private file and a published photograph a public one.
       const file = await miniapp.files.upload(data.get("file"), { visibility: publish ? "public" : "private" });
       const caption = String(data.get("caption")).trim();
-      const added = await miniapp.actions.call("photos.add", {
-        file_id: file.id, title: String(data.get("title")).trim(), caption: caption || null, status: publish ? "published" : "draft",
-      });
-      if (added.changes === 0) throw Error("this account is not the studio's curator");
+      try {
+        // photos.add declares a guard, so an account outside the studio is refused with its sentence.
+        await miniapp.actions.call("photos.add", {
+          file_id: file.id, title: String(data.get("title")).trim(), caption: caption || null, status: publish ? "published" : "draft",
+        });
+      } catch (error) {
+        // The refused photograph's file is deleted, so it does not stay behind counting against the quota.
+        await miniapp.files.delete(file.id).catch(() => {});
+        throw error;
+      }
       form.reset();
       status.textContent = publish ? "Published." : "Saved as a draft.";
       await refreshStudio();
       if (publish) await showGallery();
     } catch (error) {
-      status.textContent = `Not saved: ${error.message}`;
+      status.textContent = `Not saved. ${reason(error)}`;
+    } finally {
+      button.disabled = false;
     }
   });
   await refreshStudio();
@@ -124,19 +147,22 @@ function draftRow(photo, url) {
   const publish = el("button", { type: "button", className: "secondary", textContent: "Publish" });
   const note = el("span", { className: "muted" });
   publish.addEventListener("click", async () => {
+    publish.disabled = true;
     note.textContent = "Publishing…";
     try {
       await miniapp.files.update(photo.file_id, { visibility: "public" });
-      const published = await miniapp.actions.call("photos.publish", { id: photo.id, file_id: photo.file_id });
-      if (published.changes === 0) {
+      try {
+        await miniapp.actions.call("photos.publish", { id: photo.id });
+      } catch (error) {
         // The row stayed a draft, so its file goes back to private.
-        await miniapp.files.update(photo.file_id, { visibility: "private" });
-        throw Error("this account is not the studio's curator");
+        await miniapp.files.update(photo.file_id, { visibility: "private" }).catch(() => {});
+        throw error;
       }
       await refreshStudio();
       await showGallery();
     } catch (error) {
-      note.textContent = `Not published: ${error.message}`;
+      note.textContent = `Not published. ${reason(error)}`;
+      publish.disabled = false;
     }
   });
   return el("li", { className: "card draft" }, [

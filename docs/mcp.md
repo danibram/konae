@@ -9,11 +9,11 @@ bun install
 bun run dev:local
 ```
 
-Open the editor and go to **Platform access**. The direct link is `http://localhost:4173/_littlebox/owner/login`. To create the first owner, enter an email, a password and the installation key. In the default local environment that key is `local-development-key`; `LITTLEBOX_ADMIN_KEY` sets it. The first account claims the Deployments from the earlier prototype. Every later creator enters an invitation code instead, described under [creator admission](#creator-admission).
+Open the editor and go to **Platform access**. The direct link is `http://localhost:4173/_littlebox/owner/login`. To create the first owner, enter an email, a password and the setup key. In the default local environment that key is `local-development-key`; `LITTLEBOX_ADMIN_KEY` sets it. The first account claims the Deployments from the earlier prototype. Every later creator enters an invitation code instead, described under [creator admission](#creator-admission).
 
 Each owner administers their own projects. The page creates read-only or read, edit and publish tokens, optionally limited to specific projects, and lists and revokes active credentials. A token's secret appears only once. Tokens from this page expire after 24 hours; `token_create` accepts any subset of `read`, `write`, `publish`, `manage_users`, `export_data` and `manage_lifecycle` and a lifetime of up to 30 days. OAuth clients may request the same scopes. Only `export_data` downloads an app's accounts and data, only `manage_lifecycle` ejects a project, and the owner's browser session holds both.
 
-The installation key does not authenticate MCP tools and is not included in the editor bundle. The server listens on `127.0.0.1` by default. The Kernel refuses to start on a non-loopback address, or with a `LITTLEBOX_PUBLIC_ORIGIN` whose host is not `localhost`, a `*.localhost` name or a loopback IP, while the installation key is unset or still `local-development-key`, unless `LITTLEBOX_ALLOW_DEFAULT_KEY=1`. For a remote installation, configure the installation key, the HTTPS origin and the proxy before listening on another interface.
+The setup key does not authenticate MCP tools and is not included in the editor bundle. The server listens on `127.0.0.1` by default. The Kernel refuses to start on a non-loopback address, or with a `LITTLEBOX_PUBLIC_ORIGIN` whose host is not `localhost`, a `*.localhost` name or a loopback IP, while the setup key is unset or still `local-development-key`, unless `LITTLEBOX_ALLOW_DEFAULT_KEY=1`. For a remote installation, configure the setup key, the HTTPS origin and the proxy before listening on another interface.
 
 ## Connect an agent
 
@@ -119,11 +119,11 @@ The runtime MCP tools `auth_signup`, `auth_verify`, `auth_recover` and `auth_res
 
 ## Creator admission
 
-A creator account needs an invitation code, except the installation's first owner, which the installation key creates. The operator issues codes on the server with `littlebox-kernel creator-code-create [--expires-in 14d] [--note TEXT]`, lists them with `creator-code-list` and stops an open one with `creator-code-revoke <id>`; the README's operator section has the details. A code is single use, expires after 14 days by default, and is stored as a SHA-256 hash in `owners.sqlite`.
+A creator account needs an invitation code, except the installation's first owner, which the setup key creates. The operator issues codes on the server with `littlebox-kernel creator-code-create [--expires-in 14d] [--note TEXT]`, lists them with `creator-code-list` and stops an open one with `creator-code-revoke <id>`; the README's operator section has the details. A code is single use, expires after 14 days by default, and is stored as a SHA-256 hash in `owners.sqlite`.
 
 `POST /_littlebox/owner/signup` takes `{ "email", "code" }`, plus `"password"` in local mode. The Kernel consumes the code in the transaction that creates the account: a pending account with a verification link in required mode, an active account with a session in local mode. A code for an email whose account is pending is consumed and sends a fresh link to that account. A code for an active or suspended email is consumed and creates nothing, and the answer is the same 202 a new email gets. In local mode a taken email answers 409 `An account with that email already exists.` only to a valid code, which stays unused; a made-up code gets the same 403 a new email gets, so it says nothing about who has an account. When both `code` and `setupKey` are sent, the code decides.
 
-The installation key creates an account only while `owners.sqlite` holds no account, or only the first owner's pending account asking for a new link, and no code has ever been issued. The default `local-development-key` keeps creating owners until the first code is issued, so local development and the browser tests still work; the Kernel accepts that key only on loopback unless `LITTLEBOX_ALLOW_DEFAULT_KEY=1`.
+The setup key creates an account only while `owners.sqlite` holds no account, or only the first owner's pending account asking for a new link, and no code has ever been issued. The default `local-development-key` keeps creating owners until the first code is issued, so local development and the browser tests still work; the Kernel accepts that key only on loopback unless `LITTLEBOX_ALLOW_DEFAULT_KEY=1`.
 
 `GET /_littlebox/owner/config` returns `"admission": "setup-key"` while the key can still create an account and `"code"` otherwise. The owner page and **Platform access** ask for the field it names and never mention the key in `code` mode.
 
@@ -131,7 +131,7 @@ The installation key creates an account only while `owners.sqlite` holds no acco
 | --- | --- | --- |
 | Used, expired, revoked, unknown or mistyped code | 403 | `This invitation code is not valid. It may be mistyped, expired, revoked or already used.` |
 | Installation key once any code exists or any other account exists, or no admission at all | 403 | `An invitation code is required to create a creator account. Ask the operator of this installation for one.` |
-| Wrong installation key while the key can still create the first owner | 403 | `A valid installation setup key is required to create the first owner.` |
+| Wrong setup key while the key can still create the first owner | 403 | `A valid installation setup key is required to create the first owner.` |
 
 A refused signup creates no account and sends no mail. Codes count in the same per-address and per-email sign-in limits as the key did.
 
@@ -143,7 +143,7 @@ Suspending a creator with `creator-account-suspend` deletes their sessions, open
 
 Every account link leaves through the queue in `mail.sqlite` (`kernel-rs/src/mail.rs`). The README's [Account email](../README.md#account-email) section lists the transports and their variables. What a client sees:
 
-- Signup and recovery store the challenge and its Email Job in one transaction and answer at once. The worker sends the job on its own task.
+- Signup and recovery store the challenge and its email job in one transaction and answer at once. The worker sends the job on its own task.
 - A job is `pending`, `accepted` (the provider took it), `delivered` (the provider reported delivery to the recipient's server) or `failed`. No job state activates an account; only the person answering the link does.
 - A refusal stores nothing. 503 means no transport, or a sender the preflight refused. 429 means a limit: per address 3 a minute across the installation and 10 a day in each scope, so requests on one app cannot use up an address's allowance on another app or in the editor; per client address 20 an hour, where one IPv6 /64 is one client; per creator 100 a day, per app 100 a day, per installation 1,000 a day. The address and client limits count requests, so an address with no account reaches them after the same number of requests as one with an account.
 

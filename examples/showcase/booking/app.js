@@ -13,6 +13,15 @@ let day = localDay();
 let rooms = [];
 let picked = null;
 
+// Every status line reads a failure the same way. A refusal's message is the
+// sentence to show; the rate limit answers with a code and an unreachable
+// Kernel with a browser error, so those two get a sentence here.
+function reason(error) {
+  if (error?.message === "rate-limited") return "Too many requests just now. Wait a few seconds and try again.";
+  if (error instanceof TypeError && /fetch|network|load failed/i.test(error.message)) return "The board could not reach its server. Check the connection and try again.";
+  return error?.message ?? String(error);
+}
+
 function say(text, tone = "") {
   const status = $("#status");
   status.textContent = text;
@@ -33,7 +42,10 @@ async function renderWho() {
   $("#who").innerHTML = `<form id="rename"><label class="field">Shown to colleagues as<input id="display" maxlength="60" required value="${esc(me.display)}"></label><button class="btn secondary" type="submit">Save</button></form><button type="button" class="btn ghost" id="signout">Sign out</button>`;
   $("#rename").addEventListener("submit", async (event) => {
     event.preventDefault();
-    await run("staff.name", { display: $("#display").value.trim() }, "Name saved.");
+    const button = event.target.querySelector("button[type=submit]");
+    button.disabled = true;
+    try { await run("staff.name", { display: $("#display").value.trim() }, "Name saved."); }
+    finally { button.disabled = false; }
   });
   $("#signout").addEventListener("click", async () => { await miniapp.auth.signOut(); location.reload(); });
   $("#lede").textContent = `Signed in as ${session.name}. Pick a free hour to book it.`;
@@ -92,7 +104,7 @@ async function run(name, input, done) {
     if (done) say(done, "ok");
     return result;
   } catch (error) {
-    say(error.message, "error");
+    say(reason(error), "error");
     return null;
   }
 }
@@ -130,8 +142,8 @@ $("#book").addEventListener("submit", async (event) => {
     await render();
   } catch (error) {
     // A booking that inserts nothing is refused with the action's guard, which names the rules.
-    say(error.message, "error");
-    await render();
+    say(reason(error), "error");
+    await render().catch(() => {});
   } finally {
     button.disabled = false;
   }
@@ -143,7 +155,10 @@ $("#mine").addEventListener("click", async (event) => {
   // A cancel that changes nothing is refused with the action's guard, which run() shows.
   await run("bookings.cancel", { ref: button.dataset.cancel }, "Booking cancelled. The hours are free again.");
 });
-const go = (next) => { day = next; picked = null; $("#book").hidden = true; say(""); render(); };
+const go = (next) => {
+  day = next; picked = null; $("#book").hidden = true; say("");
+  render().catch((error) => say(reason(error), "error"));
+};
 $("#prev").addEventListener("click", () => go(shiftDay(day, -1)));
 $("#next").addEventListener("click", () => go(shiftDay(day, 1)));
 $("#today").addEventListener("click", () => go(localDay()));
@@ -152,6 +167,10 @@ $("#day").addEventListener("change", (event) => { if (event.target.value) go(eve
 // Nothing pushes changes to the page, so the open board asks again.
 setInterval(() => { if (document.visibilityState === "visible" && !picked) render().catch(() => {}); }, 30_000);
 
-await renderWho();
-await render();
+try {
+  await renderWho();
+  await render();
+} catch (error) {
+  say(reason(error), "error");
+}
 document.body.dataset.ready = "true";
