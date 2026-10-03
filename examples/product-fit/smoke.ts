@@ -160,8 +160,11 @@ try {
   const launch = runtime("launch");
   assert.equal((await action(launch, "waitlist.join", { email: "visitor@example.test", name: "Visitor", source: "smoke" })).changes, 1);
   assert.equal((await action(launch, "waitlist.count"))[0].n, 1);
-  await assert.rejects(action(launch, "waitlist.join", { email: "visitor@example.test", name: "Visitor", source: "smoke" }), /UNIQUE/);
-  check("Anonymous waitlist", "A signed-out visitor joins once and the duplicate address fails.");
+  // The statement stores the address trimmed and lowercased, and its guard refuses a repeat in any case.
+  await assert.rejects(action(launch, "waitlist.join", { email: "visitor@example.test", name: "Visitor", source: "smoke" }), /That address is already on the list\./);
+  await assert.rejects(action(launch, "waitlist.join", { email: " Visitor@Example.TEST", name: "Visitor", source: "smoke" }), /That address is already on the list\./);
+  assert.equal((await action(launch, "waitlist.count"))[0].n, 1);
+  check("Anonymous waitlist", "A signed-out visitor joins once, and the same address again, in any case, is refused with the guard's sentence.");
 
   const ana = await signupApp("journal", "ana@example.test");
   const bob = await signupApp("journal", "bob@example.test");
@@ -169,9 +172,10 @@ try {
   const entry = (await action(ana, "entries.list"))[0];
   assert.equal(entry.body, "Ana's private entry");
   assert.deepEqual(await action(bob, "entries.list"), []);
-  assert.equal((await action(bob, "entries.delete", { id: entry.id })).changes, 0);
+  await assert.rejects(action(bob, "entries.delete", { id: entry.id }), /This entry is already deleted, or it is not yours\./);
+  assert.equal((await action(ana, "entries.list")).length, 1);
   await assert.rejects(action(runtime("journal"), "entries.list"), /authentication-required/);
-  check("Private journal rows", "A second account cannot read or delete the first account's entry.");
+  check("Private journal rows", "A second account cannot read the first account's entry, and its delete is refused with the guard.");
 
   assert.match(await (await getPage("board")).text(), /<title>Sign in<\/title>/);
   await owner.call("signup_policy_set", { deploymentId: receipts.board.id, mode: "allowlist", allowlist: ["@team.example"] });
@@ -183,13 +187,24 @@ try {
   await sql("board", "UPDATE members SET role='admin' WHERE display='Lead'");
   await action(member, "cards.create", { title: "Only my owner or an admin can move me" });
   const card = (await action(member, "cards.list"))[0];
-  assert.equal((await action(dev, "cards.move", { id: card.id, status: "done" })).changes, 0);
-  assert.equal((await action(dev, "cards.delete", { id: card.id })).changes, 0);
-  assert.equal((await action(dev, "members.promote", { display: "Developer" })).changes, 0);
+  // cards.list names the owner by display name and carries no user ID to the browser.
+  assert.deepEqual(Object.keys(card).sort(), ["id", "owner", "status", "title"]);
+  const memberRows = await action<Array<{ id: number; display: string }>>(dev, "members.list");
+  const idOf = (display: string) => memberRows.find((row) => row.display === display)!.id;
+  await assert.rejects(action(dev, "cards.move", { id: card.id, status: "done" }), /Only the card's owner or an admin can move it/);
+  await assert.rejects(action(dev, "cards.delete", { id: card.id }), /Only an admin can delete a card\./);
+  await assert.rejects(action(dev, "members.promote", { id: idOf("Developer") }), /Only an admin can promote a member/);
+  // A display name is chosen by its member, so promotion names the member's row, not the name.
+  const copycat = await signupApp("board", "copycat@team.example");
+  await assert.rejects(action(copycat, "cards.create", { title: "Before joining" }), /Join the board before adding a card\./);
+  await action(copycat, "me.join", { display: "Member" });
   assert.equal((await action(lead, "cards.move", { id: card.id, status: "doing" })).changes, 1);
-  assert.equal((await action(lead, "members.promote", { display: "Member" })).changes, 1);
+  assert.equal((await action(lead, "members.promote", { id: idOf("Member") })).changes, 1);
+  assert.deepEqual((await action<Array<{ display: string; role: string }>>(lead, "members.list")).map((row) => [row.display, row.role]),
+    [["Lead", "admin"], ["Member", "admin"], ["Developer", "member"], ["Member", "member"]]);
+  await assert.rejects(action(lead, "members.promote", { id: idOf("Member") }), /and only one who is not an admin yet/);
   assert.equal((await action(member, "cards.delete", { id: card.id })).changes, 1);
-  check("Team board", "Three users obey SQL role checks, an outsider cannot sign up, and the owner seeds the first admin.");
+  check("Team board", "Four users obey SQL role checks with each guard's sentence, an outsider cannot sign up, the owner seeds the first admin, and promotion names a member's row, so a second member who picks the same display name is not promoted with it.");
 
   await owner.call("signup_policy_set", { deploymentId: receipts.portfolio.id, mode: "allowlist", allowlist: ["potter@example.test"] });
   const potter = await signupApp("portfolio", "potter@example.test");
@@ -206,6 +221,10 @@ try {
   const piece = (await action(visitor, "pieces.list"))[0];
   assert.equal(piece.title, "Clay cup");
   assert(piece.image_data.startsWith("data:image/png;base64,"));
+  // A visitor gets no file ID; the potter reads hers from pieces.files and loads it with files.url's path.
+  assert.equal("file_id" in piece, false);
+  assert.deepEqual(await action(potter, "pieces.files"), [{ id: piece.id, file_id: file.id }]);
+  await assert.rejects(action(visitor, "pieces.files"), /authentication-required/);
   await assert.rejects(visitor.call("files_read", { fileId: file.id }), /File not found/);
   assert.deepEqual(await visitor.call("files_list"), []);
   const poster = await potter.upload(png);
@@ -220,15 +239,15 @@ try {
   // download() releases the transfer when it finishes, and the Kernel refuses a second cancel.
   assert.deepEqual(await visitor.download(publicDownload), png);
   await assert.rejects(visitor.call("transfer_status", { transferId: publicDownload.transferId }), /Transfer not found or expired/);
-  check("Public portfolio", "A private upload stays with the potter. A public upload can be listed and downloaded by a visitor.");
+  check("Public portfolio", "A private upload stays with the potter, and a visitor's piece list carries no file ID. A public upload can be listed and downloaded by a visitor.");
 
   const poll = runtime("poll");
   for (const choice of ["Tuesday", "Tuesday", "Sunday"]) assert.equal((await action(poll, "votes.cast", { choice })).changes, 1);
-  assert.equal((await action(poll, "votes.cast", { choice: "invalid" })).changes, 0);
+  await assert.rejects(action(poll, "votes.cast", { choice: "invalid" }), /Pick Tuesday, Thursday, Saturday or Sunday\./);
   const votes = await action(poll, "votes.results");
   assert.deepEqual(votes.map((row: any) => [row.choice, row.n]), [["Tuesday", 2], ["Sunday", 1]]);
   assert.equal((await action(poll, "votes.perhour"))[0].n, 3);
-  check("Poll dashboard", "Anonymous votes feed grouped totals and an hourly report, with SQL checking allowed choices.");
+  check("Poll dashboard", "Anonymous votes feed grouped totals and an hourly report, and a choice outside the four days is refused with the guard's sentence.");
 
   await sql("feed", "INSERT INTO incidents(title,body,started_at) VALUES('Maintenance','Planned work',1700000000000)");
   const feed = runtime("feed");
@@ -343,7 +362,13 @@ try {
       secrets: name === "feed" ? { pings_webhook: pingsSecret } : undefined,
     }), { inputs: { "items.jsonin": { ids: "[1, 2]" } } });
     assert.equal(report.failed, 0, `${name} does not conform to its Action Contract:\n${formatConformanceReport(report)}`);
-    assert.equal(report.skipped, 0, `${name} skipped checks:\n${formatConformanceReport(report)}`);
+    // cards.create guards an INSERT for members only. The session conform uses is a member,
+    // so its second identical call inserts again and the guard cannot be reached. The team
+    // board check above proves it with an account that has not joined.
+    const unreachableGuards = name === "board" ? ["cards.create"] : [];
+    const skips = report.results.filter((result) => result.outcome === "skip");
+    assert.deepEqual(skips.map((result) => `${result.action}: ${result.check}`), unreachableGuards.map((action) => `${action}: refuses with its guard when no row changes`),
+      `${name} skipped checks:\n${formatConformanceReport(report)}`);
     conformance[name] = { passed: report.passed, skipped: report.skipped };
   }
   // The CLI, from a contract file on disk, with no proxy header and no session.
@@ -358,7 +383,7 @@ try {
   const cliTotals = cliOutput.trim().split("\n").at(-1)!;
   assert.match(cliTotals, /^\d+ passed, 0 failed, 0 skipped/);
   const total = Object.values(conformance).reduce((sum, item) => sum + item.passed, 0);
-  check("Action Contracts", `All eight examples conform: ${total} checks pass, none skipped (${Object.entries(conformance).map(([name, item]) => `${name} ${item.passed}`).join(", ")}). The CLI run on launch reports "${cliTotals}"`);
+  check("Action Contracts", `All eight examples conform: ${total} checks pass, and the only skip is board's cards.create guard, which conform cannot reach with a member's session (${Object.entries(conformance).map(([name, item]) => `${name} ${item.passed}`).join(", ")}). The CLI run on launch reports "${cliTotals}"`);
 
   console.log(JSON.stringify({ examples: 8, checks: observations.length, observations }, null, 2));
 } finally {

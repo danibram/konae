@@ -43,7 +43,7 @@ LITTLEBOX_SHOWCASE_PORT=19470 bun run examples/showcase/inbox/replay.ts
 
 The port defaults to 19470. The script builds the Kernel offline, starts it on that port with a temporary data directory and the development mail transport, and creates a throwaway owner. It copies the sources to a scratch directory, so the repository stays clean. When it exits it stops the Kernel and deletes the directory. `LITTLEBOX_SHOWCASE_BROWSER=0` skips Chrome, and `LITTLEBOX_SHOWCASE_SCREENSHOTS=<dir>` keeps a light and a dark screenshot.
 
-The last run, on 2026-11-06 after the route and guard fixes, passed all 13 checks and exited 0. `littlebox conform` reported `42 passed, 0 failed, 0 skipped.` against the private Deployment with Ana's session and a key, and `21 passed, 0 failed, 8 skipped.` against the signed variant with both secrets and no session. The count fell from 72 because the two routed actions answer only on their routes now, so their inputs are probed there and not on the runtime endpoint.
+The last run, on 2026-11-07 after the review of the examples, passed all 13 checks and exited 0. `littlebox conform` reported `42 passed, 0 failed, 0 skipped.` against the private Deployment with Ana's session and a key, and `21 passed, 0 failed, 8 skipped.` against the signed variant with both secrets and no session. The count fell from 72 because the two routed actions answer only on their routes now, so their inputs are probed there and not on the runtime endpoint.
 
 ## What worked
 
@@ -59,6 +59,7 @@ The last run, on 2026-11-06 after the route and guard fixes, passed all 13 check
 - `usage_read` counts each route call that ran under its method and path and counts none of the refused ones, except the two acknowledge guard refusals under `refused`. It also counts both signups. `signals_read` returns one `event.received` per stored event and one `event.acknowledged` per acknowledgement, naming who acknowledged.
 - `littlebox contract` writes the six actions. `littlebox conform` probes the private Deployment, including the visitor refusals and the guard, with no check skipped.
 - Chrome signs in through the Kernel's page, renders the list in light and dark, acknowledges an event from the page and reports no Content Security Policy violation.
+- When an event was acknowledged in another session after the page drew it, the page's Acknowledge is refused with the guard and the sentence stays on screen after the list reloads. Fixed on 2026-11-07: the page showed the refusal and then cleared it in the same tick, because reloading the list empties the notice. The page reads every failure through one `reason(error)` helper, the same in all five showcase apps, so `rate-limited` and an unreachable Kernel show a sentence too.
 
 ## What the primitives refused or could not do
 

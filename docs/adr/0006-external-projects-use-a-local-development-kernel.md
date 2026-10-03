@@ -1,6 +1,6 @@
 # Run External Projects against a local Development Kernel
 
-Status: accepted
+Status: accepted, 2026-10-21. Builds on ADR-0004 and ADR-0005.
 
 An External Project will develop against a local implementation of the Kernel interfaces instead of embedding production credentials or depending on live production state. Application code keeps using the same relative Runtime Interface for actions, auth and files in local preview and hosted Deployments. Remote production administration remains an explicit owner action, never an implicit part of the development runtime.
 

@@ -12,7 +12,7 @@ The yardstick: a person who does not write code, and a person who does, make the
 - A signed route refused a bad signature, a stale timestamp and a replay; a key scoped to nothing could not be created; a revoked key was refused.
 - One multi-row booking was atomic, and under 20 races and one burst of ten, exactly one booking won each time, because the Kernel serializes actions per Deployment and a partial unique index backs it.
 - Eject kept sessions and rows; a package import kept IDs, passwords, rows, files, roles and the policy; a restore kept data, keys and Signals and signed everyone out.
-- The Action Contract named every column in four apps and `conform` passed 67 to 84 checks per app against a real Kernel. After the fixes of 2026-11-06 it passes 42 in inbox, whose two routed actions are now probed on their routes only, 70 in club, 76 in booking and 87 in habits, with none skipped.
+- The Action Contract named every column in four apps and `conform` passed 67 to 84 checks per app against a real Kernel. After the fixes of 2026-11-06 it passed 42 in inbox, whose two routed actions are now probed on their routes only, 70 in club, 76 in booking and 87 in habits, with none skipped. After the review of 2026-11-07 it passes 42 in inbox, 70 in club with 2 skipped, 76 in booking and 71 in habits with 2 skipped. Habits fell because its routes declare `"callers": ["key"]` and answer only there. Each skip is a guard on an INSERT that conform's second identical call cannot reach, and each app's replay proves that guard itself.
 
 ## What hurt, by job
 
@@ -75,9 +75,9 @@ A suspended member's session answers as signed out and only the login route says
 1. Done on 2026-11-06, see the ADR-0011 update "a route binds its action". Bind a signed route to its action: an action with a signature or a key requirement is not callable through `actions_invoke`, and a route on a private app without a signature requires a key or a session. Include method, path and query in the MAC and add a nonce. This is the only finding that opens data the app meant to close.
 2. Done on 2026-11-06, see the ADR-0010 update. Make a refused mutation visible: a declared `refuse` clause, or a convention that `changes: 0` with a declared guard answers `forbidden`, so the page, Usage, the Signal and the contract all see a refusal. Record Signals only when `changes > 0`, and let a Signal name the actor.
 3. Done on 2026-11-06, see the ADR-0009 note. One refusal text per rule at both doors, with a test that walks every shared case through the Gate and the Kernel and compares the words, as `http-binding-cases.json` and `signal-cases.json` already do for two groups.
-4. The static publishing contract from product-fit: multi-page artifacts in the CLI, 404, extensionless paths, `404.html`.
-5. Initial signup policy in `littlebox publish` and `littlebox.json`; invitations allowed under Closed when the owner sends them.
+4. Done on 2026-11-06, see the ADR-0005 note on the static publishing contract. The static publishing contract from product-fit: multi-page artifacts in the CLI, 404, extensionless paths, `404.html`.
+5. Done on 2026-11-06, see the ADR-0011 note on Closed and `project.manifest.signupPolicy` in docs/mcp.md. Initial signup policy in `littlebox publish` and `littlebox.json`; invitations allowed under Closed when the owner sends them.
 6. File lifecycle: publish and delete. Done 2026-11-06: `files_update`, `files_delete` and `miniapp.files.url`.
-7. Keys in the package, and the docs made true either way.
+7. Done on 2026-11-06, see the ADR-0013 note on keys. Keys in the package, and the docs made true either way.
 
 Items 1 to 3 touch `http.rs`, `usage.rs`, `actions.ts` and the Gate together and go as one delivery. Items 4 to 7 are disjoint and can run in parallel.

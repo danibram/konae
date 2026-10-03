@@ -10,6 +10,7 @@
     "habits.create": {
       "kind": "mutation",
       "access": "authenticated",
+      "guard": "You already track 20 habits. Archive one first.",
       "statement": "INSERT INTO habits(user_id, name, created_at) SELECT ?1, ?2, ?3 WHERE (SELECT COUNT(*) FROM habits WHERE user_id = ?1 AND archived_at IS NULL) < 20",
       "bindings": [
         { "source": "actor", "field": "id" },
@@ -20,6 +21,7 @@
     "habits.archive": {
       "kind": "mutation",
       "access": "authenticated",
+      "guard": "This habit is already archived, or it is not yours.",
       "statement": "UPDATE habits SET archived_at = ?3 WHERE id = ?1 AND user_id = ?2 AND archived_at IS NULL",
       "bindings": [
         { "source": "input", "key": "id", "type": "number" },
@@ -71,7 +73,8 @@
     "habits.import": {
       "kind": "mutation",
       "access": "anonymous",
-      "http": { "method": "POST", "path": "/api/habits" },
+      "http": { "method": "POST", "path": "/api/habits", "callers": ["key"] },
+      "guard": "You already track 20 habits. Archive one first.",
       "statement": "INSERT INTO habits(user_id, name, created_at) SELECT ?1, ?2, ?3 WHERE (SELECT COUNT(*) FROM habits WHERE user_id = ?1 AND archived_at IS NULL) < 20",
       "bindings": [
         { "source": "actor", "field": "id" },
@@ -82,14 +85,14 @@
     "habits.mine": {
       "kind": "query",
       "access": "anonymous",
-      "http": { "method": "GET", "path": "/api/habits" },
+      "http": { "method": "GET", "path": "/api/habits", "callers": ["key"] },
       "statement": "SELECT id, name, created_at FROM habits WHERE user_id = ?1 AND archived_at IS NULL ORDER BY id LIMIT 20",
       "bindings": [{ "source": "actor", "field": "id" }]
     },
     "checkins.log": {
       "kind": "mutation",
       "access": "anonymous",
-      "http": { "method": "POST", "path": "/api/checkins" },
+      "http": { "method": "POST", "path": "/api/checkins", "callers": ["key"] },
       "statement": "INSERT INTO checkins(habit_id, user_id, day, device, created_at) SELECT id, ?2, ?3, ?4, ?5 FROM habits WHERE id = ?1 AND user_id = ?2 AND archived_at IS NULL AND ?3 BETWEEN date(?5 / 1000, 'unixepoch', '-30 days') AND date(?5 / 1000, 'unixepoch', '+1 day') ON CONFLICT(habit_id, day) DO NOTHING",
       "bindings": [
         { "source": "input", "key": "habitId", "type": "number" },

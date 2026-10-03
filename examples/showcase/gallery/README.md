@@ -22,7 +22,7 @@ This is a product probe. The app uses Littlebox's primitives as a creator would,
 - A Public Deployment whose first release sets `initialSignupPolicy` to Closed.
 - An Invitation, read from the development mailbox, to admit the curator's single account.
 - `files_upload` with `visibility: "public"` for published photographs and `"private"` for drafts. Publishing a draft makes its own file public with `files_update` (`miniapp.files.update` in the page), and a stray upload goes with `files_delete`. Visitors read public files through `GET /_littlebox/files/<id>`, the path `miniapp.files.url` returns, which the grid embeds as `<img>` under `img-src 'self'`.
-- Anonymous queries (`photos.published`), authenticated queries and mutations gated by a `studio` row the owner seeds with `database_execute`.
+- Anonymous queries (`photos.published`), authenticated queries and mutations gated by a `studio` row the owner seeds with `database_execute`. `photos.add` and `photos.publish` declare a guard, so an account outside the studio is refused with the app's sentence.
 - `contact.send`, an anonymous mutation with the Signal `contact.received` carrying only the `topic`.
 - `feed.items`, an anonymous query bound to `GET /feed.json` with no signature.
 - A multi-page Build Artifact from `littlebox build`: `index.html`, `about.html`, `404.html`, the `styles.css` and `app.js` they load, and the SDK as `runtime.js`.
@@ -51,7 +51,7 @@ It runs these flows and exits 0 when all of them pass:
 9. 40 contact messages from one address, then one from another, then the Signals and the inbox.
 10. Known and unknown paths on the multi-page artifact, and `HEAD /styles.css`.
 11. Usage.
-12. In Chrome, the home page in light and dark with every image loaded, the about page with a sent contact form, the signed-in studio, and in the studio a `fetch` of `miniapp.files.url(draft)`, a draft published and hidden again with `miniapp.files.update`, and an upload with an unknown visibility.
+12. In Chrome, the home page in light and dark with every image loaded, the about page with a sent contact form, the signed-in studio, and in the studio a `fetch` of `miniapp.files.url(draft)`, a draft published and hidden again with `miniapp.files.update`, and an upload with an unknown visibility. Then the owner removes the curator from the `studio` table while the page is open: the page's upload is refused with the guard and its file deleted, and its publish is refused with the guard and the draft's file put back to private.
 13. `littlebox contract`, then `littlebox conform` from the CLI with no credential, and the same checks in process.
 
 ## What worked
@@ -59,7 +59,7 @@ It runs these flows and exits 0 when all of them pass:
 - Closed signup from the first request. The Kernel refused every signup, the curator's own included, and the curator's account came in through the owner's Invitation with the policy still Closed (`acceptable: true`, then 200 on accept). The app has exactly one account (`app_users_list`) and the curator still signs in.
 - Drafts stayed invisible by every door a visitor has: `photos.published` leaves them out, `files_list` lists only the public files, `files_read` answers `File not found.` and `GET /_littlebox/files/<id>` answers 404.
 - Public photographs load in the page from `/_littlebox/files/<id>` as `image/png`, `inline`, with `Cross-Origin-Resource-Policy: same-origin`. Chrome reported no policy violation on any page, light or dark.
-- Publishing a draft keeps its file. `files_update` made the draft's file public under the same ID, `photos.publish` pointed the row at it, and the curator held 5 files for 5 photographs. A stray upload deleted with `files_delete` left `files_list`, answered `File not found.` to `files_read` and 404 at the file path, and stopped counting against the 20 MiB quota.
+- Publishing a draft keeps its file. `files_update` made the draft's file public under the same ID, `photos.publish` marked the row published, and the curator held 5 files for 5 photographs. `photos.publish` takes only the photograph's ID since 2026-11-07, because the row already names its file; before, it took a `file_id` that could point the row at any file. A second publish of the same photograph is refused with `Only the studio's curator can publish, and only a photograph that is still a draft.` A stray upload deleted with `files_delete` left `files_list`, answered `File not found.` to `files_read` and 404 at the file path, and stopped counting against the 20 MiB quota.
 - In the studio, `fetch(await miniapp.files.url(draft))` answered 200 `image/png` with the draft's bytes under `connect-src 'self'`, and the draft previews load from the same path instead of from `miniapp.files.list()`, which downloads every file.
 - `contact.send` works for a signed-out visitor, from the page and over MCP. The 31st call from one address in 10 seconds answered `rate-limited` with `Retry-After: 1`, and a second address went through at once. Each sent message recorded one `contact.received` Signal with only `{ topic }`, and the curator read every message through `studio.messages`.
 - `GET /feed.json` answers any program with no signature and no key: 200, `application/json`, the four published photographs newest first, with image paths that load. `HEAD` answers 405 with `Allow: GET`. `POST` answers 405 with `Allow: GET` and `No route accepts POST on this path.`
@@ -69,6 +69,7 @@ It runs these flows and exits 0 when all of them pass:
 - `about.html` serves its own page at `/about.html` and `/about`, and the SDK and the contact form run on it with no policy violation.
 - Every path the artifact does not hold answers 404 with `404.html`, never the home page. `HEAD /styles.css` answers 200 with `text/css`.
 - conform with no credential passed every check it could run.
+- The page reads every failure through one `reason(error)` helper, the same in all five showcase apps. A refusal shows its own sentence, `rate-limited` becomes "Too many requests just now. Wait a few seconds and try again.", and an unreachable Kernel becomes "The site could not reach its server. Check the connection and try again." Before 2026-11-07 the studio's upload and publish judged `{ changes: 0 }` themselves, a refused upload left its file behind, and the grid stayed on "Loading photographs…" when the first call failed.
 
 ## Unknown paths on a multi-page site
 
@@ -93,12 +94,12 @@ Rows with a status or a quoted message are answers the replay received. Rows tha
 | Attempt | Status | Exact answer |
 | --- | --- | --- |
 | `littlebox build` on a copy whose `about.html` names `/portrait.jpg`, which the Capsule does not hold | | `about.html references /portrait.jpg, but the Capsule holds no portrait.jpg.` |
-| `littlebox publish` with a first signup policy | | Fixed on 2026-11-06: `littlebox.json` names `project.manifest.signupPolicy` and `littlebox publish` sends it on the first release (the club and booking replays use it). This replay still publishes over MCP, because the CLI drops `about.html`. |
+| `littlebox publish` with a first signup policy | | Fixed on 2026-11-06: `littlebox.json` names `project.manifest.signupPolicy` and `littlebox publish` sends it on the first release (the club and booking replays use it). This replay publishes the artifact `littlebox build` writes, over MCP with `initialSignupPolicy`, so it can also plan a broken release first. |
 | Publish `contact.send` with `... RETURNING id` | | `Action contact.send cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.` |
 | A visitor signs up while signup is Closed | 403 | `This app is not accepting new accounts for this email address.` The same text for everyone under Closed, though it reads as if the address were the problem. |
 | The invited curator accepts while signup is Closed | 200 | Fixed on 2026-11-06 (ADR-0011, note on Closed). The replay first recorded 403 `This app is not accepting new accounts for this email address.` with `acceptable: false`. An owner's invitation is now acceptable under Closed, and the replay asserts `acceptable: true` and the 200. |
 | Create the curator's account on an app that is Closed from its first release | | Fixed on 2026-11-06. The owner invites the curator and the policy stays Closed; the curator's own signup still answers 403. |
-| Mark the curator as the studio owner | | No primitive. `auth_session` answers `role: "member"` for the only account; the app cannot tell the curator from any other account, so the owner inserts the curator's user ID into `studio` with `database_execute`. Until then `photos.add` answers `{ changes: 0 }`. |
+| Mark the curator as the studio owner | | No primitive. `auth_session` answers `role: "member"` for the only account; the app cannot tell the curator from any other account, so the owner inserts the curator's user ID into `studio` with `database_execute`. Until then `photos.add` is refused with its guard, `Only the studio's curator can add photographs.` (before 2026-11-07, `{ changes: 0 }`). |
 | A visitor reads a draft over MCP (`files_read`) | | `File not found.` |
 | A visitor reads a draft at `GET /_littlebox/files/<id>` | 404 | `{"error":"File not found."}` |
 | A visitor uploads a file (`transfer_begin`) | | `authentication-required` |
@@ -148,7 +149,7 @@ Generated from actions.json and schema.sql. action-contract.json is the machine-
 - Column types are SQLite affinities read from schema.sql. SQLite does not enforce them, so a value can still arrive as another JSON type when it was stored as one.
 - Nullability follows NOT NULL and INTEGER PRIMARY KEY in schema.sql. A column read through the right side of a LEFT JOIN is nullable.
 - A SQLite error, such as a UNIQUE constraint, is returned with SQLite's own text.
-- On a private Deployment every runtime call needs a session, including anonymous actions. An HTTP route answers by the action's access level whatever the visibility.
+- On a private Deployment every runtime call needs a session, including anonymous actions. An HTTP route answers the callers it takes: without a callers list, a signed route takes the signature or an API key, and an unsigned one anyone on a public Deployment and an API key or a session on a private one. An action whose route does not answer anyone answers only there.
 
 | Action | Kind | Access | HTTP |
 | --- | --- | --- | --- |
@@ -237,20 +238,24 @@ An array of row objects.
 
 ##### Callers
 
-Runtime endpoint: visitor (none; a public Deployment only; actor none); person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
+Runtime endpoint: visitor (none; a public Deployment only; actor none); person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; a public Deployment only, since on a private one the action answers only on its route; actor user id).
 
 HTTP route `GET /feed.json` on the Deployment host. Input is the query string, each value typed by its input's declared type. It answers `{ "result": ... }` with the same output, or `{ "error": "<message>" }` with a status.
 
-Callers: visitor (none; actor none); service (Authorization: Bearer <API key that names this action>; it replaces the signature; actor key id); person (the app session cookie, from the app's own origin; actor user id).
+Callers: visitor (none; a public Deployment only; actor none); service (Authorization: Bearer <API key that names this action>; actor key id); person (the app session cookie, from the app's own origin; actor user id).
+
+On a private Deployment the route takes an API key or a session and is the action's only door: the runtime endpoint refuses it there.
 
 ##### Errors
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
+| `Action feed.items answers only on its HTTP route, GET /feed.json.` |  | runtime | the Deployment is private and the route has no signature |
 | `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session |
 | `Unexpected action input: <key>` | 400 | both | input has a key no input binding declares |
 | `Query result exceeds 2 MiB or 1000 rows.` | 400 | both | a query produces more than 1000 rows or more than 2 MiB of JSON |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
+| `authentication-required` | 401 | http | the Deployment is private and the request carries neither an API key nor a session |
 | `invalid-api-key` | 401 | http | Authorization carries an lbk_ key that is unknown or revoked (401) |
 | `This API key may not call feed.items.` | 403 | http | the key does not name the route's action (403) |
 | `Repeated query parameter: <key>` | 400 | http | a GET names one input twice (400) |
@@ -284,6 +289,8 @@ INSERT INTO photos (file_id, title, caption, status, created_at, published_at) S
 
 `{ changes, lastInsertId }`, both integers.
 
+When the statement changes no row the call is refused with `Only the studio's curator can add photographs.` instead.
+
 ##### Callers
 
 Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
@@ -306,6 +313,7 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 | `Missing action input: status` |  | runtime | a required input is omitted |
 | `status must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
 | `status is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
+| `Only the studio's curator can add photographs.` |  | runtime | the statement changes no row, so the action's rule refused the call. Usage counts it under refused and no Signal is recorded |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
 
 ##### Limits
@@ -319,7 +327,7 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 A mutation declared authenticated. It binds the caller's ID, so a caller without one is refused.
 
 ```sql
-UPDATE photos SET status = 'published', file_id = ?3, published_at = ?4 WHERE id = ?2 AND status = 'draft' AND EXISTS (SELECT 1 FROM studio WHERE user_id = ?1)
+UPDATE photos SET status = 'published', published_at = ?3 WHERE id = ?2 AND status = 'draft' AND EXISTS (SELECT 1 FROM studio WHERE user_id = ?1)
 ```
 
 ##### Input
@@ -327,11 +335,12 @@ UPDATE photos SET status = 'published', file_id = ?3, published_at = ?4 WHERE id
 | Key | Type | Required | Limit |
 | --- | --- | --- | --- |
 | `id` | number | yes |  |
-| `file_id` | string | yes | 80 UTF-16 code units |
 
 ##### Output
 
 `{ changes, lastInsertId }`, both integers.
+
+When the statement changes no row the call is refused with `Only the studio's curator can publish, and only a photograph that is still a draft.` instead.
 
 ##### Callers
 
@@ -346,9 +355,7 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 | `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
 | `Missing action input: id` |  | runtime | a required input is omitted |
 | `id must be a number.` |  | runtime | a number input is not a JSON number |
-| `Missing action input: file_id` |  | runtime | a required input is omitted |
-| `file_id must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `file_id is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
+| `Only the studio's curator can publish, and only a photograph that is still a draft.` |  | runtime | the statement changes no row, so the action's rule refused the call. Usage counts it under refused and no Signal is recorded |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
 
 ##### Limits
@@ -499,6 +506,7 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
 | `Server action not declared.` |  | runtime | actions.json declares no action with that name |
+| `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session, whatever the action's name |
 | `Arguments must be an object.` |  | runtime | input is not an object, e.g. null |
 | `No route accepts POST on this path.` | 405 | http | a POST reaches a path no action binds (405) |
 

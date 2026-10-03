@@ -19,6 +19,15 @@ const week = Array.from({ length: 7 }, (_, i) => shiftDay(today, i - 6));
 $("#today").textContent = new Date().toLocaleDateString("en", { weekday: "long", month: "long", day: "numeric" });
 $("#device").textContent = `Checking in from this ${device}.`;
 
+// Every status line reads a failure the same way. A refusal's message is the
+// sentence to show; the rate limit answers with a code and an unreachable
+// Kernel with a browser error, so those two get a sentence here.
+function reason(error) {
+  if (error?.message === "rate-limited") return "Too many requests just now. Wait a few seconds and try again.";
+  if (error instanceof TypeError && /fetch|network|load failed/i.test(error.message)) return "Habits could not reach its server. Check the connection and try again.";
+  return error?.message ?? String(error);
+}
+
 function say(message, error = false) {
   const status = $("#status");
   status.textContent = message;
@@ -105,7 +114,7 @@ async function act(change, message) {
     await load();
     say(message);
   } catch (error) {
-    say(error instanceof Error ? error.message : String(error), true);
+    say(reason(error), true);
   }
 }
 
@@ -114,11 +123,18 @@ $("#add").addEventListener("submit", async (event) => {
   const input = $("#name");
   const name = input.value.trim();
   if (!name) return;
-  await act(async () => {
-    const result = await miniapp.actions.call("habits.create", { name });
-    if (result.changes === 0) throw Error("You already track 20 habits. Archive one first.");
-    input.value = "";
-  }, `Added ${name}.`);
+  // The button stays disabled until the call answers, so a double press adds one habit.
+  const button = event.target.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    // habits.create declares a guard, so the twenty-first habit is refused with its sentence.
+    await act(async () => {
+      await miniapp.actions.call("habits.create", { name });
+      input.value = "";
+    }, `Added ${name}.`);
+  } finally {
+    button.disabled = false;
+  }
 });
 
 const session = await miniapp.auth.session();
@@ -135,5 +151,5 @@ if (session.role === "anonymous") {
   out.addEventListener("click", async () => { await miniapp.auth.signOut(); location.reload(); });
   who.append(email, out);
   $("#app").hidden = false;
-  await load().catch((error) => say(error.message, true));
+  await load().catch((error) => say(reason(error), true));
 }

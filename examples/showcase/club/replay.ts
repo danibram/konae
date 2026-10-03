@@ -213,6 +213,8 @@ try {
     cookies[who] = A.cookieOf(accepted);
   }
   const ana = A.runtime(cookies.ana), ben = A.runtime(cookies.ben), cy = A.runtime(cookies.cy);
+  // An account that has not joined has no members row, so books.propose's guard refuses it.
+  assert.equal(await message(action(cy, "books.propose", { title: "Kindred", author: "Octavia E. Butler", coverFileId: null })), "Join the club before proposing a book.");
   for (const [client, display] of [[ana, "Ana"], [ben, "Ben"], [cy, "Cy"]] as const) assert.equal((await action(client, "me.join", { display })).changes, 1);
   check("Invitations", "Three invitations went through the development mailbox; each link opened the acceptance flow and set a password.");
 
@@ -303,7 +305,7 @@ try {
   check("API key", "A key scoped to public files reads a cover with Authorization: Bearer, gets 404 for a private note, and the runtime endpoint refuses it with 403 and says where keys work.");
 
   // Roles in SQL: each organizer mutation declares a guard, so a member's call is refused with the app's sentence.
-  const scheduleGuard = "Only an organizer can schedule a meeting, and the book must still be on the shortlist.";
+  const scheduleGuard = "Only an organizer can schedule a meeting, for a book on the shortlist while no other book is being read.";
   assert.equal(await message(action(ben, "books.schedule", { id: dispossessed, meetsOn: "2026-11-20" })), scheduleGuard);
   assert.equal(await message(action(ben, "books.remove", { id: solaris })), "Only an organizer can remove a book.");
   // The guard cannot tell a missing book from a missing role: both change no row.
@@ -326,8 +328,22 @@ try {
   // An organizer is an app role; inviting stays with the Kernel owner.
   const organizerInvites = await message(ana.call("app_invitations_create", { deploymentId: receiptA.id, emails: ["dee@club.example.test"], idempotencyKey: "organizer-invite-01" }));
   refused("Roles in SQL", "Ana (organizer) calls app_invitations_create on the runtime endpoint", organizerInvites);
-  refused("Usage", "usage_read after Ben's two refused schedules and Ana's one", `books.schedule counted ${scheduled} calls; nothing separates the two that changed nothing`);
-  check("Roles", "Ben's schedule, remove and finish are refused with their guards, and a missing book gets the schedule guard too; Ana's schedule changes one. Usage counts 1 books.schedule action and 2 refused.");
+  // One book is read at a time: with The Dispossessed current, even the organizer cannot schedule Solaris.
+  assert.equal(await message(action(ana, "books.schedule", { id: solaris, meetsOn: "2026-12-04" })), scheduleGuard);
+  assert.deepEqual((await action<Array<{ title: string; status: string }>>(ana, "books.list")).filter((book) => book.status === "current").map((book) => book.title), ["The Dispossessed"]);
+  check("Roles", "Ben's schedule, remove and finish are refused with their guards, and a missing book gets the schedule guard too; Ana's schedule changes one. Usage counts 1 books.schedule action and 2 refused. Ana cannot schedule a second book while one is current.");
+
+  // A note outlives the book it was written for. Ben writes a note on a book Ana then
+  // removes; notes.mine still lists it, and notes.add refuses a book that is gone.
+  assert.equal((await action(ben, "books.propose", { title: "Kindred", author: "Octavia E. Butler", coverFileId: null })).changes, 1);
+  const kindred = (await action<Array<{ id: number; title: string }>>(ben, "books.list")).find((book) => book.title === "Kindred")!.id;
+  const kindredNote = await upload(ben, new TextEncoder().encode("Read the prologue twice."), "note-kindred.txt", "text/plain");
+  assert.equal((await action(ben, "notes.add", { bookId: kindred, fileId: kindredNote.id, name: "note-kindred.txt" })).changes, 1);
+  assert.equal((await action(ana, "books.remove", { id: kindred })).changes, 1);
+  assert.deepEqual((await action<Array<{ book: string; file_id: string }>>(ben, "notes.mine")).map((note) => [note.book, note.file_id]),
+    [["A removed book", kindredNote.id], ["The Dispossessed", benNote.id]]);
+  assert.equal(await message(action(ben, "notes.add", { bookId: kindred, fileId: kindredNote.id, name: "note-kindred.txt" })), "Join the club first, and pick a book that is still on the list.");
+  check("Removed book", "Ben's note on a book Ana removed stays in notes.mine under \"A removed book\", and notes.add refuses the removed book with its guard.");
 
   if (process.env.LITTLEBOX_SHOWCASE_BROWSER !== "0") {
     // Ben signs in through the Kernel's own page, sees the covers from the
@@ -356,7 +372,7 @@ try {
           const images = [...document.querySelectorAll<HTMLImageElement>("img.cover")];
           return images.length === 2 && images.every((img) => img.complete && img.naturalWidth === 120);
         }, undefined, { timeout: 10_000 });
-        await page.locator("#notes summary").first().click();
+        await page.locator("#notes summary", { hasText: "The Dispossessed" }).click();
         await page.locator("#notes .note-text").filter({ hasText: benNoteText }).waitFor({ timeout: 10_000 });
         if (!storage) {
           // The SDK refuses a visibility the Kernel lacks instead of storing a private file.
@@ -369,6 +385,15 @@ try {
           }, benNote.id);
           assert.deepEqual(sdk, { refusal: "File visibility must be private or public.", url: `/_littlebox/files/${benNote.id}`, added: 0 });
           refused("File visibility", "miniapp.files.upload(file, { visibility: \"organizers\" }) in Ben's page", sdk.refusal);
+          // The note form uploads first and then calls notes.add. When the action refuses,
+          // the page deletes the upload, so a refused note leaves no file behind.
+          const filesBefore = await page.evaluate(async () => (await (window as any).miniapp.files.list()).length);
+          await page.locator("#note-form select").evaluate((select: HTMLSelectElement, id) => { select.options[0].value = String(id); }, kindred);
+          await page.locator("#note-form textarea").fill("A note for a book that is gone.");
+          await page.getByRole("button", { name: "Save private note" }).click();
+          await page.locator("#status").filter({ hasText: "pick a book that is still on the list" }).waitFor({ timeout: 10_000 });
+          assert.equal(await page.evaluate(async () => (await (window as any).miniapp.files.list()).length), filesBefore, "A refused note leaves no file.");
+          assert.equal(await page.getByRole("button", { name: "Save private note" }).isEnabled(), true);
         }
         await page.locator('button[data-action="books.schedule"]').first().click();
         await page.locator("#status").filter({ hasText: "Only an organizer can schedule a meeting" }).waitFor({ timeout: 10_000 });
@@ -382,7 +407,7 @@ try {
         await context.close();
       }
     } finally { await browser.close(); }
-    check("Browser", `Chrome signed Ben in through the Kernel's page, rendered both covers from /_littlebox/files, fetched his note from miniapp.files.url, saw the SDK refuse visibility "organizers" without storing a file, showed the organizer refusal, and reported no policy violation${shots ? `; screenshots in ${shots}` : ""}.`);
+    check("Browser", `Chrome signed Ben in through the Kernel's page, rendered both covers from /_littlebox/files, fetched his note from miniapp.files.url, saw the SDK refuse visibility "organizers" without storing a file, deleted the upload of a note notes.add refused, showed the organizer refusal, and reported no policy violation${shots ? `; screenshots in ${shots}` : ""}.`);
   }
 
   // Account recovery: the emailed link sets a new password and ends Cy's old session.
@@ -476,7 +501,12 @@ try {
     const [code, out, err] = await cli(["conform", "--url", target.receipt.url, "--contract", path.join(root, "action-contract.json"), "--token", token]);
     const totals = out.trim().split("\n").at(-1)!;
     assert.equal(code, 0, out + err);
-    assert.match(totals, /^\d+ passed, 0 failed, 0 skipped/);
+    // books.propose and notes.add guard an INSERT. Ben is a member and the book exists, so
+    // conform's second identical call inserts again and cannot reach the guard; the replay
+    // proves both guards itself (Cy before joining, Ben on a removed book).
+    assert.match(totals, /^\d+ passed, 0 failed, 2 skipped/);
+    const skipped = out.split("\n").filter((line) => line.startsWith("SKIP")).map((line) => line.slice(0, line.indexOf(". "))).sort();
+    assert.deepEqual(skipped, ["SKIP books.propose: refuses with its guard when no row changes", "SKIP notes.add: refuses with its guard when no row changes"], out);
     conformTotals[label] = totals;
   }
   check("Action Contract", `littlebox contract wrote the contract for 10 actions; conform as Ben: origin "${conformTotals.origin}", destination "${conformTotals.destination}"`);
