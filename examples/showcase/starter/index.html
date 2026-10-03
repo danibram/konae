@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Starter</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="#top">Starter</a>
+  <nav class="tabs" aria-label="Sections">
+    <a href="#updates">Updates</a>
+    <a href="#downloads">Downloads</a>
+    <a href="#member" data-needs="member" hidden>My space</a>
+    <a href="#team" data-needs="admin" hidden>Team</a>
+    <a href="#admin" data-needs="owner" hidden>Admin</a>
+  </nav>
+  <div class="who">
+    <img id="who-avatar" class="avatar" alt="" hidden>
+    <span id="who-name" class="muted"></span>
+    <span id="who-role" class="badge" hidden></span>
+    <button type="button" id="sign-in" class="button primary" hidden>Sign in or create an account</button>
+    <button type="button" id="sign-out" class="button" hidden>Sign out</button>
+  </div>
+</header>
+
+<p id="notice" class="notice" role="status" aria-live="polite" hidden></p>
+
+<main id="top" class="page">
+  <section class="hero" aria-labelledby="hero-title">
+    <h1 id="hero-title">A small app with every door in place</h1>
+    <p class="muted">Anyone can read the updates and downloads. Create an account to keep private notes and files. Team admins post for the team, and the owner runs the admin area.</p>
+  </section>
+
+  <section class="card" id="status" aria-labelledby="status-title">
+    <h2 id="status-title">Service status</h2>
+    <ul id="status-list" class="rows"></ul>
+    <p id="status-empty" class="empty" hidden>No status reported yet. A monitoring service reports here through a signed webhook.</p>
+  </section>
+
+  <section class="card" id="updates" aria-labelledby="updates-title">
+    <div class="card-head">
+      <h2 id="updates-title">Updates</h2>
+      <form id="updates-search" class="search" role="search">
+        <label class="sr" for="updates-q">Search updates</label>
+        <input id="updates-q" name="q" type="search" maxlength="60" placeholder="Search updates">
+        <button type="submit" class="button">Search</button>
+      </form>
+    </div>
+    <ol id="updates-list" class="rows"></ol>
+    <p id="updates-empty" class="empty" hidden>No updates yet.</p>
+    <button type="button" id="updates-more" class="button" hidden>Older updates</button>
+  </section>
+
+  <section class="card" id="downloads" aria-labelledby="downloads-title">
+    <h2 id="downloads-title">Downloads</h2>
+    <ul id="downloads-list" class="rows"></ul>
+    <p id="downloads-empty" class="empty" hidden>Nothing published yet. Members publish their files here from My space.</p>
+  </section>
+
+  <section id="member" class="area" data-needs="member" hidden aria-labelledby="member-title">
+    <h2 id="member-title" class="area-title">My space</h2>
+
+    <div class="card">
+      <h3>Profile</h3>
+      <form id="rename" class="inline">
+        <label for="display-name">Display name</label>
+        <input id="display-name" name="displayName" maxlength="40" required autocomplete="nickname">
+        <button type="submit" class="button">Save name</button>
+      </form>
+      <div class="inline">
+        <label for="avatar-file">Avatar, public to everyone</label>
+        <input id="avatar-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>Notes, only you can read them</h3>
+        <form id="notes-search" class="search" role="search">
+          <label class="sr" for="notes-q">Search notes</label>
+          <input id="notes-q" name="q" type="search" maxlength="60" placeholder="Search notes">
+          <button type="submit" class="button">Search</button>
+        </form>
+      </div>
+      <form id="note-add" class="stack">
+        <label for="note-title">Title</label>
+        <input id="note-title" name="title" maxlength="120" required>
+        <label for="note-body">Note</label>
+        <textarea id="note-body" name="body" maxlength="4000" rows="3"></textarea>
+        <button type="submit" class="button primary">Add note</button>
+      </form>
+      <ol id="notes-list" class="rows"></ol>
+      <p id="notes-empty" class="empty" hidden>No notes yet. Add one above.</p>
+      <button type="button" id="notes-more" class="button" hidden>Older notes</button>
+    </div>
+
+    <div class="card">
+      <h3>Files, private until you publish them</h3>
+      <div class="inline">
+        <label for="attachment-file">Attach a file, up to 2 MiB</label>
+        <input id="attachment-file" type="file">
+      </div>
+      <ul id="attachments-list" class="rows"></ul>
+      <p id="attachments-empty" class="empty" hidden>No files yet. Attach one above; it stays private until you publish it.</p>
+    </div>
+  </section>
+
+  <section id="team" class="area" data-needs="admin" hidden aria-labelledby="team-title">
+    <h2 id="team-title" class="area-title">Team</h2>
+    <div class="card">
+      <h3>Team admins</h3>
+      <ul id="roster" class="rows"></ul>
+    </div>
+    <div class="card">
+      <h3>Team board</h3>
+      <form id="team-post" class="stack">
+        <label for="team-body">Message to the team</label>
+        <textarea id="team-body" name="body" maxlength="2000" rows="2" required></textarea>
+        <button type="submit" class="button primary">Post to the team</button>
+      </form>
+      <ol id="team-list" class="rows"></ol>
+      <p id="team-empty" class="empty" hidden>No team messages yet.</p>
+    </div>
+    <div class="card">
+      <h3>Publish an update</h3>
+      <form id="update-publish" class="stack">
+        <label for="update-title">Title</label>
+        <input id="update-title" name="title" maxlength="120" required>
+        <label for="update-body">Text</label>
+        <textarea id="update-body" name="body" maxlength="4000" rows="3"></textarea>
+        <button type="submit" class="button primary">Publish to everyone</button>
+      </form>
+    </div>
+  </section>
+
+  <section id="admin" class="area" data-needs="owner" hidden aria-labelledby="admin-title">
+    <h2 id="admin-title" class="area-title">Admin</h2>
+    <div class="card">
+      <h3>At a glance</h3>
+      <dl id="stats" class="stats"></dl>
+      <p class="muted small">Signals and Usage stay with the Kernel; read them in the editor or with signals_read and usage_read.</p>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h3>Members</h3>
+        <form id="members-search" class="search" role="search">
+          <label class="sr" for="members-q">Search members</label>
+          <input id="members-q" name="q" type="search" maxlength="40" placeholder="Search members">
+          <button type="submit" class="button">Search</button>
+        </form>
+      </div>
+      <ul id="members-list" class="rows"></ul>
+      <p id="members-empty" class="empty" hidden>No member matches.</p>
+    </div>
+  </section>
+</main>
+</body>
+</html>
