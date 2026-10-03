@@ -42,14 +42,17 @@ export function validateRuntimeParams(params: unknown): SqlValue[] {
   return params as SqlValue[];
 }
 
+/** The Kernel's refusal for a result past the row or byte cap, kernel-rs/src/main.rs `bounded_rows`. */
+export const queryResultTooLarge = "Query result exceeds 2 MiB or 1000 rows.";
+
 export function assertRuntimeResultWithinLimits(rows: Record<string, SqlValue>[]) {
   if (rows.length > runtimeLimits.resultRows) {
-    throw new Error(`Query returned more than ${runtimeLimits.resultRows} rows. Add a LIMIT clause.`);
+    throw new Error(queryResultTooLarge);
   }
   let bytes = 0;
   for (const row of rows) {
     for (const value of Object.values(row)) bytes += sqlValueBytes(value);
-    if (bytes > runtimeLimits.resultBytes) throw new Error("Query result is too large.");
+    if (bytes > runtimeLimits.resultBytes) throw new Error(queryResultTooLarge);
   }
 }
 

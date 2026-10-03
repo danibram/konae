@@ -2,10 +2,6 @@ import { sqlTokens, type SqlToken } from "./sql-tokens";
 
 const aggregates = new Set(["AVG", "COUNT", "GROUP_CONCAT", "MAX", "MIN", "SUM", "TOTAL"]);
 
-/** Same sentence in Describe, Files, and Deploy when a list has no LIMIT. */
-export const LIMIT_REFUSE_SENTENCE =
-  "A list that reads rows needs a LIMIT. This check refused a query without one.";
-
 /** Breaks a statement before the clauses a person has to see, including LIMIT. */
 export function presentStatement(sql: string): string {
   return sql.replace(/\s+(FROM|WHERE|GROUP BY|HAVING|ORDER BY|LIMIT)\b/gi, "\n$1");

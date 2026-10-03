@@ -60,6 +60,7 @@
 .agent-proposal-state em { padding: 2px 4px; border: 1px solid currentColor; font: normal 10px "JetBrains Mono Variable"; letter-spacing: .08em; }
 .agent-proposal.blocked .agent-proposal-state { color: #7f3325; }
 .agent-proposal.validated .agent-proposal-state { color: #4a6a18; }
+.agent-proposal-detail { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; color: #7f3325; font: 11px/1.45 "JetBrains Mono Variable"; }
 .agent-proposal-actions { grid-row: 1 / span 2; grid-column: 2; display: flex; align-items: center; gap: 6px; }
 .agent-proposal-actions button { height: 29px; display: flex; align-items: center; gap: 5px; padding: 0 10px; border: 1px solid var(--ink); background: transparent; font-size: 12px; font-weight: 750; cursor: pointer; }
 .agent-discard { white-space: nowrap; color: #7f3325; border-color: #7f3325; }

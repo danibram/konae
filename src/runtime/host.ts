@@ -4,6 +4,7 @@ import {
   assertRuntimeDatabaseWithinLimits,
   assertRuntimeResultWithinLimits,
   assertRuntimeSql,
+  queryResultTooLarge,
   runtimeLimits,
   validateRuntimeParams,
 } from "./security";
@@ -560,7 +561,7 @@ export class MiniAppRuntimeHost {
       while (statement.step()) {
         rows.push(statement.getAsObject());
         if (rows.length > runtimeLimits.resultRows) {
-          throw new Error(`Query returned more than ${runtimeLimits.resultRows} rows. Add a LIMIT clause.`);
+          throw new Error(queryResultTooLarge);
         }
       }
       assertRuntimeResultWithinLimits(rows);
@@ -573,9 +574,14 @@ export class MiniAppRuntimeHost {
   private async invokeAction(payload: unknown) {
     if (!payload || typeof payload !== "object" || !("name" in payload)) throw new Error("A server action name is required.");
     const request = payload as { name: unknown; input?: unknown };
-    const declaration = this.actionProgram.actions[String(request.name)];
+    // The runtime endpoint checks its arguments before it looks up the action.
+    if (typeof request.name !== "string") throw new Error("Expected a string.");
+    if (request.input !== undefined && (!request.input || typeof request.input !== "object" || Array.isArray(request.input))) {
+      throw new Error("Arguments must be an object.");
+    }
+    const declaration = this.actionProgram.actions[request.name];
     if (!declaration && this.actionsFailure) {
-      throw new Error(`Server action not declared: ${String(request.name)}. actions.json is invalid: ${this.actionsFailure}`);
+      throw new Error(`Server action not declared. actions.json is invalid: ${this.actionsFailure}`);
     }
     // The preview has no visibility, so it refuses what every Deployment refuses:
     // an action whose signed or callers-limited route is its only door.
@@ -705,9 +711,10 @@ export class MiniAppRuntimeHost {
     const url = String(candidate.dataUrl ?? "");
     const size = Number(candidate.size ?? 0);
     if (!url.startsWith("data:")) throw new Error("Only local data URLs are supported in this prototype.");
-    if (size > 2 * 1024 * 1024) throw new Error("Local prototype files are limited to 2 MiB.");
     const visibility = candidate.visibility ?? "private";
     if (visibility !== "private" && visibility !== "public") throw new Error(badFileVisibility);
+    // The Kernel's limit and words for a transfer: 1 byte to 2 MiB.
+    if (!(size >= 1 && size <= 2 * 1024 * 1024)) throw new Error("Transfer size is outside the limit.");
     const file: StoredFile = {
       id: crypto.randomUUID(),
       name: String(candidate.name ?? "file"),

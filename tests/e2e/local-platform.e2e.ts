@@ -368,3 +368,53 @@ test("a private Invitation only app admits the person the owner invites from the
     await page.screenshot({ path: testInfo.outputPath(`integrations-${scheme}.png`), animations: "disabled" });
   }
 });
+
+test("a person who writes code adds a page, a public file and a signed route, and the editor says what refused the publish", async ({ page }) => {
+  await createProject(page, `Pages and routes ${Date.now()}`);
+  const explorer = await openExplorer(page);
+  for (const [file, contents] of [
+    ["pages/about.html", '<main id=app><h1>About us</h1><img src="/logo.svg" alt="Logo"></main>'],
+    ["public/logo.svg", '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>'],
+    ["404.html", "<main id=app><h1>Nothing at this address</h1></main>"],
+  ] as const) {
+    await explorer.getByRole("button", { name: "New file" }).click();
+    await page.getByLabel("File path").fill(file);
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    await page.getByLabel(`${file} code editor`).fill(contents);
+  }
+
+  const actions = await openFile(page, "actions.json");
+  const program = JSON.parse(await actions.inputValue());
+  program.actions["tasks.toggle"].guard = "That task is gone.";
+  program.actions["orders.receive"] = {
+    kind: "mutation", access: "anonymous", statement: "INSERT INTO tasks (title, done, created_at) VALUES (?1, 0, ?2)",
+    bindings: [{ source: "input", key: "title", type: "string", maxLength: 200 }, { source: "kernel", field: "now" }],
+    http: { method: "POST", path: "/hooks/orders", signature: { header: "X-Signature", secret: "orders_webhook" } },
+  };
+  await actions.fill(JSON.stringify(program, null, 2));
+  // The readout above actions.json names the route as the action's only door and the guard's answer.
+  await expect(page.getByText("orders.receive. Only its route, POST /hooks/orders, runs it, for a signed request or an API key.")).toBeVisible();
+  await expect(page.getByText('Marks a row done. Anyone can run it. When no row changes it refuses with "That task is gone.".')).toBeVisible();
+  await waitForKernelSave(page);
+
+  await page.getByRole("button", { name: "Deploy", exact: true }).click();
+  await page.getByRole("button", { name: "Deploy public", exact: true }).click();
+  const refusal = page.getByRole("alert").filter({ hasText: "Deployment failed" });
+  await expect(refusal).toContainText("Action orders.receive signs with the secret orders_webhook, which is not set for this project.");
+  await refusal.getByRole("button", { name: "Set it in Auth > Integrations" }).click();
+  await expect(page.getByText("orders.receive signs with it. Publishing is refused until it is set.")).toBeVisible();
+  await page.getByRole("button", { name: "Set", exact: true }).click();
+  await page.getByLabel("Secret value").fill("whsec-0123456789abcdef");
+  await page.getByRole("button", { name: "Save secret" }).click();
+  await expect(page.getByText("Used by orders.receive.")).toBeVisible();
+
+  const url = await publish(page);
+  const about = await page.request.get(`${url}/about`);
+  expect(about.status()).toBe(200);
+  expect(await about.text()).toContain("About us");
+  const logo = await page.request.get(`${url}/logo.svg`);
+  expect(logo.headers()["content-type"]).toContain("image/svg+xml");
+  const missing = await page.request.get(`${url}/tasks/3`);
+  expect(missing.status()).toBe(404);
+  expect(await missing.text()).toContain("Nothing at this address");
+});

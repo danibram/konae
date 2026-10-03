@@ -62,15 +62,16 @@ describe("server actions", () => {
     expect(() => params({ q: "" })).toThrow("non-empty");
     expect(() => params({ q: "longer" })).toThrow("too long");
     expect(() => params({ q: 1 })).toThrow("non-empty");
-    expect(() => params({ limit: "5" })).toThrow("finite number");
+    expect(() => params({ limit: "5" })).toThrow("limit must be a number.");
     expect(() => params({ done: 0 })).toThrow("boolean");
     expect(() => params({ other: null })).toThrow("Unexpected");
   });
 
-  test("required inputs still reject omitted values and null", () => {
+  test("required inputs still reject omitted values and null, in the Kernel's words", () => {
     const program = parseServerActionSource(source);
-    for (const input of [{}, { body: null }, { body: "" }]) {
-      expect(() => resolveServerAction(program, "notes.create", input, { actorId: "user_1" })).toThrow("non-empty");
+    expect(() => resolveServerAction(program, "notes.create", {}, { actorId: "user_1" })).toThrow("Missing action input: body");
+    for (const input of [{ body: null }, { body: "" }]) {
+      expect(() => resolveServerAction(program, "notes.create", input, { actorId: "user_1" })).toThrow("body must be a non-empty string.");
     }
   });
 
@@ -123,6 +124,30 @@ describe("server actions", () => {
     expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions: {
       "notes.list": { kind: "query", access: "granted", statement: "SELECT * FROM notes LIMIT 10", bindings: [] },
     } }))).toThrow('"access": "granted"');
+  });
+});
+
+describe("action shape", () => {
+  // kernel-rs/src/action_shape.rs runs the same cases against the Kernel's parser.
+  test("refuses the same names, access, kinds, bindings and sizes as the Kernel, with the same messages", async () => {
+    const cases: { case: string; actions: Record<string, unknown>; error: string | null }[] =
+      await Bun.file(new URL("../../kernel-rs/src/action-cases.json", import.meta.url)).json();
+    expect(cases.length).toBeGreaterThanOrEqual(25);
+    for (const item of cases) {
+      let message: string | null = null;
+      try {
+        parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message, item.case).toBe(item.error);
+    }
+  });
+
+  test("accepts nullable: false on a binding that is not an input, as the Kernel does", () => {
+    expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions: {
+      "notes.mine": { kind: "query", access: "authenticated", statement: "SELECT id FROM notes WHERE user_id = ?1 LIMIT 5", bindings: [{ source: "actor", field: "id", nullable: false }] },
+    } }))).not.toThrow();
   });
 });
 
@@ -179,13 +204,13 @@ describe("signals", () => {
 
   test("count a signal action toward the action cap", () => {
     const actions: Record<string, unknown> = {};
-    for (let index = 0; index < 50; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       actions[`items.read${String.fromCharCode(97 + (index % 26))}${String.fromCharCode(97 + Math.floor(index / 26))}`] =
         { kind: "query", access: "anonymous", statement: "SELECT 1 AS n", bindings: [] };
     }
     expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions }))).not.toThrow();
     actions["page.like"] = { kind: "signal", access: "anonymous", bindings: [], signal: { name: "page.liked" } };
-    expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions }))).toThrow("A deployment may declare at most 50 server actions.");
+    expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions }))).toThrow("A project may declare at most 100 actions.");
   });
 });
 

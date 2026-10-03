@@ -61,7 +61,7 @@ import { withPrivateNotes } from "./lib/private-notes";
 import { cloneStarter } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
 import { createDirectory, createFile, directoriesForFiles, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
-import { LIMIT_REFUSE_SENTENCE } from "./lib/query-bound";
+import { actionReadout } from "./components/action-readiness";
 import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, resetWorkspaceProject } from "./lib/workspace";
 import { ManagedSources, type EjectRecord, type ProjectMetadata } from "./lib/managed-sources";
 import { createPreviewDocument } from "./runtime/preview";
@@ -1008,7 +1008,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             </ul>
           )}
           {ejectRecord && <EjectedNotice projectId={project.id} slug={project.slug} ejectedAt={ejectRecord.at} sourcesRevision={ejectRecord.sourcesRevision} />}
-          {activeFile === "actions.json" && <ActionReadout source={activeSource} />}
+          {activeFile === "actions.json" && <ActionReadout source={activeSource} visibility={project.manifest.visibility} />}
           {contractOpen ? <ActionContractView state={actionContract} /> : <div className="code-area">
             <div className="line-numbers" aria-hidden="true" ref={gutterRef}>
               {Array.from({ length: lines }, (_, index) => <span key={index}>{index + 1}</span>)}
@@ -1223,7 +1223,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         providers={PROVIDERS}
       />
 
-      {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} session={ownerSession} signInHref={signInHref} onClose={() => setDeployOpen(false)} current={activeDeployment} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} />}
+      {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} session={ownerSession} signInHref={signInHref} onClose={() => setDeployOpen(false)} current={activeDeployment} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
 
       <Dialog
         open={resetOpen}
@@ -1289,46 +1289,20 @@ function listedActions(source: string): number {
   }
 }
 
-function actionVerdict(action: { name: string; kind: string; access: string; statement: string }): string {
-  const who = action.access === "anonymous" ? "Anyone" : "A signed-in person";
-  const verb = action.name.split(".").pop();
-  const does = verb === "list" ? "Lists the rows" : verb === "create" ? "Adds a row" : verb === "toggle" ? "Marks a row done" : action.name;
-  const leave = action.kind !== "query" || /\bLIMIT\s+\d+/i.test(action.statement)
-    ? "It can leave."
-    : LIMIT_REFUSE_SENTENCE;
-  return `${does}. ${who} can run it. ${leave}`;
-}
-
-function ActionReadout({ source }: { source: string }) {
-  try {
-    const program = parseServerActionSource(source);
-    const actions = Object.values(program.actions);
-    const refused = actions.some((action) => action.kind === "query" && !/\bLIMIT\s+\d+/i.test(action.statement));
-    return (
-      <div className="action-readout-block">
-        <p className={`action-check ${refused ? "is-refused" : ""}`}>
-          {refused ? LIMIT_REFUSE_SENTENCE : "A list that reads rows needs a LIMIT. These lists name one, so they can leave."}
-        </p>
+function ActionReadout({ source, visibility }: { source: string; visibility: "public" | "private" }) {
+  const { refusal, lines } = actionReadout(source, visibility);
+  return (
+    <div className="action-readout-block">
+      <p className={`action-check ${refusal ? "is-refused" : ""}`}>
+        {refusal ?? "A list that reads rows needs a LIMIT. Every query here names one, so they can leave."}
+      </p>
+      {lines.length > 0 && (
         <ul className="action-readout">
-          {actions.map((action) => (
-            <li key={action.name}>
-              <strong className="action-limit">{actionVerdict(action)}</strong>
-            </li>
-          ))}
+          {lines.map((line) => <li key={line}><strong className="action-limit">{line}</strong></li>)}
         </ul>
-      </div>
-    );
-  } catch (cause) {
-    const message = cause instanceof Error ? cause.message : String(cause);
-    const limitRefuse = /LIMIT/i.test(message);
-    return (
-      <div className="action-readout-block">
-        <p className={`action-check ${limitRefuse ? "is-refused" : ""}`}>
-          {limitRefuse ? LIMIT_REFUSE_SENTENCE : message}
-        </p>
-      </div>
-    );
-  }
+      )}
+    </div>
+  );
 }
 
 function describeDelete(project: MiniAppProject, path: string | null): string {
