@@ -106,4 +106,4 @@ The probes also found three places where the Gate and the Kernel answer the same
 | `"kind": "email"` | `Invalid server action: notes.mail` | `Action notes.mail has an unsupported kind.` |
 | `"schedule"` on a mutation, `"subscribe"` on a query | Passes and ignores it | Publishes and ignores it |
 
-The first is the one to fix first: a Capsule that the editor refuses publishes from the CLI and fails at its first call. The third matters once `schedule` becomes a primitive, because today an agent can write one and see both doors accept it.
+Fix the first one first, because a Capsule that the editor refuses publishes from the CLI and fails at its first call. The third matters once `schedule` becomes a primitive, because today an agent can write one and see both doors accept it.
