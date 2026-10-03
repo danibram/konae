@@ -149,7 +149,9 @@ describe("the rendered readers", () => {
 
   test("platform_guide serves the rendered JSON, and the starter app in mcp.rs uses only contract calls", () => {
     const mcp = read("kernel-rs/src/mcp.rs");
-    expect(mcp).toContain(`"sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,`);
+    // platform_guide's topics live in guide.rs; mcp.rs hands the call to it.
+    expect(mcp).toContain(`"platform_guide" => super::guide::topic(`);
+    expect(read("kernel-rs/src/guide.rs")).toContain(`"sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,`);
     expect(drift(namedCalls(mcp)).notInContract).toEqual([]);
     const guide = JSON.parse(read(renderedPaths.guide)) as { modules: { calls: { call: string }[] }[] };
     expect(drift(guide.modules.flatMap((module) => module.calls.map((call) => call.call.replace(/^miniapp\./, ""))))).toEqual(agreed);
