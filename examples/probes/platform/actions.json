@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "actions": {
+    "notes.add": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO notes (user_id, body, remind_at) VALUES (?1, ?2, ?3)",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "body", "type": "string", "maxLength": 500 },
+        { "source": "input", "key": "remind_at", "type": "number", "nullable": true }
+      ],
+      "signal": { "name": "note.added", "properties": ["actor"] }
+    },
+    "notes.due": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT id, body, remind_at FROM notes WHERE user_id = ?1 AND remind_at IS NOT NULL AND remind_at <= ?2 ORDER BY remind_at LIMIT 50",
+      "bindings": [{ "source": "actor", "field": "id" }, { "source": "kernel", "field": "now" }]
+    }
+  }
+}
