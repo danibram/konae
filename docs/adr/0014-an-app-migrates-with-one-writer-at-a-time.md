@@ -1,6 +1,6 @@
 # An app migrates with one writer at a time
 
-Status: accepted, 2026-11-06. Builds on [ADR-0013](0013-an-app-leaves-as-a-chunked-package.md).
+Status: accepted, 2026-11-06. Builds on [ADR-0013](0013-an-app-leaves-as-a-chunked-package.md), and amends [ADR-0011](0011-one-verified-account-core-for-creators-and-app-users.md)'s note on API keys at restore: a key revoked after a copy no longer comes back.
 
 A package (ADR-0013) moves an app's state to another installation, but nothing stopped the origin from taking writes after the capture, nothing kept the import from serving before the origin stopped, and a restore from an hourly copy brought back accounts suspended after the copy. The launch plan asks for a migration with an explicit write pause, an import that starts disabled, and a restore that never revives a revoked identity.
 

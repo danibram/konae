@@ -8,6 +8,15 @@ const notice = $("#notice");
 const filters = $("#filters");
 const time = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
+// Every status line reads a failure the same way. A refusal's message is the
+// sentence to show; the rate limit answers with a code and an unreachable
+// Kernel with a browser error, so those two get a sentence here.
+function reason(error) {
+  if (error?.message === "rate-limited") return "Too many requests just now. Wait a few seconds and try again.";
+  if (error instanceof TypeError && /fetch|network|load failed/i.test(error.message)) return "The inbox could not reach its server. Check the connection and try again.";
+  return error?.message ?? String(error);
+}
+
 function show(message) {
   notice.textContent = message;
   notice.hidden = !message;
@@ -71,20 +80,23 @@ async function load() {
       ? "No event has arrived yet. Services post them to /hooks/events."
       : "No event matches these filters.";
   } catch (error) {
-    show(`Could not load events: ${error.message}`);
+    show(`Could not load events: ${reason(error)}`);
   }
 }
 
 async function acknowledge(event, button) {
   button.disabled = true;
+  let refused = "";
   try {
     // The action records event.acknowledged with the actor when it changes the row,
     // and its guard refuses when someone acknowledged the event first.
     await miniapp.actions.call("events.acknowledge", { id: event.id });
   } catch (error) {
-    show(error.message);
+    refused = reason(error);
   }
+  // load() clears the notice, so the refusal is shown after the list is redrawn.
   await load();
+  if (refused) show(refused);
 }
 
 const session = await miniapp.auth.session();

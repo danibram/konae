@@ -180,12 +180,15 @@ try {
     "a fractional hour": { room: "oak", day, start: 13.5, hours: 1 },
     "five hours": { room: "birch", day, start: 9, hours: 5 },
     "a span past 18:00": { room: "birch", day, start: 17, hours: 2 },
-    "a past day": { room: "birch", day: utcDay(-1), start: 9, hours: 1 },
+    "a past day": { room: "birch", day: utcDay(-2), start: 9, hours: 1 },
     "an impossible date": { room: "birch", day: "2099-02-30", start: 9, hours: 1 },
     "text that is not a date": { room: "birch", day: "tomorrow", start: 9, hours: 1 },
     "an unknown room": { room: "attic", day, start: 9, hours: 1 },
   };
   for (const [name, input] of Object.entries(noops)) assert.equal((await book(ana, input)).changes, 0, `${name} must be refused.`);
+  // The Kernel's clock is UTC. West of UTC the evening is already tomorrow there, so the
+  // statement accepts the UTC day before today: a person in New York books their own today at 21:00.
+  assert.equal((await book(ana, { room: "birch", day: utcDay(-1), start: 9, hours: 1, title: "Late booking" })).changes, 1, "The UTC day before today is still someone's today.");
   const backstopUnique = await refusal(sql(`INSERT INTO bookings (booking_ref, room_id, day, slot, user_id, title, created_at) VALUES ('owner', 'oak', '${day}', 9, 'owner', 'Direct', 0)`));
   const backstopCheck = await refusal(sql(`INSERT INTO bookings (booking_ref, room_id, day, slot, user_id, title, created_at) VALUES ('owner', 'pine', '${day}', 9.5, 'owner', 'Direct', 0)`));
   assert.match(backstopUnique, /UNIQUE constraint failed: bookings.room_id, bookings.day, bookings.slot/);
@@ -253,7 +256,10 @@ try {
   const usage = await owner.call<{ totals: Array<{ kind: string; name: string; count: number }> }>("usage_read", { deploymentId, from: today, to: today });
   const refusedCount = usage.totals.find((row) => row.kind === "refused" && row.name === "bookings.create")?.count ?? 0;
   assert.equal(refusedCount, createRefused, "Usage counts each guard refusal under refused.");
-  check("Signals", `${createCalls} bookings.create calls: ${booked} bookings made and ${booked} booking.created Signals, each naming the booker as actor. Usage counts the ${refusedCount} guard refusals under refused.`);
+  const cancelled = await owner.call<{ signals: any[] }>("signals_read", { deploymentId, name: "booking.cancelled" });
+  assert.deepEqual(cancelled.signals.map((signal) => signal.properties.ref), [planning.ref]);
+  assert(staffIds.has(cancelled.signals[0].properties.actor) && cancelled.signals[0].properties.actor !== null, "booking.cancelled names who cancelled.");
+  check("Signals", `${createCalls} bookings.create calls: ${booked} bookings made and ${booked} booking.created Signals, each naming the booker as actor. One booking.cancelled names the canceller. Usage counts the ${refusedCount} guard refusals under refused.`);
 
   // 8. The signed check-in route for a door panel, with a key or a signature.
   const panel = await owner.call<{ key: string; id?: string; keyId?: string }>("api_keys_create", { deploymentId, name: "Door panel", actions: ["panel.checkin"] });
@@ -273,6 +279,10 @@ try {
   const byKey = await post({ room: "oak", day, hour: 10 }, { authorization: `Bearer ${panel.key}` });
   assert.equal(byKey.status, 200);
   assert.equal(byKey.body.result.changes, 1);
+  // A second check-in for the same hour, or one for an hour nobody booked, is refused with the guard.
+  const panelGuard = { status: 403, body: { error: "No booking holds this room at this hour, or it is already checked in." } };
+  assert.deepEqual(await post({ room: "oak", day, hour: 10 }, { authorization: `Bearer ${panel.key}` }), panelGuard);
+  assert.deepEqual(await post({ room: "oak", day, hour: 16 }, { authorization: `Bearer ${panel.key}` }), panelGuard);
   // The runtime endpoint refuses a key and says where keys work.
   const keyOnRuntimeResponse = await fetch(`${url}/_littlebox/mcp`, {
     method: "POST", headers: { host, "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${panel.key}`, "x-forwarded-for": freshAddress() },
@@ -287,7 +297,7 @@ try {
   const unsignedRuntime = await refusal(call(visitor, "panel.checkin", { room: "oak", day, hour: 11 }));
   assert.equal(unsignedRuntime, "Action panel.checkin answers only on its HTTP route, POST /api/checkin.");
   assert.equal(await refusal(call(ana, "panel.checkin", { room: "oak", day, hour: 11 })), unsignedRuntime);
-  check("Check-in route", `POST /api/checkin refuses an unsigned body (401 invalid-signature) and a stale t (401 stale-timestamp), and accepts a signature or the panel's API key. A staff session cookie without a signature gets 401 invalid-signature. The runtime endpoint refuses the key with ${keyOnRuntime.status} "${keyOnRuntime.body.error}". A visitor and a staff member calling panel.checkin through actions_invoke get "${unsignedRuntime}".`);
+  check("Check-in route", `POST /api/checkin refuses an unsigned body (401 invalid-signature) and a stale t (401 stale-timestamp), and accepts a signature or the panel's API key. A second check-in for the same hour and one for an hour nobody booked get 403 with the guard. A staff session cookie without a signature gets 401 invalid-signature. The runtime endpoint refuses the key with ${keyOnRuntime.status} "${keyOnRuntime.body.error}". A visitor and a staff member calling panel.checkin through actions_invoke get "${unsignedRuntime}".`);
 
   // 9. The Action Contract, and conform with a session token and with an API key.
   const contractDir = await copyOf("contract");
@@ -354,6 +364,11 @@ try {
           assert.equal(await page.locator("#status").textContent(), "Booked 2 hours.");
           await page.locator('button.cell[data-room="birch"][data-hour="15"]').waitFor({ state: "detached" });
           assert.equal(await page.locator(".cell.mine").count(), 2);
+          // With the network gone, moving to the next day says so on the page instead of failing silently.
+          await context.setOffline(true);
+          await page.locator("#next").click();
+          await page.locator("#status.error").filter({ hasText: "could not reach its server" }).waitFor({ timeout: 10_000 });
+          await context.setOffline(false);
         } else {
           await page.locator(".cell.mine").first().waitFor();
           await page.locator("#mine li").first().waitFor();
@@ -363,7 +378,7 @@ try {
         await context.close();
       }
     } finally { await browser.close(); }
-    check("Chrome", `The visitor and staff pages load under "${"connect-src 'self'"}" with no policy violation or page error; staff book two hours from the grid.${shots ? ` Screenshots in ${shots}.` : ""}`);
+    check("Chrome", `The visitor and staff pages load under "${"connect-src 'self'"}" with no policy violation or page error; staff book two hours from the grid, and an offline day change shows a sentence instead of an unhandled error.${shots ? ` Screenshots in ${shots}.` : ""}`);
   }
 
   console.log(JSON.stringify({ app: "booking", checks: findings.length, findings }, null, 2));

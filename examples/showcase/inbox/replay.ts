@@ -462,11 +462,20 @@ try {
         await page.locator(".segmented label", { hasText: "All" }).click();
         await page.waitForFunction((count) => document.querySelectorAll(".event").length === count, Math.min(before.total, 50), { timeout: 10_000 });
         assert.equal(await page.locator("#who").textContent(), "Signed in as ana@team.example");
-        assert.equal(await page.locator("#open-count").textContent(), String(before.total - before.acknowledged - (colorScheme === "light" ? 0 : 1)));
+        assert.equal(await page.locator("#open-count").textContent(), String(before.total - before.acknowledged - (colorScheme === "light" ? 0 : 2)));
         if (colorScheme === "light") {
           // Acknowledge one event from the page, which also records its Signal.
           await page.locator(".event", { hasText: "api.eu answers" }).getByRole("button", { name: "Acknowledge" }).click();
           await page.locator(".event", { hasText: "api.eu answers" }).locator(".acked").waitFor({ timeout: 10_000 });
+          // Ana acknowledges, from another session, an event this page still shows as open.
+          // The page's click is refused by the guard, and the refusal stays on screen after
+          // the list reloads.
+          const [stale] = await action<Array<{ id: number; title: string }>>(anaClient, "events.list", { state: "open" });
+          assert.equal((await action(anaClient, "events.acknowledge", { id: stale.id })).changes, 1);
+          await page.locator(".event", { hasText: stale.title }).getByRole("button", { name: "Acknowledge" }).click();
+          await page.locator(".event", { hasText: stale.title }).locator(".acked").waitFor({ timeout: 10_000 });
+          assert.equal(await page.locator("#notice").textContent(), ackGuard);
+          assert.equal(await page.locator("#notice").isVisible(), true, "The guard's refusal stays visible after the list reloads.");
         }
         assert.deepEqual(violations, [], `The ${colorScheme} page broke under the Content Security Policy.`);
         if (shots) await page.screenshot({ path: path.join(shots, `inbox-${colorScheme}.png`), fullPage: true });
@@ -474,8 +483,8 @@ try {
       }
     } finally { await browser.close(); }
     const afterBrowser = await owner.call<{ signals: unknown[] }>("signals_read", { deploymentId: inbox.id, name: "event.acknowledged" });
-    assert.equal(afterBrowser.signals.length, signalsBefore + 1, "The page's Acknowledge button recorded one more Signal.");
-    pass("Browser", `Chrome signs in through the Kernel's page, renders ${before.total} events in light and dark, acknowledges one from the page and reports no Content Security Policy violation${shots ? `; screenshots in ${shots}` : ""}.`);
+    assert.equal(afterBrowser.signals.length, signalsBefore + 2, "The page's Acknowledge button and Ana's other session each recorded one Signal; the refused click recorded none.");
+    pass("Browser", `Chrome signs in through the Kernel's page, renders ${before.total} events in light and dark, acknowledges one from the page, keeps the guard's refusal on screen for an event acknowledged first in another session, and reports no Content Security Policy violation${shots ? `; screenshots in ${shots}` : ""}.`);
   }
 
   // ------------------------------------------------- Action Contract, conform

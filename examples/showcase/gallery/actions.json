@@ -29,6 +29,7 @@
     "photos.add": {
       "kind": "mutation",
       "access": "authenticated",
+      "guard": "Only the studio's curator can add photographs.",
       "statement": "INSERT INTO photos (file_id, title, caption, status, created_at, published_at) SELECT ?2, ?3, ?4, ?5, ?6, CASE WHEN ?5 = 'published' THEN ?6 END WHERE EXISTS (SELECT 1 FROM studio WHERE user_id = ?1)",
       "bindings": [
         { "source": "actor", "field": "id" },
@@ -42,11 +43,11 @@
     "photos.publish": {
       "kind": "mutation",
       "access": "authenticated",
-      "statement": "UPDATE photos SET status = 'published', file_id = ?3, published_at = ?4 WHERE id = ?2 AND status = 'draft' AND EXISTS (SELECT 1 FROM studio WHERE user_id = ?1)",
+      "guard": "Only the studio's curator can publish, and only a photograph that is still a draft.",
+      "statement": "UPDATE photos SET status = 'published', published_at = ?3 WHERE id = ?2 AND status = 'draft' AND EXISTS (SELECT 1 FROM studio WHERE user_id = ?1)",
       "bindings": [
         { "source": "actor", "field": "id" },
         { "source": "input", "key": "id", "type": "number" },
-        { "source": "input", "key": "file_id", "type": "string", "maxLength": 80 },
         { "source": "kernel", "field": "now" }
       ]
     },

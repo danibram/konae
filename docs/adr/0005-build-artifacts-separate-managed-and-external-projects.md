@@ -1,6 +1,6 @@
 # Use Build Artifacts as the seam between Managed and External Projects
 
-Status: accepted
+Status: accepted, 2026-10-21. Builds on ADR-0004. [ADR-0007](0007-managed-builds-run-in-the-browser.md) decides where the managed builder runs, and the notes below record the data folder, Eject on the server and the static publishing contract.
 
 Littlebox will keep Managed Projects deliberately smaller than a general Node IDE: they gain TypeScript and browser-compatible libraries while Littlebox owns dependency resolution, type tooling, validation and bundling. The stable publishing contract is an immutable static Build Artifact, not a particular compiler or project layout. Eject irreversibly transfers source, build and database-schema authority to the Project Owner while the same Project may retain Littlebox hosting, capabilities, data and deployment history.
 

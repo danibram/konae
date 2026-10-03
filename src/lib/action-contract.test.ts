@@ -69,7 +69,7 @@ describe("action contract for the product-fit examples", () => {
       }
       db.close();
     }
-    expect(queries).toBe(16);
+    expect(queries).toBe(17);
   });
 
   test("the feed's routes carry method, path, signature scheme and the callers each takes", () => {
