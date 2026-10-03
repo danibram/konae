@@ -1,6 +1,6 @@
 # Use authenticated MCP for Littlebox operations
 
-Status: accepted.
+Status: accepted before its update of 2026-10-24. Amends [ADR-0001](0001-separate-runtime-and-admin-data-access.md) and [ADR-0002](0002-kernel-owns-identity-and-visibility.md): runtime operations go through authenticated MCP. [ADR-0013](0013-an-app-leaves-as-a-chunked-package.md) amends its export transfers.
 
 The editor, external agents and apps will use authenticated MCP to operate on Littlebox. The user keeps the code and build of External projects on their own machine. Sharing the protocol lets the editor and agents use the same operations and avoids keeping a second permission implementation for each client.
 

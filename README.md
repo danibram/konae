@@ -11,16 +11,24 @@ An open-source workshop for making tiny useful apps: edit code like CodePen, ask
 - A project tree with nested files and empty folders. `app.js` or `src/main.ts` is the entrypoint, and relative JavaScript, TypeScript, JSX, JSON and CSS imports compile in the browser.
 - Sandboxed iframe preview with a small `miniapp` SDK.
 - Real SQLite in the browser through `sql.js`, persisted locally and exportable as a `.sqlite` file.
-- Per-app signup, login, logout and public or login-required app pages, with a per-app signup policy.
-- File uploads. The editor preview keeps them in browser storage; published apps send them to the Kernel in chunked, checksummed MCP transfers.
+- Per-app signup, login, logout and public or login-required app pages, with a per-app signup policy: Open, Invitation only, Closed or Allowlist.
+- Verified accounts for creators and app users, with recovery and suspension, and account email through a persistent queue with Resend, SMTP or a development mailbox.
+- Creator admission with operator-issued invitation codes, and app invitations by email from the editor's Users view or over MCP.
+- File uploads, private to the uploader unless made public, which the uploader can change or delete later. The editor preview keeps them in browser storage; published apps send them to the Kernel in chunked, checksummed MCP transfers.
 - Code and data persist through page reloads.
 - Provider-independent Kernel policy for public/private shells, declared actions and owner-only administration.
 - Opaque Kernel sessions with hashed tokens, expiry and revocation.
 - A real in-browser agent on `pi-agent-core`: a streaming tool loop over a disposable copy of the project tree, bring-your-own provider keys kept in the browser, and a Validation Gate every proposal must pass before it reaches the Project. The agent can create nested source files but has no shell.
 - Browser-side builds with `esbuild-wasm`. The Kernel receives a static Build Artifact and never runs project code.
 - A shared Rust Kernel, Nginx hostname routing, one durable SQLite database per app, local backups and optional S3 storage for static artifacts.
-- Named, parameterized server actions: published browsers receive neither raw SQL nor database credentials.
-- A separate owner database export endpoint. Deployed browsers cannot reach it.
+- Named, parameterized server actions: published browsers receive neither raw SQL nor database credentials. A mutation may declare a guard that answers when the app's own rule changes no row.
+- HTTP routes on anonymous actions, for signed webhooks, programs with an API key and signed-in people, and a file read path, `GET /_littlebox/files/<id>`.
+- Usage and Signals per Deployment, read by the owner.
+- An Action Contract for every project and `littlebox conform`, which checks a running backend against it.
+- Multi-page static publishing with `404.html`, extensionless paths and an opt-in single-page fallback.
+- Owner-only export of an app's database, accounts and files as a chunked package behind the `export_data` permission, and its import on another Kernel. Deployed browsers cannot reach it.
+- Scheduled copies of the data directory to another disk or S3, `littlebox-kernel restore`, and a revocation record that keeps suspensions and revoked keys through a restore.
+- Migration of one app to another Kernel with one writer at a time, and Eject of a Managed project to its owner.
 - A Playwright test that creates a multi-file app, builds it in Chrome, publishes its artifact to MinIO and verifies task data after a reload.
 
 ## Prerequisites
@@ -114,6 +122,8 @@ The Kernel reads these at startup. Defaults are the values in `kernel-rs/src` un
 | `LITTLEBOX_COPY_SECRET` | unset | Secret, at least 32 characters, that encrypts every file of a copy sent to S3 with AES-256-GCM. `restore` needs the same secret to open such a copy. Directory copies stay unencrypted. |
 | `LITTLEBOX_BUN_PATH` | `bun` | Bun executable the Kernel spawns to derive schema migrations. The child starts with an empty environment, so a bare `bun` is found only in the system default path (`/usr/bin`, `/bin`). Set an absolute path when Bun lives elsewhere. `dev:local`, `bun run kernel` and `littlebox dev` pass their own Bun path. |
 | `LITTLEBOX_SOURCE_ROOT` | Kernel working directory | Directory that holds `database-lifecycle/` and the `node_modules` it needs. The Kernel image sets `/opt/littlebox`. |
+| `LITTLEBOX_DERIVE_HELPER` | unset (`/usr/local/bin/littlebox-derive` in the Kernel image) | Setuid helper that derives schema migrations as a user with no access to the data directory. A Kernel that is not loopback-only refuses schema derivation without it. |
+| `LITTLEBOX_CLERK_ISSUER`, `LITTLEBOX_CLERK_JWKS_FILE`, `LITTLEBOX_CLERK_AUTHORIZED_ORIGINS`, `LITTLEBOX_CLERK_BETA_SUBJECTS`, `LITTLEBOX_CLERK_PUBLISHABLE_KEY` | unset | The optional hosted creator sign-in adapter. Unset keeps it off. [Hosted creator access](./docs/clerk-creator-access.md) describes each. |
 
 The Kernel refuses to start when `LITTLEBOX_ADMIN_KEY` is unset or equal to `local-development-key` and either `LITTLEBOX_BIND` is not a loopback address (`localhost`, `127.0.0.1`, `::1` or another loopback IP) or the host in `LITTLEBOX_PUBLIC_ORIGIN` or in `LITTLEBOX_MCP_ORIGIN`, when set, is not `localhost`, a `*.localhost` name or a loopback IP, unless `LITTLEBOX_ALLOW_DEFAULT_KEY=1`. Set a long random setup key before exposing a Kernel.
 
@@ -140,16 +150,21 @@ Each app is one folder in the Kernel's data directory. A copy of that folder, wi
 
 ```text
 data/
-├── owners.sqlite           # owner accounts and sessions
-├── mcp.sqlite              # projects, sources, agent credentials, audit
+├── owners.sqlite           # creator accounts, sessions and invitation codes
+├── mcp.sqlite              # projects, sources, agent credentials, signing secrets, audit
+├── mail.sqlite             # the account email queue
+├── transfers/              # unfinished MCP uploads and downloads
 └── deployments/<id>/
     ├── deployment.json     # record, visibility, signup policy
     ├── artifact/           # the static files the Deployment serves
     ├── database.sqlite     # the app's rows
-    ├── identity.sqlite     # its accounts and sessions
+    ├── identity.sqlite     # its accounts, sessions, invitations and API keys
+    ├── usage.sqlite        # Usage and Signals
     ├── files/              # uploads
     └── backups/            # snapshots made from the Data panel
 ```
+
+[The architecture](./docs/architecture.md#current-self-hosted-topology) lists the files that appear only during a migration, after a restore or with the development mailbox.
 
 A Kernel that finds the older layout, with `artifacts/<id>/` and `backups/<id>/` at the top of the data directory, moves both into the Deployment's folder when it starts and logs each move. It refuses to start when the old and new locations both hold files, and names the two paths.
 
@@ -210,7 +225,7 @@ const files = await miniapp.files.list();
 
 SQL implementations and typed input bindings live in `actions.json`, which stays server-side after publication. The browser only knows action names and returned fields. SQL Studio and `.sqlite` export use the Kernel's separate owner Admin Interface.
 
-Each action declares an access level. On a public Deployment, `anonymous` actions run for signed-out visitors and `authenticated` actions require an app session. Files and uploads always require a session. A private Deployment requires visitors to sign in before the app shell loads, and nothing runs without that login. The Rust Kernel rejects `granted` actions until it supports explicit deployment grants.
+Each action declares an access level. On a public Deployment, `anonymous` actions run for signed-out visitors and `authenticated` actions require an app session. Signed-out visitors may list and read public files; uploads and private files require a session. A private Deployment requires visitors to sign in before the app shell loads, and its runtime endpoint runs nothing without that login. The HTTP route of an `anonymous` action answers its own callers, a signature, an API key or a session, on either kind of Deployment; [the MCP guide](./docs/mcp.md#who-may-call-a-route) lists the rules. The Rust Kernel rejects `granted` actions until it supports explicit deployment grants.
 
 Signed-out visitors may call anonymous actions 30 times per 10 seconds per client address and Deployment; further calls return `rate-limited` until the bucket refills. Each signed-in app user may call actions 120 times per 10 seconds. IPv6 clients share one bucket per /64. App login and signup allow 10 attempts per minute per client address and 5 per minute for one email address from one client address, counted separately for each Deployment. After 100 wrong passwords for one email in an hour, logins for that email wait, correct ones included. Each client address adds at most 20 failures per hour to that count, so it takes at least five addresses to pause an account. Owner login and signup have the same limits. Further attempts get HTTP 429 with `Retry-After`. The Kernel counts the socket peer address. It reads `X-Forwarded-For` only when the peer is listed in `LITTLEBOX_TRUSTED_PROXIES` (comma-separated IP addresses, unset by default), and then takes the rightmost entry that is not itself a listed proxy. A trusted proxy must append the address it received the request from to `X-Forwarded-For`, never pass the client's header through unchanged, or clients choose their own bucket. The bundled Nginx configuration appends it with `$proxy_add_x_forwarded_for`; list the Nginx address in `LITTLEBOX_TRUSTED_PROXIES` to count visitors separately behind it. Each app database is capped at 256 MiB and each identity database at 64 MiB; writes past that fail with "database or disk is full".
 
@@ -233,7 +248,7 @@ The owner or an agent with `manage_users` invites people with `app_invitations_c
 
 An invitation works under Open, Invitation only and Closed, and under an Allowlist only for a listed address, where the page otherwise says the app is not accepting accounts and the link stays usable until the owner lists it. Closing signup does not end pending invitations; revoke the ones that should end. An email that already has an active account is told to sign in; the invitation never changes its password. A suspended account is not invited and an invitation never resumes it. Resending replaces the link, so the earlier one stops working. Revoking ends a pending invitation and removes the pending account it created, if nobody used it.
 
-Inviting needs a mail transport; without one, `app_invitations_create` refuses and creates nothing. A full copy carries the invitation history and the pending recipients but no link: the export drops every challenge and clears the invitations' token hashes. At the destination a pending invitation shows `needs-resend`, and resending sends a link on the destination's host.
+Inviting needs a mail transport; without one, `app_invitations_create` refuses and creates nothing. An export or a package carries the invitation history and the pending recipients but no link, because the export drops every challenge and clears the invitations' token hashes. At the destination a pending invitation shows `needs-resend`, and resending sends a link on the destination's host.
 
 ## Verified accounts
 
@@ -250,7 +265,7 @@ Switching an installation to `required` moves every account that never verified,
 
 ## Account email
 
-Signup, recovery and, later, invitation links leave through a queue in `mail.sqlite` in the data directory. The Kernel stores the job in the same transaction as the link's challenge, so a request either stores both or neither. A worker inside the Kernel sends due jobs every few seconds and whenever a job arrives; a request never waits for the provider.
+Signup, recovery and invitation links leave through a queue in `mail.sqlite` in the data directory. The Kernel stores the job in the same transaction as the link's challenge, so a request either stores both or neither. A worker inside the Kernel sends due jobs every few seconds and whenever a job arrives; a request never waits for the provider.
 
 Choose a transport with `LITTLEBOX_MAIL_TRANSPORT`:
 
@@ -301,8 +316,9 @@ The setup key creates an account only while `owners.sqlite` holds no account and
 
 - Runtime requests are bound to the hostname-resolved Deployment; the browser cannot select another database ID.
 - Private Deployments require a per-app login before serving the shell. The signup policy decides who can create that login.
-- File operations require an authenticated app session. Files are shared among authenticated users within the same Deployment; per-user private files need a separate policy.
-- Public HTML is readable by anyone. Data is reachable only through declared actions, and a signed-out visitor can reach only the actions declared `anonymous`.
+- A file is private to its uploader unless it is made public, and only the uploader changes its visibility or deletes it. Uploads need an app session; a signed-out visitor of a public Deployment may read public files, and an API key reads only the visibilities it names.
+- Public HTML is readable by anyone. Data is reachable only through declared actions, and a signed-out visitor can reach only the actions declared `anonymous`. An HTTP route answers only the callers it takes, and an action whose route does not answer anyone is not callable through the runtime endpoint.
+- API keys are stored as hashes, name the actions and file visibilities they may use, and are refused by the runtime endpoint. Route signatures cover the method, path, query string, body, time and a nonce, and a replay is refused across restarts.
 - Sessions are opaque; only token hashes are persisted. Cookies are `HttpOnly` and host-only. Under HTTPS the owner and app cookies carry the `__Host-` prefix, so a cookie an app sets with `Domain=<suffix>` never authenticates the editor or another app.
 - Every app response carries a Content Security Policy. Scripts run only from the app's origin or as the exact inline scripts of each HTML page, matched by SHA-256 hash, so inline event handler attributes and foreign scripts do not run. Requests reach only the app's own origin. No host can be framed by another origin, and HSTS is sent on every host when the public origin is HTTPS. Administrative MCP and owner sign-in refuse a request whose `Origin` is an app host before they read any credential. [The architecture](./docs/architecture.md#isolation-of-hosted-code) lists the policy.
 - Pending and suspended accounts get no session. Verification and recovery links are single use, expire, answer only their own purpose and scope, and are stored as hashes. Opening a link changes nothing until the person posts the form.
@@ -363,7 +379,10 @@ Provider-free testing covers the editor and offline demo. Connect a provider in 
 
 ## Next slice
 
-1. Add Workspace membership and team administration above the existing owner accounts.
-2. Add immutable release history, data-aware rollback and file uploads backed by the private bucket.
+1. Run Littlebox on one real host: the production recipe with HTTPS, a real setup key, trusted proxies and S3 copies, and a README statement of what such an installation is for. These are deliveries 3 and 4 of the [self-use plan](./docs/plans/self-use-and-sdk-modules.md), and they wait on the operator.
+2. Operate the beta: quotas shown to creators, alerts, account closing, production email and an end-to-end rehearsal. This is delivery K of the [launch plan](./docs/plans/platform-launch.md), which also waits on the operator.
+3. Close the open findings of the [showcase apps](./docs/research/showcase-findings.md): a bridge from a role inside an app to the owner's user tools, per-action rate limits, allowed values for inputs, and a link from an invitation to its email job.
+
+The launch plan defers Workspace membership and teams. Immutable release history and data-aware rollback have no plan yet.
 
 Architecture and security boundaries are described in [docs/architecture.md](./docs/architecture.md).

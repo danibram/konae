@@ -1,6 +1,6 @@
 # The Kernel owns Usage and Signals
 
-Status: accepted.
+Status: accepted, 2026-11-06. Builds on [ADR-0001](0001-separate-runtime-and-admin-data-access.md): the Kernel that authorizes a runtime operation records it.
 
 An owner needs to see whether a Deployment is being used, and a Capsule needs a way to name a business occurrence without turning the browser into an analytics client. The Kernel already authorizes every login, action and upload. Recording those facts belongs with that authority.
 
