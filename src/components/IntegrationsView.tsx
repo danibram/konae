@@ -92,7 +92,7 @@ function SecretsCard({ projectId, actionsSource, onSignedOut }: { projectId: str
         <li key={secret}>
           <code>{secret}</code>
           <Badge tone="warning">Not set</Badge>
-          <small>{usage.get(secret)!.join(", ")} sign with it. Publishing is refused until it is set.</small>
+          <small>{usage.get(secret)!.join(", ")} {usage.get(secret)!.length === 1 ? "signs" : "sign"} with it. Publishing is refused until it is set.</small>
           <Button size="sm" onClick={() => { setName(secret); setValue(""); }}>Set</Button>
         </li>
       ))}

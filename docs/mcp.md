@@ -225,6 +225,24 @@ An action runs one SQL statement. A query starts with `SELECT` and a mutation wi
 
 A `WITH` clause is allowed inside the statement: `INSERT INTO bookings (room_id, slot) WITH span(slot) AS (...) SELECT ...` and `SELECT ... FROM (WITH ... SELECT ...) LIMIT 50` both pass. A keyword or a `;` inside a string, a quoted name or a comment does not count.
 
+### Action shape
+
+Before it reads a statement, each door checks the action's name, access, kind, bindings and size, in that order, and the number of actions. Both check the actions in sorted name order, so with two bad actions both name the same one. `kernel-rs/src/action-cases.json` holds the cases both test suites run, and `kernel-rs/src/action_shape.rs` and `parseServerActionSource` in `src/kernel/actions.ts` hold the checks.
+
+| Declaration | Message |
+| --- | --- |
+| More than 100 actions | `A project may declare at most 100 actions.` |
+| A name that is not lowercase dotted words of letters and digits, each starting with a letter, or is longer than 100 characters | `Invalid server action name: <name>` |
+| `"access": "granted"` | `Action <name> uses "access": "granted", which the Kernel does not support yet. Use "anonymous" or "authenticated".` |
+| Any other access | `Action <name> has an invalid access. Use "anonymous" or "authenticated".` |
+| A kind other than `query`, `mutation` or `signal` | `Action <name> has an invalid kind. Use "query", "mutation" or "signal".` |
+| `"nullable": true` on a binding that is not an input | `Action <name> has an invalid nullable input binding.` |
+| A binding of another source, an input with no key or another type, an actor field other than `id`, a kernel field other than `now`, a literal that is not a string, a number or null | `Invalid binding <index> in <name>.` |
+| A string input's `maxLength` outside 1 to 100,000 | `Invalid maxLength in <name>.` |
+| A statement longer than 20,000 bytes, or more than 100 bindings | `Action <name> exceeds statement or binding limits.` |
+
+A field of the wrong JSON type, such as `"bindings": {}` or a missing `kind`, is refused by both, but the Kernel answers with its JSON reader's message, `Invalid actions.json: ...`, where the Gate names the action.
+
 ## HTTP routes
 
 An action declared `anonymous` may answer one method and path on its Deployment's host. This is how a project receives a webhook or serves a JSON endpoint without a server of its own. `kernel-rs/src/http.rs` implements it; the [ADR-0011 updates of 2026-11-06](./adr/0011-one-verified-account-core-for-creators-and-app-users.md) record the decisions.

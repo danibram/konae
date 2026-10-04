@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "actions": {
+    "stations.search": {
+      "kind": "query",
+      "access": "anonymous",
+      "http": { "method": "GET", "path": "/api/stations" },
+      "statement": "SELECT id, name, region, level FROM stations WHERE (?1 IS NULL OR name LIKE '%' || ?1 || '%') AND (?2 IS NULL OR region = ?2) ORDER BY CASE WHEN ?3 = 'level' THEN level END DESC, CASE WHEN ?3 = 'name' THEN name END ASC, id ASC LIMIT min(coalesce(?4, 20), 100) OFFSET coalesce(?5, 0)",
+      "bindings": [
+        { "source": "input", "key": "q", "type": "string", "maxLength": 60, "nullable": true },
+        { "source": "input", "key": "region", "type": "string", "maxLength": 20, "nullable": true },
+        { "source": "input", "key": "sort", "type": "string", "maxLength": 10, "nullable": true },
+        { "source": "input", "key": "limit", "type": "number", "nullable": true },
+        { "source": "input", "key": "offset", "type": "number", "nullable": true }
+      ]
+    },
+    "stations.after": {
+      "kind": "query",
+      "access": "anonymous",
+      "http": { "method": "GET", "path": "/api/stations/after" },
+      "statement": "SELECT id, name, level FROM stations WHERE (?1 IS NULL OR id > ?1) ORDER BY id LIMIT 10",
+      "bindings": [{ "source": "input", "key": "after", "type": "number", "nullable": true }]
+    },
+    "stations.summary": {
+      "kind": "query",
+      "access": "anonymous",
+      "http": { "method": "GET", "path": "/api/summary" },
+      "statement": "SELECT region, count(*) AS stations, round(avg(level), 2) AS mean_level, max(level) AS peak FROM stations GROUP BY region ORDER BY region LIMIT 20",
+      "bindings": []
+    },
+    "readings.record": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": { "method": "POST", "path": "/api/readings", "callers": ["key"] },
+      "guard": "No station has that id.",
+      "statement": "UPDATE stations SET level = ?2, updated_at = ?3 WHERE id = ?1",
+      "bindings": [
+        { "source": "input", "key": "station", "type": "number" },
+        { "source": "input", "key": "level", "type": "number" },
+        { "source": "kernel", "field": "now" }
+      ]
+    }
+  }
+}

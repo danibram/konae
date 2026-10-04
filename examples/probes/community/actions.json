@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "actions": {
+    "members.join": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO members (user_id, display_name) VALUES (?1, ?2) ON CONFLICT (user_id) DO NOTHING",
+      "bindings": [{ "source": "actor", "field": "id" }, { "source": "input", "key": "name", "type": "string", "maxLength": 60 }]
+    },
+    "members.list": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT user_id, display_name, role FROM members WHERE EXISTS (SELECT 1 FROM members WHERE user_id = ?1 AND role = 'editor') ORDER BY display_name LIMIT 100",
+      "bindings": [{ "source": "actor", "field": "id" }]
+    },
+    "members.promote": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "Only an editor can make someone a publisher.",
+      "statement": "UPDATE members SET role = 'publisher' WHERE user_id = ?1 AND role = 'reader' AND EXISTS (SELECT 1 FROM members WHERE user_id = ?2 AND role = 'editor')",
+      "bindings": [{ "source": "input", "key": "member", "type": "string", "maxLength": 64 }, { "source": "actor", "field": "id" }],
+      "signal": { "name": "member.promoted", "properties": ["member", "actor"] }
+    },
+    "posts.create": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "Only a publisher can post.",
+      "statement": "INSERT INTO posts (author_id, title, status, created_at) SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM members WHERE user_id = ?1 AND role IN ('publisher', 'editor')) AND ?3 IN ('draft', 'published')",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "title", "type": "string", "maxLength": 120 },
+        { "source": "input", "key": "status", "type": "string", "maxLength": 10 },
+        { "source": "kernel", "field": "now" }
+      ],
+      "signal": { "name": "post.created", "properties": ["status", "actor"] }
+    },
+    "posts.feed": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT p.id, p.title, m.display_name AS author FROM posts p JOIN members m ON m.user_id = p.author_id WHERE p.status = 'published' AND (?1 IS NULL OR p.id > ?1) ORDER BY p.id LIMIT 20",
+      "bindings": [{ "source": "input", "key": "after", "type": "number", "nullable": true }]
+    },
+    "posts.mine": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT id, title, status FROM posts WHERE author_id = ?1 ORDER BY id LIMIT 50",
+      "bindings": [{ "source": "actor", "field": "id" }]
+    },
+    "follows.add": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO follows (user_id, author_id) SELECT ?1, user_id FROM members WHERE user_id = ?2 AND role IN ('publisher', 'editor') ON CONFLICT DO NOTHING",
+      "bindings": [{ "source": "actor", "field": "id" }, { "source": "input", "key": "author", "type": "string", "maxLength": 64 }]
+    },
+    "posts.following": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT p.id, p.title FROM posts p JOIN follows f ON f.author_id = p.author_id WHERE f.user_id = ?1 AND p.status = 'published' ORDER BY p.id DESC LIMIT 20",
+      "bindings": [{ "source": "actor", "field": "id" }]
+    }
+  }
+}

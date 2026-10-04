@@ -268,6 +268,114 @@
   "error": "schema.sql may only create tables and indexes, but it contains INSERT."
  },
  {
+  "case": "a query that reads rows with no LIMIT",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id, external_id FROM orders ORDER BY id DESC",
+    "bindings": []
+   }
+  },
+  "error": "Action orders.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+ },
+ {
+  "case": "a LIMIT inside a string does not count",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM orders WHERE note = 'LIMIT 5'",
+    "bindings": []
+   }
+  },
+  "error": "Action orders.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+ },
+ {
+  "case": "a LIMIT inside a comment does not count",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "-- LIMIT 10\nSELECT id FROM orders",
+    "bindings": []
+   }
+  },
+  "error": "Action orders.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+ },
+ {
+  "case": "a LIMIT inside a subquery does not count",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM (SELECT id FROM orders LIMIT 1)",
+    "bindings": []
+   }
+  },
+  "error": "Action orders.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+ },
+ {
+  "case": "a grouped query with no LIMIT",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT user_id, count(*) AS n FROM orders GROUP BY user_id",
+    "bindings": []
+   }
+  },
+  "error": "Action orders.list groups rows and has no LIMIT, so the result can grow with the data. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+ },
+ {
+  "case": "a compound query with no LIMIT on the whole result",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT count(*) AS n FROM orders UNION ALL SELECT count(*) AS n FROM notes",
+    "bindings": []
+   }
+  },
+  "error": "Action orders.list combines more than one query and has no LIMIT on the whole result. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+ },
+ {
+  "case": "totals with no GROUP BY need no LIMIT",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT count(*) AS n, sum(total) s FROM orders",
+    "bindings": []
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a query that reads no table needs no LIMIT",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT 1 AS one",
+    "bindings": []
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a top-level LIMIT",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM orders ORDER BY id DESC LIMIT 100",
+    "bindings": []
+   }
+  },
+  "error": null
+ },
+ {
   "case": "a named parameter :limit is not a LIMIT",
   "actions": {
    "notes.list": {

@@ -235,6 +235,24 @@ describe("agent thread apply gate", () => {
       canApply: false,
       stage: "migration",
       message: "table task is missing column due_at",
+      detail: "after migration",
+    });
+  });
+
+  test("a blocked gate carries the reason under the stage message, so the Kernel's sentence reaches the person", () => {
+    const refused: ValidationResult = { ok: false, checked: ["schema", "actions"], errors: [{
+      stage: "actions",
+      message: "actions.json is not a valid server action program.",
+      detail: "Action tasks.list is a query, so it cannot declare a guard. Declare it on a mutation.",
+    }] };
+    const state = run([
+      { type: "prompt", text: "x" },
+      ...events([{ type: "validation", result: refused }], snapshot({ state: "blocked", changedFiles: ["actions.json"], result: refused }, refused)),
+    ]);
+    expect(proposalFooter(state)).toMatchObject({
+      kind: "blocked",
+      message: "actions.json is not a valid server action program.",
+      detail: "Action tasks.list is a query, so it cannot declare a guard. Declare it on a mutation.",
     });
   });
 

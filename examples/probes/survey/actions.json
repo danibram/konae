@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "actions": {
+    "survey.submit": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "statement": "INSERT INTO answers (response_key, question, answer, submitted_at) SELECT ?1, j.key, CAST(j.value AS TEXT), ?3 FROM json_each(?2) AS j WHERE json_type(?2) = 'object' AND j.key IN ('role', 'team_size', 'comment') AND length(CAST(j.value AS TEXT)) BETWEEN 1 AND 500 ON CONFLICT DO NOTHING",
+      "bindings": [
+        { "source": "input", "key": "response", "type": "string", "maxLength": 40 },
+        { "source": "input", "key": "answers", "type": "string", "maxLength": 2000 },
+        { "source": "kernel", "field": "now" }
+      ],
+      "signal": { "name": "survey.submitted", "properties": [] }
+    },
+    "survey.tally": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT question, answer, count(*) AS responses FROM answers WHERE question IN ('role', 'team_size') GROUP BY question, answer ORDER BY question, responses DESC LIMIT 100",
+      "bindings": []
+    },
+    "ballots.cast": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "You have voted already.",
+      "statement": "INSERT INTO ballots (user_id, choice) VALUES (?1, ?2) ON CONFLICT (user_id) DO NOTHING",
+      "bindings": [{ "source": "actor", "field": "id" }, { "source": "input", "key": "choice", "type": "string", "maxLength": 10 }]
+    }
+  }
+}

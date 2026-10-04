@@ -16,6 +16,10 @@ describe("authHeading", () => {
     expect(authHeading(actions)).toBe("A signed-in person can list the rows. The list stops at 100 rows.");
   });
 
+  test("names a signed-in person on a private app, where even an anonymous action needs a session", () => {
+    expect(authHeading([list("anonymous")], "private")).toBe("A signed-in person can list the rows. The list stops at 100 rows.");
+  });
+
   test("reads the limit from the top level only", () => {
     expect(authHeading([list("anonymous", "SELECT id FROM tasks WHERE id IN (SELECT id FROM tasks LIMIT 5) LIMIT ?")])).toBe("Anyone can list the rows.");
   });

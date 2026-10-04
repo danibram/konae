@@ -4,6 +4,8 @@ Date: 2026-10-24.
 
 Littlebox can support small applications built from a static frontend, named SQL actions, app accounts and shared attachments. The strongest cases are private trackers, small team tools, forms, polls and dashboards. It is not yet a general backend for websites and APIs. Public media, conventional webhooks, account recovery and replacing app authentication remain missing capabilities.
 
+[The capability matrix](./capability-matrix.md) of 2026-11-07 repeats this assessment for ten app shapes and 24 features against the current Kernel.
+
 This assessment comes from building and publishing eight examples through MCP, then testing their operations against an isolated Kernel. The source and replay live in [examples/product-fit](../../examples/product-fit/README.md). These are capability probes. Successful MCP calls do not establish visual quality, accessibility or production readiness.
 
 ## Coverage

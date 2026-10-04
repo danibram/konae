@@ -25,6 +25,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 use uuid::Uuid;
 
 mod accounts;
+mod action_shape;
 mod admission;
 mod artifact;
 mod auth;
@@ -505,12 +506,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
     if program.version != 1 {
         return error(StatusCode::BAD_REQUEST, "Unsupported actions.json version.");
     }
-    for (name, action) in &program.actions {
-        if let Err(message) = validate_action(name, action) {
-            return error(StatusCode::BAD_REQUEST, &message);
-        }
-    }
-    if let Err(message) = http::validate_routes(&program) {
+    if let Err(message) = action_shape::check_program(&program) {
         return error(StatusCode::BAD_REQUEST, &message);
     }
     if let Err(error_value) = mcp::store(&state).and_then(|db| http::require_secrets(&db, &input.project.id, &program)) {
@@ -2301,27 +2297,7 @@ fn resolve_bindings(
 }
 
 fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result<(), String> {
-    if action.bindings.iter().any(|binding| binding.nullable && (
-        binding.source != "input" || binding.key.is_none() ||
-        !matches!(binding.value_type.as_deref(), Some("string" | "number" | "boolean"))
-    )) {
-        return Err(format!("Action {name} has an invalid nullable input binding."));
-    }
-    if action.statement.len() > 20_000 || action.bindings.len() > 100 {
-        return Err(format!("Action {name} exceeds statement or binding limits."));
-    }
-    if !name.contains('.') || name.len() > 100 {
-        return Err(format!("Invalid action name: {name}"));
-    }
-    if action.access != "anonymous" && action.access != "authenticated" {
-        return Err(format!(
-            "Action {name} uses unsupported access policy: {}.",
-            action.access
-        ));
-    }
-    if action.kind != "query" && action.kind != "mutation" && action.kind != "signal" {
-        return Err(format!("Action {name} has an unsupported kind."));
-    }
+    action_shape::check_action(name, action)?;
     usage::check_signal_action(name, action)?;
     if action.kind == "signal" {
         usage::declaration(name, action)?;

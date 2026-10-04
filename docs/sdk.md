@@ -142,20 +142,20 @@ Returns an array of row objects for a query action, { changes, lastInsertId } fo
 
 | Message | When | Source | Editor preview |
 | --- | --- | --- | --- |
-| `Server action not declared.` | actions.json declares no action with that name | Kernel | `Server action not declared: <name>` |
+| `Server action not declared.` | actions.json declares no action with that name | Kernel | Same |
 | `authentication-required` | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_littlebox/login | Kernel | Same |
 | `rate-limited` | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user | Kernel | Never refuses |
-| `Arguments must be an object.` | input is not an object, e.g. null | Kernel | `Action input must be an object.` |
-| `Expected a string.` | name is not a string | Kernel | `Server action not declared: <name>` |
+| `Arguments must be an object.` | input is not an object, e.g. null | Kernel | Same |
+| `Expected a string.` | name is not a string | Kernel | Same |
 | `Unexpected action input: <key>` | input has a key no input binding declares | Kernel | Same |
 | `This action requires an authenticated actor.` | an anonymous action binds the actor id and no one is signed in | Kernel | Same |
 | `Action <name> answers only on its HTTP route, <key>.` | the action's route does not answer anyone: it declares a signature or callers, or it has no signature on a private Deployment. The preview refuses the first two only, since it has no visibility | Kernel | Same |
-| `Missing action input: <key>` | a required input is omitted | Kernel | `<key> must be a non-empty string.` or `<key> must be a finite number.` or `<key> must be a boolean.` |
+| `Missing action input: <key>` | a required input is omitted | Kernel | Same |
 | `<key> must be a non-empty string.` | a string input is not a string, or is empty or only whitespace | Kernel | Same |
 | `<key> is too long.` | a string input is longer than its maxLength in UTF-16 code units | Kernel | Same |
-| `<key> must be a number.` | a number input is not a JSON number | Kernel | `<key> must be a finite number.` |
+| `<key> must be a number.` | a number input is not a JSON number | Kernel | Same |
 | `<key> must be a boolean.` | a boolean input is not true or false | Kernel | Same |
-| `Query result exceeds 2 MiB or 1000 rows.` | a query produces more than 1000 rows or more than 2 MiB of JSON | Kernel | `Query returned more than 1000 rows. Add a LIMIT clause.` or `Query result is too large.` |
+| `Query result exceeds 2 MiB or 1000 rows.` | a query produces more than 1000 rows or more than 2 MiB of JSON | Kernel | Same |
 
 Limits:
 
@@ -222,7 +222,7 @@ Returns { id, name, type, size, visibility, createdAt, ownerId, url }. ownerId i
 | --- | --- | --- | --- |
 | `authentication-required` | no one is signed in | Kernel | Same |
 | `File visibility must be private or public.` | visibility is anything other than "private" or "public"; the SDK refuses before it sends anything | SDK | Same |
-| `Transfer size is outside the limit.` | the file is empty or larger than 2 MiB | Kernel | `Local prototype files are limited to 2 MiB.` |
+| `Transfer size is outside the limit.` | the file is empty or larger than 2 MiB | Kernel | Same |
 | `This deployment has reached its 20 MiB file quota.` | the Deployment's files would exceed 20 MiB together | Kernel | Never refuses |
 | `File not found.` | the file was removed or the actor may not read it | Kernel | Never refuses |
 | `Too many active transfers. Cancel completed transfers before starting another.` | the actor already holds 2 transfers, or the Deployment holds 32 | Kernel | Never refuses |
@@ -238,7 +238,7 @@ Limits:
 - 2 transfers at a time per user and 32 per Deployment; each expires after 10 minutes
 - the name is cut to 180 characters with / and \ replaced by -; a type of 128 characters or more, or with a character other than a letter, a digit or one of !#$&^_.+-/, becomes application/octet-stream
 
-Editor preview: Stores the file in browser storage as a data URL, and accepts an empty file.
+Editor preview: Stores the file in browser storage as a data URL.
 
 ### miniapp.files.url(fileId)
 

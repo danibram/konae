@@ -178,7 +178,8 @@ function withSnapshot(state: AgentThreadState, snapshot?: AgentThreadSnapshot): 
 export type ProposalFooter =
   | { kind: "empty"; canApply: false }
   | { kind: "unvalidated"; changedFiles: ProjectFile[]; canApply: false }
-  | { kind: "blocked"; changedFiles: ProjectFile[]; canApply: false; stage: ValidationStage; message: string }
+  /** `detail` carries the reason, such as the Kernel's sentence for an action it would refuse. */
+  | { kind: "blocked"; changedFiles: ProjectFile[]; canApply: false; stage: ValidationStage; message: string; detail?: string }
   /** `checked` is what the pass covers; the panel may not claim more than this. */
   | { kind: "validated"; changedFiles: ProjectFile[]; canApply: true; checked: ValidationStage[] };
 
@@ -222,6 +223,7 @@ function blocked(changedFiles: ProjectFile[], result: ValidationResult): Proposa
     canApply: false,
     stage: first?.stage ?? "schema",
     message: first ? first.message : "Validation failed.",
+    ...(first?.detail ? { detail: first.detail } : {}),
   };
 }
 

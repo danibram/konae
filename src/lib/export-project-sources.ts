@@ -3,6 +3,8 @@ import kernelMcpSource from "../../kernel-rs/src/mcp.rs?raw";
 import kernelOwnerPage from "../../kernel-rs/src/owner-login.html?raw";
 import kernelAuthSource from "../../kernel-rs/src/auth.rs?raw";
 import kernelAccountsSource from "../../kernel-rs/src/accounts.rs?raw";
+import kernelActionShapeSource from "../../kernel-rs/src/action_shape.rs?raw";
+import kernelActionCases from "../../kernel-rs/src/action-cases.json?raw";
 import kernelAdmissionSource from "../../kernel-rs/src/admission.rs?raw";
 import kernelArtifactSource from "../../kernel-rs/src/artifact.rs?raw";
 import kernelInvitationsSource from "../../kernel-rs/src/invitations.rs?raw";
@@ -40,6 +42,8 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/main.rs", contents: kernelMainSource },
   { path: "kernel-rs/src/auth.rs", contents: kernelAuthSource },
   { path: "kernel-rs/src/accounts.rs", contents: kernelAccountsSource },
+  { path: "kernel-rs/src/action_shape.rs", contents: kernelActionShapeSource },
+  { path: "kernel-rs/src/action-cases.json", contents: kernelActionCases },
   { path: "kernel-rs/src/admission.rs", contents: kernelAdmissionSource },
   { path: "kernel-rs/src/artifact.rs", contents: kernelArtifactSource },
   { path: "kernel-rs/src/invitations.rs", contents: kernelInvitationsSource },
