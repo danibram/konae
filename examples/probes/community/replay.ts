@@ -37,17 +37,18 @@ await probe("community", 23030, async (kit) => {
   assert.equal((await act("edith", "members.promote", { member: ids.ana })).changes, 1);
   kit.pass("Roles inside the app", `A reader's post is refused with "${early}". The owner makes the first editor with database_execute; after that the editor lists members by the display names they gave and promotes Ana, while Rui's promotion is refused with "${byReader}" and his members.list returns no rows.`);
 
-  // The actor binding gives an ID, never an email, at both doors.
+  // The actor binding gives an ID, never an email, and both doors refuse the
+  // declaration with the same words before anything is published (since
+  // 2026-11-07; before, the Kernel published it and failed at the first call).
   const actionsJson = JSON.parse(await readFile(path.join(here, "actions.json"), "utf8"));
   actionsJson.actions["members.join"].bindings[1] = { source: "actor", field: "email" };
   const variant = { "schema.sql": await readFile(path.join(here, "schema.sql"), "utf8"), "actions.json": JSON.stringify(actionsJson) };
   const emailGate = await kit.gateRefusal(variant);
-  // The Kernel publishes the same program and refuses only when the action runs.
-  const emailApp = await kit.publish(here, { projectId: "probe_community_email", visibility: "public", signup: { mode: "open" }, files: variant });
-  const emailCall = await kit.errorText(kit.runtime(emailApp.host, await kit.signup(emailApp.host, "dana@probe.example")).call("actions_invoke", { name: "members.join", input: {} }));
-  assert.equal(emailCall, "Unsupported binding source: actor");
-  console.log(`  actor.email: Gate "${emailGate.message}"${emailGate.detail ? ` / "${emailGate.detail}"` : ""}; Kernel publishes, then actions_invoke answers "${emailCall}"`);
-  kit.pass("No email from the actor", `A binding { source: "actor", field: "email" } is refused by the Gate with "${emailGate.detail ?? emailGate.message}". The Kernel publishes it and answers "${emailCall}" when the action runs, so the doors disagree. Either way the app knows a person by ID and by what they typed.`);
+  const emailKernel = await kit.planRefusal(here, "probe_community_email", variant);
+  assert.equal(emailGate.detail ?? emailGate.message, "Invalid binding 1 in members.join.");
+  assert.equal(emailKernel, emailGate.detail ?? emailGate.message);
+  console.log(`  actor.email: both doors refuse with "${emailKernel}"`);
+  kit.pass("No email from the actor", `A binding { source: "actor", field: "email" } is refused at both doors with "${emailKernel}", so it never publishes. The app knows a person by ID and by what they typed.`);
 
   // One table, two audiences: drafts stay with their author, published posts reach visitors.
   assert.equal((await act("ana", "posts.create", { title: "Draft about rivers", status: "draft" })).changes, 1);

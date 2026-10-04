@@ -118,17 +118,15 @@ The counts are taken from the 240 cells above, by counting each letter.
 
 G is the only shape with nothing it needs marked N. Every other shape needs at least one feature no primitive provides, and email on an event is the one most of them share.
 
-## Where the doors disagree
+## Where the doors disagreed
 
-The probes found three declarations the Validation Gate and the Kernel answer differently. Changing the contract is outside this review, so each is reported here with both answers and asserted as it stands by `examples/probes`, so a fix shows up as a failing probe to update.
+The probes found three declarations the Validation Gate and the Kernel answered differently on 2026-11-06. The editor parity review of 2026-11-07 gave both doors one shared action-shape check (`kernel-rs/src/action-cases.json`), and the probes now assert the shared answers.
 
-| Declaration | Validation Gate | Kernel | Probe |
-| --- | --- | --- | --- |
-| A binding `{ "source": "actor", "field": "email" }` | `actions.json is not a valid server action program.` with `Invalid binding 1 in members.join.` | Publishes it, then every call answers `Unsupported binding source: actor` | community "No email from the actor" |
-| An action of `"kind": "email"` | `Invalid server action: notes.mail` | `Action notes.mail has an unsupported kind.` | platform "Declare an action of kind email" |
-| A `"schedule"` key on a mutation, or `"subscribe"` on a query | Passes | Publishes and ignores it | platform "Declare a schedule on a mutation", "Declare a subscription on a query" |
-
-The first breaks job 3 outright: a Capsule an external agent publishes runs on the Kernel and fails at the first call, while the editor would have refused it. The third lets a creator, or an agent, believe a schedule exists when nothing will run.
+| Declaration | Both doors, since 2026-11-07 | Probe |
+| --- | --- | --- |
+| A binding `{ "source": "actor", "field": "email" }` | Refused before publishing with `Invalid binding 1 in members.join.` | community "No email from the actor" |
+| An action of `"kind": "email"` | Refused with `Action notes.mail has an invalid kind. Use "query", "mutation" or "signal".` | platform "Declare an action of kind email" |
+| A `"schedule"` key on a mutation, or `"subscribe"` on a query | Still passes both doors and does nothing; it matters once `schedule` becomes a primitive | platform "Declare a schedule on a mutation", "Declare a subscription on a query" |
 
 ## What blocks the most shapes
 
