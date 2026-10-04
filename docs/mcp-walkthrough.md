@@ -1044,6 +1044,7 @@ PASS orders.claim: refuses order when it is not a number. Refused with "order mu
 PASS orders.feed: answers only on its route. Refused with "Action orders.feed answers only on its HTTP route, GET /api/orders.".
 PASS orders.feed: answers GET /api/orders with an API key. Answered an empty array; no row to check the columns against.
 PASS orders.feed: refuses a caller without a key or a session. Answered 401 "authentication-required".
+PASS orders.feed: refuses HEAD. Answered 405; a HEAD answer carries no body.
 PASS orders.feed: refuses an unknown API key. Answered 401 "invalid-api-key".
 PASS orders.feed: refuses an undeclared input on the route. Answered 400 "Unexpected action input: conformProbe".
 PASS orders.list: answers a valid call. Answered 1 row with the contract's columns.
@@ -1058,7 +1059,7 @@ PASS orders.receive: refuses an unknown API key. Answered 401 "invalid-api-key".
 PASS orders.receive: refuses an undeclared input on the route. Answered 400 "Unexpected action input: conformProbe".
 PASS orders.receive: refuses a body that is not JSON. Answered 400 "The request body must be a JSON object.".
 PASS routes: refuses a POST to a path no action binds. Answered 405 "No route accepts POST on this path.".
-24 passed, 0 failed, 0 skipped.
+25 passed, 0 failed, 0 skipped.
 ```
 <!-- /walkthrough:conform -->
 

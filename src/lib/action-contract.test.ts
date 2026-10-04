@@ -100,6 +100,41 @@ describe("action contract for the product-fit examples", () => {
     expect(recent.http!.callers.map((caller) => caller.kind)).toEqual(["visitor", "service", "person"]);
     expect(recent.errors.find((error) => error.message === "authentication-required" && error.via === "http")).toMatchObject({ status: 401 });
     expect(recent.limits).toMatchObject({ bound: "limit", limit: 50, maxRows: 1000 });
+    // A GET route refuses HEAD before any SQL; a POST route has no HEAD to refuse.
+    expect(recent.errors.find((error) => error.message === "A route does not answer HEAD. Send GET.")).toMatchObject({ status: 405, via: "http" });
+    expect(pings.errors.some((error) => error.message === "A route does not answer HEAD. Send GET.")).toBe(false);
+  });
+
+  test("the Markdown names each Signal with its properties, and a GET route's 405 for HEAD", () => {
+    const { contract } = generateActionContract({
+      schemaSource: "CREATE TABLE IF NOT EXISTS photos (id INTEGER PRIMARY KEY, title TEXT NOT NULL);",
+      actionsSource: JSON.stringify({ version: 1, actions: {
+        "photos.add": {
+          kind: "mutation", access: "authenticated",
+          statement: "INSERT INTO photos (title) VALUES (?1)",
+          bindings: [{ source: "input", key: "title", type: "string", maxLength: 80 }, { source: "actor", field: "id" }],
+          signal: { name: "photo.added", properties: ["title", "actor"] },
+        },
+        "photos.viewed": {
+          kind: "signal", access: "anonymous",
+          bindings: [{ source: "input", key: "photo", type: "number" }],
+          signal: { name: "photo.viewed", properties: ["photo"] },
+        },
+        "photos.feed": {
+          kind: "query", access: "anonymous", http: { method: "GET", path: "/feed.json" },
+          statement: "SELECT id, title FROM photos ORDER BY id DESC LIMIT 20",
+          bindings: [],
+        },
+      } }),
+    });
+    const markdown = renderActionContractMarkdown(contract);
+    const section = (name: string) => markdown.slice(markdown.indexOf(`## ${name}\n`), markdown.indexOf("### Callers", markdown.indexOf(`## ${name}\n`)));
+    expect(section("photos.add")).toContain("### Signal\n\nRecords `photo.added` with `title`, `actor` (the app user's ID, the API key's ID, or null for a visitor or a signed request) after the statement changes a row. A refused call records none.");
+    expect(section("photos.viewed")).toContain('`{ "recorded": true }`. It runs no SQL and records the Signal `photo.viewed`.');
+    expect(section("photos.viewed")).toContain("Records `photo.viewed` with `photo` on every call the bindings accept.");
+    expect(section("photos.feed")).not.toContain("### Signal");
+    expect(markdown).toMatch(/\| `A route does not answer HEAD\. Send GET\.` \| 405 \| http \| a HEAD reaches the route; .*Allow: GET\./);
+    expect(checkActionContract(JSON.parse(serializeActionContract(contract)))).toEqual([]);
   });
 
   test("inputs, access and actor refusals follow the bindings", () => {

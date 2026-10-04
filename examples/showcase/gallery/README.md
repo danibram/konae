@@ -116,8 +116,8 @@ Rows with a status or a quoted message are answers the replay received. Rows tha
 | Message 31 from one address within 10 seconds (`contact.send` over MCP) | 200 | `rate-limited`, as a JSON-RPC result with `isError: true` and `Retry-After: 1`. A route answers 429; the runtime endpoint answers 200. |
 | A tighter limit for `contact.send` alone, such as 3 an hour | | No primitive. `actions.json` declares no rate limit; every anonymous action shares 30 calls per 10 seconds per address, which lets one address send about 260,000 messages a day. |
 | `contact.send` with topic `spam` | | `CHECK constraint failed: topic IN ('commission', 'print', 'other')`. Inputs have type and length but no allowed values, so the CHECK in `schema.sql` is the only guard and its SQLite text reaches the visitor. |
-| The `contact.received` Signal in `action-contract.md` | | Missing. `action-contract.json` has `"signal": {"name":"contact.received","properties":["topic"]}`; the Markdown rendering never mentions it. |
-| The HEAD answer of `/feed.json` in the Action Contract | | Missing. The contract lists no 405 for `feed.items`, and conform does not probe HEAD. |
+| The `contact.received` Signal in `action-contract.md` | | Fixed on 2026-11-07. The Markdown has a Signal section: `Records contact.received with topic after the statement changes a row.` Before, only `action-contract.json` named it. |
+| The HEAD answer of `/feed.json` in the Action Contract | 405 | Fixed on 2026-11-07. `feed.items` lists `A route does not answer HEAD. Send GET.` with 405 and says HTTP drops the body, and conform sends a HEAD and checks the status. Before, the contract listed no 405 and conform did not probe HEAD. |
 
 ## Conform with no credential
 
@@ -181,6 +181,10 @@ INSERT INTO messages (name, email, topic, body, received_at) VALUES (?1, ?2, ?3,
 ##### Output
 
 `{ changes, lastInsertId }`, both integers.
+
+##### Signal
+
+Records `contact.received` with `topic` after the statement changes a row. A refused call records none.
 
 ##### Callers
 
@@ -259,6 +263,7 @@ On a private Deployment the route takes an API key or a session and is the actio
 | `invalid-api-key` | 401 | http | Authorization carries an lbk_ key that is unknown or revoked (401) |
 | `This API key may not call feed.items.` | 403 | http | the key does not name the route's action (403) |
 | `Repeated query parameter: <key>` | 400 | http | a GET names one input twice (400) |
+| `A route does not answer HEAD. Send GET.` | 405 | http | a HEAD reaches the route; it is refused before any SQL, with Allow: GET. HTTP carries no body on a HEAD answer, so the caller sees the 405 and the header, not the message |
 | `rate-limited` | 429 | http | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
 
 ##### Limits

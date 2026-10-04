@@ -15,9 +15,9 @@ import { signRoute } from "./route-signature";
 export type RuntimeAnswer = { ok: true; result: unknown } | { ok: false; message: string };
 export type RouteAnswer = { status: number; body: unknown };
 export type RouteRequest = {
-  method: "GET" | "POST";
+  method: "GET" | "HEAD" | "POST";
   path: string;
-  /** GET only: the query string values. */
+  /** GET and HEAD: the query string values. */
   query?: Record<string, string>;
   /** POST only: the raw body. */
   body?: string;
@@ -338,6 +338,17 @@ export async function runConformance(contract: ActionContract, target: Conforman
       if (secret !== undefined) await expectRouteRefusal(action, "refuses a stale timestamp", "stale-timestamp", await sign(request(valid), now() - 400));
     } else if (http.declaredCallers) {
       await expectRouteRefusal(action, "refuses a caller without a key or a session", "authentication-required", request(valid));
+    }
+    if (http.method === "GET") {
+      // HTTP carries no body on a HEAD answer, so only the status can be checked.
+      const head = "A route does not answer HEAD. Send GET.";
+      const error = action.errors.find((candidate) => candidate.via !== "runtime" && candidate.message === head);
+      if (!error) record(name, "refuses HEAD", "fail", `The contract does not list "${head}" for this route.`);
+      else {
+        const answer = await route({ method: "HEAD", path: http.path, query: request(valid).query });
+        record(name, "refuses HEAD", answer.status === error.status ? "pass" : "fail", answer.status === error.status
+          ? `Answered ${answer.status}; a HEAD answer carries no body.` : `Answered ${answer.status} where the contract says ${error.status}.`);
+      }
     }
     await expectRouteRefusal(action, "refuses an unknown API key", "invalid-api-key", { ...request(valid), headers: { ...request(valid).headers, authorization: "Bearer lbk_conformance_unknown" } });
     if (!takes("key") && target.key) {

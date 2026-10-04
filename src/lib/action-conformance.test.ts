@@ -29,6 +29,8 @@ type Quirks = Partial<{
   withoutRole: boolean;
   /** An API key the backend accepts on a route that takes keys, as the caller's ID. */
   key: string;
+  /** Runs a GET route for HEAD instead of refusing it with 405. */
+  answerHead: boolean;
 }>;
 
 /**
@@ -95,7 +97,11 @@ function fakeBackend(contract: ActionContract, quirks: Quirks = {}, session = tr
     },
     async route(request: RouteRequest) {
       target.calls += 1;
-      const action = contract.actions.find((candidate) => candidate.http?.method === request.method && candidate.http.path === request.path);
+      if (request.method === "HEAD" && !quirks.answerHead && contract.actions.some((candidate) => candidate.http?.method === "GET" && candidate.http.path === request.path)) {
+        return { status: 405, body: "" };
+      }
+      const method = request.method === "HEAD" ? "GET" : request.method;
+      const action = contract.actions.find((candidate) => candidate.http?.method === method && candidate.http.path === request.path);
       if (!action) return request.method === "POST" ? { status: 405, body: { error: "No route accepts POST on this path." } } : { status: 200, body: "<html>" };
       const http = action.http!;
       const keyed = Boolean(quirks.key) && request.headers?.authorization === `Bearer ${quirks.key}`;
@@ -152,6 +158,8 @@ describe("conformance runner", () => {
     expect(checks).toContain("pass refuses an unsigned request");
     expect(checks).toContain("pass refuses a body that is not JSON");
     expect(checks).toContain("pass refuses a POST to a path no action binds");
+    expect(report.results.find((result) => result.action === "incidents.recent" && result.check === "refuses HEAD")).toMatchObject({ outcome: "pass", detail: "Answered 405; a HEAD answer carries no body." });
+    expect(report.results.some((result) => result.action === "pings.receive" && result.check === "refuses HEAD")).toBe(false);
   });
 
   const cases: [string, string, Quirks, RegExp][] = [
@@ -162,6 +170,7 @@ describe("conformance runner", () => {
     ["runs an authenticated action for a visitor", "journal", { anyoneMayCall: true }, /where the contract refuses with "authentication-required"/],
     ["accepts an unsigned webhook", "feed", { acceptUnsigned: true }, /Answered 200 .* where the contract says 401 "invalid-signature"/],
     ["refuses an unsigned webhook with the wrong status", "feed", { unsignedStatus: 403 }, /Answered 403 "invalid-signature" where the contract says 401/],
+    ["runs a GET route for HEAD", "feed", { answerHead: true }, /Answered 200 where the contract says 405/],
   ];
   for (const [quirk, example, quirks, message] of cases) {
     test(`fails a backend that ${quirk}`, async () => {
