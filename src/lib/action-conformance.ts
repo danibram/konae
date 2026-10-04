@@ -271,7 +271,7 @@ export async function runConformance(contract: ActionContract, target: Conforman
       : { method: "POST", path: http.path, body: body ?? JSON.stringify(input), headers: { "content-type": "application/json" } };
     const sign = async (base: RouteRequest, at = now()): Promise<RouteRequest> => {
       const query = new URLSearchParams(base.query ?? {}).toString();
-      const header = await signRoute(secret!, { method: base.method, path: base.path, query, body: base.body ?? "" }, at);
+      const header = await signRoute(secret!, { method: http.method, path: base.path, query, body: base.body ?? "" }, at);
       return { ...base, headers: { ...base.headers, [http.signature!.header]: header } };
     };
     // The proof the valid call and the input probes carry. An action that binds

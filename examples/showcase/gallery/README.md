@@ -121,7 +121,7 @@ Rows with a status or a quoted message are answers the replay received. Rows tha
 
 ## Conform with no credential
 
-`littlebox conform --url <app> --contract action-contract.json --inputs <file>` from the CLI, with no token, key or secret: **31 passed, 0 failed, 8 skipped.** The in-process run, one client address per call, gives the same counts. `--inputs` sets `contact.send`'s `topic` to `other`, because the generated string would fail the CHECK.
+`littlebox conform --url <app> --contract action-contract.json --inputs <file>` from the CLI, with no token, key or secret: **32 passed, 0 failed, 8 skipped.** The count rose from 31 on 2026-11-07, when conform began sending a HEAD to `/feed.json`. The in-process run, one client address per call, gives the same counts. `--inputs` sets `contact.send`'s `topic` to `other`, because the generated string would fail the CHECK.
 
 Skipped, each with "Needs a signed-in person; pass --token.":
 
