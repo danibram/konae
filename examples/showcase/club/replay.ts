@@ -179,7 +179,7 @@ try {
   assert.match(warnings[0], /asks for signup Open, but this app has Invitation only\..*Auth > Users.*signup_policy_set/);
   assert.equal((await origin.owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receiptA.id })).mode, "invitation");
   const publishOnlySet = await message(new McpClient(`${origin.url}/mcp`, { token: publishToken.token }).call("signup_policy_set", { deploymentId: receiptA.id, mode: "open" }));
-  assert.equal(publishOnlySet, "Unknown tool or insufficient permission.");
+  assert.equal(publishOnlySet, "Unknown tool or insufficient permission. signup_policy_set needs a credential with manage_users. Run littlebox login with --manage-users, or use a token from token_create that includes it.");
   refused("Signup policy", "signup_policy_set with the CLI's publish token", publishOnlySet);
   check("Publish", `littlebox publish deployed ${receiptA.url} as private with policy ${firstPolicy.mode} from littlebox.json, on a token without manage_users. A republish naming open warned "${warnings[0]}" and kept invitation.`);
 

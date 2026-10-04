@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { ignoreInGit, manifestSignupPolicy, publishLocal, signupPolicyWarning } from "./littlebox";
+import { HELP, ignoreInGit, loginScopes, manifestSignupPolicy, publishLocal, signupPolicyWarning } from "./littlebox";
 
 /** A stand-in Kernel MCP endpoint that records tool calls and can fail chosen ones. */
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
@@ -95,6 +95,19 @@ describe("littlebox CLI", () => {
     expect(JSON.parse(uploaded).visibility).toBe("private");
     const html = JSON.parse(await readFile(path.join(directory, ".littlebox/artifact.json"), "utf8")).files["index.html"] as string;
     expect(html).toContain("<script data-littlebox-runtime>");
+  });
+
+  test("login adds manage_users, export_data and manage_lifecycle only when a flag asks", () => {
+    expect(loginScopes([])).toEqual(["read", "write", "publish"]);
+    expect(loginScopes(["--manage-users"])).toEqual(["read", "write", "publish", "manage_users"]);
+    expect(loginScopes(["--manage-lifecycle", "--export-data", "--manage-users"])).toEqual(["read", "write", "publish", "manage_users", "export_data", "manage_lifecycle"]);
+  });
+
+  test("help names every command and every login flag, and an unknown command prints it", async () => {
+    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "eject", "--manage-users", "--export-data", "--manage-lifecycle", "--with-data", "--project", "--revision", "--secret", "--key", "--inputs"]) expect(HELP).toContain(word);
+    const run = cli("deploy");
+    expect(await run.exited).toBe(1);
+    expect(await new Response(run.stderr).text()).toContain("Unknown command deploy.\n\nUsage: bun run littlebox --");
   });
 
   test("a trailing --dir with no value is an error, not the current directory", async () => {

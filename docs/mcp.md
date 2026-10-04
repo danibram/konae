@@ -11,7 +11,7 @@ bun run dev:local
 
 Open the editor and go to **Platform access**. The direct link is `http://localhost:4173/_littlebox/owner/login`. To create the first owner, enter an email, a password and the setup key. In the default local environment that key is `local-development-key`; `LITTLEBOX_ADMIN_KEY` sets it. The first account claims the Deployments from the earlier prototype. Every later creator enters an invitation code instead, described under [creator admission](#creator-admission).
 
-Each owner administers their own projects. The page creates read-only or read, edit and publish tokens, optionally limited to specific projects, and lists and revokes active credentials. A token's secret appears only once. Tokens from this page expire after 24 hours; `token_create` accepts any subset of `read`, `write`, `publish`, `manage_users`, `export_data` and `manage_lifecycle` and a lifetime of up to 30 days. OAuth clients may request the same scopes. Only `export_data` downloads an app's accounts and data, only `manage_lifecycle` ejects a project, and the owner's browser session holds both.
+Each owner administers their own projects. The page creates read-only or read, edit and publish tokens, optionally limited to specific projects, and lists and revokes active credentials. A token's secret appears only once. Tokens from this page expire after 24 hours; `token_create` accepts any subset of `read`, `write`, `publish`, `manage_users`, `export_data` and `manage_lifecycle` and a lifetime of up to 30 days, and `littlebox login` asks for `read`, `write` and `publish` plus one permission per flag, `--manage-users`, `--export-data` and `--manage-lifecycle`. OAuth clients may request `read`, `write`, `publish` and `manage_users`; the consent screen does not offer `export_data` or `manage_lifecycle`, and a request for either answers `Invalid scope.` with the scopes it takes. Only `export_data` downloads an app's accounts and data, only `manage_lifecycle` ejects or migrates a project, and the owner's browser session holds both.
 
 The setup key does not authenticate MCP tools and is not included in the editor bundle. The server listens on `127.0.0.1` by default. The Kernel refuses to start on a non-loopback address, or with a `LITTLEBOX_PUBLIC_ORIGIN` whose host is not `localhost`, a `*.localhost` name or a loopback IP, while the setup key is unset or still `local-development-key`, unless `LITTLEBOX_ALLOW_DEFAULT_KEY=1`. For a remote installation, configure the setup key, the HTTPS origin and the proxy before listening on another interface.
 
@@ -25,7 +25,7 @@ Clients that support headers can also use a delegated token.
 Authorization: Bearer YOUR_TOKEN
 ```
 
-Call `platform_describe` and `projects_list` after connecting. An agent needs filesystem and local execution tools to create files and build an app. The MCP server does not read paths on the user's machine.
+Call `platform_describe` and `projects_list` after connecting. `platform_guide` takes the topics `credentials`, `development`, `actions`, `sdk`, `publishing`, `users` and `portability`, each a short form of a section of this page. [The walkthrough](mcp-walkthrough.md) runs every step from a credential to a migration against a Kernel, with the exact answers. An agent needs filesystem and local execution tools to create files and build an app. The MCP server does not read paths on the user's machine.
 
 If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_MCP_ORIGIN` to its public origin, without a path. The proxy must preserve `Host`. Owner signup answers on that host too, so the Kernel refuses to start with the default setup key when this host is not local. Browser calls to the editor and to the runtime use their own origin; there is no open CORS.
 
@@ -50,9 +50,9 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | App runtime | `auth_session`, `auth_logout`, `actions_invoke`, `files_list`, `files_upload`, `files_read`, `files_update`, `files_delete` and transfers |
 | App accounts, also before sign-in | `auth_signup`, `auth_verify`, `auth_recover`, `auth_reset` |
 
-The catalog depends on the credentials. The Kernel checks the permission again on execution. A token limited to projects cannot create other projects. For `schema_plan`, that token must pass a `projectId` it has access to. Reading the signup policy needs the `read` scope. Changing it, and every `app_users_*` and `app_invitation*` tool, needs `manage_users`. The owner's browser session holds it. A delegated token holds it only when it was created with it, so tokens issued before this permission existed do not gain it. `read` alone never lists accounts or invitations.
+The catalog depends on the credentials. The Kernel checks the permission again on execution. A call to a tool the credential does not list answers `Unknown tool or insufficient permission.` and, for a tool another credential would list, the permission it needs and how to get it, such as `app_invitations_create needs a credential with manage_users. Run littlebox login with --manage-users, or use a token from token_create that includes it.` A tool of the runtime endpoint called here says so. A token limited to projects cannot create other projects. For `schema_plan`, that token must pass a `projectId` it has access to. Reading the signup policy needs the `read` scope. Changing it, and every `app_users_*` and `app_invitation*` tool, needs `manage_users`. The owner's browser session holds it. A delegated token holds it only when it was created with it, so tokens issued before this permission existed do not gain it. `read` alone never lists accounts or invitations.
 
-This changes the contract. `signup_policy_set` needed `publish` before `manage_users` existed, so a client that changed the policy with a `read`, `write` and `publish` token now gets "Unknown tool" and needs a new token that includes `manage_users`. `bun run littlebox -- dev` asks for one.
+This changes the contract. `signup_policy_set` needed `publish` before `manage_users` existed, so a client that changed the policy with a `read`, `write` and `publish` token now gets "Unknown tool" and needs a new token that includes `manage_users`. `bun run littlebox -- login --manage-users` asks for one, and `bun run littlebox -- dev` asks for one on its Development Kernel.
 
 Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `usage_read` and `signals_read` need `read`.
 
@@ -163,9 +163,10 @@ Each `svix-id` is recorded once, so a replay answers 200 with `duplicate: true` 
 
 ## Local development cycle
 
-From this repository, set `LITTLEBOX_MCP_TOKEN` to a credential that can create and publish projects.
+From this repository, get a credential that can create and publish projects with `login` (described at the end of [Build and publish](#build-and-publish)), or set `LITTLEBOX_MCP_TOKEN` to one.
 
 ```sh
+LITTLEBOX_EMAIL=you@example.com LITTLEBOX_PASSWORD=... bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173
 bun run littlebox -- init --dir /tmp/my-app --name "My app" --url http://localhost:4173
 bun run littlebox -- dev --dir /tmp/my-app --port 8796
 ```
@@ -519,7 +520,7 @@ The content type follows the extension: HTML, CSS, JavaScript, JSON and source m
 
 The 16 MiB artifact limit counts the bytes the Kernel stores, after base64 is decoded. The Kernel refuses an encoding other than base64, an encoding for a file the artifact does not hold, and a file marked base64 that does not decode, each with the path in the message.
 
-There is also `bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173`. It reads `LITTLEBOX_EMAIL` and `LITTLEBOX_PASSWORD` from the environment, obtains a 24-hour credential and stores it with `0600` permissions in `.littlebox/credentials.json`. `LITTLEBOX_INVITATION_CODE` lets it create the account if it does not exist yet, and `LITTLEBOX_SETUP_KEY` does so for an installation's first owner. On an installation that requires verification it stops and asks you to open the emailed link first. The command adds `.littlebox/` to `.gitignore`; do not copy credentials into the frontend.
+There is also `bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173`. It reads `LITTLEBOX_EMAIL` and `LITTLEBOX_PASSWORD` from the environment, obtains a 24-hour credential with `read`, `write` and `publish` and stores it with `0600` permissions in `.littlebox/credentials.json`, which `init`, `publish`, `export` and `eject` read when `LITTLEBOX_MCP_TOKEN` is unset. `--manage-users`, `--export-data` and `--manage-lifecycle` add those permissions; a delegated token cannot add one to itself later, so ask for every permission the work needs. `LITTLEBOX_INVITATION_CODE` lets it create the account if it does not exist yet, and `LITTLEBOX_SETUP_KEY` does so for an installation's first owner. On an installation that requires verification it stops and asks you to open the emailed link first. The command adds `.littlebox/` to `.gitignore`; do not copy credentials into the frontend.
 
 ## Action Contract
 
@@ -559,6 +560,20 @@ bun run littlebox -- eject --dir /tmp/ejected --project <project id> --url http:
 bun run littlebox -- publish --dir /tmp/ejected
 ```
 
+Only a Managed Project ejects: one the editor saves. A project made with `littlebox init` or `project_create` is External from the start, and `eject_plan` refuses it. The editor saves sources with `project_sources_save { projectId, transferId, expectedRevision }`, where the transfer holds this JSON; an agent that saves sources over MCP sends the same:
+
+```json
+{ "id": "app_notes", "name": "Notes", "slug": "notes", "updatedAt": 1762430000000,
+  "files": { "index.html": "<main id=app></main>", "app.js": "...", "schema.sql": "...", "actions.json": "..." },
+  "directories": [],
+  "databaseModel": { "source": "", "acceptedSource": "", "revision": "r1" },
+  "manifest": { "version": 1, "visibility": "private",
+    "runtime": { "database": { "mode": "declared-actions", "actions": [{ "name": "notes.list", "kind": "query", "access": "authenticated" }] },
+      "auth": { "mode": "optional" }, "files": { "access": "deployment" } } } }
+```
+
+A save refuses JSON without one of these parts with the part's name and its expected shape, such as `Invalid database model. Send databaseModel as { source, acceptedSource, revision } strings; an app without a Drizzle model sends empty sources.`
+
 `eject` reads the saved-sources revision from `project_inspect`, or takes `--revision`, and calls `eject_plan`. It downloads the code package, checks its size, SHA-256 and the SHA-256 of every file, writes the files into the directory, and only then calls `eject_apply`. It saves the receipt in `.littlebox/eject-receipt.json`. The directory must be empty apart from dotfiles. A run interrupted after the plan resumes in the same directory and keeps the files it already wrote if they are unchanged.
 
 Both tools need `manage_lifecycle`. The owner's browser session holds it; `token_create` delegates it only when asked, and `read`, `write`, `publish`, `manage_users` and `export_data` do not include it.
@@ -578,10 +593,10 @@ After Eject, `project_sources_read` still returns the frozen sources with `readO
 | `project_create` with `sourceAuthority: "managed"` for a project created External | `This project is External. Littlebox does not take source authority back, so create a new project to edit in Littlebox.` |
 | `eject_plan` with a stale revision | `Source revision changed: the saved sources are at revision 2, not 1. Reload the project, then plan the Eject again.` |
 | `eject_apply` after a save made the plan stale | `Source revision changed since this plan: the saved sources are at revision 2, not 1. Plan the Eject again.` |
-| Eject without `manage_lifecycle` | `Unknown tool or insufficient permission.` A credential limited to other projects gets `Project is outside this token's grants.` |
+| Eject without `manage_lifecycle` | `Unknown tool or insufficient permission. eject_plan needs a credential with manage_lifecycle. Run littlebox login with --manage-lifecycle, or use a token from token_create that includes it.` A credential limited to other projects gets `Project is outside this token's grants.` |
 | `eject_plan` for a project created External | `Project sources are maintained externally. A project created outside the editor is already External and does not pass through Eject.` |
 | `eject_plan` at another revision after Eject | `This project was ejected at sources revision 2. Plan again with that revision to download its package.` |
-| `eject_plan` with no saved sources | `This project has no saved sources to eject. Save it in the editor first.` |
+| `eject_plan` with no saved sources | `This project has no saved sources to eject. Save it in the editor, or with project_sources_save, first.` |
 
 Returning to managed authoring is not supported. To edit in Littlebox again, create a new project; production data does not merge into it.
 
@@ -619,7 +634,7 @@ Returning to managed authoring is not supported. To edit in Littlebox again, cre
 
 Read each download with `transfer_read` and cancel it when done. The transfers expire after one hour like other owner transfers. They need `export_data`, not `read`, even though every credential of one owner shares the transfer pool. The audit log gets one `package_export` row and one `package_download` row per component at its first block, with the Deployment as target and the component as detail, plus a row for every refused read.
 
-To import, start each component upload with `transfer_begin` and `component` set to its name; `McpClient.upload(bytes, projectId, component)` in `src/mcp/client.ts` does that and writes the blocks. A component upload may be as large as its limit in the table, and the Kernel refuses it at `transfer_begin` when the volume lacks that much space plus 64 MiB. Any other upload stays at 32 MiB. Write and complete it as usual, then send a release payload with `initialPackage`:
+To import on another Kernel, first create the project there with `project_create` and the same `projectId`, and set every signing secret the app's routes sign with through `secret_set`; secrets never travel, and `release_plan` refuses a release that signs with an unset one. Then start each component upload with `transfer_begin { size, sha256, projectId, component }` and `component` set to its name; `McpClient.upload(bytes, projectId, component)` in `src/mcp/client.ts` does that and writes the blocks. A component upload may be as large as its limit in the table, and the Kernel refuses it at `transfer_begin` when the volume lacks that much space plus 64 MiB. Any other upload stays at 32 MiB. Write and complete it as usual, then send a release payload with `initialPackage`:
 
 ```json
 { "project": {}, "visibility": "private", "artifact": {},
@@ -639,7 +654,7 @@ To import, start each component upload with `transfer_begin` and `component` set
 
 | Refusal | Message |
 | --- | --- |
-| Export without `export_data`, through any of the three export tools | `Unknown tool or insufficient permission.` A credential limited to other projects gets `Project is outside this token's grants.` |
+| Export without `export_data`, through any of the three export tools | `Unknown tool or insufficient permission. package_export needs a credential with export_data. Run littlebox login with --export-data, or use a token from token_create that includes it.`, naming the tool called. A credential limited to other projects gets `Project is outside this token's grants.` |
 | Reading an export's transfer without `export_data` | `Permission denied for export_data.` |
 | Package for a project with a Deployment | `Portable state can only be imported on the first deployment.` |
 | Upload bytes that differ from the declared SHA-256 | `Upload size or SHA-256 mismatch.` |
@@ -649,7 +664,9 @@ To import, start each component upload with `transfer_begin` and `component` set
 | Component over its limit | `Transfer size is outside the limit of 67108864 bytes for the identity component.` |
 | Not enough disk at `transfer_begin` for a component, at `package_export` or at `release_plan` | `Not enough free space on the Kernel volume to import this app: 340 MiB needed, 120 MiB free.` |
 
-The CLI's `export --with-data` downloads the package into the kit as `littlebox/package/`, and the kit's `deploy.mjs` uploads it, records its progress in `littlebox/import-state.json` and resumes from the Kernel's offset after an interruption. `src/lib/portable-package.ts` checks the manifest on the client with the same limits as `kernel-rs/src/package.rs`.
+The release payload is the one `release_plan` always takes, `project`, `visibility` and the `artifact` that `littlebox build` writes to `.littlebox/artifact.json`, plus `initialPackage`. No CLI command imports a package into a Kernel you already run; [the walkthrough](mcp-walkthrough.md#import-on-a-second-kernel) shows the tool calls.
+
+The CLI's `export --with-data` downloads the package into the kit as `littlebox/package/`, and the kit's `deploy.mjs` uploads it to the kit's own Kernel, signing in with that Kernel's setup key, records its progress in `littlebox/import-state.json` and resumes from the Kernel's offset after an interruption. `deploy.mjs` sets no signing secret, so for an app whose routes sign it stops at `release_plan` with the refusal that names each secret; `deploy.mjs` creates the kit Kernel's owner as `owner@selfhost.local` with the setup key as password, so `LITTLEBOX_EMAIL=owner@selfhost.local LITTLEBOX_PASSWORD=<key> bun run littlebox -- login` gets a credential for `secret_set` there, and the next `deploy.mjs` run goes through. `src/lib/portable-package.ts` checks the manifest on the client with the same limits as `kernel-rs/src/package.rs`.
 
 `project_export`, the small format, and `database_export`, the raw database file, now need `export_data` too. It returns the database, accounts and files as base64 in one transfer of at most 16 MiB, and a release still imports it through `initialDatabase`, `initialIdentity`, `initialFiles` and `initialSignupPolicy`.
 
@@ -704,7 +721,7 @@ The audit log records each migration tool with the Deployment as target and the 
 | Refusal | Message |
 | --- | --- |
 | `migration_begin` without `export_data` | `Permission denied for export_data.` |
-| Any migration tool but `migration_status` without `manage_lifecycle` | `Unknown tool or insufficient permission.` |
+| Any migration tool but `migration_status` without `manage_lifecycle` | `Unknown tool or insufficient permission. migration_begin needs a credential with manage_lifecycle. Run littlebox login with --manage-lifecycle, or use a token from token_create that includes it.`, naming the tool called |
 | A write, signup, sign-in, recovery or route call on a paused app | HTTP 503 with the operation, as above |
 | An owner change to a paused app | `This app is paused for migration <id>. …` |
 | `migration_cancel` after confirmation | `Migration <id> was confirmed, so its destination may already accept writes. Cancelling would leave two installations writing. …` |

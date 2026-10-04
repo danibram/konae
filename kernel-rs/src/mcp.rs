@@ -82,9 +82,9 @@ pub(super) fn digest(bytes: &[u8]) -> String {
 #[derive(Clone)]
 pub(super) struct Owner {
     pub(super) id: String,
-    display: Option<String>,
+    pub(super) display: Option<String>,
     pub(super) scopes: Vec<String>,
-    projects: Vec<String>,
+    pub(super) projects: Vec<String>,
     pub(super) session: bool,
 }
 
@@ -195,14 +195,14 @@ fn validate_managed_sources(source: &Value, id: &str) -> Result<()> {
         && safe_relative_path(value) && !value.chars().any(|c| c.is_control());
     anyhow::ensure!(source["id"] == id && string(&source["name"], 80)
         && source["name"].as_str().is_some_and(|s| !s.trim().is_empty())
-        && string(&source["slug"], 100) && source["updatedAt"].as_u64().is_some(), "Invalid project metadata.");
+        && string(&source["slug"], 100) && source["updatedAt"].as_u64().is_some(), "Invalid project metadata. Send {{ id, name, slug, files, directories, databaseModel, manifest, updatedAt }} with the project's own id, a name of 1 to 80 characters, a slug of up to 100 and updatedAt in milliseconds.");
     let files = source["files"].as_object().ok_or_else(|| anyhow::anyhow!("Invalid project files."))?;
     anyhow::ensure!(files.len() <= 1_000 && files.iter().all(|(name, body)| path(name) && string(body, MAX_TRANSFER)), "Invalid project files.");
     let directories = source["directories"].as_array().ok_or_else(|| anyhow::anyhow!("Invalid project directories."))?;
     anyhow::ensure!(directories.len() <= 1_000 && directories.iter().all(|entry| entry.as_str().is_some_and(path)), "Invalid project directories.");
     let model = &source["databaseModel"];
     anyhow::ensure!(model.is_object() && string(&model["source"], MAX_TRANSFER)
-        && string(&model["acceptedSource"], MAX_TRANSFER) && string(&model["revision"], 256), "Invalid database model.");
+        && string(&model["acceptedSource"], MAX_TRANSFER) && string(&model["revision"], 256), "Invalid database model. Send databaseModel as {{ source, acceptedSource, revision }} strings; an app without a Drizzle model sends empty sources.");
     let manifest = &source["manifest"];
     let actions = manifest["runtime"]["database"]["actions"].as_array();
     anyhow::ensure!(manifest["version"] == 1 && ["public", "private"].contains(&manifest["visibility"].as_str().unwrap_or(""))
@@ -211,7 +211,7 @@ fn validate_managed_sources(source: &Value, id: &str) -> Result<()> {
         && manifest["runtime"]["files"]["access"] == "deployment"
         && actions.is_some_and(|list| list.len() <= 50 && list.iter().all(|action|
             string(&action["name"], 120) && ["query", "mutation", "signal"].contains(&action["kind"].as_str().unwrap_or(""))
-            && ["anonymous", "authenticated", "granted"].contains(&action["access"].as_str().unwrap_or("")))), "Invalid project manifest.");
+            && ["anonymous", "authenticated", "granted"].contains(&action["access"].as_str().unwrap_or("")))), "Invalid project manifest. Send {{ version: 1, visibility, runtime: {{ database: {{ mode: \"declared-actions\", actions: [{{ name, kind, access }}] }}, auth: {{ mode: \"optional\" or \"required\" }}, files: {{ access: \"deployment\" }} }} }} with up to 50 actions.");
     let mut names = std::collections::HashSet::new();
     for action in actions.unwrap() {
         let name = action["name"].as_str().unwrap();
@@ -254,7 +254,7 @@ pub(super) fn tool(
         "annotations":{"readOnlyHint":read_only,"destructiveHint":!read_only,"openWorldHint":false}})
 }
 
-fn admin_tools(owner: &Owner) -> Vec<Value> {
+pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     let text = json!({"type":"string","minLength":1});
     let mut tools = vec![
         tool(
@@ -280,8 +280,8 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
         ),
         tool(
             "platform_guide",
-            "Read SDK examples, Server Action format, publishing, or local development instructions.",
-            json!({"topic":{"type":"string","enum":["sdk","actions","publishing","development"]}}),
+            "Read a guide topic: credentials (login, OAuth and which permission each tool needs), development (the CLI), actions (actions.json), sdk (window.miniapp and HTTP routes), publishing, users (signup policy and invitations), or portability (export, import, Eject and migration).",
+            json!({"topic":{"type":"string","enum":super::guide::TOPICS}}),
             &["topic"],
             true,
         ),
@@ -318,7 +318,7 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
     if owner.scopes.iter().any(|s| s == "write") {
         tools.extend([
             tool("project_create", "Register an external project. Repeating the same project ID returns it, except that an External project cannot become Managed.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourceAuthority":{"type":"string","enum":["managed","external"]}}), &["name"], false),
-            tool("project_sources_save", "Save Managed project sources if the expected source revision still matches. Upload the project JSON first.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
+            tool("project_sources_save", "Save Managed project sources if the expected source revision still matches. Upload the project JSON first: { id, name, slug, files: { path: text }, directories, databaseModel: { source, acceptedSource, revision }, manifest, updatedAt }, the format the editor saves and docs/mcp.md describes under Eject.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
             tool("schema_plan", "Derive and validate SQL from two Drizzle models in an isolated subprocess.", json!({"acceptedSource":text,"candidateSource":text,"projectId":text}), &["acceptedSource","candidateSource"], false),
         ]);
     }
@@ -406,7 +406,7 @@ fn admin_tools(owner: &Owner) -> Vec<Value> {
     tools
 }
 
-fn runtime_tools() -> Vec<Value> {
+pub(super) fn runtime_tools() -> Vec<Value> {
     let mut tools = vec![
         tool(
             "auth_session",
@@ -723,7 +723,9 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
                 if runtime && runtime_tools().iter().any(|t| t["name"] == name) {
                     return Json(json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":"authentication-required"}],"isError":true}})).into_response();
                 }
-                return rpc_error(id, -32602, "Unknown tool or insufficient permission.");
+                // Name the permission an administrative tool needs, so the agent knows which credential to get.
+                let hint = owner.as_ref().and_then(|owner| super::guide::missing_permission(name, owner));
+                return rpc_error(id, -32602, &hint.map_or("Unknown tool or insufficient permission.".to_owned(), |hint| format!("Unknown tool or insufficient permission. {hint}")));
             };
             let arguments = call["params"]
                 .get("arguments")
@@ -1083,21 +1085,9 @@ async fn admin_call(
     a: Value,
 ) -> Result<Value> {
     match name {
-        "platform_guide" => Ok(match a["topic"].as_str().unwrap() {
-            // Rendered from src/sdk/contract.ts by `bun run sdk:render`.
-            "sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,
-            "actions" => {
-                json!({"filename":"actions.json","format":{"version":1,"actions":{"items.list":{"kind":"query","access":"authenticated","statement":"SELECT id,title FROM items WHERE user_id=?1 LIMIT 50","bindings":[{"source":"actor","field":"id"}]},"items.create":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO items(title,user_id) VALUES(?1,?2)","bindings":[{"source":"input","key":"title","type":"string","maxLength":200},{"source":"actor","field":"id"}]}}},"rules":"SQL and typed bindings stay server-side. Declare schema in schema.sql for artifact publication. Runtime calls only send the declared action name and input. Add nullable:true to an input binding to bind omitted values or explicit null as SQL NULL; supplied strings remain non-empty and all supplied values retain their type checks. Mutations return changes and lastInsertId, so read rows with a query instead of mutation RETURNING, which publication rejects. A query that reads rows needs a top-level LIMIT. A total with count, sum, avg, min or max and no GROUP BY does not. An anonymous action may add http:{method:'GET' for a query or 'POST' for a mutation,path,signature?:{header,secret},callers?:['signature'|'key'|'session']} to answer on that path of its Deployment host; an action whose route does not answer anyone answers only there, not through actions_invoke. The sdk topic's http module describes routes, callers, signatures, API keys and secret_set. A mutation may add guard:'<sentence>' so a statement that changes no row is refused with it instead of answering changes 0. A mutation may add signal:{name:'order.placed',properties:[input keys or 'actor']} to record a Signal when it changes a row, and kind:'signal' with access, bindings and signal but no statement records one without SQL. The owner reads them with signals_read and Usage with usage_read."})
-            }
-            "publishing" => {
-                json!({"steps":["Create project identity with project_create. Keep its id, slug and manifest locally.","Build static HTML/CSS/JS locally. Inject the SDK using the local builder.","Upload JSON {project:{id,name,slug,files,manifest},visibility,artifact:{version:1,entrypoint:'index.html',files:{...}}} using transfer_begin with projectId, byte size and sha256, then transfer_write and transfer_complete.","Call release_plan with transferId, inspect its planId and expectedRevision, then call release_apply with planId.","Save the receipt and cancel the temporary transfer."],"concurrency":"An obsolete plan is rejected. Repeating an applied plan returns the same receipt.","access":"A first release may add initialSignupPolicy {mode, allowlist} with mode open, invitation, closed or allowlist; the Kernel installs it before the app serves. When the owner's request leaves access open for an app with accounts, propose visibility private and mode invitation. Later changes need manage_users and signup_policy_set. Invite people with app_invitations_create only when the owner asks, because it sends email."})
-            }
-            _ => {
-                json!({"commands":["bun run littlebox -- init --dir /tmp/my-app --name 'My app' --url http://localhost:4173","bun run littlebox -- dev --dir /tmp/my-app","bun run littlebox -- build --dir /tmp/my-app","bun run littlebox -- publish --dir /tmp/my-app"],"credentials":"Set LITTLEBOX_MCP_TOKEN for init and publish, or use littlebox login. Never put it in app source.","isolation":"dev uses the same Rust Kernel with separate local identities, data and files under .littlebox/dev-data. It does not proxy production.","sourceAuthority":"Code and builds stay in your folder. Source is not synchronized to the browser editor."})
-            }
-        }),
+        "platform_guide" => super::guide::topic(a["topic"].as_str().unwrap()),
         "platform_describe" => Ok(
-            json!({"name":"Littlebox","protocolVersion":VERSION,"sourceAuthority":"external","runtimeEndpoint":"/_littlebox/mcp","chunkBytes":CHUNK,"maxTransferBytes":MAX_TRANSFER,"workflow":["project_create","build locally","transfer_begin/write/complete","release_plan","release_apply"],"runtimeTools":["auth_session","actions_invoke","files_list","files_read","files_upload","files_update","files_delete"],"localDevelopment":"Use bun run littlebox -- init, build, dev, or publish. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything."}),
+            json!({"name":"Littlebox","protocolVersion":VERSION,"sourceAuthority":"external","runtimeEndpoint":"/_littlebox/mcp","chunkBytes":CHUNK,"maxTransferBytes":MAX_TRANSFER,"workflow":["a credential: platform_guide topic credentials","project_create","secret_set for each secret a route signs with","build locally","transfer_begin/write/complete","release_plan","release_apply"],"guideTopics":super::guide::TOPICS,"runtimeTools":["auth_session","actions_invoke","files_list","files_read","files_upload","files_update","files_delete"],"localDevelopment":"Use bun run littlebox -- login, init, dev, build, contract, publish, conform, export or eject; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything."}),
         ),
         "mail_status" => super::mail::status_tool(state, a["refresh"].as_bool().unwrap_or(false)).await,
         "session_inspect" => Ok(
@@ -2279,6 +2269,19 @@ mod tests {
         }
         assert!(new_transfer(&state, "owner:alice", body()).await.is_err());
         let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    /// A refused source save says what the editor's format holds, so an agent
+    /// that saves sources over MCP can correct the JSON it uploaded.
+    #[test]
+    fn a_refused_source_save_names_the_expected_format() {
+        let manifest = json!({"version":1,"visibility":"private","runtime":{"database":{"mode":"declared-actions","actions":[]},"auth":{"mode":"optional"},"files":{"access":"deployment"}}});
+        let base = json!({"id":"app_a","name":"A","slug":"a","files":{"index.html":"<main></main>"},"directories":[],"databaseModel":{"source":"","acceptedSource":"","revision":"r1"},"manifest":manifest,"updatedAt":1});
+        assert!(validate_managed_sources(&base, "app_a").is_ok());
+        let refusal = |change: &dyn Fn(&mut Value)| { let mut source = base.clone(); change(&mut source); validate_managed_sources(&source, "app_a").unwrap_err().to_string() };
+        assert_eq!(refusal(&|s| { s.as_object_mut().unwrap().remove("databaseModel"); }), "Invalid database model. Send databaseModel as { source, acceptedSource, revision } strings; an app without a Drizzle model sends empty sources.");
+        assert!(refusal(&|s| s["manifest"] = json!({"version":1,"visibility":"private"})).starts_with("Invalid project manifest. Send { version: 1, visibility, runtime: { database: { mode: \"declared-actions\""));
+        assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("updatedAt"); }).starts_with("Invalid project metadata. Send { id, name, slug, files, directories, databaseModel, manifest, updatedAt }"));
     }
 
     /// The sdk topic is src/sdk/contract.ts rendered to sdk-guide.json. Every
