@@ -20,6 +20,8 @@
 //! anyone (`route_callers`). An action whose route does not answer anyone
 //! answers only there: `actions_invoke` refuses it (`route_only`).
 //! docs/mcp.md, "HTTP routes", states the signature scheme a sender computes.
+//! A route may instead declare a provider's own scheme and a `fields` map
+//! that reads a nested payload; provider.rs holds both (ADR-0015).
 
 use super::*;
 use std::sync::{Arc, OnceLock};
@@ -54,16 +56,19 @@ pub(super) struct HttpBinding {
     pub(super) signature: Option<SignatureBinding>,
     /// The declared callers, each of "signature", "key" and "session".
     pub(super) callers: Option<Vec<String>>,
+    /// Input keys and the JSON path each reads from a POST body.
+    pub(super) fields: Option<Vec<(String, Vec<super::provider::Step>)>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SignatureBinding {
+    /// The header the MAC arrives in; `svix-signature` for the svix scheme.
     pub(super) header: String,
     pub(super) secret: String,
+    pub(super) scheme: super::provider::Scheme,
 }
 
 const RESERVED_SEGMENTS: [&str; 4] = ["_littlebox", "oauth", ".well-known", "mcp"];
-const UNSIGNABLE_HEADERS: [&str; 5] = ["authorization", "cookie", "host", "content-type", "content-length"];
 const ROUTE_CALLERS: [&str; 3] = ["signature", "key", "session"];
 
 /// Parses and checks one action's `http` key. `Ok(None)` when it has none.
@@ -71,7 +76,7 @@ pub(super) fn binding(name: &str, action: &ActionDefinition) -> Result<Option<Ht
     let Some(value) = action.http.as_ref() else { return Ok(None) };
     let invalid = || format!("Action {name} has an invalid http binding.");
     let record = value.as_object().ok_or_else(invalid)?;
-    if record.keys().any(|key| !["method", "path", "signature", "callers"].contains(&key.as_str())) {
+    if record.keys().any(|key| !["method", "path", "signature", "callers", "fields"].contains(&key.as_str())) {
         return Err(invalid());
     }
     let path = record.get("path").and_then(Value::as_str).ok_or_else(invalid)?;
@@ -100,25 +105,8 @@ pub(super) fn binding(name: &str, action: &ActionDefinition) -> Result<Option<Ht
     let signature = match record.get("signature") {
         None => None,
         Some(value) => {
-            let signature = value.as_object().ok_or_else(invalid)?;
-            if signature.keys().any(|key| key != "header" && key != "secret") {
-                return Err(invalid());
-            }
-            let header = signature.get("header").and_then(Value::as_str).unwrap_or("");
-            if header.is_empty()
-                || header.len() > 64
-                || !header.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-                || UNSIGNABLE_HEADERS.contains(&header.to_ascii_lowercase().as_str())
-            {
-                return Err(format!("Action {name} has an invalid signature header."));
-            }
-            let secret = signature.get("secret").and_then(Value::as_str).unwrap_or("");
-            if !valid_secret_name(secret) {
-                return Err(format!(
-                    r#"Action {name} names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter."#
-                ));
-            }
-            Some(SignatureBinding { header: header.to_owned(), secret: secret.to_owned() })
+            let (header, secret, scheme) = super::provider::signature(name, method, value)?;
+            Some(SignatureBinding { header, secret, scheme })
         }
     };
     let callers = match record.get("callers") {
@@ -146,7 +134,11 @@ pub(super) fn binding(name: &str, action: &ActionDefinition) -> Result<Option<Ht
             Some(callers)
         }
     };
-    Ok(Some(HttpBinding { method: method.to_owned(), path: path.to_owned(), signature, callers }))
+    let fields = match record.get("fields") {
+        None => None,
+        Some(value) => Some(super::provider::fields(name, method, action, value)?),
+    };
+    Ok(Some(HttpBinding { method: method.to_owned(), path: path.to_owned(), signature, callers, fields }))
 }
 
 /// The callers a route accepts on a Deployment, or `None` when it answers
@@ -236,11 +228,22 @@ pub(super) fn require_secrets(db: &Connection, project: &str, program: &ActionPr
         let Ok(Some(HttpBinding { signature: Some(signature), .. })) = binding(name, &program.actions[name]) else {
             continue;
         };
-        if secret_value(db, project, &signature.secret)?.is_none() {
-            actions.push(name.clone());
-            if !secrets.contains(&signature.secret) {
-                secrets.push(signature.secret.clone());
+        match secret_value(db, project, &signature.secret)? {
+            None => {
+                actions.push(name.clone());
+                if !secrets.contains(&signature.secret) {
+                    secrets.push(signature.secret.clone());
+                }
             }
+            // A svix secret is a key in base64, so a value that does not
+            // decode could never verify a delivery.
+            Some(value) if signature.scheme == super::provider::Scheme::Svix && super::provider::svix_key(&value).is_none() => {
+                let secret = &signature.secret;
+                anyhow::bail!(
+                    "Action {name} verifies svix signatures with the secret {secret}, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_."
+                );
+            }
+            Some(_) => {}
         }
     }
     unset_secrets_message(&actions, &secrets).map_or(Ok(()), |message| Err(anyhow::anyhow!(message)))
@@ -918,7 +921,9 @@ async fn run_route(
     if signs && !accepts("signature") {
         return refusal(StatusCode::UNAUTHORIZED, "authentication-required");
     }
-    if let (Some(signature), true) = (&http.signature, signs) {
+    // Littlebox's own scheme here; a provider's scheme below.
+    let littlebox = http.signature.as_ref().filter(|signature| signature.scheme == super::provider::Scheme::Littlebox);
+    if let (Some(signature), true) = (littlebox, signs) {
         let secret = match super::mcp::store(state).and_then(|db| secret_value(&db, &deployment.project_id, &signature.secret)) {
             Ok(Some(secret)) => secret,
             Ok(None) => return refusal(StatusCode::SERVICE_UNAVAILABLE, "The route's signing secret is not set."),
@@ -936,6 +941,54 @@ async fn run_route(
             Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
         }
     }
+    // A provider's delivery is remembered before the action runs, so two
+    // copies sent at once cannot both run, and forgotten if the action does
+    // not succeed, so the provider's retry of it runs.
+    let mut delivery = None;
+    if let (Some(signature), true) = (&http.signature, signs) {
+        if signature.scheme != super::provider::Scheme::Littlebox {
+            let secret = match super::mcp::store(state).and_then(|db| secret_value(&db, &deployment.project_id, &signature.secret)) {
+                Ok(Some(secret)) => secret,
+                Ok(None) => return refusal(StatusCode::SERVICE_UNAVAILABLE, "The route's signing secret is not set."),
+                Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
+            };
+            let read = |name: &str| headers.get(name).and_then(|value| value.to_str().ok()).map(str::to_owned);
+            let now = now_ms() / 1000;
+            let key = match super::provider::verify(&signature.scheme, &signature.header, &secret, &read, body, now) {
+                super::provider::Delivery::Valid { key, expires } => {
+                    match identity_connection(state, deployment).and_then(|db| super::provider::claim(&db, &http.path, &key, expires, now)) {
+                        Ok(true) => key,
+                        Ok(false) => return refusal(StatusCode::CONFLICT, "replayed-signature"),
+                        Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
+                    }
+                }
+                super::provider::Delivery::Invalid => return refusal(StatusCode::UNAUTHORIZED, "invalid-signature"),
+                super::provider::Delivery::Stale => return refusal(StatusCode::UNAUTHORIZED, "stale-timestamp"),
+            };
+            delivery = Some(key);
+        }
+    }
+    let response = run_verified(state, deployment, table, name, http, &caller, query, body).await;
+    if let Some(key) = delivery.filter(|_| !response.status().is_success()) {
+        if let Err(error_value) = identity_connection(state, deployment).and_then(|db| super::provider::release(&db, &http.path, &key)) {
+            eprintln!("Could not release a delivery on {}: {error_value}", http.path);
+        }
+    }
+    response
+}
+
+/// Runs a route's action once its caller is resolved and its signature checked.
+#[allow(clippy::too_many_arguments)]
+async fn run_verified(
+    state: &AppState,
+    deployment: &Deployment,
+    table: &RouteTable,
+    name: &str,
+    http: &HttpBinding,
+    caller: &Caller,
+    query: Value,
+    body: &[u8],
+) -> Response {
     let input = if http.method == "POST" {
         if body.iter().all(u8::is_ascii_whitespace) {
             json!({})
@@ -947,6 +1000,10 @@ async fn run_route(
         }
     } else {
         query
+    };
+    let input = match &http.fields {
+        Some(fields) => super::provider::project(fields, &table.program.actions[name], &input),
+        None => input,
     };
     let action = &table.program.actions[name];
     let params = match resolve_bindings(action, &input, caller.actor_id()) {
@@ -1234,6 +1291,60 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
+    /// A provider's delivery on a live route: the fields map reads the nested
+    /// payload and ignores the rest, a replay answers 409, a changed byte 401,
+    /// and a delivery whose action fails is forgotten so its retry runs.
+    #[tokio::test]
+    async fn a_provider_delivery_runs_once_and_a_failed_one_can_be_retried() {
+        let root = std::env::temp_dir().join(format!("littlebox-provider-route-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        let state = test_state(&root);
+        let secret = "github-route-secret-0123";
+        secrets_call(&super::super::mcp::store(&state).unwrap(), "provider_route", None, "secret_set", &json!({"name": "github_webhook", "value": secret})).unwrap();
+        let actions = json!({"version": 1, "actions": {"issues.receive": {"kind": "mutation", "access": "anonymous",
+            "statement": "INSERT INTO issues (node_id, title) VALUES (?1, ?2)",
+            "bindings": [{"source": "input", "key": "id", "type": "string"}, {"source": "input", "key": "title", "type": "string"}],
+            "http": {"method": "POST", "path": "/hooks/github",
+                "signature": {"scheme": "hmac-body", "header": "X-Hub-Signature-256", "secret": "github_webhook", "algorithm": "sha256", "encoding": "hex", "prefix": "sha256="},
+                "fields": {"id": "$.issue.node_id", "title": "$.issue.title"}}}}});
+        let body = json!({
+            "project": {"id": "provider_route", "name": "Provider route", "slug": "provider-route", "manifest": {},
+                "files": {"actions.json": actions.to_string(), "schema.sql": "CREATE TABLE IF NOT EXISTS issues (node_id TEXT NOT NULL, title TEXT NOT NULL);"}},
+            "visibility": "public",
+            "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}
+        });
+        let request = Request::builder().header("x-littlebox-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
+        let deployed = deploy(State(state.clone()), request).await;
+        let status = deployed.status();
+        let text = axum::body::to_bytes(deployed.into_body(), 100_000).await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&text));
+        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        let sign = |payload: &str| format!("sha256={}", hex::encode(ring::hmac::sign(&ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes()), payload.as_bytes()).as_ref()));
+        let post = |payload: String, signature: String| {
+            let state = state.clone();
+            let host = deployment.hostname.clone();
+            async move {
+                let request = Request::builder().method("POST").uri("/hooks/github").header(header::HOST, host)
+                    .header("x-hub-signature-256", signature).body(Body::from(payload)).unwrap();
+                let response = post_route(State(state), request).await;
+                let status = response.status();
+                let bytes = axum::body::to_bytes(response.into_body(), 1_000_000).await.unwrap();
+                (status, String::from_utf8_lossy(&bytes).into_owned())
+            }
+        };
+        let event = r#"{"action":"opened","issue":{"node_id":"I_1","title":"Broken link","user":{"login":"ana"}},"repository":{"full_name":"acme/site"}}"#;
+        assert_eq!(post(event.into(), sign(event)).await, (StatusCode::OK, r#"{"result":{"changes":1,"lastInsertId":1}}"#.into()), "undeclared keys are left out");
+        assert_eq!(post(event.into(), sign(event)).await, (StatusCode::CONFLICT, r#"{"error":"replayed-signature"}"#.into()));
+        let tampered = event.replace("Broken link", "Fixed");
+        assert_eq!(post(tampered, sign(event)).await, (StatusCode::UNAUTHORIZED, r#"{"error":"invalid-signature"}"#.into()));
+        assert_eq!(post(event.into(), sign("{}")).await.0, StatusCode::UNAUTHORIZED, "another body's MAC");
+        let untitled = r#"{"action":"opened","issue":{"node_id":"I_2"}}"#;
+        let missing = (StatusCode::BAD_REQUEST, r#"{"error":"Missing action input: title"}"#.to_owned());
+        assert_eq!(post(untitled.into(), sign(untitled)).await, missing);
+        assert_eq!(post(untitled.into(), sign(untitled)).await, missing, "a failed delivery is not remembered, so its retry runs");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
     #[test]
     fn an_unset_secret_refuses_the_release() {
         let db = Connection::open_in_memory().unwrap();
@@ -1272,5 +1383,16 @@ mod tests {
         assert_eq!(reuse.unwrap_err().to_string(), SECRET_REUSED);
         secrets_call(&db, "project_c", None, "secret_set", &json!({"name": "hook", "value": "a-long-enough-secret"})).unwrap();
         secrets_call(&db, "project_a", None, "secret_set", &json!({"name": "second", "value": "a-long-enough-secret"})).unwrap();
+        // A svix secret is a base64 key, so a value that does not decode is refused at publish.
+        let svix = program(&json!({"emails.receive": {"kind": "mutation", "access": "anonymous",
+            "statement": "INSERT INTO orders (external_id) VALUES (?1)", "bindings": [{"source": "input", "key": "id", "type": "string"}],
+            "http": {"method": "POST", "path": "/hooks/email", "signature": {"scheme": "svix", "secret": "resend_webhook"}}}}));
+        secrets_call(&db, "project_a", None, "secret_set", &json!({"name": "resend_webhook", "value": "whsec_not*base64*at*all"})).unwrap();
+        assert_eq!(
+            require_secrets(&db, "project_a", &svix).unwrap_err().to_string(),
+            "Action emails.receive verifies svix signatures with the secret resend_webhook, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_."
+        );
+        secrets_call(&db, "project_a", None, "secret_set", &json!({"name": "resend_webhook", "value": "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"})).unwrap();
+        require_secrets(&db, "project_a", &svix).unwrap();
     }
 }

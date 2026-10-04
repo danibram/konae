@@ -173,11 +173,13 @@ Only an action declared anonymous may bind a route. A route has three kinds of c
 Without callers, a signed route takes the signature or a key, an unsigned route on a private app a key or a session, and an unsigned route on a public app anyone. A person whose session the route does not take must sign like any sender.
 An action whose route does not answer anyone answers only on that route: miniapp.actions.call refuses it. The app's own page calls such a route with fetch, which sends the session cookie.
 A signed route reads the declared header as t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256>. The MAC is keyed with the secret and covers t, the nonce, the method, the path, the canonical query string and the raw body, joined by newlines. The canonical query string is the pairs sorted by key, then value, written as application/x-www-form-urlencoded.
+A provider's scheme. hmac-body: the header carries the prefix, if declared, then the HMAC of the raw body with the declared algorithm, in hex or base64 (GitHub: X-Hub-Signature-256, sha256, hex, prefix sha256=; Shopify: X-Shopify-Hmac-Sha256, sha256, base64). timestamped: the header carries comma-separated fields, the timestamp after prefix and the hex HMAC-SHA256 of <t>.<body> after tag (Stripe: Stripe-Signature, t=, v1=, window 300). svix: svix-id, svix-timestamp and svix-signature, the base64 HMAC-SHA256 of <id>.<t>.<body> keyed with the base64 after whsec_ (Resend, Svix). A provider's delivery is accepted once; one whose action fails is forgotten, so the provider's retry runs.
+fields maps an input key to a JSON path into the POST body, such as { "id": "$.data.object.id" }. Each input fields does not name is read from the body's key of that name, and every other key of the body is left out, so a provider's payload needs no adapter. A path that is missing leaves its input out: a required one is refused as missing, a nullable one binds NULL.
 The owner sets the secret with the secret_set admin tool before publishing. It never appears in actions.json, the Build Artifact or an export.
 GET /_littlebox/files/<id>, the path miniapp.files.url returns, answers a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it. A visitor without a session on a private app gets 401 authentication-required before any file is looked up; every other caller who may not read the file gets 404 File not found, the same as for a missing or deleted one.
 The editor preview serves no routes. Run them on a Development Kernel with littlebox dev, or on a Deployment.
 
-Declared with "http" in actions.json: { "method": "GET" | "POST", "path": "/api/items", "signature"?: { "header": "X-Signature", "secret": "items_webhook" }, "callers"?: ["signature" | "key" | "session"] } on an action declared anonymous. GET binds a query and maps the query string onto its input bindings by type; POST binds a mutation and reads a JSON object body. callers names who may call the route; without it a signed route takes the signature or an API key, an unsigned route on a private Deployment an API key or a session, and an unsigned route on a public Deployment anyone. An action whose route does not answer anyone answers only on that route, never through miniapp.actions.call. The route answers { result } with the rows or { changes, lastInsertId }, and { error } with a status code. The Validation Gate and the Kernel refuse the same declarations with the same messages.
+Declared with "http" in actions.json: { "method": "GET" | "POST", "path": "/api/items", "signature"?: { "scheme"?: "littlebox" | "hmac-body" | "timestamped" | "svix", "header": "X-Signature", "secret": "items_webhook", ... }, "callers"?: ["signature" | "key" | "session"], "fields"?: { "<input key>": "$.data.object.id" } } on an action declared anonymous. GET binds a query and maps the query string onto its input bindings by type; POST binds a mutation and reads a JSON object body. A signature's scheme is littlebox by default; hmac-body, timestamped and svix verify a provider's own webhook, such as GitHub's, Shopify's, Stripe's or Resend's. fields reads each named input from a JSON path into the body, and with it the route leaves out body keys no input names. callers names who may call the route; without it a signed route takes the signature or an API key, an unsigned route on a private Deployment an API key or a session, and an unsigned route on a public Deployment anyone. An action whose route does not answer anyone answers only on that route, never through miniapp.actions.call. The route answers { result } with the rows or { changes, lastInsertId }, and { error } with a status code. The Validation Gate and the Kernel refuse the same declarations with the same messages.
 Refusals:
 - "Action <name> must bind GET for a query and POST for a mutation." when the method does not match the action's kind, or is neither GET nor POST
 - "Action <name> is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route." when the action's access is authenticated
@@ -187,18 +189,32 @@ Refusals:
 - "Action <name> has an invalid signature header." when the header is not 1 to 64 letters, digits and -, or is Authorization, Cookie, Host, Content-Type or Content-Length
 - "Action <name> names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter." when the secret is not a secret name
 - "Action <name> has an invalid http binding." when http is not an object, has another key, or its signature has a key other than header and secret
+- "Action <name> names an unknown signature scheme. Use "littlebox", "hmac-body", "timestamped" or "svix"." when the signature's scheme is another word, or not text
+- "Action <name> has an invalid <key> signature. It takes <names>." when the signature has a key its scheme does not take, such as a header on a svix signature or a window on an hmac-body one
+- "Action <name> binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body." when a query's route declares hmac-body, timestamped or svix
+- "Action <name> has an invalid signature algorithm. Use "sha256" or "sha1"." when an hmac-body signature names no algorithm or another one
+- "Action <name> has an invalid signature encoding. Use "hex" or "base64"." when an hmac-body signature names no encoding or another one
+- "Action <name> has an invalid signature prefix. Use 1 to 32 letters, digits, "=", "-", "_", "." or ":", such as "sha256="." when an hmac-body signature's prefix has another character or is longer
+- "Action <name> has an invalid timestamp prefix. Use the field's name and "=", such as "t="." when a timestamped signature has no prefix, or one that is not a name and =
+- "Action <name> has an invalid signature tag. Use the field's name and "=", such as "v1=", other than the timestamp's." when a timestamped signature has no tag, one that is not a name and =, or the timestamp's
+- "Action <name> has an invalid signature window. Use a whole number of seconds from 1 to 3600." when a timestamped signature has no window, or one that is not a whole number from 1 to 3600
+- "Action <name> binds GET, so it cannot declare fields. Fields read a POST body." when a query's route declares fields
+- "Action <name> has an invalid fields map. Map 1 to 32 input keys to JSON paths, such as "$.data.object.id"." when fields is not an object, is empty or has more than 32 keys
+- "Action <name> maps <key>, which is not one of its input bindings." when fields names a key that no input binding declares; the first such key in sorted order
+- "Action <name> maps <key> to an invalid JSON path. Use "$" and then ".name" or "[index]" steps, such as "$.data.object.id"." when a path is not text, lacks the $, is $ alone, has more than 16 steps or 200 characters, or a step that is not .name or [index]
 - "Action <name> has an invalid callers list. List one or more of "signature", "key" and "session", each once." when callers is not a list, is empty, repeats a caller or names another one
 - "Action <name> lists "signature" among its callers but declares no signature." when callers names signature and the binding has no signature
 - "Action <name> declares a signature, so its callers must include "signature"." when the binding has a signature and callers leaves it out
 - "Action <name> signs with the secret <name>, which is not set for this project. Set it with secret_set before publishing." when publishing, and the owner has not set the secret; the editor cannot see secrets, so only the Kernel refuses this
 - "Actions <names> sign with the secret <name>, which is not set for this project. Set it with secret_set before publishing." when publishing, and several actions sign with one secret the owner has not set
 - "Actions <names> sign with the secrets <names>, which are not set for this project. Set each with secret_set before publishing." when publishing, and more than one secret is unset; one refusal names every action and every secret
-- "invalid-signature" when a signed route gets no signature, a malformed one, or one whose MAC does not match (401)
-- "stale-timestamp" when a signature's t is more than 300 seconds from the Kernel's clock; checked before the MAC, so it says nothing about the secret (401)
+- "Action <name> verifies svix signatures with the secret <key>, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_." when publishing a svix route whose secret's value is not whsec_ and base64; the editor cannot see secrets, so only the Kernel refuses this
+- "invalid-signature" when a signed route gets no signature, a malformed one, one without its declared prefix, or one whose MAC does not match (401)
+- "stale-timestamp" when a signature's t is more than 300 seconds from the Kernel's clock, or a timestamped one's outside its window; checked before the MAC, so it says nothing about the secret (401)
 - "authentication-required" when a route that takes an API key or a session, and no signature, gets neither (401)
 - "This route does not accept API keys." when the route's callers leave out key and the request carries one (403)
 - "An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session." when a request to the runtime endpoint carries an API key (403)
-- "replayed-signature" when the same signature arrives a second time; a retry signs again with a new nonce (409)
+- "replayed-signature" when the same signature arrives a second time, or a svix id again within 72 hours; a retry signs again with a new nonce, and a provider's delivery whose action failed is not remembered (409)
 - "invalid-api-key" when Authorization carries an lbk_ key that is unknown or revoked (401)
 - "This API key may not call <name>." when the key does not name the route's action (403)
 - "No route accepts POST on this path." when a POST reaches a path no action binds (405)
@@ -210,6 +226,8 @@ Refusals:
 Limits:
 - a POST body of 64 KiB
 - a signature's t within 300 seconds of the Kernel's clock, a nonce of 1 to 64 letters, digits, - and _, and each signature accepted once
+- a provider's scheme: an hmac-body MAC accepted once in 72 hours, a timestamped t within its window of 1 to 3600 seconds, a svix timestamp within 300 seconds and its id accepted once in 72 hours, and at most 4 signature values in a header
+- fields: 1 to 32 inputs, each path $ and 1 to 16 .name or [index] steps, up to 200 characters
 - the runtime endpoint's action rate limits: 30 per 10 seconds per client address without a key or session, 120 per 10 seconds per user or key
 - 50 live API keys per Deployment
 

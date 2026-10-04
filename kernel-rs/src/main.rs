@@ -43,6 +43,7 @@ mod mcp;
 mod migration;
 mod oauth;
 mod package;
+mod provider;
 mod recovery;
 mod security;
 mod sql_rules;

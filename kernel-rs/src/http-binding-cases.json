@@ -361,7 +361,7 @@
     }
    }
   },
-  "error": "Action orders.receive has an invalid http binding."
+  "error": "Action orders.receive has an invalid littlebox signature. It takes \"scheme\", \"header\" and \"secret\"."
  },
  {
   "case": "a signature header the Kernel reads itself",
@@ -639,5 +639,1501 @@
    }
   },
   "error": "Action orders.receive declares a signature, so its callers must include \"signature\"."
+ },
+ {
+  "case": "a GitHub-style signature with fields into a nested body",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     },
+     "fields": {
+      "id": "$.issue.node_id",
+      "title": "$.issue.title"
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a Shopify-style signature in base64 with no prefix",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Shopify-Hmac-Sha256",
+      "secret": "shop_webhook",
+      "algorithm": "sha256",
+      "encoding": "base64"
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a Stripe-style timestamped signature with fields",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "timestamped",
+      "header": "Stripe-Signature",
+      "secret": "payments_webhook",
+      "prefix": "t=",
+      "tag": "v1=",
+      "window": 300
+     },
+     "fields": {
+      "id": "$.id",
+      "title": "$.data.object.failure_message"
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a svix signature names no header",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "svix",
+      "secret": "resend_webhook"
+     },
+     "fields": {
+      "id": "$.data.email_id",
+      "title": "$.type"
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "the littlebox scheme named explicitly",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "littlebox",
+      "header": "X-Signature",
+      "secret": "orders_webhook"
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a window written as 300.0 is the integer 300",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "timestamped",
+      "header": "Stripe-Signature",
+      "secret": "payments_webhook",
+      "prefix": "t=",
+      "tag": "v1=",
+      "window": 300.0
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "fields on a route a key calls, with no signature",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "fields": {
+      "id": "$.order.id",
+      "title": "$.order.lines[0].title"
+     },
+     "callers": [
+      "key"
+     ]
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "an unknown signature scheme",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "github",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive names an unknown signature scheme. Use \"littlebox\", \"hmac-body\", \"timestamped\" or \"svix\"."
+ },
+ {
+  "case": "a scheme that is not a string",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": 1,
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive names an unknown signature scheme. Use \"littlebox\", \"hmac-body\", \"timestamped\" or \"svix\"."
+ },
+ {
+  "case": "an hmac-body signature with no header",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid signature header."
+ },
+ {
+  "case": "a timestamped signature with no header",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "timestamped",
+      "secret": "payments_webhook",
+      "prefix": "t=",
+      "tag": "v1=",
+      "window": 300
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid signature header."
+ },
+ {
+  "case": "a timestamped signature that reads Authorization",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "timestamped",
+      "header": "Authorization",
+      "secret": "payments_webhook",
+      "prefix": "t=",
+      "tag": "v1=",
+      "window": 300
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid signature header."
+ },
+ {
+  "case": "an hmac-body signature with a window",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256=",
+      "window": 300
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid hmac-body signature. It takes \"scheme\", \"header\", \"secret\", \"algorithm\", \"encoding\" and \"prefix\"."
+ },
+ {
+  "case": "a timestamped signature with an algorithm",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "timestamped",
+      "header": "Stripe-Signature",
+      "secret": "payments_webhook",
+      "prefix": "t=",
+      "tag": "v1=",
+      "window": 300,
+      "algorithm": "sha256"
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid timestamped signature. It takes \"scheme\", \"header\", \"secret\", \"prefix\", \"tag\" and \"window\"."
+ },
+ {
+  "case": "a svix signature with a header",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "svix",
+      "secret": "resend_webhook",
+      "header": "svix-signature"
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid svix signature. It takes \"scheme\" and \"secret\"."
+ },
+ {
+  "case": "a provider scheme on a GET route",
+  "actions": {
+   "hooks.receive": {
+    "kind": "query",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "GET",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     }
+    },
+    "statement": "SELECT id FROM orders WHERE external_id = ?1 AND note = ?2 AND created_at < ?3 LIMIT 10"
+   }
+  },
+  "error": "Action hooks.receive binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body."
+ },
+ {
+  "case": "an hmac-body signature with an unknown algorithm",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "md5",
+      "encoding": "hex",
+      "prefix": "sha256="
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid signature algorithm. Use \"sha256\" or \"sha1\"."
+ },
+ {
+  "case": "an hmac-body signature with no encoding",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "prefix": "sha256="
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid signature encoding. Use \"hex\" or \"base64\"."
+ },
+ {
+  "case": "an hmac-body prefix with a space",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha 256="
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid signature prefix. Use 1 to 32 letters, digits, \"=\", \"-\", \"_\", \".\" or \":\", such as \"sha256=\"."
+ },
+ {
+  "case": "an hmac-body secret that is not a secret name",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "GitHub",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter."
+ },
+ {
+  "case": "a timestamp prefix with no =",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "timestamped",
+      "header": "Stripe-Signature",
+      "secret": "payments_webhook",
+      "prefix": "t",
+      "tag": "v1=",
+      "window": 300
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid timestamp prefix. Use the field's name and \"=\", such as \"t=\"."
+ },
+ {
+  "case": "a signature tag equal to the timestamp prefix",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "timestamped",
+      "header": "Stripe-Signature",
+      "secret": "payments_webhook",
+      "prefix": "t=",
+      "tag": "t=",
+      "window": 300
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid signature tag. Use the field's name and \"=\", such as \"v1=\", other than the timestamp's."
+ },
+ {
+  "case": "a timestamped signature with no window",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "timestamped",
+      "header": "Stripe-Signature",
+      "secret": "payments_webhook",
+      "prefix": "t=",
+      "tag": "v1="
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid signature window. Use a whole number of seconds from 1 to 3600."
+ },
+ {
+  "case": "a window of two hours",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "timestamped",
+      "header": "Stripe-Signature",
+      "secret": "payments_webhook",
+      "prefix": "t=",
+      "tag": "v1=",
+      "window": 7200
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid signature window. Use a whole number of seconds from 1 to 3600."
+ },
+ {
+  "case": "a window written as text",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "timestamped",
+      "header": "Stripe-Signature",
+      "secret": "payments_webhook",
+      "prefix": "t=",
+      "tag": "v1=",
+      "window": "300"
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid signature window. Use a whole number of seconds from 1 to 3600."
+ },
+ {
+  "case": "a window with a fraction",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "timestamped",
+      "header": "Stripe-Signature",
+      "secret": "payments_webhook",
+      "prefix": "t=",
+      "tag": "v1=",
+      "window": 300.5
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid signature window. Use a whole number of seconds from 1 to 3600."
+ },
+ {
+  "case": "fields on a GET route",
+  "actions": {
+   "hooks.receive": {
+    "kind": "query",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "GET",
+     "path": "/hooks/provider",
+     "fields": {
+      "id": "$.id"
+     }
+    },
+    "statement": "SELECT id FROM orders WHERE external_id = ?1 AND note = ?2 AND created_at < ?3 LIMIT 10"
+   }
+  },
+  "error": "Action hooks.receive binds GET, so it cannot declare fields. Fields read a POST body."
+ },
+ {
+  "case": "an empty fields map",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     },
+     "fields": {}
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid fields map. Map 1 to 32 input keys to JSON paths, such as \"$.data.object.id\"."
+ },
+ {
+  "case": "fields as a list",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     },
+     "fields": [
+      "$.id"
+     ]
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive has an invalid fields map. Map 1 to 32 input keys to JSON paths, such as \"$.data.object.id\"."
+ },
+ {
+  "case": "a path for an input the action does not bind",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     },
+     "fields": {
+      "id": "$.id",
+      "amount": "$.data.object.amount"
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive maps amount, which is not one of its input bindings."
+ },
+ {
+  "case": "a path for a binding that is not an input",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     },
+     "fields": {
+      "now": "$.created"
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive maps now, which is not one of its input bindings."
+ },
+ {
+  "case": "a path without $",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     },
+     "fields": {
+      "id": "data.object.id"
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive maps id to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\"."
+ },
+ {
+  "case": "a path that is the whole body",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     },
+     "fields": {
+      "id": "$"
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive maps id to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\"."
+ },
+ {
+  "case": "a path with a quoted step",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     },
+     "fields": {
+      "title": "$['issue'].title"
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive maps title to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\"."
+ },
+ {
+  "case": "a path that is not text",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     },
+     "fields": {
+      "id": 5
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive maps id to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\"."
+ },
+ {
+  "case": "two bad paths name the first in sorted order",
+  "actions": {
+   "hooks.receive": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/hooks/provider",
+     "signature": {
+      "scheme": "hmac-body",
+      "header": "X-Hub-Signature-256",
+      "secret": "github_webhook",
+      "algorithm": "sha256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     },
+     "fields": {
+      "title": "bad",
+      "id": "also bad"
+     }
+    },
+    "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
+   }
+  },
+  "error": "Action hooks.receive maps id to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\"."
  }
 ]
