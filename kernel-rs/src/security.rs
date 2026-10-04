@@ -11,7 +11,8 @@
 //!   scripts from other origins stay blocked.
 //! - Every host gets `frame-ancestors 'none'` and `X-Frame-Options: DENY`, so
 //!   an app cannot frame the editor, another app or itself in another origin.
-//! - Every host gets HSTS when the installation is served over HTTPS.
+//! - Every host gets HSTS when the installation is served over HTTPS, and a
+//!   custom domain gets it without `includeSubDomains`.
 
 use super::*;
 use axum::middleware::Next;
@@ -70,11 +71,23 @@ pub(super) const PLATFORM_POLICY: &str = "default-src 'none'; frame-ancestors 'n
 /// first visit. There is no `preload`, which is the operator's decision.
 pub(super) const HSTS: &str = "max-age=31536000; includeSubDomains";
 
+/// The HSTS value on a custom domain. The owner's other names under it are
+/// not the installation's to put on HTTPS, so it has no `includeSubDomains`.
+pub(super) const HSTS_ALIAS: &str = "max-age=31536000";
+
 /// Whether the installation is served over HTTPS, by the same rule that picks
 /// the `__Host-` cookie names.
 pub(super) fn https(state: &AppState) -> bool {
     state.public_origin.starts_with("https://")
         || std::env::var("LITTLEBOX_MCP_ORIGIN").is_ok_and(|origin| origin.starts_with("https://"))
+}
+
+/// The HSTS value for a request, or none over plain HTTP.
+pub(super) fn hsts(state: &AppState, headers: &HeaderMap) -> Option<&'static str> {
+    if !https(state) {
+        return None;
+    }
+    Some(if super::domain::is_alias_request(state, headers) { HSTS_ALIAS } else { HSTS })
 }
 
 /// The CSP hash source of every inline `<script>` in an HTML document.
@@ -157,7 +170,7 @@ pub(super) async fn from_app_origin(state: &AppState, headers: &HeaderMap) -> bo
     let Some(host) = url::Url::parse(origin).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase)) else {
         return false;
     };
-    if state.deployments.read().await.contains_key(&host) {
+    if state.deployments.read().await.contains_key(&host) || super::domain::claimed(state, &host) {
         return true;
     }
     let configured = |value: &str| url::Url::parse(value).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase));
@@ -177,6 +190,7 @@ pub(super) async fn from_app_origin(state: &AppState, headers: &HeaderMap) -> bo
 /// Adds the isolation headers to every response.
 pub(super) async fn headers(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let app = deployment_for(&state, request.headers()).await.is_some();
+    let hsts = hsts(&state, request.headers());
     let response = next.run(request).await;
     let (mut parts, body) = response.into_parts();
     let html = parts
@@ -201,8 +215,8 @@ pub(super) async fn headers(State(state): State<AppState>, request: Request, nex
     };
     parts.headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     parts.headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    if https(&state) {
-        parts.headers.insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static(HSTS));
+    if let Some(hsts) = hsts {
+        parts.headers.insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static(hsts));
     }
     Response::from_parts(parts, body)
 }

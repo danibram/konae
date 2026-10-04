@@ -420,7 +420,7 @@ async fn run(state: &AppState, deployment: &Deployment, inviter: &str, name: &st
             // The rows that record the invitations are committed before any
             // message leaves, so a retry with the same key finds them. Each
             // message then goes through the account mail outbox and its budgets.
-            let page = format!("{}/_littlebox/invitation", deployment.url);
+            let page = format!("{}/_littlebox/invitation", super::domain::app_url(state, deployment));
             let invited_by = inviter_display(state, &inviter);
             let mut outcomes: HashMap<String, &'static str> = HashMap::new();
             for (invitation, challenge) in issued {

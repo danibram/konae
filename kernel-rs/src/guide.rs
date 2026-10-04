@@ -59,7 +59,8 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "cli": "bun run littlebox -- publish --dir <folder> runs these steps with the credential from login and sends project.manifest.signupPolicy from littlebox.json as initialSignupPolicy on the first release.",
             "concurrency": "An obsolete plan is rejected. Repeating an applied plan returns the same receipt.",
             "access": "A first release may add initialSignupPolicy {mode, allowlist} with mode open, invitation, closed or allowlist; the Kernel installs it before the app serves. When the owner's request leaves access open for an app with accounts, propose visibility private and mode invitation. Later changes need manage_users and signup_policy_set. Invite people with app_invitations_create only when the owner asks, because it sends email.",
-            "import": "A first release may also carry initialPackage to start the Deployment with an exported app's data; the portability topic has the steps."
+            "import": "A first release may also carry initialPackage to start the Deployment with an exported app's data; the portability topic has the steps.",
+            "domain": "domain_set { deploymentId, hostname } adds a custom domain next to the generated hostname and needs publish. Its first answer names a TXT record, _littlebox.<hostname>, and the token it must hold. Once the record is at the DNS provider and the hostname points at the installation's proxy, which terminates TLS and forwards Host unchanged, call domain_set again: the Kernel looks the record up and the alias serves. domain_read shows the state and domain_clear removes it. bun run littlebox -- domain runs the same steps."
         }),
         "users" => json!({
             "permission": "manage_users, which login adds with --manage-users. signup_policy_read needs only read.",

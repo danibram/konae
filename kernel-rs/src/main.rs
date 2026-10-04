@@ -31,6 +31,7 @@ mod artifact;
 mod auth;
 mod clerk;
 mod copies;
+mod domain;
 mod eject;
 mod files;
 mod guard;
@@ -2877,7 +2878,13 @@ async fn deployment_for(state: &AppState, headers: &HeaderMap) -> Option<Deploym
         .ok()?
         .split(':')
         .next()?;
-    state.deployments.read().await.get(host).cloned()
+    let deployments = state.deployments.read().await;
+    if let Some(deployment) = deployments.get(host) {
+        return Some(deployment.clone());
+    }
+    // A verified custom domain answers as the Deployment's own host.
+    let id = domain::serving(state, host)?;
+    deployments.values().find(|deployment| deployment.id == id).cloned()
 }
 
 fn is_private(deployment: &Deployment) -> bool {

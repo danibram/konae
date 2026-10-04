@@ -238,7 +238,7 @@ fn app_delivery(state: &AppState, deployment: &Deployment, email: &str, client: 
         creator: Some(project_creator(state, &deployment.project_id).unwrap_or_else(|| "operator".into())),
         app_name: deployment.project_name.clone(),
         inviter: None,
-        page: format!("{}/_littlebox/account", deployment.url),
+        page: format!("{}/_littlebox/account", super::domain::app_url(state, deployment)),
     }
 }
 

@@ -1,0 +1,21 @@
+import { describe, expect, test } from "bun:test";
+import cases from "../../kernel-rs/src/domain-cases.json";
+import { checkHostname, domainRecordName } from "./domain-name";
+
+// The Kernel runs the same file in kernel-rs/src/domain.rs.
+describe("custom domain hostnames", () => {
+  const rules = { suffix: cases.context.suffix, installationHosts: cases.context.installationHosts };
+  test("the case file covers every rule", () => {
+    expect(cases.cases.length).toBeGreaterThanOrEqual(20);
+  });
+  for (const item of cases.cases) {
+    test(item.case, () => {
+      const outcome = checkHostname(item.hostname, rules);
+      if (item.error === null) expect(outcome).toEqual({ ok: true, hostname: item.hostnameOut! });
+      else expect(outcome).toEqual({ ok: false, message: item.error });
+    });
+  }
+  test("the proof lives under _littlebox", () => {
+    expect(domainRecordName("notes.example.org")).toBe("_littlebox.notes.example.org");
+  });
+});

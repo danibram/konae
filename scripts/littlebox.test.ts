@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { HELP, ignoreInGit, loginScopes, manifestSignupPolicy, publishLocal, signupPolicyWarning } from "./littlebox";
+import { HELP, domainLocal, ignoreInGit, loginScopes, manifestSignupPolicy, publishLocal, signupPolicyWarning } from "./littlebox";
 
 /** A stand-in Kernel MCP endpoint that records tool calls and can fail chosen ones. */
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
@@ -104,10 +104,40 @@ describe("littlebox CLI", () => {
   });
 
   test("help names every command and every login flag, and an unknown command prints it", async () => {
-    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "eject", "--manage-users", "--export-data", "--manage-lifecycle", "--with-data", "--project", "--revision", "--secret", "--key", "--inputs"]) expect(HELP).toContain(word);
+    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "eject", "--manage-users", "--export-data", "--manage-lifecycle", "--with-data", "--project", "--revision", "--secret", "--key", "--inputs", "domain", "--deployment", "--set", "--clear"]) expect(HELP).toContain(word);
     const run = cli("deploy");
     expect(await run.exited).toBe(1);
     expect(await new Response(run.stderr).text()).toContain("Unknown command deploy.\n\nUsage: bun run littlebox --");
+  });
+
+  test("domain checks the hostname by the Kernel's rules before domain_set and prints the TXT record", async () => {
+    const calls: string[] = [];
+    const rules = { suffix: "apps.example.com", installationHosts: ["littlebox.example.com"] };
+    let state: Record<string, unknown> = { hostname: null, status: "none", generatedUrl: "https://notes-1a2b3c.apps.example.com", rules };
+    const client = {
+      async call<T>(name: string, input: Record<string, unknown>): Promise<T> {
+        calls.push(`${name} ${input.hostname ?? ""}`.trim());
+        if (name === "domain_set") {
+          state = { ...state, hostname: input.hostname, status: calls.filter((call) => call.startsWith("domain_set")).length > 1 ? "active" : "pending",
+            url: `https://${input.hostname}`, dns: "No TXT record at _littlebox.notes.example.org yet.",
+            record: { type: "TXT", name: `_littlebox.${input.hostname}`, value: "littlebox-verify-abc" } };
+        }
+        if (name === "domain_clear") return { cleared: state.hostname, generatedUrl: state.generatedUrl } as T;
+        return state as T;
+      },
+    };
+    await expect(domainLocal(client, "d1", { set: "shop.apps.example.com" })).rejects.toThrow(
+      "shop.apps.example.com is under this installation's app suffix apps.example.com, where Littlebox names apps itself. Name a hostname outside it.");
+    expect(calls).toEqual(["domain_read"]);
+    expect(await domainLocal(client, "d1", { set: "Notes.Example.org" })).toEqual([
+      "notes.example.org does not serve yet. No TXT record at _littlebox.notes.example.org yet.",
+      'Add this record at your DNS provider: TXT _littlebox.notes.example.org "littlebox-verify-abc"',
+      "Point notes.example.org at this installation's proxy, then run this command again with --set notes.example.org.",
+    ]);
+    expect(await domainLocal(client, "d1", { set: "notes.example.org" })).toEqual([
+      "https://notes.example.org serves this app, next to https://notes-1a2b3c.apps.example.com. Your proxy must terminate TLS for notes.example.org and forward Host unchanged.",
+    ]);
+    expect(await domainLocal(client, "d1", { clear: true })).toEqual(["notes.example.org no longer serves this app. https://notes-1a2b3c.apps.example.com keeps answering."]);
   });
 
   test("a trailing --dir with no value is an error, not the current directory", async () => {
