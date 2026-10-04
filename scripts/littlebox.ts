@@ -162,7 +162,8 @@ async function readCapsuleFile(root: string, relative: string): Promise<string |
 }
 
 async function bundleModule(root: string, entry: string) {
-  const result = await build({ entryPoints: [path.join(root, entry)], bundle: true, write: false, platform: "browser", format: "esm", target: "es2022", outdir: "out" });
+  // absWorkingDir names each bundled module by its Capsule path, which the build then drops.
+  const result = await build({ entryPoints: [path.join(root, entry)], absWorkingDir: path.resolve(root), bundle: true, write: false, platform: "browser", format: "esm", target: "es2022", outdir: "out" });
   const script = result.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
   if (script === undefined) throw Error("The local builder produced no JavaScript.");
   return { script, styles: result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? "" };

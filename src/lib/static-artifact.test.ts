@@ -6,7 +6,7 @@ import path from "node:path";
 import { buildLocal } from "../../scripts/littlebox";
 import { createDefaultManifest, normalizeManifest } from "../deployments/manifest";
 import type { MiniAppProject } from "./types";
-import { assembleStaticArtifact, checkRouting, isDocument, resolveReference, routingMessage, runtimeFile, servedPath } from "./static-artifact.js";
+import { assembleStaticArtifact, checkRouting, isDocument, resolveReference, routingMessage, runtimeFile, servedPath, stripModulePaths } from "./static-artifact.js";
 
 // esbuild-wasm starts only in a browser. The editor's build runs here on native
 // esbuild with the editor's own plugin, which resolves every import from the
@@ -107,6 +107,16 @@ describe("the artifact", () => {
   });
 });
 
+describe("module path comments", () => {
+  test("drops a line that names a Capsule file, from either builder, and keeps every other comment", () => {
+    const held = new Set(["app.js", "lib/a.js", "lib/b.css"]);
+    expect(stripModulePaths("// lib/a.js\nvar a = 1;\n\n// littlebox:app.js\nconsole.log(a);\n", held)).toBe("var a = 1;\n\nconsole.log(a);\n");
+    expect(stripModulePaths("/* lib/b.css */\np { margin: 0 }\n", held)).toBe("p { margin: 0 }\n");
+    const kept = "// ../../tmp/other.js\n// see app.js\n/*! license */\nx();\n";
+    expect(stripModulePaths(kept, held)).toBe(kept);
+  });
+});
+
 describe("refusals", () => {
   const refused = (files: Record<string, string>, message: string) => expect(assemble(files)).rejects.toThrow(message);
 
@@ -186,12 +196,40 @@ describe("the CLI and the editor build the same artifact", () => {
       const editor = await buildProjectInBrowser(project(capsule));
       expect(Object.keys(cli.files).sort()).toEqual(["about.html", "app.js", "guide/install.html", "index.html", "robots.txt", "runtime.js", "styles.css"]);
       expect(Object.keys(editor.files).sort()).toEqual(Object.keys(cli.files).sort());
-      for (const file of ["index.html", "about.html", "guide/install.html", "robots.txt", "styles.css", "runtime.js"]) {
+      for (const file of ["index.html", "about.html", "guide/install.html", "robots.txt", "styles.css", "runtime.js", "app.js"]) {
         expect(editor.files[file]).toBe(cli.files[file]);
       }
       expect(cli.files["index.html"]).toContain('<head><script src="/runtime.js"></script>');
       expect(cli.files["app.js"]).toContain("document.title = greeting");
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  test("the same Capsule built from two folders gives byte-identical files, with no folder named", async () => {
+    const modular = {
+      "index.html": "<main id=app></main>",
+      "styles.css": "body { color: #222 }",
+      "app.js": 'import { greet } from "./lib/greet.js";\nimport "./lib/card.css";\n//! Kept: a legal comment.\ndocument.title = greet("Ana");\n',
+      "lib/greet.js": "export const greet = (name) => `Hello, ${name}`;\n",
+      "lib/card.css": ".card { padding: 4px }\n",
+    };
+    const first = await onDisk(modular);
+    const second = await onDisk(modular);
+    try {
+      const one = JSON.stringify((await buildLocal(first)).artifact);
+      const two = JSON.stringify((await buildLocal(second)).artifact);
+      expect(one).toBe(two);
+      expect(one).not.toContain(path.basename(first));
+      expect(one).not.toContain(path.basename(second));
+      for (const comment of ["// app.js", "// lib/greet.js", "/* lib/card.css */"]) expect(one).not.toContain(comment);
+      expect(one).toContain("Kept: a legal comment.");
+      expect(one).toContain(".card {");
+      // The editor names modules with its own namespace; its page carries the same script and styles.
+      const editor = await buildProjectInBrowser(project(modular));
+      expect(editor.files["index.html"]).toBe(JSON.parse(one).files["index.html"]);
+    } finally {
+      await rm(first, { recursive: true, force: true });
+      await rm(second, { recursive: true, force: true });
+    }
   });
 
   test("both refuse a missing reference with the same words", async () => {

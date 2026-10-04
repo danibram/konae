@@ -26,6 +26,7 @@ export function assembleStaticArtifact(input: {
   head?: string;
   routing?: unknown;
 }): Promise<StaticArtifact>;
+export function stripModulePaths(code: string, held: Set<string>): string;
 export function resolveReference(raw: string, from: string): string | null;
 export function scanHtml(html: string, from: string, reference: (raw: string, from: string, kind: "asset" | "module") => void): void;
 export function scanCss(css: string, from: string, reference: (raw: string, from: string, kind: "asset" | "module") => void): void;

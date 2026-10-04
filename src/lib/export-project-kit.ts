@@ -121,6 +121,7 @@ console.log('Built littlebox/artifact.json');
 async function bundle(entry) {
   const result = await build({
     entryPoints: [path.join(app, entry)],
+    absWorkingDir: app,
     bundle: true,
     write: false,
     format: 'esm',
