@@ -42,7 +42,7 @@ PASS Public and staff views. A visitor and GET /api/availability get only { room
 PASS Double booking under concurrency. 20 rounds of two overlapping bookings sent together: one wins with 2 rows, the other is refused with the guard (2/0, 0/2, 0 standing for the guard). Ten requests for one hour: 0,0,1,0,0,0,0,0,0,0. Owner SQL counts 1 holder.
 PASS Signals. 62 bookings.create calls: 25 bookings made and 25 booking.created Signals, each naming the booker as actor. One booking.cancelled names the canceller. Usage counts the 37 guard refusals under refused.
 PASS Check-in route. POST /api/checkin refuses an unsigned body (401 invalid-signature) and a stale t (401 stale-timestamp), and accepts a signature or the panel's API key. A second check-in for the same hour and one for an hour nobody booked get 403 with the guard. [...] The runtime endpoint refuses the key with 403 [...]. A visitor and a staff member calling panel.checkin through actions_invoke get "Action panel.checkin answers only on its HTTP route, POST /api/checkin.".
-PASS Action Contract. [...] conform --token --secret: "76 passed, 0 failed, 0 skipped.". conform --token --key: "75 passed, 0 failed, 0 skipped.". conform --key alone: "27 passed, 0 failed, 14 skipped, 1 rate-limit waits.".
+PASS Action Contract. [...] conform --token --secret: "77 passed, 0 failed, 0 skipped.". conform --token --key: "76 passed, 0 failed, 0 skipped.". conform --key alone: "28 passed, 0 failed, 14 skipped, 1 rate-limit waits.".
 PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no policy violation or page error; staff book two hours from the grid, and an offline day change shows a sentence instead of an unhandled error.
 ```
 
@@ -129,7 +129,7 @@ Messages are quoted exactly as the replay received them. "Gate" is the editor's 
 | "Not in the past" in the office's time | Kernel | The `now` binding is UTC milliseconds; there is no time zone | Changed on 2026-11-07. The check compared with the UTC date, so in the evening west of UTC it refused the person's own today: at 21:00 in New York the UTC date is already tomorrow. It now accepts the UTC day before today, and the replay books it. The cost is the other side: east of UTC, just after midnight, yesterday is still accepted for a few hours. The page offers no past day and sends the browser's local date for its own lists |
 | The booker's name | Kernel | The `actor` binding has only `id` | The app keeps a `staff` table of display names each person sets for themselves. A name is not verified |
 | Typed columns in the Action Contract | `contract` | No warning and no `unnamed` entry, but 7 columns typed `unknown` | `bookings.day.booked_by`, `bookings.day.mine`, `bookings.mine.start`, `bookings.recent.start`, `bookings.recent.booked_by`, `bookings.recent.created_at`, `bookings.recent.cancelled_at`. Every expression column is aliased, so all are named; their types come from `coalesce`, `min`, `max` and a comparison, which the contract does not infer |
-| `conform` with an API key alone | `conform` | `27 passed, 0 failed, 14 skipped` | Authenticated actions need `--token`. With both `--token` and `--key`, the key is sent only to a signed route whose secret was not given |
+| `conform` with an API key alone | `conform` | `28 passed, 0 failed, 14 skipped` | Authenticated actions need `--token`. With both `--token` and `--key`, the key is sent only to a signed route whose secret was not given |
 
 ## Action Contract and conform
 
@@ -137,9 +137,9 @@ Messages are quoted exactly as the replay received them. "Gate" is the editor's 
 
 | Run | Result |
 | --- | --- |
-| `--token <session> --secret panel_hook=<secret>` | 76 passed, 0 failed, 0 skipped |
-| `--token <session> --key <panel key>` | 75 passed, 0 failed, 0 skipped |
-| `--key <panel key>` alone | 27 passed, 0 failed, 14 skipped |
+| `--token <session> --secret panel_hook=<secret>` | 77 passed, 0 failed, 0 skipped |
+| `--token <session> --key <panel key>` | 76 passed, 0 failed, 0 skipped |
+| `--key <panel key>` alone | 28 passed, 0 failed, 14 skipped |
 
 The counts fell on 2026-11-06 because `panel.checkin` answers only on its route, so its inputs are probed there and not on the runtime endpoint. The runs with a key gained one check on 2026-11-07, when `panel.checkin` declared its guard and `conform` probed it on the route.
 
