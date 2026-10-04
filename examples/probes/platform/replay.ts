@@ -38,9 +38,9 @@ await probe("platform", 23050, async (kit) => {
     "a schedule on a mutation": (actions) => { actions["notes.add"].schedule = "0 8 * * *"; },
     "a subscription on a query": (actions) => { actions["notes.due"].subscribe = true; },
   };
-  // Today's answers. The first pair is the same refusal in two wordings; the other two pass both doors and do nothing.
+  // Today's answers. The first pair is one refusal with the same words at both doors (since 2026-11-07); the other two pass both doors and do nothing.
   const expected: Record<string, [string, string]> = {
-    "an action of kind email": ["Invalid server action: notes.mail", "Action notes.mail has an unsupported kind."],
+    "an action of kind email": ['Action notes.mail has an invalid kind. Use "query", "mutation" or "signal".', 'Action notes.mail has an invalid kind. Use "query", "mutation" or "signal".'],
     "a schedule on a mutation": ["passes", "passes"],
     "a subscription on a query": ["passes", "passes"],
   };
