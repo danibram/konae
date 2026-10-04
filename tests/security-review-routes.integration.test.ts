@@ -16,6 +16,14 @@ afterAll(async () => { await lab?.stop(); });
 const day = () => new Date().toISOString().slice(0, 10);
 const checkin = (body: string, headers: Record<string, string> = {}, route = "/api/checkin") =>
   hostFetch(lab, lab.apps.booking.hostname, route, { method: "POST", headers: { "content-type": "application/json", ...headers }, body });
+/**
+ * A request whose signature verified: no booking holds room "none", so the
+ * action's guard answers, which only happens after the signature passed.
+ */
+async function expectAccepted(response: Promise<Response>) {
+  expect(await answerOf(await response)).toEqual({ status: 403, body: { error: "No booking holds this room at this hour, or it is already checked in." } });
+}
+const answerOf = async (response: Response) => ({ status: response.status, body: await response.json() });
 const panelSign = (body: string, extra: { path?: string; query?: string; at?: number; nonce?: string } = {}) =>
   signRoute(lab.secrets.panel_hook, { method: "POST", path: extra.path ?? "/api/checkin", query: extra.query, body }, extra.at, extra.nonce);
 
@@ -31,7 +39,7 @@ describe("route signatures", () => {
     // The signed path is the route's own, so a signature for another path fails on this one.
     const forOther = await panelSign(body, { path: "/api/other" });
     expect(await (await checkin(body, { "x-panel-signature": forOther })).json()).toEqual({ error: "invalid-signature" });
-    expect((await checkin(body, { "x-panel-signature": signature })).status).toBe(200);
+    await expectAccepted(checkin(body, { "x-panel-signature": signature }));
   });
 
   test("the MAC covers the raw bytes: re-encoded JSON, duplicate keys and a method override header are refused", async () => {
@@ -48,7 +56,7 @@ describe("route signatures", () => {
     // No method override is read: a GET with X-HTTP-Method-Override is a GET, which the POST route does not answer.
     const overridden = await hostFetch(lab, lab.apps.booking.hostname, "/api/checkin", { headers: { "x-http-method-override": "POST", "x-panel-signature": signature } });
     expect(overridden.status).not.toBe(200);
-    expect((await checkin(body, { "x-panel-signature": signature })).status).toBe(200);
+    await expectAccepted(checkin(body, { "x-panel-signature": signature }));
   });
 
   test("a chunked body is verified over the bytes the Kernel received", async () => {
@@ -62,7 +70,7 @@ describe("route signatures", () => {
       method: "POST", body: chunked(text), headers: { host: lab.apps.booking.hostname, "x-forwarded-for": freshClient(), "content-type": "application/json", "x-panel-signature": signature },
     });
     expect((await send(body.replace("none", "nonf"))).status).toBe(401);
-    expect((await send(body)).status).toBe(200);
+    await expectAccepted(send(body));
   });
 
   test("a header with thousands of v1 values costs no MAC each, and three 32-byte values are refused", async () => {
@@ -70,14 +78,14 @@ describe("route signatures", () => {
     const signature = await panelSign(body);
     const crowded = signature.replace("v1=", `${"v1=,v1=00,".repeat(3000)}v1=`);
     const started = performance.now();
-    expect((await checkin(body, { "x-panel-signature": crowded })).status).toBe(200);
+    await expectAccepted(checkin(body, { "x-panel-signature": crowded }));
     expect(performance.now() - started).toBeLessThan(2000);
     const fresh = await panelSign(body);
     const three = fresh.replace("v1=", `v1=${"ab".repeat(32)},v1=${"cd".repeat(32)},v1=`);
     expect(await (await checkin(body, { "x-panel-signature": three })).json()).toEqual({ error: "invalid-signature" });
     // Two values, as during a rotation, still verify.
     const two = fresh.replace("v1=", `v1=${"ab".repeat(32)},v1=`);
-    expect((await checkin(body, { "x-panel-signature": two })).status).toBe(200);
+    await expectAccepted(checkin(body, { "x-panel-signature": two }));
   });
 
   test("a signature captured on one Deployment cannot be replayed on another of the same owner", async () => {
@@ -94,7 +102,7 @@ describe("route signatures", () => {
     const { receipt } = await release(lab.kernel.owner, { project: { ...project, files: compiled.files }, visibility: "public", artifact: compiled.artifact }, project.id);
     const body = JSON.stringify({ room: "none", day: day(), hour: 12 });
     const captured = await panelSign(body);
-    expect((await checkin(body, { "x-panel-signature": captured })).status).toBe(200);
+    await expectAccepted(checkin(body, { "x-panel-signature": captured }));
     const replayed = await hostFetch(lab, receipt.hostname, "/api/checkin", { method: "POST", headers: { "content-type": "application/json", "x-panel-signature": captured }, body });
     expect(await replayed.json()).toEqual({ error: "invalid-signature" });
   });

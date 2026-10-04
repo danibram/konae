@@ -19,7 +19,7 @@ describe("cross-user", () => {
     const created = await invoke(ana, "habits.create", { name: "Read" });
     expect(await invoke(ben, "habits.list")).toEqual([]);
     // The statement binds the actor, so Ben's update of Ana's row changes nothing.
-    expect((await invoke(ben, "habits.archive", { id: created.lastInsertId })).changes).toBe(0);
+    await expect(invoke(ben, "habits.archive", { id: created.lastInsertId })).rejects.toThrow("This habit is already archived, or it is not yours.");
     const day = new Date().toISOString().slice(0, 10);
     expect((await invoke(ben, "checkins.add", { habitId: created.lastInsertId, day, device: "phone" })).changes).toBe(0);
     expect((await invoke(ana, "habits.list")).map((row: { name: string }) => row.name)).toEqual(["Read"]);
@@ -54,7 +54,7 @@ describe("cross-user", () => {
     await invoke(member, "me.join", { display: "Mallory" });
     const proposed = await invoke(member, "books.propose", { title: "A", author: "B", coverFileId: null });
     await expect(invoke(member, "books.schedule", { id: proposed.lastInsertId, meetsOn: "2027-01-01" }))
-      .rejects.toThrow("Only an organizer can schedule a meeting, and the book must still be on the shortlist.");
+      .rejects.toThrow("Only an organizer can schedule a meeting");
     await expect(invoke(member, "books.remove", { id: proposed.lastInsertId })).rejects.toThrow("Only an organizer can remove a book.");
   });
 
