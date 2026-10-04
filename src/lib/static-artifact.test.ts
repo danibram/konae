@@ -6,7 +6,7 @@ import path from "node:path";
 import { buildLocal } from "../../scripts/littlebox";
 import { createDefaultManifest, normalizeManifest } from "../deployments/manifest";
 import type { MiniAppProject } from "./types";
-import { assembleStaticArtifact, checkRouting, isDocument, resolveReference, routingMessage, runtimeFile, servedPath, stripModulePaths } from "./static-artifact.js";
+import { assembleStaticArtifact, checkRouting, isDocument, resolveReference, routingMessage, runtimeFile, servedPath, splitFragmentHead, stripModulePaths } from "./static-artifact.js";
 
 // esbuild-wasm starts only in a browser. The editor's build runs here on native
 // esbuild with the editor's own plugin, which resolves every import from the
@@ -98,6 +98,31 @@ describe("the artifact", () => {
     expect(Object.keys(artifact.files)).toEqual(["index.html"]);
     expect(artifact.files["index.html"]).toContain("<script data-littlebox-runtime>window.miniapp = {};</script>");
     expect(artifact.files["index.html"]).toContain("<style>p{}</style>");
+  });
+
+  test("a fragment that opens with a <title> and an icon <link> gets them in the head, and its icon file ships", async () => {
+    const fragment = '<title>Starter</title>\n<link rel="icon" href="favicon.svg" type="image/svg+xml">\n<main id=app><svg><title>Close</title></svg></main>';
+    const artifact = await assemble({ "index.html": fragment, "favicon.svg": "<svg xmlns=\"http://www.w3.org/2000/svg\"/>", "app.js": "" });
+    const html = artifact.files["index.html"];
+    const [head, body] = html.split("</head>");
+    expect(head).toContain('<title>Starter</title><link rel="icon" href="favicon.svg" type="image/svg+xml"><style>');
+    expect(body).not.toContain("<title>Starter</title>");
+    expect(body).not.toContain('rel="icon"');
+    expect(body).toContain("<main id=app><svg><title>Close</title></svg></main>");
+    expect(artifact.files["favicon.svg"]).toContain("<svg");
+  });
+
+  test("a data: SVG icon in a fragment is hoisted and needs no file", async () => {
+    const icon = '<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E">';
+    const artifact = await assemble({ "index.html": `${icon}<main id=app></main>`, "app.js": "" });
+    expect(artifact.files["index.html"].split("</head>")[0]).toContain(icon);
+    expect(Object.keys(artifact.files)).toEqual(["index.html"]);
+  });
+
+  test("only the elements a fragment opens with move: a stylesheet link or a later title stays in the body", () => {
+    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><title>A</title><main></main>')).toEqual({ head: "", body: '<link rel="stylesheet" href="x.css"><title>A</title><main></main>' });
+    expect(splitFragmentHead("<main></main><title>A</title>")).toEqual({ head: "", body: "<main></main><title>A</title>" });
+    expect(splitFragmentHead('<!-- top -->\n<title>A</title><link rel="apple-touch-icon" href="/t.png"><main></main>')).toEqual({ head: '<title>A</title><link rel="apple-touch-icon" href="/t.png">', body: "<main></main>" });
   });
 
   test("a Capsule without index.html gets the default fragment home page", async () => {

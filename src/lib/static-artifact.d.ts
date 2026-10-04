@@ -17,6 +17,7 @@ export function checkRouting(value: unknown): RoutingMode;
 export function servedPath(source: string): string | null;
 export function isDocument(html: string): boolean;
 export function renderCapsuleDocument(input: { body: string; styles: string; script: string; runtime: string; head?: string }): string;
+export function splitFragmentHead(fragment: string): { head: string; body: string };
 export function assembleStaticArtifact(input: {
   paths: string[];
   read: (path: string) => Promise<string | Uint8Array>;
