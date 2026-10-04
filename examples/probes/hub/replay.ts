@@ -77,8 +77,9 @@ await probe("hub", 23010, async (kit) => {
   assert.deepEqual(rows.map((row: any) => row.source), ["push", "deploy"]);
   kit.pass("Program API", "GET /api/events with a key that names events.feed returns the push and the deploy that were stored.");
 
+  // The public copy holds its own secret: one owner's two projects cannot share a value.
   // On a public app the unsigned route takes anyone, so the hub cannot tell the provider from a stranger.
-  const open = await kit.publish(here, { projectId: "probe_hub_public", visibility: "public", signup: { mode: "closed" }, secrets: { push_hook: secret } });
+  const open = await kit.publish(here, { projectId: "probe_hub_public", visibility: "public", signup: { mode: "closed" }, secrets: { push_hook: `public-${secret}` } });
   const spoofed = await kit.appFetch(open.host)(`${url}/hooks/deploy`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ref: "main", detail: "from anyone" }) });
   assert.equal(spoofed.status, 200);
   kit.pass("Unsigned route on a public app", "POST /hooks/deploy with no signature, key or session answers 200 and stores the row: a sender that cannot sign Littlebox's way or send a key lands only where anyone can post.");

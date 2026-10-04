@@ -33,6 +33,7 @@ const ownerEmail = "owner@starter.test";
 const passwords = { owner: `owner-${crypto.randomUUID()}`, ana: `ana-${crypto.randomUUID()}`, ben: `ben-${crypto.randomUUID()}`, olga: `olga-${crypto.randomUUID()}` };
 const people = { ana: "ana@starter.test", ben: "ben@starter.test", olga: ownerEmail };
 const webhookSecret = `status-${crypto.randomUUID()}`;
+const managedSecret = `managed-${crypto.randomUUID()}`;
 const MiB = 1024 * 1024;
 
 const observations: { scenario: string; result: string }[] = [];
@@ -295,7 +296,8 @@ try {
   const saved = await A.owner.call<{ revision: number }>("project_sources_save", { projectId: managedId, transferId: saveUpload.transferId, expectedRevision: 0 });
   await A.owner.cancel(saveUpload.transferId).catch(() => {});
   assert.deepEqual(saved, { revision: 1 });
-  await A.owner.call("secret_set", { projectId: managedId, name: "status_webhook", value: webhookSecret });
+  // One owner's two projects cannot share a signing secret, so the managed copy gets its own.
+  await A.owner.call("secret_set", { projectId: managedId, name: "status_webhook", value: managedSecret });
   const managedRoot = path.join(scratch, "managed");
   await mkdir(managedRoot);
   for (const name of capsuleFiles) await writeFile(path.join(managedRoot, name), sources[name]);
@@ -642,8 +644,8 @@ try {
   const conformRuns: Record<string, string> = {};
   const conformFailures: Record<string, string[]> = {};
   for (const [label, extra] of [
-    ["session, key and secret", ["--token", tokenOfCookie(conformCookie), "--key", conformKey.key, "--secret", `status_webhook=${webhookSecret}`]],
-    ["key and secret", ["--key", conformKey.key, "--secret", `status_webhook=${webhookSecret}`]],
+    ["session, key and secret", ["--token", tokenOfCookie(conformCookie), "--key", conformKey.key, "--secret", `status_webhook=${managedSecret}`]],
+    ["key and secret", ["--key", conformKey.key, "--secret", `status_webhook=${managedSecret}`]],
   ] as const) {
     const [, out, err] = await cli(["conform", "--url", managedReceipt.url, "--contract", contractFile, "--inputs", inputsFile, ...extra]);
     conformRuns[label] = out.trim().split("\n").at(-1)!;
