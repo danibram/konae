@@ -14,6 +14,7 @@ import kernelEjectSource from "../../kernel-rs/src/eject.rs?raw";
 import kernelFilesSource from "../../kernel-rs/src/files.rs?raw";
 import kernelGuardSource from "../../kernel-rs/src/guard.rs?raw";
 import kernelGuardCases from "../../kernel-rs/src/guard-cases.json?raw";
+import kernelGuideSource from "../../kernel-rs/src/guide.rs?raw";
 import kernelLimitsSource from "../../kernel-rs/src/limits.rs?raw";
 import kernelHttpSource from "../../kernel-rs/src/http.rs?raw";
 import kernelHttpBindingCases from "../../kernel-rs/src/http-binding-cases.json?raw";
@@ -52,6 +53,7 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/eject.rs", contents: kernelEjectSource },
   { path: "kernel-rs/src/files.rs", contents: kernelFilesSource },
   { path: "kernel-rs/src/guard.rs", contents: kernelGuardSource },
+  { path: "kernel-rs/src/guide.rs", contents: kernelGuideSource },
   { path: "kernel-rs/src/guard-cases.json", contents: kernelGuardCases },
   { path: "kernel-rs/src/limits.rs", contents: kernelLimitsSource },
   { path: "kernel-rs/src/http.rs", contents: kernelHttpSource },

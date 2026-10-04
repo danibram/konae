@@ -120,7 +120,7 @@ async fn plan(state: &AppState, owner: &Owner, principal: &str, a: &Value) -> Re
         current == expected,
         "Source revision changed: the saved sources are at revision {current}, not {expected}. Reload the project, then plan the Eject again."
     );
-    anyhow::ensure!(current > 0, "This project has no saved sources to eject. Save it in the editor first.");
+    anyhow::ensure!(current > 0, "This project has no saved sources to eject. Save it in the editor, or with project_sources_save, first.");
     let bytes = package(state, &db, &project, id, current)?;
     let sha = digest(&bytes);
     let now = now_ms();

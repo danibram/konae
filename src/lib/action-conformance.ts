@@ -236,17 +236,17 @@ export async function runConformance(contract: ActionContract, target: Conforman
           await expectRefusal(action, `refuses a missing ${input.key}`, [`Missing action input: ${input.key}`], () => invoke(name, rest, caller));
         }
         if (input.type === "string") {
-          await expectRefusal(action, `refuses a ${input.key} that is not a string`, [`${input.key} must be a non-empty string.`], () => invoke(name, { ...valid, [input.key]: 5 }, caller));
+          await expectRefusal(action, `refuses ${input.key} when it is not a string`, [`${input.key} must be a non-empty string.`], () => invoke(name, { ...valid, [input.key]: 5 }, caller));
           await expectRefusal(action, `refuses an empty ${input.key}`, [`${input.key} must be a non-empty string.`], () => invoke(name, { ...valid, [input.key]: " " }, caller));
           const maxLength = input.maxLength ?? 10_000;
           // The runtime endpoint reads at most 200 KB per request.
           if (maxLength < 150_000) {
-            await expectRefusal(action, `refuses a ${input.key} longer than ${maxLength}`, [`${input.key} is too long.`], () => invoke(name, { ...valid, [input.key]: "x".repeat(maxLength + 1) }, caller));
+            await expectRefusal(action, `refuses ${input.key} when it is longer than ${maxLength}`, [`${input.key} is too long.`], () => invoke(name, { ...valid, [input.key]: "x".repeat(maxLength + 1) }, caller));
           }
         } else if (input.type === "number") {
-          await expectRefusal(action, `refuses a ${input.key} that is not a number`, [`${input.key} must be a number.`], () => invoke(name, { ...valid, [input.key]: "1" }, caller));
+          await expectRefusal(action, `refuses ${input.key} when it is not a number`, [`${input.key} must be a number.`], () => invoke(name, { ...valid, [input.key]: "1" }, caller));
         } else {
-          await expectRefusal(action, `refuses a ${input.key} that is not a boolean`, [`${input.key} must be a boolean.`], () => invoke(name, { ...valid, [input.key]: "true" }, caller));
+          await expectRefusal(action, `refuses ${input.key} when it is not a boolean`, [`${input.key} must be a boolean.`], () => invoke(name, { ...valid, [input.key]: "true" }, caller));
         }
       }
     }
