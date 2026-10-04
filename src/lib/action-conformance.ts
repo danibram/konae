@@ -212,6 +212,8 @@ export async function runConformance(contract: ActionContract, target: Conforman
         const { [input.key]: _, ...rest } = valid;
         const omitted = await invoke(name, rest, caller);
         if (omitted.ok) record(name, `answers without the nullable ${input.key}`, checkOutput(action, omitted.result) ? "fail" : "pass", checkOutput(action, omitted.result) ?? "Answered.");
+        // The bindings accepted the call and the app's rule refused it, as for a caller without the role.
+        else if (action.guard && omitted.message === action.guard) record(name, `answers without the nullable ${input.key}`, "pass", `Refused with its guard, "${omitted.message}": the bindings accepted the call without ${input.key}.`);
         else record(name, `answers without the nullable ${input.key}`, "fail", `Refused with "${omitted.message}" where the contract makes ${input.key} optional.`);
       }
     }
