@@ -8,8 +8,10 @@
  * the tests. A replacement backend passes when every check passes; a check the
  * caller gave no credential for is reported as skipped, never as passed.
  */
-import type { ActionContract, ContractAction, ContractColumn, ContractError } from "./action-contract";
+import { routeSignature, type ActionContract, type ContractAction, type ContractColumn, type ContractError } from "./action-contract";
 import type { RouteCaller } from "../kernel/actions";
+import { bodyFromFields } from "../kernel/route-declaration";
+import { signDelivery } from "./provider-signature";
 import { signRoute } from "./route-signature";
 
 export type RuntimeAnswer = { ok: true; result: unknown } | { ok: false; message: string };
@@ -264,13 +266,22 @@ export async function runConformance(contract: ActionContract, target: Conforman
     const secret = http.signature ? target.secrets?.[http.signature.secret] : undefined;
     // Without declared callers, a signed route takes the signature or a key and an unsigned one a key or a session.
     const takes = (caller: RouteCaller) => http.declaredCallers ? http.declaredCallers.includes(caller) : caller !== "session" || !http.signature;
+    // With fields, each input sits at its path, and a key no input names rides along to show the route leaves it out.
+    const postBody = (input: Record<string, unknown>) => JSON.stringify(http.fields ? { ...bodyFromFields(http.fields, input), [UNEXPECTED_KEY]: 1 } : input);
     const request = (input: Record<string, unknown>, body?: string): RouteRequest => http.method === "GET"
       ? { method: "GET", path: http.path, query: Object.fromEntries(Object.entries(input).map(([key, value]) => [key, String(value)])) }
-      : { method: "POST", path: http.path, body: body ?? JSON.stringify(input), headers: { "content-type": "application/json" } };
+      : { method: "POST", path: http.path, body: body ?? postBody(input), headers: { "content-type": "application/json" } };
+    // A body-only MAC is the same for the same bytes, so each signed request gets its own trailing whitespace, which JSON ignores.
+    let resends = 0;
     const sign = async (base: RouteRequest, at = now()): Promise<RouteRequest> => {
-      const query = new URLSearchParams(base.query ?? {}).toString();
-      const header = await signRoute(secret!, { method: base.method, path: base.path, query, body: base.body ?? "" }, at);
-      return { ...base, headers: { ...base.headers, [http.signature!.header]: header } };
+      const signature = http.signature!;
+      if (signature.scheme === "littlebox") {
+        const query = new URLSearchParams(base.query ?? {}).toString();
+        const header = await signRoute(secret!, { method: base.method, path: base.path, query, body: base.body ?? "" }, at);
+        return { ...base, headers: { ...base.headers, [signature.header]: header } };
+      }
+      const body = signature.scheme === "hmac-body" ? `${base.body ?? ""}${" ".repeat(resends++)}` : base.body ?? "";
+      return { ...base, body, headers: { ...base.headers, ...await signDelivery(routeSignature(signature), secret!, body, { t: at }) } };
     };
     // The proof the valid call and the input probes carry. An action that binds
     // the caller needs one with an ID: a key or a session.
@@ -333,7 +344,8 @@ export async function runConformance(contract: ActionContract, target: Conforman
 
     if (http.signature) {
       await expectRouteRefusal(action, "refuses an unsigned request", "invalid-signature", request(valid));
-      if (secret !== undefined) await expectRouteRefusal(action, "refuses a stale timestamp", "stale-timestamp", await sign(request(valid), now() - 400));
+      const window = http.signature.windowSeconds;
+      if (secret !== undefined && window !== null) await expectRouteRefusal(action, "refuses a stale timestamp", "stale-timestamp", await sign(request(valid), now() - window - 100));
     } else if (http.declaredCallers) {
       await expectRouteRefusal(action, "refuses a caller without a key or a session", "authentication-required", request(valid));
     }
@@ -342,7 +354,8 @@ export async function runConformance(contract: ActionContract, target: Conforman
       await expectRouteRefusal(action, "refuses an API key it does not take", "This route does not accept API keys.", { ...request(valid), headers: { ...request(valid).headers, authorization: `Bearer ${target.key}` } });
     }
     if (open) {
-      await expectRouteRefusal(action, "refuses an undeclared input on the route", `Unexpected action input: ${UNEXPECTED_KEY}`, await prove(request({ ...valid, [UNEXPECTED_KEY]: 1 })));
+      // A route with fields leaves the key out instead; the valid call above carried one.
+      if (!http.fields) await expectRouteRefusal(action, "refuses an undeclared input on the route", `Unexpected action input: ${UNEXPECTED_KEY}`, await prove(request({ ...valid, [UNEXPECTED_KEY]: 1 })));
       if (http.method === "POST") {
         await expectRouteRefusal(action, "refuses a body that is not JSON", "The request body must be a JSON object.", await prove(request(valid, "not json")));
       }

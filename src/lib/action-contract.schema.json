@@ -137,16 +137,24 @@
         "input": { "type": "string" },
         "signature": {
           "type": "object",
-          "required": ["header", "secret", "scheme", "windowSeconds", "acceptedOnce"],
+          "required": ["scheme", "header", "headers", "secret", "format", "windowSeconds", "acceptedOnce", "replay"],
           "additionalProperties": false,
           "properties": {
+            "scheme": { "enum": ["littlebox", "hmac-body", "timestamped", "svix"] },
             "header": { "type": "string" },
+            "headers": { "type": "array", "minItems": 1, "items": { "type": "string" } },
             "secret": { "type": "string" },
-            "scheme": { "type": "string" },
-            "windowSeconds": { "type": "integer", "minimum": 1 },
-            "acceptedOnce": { "const": true }
+            "format": { "type": "string" },
+            "windowSeconds": { "type": ["integer", "null"], "minimum": 1 },
+            "acceptedOnce": { "const": true },
+            "replay": { "type": "string" },
+            "algorithm": { "enum": ["sha256", "sha1"] },
+            "encoding": { "enum": ["hex", "base64"] },
+            "prefix": { "type": "string" },
+            "tag": { "type": "string" }
           }
         },
+        "fields": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string" } },
         "callers": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "$ref": "#/$defs/caller" } },
         "declaredCallers": { "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": { "enum": ["signature", "key", "session"] } },
         "onlyDoor": { "enum": ["always", "on a private Deployment"] }

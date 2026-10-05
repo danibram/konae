@@ -16,6 +16,7 @@
  * src/sdk/contract.ts, whose test checks each against the Kernel's source.
  */
 import { parseServerActionSource, type HttpBinding, type RouteCaller, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
+import type { RouteSignature, SignatureScheme } from "../kernel/route-declaration";
 import { sdkContract, type SdkError } from "../sdk/contract";
 import { limitIndex } from "./query-bound";
 import { sqlStatementTokens, sqlTokens, type SqlToken } from "./sql-tokens";
@@ -71,11 +72,38 @@ export type ContractCaller = {
   actor: "none" | "user id" | "key id";
 };
 
+/**
+ * How a sender signs the route: the scheme actions.json declares, its
+ * settings, the headers it sets, what the MAC covers and how a replay is
+ * refused (ADR-0015).
+ */
+export type ContractSignature = {
+  scheme: SignatureScheme;
+  /** The header the MAC arrives in. */
+  header: string;
+  /** Every header the sender sets. */
+  headers: string[];
+  secret: string;
+  /** What the sender computes, written out. */
+  format: string;
+  /** How far a signature's time may sit from the server's clock, or null when the scheme carries none. */
+  windowSeconds: number | null;
+  acceptedOnce: true;
+  /** How a second copy of a request is refused. */
+  replay: string;
+  algorithm?: "sha256" | "sha1";
+  encoding?: "hex" | "base64";
+  prefix?: string;
+  tag?: string;
+};
+
 export type ContractHttp = {
   method: "GET" | "POST";
   path: string;
   input: string;
-  signature?: { header: string; secret: string; scheme: string; windowSeconds: number; acceptedOnce: true };
+  signature?: ContractSignature;
+  /** Input keys and the JSON path each is read from in the POST body; the body's other keys are left out. */
+  fields?: Record<string, string>;
   callers: ContractCaller[];
   /** The `callers` list actions.json declares, when it declares one. */
   declaredCallers?: RouteCaller[];
@@ -158,6 +186,50 @@ const SIGNATURE_WINDOW = 300;
 
 const RUNTIME = { endpoint: "/_littlebox/mcp", tool: "actions_invoke", sdk: "miniapp.actions.call" };
 const SIGNATURE_SCHEME = "t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256, keyed with the secret, of t, n, the method, the path, the canonical query string and the raw body, joined by newlines>";
+const SVIX_WINDOW = 300;
+const FAILED_DELIVERY = "a delivery whose action fails is not remembered, so the provider's retry runs";
+
+/** The contract's description of a route's signature. kernel-rs/src/provider.rs verifies the provider schemes. */
+function contractSignature(signature: RouteSignature): ContractSignature {
+  const base = { header: signature.header, secret: signature.secret, acceptedOnce: true as const };
+  if (signature.scheme === "hmac-body") {
+    const algorithm = signature.algorithm ?? "sha256";
+    const encoding = signature.encoding ?? "hex";
+    return {
+      scheme: "hmac-body", ...base, headers: [signature.header],
+      format: `${signature.prefix ?? ""}<${encoding} HMAC-${algorithm.toUpperCase()}, keyed with the secret, of the raw body>`,
+      windowSeconds: null, replay: `each MAC is accepted once in 72 hours; ${FAILED_DELIVERY}`,
+      algorithm, encoding, ...(signature.prefix === undefined ? {} : { prefix: signature.prefix }),
+    };
+  }
+  if (signature.scheme === "timestamped") {
+    return {
+      scheme: "timestamped", ...base, headers: [signature.header],
+      format: `${signature.prefix}<unix seconds>,${signature.tag}<hex HMAC-SHA256, keyed with the secret, of <t>.<raw body>>`,
+      windowSeconds: signature.window ?? SIGNATURE_WINDOW, replay: `each MAC is accepted once while its t is in the window; ${FAILED_DELIVERY}`,
+      prefix: signature.prefix, tag: signature.tag,
+    };
+  }
+  if (signature.scheme === "svix") {
+    return {
+      scheme: "svix", ...base, headers: ["svix-id", "svix-timestamp", "svix-signature"],
+      format: "svix-id: <message id>, svix-timestamp: <unix seconds>, svix-signature: v1,<base64 HMAC-SHA256, keyed with the base64 after whsec_ in the secret, of <id>.<t>.<raw body>>",
+      windowSeconds: SVIX_WINDOW, replay: `each svix-id is accepted once in 72 hours; ${FAILED_DELIVERY}`,
+    };
+  }
+  return { scheme: "littlebox", ...base, headers: [signature.header], format: SIGNATURE_SCHEME, windowSeconds: SIGNATURE_WINDOW, replay: "each signature is accepted once" };
+}
+
+/** The route signature a contract's signature describes: the inverse of contractSignature. */
+export function routeSignature(signature: ContractSignature): RouteSignature {
+  const { header, secret } = signature;
+  if (signature.scheme === "hmac-body") {
+    return { scheme: "hmac-body", header, secret, algorithm: signature.algorithm, encoding: signature.encoding, ...(signature.prefix === undefined ? {} : { prefix: signature.prefix }) };
+  }
+  if (signature.scheme === "timestamped") return { scheme: "timestamped", header, secret, prefix: signature.prefix, tag: signature.tag, window: signature.windowSeconds ?? SIGNATURE_WINDOW };
+  if (signature.scheme === "svix") return { scheme: "svix", header, secret };
+  return { header, secret };
+}
 
 /**
  * Writes the contract for a Capsule's actions.json and schema.sql. Throws the
@@ -278,10 +350,9 @@ function contractHttp(http: HttpBinding, kind: "query" | "mutation" | "signal"):
     path: http.path,
     input: kind === "query"
       ? "the query string, each value typed by its input's declared type"
-      : `a JSON object body of at most ${MAX_ROUTE_BODY / 1024} KiB`,
-    ...(http.signature ? {
-      signature: { header: http.signature.header, secret: http.signature.secret, scheme: SIGNATURE_SCHEME, windowSeconds: SIGNATURE_WINDOW, acceptedOnce: true as const },
-    } : {}),
+      : `a JSON object body of at most ${MAX_ROUTE_BODY / 1024} KiB${http.fields ? `; ${Object.entries(http.fields).map(([key, path]) => `${key} is read from ${path}`).join(", ")}, and the body's other keys are left out` : ""}`,
+    ...(http.signature ? { signature: contractSignature(http.signature) } : {}),
+    ...(http.fields ? { fields: { ...http.fields } } : {}),
     callers,
     ...(declared ? { declaredCallers: [...declared] } : {}),
     onlyDoor: http.signature || declared ? "always" : "on a private Deployment",
@@ -329,7 +400,9 @@ function actionErrors(action: ServerActionDefinition, inputs: ContractInput[], a
   if (action.access === "authenticated") errors.push(fromSdk("authentication-required", "runtime"));
   errors.push({ ...fromSdk("Sign in to use Littlebox MCP.", "runtime"), when: "the Deployment is private and the caller has no session" });
   if (actorBound && action.access === "anonymous") errors.push(fromSdk("This action requires an authenticated actor.", both));
-  errors.push(fromSdk("Unexpected action input: <key>", both));
+  // A route with fields leaves undeclared body keys out, so only the runtime endpoint refuses them.
+  const unexpected = http?.fields ? (onlyDoor ? null : "runtime") : both;
+  if (unexpected) errors.push(fromSdk("Unexpected action input: <key>", unexpected));
   for (const input of inputs) {
     if (input.required) errors.push(fromSdk("Missing action input: <key>", both, { key: input.key }));
     if (input.type === "string") {
@@ -351,7 +424,8 @@ function actionErrors(action: ServerActionDefinition, inputs: ContractInput[], a
     const takes = (caller: RouteCaller) => http.callers ? http.callers.includes(caller) : caller !== "session" || !http.signature;
     if (http.signature) {
       errors.push(fromSdk("invalid-signature", "http"));
-      errors.push(fromSdk("stale-timestamp", "http"));
+      // A body-only MAC carries no time to be stale.
+      if (http.signature.scheme !== "hmac-body") errors.push(fromSdk("stale-timestamp", "http"));
       errors.push(fromSdk("replayed-signature", "http"));
     } else {
       errors.push({
@@ -751,7 +825,10 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
       const http = action.http;
       lines.push(`HTTP route \`${http.method} ${http.path}\` on the Deployment host. Input is ${http.input}. It answers \`{ "result": ... }\` with the same output, or \`{ "error": "<message>" }\` with a status.`, "");
       if (http.signature) {
-        lines.push(`A signed request carries \`${http.signature.header}: ${http.signature.scheme}\`. The secret is named \`${http.signature.secret}\` and set by the owner; it is never in this file. \`t\` must be within ${http.signature.windowSeconds} seconds of the server's clock, and each signature is accepted once.`, "");
+        const signature = http.signature;
+        const carries = signature.scheme === "svix" ? `\`${signature.format}\`` : `\`${signature.header}: ${signature.format}\``;
+        const window = signature.windowSeconds === null ? "The scheme carries no time" : `\`t\` must be within ${signature.windowSeconds} seconds of the server's clock`;
+        lines.push(`A signed request uses the ${signature.scheme} scheme and carries ${carries}. The secret is named \`${signature.secret}\` and set by the owner; it is never in this file. ${window}, and ${signature.replay}.`, "");
       }
       lines.push(`Callers: ${http.callers.map(describeCaller).join("; ")}.`, "");
       lines.push(http.onlyDoor === "always"
@@ -899,8 +976,9 @@ export function programFromContract(contract: ActionContract): ServerActionProgr
         http: {
           method: action.http.method,
           path: action.http.path,
-          ...(action.http.signature ? { signature: { header: action.http.signature.header, secret: action.http.signature.secret } } : {}),
+          ...(action.http.signature ? { signature: routeSignature(action.http.signature) } : {}),
           ...(action.http.declaredCallers ? { callers: [...action.http.declaredCallers] } : {}),
+          ...(action.http.fields ? { fields: { ...action.http.fields } } : {}),
         },
       } : {}),
     };
