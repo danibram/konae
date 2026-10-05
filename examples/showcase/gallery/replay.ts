@@ -20,6 +20,7 @@ import { buildLocal } from "../../../scripts/littlebox";
 import { kernelTarget } from "../../../scripts/conform";
 import { generateActionContract } from "../../../src/lib/action-contract";
 import { formatConformanceReport, runConformance } from "../../../src/lib/action-conformance";
+import { fakeResolver } from "../../probes/_dns";
 
 const here = import.meta.dir;
 const repo = path.resolve(here, "../../..");
@@ -86,6 +87,10 @@ function landscape(seed: number, width = 640, height = 480): Uint8Array {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), pngChunk("IHDR", header), pngChunk("IDAT", deflateSync(raw)), pngChunk("IEND", new Uint8Array())]);
 }
 
+// The studio's own domain. A fake resolver answers the Kernel's TXT lookup.
+const dns = await fakeResolver();
+const studioDomain = "gallery.studio.example";
+
 let kernel: ReturnType<typeof Bun.spawn> | undefined;
 try {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
@@ -98,6 +103,7 @@ try {
       LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: dataDir, LITTLEBOX_ADMIN_KEY: setupKey,
       LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: repo,
       LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development",
+      LITTLEBOX_DNS_RESOLVER: dns.address,
     },
     stdout: "ignore", stderr: "inherit",
   });
@@ -406,6 +412,54 @@ try {
   assert.equal(routeCount, 1);
   pass("Usage", `usage_read counts GET /feed.json ${routeCount} time (the 400 and 405 answers count nothing) and contact.send ${usage.totals.find((row) => row.kind === "action" && row.name === "contact.send")?.count} times.`);
 
+  // The studio's own domain: proved with a TXT record, then the same app on its own origin.
+  const aliasHost = `${studioDomain}:${port}`;
+  const aliasOrigin = `http://${aliasHost}`;
+  const onAlias = (path: string, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers); headers.set("host", aliasHost); headers.set("x-forwarded-for", freshAddress());
+    return fetch(url + path, { ...init, headers });
+  };
+  const claim = await owner.call<{ status: string; record: { name: string; value: string } }>("domain_set", { deploymentId: receipt.id, hostname: studioDomain });
+  assert.equal(claim.status, "pending");
+  assert.equal((await onAlias("/")).status, 404);
+  dns.txt(claim.record.name, ["littlebox-verify-copied-from-another-app"]);
+  const wrongRecord = await errorText(owner.call("domain_set", { deploymentId: receipt.id, hostname: studioDomain }));
+  assert.equal(wrongRecord, `The TXT record at ${claim.record.name} holds "littlebox-verify-copied-from-another-app", not this Deployment's token. Set it to ${claim.record.value} and call domain_set again.`);
+  refused(`domain_set ${studioDomain} while ${claim.record.name} holds another value`, wrongRecord);
+  const underSuffix = await errorText(owner.call("domain_set", { deploymentId: receipt.id, hostname: "gallery.localhost" }));
+  assert.equal(underSuffix, "gallery.localhost is under this installation's app suffix localhost, where Littlebox names apps itself. Name a hostname outside it.");
+  refused("domain_set gallery.localhost", underSuffix);
+  dns.txt(claim.record.name, [claim.record.value]);
+  const proved = await owner.call<{ status: string; url: string }>("domain_set", { deploymentId: receipt.id, hostname: studioDomain });
+  assert.equal(proved.status, "active");
+  const aliasHome = await onAlias("/", { headers: { accept: "text/html" } });
+  assert.equal(aliasHome.status, 200);
+  assert.match(await aliasHome.text(), /<html/i);
+  assert.match(aliasHome.headers.get("content-security-policy") ?? "", /img-src 'self' blob: data:/);
+  assert.equal((await get("/")).status, 200, "the generated hostname keeps answering");
+  const aliasAbout = await onAlias("/about");
+  assert.equal(aliasAbout.status, 200);
+  const aliasMissing = await onAlias("/missing-page");
+  assert.equal(aliasMissing.status, 404);
+  const aliasFeed = await (await onAlias("/feed.json")).json();
+  assert.deepEqual(aliasFeed, feedBody);
+  const aliasImage = await onAlias(aliasFeed.result[0].image);
+  assert.equal(aliasImage.status, 200);
+  assert.equal(aliasImage.headers.get("content-type"), "image/png");
+  const aliasRuntime = new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+    const headers = new Headers(init?.headers); headers.set("host", aliasHost); headers.set("origin", aliasOrigin); headers.set("x-forwarded-for", freshAddress());
+    return fetch(input, { ...init, headers });
+  } });
+  const aliasPhotos = await aliasRuntime.call<any[]>("actions_invoke", { name: "photos.published", input: {} });
+  assert.equal(aliasPhotos.length, 4);
+  const crossOrigin = await errorText(new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+    const headers = new Headers(init?.headers); headers.set("host", aliasHost); headers.set("origin", `http://${host}:${port}`);
+    return fetch(input, { ...init, headers });
+  } }).call("actions_invoke", { name: "photos.published", input: {} }));
+  assert.match(crossOrigin, /Cross-origin or unrecognized-host MCP request rejected/);
+  refused(`A page on ${host} calls the runtime on ${studioDomain}`, crossOrigin, 403);
+  pass("Custom domain", `domain_set ${studioDomain} answers pending with ${claim.record.name}; a record holding another value is refused and the alias answers 404; once the fake resolver returns the token the alias serves: / answers 200 with the app policy, /about 200, /missing-page 404 with 404.html, /feed.json the same 4 items, the first image 200 image/png from /_littlebox/files/<id>, and photos.published over the runtime with Origin ${aliasOrigin} returns 4 rows. The generated hostname keeps answering, and a page on it cannot call the runtime on the alias.`);
+
   // The published pages in Chrome, under the Kernel's Content Security Policy.
   if (process.env.LITTLEBOX_SHOWCASE_BROWSER !== "0") {
     const browser = await chromium.launch({ channel: "chrome" });
@@ -513,5 +567,6 @@ try {
 } finally {
   kernel?.kill();
   if (kernel) await kernel.exited;
+  dns.stop();
   await rm(scratch, { recursive: true, force: true });
 }

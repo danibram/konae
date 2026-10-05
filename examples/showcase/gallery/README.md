@@ -27,6 +27,7 @@ This is a product probe. The app uses Littlebox's primitives as a creator would,
 - `feed.items`, an anonymous query bound to `GET /feed.json` with no signature.
 - A multi-page Build Artifact from `littlebox build`: `index.html`, `about.html`, `404.html`, the `styles.css` and `app.js` they load, and the SDK as `runtime.js`.
 - `signals_read`, `usage_read`, `littlebox contract` and `littlebox conform`.
+- A custom domain, `gallery.studio.example`, set with `domain_set` and proved with a TXT record that a fake resolver on a local UDP port answers ([ADR-0015](../../../docs/adr/0015-a-deployment-answers-on-one-custom-domain.md)). The replay reaches the alias with a `Host` header, as a proxy that forwards `Host` unchanged would.
 
 ## Run the replay
 
@@ -51,8 +52,9 @@ It runs these flows and exits 0 when all of them pass:
 9. 40 contact messages from one address, then one from another, then the Signals and the inbox.
 10. Known and unknown paths on the multi-page artifact, and `HEAD /styles.css`.
 11. Usage.
-12. In Chrome, the home page in light and dark with every image loaded, the about page with a sent contact form, the signed-in studio, and in the studio a `fetch` of `miniapp.files.url(draft)`, a draft published and hidden again with `miniapp.files.update`, and an upload with an unknown visibility. Then the owner removes the curator from the `studio` table while the page is open: the page's upload is refused with the guard and its file deleted, and its publish is refused with the guard and the draft's file put back to private.
-13. `littlebox contract`, then `littlebox conform` from the CLI with no credential, and the same checks in process.
+12. The custom domain: `domain_set` before the TXT record, with a record that holds another value, with a name under the suffix, then with the right token; the pages, the 404, `/feed.json`, a file and the runtime on the alias, and a page on the generated hostname calling the alias's runtime.
+13. In Chrome, the home page in light and dark with every image loaded, the about page with a sent contact form, the signed-in studio, and in the studio a `fetch` of `miniapp.files.url(draft)`, a draft published and hidden again with `miniapp.files.update`, and an upload with an unknown visibility. Then the owner removes the curator from the `studio` table while the page is open: the page's upload is refused with the guard and its file deleted, and its publish is refused with the guard and the draft's file put back to private.
+14. `littlebox contract`, then `littlebox conform` from the CLI with no credential, and the same checks in process.
 
 ## What worked
 
@@ -68,6 +70,7 @@ It runs these flows and exits 0 when all of them pass:
 - `littlebox build` publishes the three pages, `styles.css`, `app.js` and the SDK, and leaves out `schema.sql` and `actions.json`. The replay publishes that artifact as it is.
 - `about.html` serves its own page at `/about.html` and `/about`, and the SDK and the contact form run on it with no policy violation.
 - Every path the artifact does not hold answers 404 with `404.html`, never the home page. `HEAD /styles.css` answers 200 with `text/css`.
+- The studio serves from its own domain. Until the Kernel's own lookup found the token in `_littlebox.gallery.studio.example`, the name answered 404; a record holding another value was refused with the value it held and the token it needed. Once proved, `gallery.studio.example` answered `/`, `/about`, the 404 page, `/feed.json` with the same four items and the first photograph as `image/png`, with the same policy, and `photos.published` over the runtime with the alias as `Origin` returned the four rows. The generated hostname kept answering.
 - conform with no credential passed every check it could run.
 - The page reads every failure through one `reason(error)` helper, the same in all five showcase apps. A refusal shows its own sentence, `rate-limited` becomes "Too many requests just now. Wait a few seconds and try again.", and an unreachable Kernel becomes "The site could not reach its server. Check the connection and try again." Before 2026-11-07 the studio's upload and publish judged `{ changes: 0 }` themselves, a refused upload left its file behind, and the grid stayed on "Loading photographs…" when the first call failed.
 
@@ -118,6 +121,9 @@ Rows with a status or a quoted message are answers the replay received. Rows tha
 | `contact.send` with topic `spam` | | `CHECK constraint failed: topic IN ('commission', 'print', 'other')`. Inputs have type and length but no allowed values, so the CHECK in `schema.sql` is the only guard and its SQLite text reaches the visitor. |
 | The `contact.received` Signal in `action-contract.md` | | Missing. `action-contract.json` has `"signal": {"name":"contact.received","properties":["topic"]}`; the Markdown rendering never mentions it. |
 | The HEAD answer of `/feed.json` in the Action Contract | | Missing. The contract lists no 405 for `feed.items`, and conform does not probe HEAD. |
+| `domain_set gallery.studio.example` while `_littlebox.gallery.studio.example` holds another value | | `The TXT record at _littlebox.gallery.studio.example holds "littlebox-verify-copied-from-another-app", not this Deployment's token. Set it to <token> and call domain_set again.` |
+| `domain_set gallery.localhost` | | `gallery.localhost is under this installation's app suffix localhost, where Littlebox names apps itself. Name a hostname outside it.` |
+| A page on the generated hostname calls the runtime on `gallery.studio.example` | 403 | `Cross-origin or unrecognized-host MCP request rejected.` |
 
 ## Conform with no credential
 
