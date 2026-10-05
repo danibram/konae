@@ -1,6 +1,6 @@
 # Probes
 
-Small Capsules that decide the cells of the [capability matrix](../../docs/research/capability-matrix.md) no [showcase](../showcase/README.md) replay proves. Each folder holds a Capsule (`index.html`, `app.js`, `schema.sql`, `actions.json`) and a `replay.ts` that publishes it on its own Kernel, asserts every answer the matrix quotes, and removes the Kernel and its data when it exits. `_kit.ts` is the harness they share.
+Small Capsules that decide the cells of the [capability matrix](../../docs/research/capability-matrix.md) no [showcase](../showcase/README.md) replay proves. Each folder holds a Capsule (`index.html`, `app.js`, `schema.sql`, `actions.json`) and a `replay.ts` that publishes it on its own Kernel, asserts every answer the matrix quotes, and removes the Kernel and its data when it exits. `_kit.ts` is the harness they share, and `_dns.ts` is a fake DNS resolver on a local UDP port that the custom domain replays hand to the Kernel as `LITTLEBOX_DNS_RESOLVER`.
 
 | Probe | What it is | Cells |
 | --- | --- | --- |
@@ -9,7 +9,8 @@ Small Capsules that decide the cells of the [capability matrix](../../docs/resea
 | [shop](shop/replay.ts) | Prints with limited stock and holds that lapse | Inventory under concurrency, delayed work, payments, what the page may load |
 | [community](community/replay.ts) | Publishers and readers on one public app | Roles inside the app, public and private rows, realtime by polling, audit, files by role |
 | [survey](survey/replay.ts) | An anonymous survey and a signed-in vote | Multi-answer form in one write, tallies, one vote per person |
-| [platform](platform/replay.ts) | Notes with reminders | Email on an event, scheduled work, realtime push, third-party login, custom domain |
+| [platform](platform/replay.ts) | Notes with reminders | Email on an event, scheduled work, realtime push, third-party login, an unclaimed hostname |
+| [domain](domain/replay.ts) | A public guestbook on guestbook.example.org | Custom domain: the TXT proof through a fake resolver, the alias as the app's origin, one holder per name, the package and the maintenance page |
 
 Run them all, each on its own port from 23000:
 

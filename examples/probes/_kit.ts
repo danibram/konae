@@ -26,7 +26,7 @@ export type Kit = {
   owner: McpClient;
   pass(flow: string, result: string): void;
   /** Publishes the Capsule in `dir` as a first release and returns its host. */
-  publish(dir: string, options: { projectId: string; visibility: "public" | "private"; signup?: { mode: string; allowlist?: string[] }; files?: Record<string, string>; secrets?: Record<string, string> }): Promise<Published>;
+  publish(dir: string, options: { projectId: string; visibility: "public" | "private"; signup?: { mode: string; allowlist?: string[] }; files?: Record<string, string>; secrets?: Record<string, string>; initialPackage?: unknown }): Promise<Published>;
   /** The message release_plan answers for a Capsule whose sources are overridden by `files`. */
   planRefusal(dir: string, projectId: string, files: Record<string, string>): Promise<string>;
   /** The editor's Validation Gate on the same sources: its message and, when it has one, the detail under it. */
@@ -42,7 +42,8 @@ export type Kit = {
   errorText(promise: Promise<unknown>): Promise<string>;
 };
 
-export async function probe(name: string, defaultPort: number, body: (kit: Kit) => Promise<void>) {
+/** `env` adds to the Kernel's environment, such as LITTLEBOX_DNS_RESOLVER for a fake resolver. */
+export async function probe(name: string, defaultPort: number, body: (kit: Kit) => Promise<void>, options: { env?: Record<string, string> } = {}) {
   const port = Number(process.env.LITTLEBOX_PROBE_PORT ?? defaultPort);
   assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Set LITTLEBOX_PROBE_PORT to a free local port.");
   const url = `http://127.0.0.1:${port}`;
@@ -73,6 +74,7 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
         LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: dataDir, LITTLEBOX_ADMIN_KEY: setupKey,
         LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: repo,
         LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development",
+        ...options.env,
       },
       stdout: "ignore", stderr: "inherit",
     });
@@ -133,8 +135,10 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
       url, dataDir, owner, address, errorText, appFetch,
       pass: (flow, result) => console.log(`PASS ${flow}. ${result}`),
       async publish(dir, options) {
-        const receipt = await release(dir, options.projectId, options.visibility, options.files ?? {},
-          options.signup ? { initialSignupPolicy: { mode: options.signup.mode, allowlist: options.signup.allowlist ?? [] } } : {}, options.secrets);
+        const receipt = await release(dir, options.projectId, options.visibility, options.files ?? {}, {
+          ...(options.signup ? { initialSignupPolicy: { mode: options.signup.mode, allowlist: options.signup.allowlist ?? [] } } : {}),
+          ...(options.initialPackage ? { initialPackage: options.initialPackage } : {}),
+        }, options.secrets);
         return { receipt, host: receipt.hostname, deploymentId: receipt.id };
       },
       planRefusal: (dir, projectId, files) => errorText(release(dir, projectId, "public", files)),

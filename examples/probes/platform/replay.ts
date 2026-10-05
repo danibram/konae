@@ -1,7 +1,8 @@
 // Probe: what the platform has no primitive for. Decides the matrix cells for
 // email on an event, scheduled or delayed work, realtime push, third-party
-// login and a custom domain, by reading what the runtime door offers and how
-// the two doors answer a declaration for each.
+// login, by reading what the runtime door offers and how the two doors answer
+// a declaration for each. It also pins what an unclaimed hostname answers; the
+// domain probe proves the custom domain itself (ADR-0015).
 //
 //   LITTLEBOX_PROBE_PORT=23050 bun run examples/probes/platform/replay.ts
 import assert from "node:assert/strict";
@@ -63,7 +64,7 @@ await probe("platform", 23050, async (kit) => {
   assert.equal((await runtime.call<any[]>("actions_invoke", { name: "notes.due", input: {} })).length, 1);
   kit.pass("A reminder without a worker", "notes.due returns nothing before remind_at and the note after it, because the query compares remind_at with kernel.now when someone asks. Nothing is sent when nobody asks.");
 
-  // A custom domain: the Kernel answers only the hostnames it generated.
+  // A hostname no Deployment has claimed with domain_set answers like an unknown host.
   const custom = await fetch(`${url}/`, { headers: { host: "notes.example.org" } });
   const customBody = (await custom.text()).replace(/\s+/g, " ").slice(0, 120);
   assert.notEqual(custom.status, 200);
@@ -76,5 +77,5 @@ await probe("platform", 23050, async (kit) => {
   });
   const proxiedBody = (await proxied.text()).slice(0, 160);
   assert.notEqual(proxied.status, 200);
-  kit.pass("Custom domain", `A request for Host: notes.example.org answers ${custom.status}. Behind a proxy that rewrites Host to ${app.host}, the page's runtime call carries Origin: https://notes.example.org and answers ${proxied.status} ${proxiedBody}.`);
+  kit.pass("Unclaimed hostname", `A request for Host: notes.example.org, which no domain_set claimed, answers ${custom.status}. Behind a proxy that rewrites Host to ${app.host}, the page's runtime call carries Origin: https://notes.example.org and answers ${proxied.status} ${proxiedBody}.`);
 });

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "actions": {
+    "entries.add": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "statement": "INSERT INTO entries (name, body, created_at) VALUES (?1, ?2, ?3)",
+      "bindings": [
+        { "source": "input", "key": "name", "type": "string", "maxLength": 80 },
+        { "source": "input", "key": "body", "type": "string", "maxLength": 500 },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "entries.list": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT id, name, body, created_at FROM entries ORDER BY id DESC LIMIT 50",
+      "bindings": [],
+      "http": { "method": "GET", "path": "/api/entries" }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS entries (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
