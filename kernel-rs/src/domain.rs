@@ -415,7 +415,7 @@ pub(super) async fn admin_call(state: &AppState, owner: &mcp::Owner, name: &str,
 async fn set(state: &AppState, owner: &mcp::Owner, id: &str, raw: &str, server: Result<SocketAddr>) -> Result<Value> {
     let deployment = mcp::owned_deployment(state, owner, id, "publish").await?;
     let hostname = check_hostname(raw, &Rules::of(state)).map_err(anyhow::Error::msg)?;
-    let record = {
+    let (record, fresh) = {
         let _domains = database_lock(state, "domains").await;
         ensure_free(state, &deployment.id, &hostname).await?;
         let existing = read_record(state, &deployment.id);
@@ -425,12 +425,12 @@ async fn set(state: &AppState, owner: &mcp::Owner, id: &str, raw: &str, server: 
         // One token per Deployment, kept when the hostname changes, so the
         // owner can add the record for a new name before switching to it.
         let token = existing.as_ref().map(|record| record.token.clone()).unwrap_or_else(new_token);
-        let record = match existing {
-            Some(record) if record.hostname == hostname => record,
-            _ => Record { hostname: hostname.clone(), token, verified: false, verified_at: None, created_at: now_ms() },
+        let (record, fresh) = match existing {
+            Some(record) if record.hostname == hostname => (record, false),
+            _ => (Record { hostname: hostname.clone(), token, verified: false, verified_at: None, created_at: now_ms() }, true),
         };
         write_record(state, &deployment.id, Some(&record)).await?;
-        record
+        (record, fresh)
     };
     let name = format!("{TXT_LABEL}.{hostname}");
     let found = match server {
@@ -444,6 +444,10 @@ async fn set(state: &AppState, owner: &mcp::Owner, id: &str, raw: &str, server: 
     };
     if !values.iter().any(|value| value.trim() == record.token) {
         let shown = values.iter().map(|value| format!("\"{}\"", value.chars().take(80).collect::<String>())).collect::<Vec<_>>().join(", ");
+        // The owner could not have known a token this call issued.
+        if fresh {
+            return Ok(view(state, &deployment, Some(&record), Some(format!("The TXT record at {name} holds {shown}, not this token yet."))));
+        }
         bail!("The TXT record at {name} holds {shown}, not this Deployment's token. Set it to {} and call domain_set again.", record.token);
     }
     let _domains = database_lock(state, "domains").await;

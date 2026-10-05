@@ -542,7 +542,7 @@ A Deployment can answer on one hostname its owner controls, such as `notes.examp
      "next": "Add a TXT record _littlebox.notes.example.org holding littlebox-verify-3f0c…, then call domain_set again with notes.example.org." }
    ```
 
-3. Add the TXT record at the DNS provider and call `domain_set` again with the same hostname. The Kernel looks the record up itself, over UDP, from `LITTLEBOX_DNS_RESOLVER` (an IP address with an optional port) or the first `nameserver` in `/etc/resolv.conf`. When one of the record's values is the token, the answer is `status: "active"` and the alias serves.
+3. Add the TXT record at the DNS provider and call `domain_set` again with the same hostname. The Kernel looks the record up itself, over UDP, from `LITTLEBOX_DNS_RESOLVER` (an IP address with an optional port) or the first `nameserver` in `/etc/resolv.conf`. When one of the record's values is the token, the answer is `status: "active"` and the alias serves. A record that holds other values refuses the call, except on the call that issued the token, which answers `pending` and names what the record holds.
 
 `bun run littlebox -- domain --deployment <id> --set <hostname>` runs steps 2 and 3 and prints the record; `--clear` removes the alias and no flag shows it. The CLI checks the name with `src/lib/domain-name.ts` first, by the same rules and words as the Kernel.
 
