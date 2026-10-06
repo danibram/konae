@@ -54,7 +54,7 @@ The yardstick: a person who does not write code, and a person who does, make the
 | Inputs have type and length but no allowed values and no integer type; a CHECK is the only guard and its SQLite text reaches the visitor | gallery, booking, inbox | `CHECK constraint failed: ...` |
 | The only clock is `now` in UTC milliseconds; no time zone for a local day | habits, booking | |
 | The runtime endpoint answers `rate-limited` as HTTP 200 with `isError`; a route answers 429 | gallery | |
-| Under required verification the CLI cannot create the first owner in one step | habits | 202 `link-sent` |
+| Under required verification the CLI cannot create the first owner in one step. Fixed on 2026-11-07: `littlebox login --verify-from <data folder>/mailbox.jsonl` answers the link from a development mailbox on a loopback Kernel, and without the flag the CLI names both steps | habits | Exit 0 and a saved credential. Was 202 `link-sent` |
 
 ### Job 4: take the app to another machine
 
@@ -155,7 +155,7 @@ The yardstick: a person who does not write code, and a person who does, make the
 | Inputs have type and length but no allowed values and no integer type; a CHECK is the only guard and its SQLite text reaches the visitor | gallery, booking, inbox | `CHECK constraint failed: ...` |
 | The only clock is `now` in UTC milliseconds; no time zone for a local day | habits, booking | |
 | The runtime endpoint answers `rate-limited` as HTTP 200 with `isError`; a route answers 429 | gallery | |
-| Under required verification the CLI cannot create the first owner in one step | habits | 202 `link-sent` |
+| Under required verification the CLI cannot create the first owner in one step. Fixed on 2026-11-07: `littlebox login --verify-from <data folder>/mailbox.jsonl` answers the link from a development mailbox on a loopback Kernel, and without the flag the CLI names both steps | habits | Exit 0 and a saved credential. Was 202 `link-sent` |
 
 ### Job 4: take the app to another machine
 

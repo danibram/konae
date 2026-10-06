@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { HELP, ignoreInGit, loginScopes, manifestSignupPolicy, publishLocal, signupPolicyWarning } from "./littlebox";
+import { HELP, VERIFY_BY_LINK, creatorVerificationToken, ignoreInGit, isLoopbackUrl, loginScopes, manifestSignupPolicy, publishLocal, signupPolicyWarning } from "./littlebox";
 
 /** A stand-in Kernel MCP endpoint that records tool calls and can fail chosen ones. */
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
@@ -103,8 +103,32 @@ describe("littlebox CLI", () => {
     expect(loginScopes(["--manage-lifecycle", "--export-data", "--manage-users"])).toEqual(["read", "write", "publish", "manage_users", "export_data", "manage_lifecycle"]);
   });
 
+  test("login --verify-from reads the newest creator verification link for the email and works only on this machine", async () => {
+    const line = (to: string, scope: string, purpose: string, token: string) => JSON.stringify({ to, purpose, scope, link: `http://127.0.0.1:4173/_littlebox/owner/login#${purpose}=${token}`, expiresAt: 1 });
+    const mailbox = [
+      line("ada@example.test", "creator", "verification", "old"),
+      line("ada@example.test", "deployment:app", "verification", "app-account"),
+      line("bob@example.test", "creator", "verification", "bob"),
+      line("ada@example.test", "creator", "recovery", "recovery"),
+      "not json",
+      line("Ada@Example.test", "creator", "verification", "new"),
+    ].join("\n");
+    expect(creatorVerificationToken(mailbox, "ada@example.test")).toBe("new");
+    expect(creatorVerificationToken(mailbox, "ada@example.test", 6)).toBeUndefined();
+    expect(creatorVerificationToken(mailbox, "cara@example.test")).toBeUndefined();
+    for (const url of ["http://localhost:4173", "http://127.0.0.1:19400", "http://[::1]:8787", "http://kernel.localhost"]) expect(isLoopbackUrl(url)).toBe(true);
+    for (const url of ["https://littlebox.example.com", "http://192.168.1.4:4173", "http://localhost.example.com"]) expect(isLoopbackUrl(url)).toBe(false);
+    expect(HELP).toContain("--verify-from <mailbox.jsonl>");
+    expect(VERIFY_BY_LINK).toContain("--verify-from");
+    const run = Bun.spawn([process.execPath, "run", "scripts/littlebox.ts", "login", "--dir", tmpdir(), "--url", "https://littlebox.example.com", "--verify-from", "/tmp/mailbox.jsonl"], {
+      env: { ...process.env, LITTLEBOX_EMAIL: "ada@example.test", LITTLEBOX_PASSWORD: "a-long-password" }, stderr: "pipe", stdout: "ignore",
+    });
+    expect(await run.exited).toBe(1);
+    expect(await new Response(run.stderr).text()).toContain("--verify-from reads a development mailbox on this machine, so it works only with a Kernel on localhost or 127.0.0.1, not littlebox.example.com.");
+  });
+
   test("help names every command and every login flag, and an unknown command prints it", async () => {
-    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "eject", "--manage-users", "--export-data", "--manage-lifecycle", "--with-data", "--project", "--revision", "--secret", "--key", "--inputs"]) expect(HELP).toContain(word);
+    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "eject", "--manage-users", "--export-data", "--manage-lifecycle", "--verify-from", "--with-data", "--project", "--revision", "--secret", "--key", "--inputs"]) expect(HELP).toContain(word);
     const run = cli("deploy");
     expect(await run.exited).toBe(1);
     expect(await new Response(run.stderr).text()).toContain("Unknown command deploy.\n\nUsage: bun run littlebox --");

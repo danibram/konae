@@ -199,3 +199,35 @@ describe("creator admission", () => {
     expect((await post("/_littlebox/owner/verify", { token: tokenOf(await lastLinkFor("bob@admission.test")), password })).status).toBe(410);
   }, 30_000);
 });
+
+describe("littlebox login --verify-from", () => {
+  const runLogin = async (folder: string, env: Record<string, string>, ...extra: string[]) => {
+    const child = Bun.spawn([process.execPath, "run", "scripts/littlebox.ts", "login", "--dir", folder, "--url", url, ...extra], {
+      env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_"))), ...env }, stdout: "pipe", stderr: "pipe",
+    });
+    return { code: await child.exited, out: await new Response(child.stdout).text(), err: await new Response(child.stderr).text() };
+  };
+
+  test("creates an admitted creator, answers the emailed link and saves a credential in one step", async () => {
+    const folder = await mkdtemp(path.join(tmpdir(), "littlebox-verify-from-"));
+    const env = { LITTLEBOX_EMAIL: "cli@admission.test", LITTLEBOX_PASSWORD: "cli-password-2026", LITTLEBOX_INVITATION_CODE: issueCode("For the CLI").code };
+    const done = await runLogin(folder, env, "--verify-from", path.join(root, "mailbox.jsonl"));
+    expect(done.err).toBe("");
+    expect(done.code).toBe(0);
+    const saved = JSON.parse(await readFile(path.join(folder, ".littlebox/credentials.json"), "utf8")) as { token: string };
+    expect(await new McpClient(`${url}/mcp`, { token: saved.token }).call("projects_list")).toMatchObject({ projects: [] });
+    expect(cli("creator-code-list").out).toContain("cli@admission.test (active)");
+    // The account now signs in with the password the CLI set, without the code.
+    expect((await runLogin(folder, { LITTLEBOX_EMAIL: env.LITTLEBOX_EMAIL, LITTLEBOX_PASSWORD: env.LITTLEBOX_PASSWORD })).code).toBe(0);
+    await rm(folder, { recursive: true, force: true });
+  }, 60_000);
+
+  test("without the flag the CLI explains the two steps", async () => {
+    const folder = await mkdtemp(path.join(tmpdir(), "littlebox-verify-from-"));
+    const done = await runLogin(folder, { LITTLEBOX_EMAIL: "twostep@admission.test", LITTLEBOX_PASSWORD: "cli-password-2026", LITTLEBOX_INVITATION_CODE: issueCode("Two steps").code });
+    expect(done.code).toBe(1);
+    expect(done.err).toContain("Open it, choose LITTLEBOX_PASSWORD as the password, then run login again");
+    expect(done.err).toContain("--verify-from <its data folder>/mailbox.jsonl");
+    await rm(folder, { recursive: true, force: true });
+  }, 60_000);
+});

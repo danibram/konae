@@ -137,7 +137,7 @@ The editor, the `littlebox` CLI and the test configurations read these:
 | `LITTLEBOX_URL` | `littlebox login`, `littlebox init`, `littlebox eject` | `http://localhost:4173` | Littlebox installation to talk to. `--url` overrides it. |
 | `LITTLEBOX_EMAIL`, `LITTLEBOX_PASSWORD` | `littlebox login` | unset | Owner credentials exchanged for a 24-hour MCP token. |
 | `LITTLEBOX_SETUP_KEY` | `littlebox login` | unset | Installation setup key, needed only to create an installation's first owner. |
-| `LITTLEBOX_INVITATION_CODE` | `littlebox login` | unset | Invitation code that creates the account when it does not exist yet. |
+| `LITTLEBOX_INVITATION_CODE` | `littlebox login` | unset | Invitation code that creates the account when it does not exist yet. Under required verification, add `--verify-from <data folder>/mailbox.jsonl` on a development Kernel to answer the emailed link in the same run. |
 | `LITTLEBOX_EDITOR_URL` | `playwright.local.config.ts` | `http://127.0.0.1:4176` | Editor the local end-to-end suite opens. When set outside CI, the suite reuses a server that is already running. |
 | `LITTLEBOX_TEST_KERNEL_PORT` | `playwright.local.config.ts` | `8794` | Kernel port for the local end-to-end suite. |
 | `LITTLEBOX_PORT` | exported self-host kit | `8787` | Port the exported Kernel publishes, read from the kit's `.env`. |

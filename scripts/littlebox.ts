@@ -75,10 +75,13 @@ export function loginScopes(args: string[]) {
 export const HELP = `Usage: bun run littlebox -- <command> [options]
 
 login     --dir <folder> --url <Kernel URL> [--manage-users] [--export-data] [--manage-lifecycle]
+          [--verify-from <mailbox.jsonl>]
           Reads LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD, plus LITTLEBOX_INVITATION_CODE to create the
           account with an operator's invitation code, or LITTLEBOX_SETUP_KEY for the first owner.
           Saves a 24-hour token with read, write and publish in <folder>/.littlebox/credentials.json.
           Each flag adds that permission: inviting app users, exporting live data, Eject and migration.
+          On a Kernel that verifies email, creating the account sends a link; --verify-from reads it from
+          a development mailbox on this machine and sets LITTLEBOX_PASSWORD, for loopback Kernels only.
 init      --dir <empty folder> --name <name> --url <Kernel URL>   Registers a project and writes a template.
 dev       --dir <folder> [--port 8796]   Runs the app on a local Development Kernel and republishes on change.
 build     --dir <folder>                 Writes .littlebox/artifact.json.
@@ -98,15 +101,56 @@ Every command but login reads the credential from <folder>/.littlebox/credential
 function endpoint(url: string) { return new URL("/mcp", url).href; }
 async function json<T>(filename: string): Promise<T> { return JSON.parse(await readFile(filename, "utf8")); }
 
+/** What login says when the account it created waits for its emailed link. */
+export const VERIFY_BY_LINK = "This installation verifies email, so the account waits for the link sent to your address. Open it, choose LITTLEBOX_PASSWORD as the password, then run login again with the same LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD and without the code or key, which are used now. On a development Kernel on this machine, run login with --verify-from <its data folder>/mailbox.jsonl to do both in one step.";
+
+/** Whether a Kernel URL names this machine, the only place a development mailbox can be read. */
+export function isLoopbackUrl(url: string) {
+  const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
+  return host === "localhost" || host.endsWith(".localhost") || host === "::1" || /^127(\.\d{1,3}){3}$/.test(host);
+}
+
+/**
+ * The newest creator verification token for `email` among the development
+ * mailbox's lines past the first `seen`. Lines for app accounts, other
+ * addresses and other purposes are skipped.
+ */
+export function creatorVerificationToken(mailbox: string, email: string, seen = 0): string | undefined {
+  const lines = mailbox.split("\n").filter(Boolean).slice(seen);
+  const message = lines.map((line) => { try { return JSON.parse(line) as { to?: string; scope?: string; purpose?: string; link?: string }; } catch { return {}; } })
+    .filter((item) => item.scope === "creator" && item.purpose === "verification" && item.to?.toLowerCase() === email.toLowerCase() && item.link)
+    .at(-1);
+  return message ? new URLSearchParams(new URL(message.link!).hash.slice(1)).get("verification") ?? undefined : undefined;
+}
+
+async function mailboxLines(file: string) {
+  return (await readFile(file, "utf8").catch(() => "")).split("\n").filter(Boolean).length;
+}
+
+/** Waits for the Kernel's mail worker to write the link, then answers it with the password. */
+async function verifyFromMailbox(url: string, file: string, email: string, password: string, seen: number) {
+  for (const deadline = Date.now() + 15_000; Date.now() < deadline; await Bun.sleep(200)) {
+    const token = creatorVerificationToken(await readFile(file, "utf8").catch(() => ""), email, seen);
+    if (!token) continue;
+    return fetch(new URL("/_littlebox/owner/verify", url), {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token, password }),
+    });
+  }
+  throw Error(`No verification link for ${email} reached ${file} within 15 seconds. Check that this is the mailbox of the Kernel at ${url}, which writes one when LITTLEBOX_MAIL_TRANSPORT=development.`);
+}
+
 /** Signs in, or creates the account with an invitation code or, for the first owner, the setup key. */
-async function login(url: string, email: string, password: string, admission: { code?: string; setupKey?: string } = {}, scopes = ["read", "write", "publish"]): Promise<string> {
+async function login(url: string, email: string, password: string, admission: { code?: string; setupKey?: string } = {}, scopes = ["read", "write", "publish"], verifyFrom?: string): Promise<string> {
+  if (verifyFrom && !isLoopbackUrl(url)) throw Error(`--verify-from reads a development mailbox on this machine, so it works only with a Kernel on localhost or 127.0.0.1, not ${new URL(url).host}.`);
   let response = await fetch(new URL("/_littlebox/owner/login", url), {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password }),
   });
+  const seen = verifyFrom ? await mailboxLines(verifyFrom) : 0;
   if (!response.ok && (admission.code || admission.setupKey)) response = await fetch(new URL("/_littlebox/owner/signup", url), {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password, ...admission }),
   });
-  if (response.status === 202) throw Error("This installation verifies email. Open the link sent to your address to choose your password, then run login again.");
+  if (response.status === 202 && verifyFrom) response = await verifyFromMailbox(url, verifyFrom, email, password, seen);
+  if (response.status === 202) throw Error(VERIFY_BY_LINK);
   if (!response.ok) throw Error((await response.json()).error ?? "Owner sign-in failed.");
   const cookie = response.headers.get("set-cookie")?.split(";")[0];
   if (!cookie) throw Error("Owner sign-in returned no session.");
@@ -408,7 +452,8 @@ async function main() {
     const email = process.env.LITTLEBOX_EMAIL; const password = process.env.LITTLEBOX_PASSWORD;
     if (!email || !password) throw Error("Set LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD. To create the account, also set LITTLEBOX_INVITATION_CODE, or LITTLEBOX_SETUP_KEY for the first owner.");
     const scopes = loginScopes(args);
-    const token = await login(url, email, password, { code: process.env.LITTLEBOX_INVITATION_CODE, setupKey: process.env.LITTLEBOX_SETUP_KEY }, scopes);
+    const verifyFrom = option("verify-from");
+    const token = await login(url, email, password, { code: process.env.LITTLEBOX_INVITATION_CODE, setupKey: process.env.LITTLEBOX_SETUP_KEY }, scopes, verifyFrom && path.resolve(verifyFrom));
     await mkdir(path.join(root, ".littlebox"), { recursive: true });
     await writeFile(path.join(root, ".littlebox/credentials.json"), JSON.stringify({ url, token }), { mode: 0o600 });
     await chmod(path.join(root, ".littlebox/credentials.json"), 0o600);
