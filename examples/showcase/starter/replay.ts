@@ -98,6 +98,7 @@ function post(base: string, route: string, body: unknown, headers: Record<string
     body: JSON.stringify(body),
   });
 }
+const signupHint = "Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first.";
 const cookieOf = (response: Response) => response.headers.get("set-cookie")?.split(";")[0];
 const tokenOfCookie = (cookie: string) => cookie.split("=").slice(1).join("=");
 
@@ -158,13 +159,13 @@ function app(kernel: Kernel, receipt: Receipt) {
     const before = await mailCount(kernel.data, email, "verification");
     const started = await auth("/_littlebox/auth/signup", { email });
     assert.equal(started.status, 202, await started.clone().text());
-    assert.equal(cookieOf(started), undefined, "A signup must not open a session before verification.");
+    assert.match(cookieOf(started) ?? "", /^littlebox_signup=/, "A signup must not open a session before verification.");
     const verified = await auth("/_littlebox/auth/verify", { token: (await mail(kernel.data, email, "verification", before)).token, password });
     assert.equal(verified.status, 200, await verified.clone().text());
     return cookieOf(verified)!;
   };
-  const login = async (email: string, password: string) => {
-    const response = await auth("/_littlebox/auth/login", { email, password });
+  const login = async (email: string, password: string, cookie?: string) => {
+    const response = await post(kernel.url, "/_littlebox/auth/login", { email, password }, cookie ? { host, cookie } : { host });
     return { status: response.status, cookie: response.ok ? cookieOf(response) : undefined, text: response.ok ? "" : await response.text() };
   };
   const sign = (body: string, secret = webhookSecret, t = Math.floor(Date.now() / 1000), nonce?: string) =>
@@ -322,10 +323,13 @@ try {
   // ----------------------------------------------- open signup, verification required
   const anaStart = await S.auth("/_littlebox/auth/signup", { email: people.ana });
   assert.equal(anaStart.status, 202);
-  assert.equal(cookieOf(anaStart), undefined);
-  const pendingLogin = await S.login(people.ana, passwords.ana);
+  const anaBrowser = cookieOf(anaStart)!;
+  assert.match(anaBrowser, /^littlebox_signup=/, "The signup sets only the signup hint, never a session.");
+  const pendingLogin = await S.login(people.ana, passwords.ana, anaBrowser);
   assert.equal(pendingLogin.status, 401, pendingLogin.text);
-  refused("Required verification", "Ana signs in before opening her verification link", `${pendingLogin.status} ${pendingLogin.text}`);
+  assert.equal(JSON.parse(pendingLogin.text).error, signupHint);
+  const otherBrowser = await S.login(people.ana, passwords.ana);
+  assert.deepEqual([otherBrowser.status, JSON.parse(otherBrowser.text).error], [401, "Email or password is incorrect."]);
   const pendingUsers = (await A.owner.call<{ users: { email: string; state: string }[] }>("app_users_list", { deploymentId: receipt.id })).users;
   assert.deepEqual(pendingUsers.map((user) => [user.email, user.state]), [[people.ana, "pending"]]);
   const anaVerified = await S.auth("/_littlebox/auth/verify", { token: (await mail(A.data, people.ana, "verification")).token, password: passwords.ana });
@@ -340,7 +344,7 @@ try {
   // The Project Owner's own email signs up as an ordinary app account.
   assert.equal(sessions.olga.name, ownerEmail);
   refused("Owner inside the app", "auth_session for the app account the Project Owner created with the owner's email", `role "${sessions.olga.role}"; no binding or session field tells the app this account is its owner`);
-  check("Verified open signup", `Signup answers 202 with no cookie, the pending account's sign-in answers ${pendingLogin.status}, and the emailed link sets the password and opens a session. Ana, Ben and the owner's app account are active; auth_session gives the owner's account role "${sessions.olga.role}".`);
+  check("Verified open signup", `Signup answers 202 with no session cookie, only the signup hint; the pending account's sign-in from Ana's browser answers ${pendingLogin.status} with the hint to open the link first, and from another browser the plain 401; and the emailed link sets the password and opens a session. Ana, Ben and the owner's app account are active; auth_session gives the owner's account role "${sessions.olga.role}".`);
 
   // Each person joins the app once; a second join changes nothing.
   for (const [who, caller] of [["ana", ana], ["ben", ben], ["olga", olga]] as const) {

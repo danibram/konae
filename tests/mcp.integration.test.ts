@@ -836,3 +836,93 @@ describe("authenticated MCP", () => {
     expect((await refused!.json()).error).toBe("rate-limited");
   });
 });
+
+// A second Kernel that requires verification, for the flows that only exist
+// there. It shares the build and the helpers above but none of their state.
+describe("app accounts under required verification", () => {
+  let strictRoot: string;
+  let strictKernel: ReturnType<typeof Bun.spawn> | undefined;
+  let strictUrl: string;
+  let owner: McpClient;
+  let host: string;
+  const ownerEmail = "olga@strict.test";
+  const post = (route: string, body: unknown, headers: Record<string, string> = {}) => fetch(`${strictUrl}${route}`, {
+    method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": freshClient(), ...headers }, body: JSON.stringify(body),
+  });
+  const mailbox = async () => (await Bun.file(path.join(strictRoot, "mailbox.jsonl")).text().catch(() => "")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as { to: string; scope: string; purpose: string; link: string });
+  const token = async (to: string, purpose: string) => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const found = (await mailbox()).filter((message) => message.to === to && message.purpose === purpose).at(-1);
+      if (found) return new URLSearchParams(new URL(found.link).hash.slice(1)).get(purpose)!;
+      await Bun.sleep(100);
+    }
+    throw Error(`No ${purpose} email reached ${to}.`);
+  };
+  const appPost = (route: string, body: unknown, cookie?: string) => post(route, body, { host, ...(cookie ? { cookie } : {}) });
+  const setCookie = (response: Response) => response.headers.get("set-cookie")?.split(";")[0];
+
+  beforeAll(async () => {
+    strictRoot = await mkdtemp(path.join(tmpdir(), "littlebox-mcp-strict-"));
+    const strictPort = (Number(process.env.LITTLEBOX_MCP_TEST_PORT) || 19300 + Math.floor(Math.random() * 90)) + 100;
+    strictUrl = `http://127.0.0.1:${strictPort}`;
+    strictKernel = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
+      env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_"))), LITTLEBOX_DATA_DIR: strictRoot, LITTLEBOX_KERNEL_PORT: String(strictPort), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_PUBLIC_ORIGIN: strictUrl, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development", LITTLEBOX_ACCOUNT_VERIFICATION: "required" },
+      stdout: "ignore", stderr: "inherit",
+    });
+    let ready = false;
+    for (let attempt = 0; attempt < 100 && !ready; attempt++) {
+      try { ready = (await fetch(`${strictUrl}/_littlebox/health`)).ok; } catch {}
+      if (!ready) await Bun.sleep(100);
+    }
+    expect(ready).toBe(true);
+    expect((await post("/_littlebox/owner/signup", { email: ownerEmail, setupKey })).status).toBe(202);
+    const verified = await post("/_littlebox/owner/verify", { token: await token(ownerEmail, "verification"), password });
+    expect(verified.status).toBe(200);
+    const cookie = setCookie(verified)!;
+    owner = new McpClient(`${strictUrl}/mcp`, { fetch: (input, init) => {
+      const headers = new Headers(init?.headers); headers.set("cookie", cookie);
+      return fetch(input, { ...init, headers });
+    } });
+    const id = "strict_app";
+    await owner.call("project_create", { projectId: id, name: "Strict" });
+    const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify(payload(id))), id);
+    const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+    const receipt = await owner.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId });
+    host = receipt.hostname;
+    await owner.call("signup_policy_set", { deploymentId: receipt.id, mode: "open" });
+  }, 60_000);
+
+  afterAll(async () => {
+    strictKernel?.kill();
+    if (strictKernel) await strictKernel.exited;
+    if (strictRoot) await rm(strictRoot, { recursive: true, force: true });
+  });
+
+  test("a sign-in before the link hints only in the browser that asked for it", async () => {
+    const plain = "Email or password is incorrect.";
+    const hint = "Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first.";
+    const started = await appPost("/_littlebox/auth/signup", { email: "ana@strict.test" });
+    expect(started.status).toBe(202);
+    const browser = setCookie(started)!;
+    expect(browser).toStartWith("littlebox_signup=");
+    const login = async (email: string, pw: string, cookie?: string) => {
+      const response = await appPost("/_littlebox/auth/login", { email, password: pw }, cookie);
+      return [response.status, (await response.json()).error] as const;
+    };
+    expect(await login("ana@strict.test", password, browser)).toEqual([401, hint]);
+    expect(await login("ana@strict.test", password)).toEqual([401, plain]);
+    expect(await login("someone@strict.test", password, browser)).toEqual([401, plain]);
+    // An address with an active account: the probe's own signup sets the same cookie and gets the same hint.
+    await appPost("/_littlebox/auth/signup", { email: "ben@strict.test" });
+    expect((await appPost("/_littlebox/auth/verify", { token: await token("ben@strict.test", "verification"), password })).status).toBe(200);
+    const probe = await appPost("/_littlebox/auth/signup", { email: "ben@strict.test" });
+    expect(probe.status).toBe(202);
+    expect(await login("ben@strict.test", "a-guessed-password", setCookie(probe))).toEqual([401, hint]);
+    // The runtime endpoint's auth_signup sets it too.
+    const runtime = await fetch(`${strictUrl}/_littlebox/mcp`, {
+      method: "POST", headers: { host, "content-type": "application/json", accept: "application/json, text/event-stream", "x-forwarded-for": freshClient() },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "auth_signup", arguments: { email: "cara@strict.test" } } }),
+    });
+    expect(await login("cara@strict.test", password, setCookie(runtime))).toEqual([401, hint]);
+  }, 30_000);
+});

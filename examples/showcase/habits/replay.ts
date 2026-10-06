@@ -225,13 +225,18 @@ try {
   const ana = "ana@habits.test";
   const first = await appPost("/_littlebox/auth/signup", { email: ana });
   assert.equal(first.status, 202, await first.clone().text());
-  assert.equal(cookieOf(first), undefined, "A signup must not open a session before verification.");
+  // A signup opens no session. It sets only the signup hint, so a sign-in from this browser before the link can say why it failed.
+  const signupHint = cookieOf(first);
+  assert.match(signupHint ?? "", /^littlebox_signup=/, "A signup must not open a session before verification.");
   const firstLink = await waitForMail(ana, 0);
   assert.equal(firstLink.purpose, "verification");
-  const pendingLogin = await appPost("/_littlebox/auth/login", { email: ana, password: anaPassword });
+  const pendingLogin = await appPost("/_littlebox/auth/login", { email: ana, password: anaPassword }, { cookie: signupHint! });
   const pendingLoginBody = await pendingLogin.text();
   assert.equal(pendingLogin.status, 401, pendingLoginBody);
+  assert.equal(JSON.parse(pendingLoginBody).error, "Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first.");
   assert.equal(cookieOf(pendingLogin), undefined);
+  const otherBrowserLogin = await appPost("/_littlebox/auth/login", { email: ana, password: anaPassword });
+  assert.deepEqual([otherBrowserLogin.status, await otherBrowserLogin.json()], [401, { error: "Email or password is incorrect." }]);
   assert.equal((await runtime().call<{ role: string }>("auth_session")).role, "anonymous");
   await assert.rejects(action(runtime(), "habits.list"), /authentication-required/);
   const pendingUsers = await appUsers();
@@ -241,7 +246,7 @@ try {
   const ben = "ben@habits.test";
   const benSignup = await appPost("/_littlebox/auth/signup", { email: ben, password: "typed-at-signup-1234" });
   const benSignupStatus = benSignup.status;
-  assert.equal(cookieOf(benSignup), undefined);
+  assert.match(cookieOf(benSignup) ?? "", /^littlebox_signup=/);
   const benTypedLogin = await appPost("/_littlebox/auth/login", { email: ben, password: "typed-at-signup-1234" });
   assert.equal(benTypedLogin.status, 401, await benTypedLogin.clone().text());
 
@@ -279,7 +284,7 @@ try {
   const users = await appUsers();
   assert.deepEqual(users.map((user) => [user.email, user.state, user.verified]), [[ana, "active", true], [ben, "active", true]]);
   check("Verified signup",
-    `Signup answers 202 with no cookie; the pending account's login answers ${pendingLogin.status} ${pendingLoginBody}; a re-signup keeps user ID ${anaSession.userId} and turns the first link into 410; a signup for the active address answers 202, mails [${mailToActive.join(", ") || "nothing"}], and a guessed password answers 401 while both of Ana's sessions keep working. A password sent with a required-mode signup (status ${benSignupStatus}) does not sign in.`);
+    `Signup answers 202 with no session cookie, only the signup hint; the pending account's login from that browser answers ${pendingLogin.status} ${pendingLoginBody}, and from another browser the plain 401; a re-signup keeps user ID ${anaSession.userId} and turns the first link into 410; a signup for the active address answers 202, mails [${mailToActive.join(", ") || "nothing"}], and a guessed password answers 401 while both of Ana's sessions keep working. A password sent with a required-mode signup (status ${benSignupStatus}) does not sign in.`);
 
   // ------------------------------------------------ two devices, one account
   const today = utcDay();

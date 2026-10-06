@@ -118,3 +118,11 @@ The runtime endpoint refuses a request that carries an API key with 403 and says
 ## Note, 2026-11-07: a key reads what a visitor reads
 
 The starter app found that a key naming no file visibility answered 404 for a public avatar that a request with no credential read. A key now reads a public file of a public Deployment as a visitor does, and the visibilities it names on top. On a private Deployment a visitor reads nothing, so there the key reads only what it names, and `files: ["public"]` keeps its meaning. The check is `key_reads` in `kernel-rs/src/http.rs`.
+
+## Note, 2026-11-07: a sign-in before the link says what to do
+
+The starter and habits apps found that a person who signs in before opening the verification link is told the password is wrong. Required mode stores no password at signup, so the Kernel cannot answer "right password, account not confirmed" without changing this decision, and an answer that depends on the account's state tells whoever asks whether an address has an account.
+
+The Kernel keeps the 401 and adds a hint in the browser that asked for the link. Every 202 from an app signup sets a cookie that holds the SHA-256 of the Deployment ID and the email typed and lives as long as a verification link. A failed sign-in that carries the cookie for the email typed answers `Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first.` The hint depends on the cookie alone. A signup request sets the same cookie whether the address is new, pending, active or suspended, so a person testing addresses with their own signup gets the hint for every one of them and learns nothing from it.
+
+Considered: a distinct answer for a pending account whose password matches the one typed at signup, which needs that password stored and gives the state away to anyone who typed it; and a hint only when the account is pending and the browser started the signup, which still tells the browser that started it whether the address had an account before. The code is `signup_hint_cookie` and `signup_hint_applies` in `kernel-rs/src/accounts.rs`.

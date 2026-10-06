@@ -35,7 +35,7 @@ The Kernel's check that its mail transport may send as the configured sender, su
 _Avoid_: email health
 
 **Verification Mode**:
-The installation's choice between local, where signup creates an active unverified account for development, and required, where every new account starts pending and accounts that never verified return to pending.
+The installation's choice between local, where signup creates an active unverified account for development, and required, where every new account starts pending and accounts that never verified return to pending. In required mode a sign-in that fails in the browser that asked for a link says to open the link first; the hint follows that browser's signup request, never the account's state.
 _Avoid_: email confirmation setting
 
 **Workspace**:

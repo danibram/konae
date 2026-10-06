@@ -967,7 +967,13 @@ async fn auth_request(
     }
     if signup && state.accounts.verification == auth::Verification::Required {
         return match accounts::signup_app(state, &deployment, &input.email, client).await {
-            Ok(()) => accounts::link_sent(),
+            Ok(()) => {
+                let mut response = accounts::link_sent();
+                if let Some(cookie) = accounts::signup_hint_cookie(state, &deployment, &input.email) {
+                    response.headers_mut().insert(header::SET_COOKIE, cookie);
+                }
+                response
+            }
             Err(error_value) => auth_error(error_value),
         };
     }
@@ -1033,6 +1039,9 @@ async fn auth_request(
     };
     if !signup && matches!(result, Err(AuthError::InvalidCredentials)) {
         state.guards.auth_failed(&deployment.id, client, &failed_email);
+        if accounts::signup_hint_applies(state, &deployment, headers, &failed_email) {
+            return error(StatusCode::UNAUTHORIZED, accounts::SIGNUP_HINT);
+        }
     }
     match result {
         Ok(session) => {

@@ -122,6 +122,54 @@ pub fn routes() -> Router<AppState> {
 /// account exists.
 const LINK_SENT: &str = "If this email can use the app, a link is on its way. Open it to choose your password.";
 
+/// The answer to a sign-in that failed in a browser that started a signup
+/// for the same email on this app. It keeps the 401 and the first sentence.
+pub(crate) const SIGNUP_HINT: &str = "Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first.";
+
+/// The cookie a browser keeps after it asks for a signup link, so a sign-in
+/// that fails before the link is opened can say why. It holds a hash of the
+/// Deployment and the email the person typed, never the email.
+fn signup_hint_name(state: &AppState) -> &'static str {
+    if state.public_origin.starts_with("https://") { "__Host-littlebox_signup" } else { "littlebox_signup" }
+}
+
+fn signup_hint_value(deployment: &Deployment, email: &str) -> Option<String> {
+    let email = auth::normalize_email(email).ok()?.to_lowercase();
+    Some(auth::hash_token(&format!("{}\n{email}", deployment.id)))
+}
+
+/// The `Set-Cookie` for an answered signup request. Every answer that says a
+/// link is on its way sets it, whether the email is new, pending, active or
+/// suspended, so the cookie records only what this browser asked for and
+/// says nothing about the account. It lives as long as a verification link.
+pub(crate) fn signup_hint_cookie(state: &AppState, deployment: &Deployment, email: &str) -> Option<HeaderValue> {
+    let value = signup_hint_value(deployment, email)?;
+    let name = signup_hint_name(state);
+    let secure = if name.starts_with("__Host-") { "; Secure" } else { "" };
+    HeaderValue::from_str(&format!(
+        "{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{secure}",
+        auth::VERIFICATION_TTL_SECONDS
+    ))
+    .ok()
+}
+
+/// Whether this browser asked for a signup link for `email` on this app.
+/// The hint depends on this alone, never on the account's state, so it tells
+/// a person who missed the email what to do and tells someone testing
+/// addresses nothing: their own signup request sets the same cookie for an
+/// address with an account as for one without.
+pub(crate) fn signup_hint_applies(state: &AppState, deployment: &Deployment, headers: &HeaderMap, email: &str) -> bool {
+    let Some(expected) = signup_hint_value(deployment, email) else { return false };
+    let name = signup_hint_name(state);
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .filter_map(|part| part.trim().strip_prefix(name)?.strip_prefix('='))
+        .any(|value| value == expected)
+}
+
 /// Opens one Deployment's account store in this installation's mode.
 pub(crate) fn app_store(state: &AppState, deployment: &Deployment) -> Result<AuthService, AuthError> {
     AuthService::open_in(
@@ -514,7 +562,10 @@ pub(crate) async fn runtime_tool(
     let sent = || (json!({"status": "link-sent", "message": LINK_SENT}), None);
     let outcome = match name {
         "auth_signup" if state.accounts.verification == Verification::Required => {
-            signup_app(state, &deployment, &text("email"), client).await.map(|()| sent())
+            let hint = signup_hint_cookie(state, &deployment, &text("email"));
+            signup_app(state, &deployment, &text("email"), client)
+                .await
+                .map(|()| (json!({"status": "link-sent", "message": LINK_SENT}), hint))
         }
         "auth_signup" => signup_app_unverified(state, &deployment, &text("email"), &text("password"))
             .await
@@ -892,7 +943,7 @@ mod tests {
         assert!(login.contains("formnovalidate") && login.contains("a link to choose your password"));
         let response = app_signup(&fixture, APP_HOST, "person@example.test").await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        assert!(cookie_of(&response).is_none(), "a pending account gets no session");
+        assert!(cookie_of(&response).is_some_and(|cookie| cookie.starts_with("littlebox_signup=")), "a pending account gets no session, only the signup hint");
         let (purpose, token) = fixture.last_link();
         assert_eq!(purpose, Purpose::Verification);
         let link = fixture.mailbox.0.lock().unwrap()[0].link.clone();
@@ -924,6 +975,64 @@ mod tests {
         let repeated = app_signup(&fixture, APP_HOST, "person@example.test").await;
         assert_eq!(repeated.status(), StatusCode::ACCEPTED);
         assert_eq!(fixture.sent(), 1);
+    }
+
+    async fn app_login_with(fixture: &Fixture, host: &str, cookie: &str, email: &str, password: &str) -> (StatusCode, String) {
+        let mut headers = host_headers(host);
+        headers.insert(header::COOKIE, HeaderValue::from_str(cookie).unwrap());
+        let body = json!({"email": email, "password": password});
+        let response = super::super::login(State(fixture.state.clone()), headers, request("POST", host, "/_littlebox/auth/login", body)).await;
+        let status = response.status();
+        let body: Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 1 << 16).await.unwrap()).unwrap();
+        (status, body["error"].as_str().unwrap_or_default().to_owned())
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_before_the_link_hints_only_in_the_browser_that_asked_and_never_by_account_state() {
+        let mut fixture = fixture(Verification::Required, true);
+        let plain = (StatusCode::UNAUTHORIZED, "Email or password is incorrect.".to_owned());
+        let hinted = (StatusCode::UNAUTHORIZED, SIGNUP_HINT.to_owned());
+
+        // Ana asks for a link and signs in before opening it, in the same browser.
+        let started = app_signup(&fixture, APP_HOST, "ana@example.test").await;
+        assert_eq!(started.status(), StatusCode::ACCEPTED);
+        let set = started.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap().to_owned();
+        assert!(set.contains("HttpOnly") && set.contains("SameSite=Lax") && set.contains(&format!("Max-Age={}", auth::VERIFICATION_TTL_SECONDS)));
+        assert!(!set.contains("ana@example.test"), "the cookie holds a hash, never the email");
+        let hint = cookie_of(&started).unwrap();
+        assert_eq!(app_login_with(&fixture, APP_HOST, &hint, "ana@example.test", PASSWORD).await, hinted);
+        assert_eq!(app_login_with(&fixture, APP_HOST, &hint, "ANA@example.test", PASSWORD).await, hinted, "the email matches as typed in any case");
+        // Another browser, another email, or another app gets the plain answer.
+        assert_eq!(app_login(&fixture, APP_HOST, "ana@example.test", PASSWORD).await.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(app_login_with(&fixture, APP_HOST, "other=1", "ana@example.test", PASSWORD).await, plain);
+        assert_eq!(app_login_with(&fixture, APP_HOST, &hint, "ben@example.test", PASSWORD).await, plain);
+        assert_eq!(app_login_with(&fixture, OTHER_HOST, &hint, "ana@example.test", PASSWORD).await, plain);
+
+        // Someone testing addresses learns nothing. A signup request for an
+        // address with an active account answers the same 202 and sets the
+        // same kind of cookie, and a wrong password then gets the same hint
+        // a pending account gets.
+        // Every request here comes from one test address; start its rate limits over.
+        fixture.state.guards = Arc::new(Guards::new(Vec::new()));
+        let first = app_signup(&fixture, APP_HOST, "dora@example.test").await;
+        let token = fixture.last_link().1;
+        assert_eq!(app_answer(&fixture, APP_HOST, "/_littlebox/auth/verify", &token, "dora's real password").await.status(), StatusCode::OK);
+        let probe = app_signup(&fixture, APP_HOST, "dora@example.test").await;
+        assert_eq!(probe.status(), StatusCode::ACCEPTED);
+        let probe_cookie = cookie_of(&probe).unwrap();
+        assert_eq!(probe_cookie, cookie_of(&first).unwrap(), "the cookie depends on the app and the email, not on the account");
+        assert_eq!(app_login_with(&fixture, APP_HOST, &probe_cookie, "dora@example.test", "a guessed password").await, hinted);
+        let fresh = app_signup(&fixture, APP_HOST, "nobody@example.test").await;
+        assert_eq!(app_login_with(&fixture, APP_HOST, &cookie_of(&fresh).unwrap(), "nobody@example.test", "a guessed password").await, hinted);
+        // The right password still signs in with the cookie.
+        assert_eq!(app_login_with(&fixture, APP_HOST, &probe_cookie, "dora@example.test", "dora's real password").await.0, StatusCode::OK);
+
+        // The runtime endpoint's auth_signup sets the same cookie.
+        fixture.state.guards = Arc::new(Guards::new(Vec::new()));
+        let over_mcp = rpc(&fixture, APP_HOST, None, "tools/call", json!({"name": "auth_signup", "arguments": {"email": "cara@example.test"}})).await;
+        let cara = cookie_of(&over_mcp).unwrap();
+        assert!(cara.starts_with("littlebox_signup="));
+        assert_eq!(app_login_with(&fixture, APP_HOST, &cara, "cara@example.test", PASSWORD).await, hinted);
     }
 
     #[tokio::test]
@@ -1052,7 +1161,7 @@ mod tests {
         assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
 
         let signup = rpc(&fixture, APP_HOST, None, "tools/call", json!({"name": "auth_signup", "arguments": {"email": "person@example.test"}})).await;
-        assert!(signup.headers().get(header::SET_COOKIE).is_none());
+        assert!(cookie_of(&signup).is_some_and(|cookie| cookie.starts_with("littlebox_signup=")), "no session, only the signup hint");
         let body = rpc_json(signup).await;
         assert_eq!(body["result"]["structuredContent"]["result"]["status"], "link-sent", "{body}");
         assert!(!body.to_string().contains(&fixture.last_link().1), "no tool returns a token");
