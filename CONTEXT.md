@@ -119,7 +119,7 @@ The Project Owner's offer of an account on one Deployment to one email, sent as 
 _Avoid_: invite code (that names creator admission), allowlist entry
 
 **Runtime Actor**:
-Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a signed-in app user, or a service holding an API key. Its permissions are evaluated by server-side actions and never imply Project ownership. An `actor` binding yields the app user's ID or the key's ID, and nothing for a visitor.
+Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a signed-in app user, or a service holding an API key. Its permissions are evaluated by server-side actions and never imply Project ownership. An `actor` binding of the `id` yields the app user's ID or the key's ID, and nothing for a visitor. One of the `role` yields the app user's role on that app: `owner` for the Project Owner's own app account, which only the owner's session or the owner's own invitation creates, and `member` for everyone else; a visitor, a key and a signed request have no role and bind null.
 _Avoid_: Owner, editor user
 
 **API Key**:

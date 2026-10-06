@@ -593,6 +593,7 @@ export class MiniAppRuntimeHost {
     }
     const { action, params } = resolveServerAction(this.actionProgram, String(request.name), request.input, {
       actorId: this.previewActor === "guest" ? null : `${this.previewActor}_${this.appId}`,
+      actorRole: this.previewActor === "guest" ? null : this.getRuntimeSession().role,
     });
     // The preview keeps no Usage store. A signal action runs no SQL and answers
     // as the Kernel does, which records the Signal on a Deployment.

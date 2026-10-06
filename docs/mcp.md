@@ -75,8 +75,9 @@ All of these tools take a `deploymentId`, check `manage_users` and the token's p
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
-| `app_users_list` | `limit` (1 to 100, default 50), `cursor`, `state` | `{ users: [{ userId, email, state, verified, verifiedAt, createdAt }], nextCursor }`, ordered by email. |
+| `app_users_list` | `limit` (1 to 100, default 50), `cursor`, `state` | `{ users: [{ userId, email, state, verified, verifiedAt, createdAt, role }], nextCursor }`, ordered by email. `role` is `owner` for the Project Owner's own account and `member` otherwise. |
 | `app_user_suspend`, `app_user_resume` | `userId` | `{ userId, email, state }`. Suspension ends sessions and open links and keeps ID, password and rows. Resume returns `active` if the account ever verified, otherwise `pending`. |
+| `app_owner_enter` | none besides `deploymentId` | Listed and accepted only for the owner's browser session; a delegated token, even with `manage_users`, does not see it and gets `Unknown tool or insufficient permission.` Creates or links the app account for the owner's creator email with role `owner` and answers `{ userId, email, role: "owner", account: "created" or "existing", passwordCleared, url, expiresAt }`. `url` is `<app>/_littlebox/owner-entry#entry=<token>`, works once for two minutes and signs that account in. See [the owner's account in an app](#the-owners-account-in-an-app). |
 | `app_invitations_create` | `emails` (1 to 50), `idempotencyKey` (8 to 128 characters) | `{ policy, results: [...] }` with one result per distinct address: `invited` with `invitationId`, `expiresAt`, `acceptable` and `delivery`; `already-invited` with the pending `invitationId`; `already-member`; `suspended`; or `invalid-email`. |
 | `app_invitations_list` | `limit`, `cursor` | `{ invitations: [{ invitationId, email, status, invitedBy, createdAt, expiresAt, acceptedAt, revokedAt, delivery, sends }], nextCursor }`, newest first. |
 | `app_invitation_resend` | `invitationId`, `idempotencyKey` | A new seven-day link for a pending invitation; the earlier link stops working. Refused for an accepted or revoked invitation, an active account or a suspended one. |
@@ -165,6 +166,29 @@ The preflight calls `GET /domains` and requires the sender's domain with status 
 
 Each `svix-id` is recorded once, so a replay answers 200 with `duplicate: true` and changes nothing. `email.sent` moves a job to accepted, `email.delivered` to delivered, and `email.bounced`, `email.failed` and `email.suppressed` to failed ([event types](https://resend.com/docs/dashboard/webhooks/event-types)); the job is found by `data.email_id`. A state only moves forward and the first final state wins, so events in any order end in the same state. An event for an ID the worker has not recorded yet is kept and applied when it does. Other event types are recorded and change nothing.
 
+## The owner's account in an app
+
+An app decides what its owner may do with the same rules it applies to everyone, so it needs to recognise the owner's account. The Project Owner's app account on a Deployment has the role `owner` in that Deployment's `identity.sqlite`; every other account has `member`. `auth_session` returns it, `app_users_list` lists it, and an action reads it with `{ "source": "actor", "field": "role" }`, which binds `owner` or `member` for a person and null for a visitor, an API key or a signed request. Unlike the ID binding it never refuses on its own; write the check into the statement and declare a guard:
+
+```json
+{
+  "kind": "mutation",
+  "access": "authenticated",
+  "statement": "UPDATE profiles SET role = 'admin' WHERE user_id = ?1 AND role = 'member' AND ?2 = 'owner'",
+  "bindings": [{ "source": "input", "key": "userId", "type": "string", "maxLength": 64 }, { "source": "actor", "field": "role" }],
+  "guard": "Only the app's owner can make a member a team admin."
+}
+```
+
+The role comes from the owner's own credential, never from signup or an input:
+
+- `app_owner_enter`, which the editor's Users view calls from Open as owner, takes the owner's browser session. It finds the account whose email is the owner's creator email, or creates it active with no password, sets its role to `owner`, and returns a link that works once for two minutes. Opening the link shows a page that posts the token from the fragment to `POST /_littlebox/owner-entry`; GET changes nothing. The POST answers 200 with the app session cookie, and 410 `This link is invalid, expired or already used.` for a used, expired or foreign token. Usage counts the entry as a login.
+- Under required verification the creator scope already proved the address, so the account counts as verified. A pending account under that email, which may be a stranger's unanswered signup, is taken over: its links and sessions end. An active account that never verified, possible in local mode where anyone may sign up with any address, loses its password and sessions, and the answer says `passwordCleared: true`; the owner sets a password with recovery when they want one. A suspended account is refused with `Your app account on this app is suspended. Resume it in the Users view first.`
+- An owner signed in through the optional hosted identity adapter has no email in the Kernel and gets `Your owner account signs in through the hosted identity provider, so this installation has no email to give your app account. Sign up in the app instead.`
+- `app_invitations_create` for the owner's own creator email marks the pending account `owner`, since only the owner's mailbox can answer the link.
+
+The role travels with the identity file in a package, a portable export and a migration. The editor's preview has no owner account: Alice and Bob are members.
+
 ## Local development cycle
 
 From this repository, get a credential that can create and publish projects with `login` (described at the end of [Build and publish](#build-and-publish)), or set `LITTLEBOX_MCP_TOKEN` to one.
@@ -240,7 +264,7 @@ Before it reads a statement, each door checks the action's name, access, kind, b
 | Any other access | `Action <name> has an invalid access. Use "anonymous" or "authenticated".` |
 | A kind other than `query`, `mutation` or `signal` | `Action <name> has an invalid kind. Use "query", "mutation" or "signal".` |
 | `"nullable": true` on a binding that is not an input | `Action <name> has an invalid nullable input binding.` |
-| A binding of another source, an input with no key or another type, an actor field other than `id`, a kernel field other than `now`, a literal that is not a string, a number or null | `Invalid binding <index> in <name>.` |
+| A binding of another source, an input with no key or another type, an actor field other than `id` or `role`, a kernel field other than `now`, a literal that is not a string, a number or null | `Invalid binding <index> in <name>.` |
 | A string input's `maxLength` outside 1 to 100,000 | `Invalid maxLength in <name>.` |
 | A statement longer than 20,000 bytes, or more than 100 bindings | `Action <name> exceeds statement or binding limits.` |
 
@@ -289,9 +313,9 @@ The Kernel resolves the caller before any SQL runs.
 
 | Caller | `callers` entry | Proof | Actor ID for an `actor` binding |
 | --- | --- | --- | --- |
-| A service | `"signature"` | The signature the binding declares | None, so an action that binds the actor refuses |
-| A program the owner wrote | `"key"` | `Authorization: Bearer lbk_...`, an API key that names the action | The key's ID, `key_...` |
-| A person | `"session"` | The app session cookie, sent from the app's own origin | The app user's ID |
+| A service | `"signature"` | The signature the binding declares | None, so an action that binds the actor's ID refuses; the role binds null |
+| A program the owner wrote | `"key"` | `Authorization: Bearer lbk_...`, an API key that names the action | The key's ID, `key_...`; the role binds null |
+| A person | `"session"` | The app session cookie, sent from the app's own origin | The app user's ID; the role binds `owner` or `member` |
 
 `"callers"` lists one or more of the three, each once. `"signature"` belongs in it exactly when the binding declares a signature. Without the list:
 

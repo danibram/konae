@@ -520,6 +520,14 @@ impl Caller {
             Caller::Visitor => None,
         }
     }
+
+    /// A person's role in the app. A key is a program, not a member, so it has none.
+    fn actor_role(&self) -> Option<&str> {
+        match self {
+            Caller::Person(user) => Some(&user.role),
+            Caller::Key(_) | Caller::Visitor => None,
+        }
+    }
 }
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {
@@ -949,7 +957,7 @@ async fn run_route(
         query
     };
     let action = &table.program.actions[name];
-    let params = match resolve_bindings(action, &input, caller.actor_id()) {
+    let params = match resolve_bindings(action, &input, caller.actor_id(), caller.actor_role()) {
         Ok(params) => params,
         Err(message) => return refusal(StatusCode::BAD_REQUEST, &message),
     };

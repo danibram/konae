@@ -61,7 +61,7 @@ export type ContractInput = {
 
 export type ContractBinding =
   | { source: "input"; key: string }
-  | { source: "actor"; field: "id" }
+  | { source: "actor"; field: "id" | "role" }
   | { source: "kernel"; field: "now" }
   | { source: "literal"; value: string | number | null };
 
@@ -232,7 +232,8 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables): C
     }
     return { source: "input", key: binding.key };
   });
-  const actorBound = action.bindings.some((binding) => binding.source === "actor");
+  // The role binds null for a caller without one, so only the ID refuses them.
+  const actorBound = action.bindings.some((binding) => binding.source === "actor" && binding.field === "id");
   const output: ContractOutput = action.kind === "query"
     ? { kind: "rows", ...deriveOutputColumns(action.statement, tables) }
     : action.kind === "signal"

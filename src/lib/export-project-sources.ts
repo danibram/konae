@@ -6,6 +6,7 @@ import kernelAccountsSource from "../../kernel-rs/src/accounts.rs?raw";
 import kernelActionShapeSource from "../../kernel-rs/src/action_shape.rs?raw";
 import kernelActionCases from "../../kernel-rs/src/action-cases.json?raw";
 import kernelAdmissionSource from "../../kernel-rs/src/admission.rs?raw";
+import kernelAppOwnerSource from "../../kernel-rs/src/app_owner.rs?raw";
 import kernelArtifactSource from "../../kernel-rs/src/artifact.rs?raw";
 import kernelInvitationsSource from "../../kernel-rs/src/invitations.rs?raw";
 import kernelClerkSource from "../../kernel-rs/src/clerk.rs?raw";
@@ -46,6 +47,7 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/action_shape.rs", contents: kernelActionShapeSource },
   { path: "kernel-rs/src/action-cases.json", contents: kernelActionCases },
   { path: "kernel-rs/src/admission.rs", contents: kernelAdmissionSource },
+  { path: "kernel-rs/src/app_owner.rs", contents: kernelAppOwnerSource },
   { path: "kernel-rs/src/artifact.rs", contents: kernelArtifactSource },
   { path: "kernel-rs/src/invitations.rs", contents: kernelInvitationsSource },
   { path: "kernel-rs/src/clerk.rs", contents: kernelClerkSource },

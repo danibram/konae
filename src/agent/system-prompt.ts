@@ -64,6 +64,7 @@ Rules the Validation Gate checks for you:
   { "source": "input", "key": "id", "type": "number" }
   { "source": "input", "key": "done", "type": "boolean" }
   { "source": "actor", "field": "id" }    — the authenticated Runtime Actor id; the action fails for anonymous callers
+  { "source": "actor", "field": "role" }  — the signed-in person's role in this app: "owner" for the Project Owner's own account, "member" for everyone else, null for a visitor or an API key. Check it in the WHERE with a guard, such as AND ?3 = 'owner'
   { "source": "kernel", "field": "now" }  — server time in milliseconds
   { "source": "literal", "value": 0 }
 - Inputs are typed and validated. A "string" input must be non-empty; a "number" must be finite.

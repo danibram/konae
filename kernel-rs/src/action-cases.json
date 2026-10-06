@@ -214,6 +214,28 @@
   "error": "Invalid binding 0 in orders.create."
  },
  {
+  "case": "an actor binding of the role",
+  "actions": {
+   "members.promote": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE members SET role = 'admin' WHERE id = ?1 AND ?2 = 'owner'",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "actor",
+      "field": "role"
+     }
+    ]
+   }
+  },
+  "error": null
+ },
+ {
   "case": "an actor binding of another field",
   "actions": {
    "orders.create": {

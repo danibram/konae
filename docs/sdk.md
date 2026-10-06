@@ -39,6 +39,7 @@ Error messages below are the exact text a published app receives as `error.messa
 Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.
 
 - Visibility decides who may open the app shell. It never grants data access on its own.
+- The Project Owner's own account on an app has the role "owner". The owner opens it with Open as owner in the editor's Users view, or app_owner_enter with the owner's browser session, or by accepting an invitation they sent to their own email. No signup, recovery or input gives the role. An action checks it with the binding { "source": "actor", "field": "role" } and a guard, so the app needs no key-only route to recognise its owner.
 - The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_littlebox/invitation.
 
 ### miniapp.auth.session()
@@ -49,9 +50,9 @@ Signed-out visitors on a public Deployment: allowed.
 
 Runtime MCP tools: `auth_session`.
 
-Returns { userId, name, role }. Signed in, name is the account email and role is "member" or "owner". Signed out, { userId: "anonymous", name: "Anonymous", role: "anonymous" }.
+Returns { userId, name, role }. Signed in, name is the account email and role is "owner" for the Project Owner's own account on this app and "member" for everyone else. Signed out, { userId: "anonymous", name: "Anonymous", role: "anonymous" }.
 
-Editor preview: Returns Alice or Bob, the preview's test accounts, with role "member", or the anonymous state.
+Editor preview: Returns Alice or Bob, the preview's test accounts, with role "member", or the anonymous state. The preview has no owner account; publish to try what only the owner may do.
 
 ### miniapp.auth.signIn()
 
@@ -85,6 +86,7 @@ Editor preview: Switches to the signed-out state and returns the anonymous sessi
 
 The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.
 
+- A binding passes who calls: { "source": "actor", "field": "id" } is the signed-in person's ID or the API key's ID, and refuses a caller without one; { "source": "actor", "field": "role" } is the person's role on this app, "owner" or "member", and null for a visitor, an API key or a signed request. Neither can come from the input.
 - A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.
 - A mutation action returns { changes, lastInsertId }. Read changed rows with a separate query. A mutation that declares a guard and changes no row is refused with the guard instead.
 - The Action Contract, action-contract.json, lists every action with its inputs, the columns it returns, its errors and limits. It is written from actions.json and schema.sql by littlebox contract and carried in the export; an expression the SELECT returns without AS has no name in it, and the Validation Gate warns.

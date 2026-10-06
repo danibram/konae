@@ -197,7 +197,7 @@
         },
         {
           "type": "object", "required": ["source", "field"], "additionalProperties": false,
-          "properties": { "source": { "const": "actor" }, "field": { "const": "id" } }
+          "properties": { "source": { "const": "actor" }, "field": { "enum": ["id", "role"] } }
         },
         {
           "type": "object", "required": ["source", "field"], "additionalProperties": false,

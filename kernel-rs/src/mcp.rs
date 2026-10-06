@@ -372,6 +372,9 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             false,
         ));
         tools.extend(super::invitations::admin_tools());
+        if owner.session {
+            tools.push(super::app_owner::admin_tool());
+        }
     }
     if owner.scopes.iter().any(|s| s == "publish") {
         tools.extend([
@@ -1461,6 +1464,7 @@ async fn admin_call(
             tx.commit()?;
             Ok(receipt)
         }
+        "app_owner_enter" => super::app_owner::admin_call(state, owner, &a).await,
         name if name.starts_with("app_") => super::invitations::admin_call(state, owner, name, &a).await,
         name if name.starts_with("eject_") => super::eject::admin_call(state, owner, principal, name, &a).await,
         name if name.starts_with("migration_") => super::migration::admin_call(state, owner, principal, name, &a).await,

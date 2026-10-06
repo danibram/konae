@@ -126,3 +126,20 @@ The starter and habits apps found that a person who signs in before opening the 
 The Kernel keeps the 401 and adds a hint in the browser that asked for the link. Every 202 from an app signup sets a cookie that holds the SHA-256 of the Deployment ID and the email typed and lives as long as a verification link. A failed sign-in that carries the cookie for the email typed answers `Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first.` The hint depends on the cookie alone. A signup request sets the same cookie whether the address is new, pending, active or suspended, so a person testing addresses with their own signup gets the hint for every one of them and learns nothing from it.
 
 Considered: a distinct answer for a pending account whose password matches the one typed at signup, which needs that password stored and gives the state away to anyone who typed it; and a hint only when the account is pending and the browser started the signup, which still tells the browser that started it whether the address had an account before. The code is `signup_hint_cookie` and `signup_hint_applies` in `kernel-rs/src/accounts.rs`.
+
+## Note, 2026-11-07: the owner's account in an app has the role owner
+
+The starter app could not recognise its owner. `app_users.role` allowed `owner` but nothing wrote it, so the Project Owner's own app account read `member`, and Starter appointed its owner through a key-only route called with curl.
+
+When the Project Owner creates or links the app account for their creator email on their own Deployment, that account gets the role `owner` in `identity.sqlite`. Two doors write it, both behind the owner's own credential: `app_owner_enter`, which only the owner's browser session may call and which returns a one-time entry link on the app's origin, and an invitation the owner sends to their own creator email. Signup, verification, recovery and invitation acceptance keep the role the account has. `auth_session` returns the role, and the actor binding gains `{ "source": "actor", "field": "role" }`, which binds `owner` or `member` for a person and null for a visitor, an API key or a signed request, so a guard can check it. Both doors parse it from `action-cases.json` and `http-binding-cases.json`.
+
+Decisions the plan left open:
+
+- Session only. A delegated token with `manage_users` cannot call `app_owner_enter`, because the tool signs a person in, and `token_create` is session-only for the same reason.
+- The owner's email is the creator account's email in `owners.sqlite`. An owner of the hosted identity adapter has none there and is refused with a message, rather than taking an email as an argument, which would let a credential name any address.
+- The account is active without a verification of its own. Under required verification the creator scope proved the same address, so the account is marked verified. In local mode nothing is proved, the account stays unverified, and an existing unverified account under that email loses its password and sessions, since anyone could have created it.
+- A pending account under the owner's email is taken over, as a signup takes over a stranger's pending account in `request_signup_with`. A suspended one is refused.
+- The account may have no password. Recovery sets one; the entry link needs none. The entry counts as a login in Usage.
+- The entry token lives in the Kernel's memory for two minutes and works once. A restart ends open links; the owner clicks again.
+- The editor's preview keeps Alice and Bob as members and has no owner persona. Adding one changes the preview's actor picker outside the Users view, so it waits for a delivery that owns the preview.
+
