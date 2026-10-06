@@ -533,10 +533,11 @@ try {
   refused("File owner", "Ben's files_update on Ana's private draft", benChangesDraft);
   const benPublishes = await message(action(ben, "attachments.publish", { id: brochureRow.id }));
   assert.equal(benPublishes, program.actions["attachments.publish"].guard);
-  // A key with no file scope reads nothing, not even a public avatar.
+  // A key with no file scope reads what a visitor reads: the public avatar, not the private draft.
   const botAvatar = await S.fileGet(avatar.id, { bearer: bot.key });
-  const botAvatarText = await botAvatar.text();
-  refused("API key files", "The Release bot key, which names no file visibility, reads Ana's public avatar", `${botAvatar.status} ${botAvatarText}`);
+  assert.equal(botAvatar.status, 200, await botAvatar.clone().text());
+  assert.equal(botAvatar.headers.get("content-type"), "image/png");
+  assert.equal((await S.fileGet(draft.id, { bearer: bot.key })).status, 404);
 
   // Publishing is two steps: the bytes become public, then the row is listed.
   await ana.call("files_update", { fileId: brochure.id, visibility: "public" });
@@ -572,7 +573,7 @@ try {
   assert.equal(await message(ana.call("files_read", { fileId: photos.id })), "File not found.");
   for (const id of fillers) await ben.call("files_delete", { fileId: id });
   assert.deepEqual((await action(ana, "attachments.list")).map((row: any) => [row.name, row.public]), [["brochure.txt", 1], ["contract-draft.txt", 0]]);
-  check("Files", `Ana's avatar is public and a visitor reads it inline; her draft is private, so a visitor and Ben get 404 "File not found." as for a missing file, and Ben's files_update and files_delete are refused. Publishing the brochure takes files_update and attachments.publish, then downloads.list and a visitor read it. ${fillers.length - 1} of Ben's 2 MiB files plus Ana's 2 MiB attachment fill the quota and the next upload answers "${quotaRefusal}"; Ana deletes her attachment, the file path and files_read answer 404 and "File not found.", and Ben's same upload succeeds.`);
+  check("Files", `Ana's avatar is public and a visitor reads it inline, as does the Release bot key, which names no file visibility; her draft is private, so a visitor and Ben get 404 "File not found." as for a missing file, and Ben's files_update and files_delete are refused. Publishing the brochure takes files_update and attachments.publish, then downloads.list and a visitor read it. ${fillers.length - 1} of Ben's 2 MiB files plus Ana's 2 MiB attachment fill the quota and the next upload answers "${quotaRefusal}"; Ana deletes her attachment, the file path and files_read answer 404 and "File not found.", and Ben's same upload succeeds.`);
 
   // --------------------------------------- a guard and its refusal, for the page
   const renameTaken = await message(action(ana, "me.rename", { displayName: "Ben" }));

@@ -979,8 +979,9 @@ async fn run_route(
 }
 
 // ---------------------------------------------------------------------------
-// The file read path. A key reads the visibilities it names; a person reads
-// what `file_readable` allows; a visitor reads public files of a public
+// The file read path. A key reads the visibilities it names and, like a
+// visitor, public files of a public Deployment; a person reads what
+// `file_readable` allows; a visitor reads public files of a public
 // Deployment. A file another caller may not read answers 404, as a missing one.
 
 async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>, request: Request) -> Response {
@@ -1014,6 +1015,13 @@ async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>
     response
 }
 
+/// Whether a key reads a file of this visibility. It reads the visibilities
+/// it names, and a public file of a public Deployment as a visitor would, so
+/// a key never sees less than a request with no credential.
+fn key_reads(key: &ApiKey, visibility: &str, private_deployment: bool) -> bool {
+    (visibility == "public" && !private_deployment) || key.files.iter().any(|named| named == visibility)
+}
+
 async fn read_file_as_key(state: &AppState, deployment: &Deployment, key: &ApiKey, id: &str) -> Response {
     let not_found = || error(StatusCode::NOT_FOUND, "File not found.");
     if !valid_file_id(id) {
@@ -1025,7 +1033,7 @@ async fn read_file_as_key(state: &AppState, deployment: &Deployment, key: &ApiKe
         Err(_) => return not_found(),
     };
     let Some(metadata) = index.iter().find(|file| file["id"].as_str() == Some(id)) else { return not_found() };
-    if !key.files.iter().any(|visibility| visibility == file_visibility(metadata)) {
+    if !key_reads(key, file_visibility(metadata), is_private(deployment)) {
         return not_found();
     }
     match tokio::fs::read(directory.join(format!("{id}.blob"))).await {
@@ -1232,6 +1240,20 @@ mod tests {
         assert_eq!(get(&state, &restarted, "/api/total").await.0, StatusCode::OK);
         assert_eq!(route_parses(&second.id), 3);
         let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[test]
+    fn a_key_reads_what_a_visitor_reads_and_the_visibilities_it_names() {
+        let key = |files: &[&str]| ApiKey { id: "key".into(), actions: Vec::new(), files: files.iter().map(|f| f.to_string()).collect() };
+        // A key that names no file visibility still reads a public file of a public app.
+        assert!(key_reads(&key(&[]), "public", false));
+        assert!(!key_reads(&key(&[]), "private", false));
+        // On a private app a visitor reads nothing, so the key reads only what it names.
+        assert!(!key_reads(&key(&[]), "public", true));
+        assert!(key_reads(&key(&["public"]), "public", true));
+        assert!(!key_reads(&key(&["public"]), "private", true));
+        assert!(key_reads(&key(&["private"]), "private", true));
+        assert!(!key_reads(&key(&["private"]), "public", true));
     }
 
     #[test]

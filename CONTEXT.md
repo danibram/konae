@@ -123,7 +123,7 @@ Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a s
 _Avoid_: Owner, editor user
 
 **API Key**:
-A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It names the Server Actions it may call over their HTTP routes and the file visibilities it may read, and is sent as `Authorization: Bearer`. The runtime endpoint refuses it. The Kernel stores its hash only. A package or a portable export carries its name, scope and hash, and the import marks it revoked at import, so the destination's owner sees which programs to issue new keys for; a restore of a copy keeps it valid.
+A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It names the Server Actions it may call over their HTTP routes and the file visibilities it may read, and on a public Deployment it also reads public files as a visitor does. It is sent as `Authorization: Bearer`. The runtime endpoint refuses it. The Kernel stores its hash only. A package or a portable export carries its name, scope and hash, and the import marks it revoked at import, so the destination's owner sees which programs to issue new keys for; a restore of a copy keeps it valid.
 _Avoid_: token (an Agent Credential), service account
 
 **Signing Secret**:
