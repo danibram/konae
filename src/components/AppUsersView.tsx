@@ -1,7 +1,7 @@
 import { MailWarning, RefreshCw, Send, Users } from "lucide-react";
 import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import {
-  createAppInvitations, listAppInvitations, listAppUsers, readMailStatus, readSignupPolicy, resendAppInvitation, resumeAppUser,
+  createAppInvitations, listAppInvitations, listAppUsers, openAppAsOwner, readMailStatus, readSignupPolicy, resendAppInvitation, resumeAppUser,
   revokeAppInvitation, saveSignupPolicy, signupModes, suspendAppUser,
   type AppInvitation, type AppUser, type AppUserState, type InvitationResult, type MailStatus, type SignupMode, type SignupPolicy,
 } from "../deployments/client";
@@ -70,6 +70,7 @@ export function AppUsersView({ deploymentId, visibility, onSetVisibility }: Prop
           {!readiness.ready && <p className="access-mail" role="status"><MailWarning size={15} /><span>{readiness.reason}</span></p>}
           <InviteForm deploymentId={deploymentId} mailReady={readiness.ready} mailReason={readiness.reason} onInvited={onChanged} onSignedOut={onSignedOut} />
           <InvitationList deploymentId={deploymentId} mailReady={readiness.ready} mailReason={readiness.reason} changed={changed} onChanged={onChanged} onSignedOut={onSignedOut} />
+          <OwnerAccount deploymentId={deploymentId} onOpened={onChanged} onSignedOut={onSignedOut} />
           <AccountList deploymentId={deploymentId} changed={changed} onSignedOut={onSignedOut} />
         </>
       )}
@@ -321,6 +322,54 @@ const stateFilters: Array<{ value: "" | AppUserState; label: string }> = [
   { value: "suspended", label: "Suspended" },
 ];
 
+/**
+ * Opens the app signed in as the owner's own account, which the Kernel
+ * creates or links with the role "owner" so the app's actions can tell the
+ * owner apart. The tab opens before the call so a popup blocker allows it.
+ */
+function OwnerAccount({ deploymentId, onOpened, onSignedOut }: { deploymentId: string; onOpened: () => void; onSignedOut: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const [error, setError] = useState("");
+
+  const open = async () => {
+    setBusy(true);
+    setError("");
+    setNote("");
+    const tab = window.open("about:blank", "_blank");
+    if (tab) tab.opener = null;
+    try {
+      const entry = await openAppAsOwner(deploymentId);
+      if (tab) tab.location.replace(entry.url);
+      else window.location.assign(entry.url);
+      setNote(entry.account === "created"
+        ? `Created your app account, ${entry.email}, with the role owner and opened the app.`
+        : entry.passwordCleared
+          ? `Opened the app as ${entry.email}. That account never confirmed its email, so its password and other sessions were cleared; it is yours now, with the role owner.`
+          : `Opened the app as ${entry.email}, with the role owner.`);
+      onOpened();
+    } catch (cause) {
+      tab?.close();
+      if (signedOut(cause)) onSignedOut();
+      setError(message(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="access-card" role="group" aria-label="Your account in this app">
+      <h3>Your account in this app</h3>
+      <p className="access-note">Opens the app signed in as your own email, with the role owner. The app's actions can check that role, so only you reach what the app keeps for its owner. The first time, this creates the account.</p>
+      {error && <div className="access-error" role="alert">{error}</div>}
+      {note && <p className="access-note" role="status">{note}</p>}
+      <div className="access-actions">
+        <Button size="sm" disabled={busy} onClick={() => void open()}>{busy ? "Opening" : "Open as owner"}</Button>
+      </div>
+    </Card>
+  );
+}
+
 function AccountList({ deploymentId, changed, onSignedOut }: { deploymentId: string; changed: number; onSignedOut: () => void }) {
   const [filter, setFilter] = useState<"" | AppUserState>("");
   // Each entry is the cursor that opens a page; the first page has none.
@@ -365,7 +414,7 @@ function AccountList({ deploymentId, changed, onSignedOut }: { deploymentId: str
           {stateFilters.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </Select>
       </header>
-      <p className="access-note">People who use this app. They are not owners and cannot open this editor.</p>
+      <p className="access-note">People who use this app. An app account cannot open this editor; the one marked Owner is your own.</p>
       {error && <div className="access-error" role="alert">{error}</div>}
       {!rows ? <p className="access-note">Loading app accounts.</p> : rows.length === 0 ? (
         <p className="access-note">{filter ? `No ${userStateView[filter].label.toLowerCase()} app accounts.` : "No app accounts yet. People appear here once they sign up or you invite them."}</p>
@@ -376,7 +425,7 @@ function AccountList({ deploymentId, changed, onSignedOut }: { deploymentId: str
             <tbody>
               {rows.map((user) => (
                 <tr key={user.userId}>
-                  <td className="access-email">{user.email}</td>
+                  <td className="access-email">{user.email}{user.role === "owner" && <> <Badge tone="accent" title="The Project Owner's own account. Actions see the role owner.">Owner</Badge></>}</td>
                   <td><Badge tone={userStateView[user.state].tone} title={userStateView[user.state].sentence}>{userStateView[user.state].label}</Badge>{user.state !== "pending" && !user.verified && <small> Email not verified</small>}</td>
                   <td><small>{formatDate(user.createdAt)}</small></td>
                   <td className="access-row-actions">
