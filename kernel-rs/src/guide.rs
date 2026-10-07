@@ -70,7 +70,8 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "The person opens the link and chooses a password; the page posts it to /_littlebox/auth/accept and signs them in.",
                 "app_invitations_list shows each invitation's status; app_invitation_resend sends a new link and app_invitation_revoke ends one."
             ],
-            "accounts": "app_users_list, app_user_suspend and app_user_resume. Suspension ends sessions and keeps the account's rows."
+            "accounts": "app_users_list, app_user_suspend and app_user_resume. Suspension ends sessions and keeps the account's rows.",
+            "owner": "The Project Owner's own app account has the role owner, which auth_session returns and the binding { source: actor, field: role } yields. app_owner_enter { deploymentId }, for the owner's browser session only, creates or links it and returns a link that signs it in once within two minutes; an invitation the owner sends to their own email gives the same role. Guard owner-only actions with ?n = 'owner' on that binding instead of a key-only route."
         }),
         "portability" => json!({
             "export": [

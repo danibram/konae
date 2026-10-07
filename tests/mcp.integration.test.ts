@@ -863,7 +863,8 @@ describe("app accounts under required verification", () => {
 
   beforeAll(async () => {
     strictRoot = await mkdtemp(path.join(tmpdir(), "littlebox-mcp-strict-"));
-    const strictPort = (Number(process.env.LITTLEBOX_MCP_TEST_PORT) || 19300 + Math.floor(Math.random() * 90)) + 100;
+    // Its own range, so it never meets the admission suite's 19400 to 19489.
+    const strictPort = Number(process.env.LITTLEBOX_MCP_STRICT_TEST_PORT) || 20400 + Math.floor(Math.random() * 90);
     strictUrl = `http://127.0.0.1:${strictPort}`;
     strictKernel = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
       env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_"))), LITTLEBOX_DATA_DIR: strictRoot, LITTLEBOX_KERNEL_PORT: String(strictPort), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_PUBLIC_ORIGIN: strictUrl, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development", LITTLEBOX_ACCOUNT_VERIFICATION: "required" },

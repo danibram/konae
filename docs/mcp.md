@@ -187,7 +187,7 @@ The role comes from the owner's own credential, never from signup or an input:
 - An owner signed in through the optional hosted identity adapter has no email in the Kernel and gets `Your owner account signs in through the hosted identity provider, so this installation has no email to give your app account. Sign up in the app instead.`
 - `app_invitations_create` for the owner's own creator email marks the pending account `owner`, since only the owner's mailbox can answer the link.
 
-The role travels with the identity file in a package, a portable export and a migration. The editor's preview has no owner account: Alice and Bob are members.
+The role travels with the identity file in a package, a portable export and a migration, so after an import to another owner's installation the previous owner's account is still `owner` and the new owner's Open as owner adds a second; no tool removes the role, and `app_user_suspend` is the lever until one does. The editor's preview has no owner account: Alice and Bob are members.
 
 ## Local development cycle
 

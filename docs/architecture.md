@@ -98,6 +98,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 | `admission.rs` | Invitation codes and the setup key's one use |
 | `clerk.rs` | The optional hosted creator sign-in adapter |
 | `invitations.rs` | App invitations and the owner's user tools behind `manage_users` |
+| `app_owner.rs` | The Project Owner's own app account with the role `owner`, and its one-time entry link |
 | `mail.rs` | The email queue, its worker, the Resend, SMTP and development transports, the sender preflight and the limits |
 | `http.rs` | HTTP routes, their callers and signatures, signing secrets, API keys and `GET /_littlebox/files/<id>` |
 | `guard.rs` | A mutation's guard |

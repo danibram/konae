@@ -141,5 +141,6 @@ Decisions the plan left open:
 - A pending account under the owner's email is taken over, as a signup takes over a stranger's pending account in `request_signup_with`. A suspended one is refused.
 - The account may have no password. Recovery sets one; the entry link needs none. The entry counts as a login in Usage.
 - The entry token lives in the Kernel's memory for two minutes and works once. A restart ends open links; the owner clicks again.
+- The role travels with the identity file in a package, a portable export and a migration. After an import to another owner's installation, the previous owner's app account is still `owner`, and the new Project Owner's Open as owner adds a second one. No tool removes the role; suspending that account with `app_user_suspend` is the lever until one exists.
 - The editor's preview keeps Alice and Bob as members and has no owner persona. Adding one changes the preview's actor picker outside the Users view, so it waits for a delivery that owns the preview.
 
