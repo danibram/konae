@@ -245,7 +245,7 @@ try {
   await A.owner.cancel(probeUpload.transferId).catch(() => {});
   assert.equal(kernelLimitRefusal, gateLimitRefusal);
   refused("LIMIT rule", "notes.list without its LIMIT, in the Gate and on release_plan", kernelLimitRefusal);
-  check("Gate", `The Gate passes the Capsule's 27 actions. notes.list without its LIMIT is refused by the Gate and by the Kernel's release_plan with the same words: "${kernelLimitRefusal}"`);
+  check("Gate", `The Gate passes the Capsule's 26 actions. notes.list without its LIMIT is refused by the Gate and by the Kernel's release_plan with the same words: "${kernelLimitRefusal}"`);
 
   // ------------------------------------------------------- the CLI publishes
   const cliDir = path.join(scratch, "cli");
@@ -341,10 +341,30 @@ try {
     ben: await ben.call<{ userId: string; role: string }>("auth_session"),
     olga: await olga.call<{ userId: string; name: string; role: string }>("auth_session"),
   };
-  // The Project Owner's own email signs up as an ordinary app account.
+  // The Project Owner's own email signs up as an ordinary app account, a member until the owner claims it.
   assert.equal(sessions.olga.name, ownerEmail);
-  refused("Owner inside the app", "auth_session for the app account the Project Owner created with the owner's email", `role "${sessions.olga.role}"; no binding or session field tells the app this account is its owner`);
-  check("Verified open signup", `Signup answers 202 with no session cookie, only the signup hint; the pending account's sign-in from Ana's browser answers ${pendingLogin.status} with the hint to open the link first, and from another browser the plain 401; and the emailed link sets the password and opens a session. Ana, Ben and the owner's app account are active; auth_session gives the owner's account role "${sessions.olga.role}".`);
+  assert.equal(sessions.olga.role, "member");
+  check("Verified open signup", `Signup answers 202 with no session cookie, only the signup hint; the pending account's sign-in from Ana's browser answers ${pendingLogin.status} with the hint to open the link first, and from another browser the plain 401; and the emailed link sets the password and opens a session. Ana, Ben and the owner's app account are active, all three members.`);
+
+  // ------------------------------------------------- the owner's role, from the Users view
+  // Open as owner in the editor calls app_owner_enter with the owner's session. It links the
+  // account with the owner's email, gives it the role owner and returns a one-time entry link.
+  const entry = await A.owner.call<{ userId: string; account: string; passwordCleared: boolean; role: string; url: string }>("app_owner_enter", { deploymentId: receipt.id });
+  assert.deepEqual([entry.userId, entry.account, entry.passwordCleared, entry.role], [sessions.olga.userId, "existing", false, "owner"]);
+  const entryUrl = new URL(entry.url);
+  assert.equal(`${entryUrl.origin}${entryUrl.pathname}`, `${receipt.url}/_littlebox/owner-entry`);
+  const entryToken = new URLSearchParams(entryUrl.hash.slice(1)).get("entry")!;
+  const entered = await S.auth("/_littlebox/owner-entry", { token: entryToken });
+  assert.equal(entered.status, 200, await entered.clone().text());
+  assert.equal((await entered.json()).result.user.role, "owner");
+  cookies.olga = cookieOf(entered)!;
+  const entryAgain = await S.auth("/_littlebox/owner-entry", { token: entryToken });
+  assert.deepEqual([entryAgain.status, (await entryAgain.json()).error], [410, "This link is invalid, expired or already used."]);
+  // The session the owner opened with a password reads the new role too.
+  sessions.olga = await olga.call<{ userId: string; name: string; role: string }>("auth_session");
+  assert.equal(sessions.olga.role, "owner");
+  const ownerUsers = (await A.owner.call<{ users: { email: string; role: string }[] }>("app_users_list", { deploymentId: receipt.id })).users;
+  assert.deepEqual(ownerUsers.map((user) => [user.email, user.role]), [[people.ana, "member"], [people.ben, "member"], [ownerEmail, "owner"]]);
 
   // Each person joins the app once; a second join changes nothing.
   for (const [who, caller] of [["ana", ana], ["ben", ben], ["olga", olga]] as const) {
@@ -352,12 +372,8 @@ try {
     assert.equal((await action(caller, "me.join", { displayName: `${who} again` })).changes, 0);
   }
 
-  // ------------------------------------------------- the owner's role, then a team admin
-  const consoleKey = await A.owner.call<{ key: string; keyId: string }>("api_keys_create", { deploymentId: receipt.id, name: "Owner console", actions: ["owners.appoint"] });
-  const appointed = await S.route("POST", "/api/owners", { body: JSON.stringify({ userId: sessions.olga.userId }), bearer: consoleKey.key });
-  assert.deepEqual(appointed, { status: 200, body: { result: { changes: 1, lastInsertId: 0 } } });
-  const appointAgain = await S.route("POST", "/api/owners", { body: JSON.stringify({ userId: sessions.olga.userId }), bearer: consoleKey.key });
-  assert.deepEqual(appointAgain, { status: 403, body: { error: program.actions["owners.appoint"].guard } });
+  // ------------------------------------------------- a team admin, promoted by the owner
+  // me.join copied the owner's role from the actor binding into the profile.
   assert.equal((await action(olga, "me.get"))[0].role, "owner");
 
   const benPromotes = await message(action(ben, "members.promote", { userId: sessions.ben.userId }));
@@ -383,7 +399,7 @@ try {
   refused("Guard", "Ben (member) posts in the team area", benPosts);
   const [stats] = await action(olga, "admin.stats");
   assert.equal(stats.admins, 1);
-  check("Owner and team admin", `An API key named "Owner console", scoped to owners.appoint, makes the owner's app account the in-app owner over POST /api/owners; a second call answers 403 with the guard. Ben's members.promote is refused with "${benPromotes}"; Ana sees an empty roster and is refused a team post until the owner promotes her with members.promote, a guarded mutation. Then team.roster lists ana (admin) and olga (owner), her post lands, and her own members.promote, members.list and admin.stats get the guard or no rows. Ben still reads no team row.`);
+  check("Owner and team admin", `Open as owner (app_owner_enter, the owner's session) links the account with the owner's email and returns an entry link that signs it in once and answers 410 after; auth_session and app_users_list then give it the role owner, and me.join copies that role into the app's profile through { "source": "actor", "field": "role" }, with no key-only route. Ben's members.promote is refused with "${benPromotes}"; Ana sees an empty roster and is refused a team post until the owner promotes her with members.promote, a guarded mutation. Then team.roster lists ana (admin) and olga (owner), her post lands, and her own members.promote, members.list and admin.stats get the guard or no rows. Ben still reads no team row.`);
 
   // ------------------------------------------------------- the visitor's view
   const visitor = S.runtime();
@@ -397,8 +413,6 @@ try {
   const visitorWrite = await S.route("POST", "/api/updates", { body: JSON.stringify({ title: "Spam" }) });
   assert.deepEqual(visitorWrite, { status: 401, body: { error: "authentication-required" } });
   refused("Private write API", "A visitor's POST /api/updates with no key", `${visitorWrite.status} ${JSON.stringify(visitorWrite.body)}`);
-  const visitorOwner = await S.route("POST", "/api/owners", { body: JSON.stringify({ userId: sessions.ben.userId }) });
-  assert.equal(visitorOwner.status, 401);
   // A member's session from the app's own origin does not open a key-only route either.
   const benOnKeyRoute = await S.route("POST", "/api/updates", { body: JSON.stringify({ title: "From Ben" }), cookie: cookies.ben, headers: { origin: S.origin } });
   assert.deepEqual(benOnKeyRoute, { status: 401, body: { error: "authentication-required" } });
@@ -412,9 +426,6 @@ try {
     assert.equal(posted.status, 200, JSON.stringify(posted));
     assert.equal(posted.body.result.changes, 1);
   }
-  const outOfScope = await S.route("POST", "/api/owners", { body: JSON.stringify({ userId: sessions.ben.userId }), bearer: bot.key });
-  assert.deepEqual(outOfScope, { status: 403, body: { error: "This API key may not call owners.appoint." } });
-  refused("API key scope", "The Release bot key, scoped to updates.post, on POST /api/owners", `${outOfScope.status} ${outOfScope.body.error}`);
   const keyOnHook = await S.route("POST", "/hooks/status", { body: JSON.stringify({ component: "api", state: "down" }), bearer: bot.key });
   assert.deepEqual(keyOnHook, { status: 403, body: { error: "This API key may not call status.report." } });
   refused("API key scope", "The Release bot key on the signed webhook, which takes a signature or a key", `${keyOnHook.status} ${keyOnHook.body.error}`);
@@ -429,7 +440,7 @@ try {
   assert.deepEqual(unknownKey, { status: 401, body: { error: "invalid-api-key" } });
   const botRows = (await A.owner.call<{ rows: { author_id: string; source: string }[] }>("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: "SELECT DISTINCT author_id, source FROM updates" } })).rows;
   assert.deepEqual(botRows, [{ author_id: bot.keyId, source: "program" }]);
-  check("Private write API", `A key named "Release bot", scoped to updates.post, writes 12 updates over POST /api/updates; each row's author_id is the key's ID ${bot.keyId}. The same key is refused on POST /api/owners and on the webhook with 403 "This API key may not call <action>.", an undeclared field answers 400, the runtime endpoint answers 403, an unknown key 401, and a visitor or Ben's session 401 authentication-required.`);
+  check("Private write API", `A key named "Release bot", scoped to updates.post, writes 12 updates over POST /api/updates; each row's author_id is the key's ID ${bot.keyId}. The same key is refused on the webhook with 403 "This API key may not call <action>.", an undeclared field answers 400, the runtime endpoint answers 403, an unknown key 401, and a visitor or Ben's session 401 authentication-required.`);
 
   // ---------------------------------------- pagination and search, public and private
   const page1 = await S.route("GET", "/api/updates");
@@ -601,7 +612,7 @@ try {
   assert(posted.every((signal) => signal.properties.actor === bot.keyId));
   assert.deepEqual(named("status.changed").map((signal) => [signal.properties.state, signal.properties.actor]).reverse(), [["operational", null], ["degraded", null]]);
   assert.deepEqual(named("role.changed").map((signal) => [signal.properties.userId, signal.properties.actor]).reverse(),
-    [[sessions.olga.userId, consoleKey.keyId], [sessions.ana.userId, sessions.olga.userId]]);
+    [[sessions.ana.userId, sessions.olga.userId]]);
   assert.deepEqual(named("attachment.published").map((signal) => signal.properties), [{ id: brochureRow.id, actor: sessions.ana.userId }]);
   assert.deepEqual(named("download.opened").map((signal) => signal.properties), [{ fileId: brochure.id, actor: null }]);
   const today = new Date().toISOString().slice(0, 10);
@@ -614,7 +625,7 @@ try {
   assert.equal(total("signup"), 3);
   const appReadsSignals = await message(olga.call("signals_read", { deploymentId: receipt.id }));
   refused("Signals", "The in-app owner's session calls signals_read on the runtime endpoint", appReadsSignals);
-  check("Signals and Usage", `signals_read returns ${signals.length} Signals. member.joined fires once per person although each joined twice; note.added names its writer; the 12 program updates name the key ${bot.keyId}; status.changed fires for the two deliveries that changed the row with actor null, not for the identical retry; role.changed names the Owner console key for the appointment and the owner for Ana's promotion, and none of the four refused role and team calls recorded one. Usage counts refused members.promote ${total("refused", "members.promote")}, refused team.post ${total("refused", "team.post")}, POST /api/updates ${total("route", "POST /api/updates")}, POST /hooks/status ${total("route", "POST /hooks/status")}, signup ${total("signup")}. The app itself cannot read them: "${appReadsSignals}".`);
+  check("Signals and Usage", `signals_read returns ${signals.length} Signals. member.joined fires once per person although each joined twice; note.added names its writer; the 12 program updates name the key ${bot.keyId}; status.changed fires for the two deliveries that changed the row with actor null, not for the identical retry; role.changed names the owner for Ana's promotion, and none of the four refused role and team calls recorded one. Usage counts refused members.promote ${total("refused", "members.promote")}, refused team.post ${total("refused", "team.post")}, POST /api/updates ${total("route", "POST /api/updates")}, POST /hooks/status ${total("route", "POST /hooks/status")}, signup ${total("signup")}. The app itself cannot read them: "${appReadsSignals}".`);
 
   // --------------------------------------------- Action Contract and conform
   const contractDir = path.join(scratch, "contract");
@@ -624,7 +635,7 @@ try {
   assert.equal(contractCode, 0, contractOut + contractErr);
   assert.equal(contractErr.trim(), "", "contract warns about nothing");
   const written = JSON.parse(await readFile(path.join(contractDir, "action-contract.json"), "utf8"));
-  assert.equal(written.actions.length, 27);
+  assert.equal(written.actions.length, 26);
   const queries = written.actions.filter((item: any) => item.output?.kind === "rows");
   assert(queries.every((item: any) => item.output.unnamed.length === 0));
   for (const item of queries) {
@@ -637,7 +648,7 @@ try {
   refused("Action Contract", "admin.stats returns six COUNT(*) columns, each aliased", `Each is typed "unknown" with nullable null: ${unknownColumns.join(", ")}`);
   // conform runs every mutation once, so it targets the managed Deployment, not the one that travels.
   const conformCookie = await M.signUp("conform@starter.test", `conform-${crypto.randomUUID()}`);
-  const conformKey = await A.owner.call<{ key: string }>("api_keys_create", { deploymentId: managedReceipt.id, name: "Conformance", actions: ["updates.post", "owners.appoint", "status.report"] });
+  const conformKey = await A.owner.call<{ key: string }>("api_keys_create", { deploymentId: managedReceipt.id, name: "Conformance", actions: ["updates.post", "status.report"] });
   const inputsFile = path.join(scratch, "conform-inputs.json");
   await writeFile(inputsFile, JSON.stringify({ "status.report": { component: "conform", state: "degraded", detail: "conformance run" } }));
   const contractFile = path.join(contractDir, "action-contract.json");
@@ -658,7 +669,7 @@ try {
   assert.match(conformRuns["session, key and secret"], /^\d+ passed, 0 failed, 0 skipped/);
   assert.deepEqual(conformFailures["key and secret"], []);
   assert.match(conformRuns["key and secret"], /^\d+ passed, 0 failed, \d+ skipped/);
-  check("Action Contract and conform", `littlebox contract writes 27 actions with no warning, and every query names each column it returns. conform against ${managedReceipt.url}: with a session, a key and the secret "${conformRuns["session, key and secret"]}", the member meeting every role's guard; with the key and the secret "${conformRuns["key and secret"]}", the session-only actions skipped.`);
+  check("Action Contract and conform", `littlebox contract writes 26 actions with no warning, and every query names each column it returns. conform against ${managedReceipt.url}: with a session, a key and the secret "${conformRuns["session, key and secret"]}", the member meeting every role's guard; with the key and the secret "${conformRuns["key and secret"]}", the session-only actions skipped.`);
 
   // ------------------------------------------- package export, import on Kernel B
   const exported = await A.owner.call<{ manifest: any; downloads: Record<string, Transfer> }>("package_export", { deploymentId: receipt.id });
@@ -714,10 +725,10 @@ try {
   assert.deepEqual(oldKey, { status: 401, body: { error: "invalid-api-key" } });
   refused("Import", "The origin's Release bot key on the destination", `${oldKey.status} ${oldKey.body.error}`);
   const keysB = (await B.owner.call<{ keys: { name: string; actions: string[]; revokedReason: string | null }[] }>("api_keys_list", { deploymentId: imported.id })).keys;
-  assert.deepEqual(keysB.map((key) => [key.name, key.revokedReason]).sort(), [["Owner console", "import"], ["Release bot", "import"]]);
+  assert.deepEqual(keysB.map((key) => [key.name, key.revokedReason]), [["Release bot", "import"]]);
   const botB = await B.owner.call<{ key: string }>("api_keys_create", { deploymentId: imported.id, name: "Release bot", actions: ["updates.post"] });
   assert.equal((await I.route("POST", "/api/updates", { body: JSON.stringify({ title: "Release 1.13" }), bearer: botB.key })).status, 200);
-  assert.deepEqual(await I.route("POST", "/api/owners", { body: JSON.stringify({ userId: sessions.ben.userId }), bearer: botB.key }), { status: 403, body: { error: "This API key may not call owners.appoint." } });
+  assert.deepEqual(await I.route("POST", "/hooks/status", { body: JSON.stringify({ component: "api", state: "down" }), bearer: botB.key }), { status: 403, body: { error: "This API key may not call status.report." } });
   // The origin's last accepted delivery, captured and replayed at the destination, is refused:
   // the memory of signatures travels with the accounts. Past 300 seconds it is stale anyway.
   const lastAge = Math.floor(Date.now() / 1000) - Number(lastSignature.match(/^t=(\d+)/)![1]);
@@ -730,8 +741,8 @@ try {
   assert.equal(signalsB.signals.length, 26);
   const newcomer = await I.auth("/_littlebox/auth/signup", { email: "dee@starter.test" });
   assert.equal(newcomer.status, 202);
-  assert.equal(cookieOf(newcomer), undefined);
-  check("Package export and import", `package_export carried ${exported.manifest.contents.map((item: any) => `${item.name} (${item.size} B)`).join(", ")}. Kernel B imported it after its own secret_set: Ana, Ben and the owner sign in with their passwords; rows, the admin and owner roles, every guard, the private draft, the public avatar and brochure, the deleted file's 404 and the visitor's limits hold. Both origin keys answer invalid-api-key and appear as revoked at import; a new key works within its scope. The webhook takes the secret the owner set again, the origin's last delivery replayed answers ${originSigned.status} ${originSigned.body.error}, 26 note.added Signals arrived, and a new signup is still open and waits for its link.`);
+  assert.match(cookieOf(newcomer) ?? "", /^littlebox_signup=/, "No session before the link, only the signup hint.");
+  check("Package export and import", `package_export carried ${exported.manifest.contents.map((item: any) => `${item.name} (${item.size} B)`).join(", ")}. Kernel B imported it after its own secret_set: Ana, Ben and the owner sign in with their passwords; rows, the admin and owner roles, every guard, the private draft, the public avatar and brochure, the deleted file's 404 and the visitor's limits hold. The origin's Release bot key answers invalid-api-key and appears as revoked at import; a new key works within its scope. The webhook takes the secret the owner set again, the origin's last delivery replayed answers ${originSigned.status} ${originSigned.body.error}, 26 note.added Signals arrived, and a new signup is still open and waits for its link.`);
 
   // --------------------------------------------- Chrome under the app's policy
   if (process.env.LITTLEBOX_SHOWCASE_BROWSER !== "0") {

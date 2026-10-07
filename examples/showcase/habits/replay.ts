@@ -253,7 +253,7 @@ try {
   // A second signup for the pending address keeps its ID and replaces the link.
   const second = await appPost("/_littlebox/auth/signup", { email: ana });
   assert.equal(second.status, 202);
-  assert.equal(cookieOf(second), undefined);
+  assert.equal(cookieOf(second), signupHint, "The same email gets the same hint cookie, and no session.");
   const secondLink = await waitForMail(ana, 1);
   const stale = await appPost("/_littlebox/auth/verify", { token: tokenOf(firstLink.link), password: anaPassword });
   assert.equal(stale.status, 410, await stale.clone().text());
@@ -269,7 +269,7 @@ try {
   const mailBefore = await mailCount(ana);
   const steal = await appPost("/_littlebox/auth/signup", { email: ana });
   assert.equal(steal.status, 202);
-  assert.equal(cookieOf(steal), undefined);
+  assert.equal(cookieOf(steal), signupHint, "An active address gets the hint cookie a pending one gets, so the cookie tells nothing.");
   await Bun.sleep(1_500);
   const mailToActive = (await mailbox(dataDir)).filter((item) => item.to === ana).slice(mailBefore).map((item) => item.purpose);
   const stolenLogin = await appPost("/_littlebox/auth/login", { email: ana, password: "attacker-password-1234" });

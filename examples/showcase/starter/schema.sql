@@ -1,5 +1,6 @@
 -- One row per person who joined. The role lives here, in the app's rows:
--- the Kernel knows who is signed in, the app decides what they may do.
+-- the Kernel knows who is signed in and which account is the owner's, and
+-- the app decides what each role may do. me.join copies the owner's role in.
 CREATE TABLE IF NOT EXISTS profiles (
   user_id TEXT PRIMARY KEY NOT NULL,
   display_name TEXT NOT NULL CHECK (length(trim(display_name)) BETWEEN 1 AND 40),

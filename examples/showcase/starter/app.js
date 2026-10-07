@@ -194,7 +194,8 @@ async function loadAdmin(q = null) {
 
 async function render() {
   const signedIn = state.session.role !== "anonymous";
-  const role = signedIn ? state.me?.role ?? "member" : "anonymous";
+  // The Kernel names the owner's account; the profile names admins.
+  const role = !signedIn ? "anonymous" : state.session.role === "owner" ? "owner" : state.me?.role ?? "member";
   for (const node of document.querySelectorAll("[data-needs]")) node.hidden = RANK[role] < RANK[node.dataset.needs];
   $("#sign-in").hidden = signedIn;
   $("#sign-out").hidden = !signedIn;

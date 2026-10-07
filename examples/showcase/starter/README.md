@@ -13,7 +13,7 @@ Every rule lives in `actions.json`. The Kernel binds the caller's ID and the SQL
 | `app.js` | The page: `miniapp.auth`, `miniapp.actions` and `miniapp.files`, `textContent` only, no inline handlers |
 | `favicon.svg` | The icon, as text so the managed path can hold it |
 | `schema.sql`, `schema.ts` | Six tables; the SQL the Kernel runs and the Database Model the editor reads |
-| `actions.json` | 27 actions: the only door to the database |
+| `actions.json` | 26 actions: the only door to the database |
 | `replay.ts` | Starts two Kernels, proves every claim below and removes them |
 | `AGENT.md` | What an agent reads before adapting this app |
 
@@ -25,9 +25,9 @@ Every rule lives in `actions.json`. The Kernel binds the caller's ID and the SQL
 | Public read API | An unsigned `GET` route on a public app, with pagination and search under a `LIMIT` | `updates.list` at `GET /api/updates?before=&q=` |
 | Accounts | Signup Policy Open, `LITTLEBOX_ACCOUNT_VERIFICATION=required` | `littlebox.json` `signupPolicy`, the Kernel's sign-in page |
 | Member area | `actor` bindings on `authenticated` actions | `me.*`, `notes.*`, `attachments.*` |
-| Team area with roles | A role column and guarded mutations whose `WHERE` checks the caller's role | `team.*`, `updates.publish`, `members.promote` |
-| Admin area for the owner | The same, for `role = 'owner'` | `members.list`, `members.demote`, `updates.remove`, `admin.stats` |
-| The in-app owner | A key-only route, so only the Project Owner's key appoints it | `owners.appoint` at `POST /api/owners`, `"callers": ["key"]` |
+| Team area with roles | A role column and guarded mutations whose `WHERE` checks the caller's role | `team.*`, `updates.publish` |
+| Admin area for the owner | Guards on `{ "source": "actor", "field": "role" }` equal to `'owner'`, which the Kernel gives only the Project Owner's own account | `members.list`, `members.promote`, `members.demote`, `updates.remove`, `admin.stats` |
+| The in-app owner | Open as owner in the editor's Users view (`app_owner_enter`) links the account with the owner's email and gives it the role `owner`; `me.join` copies that role into the profile | `me.join` |
 | Private write API | A key-only route on a public app; the key's ID is the actor | `updates.post` at `POST /api/updates` |
 | Signed webhook | A route with a signature and a signing secret set with `secret_set` | `status.report` at `POST /hooks/status`, header `X-Starter-Signature` |
 | Avatar | `miniapp.files.upload(file, { visibility: "public" })`, `miniapp.files.url` | `me.avatar` |
@@ -60,7 +60,7 @@ cp examples/showcase/starter/{index.html,styles.css,app.js,favicon.svg,schema.sq
 bun run littlebox -- publish --dir /tmp/starter
 ```
 
-Then, as the Project Owner: sign up in the app with your own email, find your user ID with `app_users_list`, issue a key with `api_keys_create { actions: ["owners.appoint"] }`, and send `POST /api/owners {"userId": "<yours>"}` with it. Your account now opens the admin area, where you make members team admins.
+Then, as the Project Owner, open the project's Auth > Users view in the editor and choose Open as owner. The app opens signed in as your own email with the role `owner`, and its admin area is where you make members team admins. An agent with the owner's browser session calls `app_owner_enter` for the same link.
 
 ## What the replay proves
 
@@ -69,16 +69,17 @@ The run of 2026-11-07 passed every check in about 75 seconds.
 | Claim | How the replay shows it |
 | --- | --- |
 | Open signup with required verification | Signup answers 202 with no session cookie, only the signup hint; signing in before the link answers 401 with the hint in Ana's browser and the plain answer in another; the link sets the password and opens a session |
-| A visitor reads the public rows and the public API only | `status.list`, `updates.list`, `downloads.list` and `GET /api/updates` answer; `notes.list`, `team.roster` and `me.join` answer `authentication-required`; both key-only routes answer 401; a private attachment answers 404 |
+| A visitor reads the public rows and the public API only | `status.list`, `updates.list`, `downloads.list` and `GET /api/updates` answer; `notes.list`, `team.roster` and `me.join` answer `authentication-required`; the key-only route answers 401; a private attachment answers 404 |
 | A member reads and writes only their own rows | Ben reads only his note; deleting Ana's note gets the guard; a `userId` input is refused |
 | A team admin promoted by a guarded mutation sees the team area | Ben's and Ana's `members.promote` get the guard; the owner's promotes Ana; then `team.roster` and `team.posts` answer her and still answer Ben with no rows |
-| A key writes within its scope and is refused outside it | The Release bot key posts 12 updates whose `author_id` is the key's ID; on `/api/owners` and the webhook it gets 403 |
+| The owner's account is the app's owner without a key | Ana, Ben and the owner sign up as members; `app_owner_enter` with the owner's session links the owner's account, its entry link signs in once and answers 410 after, and `auth_session` and `app_users_list` then say `owner`; `me.join` stores that role from the actor binding |
+| A key writes within its scope and is refused outside it | The Release bot key posts 12 updates whose `author_id` is the key's ID; on the webhook it gets 403 |
 | A signed webhook updates a row | Two deliveries insert and update `api`; unsigned, replayed, stale and wrongly signed deliveries answer 401, 409, 401, 401 |
 | Avatar public, attachment private, publish, delete and quota | See the Files check; the Release bot key, which names no file visibility, reads the public avatar as a visitor does and gets 404 for the private draft; 8 of Ben's 2 MiB files and Ana's 2 MiB attachment fill the 20 MiB quota, the next upload is refused, and deleting Ana's attachment lets the same upload through |
 | Pagination and search within the LIMIT rules | `updates.list` pages 10 and 2 and searches; `notes.list` pages 20 and 5; the Gate and the Kernel refuse `notes.list` without its `LIMIT` with the same words |
 | A guarded mutation shows its refusal in the page | Chrome, as Ana, renames her to "ben" and the page shows the guard |
-| Signals carry the actor and only real changes | 47 Signals: each person's `member.joined` once though each joined twice; program updates name the key; `status.changed` has `actor` null and skips the identical retry; no refused call records one |
-| The Action Contract names every column; conform passes with a session and with a key | 27 actions, no warning, no unnamed column; conform with a session, the key and the secret: 184 passed, 0 failed, 0 skipped, the member meeting each role's guard on the probes that omit a nullable input too; with the key and the secret: 65 passed, 0 failed, 40 skipped. Both counts include the HEAD probe on `GET /api/updates` |
+| Signals carry the actor and only real changes | 46 Signals: each person's `member.joined` once though each joined twice; program updates name the key; `status.changed` has `actor` null and skips the identical retry; no refused call records one |
+| The Action Contract names every column; conform passes with a session and with a key | 26 actions, no warning, no unnamed column; conform with a session, the key and the secret: @SESSION@ passed, 0 failed, 0 skipped, the member meeting each role's guard on the probes that omit a nullable input too; with the key and the secret: @KEY@ passed, 0 failed, 40 skipped. Both counts include the HEAD probe on `GET /api/updates` |
 | The app exports as a package and imports with every rule intact | On the second Kernel, passwords, rows, roles, guards, file visibility, the deleted file, Signals and open signup with verification hold; old keys answer `invalid-api-key`; the origin's last webhook delivery answers 409 |
 | The same Capsule publishes from the CLI and the managed path | `littlebox login`, `init`, `build`, `publish` for one Deployment; `project_sources_save` and `release_plan`/`release_apply` for another; each is built in its own folder, and their page, script, styles and icon are byte for byte the same, with no bundler comment naming a folder |
 | No console error under the policy | A visitor in light, Ana in dark and the owner in light load with no violation, console error or failed request |
@@ -89,7 +90,7 @@ Each row is a limit the app met, with the exact answer. None was worked around.
 
 | Primitive | Request | Answer | What it costs the app |
 | --- | --- | --- | --- |
-| Owner inside the app | `auth_session` for the app account the Project Owner opened with the owner's own email | `role "member"`. No binding or session field tells the app this account is its owner | The app cannot recognize its owner. Starter appoints one through a key-only route the owner calls once with curl, which a person who does not write code would not do. `docs/sdk.md` says the role is "member" or "owner", but only the optional hosted identity adapter returns "owner" |
+| Owner inside the app | `auth_session` for the app account the Project Owner opened with the owner's own email | Was `role "member"`, with no binding that told the app this account was its owner, so Starter appointed one through a key-only route called with curl. Fixed on 2026-11-07: Open as owner in the Users view, or `app_owner_enter`, gives that account the role `owner`, which `auth_session` returns and `{ "source": "actor", "field": "role" }` binds | None now. The key-only route `owners.appoint` is gone |
 | Actor binding | An action that wants the caller's email | No binding gives it: only `actor.id`, `kernel.now` and literals exist | Display names are typed by the member, and the owner matches emails to IDs with `app_users_list` |
 | Required verification | Ana signs in before opening her verification link | Was `401 {"error":"Email or password is incorrect."}`. Fixed on 2026-11-07: from her browser, `401 {"error":"Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first."}`; from another browser, the plain answer | None now. The hint depends on a cookie the signup request set, never on the account, so it tells nobody whether an address has an account |
 | conform | `conform --token` as a member, on `updates.publish`, a guarded mutation with a nullable `body` | Fixed on 2026-11-07: `PASS updates.publish: answers without the nullable body. Refused with its guard, "Only team admins can publish an update.": the bindings accepted the call without body.` Before, the same probe failed with `Refused with "Only team admins can publish an update." where the contract makes body optional.` | None now. conform passes a guard refusal on the probe that omits a nullable input, as it does on the valid call |
@@ -108,7 +109,7 @@ Each row is a limit the app met, with the exact answer. None was worked around.
 | Package import | Ana's origin session cookie on the destination, calling `notes.list` | `authentication-required` | People sign in again, as documented |
 | File quota | Ben's 9th 2 MiB file once the app holds 18 MiB | `This deployment has reached its 20 MiB file quota.` | No SDK call tells the app or the member how much room is left |
 
-Refusals the rules require, all asserted in `replay.ts`: the guards' own sentences, `This API key may not call owners.appoint.`, `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.`, `Unexpected action input: author`, `Repeated query parameter: q`, `before must be a number.`, `replayed-signature`, `invalid-signature`, `stale-timestamp`, `File not found.` and `Only the person who uploaded this file may change or delete it.`
+Refusals the rules require, all asserted in `replay.ts`: the guards' own sentences, `This API key may not call status.report.`, `This link is invalid, expired or already used.` for a second use of the owner's entry link, `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.`, `Unexpected action input: author`, `Repeated query parameter: q`, `before must be a number.`, `replayed-signature`, `invalid-signature`, `stale-timestamp`, `File not found.` and `Only the person who uploaded this file may change or delete it.`
 
 ## Design notes
 
