@@ -40,7 +40,7 @@ await probe("platform", 23050, async (kit) => {
   };
   // Today's answers. The first pair is one refusal with the same words at both doors (since 2026-11-07); the other two pass both doors and do nothing.
   const expected: Record<string, [string, string]> = {
-    "an action of kind email": ['Action notes.mail has an invalid kind. Use "query", "mutation" or "signal".', 'Action notes.mail has an invalid kind. Use "query", "mutation" or "signal".'],
+    "an action of kind email": ['Action notes.mail has an invalid kind. Use "query", "mutation", "signal" or "call".', 'Action notes.mail has an invalid kind. Use "query", "mutation", "signal" or "call".'],
     "a schedule on a mutation": ["passes", "passes"],
     "a subscription on a query": ["passes", "passes"],
   };

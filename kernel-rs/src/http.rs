@@ -216,7 +216,31 @@ fn secrets_table(db: &Connection) -> rusqlite::Result<()> {
         "CREATE TABLE IF NOT EXISTS project_secrets(
            project TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, updated_at INTEGER NOT NULL,
            PRIMARY KEY(project, name))",
-    )
+    )?;
+    // A secret set with "use": "call" only signs or carries the project's
+    // outgoing calls (ADR-0015). Stores written before calls lack the column.
+    let present: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('project_secrets') WHERE name='use')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !present {
+        db.execute_batch("ALTER TABLE project_secrets ADD COLUMN use TEXT NOT NULL DEFAULT 'route'")?;
+    }
+    Ok(())
+}
+
+/// A secret's value, for a call that signs with it or sends the key it holds.
+pub(super) fn project_secret(db: &Connection, project: &str, name: &str) -> Result<Option<String>> {
+    secret_value(db, project, name)
+}
+
+fn secret_for_calls_only(db: &Connection, project: &str, name: &str) -> Result<bool> {
+    secrets_table(db)?;
+    Ok(db
+        .query_row("SELECT use = 'call' FROM project_secrets WHERE project=?1 AND name=?2", params_from_iter([project, name]), |row| row.get(0))
+        .optional()?
+        .unwrap_or(false))
 }
 
 fn secret_value(db: &Connection, project: &str, name: &str) -> Result<Option<String>> {
@@ -236,6 +260,12 @@ pub(super) fn require_secrets(db: &Connection, project: &str, program: &ActionPr
         let Ok(Some(HttpBinding { signature: Some(signature), .. })) = binding(name, &program.actions[name]) else {
             continue;
         };
+        if secret_for_calls_only(db, project, &signature.secret)? {
+            let secret = &signature.secret;
+            anyhow::bail!(
+                "Action {name} signs its route with the secret {secret}, which is set for calls only. Set a route secret with a value of its own."
+            );
+        }
         if secret_value(db, project, &signature.secret)?.is_none() {
             actions.push(name.clone());
             if !secrets.contains(&signature.secret) {
@@ -278,9 +308,11 @@ pub(super) fn secrets_call(db: &Connection, project: &str, deployment: Option<&D
     secrets_table(db)?;
     match name {
         "secrets_list" => {
-            let mut query = db.prepare("SELECT name, updated_at FROM project_secrets WHERE project=?1 ORDER BY name")?;
+            let mut query = db.prepare("SELECT name, updated_at, use FROM project_secrets WHERE project=?1 ORDER BY name")?;
             let secrets = query
-                .query_map([project], |row| Ok(json!({"name": row.get::<_, String>(0)?, "updatedAt": row.get::<_, i64>(1)?})))?
+                .query_map([project], |row| {
+                    Ok(json!({"name": row.get::<_, String>(0)?, "updatedAt": row.get::<_, i64>(1)?, "use": row.get::<_, String>(2)?}))
+                })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(json!({"projectId": project, "secrets": secrets}))
         }
@@ -292,21 +324,31 @@ pub(super) fn secrets_call(db: &Connection, project: &str, deployment: Option<&D
                 (16..=512).contains(&value.len()) && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte)),
                 "A secret value is 16 to 512 printable ASCII characters without spaces."
             );
+            let usage = match a.get("use").and_then(Value::as_str) {
+                None | Some("route") => "route",
+                Some("call") => "call",
+                Some(_) => anyhow::bail!(r#"A secret's use is "route" or "call"."#),
+            };
             // A signature names no app, so a request signed for one project
-            // would be accepted by another that holds the same value.
-            let reused: bool = db.query_row(
-                "SELECT EXISTS(SELECT 1 FROM project_secrets s JOIN projects p ON p.id = s.project
-                   WHERE s.value = ?1 AND s.project <> ?2 AND p.owner = (SELECT owner FROM projects WHERE id = ?2))",
-                rusqlite::params![value, project],
-                |row| row.get(0),
-            )?;
+            // would be accepted by another that holds the same value. A
+            // secret for calls only verifies nothing, so it may hold the value
+            // of another project's route secret: that is how one app signs a
+            // call to another.
+            let reused: bool = usage == "route"
+                && db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM project_secrets s JOIN projects p ON p.id = s.project
+                       WHERE s.value = ?1 AND s.project <> ?2 AND s.use = 'route'
+                         AND p.owner = (SELECT owner FROM projects WHERE id = ?2))",
+                    rusqlite::params![value, project],
+                    |row| row.get(0),
+                )?;
             anyhow::ensure!(!reused, SECRET_REUSED);
             db.execute(
-                "INSERT INTO project_secrets(project, name, value, updated_at) VALUES(?1, ?2, ?3, ?4)
-                 ON CONFLICT(project, name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-                rusqlite::params![project, secret, value, now_ms() as i64],
+                "INSERT INTO project_secrets(project, name, value, updated_at, use) VALUES(?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(project, name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, use=excluded.use",
+                rusqlite::params![project, secret, value, now_ms() as i64, usage],
             )?;
-            Ok(json!({"projectId": project, "name": secret, "updatedAt": now_ms()}))
+            Ok(json!({"projectId": project, "name": secret, "updatedAt": now_ms(), "use": usage}))
         }
         "secret_delete" => {
             let secret = a["name"].as_str().unwrap_or("");
@@ -325,6 +367,13 @@ pub(super) fn secrets_call(db: &Connection, project: &str, deployment: Option<&D
                     users.is_empty(),
                     "The published action {} signs with {secret}. Publish without that signature before deleting the secret.",
                     users.join(", ")
+                );
+                let callers: Vec<String> =
+                    super::calls::secrets(&program).into_iter().filter(|(_, used)| used == secret).map(|(action, _)| action).collect();
+                anyhow::ensure!(
+                    callers.is_empty(),
+                    "The published call {} uses {secret}. Publish without that auth before deleting the secret.",
+                    callers.join(", ")
                 );
             }
             let removed = db.execute("DELETE FROM project_secrets WHERE project=?1 AND name=?2", params_from_iter([project, secret]))?;
@@ -634,7 +683,8 @@ fn valid_nonce(nonce: &str) -> bool {
     (1..=64).contains(&nonce.len()) && nonce.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-#[cfg(test)]
+/// The signature header value for `request`. A call signs with it
+/// (`calls.rs`), and the tests sign their requests with it.
 pub(super) fn sign(secret: &str, timestamp: u64, nonce: &str, request: &SignedRequest<'_>) -> String {
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes());
     let tag = ring::hmac::sign(&key, &signed_message(timestamp, nonce, request));
@@ -812,7 +862,14 @@ pub(super) async fn get_route(State(state): State<AppState>, AxumPath(relative):
                 Err(message) => return refusal(StatusCode::BAD_REQUEST, &message),
             };
             let client = state.guards.client_ip(peer(&request), request.headers());
-            return run_route(&state, &deployment, &table, name, http, request.headers(), client, input, raw_query, b"").await;
+            let mut response = run_route(&state, &deployment, &table, name, http, request.headers(), client, input, raw_query, b"").await;
+            // A GET route that answers anyone hands every caller the same rows,
+            // with no cookie or key counted from another origin, so a page on
+            // another origin may read it (ADR-0015, "connects").
+            if route_callers(http, is_private(&deployment)).is_none() {
+                response.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+            }
+            return response;
         }
     }
     // Every other GET keeps serving the Build Artifact.
@@ -837,6 +894,37 @@ pub(super) async fn post_route(State(state): State<AppState>, request: Request) 
         Err(_) => return refusal(StatusCode::PAYLOAD_TOO_LARGE, "The request body exceeds 64 KiB."),
     };
     run_route(&state, &deployment, &table, name, http, &headers, client, Value::Null, &raw_query, &body).await
+}
+
+/// A call from an app of this installation to one of `deployment`'s routes,
+/// answered by the route code a request from outside meets: the same callers
+/// check, signature check, rate limit, guard, Usage and Signal. `calls.rs`
+/// sends it with the host, signature or key headers a request would carry and
+/// no cookie. A method and path no route binds answer 404.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn call_route(
+    state: &AppState,
+    deployment: &Deployment,
+    method: &str,
+    path: &str,
+    raw_query: &str,
+    body: &[u8],
+    headers: &HeaderMap,
+    client: std::net::IpAddr,
+) -> Response {
+    let table = route_table(deployment);
+    let Some((name, http)) = table.find(method, path) else {
+        return refusal(StatusCode::NOT_FOUND, "No route of this app answers that method and path.");
+    };
+    let query = if method == "GET" {
+        match query_input(&table.program, name, raw_query) {
+            Ok(input) => input,
+            Err(message) => return refusal(StatusCode::BAD_REQUEST, &message),
+        }
+    } else {
+        Value::Null
+    };
+    run_route(state, deployment, &table, name, http, headers, client, query, raw_query, body).await
 }
 
 /// Turns a query string into action input, typed by the action's bindings, so

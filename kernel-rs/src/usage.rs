@@ -57,6 +57,8 @@ pub(crate) enum Operation {
     /// A guarded mutation that changed no row, by action name. The one
     /// refusal Usage counts: the app's own rule said no (`guard.rs`).
     Refused(String),
+    /// A call queued by an action of `"kind": "call"`, by action name (`calls.rs`).
+    Call(String),
 }
 
 impl Operation {
@@ -70,6 +72,7 @@ impl Operation {
             Operation::Signup => ("signup", String::new()),
             Operation::Login => ("login", String::new()),
             Operation::Refused(name) => ("refused", name),
+            Operation::Call(name) => ("call", name),
         }
     }
 }
@@ -420,7 +423,7 @@ pub(crate) fn admin_tools() -> Vec<Value> {
     vec![
         super::mcp::tool(
             "usage_read",
-            "Read a deployment's Usage: daily totals of the runtime operations the Kernel allowed (session, action, route, upload, file_read, signup, login) and of guard refusals (refused, by action) between two UTC dates written YYYY-MM-DD, both included, at most 400 days apart.",
+            "Read a deployment's Usage: daily totals of the runtime operations the Kernel allowed (session, action, route, upload, file_read, signup, login, call) and of guard refusals (refused, by action) between two UTC dates written YYYY-MM-DD, both included, at most 400 days apart.",
             json!({"deploymentId": text, "from": date, "to": date}),
             &["deploymentId", "from", "to"],
             true,

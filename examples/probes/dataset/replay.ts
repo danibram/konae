@@ -70,14 +70,15 @@ await probe("dataset", 23000, async (kit) => {
   assert.equal(summary.body.result.find((row: any) => row.region === "delta").peak, 11.1);
   kit.pass("Aggregates", "GET /api/summary groups 30 stations into 3 regions of 10 with count, avg and max.");
 
-  // The read API from a page on another origin: the Kernel sends no CORS headers.
+  // The read API from a page on another origin. A GET route that answers anyone
+  // allows every origin since ADR-0015; a page lists the origin in its connects.
   const foreign = await get("/api/summary", "https://dashboard.example");
   assert.equal(foreign.status, 200);
-  assert.equal(foreign.headers.get("access-control-allow-origin"), null);
+  assert.equal(foreign.headers.get("access-control-allow-origin"), "*");
   assert.equal(foreign.headers.get("cache-control"), "no-store");
   const preflight = await kit.appFetch(app.host)(`${url}/api/summary`, { method: "OPTIONS", headers: { origin: "https://dashboard.example", "access-control-request-method": "GET" } });
   assert.equal(preflight.headers.get("access-control-allow-origin"), null);
-  kit.pass("Read API from another origin", `A GET with Origin: https://dashboard.example answers 200 with no Access-Control-Allow-Origin and Cache-Control: no-store, so a server reads it and a browser page on another origin cannot. An OPTIONS preflight answers ${preflight.status} with no CORS headers.`);
+  kit.pass("Read API from another origin", `A GET with Origin: https://dashboard.example answers 200 with Access-Control-Allow-Origin: * and Cache-Control: no-store, so a server reads it and so does a page on another origin whose policy allows this host. An OPTIONS preflight answers ${preflight.status} with no CORS headers, so only a simple GET crosses origins.`);
 
   // The write API: a key that names the action, nothing else.
   const write = (body: object, key?: string) => kit.appFetch(app.host)(`${url}/api/readings`, {

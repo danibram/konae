@@ -44,7 +44,7 @@ actions.json format:
   "version": 1,
   "actions": {
     "<group>.<verb>": {
-      "kind": "query" | "mutation" | "signal",
+      "kind": "query" | "mutation" | "signal" | "call",
       "access": "anonymous" | "authenticated",
       "statement": "<one SQL statement with ? placeholders; a signal action has none>",
       "bindings": [ ... ],
@@ -71,6 +71,7 @@ Rules the Validation Gate checks for you:
 - Mutations return { changes, lastInsertId }. Read changed rows with a separate query; mutation statements using RETURNING fail validation.
 - When a mutation's WHERE carries a rule, such as "only an organizer" or "the slot is free", add "guard": "<the sentence the person should see>" to it. When the statement changes no row the call is refused with that sentence instead of returning { changes: 0 }.
 - To let the owner see that something happened, such as a newsletter signup, add "signal": { "name": "newsletter.joined", "properties": ["source"] } to the mutation that does it. Properties are keys of its input bindings, or "actor" for the caller's ID. A mutation records its Signal only when it changed a row. With no table to write, use "kind": "signal" with access and bindings and no statement; it returns { recorded: true }. A query cannot declare a signal. There is no miniapp.track; the app calls the action with miniapp.actions.call, and only the owner reads Signals.
+- To tell another app or an outside service that something happened, declare "kind": "call" with "method", "url", input bindings only, "body" mapping body keys to input keys, and an optional "auth" and "then", as the calls module below describes. The Kernel sends it from its own process; the page never sees a secret or a key. Put "connects" in the manifest only for a direct browser fetch of a public GET route.
 - A query that reads rows needs a top-level LIMIT. The Validation Gate and the Kernel both refuse one that does not, including after the app is exported. A LIMIT inside a string, a comment or a subquery does not count. A query that only returns a total (count, sum, avg, min or max) with no GROUP BY, and a query that does not read a table, are the exceptions. LIMIT does not raise the 1000-row runtime cap.
 - schema.sql must run twice on the same database without failing, because the runtime re-runs it on every database open.
 - schema.sql may only contain CREATE TABLE IF NOT EXISTS and CREATE [UNIQUE] INDEX IF NOT EXISTS. No INSERT, PRAGMA, BEGIN/COMMIT, triggers or views: the Kernel refuses them at deploy. Never reach for DROP TABLE to "reset" it: that is the owner's data. Rows come from server actions, not from schema.sql.

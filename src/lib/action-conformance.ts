@@ -170,6 +170,12 @@ export async function runConformance(contract: ActionContract, target: Conforman
   for (const action of contract.actions) {
     const name = action.name;
     const valid = minimal(action);
+    // A call's then mutation runs only after its call ends; the runtime endpoint refuses it (ADR-0015).
+    if (action.thenOf) {
+      await expectRefusal(action, "runs only after its call", [`Action ${name} runs only after the call ${action.thenOf} answers.`, "Sign in to use Littlebox MCP."],
+        () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
+      continue;
+    }
     const routeOnly = action.http ? `Action ${name} answers only on its HTTP route, ${action.http.method} ${action.http.path}.` : null;
     if (action.http?.onlyDoor === "always") {
       // The runtime endpoint refuses the action; its bindings are probed on the route.
@@ -187,6 +193,9 @@ export async function runConformance(contract: ActionContract, target: Conforman
     // The answer for a valid call.
     if (!caller) {
       record(name, "answers a valid call", "skip", "Needs a signed-in person; pass --token.");
+    } else if (action.call) {
+      // A valid call would queue a real request to another app or service.
+      record(name, "answers a valid call", "skip", `A valid call queues ${action.call.method} ${action.call.url}, so conform does not send one.`);
     } else {
       const answer = await invoke(name, valid, caller);
       if (!answer.ok && answer.message === routeOnly && listedIn(action.errors, answer.message)) {
@@ -375,6 +384,10 @@ export function checkOutput(action: ContractAction, result: unknown): string | n
     return null;
   }
   if (output.kind === "signal") return result === null || typeof result === "object" ? null : `Answered ${preview(result)} for a Signal.`;
+  if (output.kind === "queued") {
+    const record = result as Record<string, unknown> | null;
+    return record && typeof record === "object" && typeof record.callId === "string" && record.queued === true ? null : `Answered ${preview(result)} where the contract says { callId, queued: true }.`;
+  }
   if (!Array.isArray(result)) return `Answered ${preview(result)} where the contract says an array of rows.`;
   const named = output.columns.map((column) => column.name);
   for (const [index, row] of result.entries()) {

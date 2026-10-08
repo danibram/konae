@@ -540,7 +540,8 @@ A signing secret belongs to the project, never leaves the Kernel and is not part
   "result": {
     "name": "orders_webhook",
     "projectId": "<project id>",
-    "updatedAt": <time ms>
+    "updatedAt": <time ms>,
+    "use": "route"
   }
 }
 ```
@@ -1374,7 +1375,8 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
   "result": {
     "name": "orders_webhook",
     "projectId": "<project id>",
-    "updatedAt": <time ms>
+    "updatedAt": <time ms>,
+    "use": "route"
   }
 }
 ```

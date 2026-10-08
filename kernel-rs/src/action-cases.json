@@ -117,7 +117,7 @@
     "bindings": []
    }
   },
-  "error": "Action orders.list has an invalid kind. Use \"query\", \"mutation\" or \"signal\"."
+  "error": "Action orders.list has an invalid kind. Use \"query\", \"mutation\", \"signal\" or \"call\"."
  },
  {
   "case": "every binding form",

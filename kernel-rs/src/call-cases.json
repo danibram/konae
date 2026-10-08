@@ -1,0 +1,2754 @@
+[
+ {
+  "case": "a signed POST to an outside app",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "auth": {
+     "secret": "inbox_events",
+     "header": "X-Inbox-Signature"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a GET with no body and no auth",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "GET",
+    "url": "https://api.example.com/v1/rates?base=EUR",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ]
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a call that sends an API key",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "auth": {
+     "key": "inbox_key"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "an http URL is left to the Kernel's installation check",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "http://inbox-abc.localhost:8787/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "an anonymous call",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "anonymous",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a then that reads the status, the body and an input",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.noted",
+     "inputs": {
+      "id": "/input/taskId",
+      "notice": "/body/error"
+     }
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ]
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a then that reads the whole answer",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.noted",
+     "inputs": {
+      "id": "/input/taskId",
+      "notice": "/body"
+     }
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ]
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a then with an escaped pointer",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.noted",
+     "inputs": {
+      "id": "/input/taskId",
+      "notice": "/body/a~1b~0c"
+     }
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ]
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a url on a mutation",
+  "actions": {
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ],
+    "url": "https://inbox.example.org/x"
+   }
+  },
+  "error": "Action tasks.noted is a mutation, so it cannot declare url, method, body, auth or then. Those keys belong to an action of \"kind\": \"call\"."
+ },
+ {
+  "case": "a then on a query",
+  "actions": {
+   "tasks.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM tasks LIMIT 5",
+    "bindings": [],
+    "then": {
+     "action": "tasks.noted"
+    }
+   }
+  },
+  "error": "Action tasks.list is a query, so it cannot declare url, method, body, auth or then. Those keys belong to an action of \"kind\": \"call\"."
+ },
+ {
+  "case": "a method on a signal action",
+  "actions": {
+   "tasks.seen": {
+    "kind": "signal",
+    "access": "anonymous",
+    "bindings": [],
+    "signal": {
+     "name": "task.seen"
+    },
+    "method": "POST"
+   }
+  },
+  "error": "Action tasks.seen is a signal action, so it cannot declare url, method, body, auth or then. Those keys belong to an action of \"kind\": \"call\"."
+ },
+ {
+  "case": "an unknown kind with a url",
+  "actions": {
+   "inbox.tell": {
+    "kind": "fetch",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid kind. Use \"query\", \"mutation\", \"signal\" or \"call\"."
+ },
+ {
+  "case": "a call with a statement",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "statement": "SELECT 1"
+   }
+  },
+  "error": "Action inbox.tell is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route."
+ },
+ {
+  "case": "a call with a signal",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "signal": {
+     "name": "inbox.told"
+    }
+   }
+  },
+  "error": "Action inbox.tell is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route."
+ },
+ {
+  "case": "a call with a guard",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "guard": "No."
+   }
+  },
+  "error": "Action inbox.tell is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route."
+ },
+ {
+  "case": "a call with an http route",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "http": {
+     "method": "POST",
+     "path": "/tell"
+    }
+   }
+  },
+  "error": "Action inbox.tell is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route."
+ },
+ {
+  "case": "a call that binds the actor",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string"
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     },
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell is a call, so its bindings may only be inputs."
+ },
+ {
+  "case": "a call that binds the time",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string"
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     },
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell is a call, so its bindings may only be inputs."
+ },
+ {
+  "case": "no method",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell must call with \"method\": \"GET\" or \"POST\"."
+ },
+ {
+  "case": "a PUT",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "PUT",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell must call with \"method\": \"GET\" or \"POST\"."
+ },
+ {
+  "case": "a lowercase post",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "post",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell must call with \"method\": \"GET\" or \"POST\"."
+ },
+ {
+  "case": "no url",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+ },
+ {
+  "case": "a relative url",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+ },
+ {
+  "case": "an ftp url",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "ftp://inbox.example.org/hooks",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+ },
+ {
+  "case": "a file url",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "file:///etc/passwd",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+ },
+ {
+  "case": "a url with credentials",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://user:pass@inbox.example.org/hooks",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+ },
+ {
+  "case": "a url with a fragment",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks#x",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+ },
+ {
+  "case": "a url with a space",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/a b",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+ },
+ {
+  "case": "a url longer than 2048 characters",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+ },
+ {
+  "case": "a url that is a number",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": 5,
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+ },
+ {
+  "case": "an IPv4 literal",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://10.0.0.5/hooks",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell calls the IP address 10.0.0.5. Name a host instead."
+ },
+ {
+  "case": "an IPv4 literal written short",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "http://127.1/hooks",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell calls the IP address 127.0.0.1. Name a host instead."
+ },
+ {
+  "case": "the metadata address",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "http://169.254.169.254/latest/meta-data",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell calls the IP address 169.254.169.254. Name a host instead."
+ },
+ {
+  "case": "an IPv6 literal",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://[::1]/hooks",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell calls the IP address [::1]. Name a host instead."
+ },
+ {
+  "case": "localhost",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "http://localhost:8787/hooks",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell calls localhost, which names this machine or a cloud metadata service."
+ },
+ {
+  "case": "localhost with a trailing dot",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://LOCALHOST./hooks",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell calls localhost., which names this machine or a cloud metadata service."
+ },
+ {
+  "case": "the Google metadata host",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "http://metadata.google.internal/computeMetadata/v1/",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell calls metadata.google.internal, which names this machine or a cloud metadata service."
+ },
+ {
+  "case": "an app under localhost is allowed",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "http://starter-1.localhost:8787/hooks/status",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "the Kernel's MCP path",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/mcp",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel."
+ },
+ {
+  "case": "the Kernel's admin paths",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/_littlebox/mcp",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel."
+ },
+ {
+  "case": "OAuth discovery",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/.well-known/oauth-authorization-server",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel."
+ },
+ {
+  "case": "the reserved path in capitals",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/MCP/x",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel."
+ },
+ {
+  "case": "a body that is a list",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": [
+     "title"
+    ]
+   }
+  },
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys, at most 32."
+ },
+ {
+  "case": "a body value that is not a string",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": 1
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys, at most 32."
+ },
+ {
+  "case": "a body key with a space",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "the title": "title"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys, at most 32."
+ },
+ {
+  "case": "a body with 33 keys",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "k0": "title",
+     "k1": "title",
+     "k2": "title",
+     "k3": "title",
+     "k4": "title",
+     "k5": "title",
+     "k6": "title",
+     "k7": "title",
+     "k8": "title",
+     "k9": "title",
+     "k10": "title",
+     "k11": "title",
+     "k12": "title",
+     "k13": "title",
+     "k14": "title",
+     "k15": "title",
+     "k16": "title",
+     "k17": "title",
+     "k18": "title",
+     "k19": "title",
+     "k20": "title",
+     "k21": "title",
+     "k22": "title",
+     "k23": "title",
+     "k24": "title",
+     "k25": "title",
+     "k26": "title",
+     "k27": "title",
+     "k28": "title",
+     "k29": "title",
+     "k30": "title",
+     "k31": "title",
+     "k32": "title"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys, at most 32."
+ },
+ {
+  "case": "a body key from an unknown input",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "severity": "level"
+    }
+   }
+  },
+  "error": "Action inbox.tell sends body key severity from level, which is not one of its input bindings."
+ },
+ {
+  "case": "an auth that is a string",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "auth": "inbox_events"
+   }
+  },
+  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds."
+ },
+ {
+  "case": "an auth with both secret and key",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "auth": {
+     "secret": "a",
+     "key": "b"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds."
+ },
+ {
+  "case": "an auth with neither",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "auth": {}
+   }
+  },
+  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds."
+ },
+ {
+  "case": "a key auth with a header",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "auth": {
+     "key": "inbox_key",
+     "header": "X-Key"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds."
+ },
+ {
+  "case": "an auth with an unknown key",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "auth": {
+     "secret": "inbox_events",
+     "scheme": "stripe"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds."
+ },
+ {
+  "case": "an auth secret with capitals",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "auth": {
+     "secret": "InboxEvents"
+    }
+   }
+  },
+  "error": "Action inbox.tell names an invalid auth secret. Use lowercase letters, digits and \"_\", starting with a letter."
+ },
+ {
+  "case": "an auth key secret that is a number",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "auth": {
+     "key": 5
+    }
+   }
+  },
+  "error": "Action inbox.tell names an invalid auth secret. Use lowercase letters, digits and \"_\", starting with a letter."
+ },
+ {
+  "case": "an auth header the Kernel sets itself",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "auth": {
+     "secret": "inbox_events",
+     "header": "Authorization"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid signature header."
+ },
+ {
+  "case": "an auth header with a space",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "auth": {
+     "secret": "inbox_events",
+     "header": "X Sig"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid signature header."
+ },
+ {
+  "case": "a then that is a string",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": "tasks.noted"
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ]
+   }
+  },
+  "error": "Action inbox.tell has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer."
+ },
+ {
+  "case": "a then with no action",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "inputs": {}
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ]
+   }
+  },
+  "error": "Action inbox.tell has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer."
+ },
+ {
+  "case": "a then with an unknown key",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.noted",
+     "inputs": {},
+     "when": "ok"
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ]
+   }
+  },
+  "error": "Action inbox.tell has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer."
+ },
+ {
+  "case": "a then whose pointer is a number",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.noted",
+     "inputs": {
+      "id": 5
+     }
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ]
+   }
+  },
+  "error": "Action inbox.tell has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer."
+ },
+ {
+  "case": "a pointer without a leading slash",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.noted",
+     "inputs": {
+      "id": "/input/taskId",
+      "notice": "body/error"
+     }
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ]
+   }
+  },
+  "error": "Action inbox.tell reads body/error for then, which is not a JSON pointer into /ok, /status, /error, /body or /input."
+ },
+ {
+  "case": "a pointer outside the answer",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.noted",
+     "inputs": {
+      "id": "/input/taskId",
+      "notice": "/headers/x"
+     }
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ]
+   }
+  },
+  "error": "Action inbox.tell reads /headers/x for then, which is not a JSON pointer into /ok, /status, /error, /body or /input."
+ },
+ {
+  "case": "a pointer with a bad escape",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.noted",
+     "inputs": {
+      "id": "/input/taskId",
+      "notice": "/body/a~2"
+     }
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ]
+   }
+  },
+  "error": "Action inbox.tell reads /body/a~2 for then, which is not a JSON pointer into /ok, /status, /error, /body or /input."
+ },
+ {
+  "case": "the empty pointer",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.noted",
+     "inputs": {
+      "id": "/input/taskId",
+      "notice": ""
+     }
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ]
+   }
+  },
+  "error": "Action inbox.tell reads  for then, which is not a JSON pointer into /ok, /status, /error, /body or /input."
+ },
+ {
+  "case": "a pointer to an input the call does not have",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.noted",
+     "inputs": {
+      "id": "/input/task",
+      "notice": "/status"
+     }
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ]
+   }
+  },
+  "error": "Action inbox.tell reads /input/task for then, but task is not one of its input bindings."
+ },
+ {
+  "case": "a then naming an undeclared action",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.gone",
+     "inputs": {}
+    }
+   }
+  },
+  "error": "Action inbox.tell names tasks.gone as its then, which is not declared."
+ },
+ {
+  "case": "a then naming a query",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.list",
+     "inputs": {}
+    }
+   },
+   "tasks.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM tasks LIMIT 5",
+    "bindings": []
+   }
+  },
+  "error": "Action inbox.tell names tasks.list as its then, which is not a mutation."
+ },
+ {
+  "case": "a then naming another call",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "inbox.again",
+     "inputs": {}
+    }
+   },
+   "inbox.again": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.tell names inbox.again as its then, which is not a mutation."
+ },
+ {
+  "case": "a then naming a routed mutation",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "anonymous",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.noted",
+     "inputs": {
+      "id": "/input/taskId",
+      "notice": "/body/error"
+     }
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ],
+    "http": {
+     "method": "POST",
+     "path": "/noted"
+    }
+   }
+  },
+  "error": "Action inbox.tell names tasks.noted as its then, which answers on an HTTP route. A then mutation runs only after its call."
+ },
+ {
+  "case": "a then naming a mutation that binds the actor",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.noted",
+     "inputs": {
+      "id": "/input/taskId",
+      "notice": "/body/error"
+     }
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1 AND owner = ?3",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "nullable": true
+     },
+     {
+      "source": "actor",
+      "field": "id"
+     }
+    ]
+   }
+  },
+  "error": "Action inbox.tell names tasks.noted as its then, which binds the actor. A then mutation runs with no caller."
+ },
+ {
+  "case": "a then that fills an input the mutation lacks",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.noted",
+     "inputs": {
+      "id": "/input/taskId",
+      "colour": "/status"
+     }
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ]
+   }
+  },
+  "error": "Action inbox.tell fills colour, which is not an input of tasks.noted."
+ },
+ {
+  "case": "a then that leaves a required input empty",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    },
+    "then": {
+     "action": "tasks.noted",
+     "inputs": {
+      "notice": "/status"
+     }
+    }
+   },
+   "tasks.noted": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "notice",
+      "type": "string",
+      "maxLength": 200,
+      "nullable": true
+     }
+    ]
+   }
+  },
+  "error": "Action inbox.tell leaves id of tasks.noted unfilled. Fill it from the answer or make the input nullable."
+ },
+ {
+  "case": "two bad calls name the first in sorted order",
+  "actions": {
+   "inbox.zeta": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "PUT",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   },
+   "inbox.alpha": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "ftp://x.example/",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId"
+    }
+   }
+  },
+  "error": "Action inbox.alpha has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+ },
+ {
+  "case": "two https origins",
+  "connects": [
+   "https://api.example.com",
+   "https://inbox-1.apps.example.org:8443"
+  ],
+  "error": null
+ },
+ {
+  "case": "an app of a local installation over http",
+  "connects": [
+   "http://inbox-1.localhost:8787",
+   "http://localhost:5173"
+  ],
+  "error": null
+ },
+ {
+  "case": "no connects",
+  "connects": null,
+  "error": null
+ },
+ {
+  "case": "connects that is a string",
+  "connects": "https://api.example.com",
+  "error": "connects must be a list of at most 10 origins, such as [\"https://api.example.com\"]."
+ },
+ {
+  "case": "eleven origins",
+  "connects": [
+   "https://a0.example.com",
+   "https://a1.example.com",
+   "https://a2.example.com",
+   "https://a3.example.com",
+   "https://a4.example.com",
+   "https://a5.example.com",
+   "https://a6.example.com",
+   "https://a7.example.com",
+   "https://a8.example.com",
+   "https://a9.example.com",
+   "https://a10.example.com"
+  ],
+  "error": "connects must be a list of at most 10 origins, such as [\"https://api.example.com\"]."
+ },
+ {
+  "case": "an origin that is a number",
+  "connects": [
+   5
+  ],
+  "error": "connects must be a list of at most 10 origins, such as [\"https://api.example.com\"]."
+ },
+ {
+  "case": "an http origin",
+  "connects": [
+   "http://api.example.com"
+  ],
+  "error": "connects lists http://api.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+ },
+ {
+  "case": "an origin with a path",
+  "connects": [
+   "https://api.example.com/v1"
+  ],
+  "error": "connects lists https://api.example.com/v1, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+ },
+ {
+  "case": "an origin with a trailing slash",
+  "connects": [
+   "https://api.example.com/"
+  ],
+  "error": "connects lists https://api.example.com/, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+ },
+ {
+  "case": "a wildcard",
+  "connects": [
+   "https://*.example.com"
+  ],
+  "error": "connects lists https://*.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+ },
+ {
+  "case": "an origin in capitals",
+  "connects": [
+   "https://API.example.com"
+  ],
+  "error": "connects lists https://API.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+ },
+ {
+  "case": "an origin with its default port",
+  "connects": [
+   "https://api.example.com:443"
+  ],
+  "error": "connects lists https://api.example.com:443, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+ },
+ {
+  "case": "a bare host",
+  "connects": [
+   "api.example.com"
+  ],
+  "error": "connects lists api.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+ },
+ {
+  "case": "a data URL",
+  "connects": [
+   "data:text/plain,x"
+  ],
+  "error": "connects lists data:text/plain,x, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+ },
+ {
+  "case": "http to a host outside localhost",
+  "connects": [
+   "http://localhost.example.com"
+  ],
+  "error": "connects lists http://localhost.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+ },
+ {
+  "case": "an origin listed twice",
+  "connects": [
+   "https://api.example.com",
+   "https://api.example.com"
+  ],
+  "error": "connects lists https://api.example.com twice."
+ }
+]

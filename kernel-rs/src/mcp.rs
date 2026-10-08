@@ -356,6 +356,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ]);
     }
     tools.extend(super::usage::admin_tools());
+    tools.extend(super::calls::admin_tools());
     tools.push(tool(
         "signup_policy_read",
         "Read who may create an account on a deployment.",
@@ -375,7 +376,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     }
     if owner.scopes.iter().any(|s| s == "publish") {
         tools.extend([
-            tool("secret_set", "Set a signing secret an action's http signature names. The value is never returned.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64},"value":{"type":"string","minLength":16,"maxLength":512}}), &["projectId","name","value"], false),
+            tool("secret_set", "Set a signing secret an action's http signature names, or, with use call, one a call action signs with or an API key it sends. The value is never returned.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64},"value":{"type":"string","minLength":16,"maxLength":512},"use":{"type":"string","enum":["route","call"]}}), &["projectId","name","value"], false),
             tool("secret_delete", "Delete a signing secret no published action uses.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64}}), &["projectId","name"], false),
             tool("api_keys_create", "Issue an API key for one deployment, scoped to named actions with an HTTP route and to file visibilities. The key appears only in this answer.", json!({"deploymentId":text,"name":{"type":"string","minLength":1,"maxLength":80},"actions":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"files":{"type":"array","items":{"type":"string","enum":["public","private"]}}}), &["deploymentId","name"], false),
             tool("api_keys_revoke", "Revoke a deployment's API key by its ID.", json!({"deploymentId":text,"keyId":text}), &["deploymentId","keyId"], false),
@@ -1289,6 +1290,10 @@ async fn admin_call(
             let deployment = owned_deployment(state, owner, id, if name == "api_keys_list" { "read" } else { "publish" }).await?;
             super::http::api_keys_call(state, &deployment, name, &a).await
         }
+        "calls_read" => {
+            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "read").await?;
+            super::calls::admin_call(state, &deployment, &a).await
+        }
         "usage_read" | "signals_read" => {
             let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "read").await?;
             super::usage::admin_call(&state.data_root, &deployment, name, &a).await
@@ -1502,6 +1507,7 @@ async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
         );
     }
     super::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
+    super::calls::check_connects(&input.project.manifest).map_err(anyhow::Error::msg)?;
     // The limit counts the bytes the Kernel stores, after base64 is decoded.
     let total: usize = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?.values().map(Vec::len).sum();
     anyhow::ensure!(total <= 16 * 1024 * 1024, "Artifact exceeds 16 MiB.");
@@ -1515,6 +1521,7 @@ async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
     anyhow::ensure!(program.version == 1, "Unsupported action version.");
     super::action_shape::check_program(&program).map_err(anyhow::Error::msg)?;
     super::http::require_secrets(&store(state)?, &input.project.id, &program)?;
+    super::calls::check_release(state, &store(state)?, &input.project.id, &program)?;
     let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
     let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
     anyhow::ensure!(

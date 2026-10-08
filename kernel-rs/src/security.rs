@@ -29,19 +29,25 @@ const MAX_HASHED_HTML: usize = 32 * 1024 * 1024;
 /// generated attribute. The starter templates load their fonts from Google
 /// Fonts, so those two hosts are the only foreign origins. Images and media
 /// accept `blob:` and `data:` because the SDK hands files to the app as Blob
-/// URLs and apps keep small inline copies of images.
-pub(super) fn app_policy(script_hashes: &[String]) -> String {
+/// URLs and apps keep small inline copies of images. `connects` are the
+/// origins the manifest's `connects` adds to connect-src (ADR-0015).
+pub(super) fn app_policy(script_hashes: &[String], connects: &[String]) -> String {
     let mut script = String::from("'self'");
     for hash in script_hashes {
         script.push(' ');
         script.push_str(hash);
+    }
+    let mut connect = String::from("'self'");
+    for origin in connects {
+        connect.push(' ');
+        connect.push_str(origin);
     }
     format!(
         "default-src 'self'; script-src {script}; \
          style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
          font-src 'self' data: https://fonts.gstatic.com; \
          img-src 'self' blob: data:; media-src 'self' blob: data:; \
-         connect-src 'self'; form-action 'self'; frame-ancestors 'none'; \
+         connect-src {connect}; form-action 'self'; frame-ancestors 'none'; \
          object-src 'none'; base-uri 'none'"
     )
 }
@@ -176,7 +182,9 @@ pub(super) async fn from_app_origin(state: &AppState, headers: &HeaderMap) -> bo
 
 /// Adds the isolation headers to every response.
 pub(super) async fn headers(State(state): State<AppState>, request: Request, next: Next) -> Response {
-    let app = deployment_for(&state, request.headers()).await.is_some();
+    let deployment = deployment_for(&state, request.headers()).await;
+    let app = deployment.is_some();
+    let connects = deployment.map(|deployment| super::calls::connects(&deployment.manifest)).unwrap_or_default();
     let response = next.run(request).await;
     let (mut parts, body) = response.into_parts();
     let html = parts
@@ -191,11 +199,11 @@ pub(super) async fn headers(State(state): State<AppState>, request: Request, nex
             Ok(bytes) => (inline_script_hashes(&bytes), Body::from(bytes)),
             Err(_) => return error(StatusCode::INTERNAL_SERVER_ERROR, "Page is too large to serve."),
         };
-        let policy = if app { app_policy(&hashes) } else { platform_page_policy(&hashes) };
+        let policy = if app { app_policy(&hashes, &connects) } else { platform_page_policy(&hashes) };
         parts.headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_str(&policy).unwrap());
         body
     } else {
-        let policy = if app { app_policy(&[]) } else { PLATFORM_POLICY.to_owned() };
+        let policy = if app { app_policy(&[], &connects) } else { PLATFORM_POLICY.to_owned() };
         parts.headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_str(&policy).unwrap());
         body
     };
@@ -228,7 +236,7 @@ mod tests {
     fn a_document_without_inline_scripts_gets_no_hash() {
         let html = br#"<!doctype html><script src="/runtime.js"></script><script type="module" src="shell.js"></script><main>Docs</main>"#;
         assert!(inline_script_hashes(html).is_empty());
-        assert!(app_policy(&[]).contains("script-src 'self';"));
+        assert!(app_policy(&[], &[]).contains("script-src 'self';"));
     }
 
     #[test]
@@ -252,7 +260,7 @@ mod tests {
 
     #[test]
     fn app_policy_blocks_inline_handlers_framing_and_foreign_connections() {
-        let policy = app_policy(&[sha("x")]);
+        let policy = app_policy(&[sha("x")], &[]);
         assert!(policy.starts_with("default-src 'self'; script-src 'self' 'sha256-"));
         assert!(!policy.contains("'unsafe-inline' 'sha256"), "script-src must not allow inline script");
         assert!(!policy.contains("unsafe-eval"));
@@ -261,5 +269,12 @@ mod tests {
         }
         assert!(platform_page_policy(&[]).contains("frame-ancestors 'none'"));
         assert!(PLATFORM_POLICY.contains("frame-ancestors 'none'"));
+    }
+
+    #[test]
+    fn connects_adds_its_origins_to_connect_src_and_nothing_else() {
+        let policy = app_policy(&[], &["https://api.example.com".into(), "https://inbox-1.apps.example.org".into()]);
+        assert!(policy.contains("connect-src 'self' https://api.example.com https://inbox-1.apps.example.org;"), "{policy}");
+        assert!(policy.contains("default-src 'self';") && policy.contains("form-action 'self';"));
     }
 }

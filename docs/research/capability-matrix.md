@@ -125,7 +125,7 @@ The probes found three declarations the Validation Gate and the Kernel answered 
 | Declaration | Both doors, since 2026-11-07 | Probe |
 | --- | --- | --- |
 | A binding `{ "source": "actor", "field": "email" }` | Refused before publishing with `Invalid binding 1 in members.join.` | community "No email from the actor" |
-| An action of `"kind": "email"` | Refused with `Action notes.mail has an invalid kind. Use "query", "mutation" or "signal".` | platform "Declare an action of kind email" |
+| An action of `"kind": "email"` | Refused with `Action notes.mail has an invalid kind. Use "query", "mutation", "signal" or "call".` | platform "Declare an action of kind email" |
 | A `"schedule"` key on a mutation, or `"subscribe"` on a query | Still passes both doors and does nothing; it matters once `schedule` becomes a primitive | platform "Declare a schedule on a mutation", "Declare a subscription on a query" |
 
 ## What blocks the most shapes

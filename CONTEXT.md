@@ -4,7 +4,7 @@ Littlebox is the guardrail that lets a person who does not write code, and a per
 
 ## Language
 
-Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key and SDK module. Usage, Signal and Action Contract keep their capitals, as the older terms do.
+Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, SDK module, call action and outbox. Usage, Signal and Action Contract keep their capitals, as the older terms do.
 
 **Account**:
 The authenticated identity and personal profile used to enter Littlebox and participate in Workspaces. An Account does not directly own runtime data or imply access to every Project.
@@ -127,7 +127,7 @@ A secret the Project Owner issues for one Deployment so a program can call it as
 _Avoid_: token (an Agent Credential), service account
 
 **Signing Secret**:
-A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. A sender proves a request with an HMAC under it of a timestamp, a nonce, the method, the path, the canonical query string and the body. It never appears in `actions.json`, a Build Artifact or an export.
+A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. One set with `"use": "call"` instead signs, or holds the API key for, the Project's call actions, and may repeat another project's route secret. A sender proves a request with an HMAC under it of a timestamp, a nonce, the method, the path, the canonical query string and the body. It never appears in `actions.json`, a Build Artifact or an export.
 _Avoid_: webhook token, API key
 
 **Project Owner**:
@@ -135,12 +135,20 @@ An authenticated workspace member allowed to edit a Project and administer its d
 _Avoid_: Runtime user, app user
 
 **Server Action**:
-A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. It runs one SQL statement. A query starts with `SELECT`, a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, and a `WITH` clause sits inside the statement, never in front of it. The Validation Gate and the Kernel refuse a statement that breaks a rule, and an action whose name, access, kind or bindings they do not take, with the same words, and a project declares at most 100 actions. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for the callers the route takes, of a signed request, an API key and a signed-in user; an `authenticated` action may not. An action whose route does not answer anyone answers only there, never through `miniapp.actions.call`.
+A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. It runs one SQL statement. A query starts with `SELECT`, a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, and a `WITH` clause sits inside the statement, never in front of it. The Validation Gate and the Kernel refuse a statement that breaks a rule, and an action whose name, access, kind or bindings they do not take, with the same words, and a project declares at most 100 actions. A call action runs no SQL; the Kernel sends its request. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for the callers the route takes, of a signed request, an API key and a signed-in user; an `authenticated` action may not. An action whose route does not answer anyone answers only there, never through `miniapp.actions.call`.
 _Avoid_: Raw SQL endpoint
 
 **Callers**:
 The kinds of caller an HTTP route takes, any of `"signature"` (a service that signs the request with the signing secret), `"key"` (an API key that names the action) and `"session"` (a signed-in app user), declared as `"callers"` on the route. Without the list a signed route takes a signature or a key, an unsigned route on a Private Deployment takes a key or a session, and an unsigned route on a Public Deployment answers anyone. An action whose route does not answer anyone answers only on that route. The Validation Gate and the Kernel parse the list from one case file.
 _Avoid_: principals, auth mode, access level (that is `anonymous` or `authenticated` on the action)
+
+**Call Action**:
+A Server Action of `"kind": "call"` that declares one HTTP request to another app or an outside service: a method, a URL, a body built from its inputs, an optional `auth` that signs with a signing secret or sends the API key a secret holds, and an optional `then` mutation. Invoking it queues the call and answers `{ callId, queued: true }`; the Kernel sends it from its own process, never from the browser, retries it, and runs the `then` mutation with the answer. A URL is https, or http to an app of this installation, never a private address, the editor or the Kernel's own paths. A call to an app of this installation runs through that app's route code with the same callers check.
+_Avoid_: webhook out, fetch action, integration
+
+**Outbox**:
+The calls a Deployment's call actions queued, kept in `calls.sqlite` with their attempts, status, error kind and what the `then` mutation did, which the Project Owner reads with `calls_read`. Pending calls stay on the installation; they do not travel in a package.
+_Avoid_: call log, queue (the mail queue holds account email)
 
 **Guard**:
 A mutation's declared refusal, `"guard": "<message>"`, which the Kernel answers instead of `{ changes: 0 }` when the statement changes no row because the app's own rule in its `WHERE` said no. It is a tool error on the runtime endpoint and 403 on a route, counts under Usage's `refused` and records no Signal.

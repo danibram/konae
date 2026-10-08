@@ -44,6 +44,7 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | Signing secrets | `secrets_list`, `secret_set`, `secret_delete` |
 | API keys | `api_keys_list`, `api_keys_create`, `api_keys_revoke` |
 | Usage and Signals | `usage_read`, `signals_read` |
+| Calls between apps | `calls_read` |
 | App users and invitations | `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_invitations_create`, `app_invitations_list`, `app_invitation_resend`, `app_invitation_revoke` |
 | Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
 | Credentials from the owner session | `tokens_list`, `token_create`, `token_revoke` |
@@ -54,7 +55,7 @@ The catalog depends on the credentials. The Kernel checks the permission again o
 
 This changes the contract. `signup_policy_set` needed `publish` before `manage_users` existed, so a client that changed the policy with a `read`, `write` and `publish` token now gets "Unknown tool" and needs a new token that includes `manage_users`. `bun run littlebox -- login --manage-users` asks for one, and `bun run littlebox -- dev` asks for one on its Development Kernel.
 
-Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `usage_read` and `signals_read` need `read`.
+Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `usage_read`, `signals_read` and `calls_read` need `read`.
 
 `project_create` returns a template and an External identity by default. Later sources stay in the user's folder; `project_inspect` returns metadata and the Deployment, without claiming to synchronize that code with the editor.
 
@@ -236,7 +237,7 @@ Before it reads a statement, each door checks the action's name, access, kind, b
 | A name that is not lowercase dotted words of letters and digits, each starting with a letter, or is longer than 100 characters | `Invalid server action name: <name>` |
 | `"access": "granted"` | `Action <name> uses "access": "granted", which the Kernel does not support yet. Use "anonymous" or "authenticated".` |
 | Any other access | `Action <name> has an invalid access. Use "anonymous" or "authenticated".` |
-| A kind other than `query`, `mutation` or `signal` | `Action <name> has an invalid kind. Use "query", "mutation" or "signal".` |
+| A kind other than `query`, `mutation`, `signal` or `call` | `Action <name> has an invalid kind. Use "query", "mutation", "signal" or "call".` |
 | `"nullable": true` on a binding that is not an input | `Action <name> has an invalid nullable input binding.` |
 | A binding of another source, an input with no key or another type, an actor field other than `id`, a kernel field other than `now`, a literal that is not a string, a number or null | `Invalid binding <index> in <name>.` |
 | A string input's `maxLength` outside 1 to 100,000 | `Invalid maxLength in <name>.` |
@@ -267,7 +268,7 @@ The route answers to the callers it takes, described below, and on a private app
 
 | Answer | Status | When |
 | --- | --- | --- |
-| `{ "result": [rows] }` or `{ "result": { "changes", "lastInsertId" } }` | 200 | The action ran. Every answer carries `Cache-Control: no-store` |
+| `{ "result": [rows] }` or `{ "result": { "changes", "lastInsertId" } }` | 200 | The action ran. Every answer carries `Cache-Control: no-store`. A `GET` route that answers anyone also carries `Access-Control-Allow-Origin: *`, so a page on another origin may read it ([Calls between apps](#a-page-that-reads-another-app)) |
 | `{ "error": "<binding message>" }` | 400 | An input is missing, unexpected or of the wrong type, the body is not a JSON object, or a query parameter repeats |
 | `{ "error": "invalid-signature" }` | 401 | A route that needs the signature from this caller got none, a malformed one, or one whose MAC does not match |
 | `{ "error": "stale-timestamp" }` | 401 | The signature's `t` is more than 300 seconds from the Kernel's clock. Checked before the MAC, so it says nothing about the secret |
@@ -322,15 +323,15 @@ The Validation Gate and the Kernel refuse the same `callers` declarations with t
 
 ### Signatures
 
-The owner sets the secret for the project before publishing. A release whose signature names an unset secret is refused when planned and again when applied, with `Action <name> signs with the secret <secret>, which is not set for this project. Set it with secret_set before publishing.` When several are unset, one refusal names every action and every secret: `Actions events.feed and events.receive sign with the secrets events_feed and events_webhook, which are not set for this project. Set each with secret_set before publishing.` The editor cannot see secrets, so this is the one refusal the Validation Gate does not make.
+The owner sets the secret for the project before publishing. A release whose signature names an unset secret is refused when planned and again when applied, with `Action <name> signs with the secret <secret>, which is not set for this project. Set it with secret_set before publishing.` When several are unset, one refusal names every action and every secret: `Actions events.feed and events.receive sign with the secrets events_feed and events_webhook, which are not set for this project. Set each with secret_set before publishing.` The editor cannot see secrets, so the Validation Gate does not make this refusal, nor the installation rules of [calls](#where-a-call-may-go).
 
 ```text
-secret_set   { "projectId", "name": "orders_webhook", "value": "<16 to 512 printable characters, no spaces>" }
-secrets_list { "projectId" }                      names and update times, never values
-secret_delete { "projectId", "name" }             refused while the published Deployment signs with it
+secret_set   { "projectId", "name": "orders_webhook", "value": "<16 to 512 printable characters, no spaces>", "use"?: "route" | "call" }
+secrets_list { "projectId" }                      names, uses and update times, never values
+secret_delete { "projectId", "name" }             refused while the published Deployment signs with it or a call uses it
 ```
 
-A signature names no app or host, so a request signed for one project would be accepted by another that holds the same value. `secret_set` therefore refuses a value that another project of the same owner already holds, with `Another of your projects already uses this secret value. A signature does not name the app, so a request signed for one would be accepted by the other. Set a different value.` A copy of an app for staging gets its own secret, and its sender signs with that one.
+A signature names no app or host, so a request signed for one project would be accepted by another that holds the same value. `secret_set` therefore refuses a value that another project of the same owner already holds as a route secret, with `Another of your projects already uses this secret value. A signature does not name the app, so a request signed for one would be accepted by the other. Set a different value.` A copy of an app for staging gets its own secret, and its sender signs with that one.
 
 Secrets belong to the project and live in `mcp.sqlite`, next to the project registry, because a first publish must find them before its Deployment exists. They never enter `actions.json`, the Build Artifact, a listing, the audit log or a portable export. On another installation the owner runs `project_create`, then `secret_set`, then the release.
 
@@ -374,6 +375,110 @@ The editor's Auth > Integrations view sets, lists and deletes secrets by name an
 
 The editor preview serves no routes. Try them on a Development Kernel with `littlebox dev` or on a Deployment.
 
+## Calls between apps
+
+An action of `"kind": "call"` sends one HTTP request to another app or an outside service. The Kernel sends it from its own process, never from the browser, so a signing secret or an API key the request needs stays in the Kernel. [ADR-0015](./adr/0015-an-app-calls-another-from-the-kernel.md) records the decision; `kernel-rs/src/calls.rs` implements it.
+
+```json
+"tasks.escalate": {
+  "kind": "call",
+  "access": "authenticated",
+  "method": "POST",
+  "url": "https://desk-4f2a9c.apps.example.org/hooks/tickets",
+  "bindings": [
+    { "source": "input", "key": "taskId", "type": "number" },
+    { "source": "input", "key": "title", "type": "string", "maxLength": 200 }
+  ],
+  "body": { "ref": "taskId", "title": "title" },
+  "auth": { "secret": "desk_tickets", "header": "X-Desk-Signature" },
+  "then": { "action": "tasks.escalated", "inputs": { "id": "/input/taskId", "status": "/status", "note": "/body/error" } }
+}
+```
+
+`miniapp.actions.call("tasks.escalate", { taskId, title })` checks the caller and the inputs as for any action, queues the call and answers `{ callId, queued: true }`. The call's bindings may only be inputs. `body` maps each body key to one of them: a `POST` sends a JSON object, a `GET` sends query parameters after the URL's own, and an input that is null or missing leaves its key out. Usage counts each queued call under `call`, by action.
+
+`auth` is optional:
+
+| `auth` | What the request carries |
+| --- | --- |
+| `{ "secret": "<name>" }` | A signature in Littlebox's [route scheme](#signatures), keyed with the secret's value, in `X-Littlebox-Signature`, or in the header `"header"` names. Each attempt signs again with a new nonce |
+| `{ "key": "<name>" }` | `Authorization: Bearer <value>`, where the secret holds an API key the other app's owner issued |
+
+A secret that signs a call to another app of the same owner holds that app's route secret, which `secret_set` refuses as a [reused value](#signatures). Set it with `"use": "call"`: such a secret verifies no route of its own app, so it may repeat another project's value, and a route that names it is refused at publish with `Action <name> signs its route with the secret <secret>, which is set for calls only. Set a route secret with a value of its own.` `secrets_list` shows each secret's `use`.
+
+```text
+secret_set { "projectId", "name": "desk_tickets", "value": "<the desk's tickets_hook value>", "use": "call" }
+```
+
+### Where a call may go
+
+A URL is `https`, or `http` only to an app of this installation. The rules below keep a call from reaching the machine the Kernel runs on, its network, a cloud metadata service, the editor or the Kernel's own administration:
+
+| Rule | Checked | Refusal |
+| --- | --- | --- |
+| An absolute `http` or `https` URL, up to 2048 characters, without a user, a password, a fragment, a space or a control character | Both doors | `Action <name> has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.` |
+| No IP address as the host, in any notation, so `http://127.1/` and `http://[::1]/` are refused | Both doors | `Action <name> calls the IP address <host>. Name a host instead.` |
+| No `localhost`, `metadata`, `instance-data` or name under `.internal` | Both doors | `Action <name> calls <host>, which names this machine or a cloud metadata service.` |
+| No first path segment `_littlebox`, `oauth`, `.well-known` or `mcp`, in any case | Both doors | `Action <name> calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel.` |
+| Not the installation's public host or its MCP host | The Kernel, at publish and before each attempt | `Action <name> calls <host>, the editor's host. A call reaches an app or an outside service, never the editor.` |
+| `http` only to a host under `LITTLEBOX_HOST_SUFFIX` | The Kernel, at publish and before each attempt | `Action <name> calls http://<host>, which is not an app of this installation. Use https.` |
+| Every address an outside host resolves to is public | The Kernel, before each attempt | The call fails with `address-refused` |
+
+The Validation Gate cannot see the installation or its secrets, so the Kernel alone makes the editor-host, `http` and unset-secret refusals, as it alone refuses an unset route secret. Before each attempt to a host outside the installation, the Kernel resolves the name and refuses the call when any address is loopback, private (10/8, 172.16/12, 192.168/16), link-local (169.254/16, where cloud metadata answers), shared (100.64/10), documentation, benchmarking (198.18/15), multicast, reserved, unspecified, unique-local (fc00::/7), IPv6 link-local, or an IPv4 address of any of those carried in IPv6 (`::ffff:0:0/96`, `64:ff9b::/96`). It then connects to the address it checked, so a second DNS answer cannot move the request. It follows no redirect: a 3xx is the answer, so a redirect cannot lead past these rules. It uses no proxy from the environment.
+
+A URL whose host is a Deployment of this installation does not leave the process. The Kernel answers it with the route code a request from outside meets, `http::call_route`: the route's callers, the signature check and its replay memory, the rate limit, the guard, Usage and the Signal, with no cookie and a client address of its own for each calling app. A host under the suffix that no app holds fails with `app-not-found`. A paused app answers 503.
+
+### Delivery and the outbox
+
+The worker in `calls.sqlite` sends each call within seconds. An attempt has 10 seconds from connecting to the last byte, and an answer larger than 64 KiB ends the call with `answer-too-large`. A network failure, a timeout, a DNS failure, 408, 425, 429 or a 5xx is retried, waiting 30 seconds, then 1, 2 and 4 minutes, up to 5 attempts. Any other answer is final. An app queues at most 20 calls in any 60 seconds, or `LITTLEBOX_CALLS_PER_MINUTE`; the next is refused with `This app reached its limit of calls in the last minute. Try again in a minute.` A paused app sends nothing until its pause ends.
+
+When a call ends, delivered or failed, its `then` mutation runs once, with no actor, under the app's database lock. Each of its inputs is read by a JSON pointer from this document:
+
+| Pointer | Value |
+| --- | --- |
+| `/ok` | `true` for a 2xx answer |
+| `/status` | The HTTP status, or null when no answer arrived |
+| `/error` | The Kernel's error kind, such as `timeout`, `address-refused` or `app-not-found`, or null |
+| `/body` | The answer parsed as JSON, or null; `/body/error` is another Littlebox app's refusal |
+| `/input` | The call's own inputs, so `/input/taskId` names the row the call was about |
+
+A pointer that finds nothing, or null, leaves its input out, so it binds NULL when the input is nullable. A string input takes a number, a boolean or a structure as its JSON text. The `then` mutation must exist, be a mutation, have no HTTP route and no actor binding, and every required input must be filled; both doors refuse anything else at publish. Only the Kernel runs it: `miniapp.actions.call` refuses it with `Action <name> runs only after the call <call> answers.` It counts in Usage as an action, or under `refused` when its guard refuses, and records its Signal with `actor` null.
+
+`calls_read { "deploymentId", "cursor"? }` needs `read` and lists the app's calls newest first, 50 at a time: the action, `pending`, `delivered` or `failed`, attempts, method, URL, status, error kind, the first 1 KiB of the answer and the `then` mutation's outcome (`done`, `refused` with the guard, or `failed` with the reason). The outbox keeps the newest 1000 finished calls per app. Pending calls do not travel in a package or a migration; on the destination, the page invokes them again.
+
+### A page that reads another app
+
+`"connects": ["https://desk-4f2a9c.apps.example.org"]` in the project manifest, or `project.manifest.connects` in `littlebox.json`, adds those origins to the page's `connect-src`, so its `fetch` may read another app's public route directly. A `GET` route that answers anyone, an unsigned route on a public Deployment with no `callers`, answers with `Access-Control-Allow-Origin: *`, since every caller already gets the same rows. A route that takes a key, a session or a signature sends no CORS header. A key never goes to the browser: a request that needs one is a call action. `connects` lists at most 10 origins, each exactly `https://host` or `https://host:port`, and `http` only for a host under `localhost`, which a local installation serves over http. Both doors refuse anything else with the same words:
+
+| Declaration | Message |
+| --- | --- |
+| Not a list of at most 10 strings | `connects must be a list of at most 10 origins, such as ["https://api.example.com"].` |
+| A path, a trailing slash, a wildcard, capitals, the default port written out, or `http` outside `localhost` | `connects lists <entry>, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost.` |
+| An origin twice | `connects lists <entry> twice.` |
+
+### Declarations both doors refuse
+
+The Validation Gate and the Kernel parse calls and `connects` from one case file, `kernel-rs/src/call-cases.json`, with these messages besides the URL rules above:
+
+| Declaration | Message |
+| --- | --- |
+| A query, mutation or signal action with `url`, `method`, `body`, `auth` or `then` | `Action <name> is a <kind>, so it cannot declare url, method, body, auth or then. Those keys belong to an action of "kind": "call".` |
+| A call with a statement, signal, guard or http | `Action <name> is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route.` |
+| A call that binds the actor, the time or a literal | `Action <name> is a call, so its bindings may only be inputs.` |
+| A method other than `"GET"` or `"POST"` | `Action <name> must call with "method": "GET" or "POST".` |
+| A `body` that is not an object of at most 32 keys of 1 to 64 letters, digits, `_`, `.` and `-`, each naming a string | `Action <name> has an invalid body. Map each body key to one of the call's input keys, at most 32.` |
+| A body value that names no input | `Action <name> sends body key <key> from <input>, which is not one of its input bindings.` |
+| An `auth` with both or neither of `secret` and `key`, or another key | `Action <name> has an invalid auth. Name a secret with "secret" to sign the request, or with "key" to send the API key it holds.` |
+| A secret that is not a secret name | `Action <name> names an invalid auth secret. Use lowercase letters, digits and "_", starting with a letter.` |
+| A header the Kernel sets itself, or not 1 to 64 letters, digits and `-` | `Action <name> has an invalid signature header.` |
+| A `then` that is not `{ "action", "inputs" }` of strings | `Action <name> has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer.` |
+| A pointer outside the document, or with a `~` not followed by `0` or `1` | `Action <name> reads <pointer> for then, which is not a JSON pointer into /ok, /status, /error, /body or /input.` |
+| `/input/<key>` for an input the call lacks | `Action <name> reads <pointer> for then, but <key> is not one of its input bindings.` |
+| A `then` action that is missing, not a mutation, routed, or binds the actor | `Action <name> names <target> as its then, which is not declared.`, `... which is not a mutation.`, `... which answers on an HTTP route. A then mutation runs only after its call.`, `... which binds the actor. A then mutation runs with no caller.` |
+| A `then` input the mutation lacks, or a required one left out | `Action <name> fills <key>, which is not an input of <target>.`, `Action <name> leaves <key> of <target> unfilled. Fill it from the answer or make the input nullable.` |
+
+The editor preview answers a call with `{ callId, queued: true }` and sends nothing. Try calls on a Development Kernel with `littlebox dev`, or on a Deployment. The [Action Contract](#action-contract) lists a call with its request and its `then`, and `conform` checks its refusals without sending one.
+
 ## Usage and Signals
 
 Each Deployment keeps Usage and Signals in its own `usage.sqlite`, next to its database and accounts. [ADR-0010](./adr/0010-kernel-owns-usage-and-signals.md) records the decision; `kernel-rs/src/usage.rs` implements it. Only the owner reads them, through two tools that need `read` and the project grant. The runtime endpoint does not list them, so an app cannot read its own Usage.
@@ -401,6 +506,7 @@ signals_read { "deploymentId", "name"?: "order.placed", "cursor"? }
 | `signup` | | an account becomes active: a signup in local mode, an answered verification link or an accepted invitation |
 | `login` | | a password sign-in or an answered recovery link |
 | `refused` | the action | a mutation with a [guard](#guards) changed no row and the Kernel answered the guard, on `actions_invoke` or on its route |
+| `call` | the action | a [call action](#calls-between-apps) queued a call; the target app counts the request as its own `route` |
 
 Nothing else the Kernel refuses is counted: a call without the session it needs, an input the bindings reject, a statement SQLite refuses, a bad signature or a wrong password. A guard's refusal is the app's own rule saying no, which the owner wants to see next to the calls that ran. The Kernel writes Usage off the request path. A response never waits for it, and when more than 16,384 entries are waiting the newest are dropped and logged. The two read tools wait up to five seconds for the queue to drain, so they include every call that finished before them.
 

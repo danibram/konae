@@ -56,6 +56,8 @@ flowchart LR
   K --> DB["deployments/<id>/: record, artifact, SQLite, files, backups, Usage"]
   K --> MQ["mail.sqlite queue"]
   MQ -.->|"worker"| MP["Resend, SMTP or development mailbox"]
+  K --> CQ["calls.sqlite queue"]
+  CQ -.->|"worker: call actions"| OS["another app's route, in process, or an outside https service"]
   K -.->|"scheduled copy and revocation record"| CP["second disk or S3 prefix"]
   K -.-> S3["S3: second copy of artifacts"]
   O["project owner or agent"] --> E["editor, CLI or MCP client"]
@@ -70,6 +72,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 ├── owners.sqlite           # creator accounts, sessions, challenges and invitation codes
 ├── mcp.sqlite              # projects, saved sources, agent credentials, OAuth, signing secrets, audit
 ├── mail.sqlite             # the account email queue, ADR-0012
+├── calls.sqlite            # the call actions' queue and outbox, ADR-0015
 ├── mailbox.jsonl           # the development mailbox, only with LITTLEBOX_MAIL_TRANSPORT=development
 ├── transfers/              # unfinished MCP uploads and downloads
 ├── recovery-hold.json      # only after a restore that could not read the revocation record
@@ -100,6 +103,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 | `invitations.rs` | App invitations and the owner's user tools behind `manage_users` |
 | `mail.rs` | The email queue, its worker, the Resend, SMTP and development transports, the sender preflight and the limits |
 | `http.rs` | HTTP routes, their callers and signatures, signing secrets, API keys and `GET /_littlebox/files/<id>` |
+| `calls.rs` | Call actions, their queue and worker in `calls.sqlite`, the address rules, `then` mutations, `calls_read` and the manifest's `connects` |
 | `guard.rs` | A mutation's guard |
 | `sql_rules.rs` | The statement rules both doors share |
 | `usage.rs` | Usage and Signals |
@@ -117,7 +121,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 
 ### Two doors, one set of refusals
 
-A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before anything is applied. The Kernel parses the same `actions.json` and `schema.sql` again at `release_plan`, on every installation, including one unpacked from an export. Where both refuse a declaration they use the same words, and each rule has one case file that both test suites run: `sql-rule-cases.json` for statements, `http-binding-cases.json` for routes and their callers, `signal-cases.json` for Signals, `guard-cases.json` for guards and `signature-cases.json` for route signatures, all in `kernel-rs/src`. The query bound is `src/lib/query-bound.ts` on one side and its port in `main.rs` on the other ([ADR-0009](./adr/0009-the-gate-and-the-kernel-share-one-query-bound.md)). The Action Contract written from a Capsule lists the refusals a third backend would have to give.
+A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before anything is applied. The Kernel parses the same `actions.json` and `schema.sql` again at `release_plan`, on every installation, including one unpacked from an export. Where both refuse a declaration they use the same words, and each rule has one case file that both test suites run: `sql-rule-cases.json` for statements, `http-binding-cases.json` for routes and their callers, `signal-cases.json` for Signals, `guard-cases.json` for guards, `signature-cases.json` for route signatures and `call-cases.json` for call actions and `connects`, all in `kernel-rs/src`. The query bound is `src/lib/query-bound.ts` on one side and its port in `main.rs` on the other ([ADR-0009](./adr/0009-the-gate-and-the-kernel-share-one-query-bound.md)). The Action Contract written from a Capsule lists the refusals a third backend would have to give.
 
 An artifact holds pages and the files they load. `kernel-rs/src/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page; under `spa` it serves `index.html`. The rules for which Capsule files become the artifact live in one file, `src/lib/static-artifact.js`, which the CLI, the editor and the exported kit all run. The [MCP guide](./mcp.md#what-the-build-publishes) lists both.
 
@@ -225,7 +229,7 @@ A fragment page in a Build Artifact inlines the runtime and the compiled module;
 
 - Styles allow `'unsafe-inline'` because apps write `style="..."` attributes through `innerHTML`, as the `poll` example does, and the artifact inlines `styles.css`. A hash cannot cover a generated attribute. Google Fonts is the only foreign origin because the starter templates import it and the agent is told to keep the fonts it finds. Neither font host can read app data.
 - Images and media accept `blob:` and `data:` because `miniapp.files.read` hands a file to the app as a Blob URL and apps keep small inline copies of images, as the `portfolio` example does. `miniapp.files.url` returns `/_littlebox/files/<id>`, which `connect-src 'self'` allows a page to fetch again.
-- `connect-src 'self'` limits `fetch` to the app's origin, where the runtime reaches `/_littlebox/mcp`.
+- `connect-src 'self'` limits `fetch` to the app's origin, where the runtime reaches `/_littlebox/mcp`, plus the origins the manifest's `connects` lists, at most 10 ([ADR-0015](./adr/0015-an-app-calls-another-from-the-kernel.md)). A request that needs a secret or a key is a call action, which the Kernel sends.
 
 Every host, apps included, sends `frame-ancestors 'none'` and `X-Frame-Options: DENY`. The Kernel's pages on the editor host, such as owner sign-in, get `default-src 'self'` with their script hashes; its JSON and errors get `default-src 'none'`. When `LITTLEBOX_PUBLIC_ORIGIN` or `LITTLEBOX_MCP_ORIGIN` is HTTPS, every response carries `Strict-Transport-Security: max-age=31536000; includeSubDomains`. `includeSubDomains` makes a browser that has visited the installation's host use HTTPS for app hosts beneath it before their first visit. There is no `preload`; the operator decides that.
 

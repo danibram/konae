@@ -13,6 +13,8 @@ import kernelCopiesSource from "../../kernel-rs/src/copies.rs?raw";
 import kernelEjectSource from "../../kernel-rs/src/eject.rs?raw";
 import kernelFilesSource from "../../kernel-rs/src/files.rs?raw";
 import kernelGuardSource from "../../kernel-rs/src/guard.rs?raw";
+import kernelCallsSource from "../../kernel-rs/src/calls.rs?raw";
+import kernelCallCases from "../../kernel-rs/src/call-cases.json?raw";
 import kernelGuardCases from "../../kernel-rs/src/guard-cases.json?raw";
 import kernelGuideSource from "../../kernel-rs/src/guide.rs?raw";
 import kernelLimitsSource from "../../kernel-rs/src/limits.rs?raw";
@@ -53,6 +55,8 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/eject.rs", contents: kernelEjectSource },
   { path: "kernel-rs/src/files.rs", contents: kernelFilesSource },
   { path: "kernel-rs/src/guard.rs", contents: kernelGuardSource },
+  { path: "kernel-rs/src/calls.rs", contents: kernelCallsSource },
+  { path: "kernel-rs/src/call-cases.json", contents: kernelCallCases },
   { path: "kernel-rs/src/guide.rs", contents: kernelGuideSource },
   { path: "kernel-rs/src/guard-cases.json", contents: kernelGuardCases },
   { path: "kernel-rs/src/limits.rs", contents: kernelLimitsSource },

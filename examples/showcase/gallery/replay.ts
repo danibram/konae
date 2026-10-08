@@ -315,7 +315,8 @@ try {
   assert.equal(feed.status, 200);
   assert.equal(feed.headers.get("content-type"), "application/json");
   assert.equal(feed.headers.get("cache-control"), "no-store");
-  assert.equal(feed.headers.get("access-control-allow-origin"), null);
+  // An open GET route allows every origin since ADR-0015.
+  assert.equal(feed.headers.get("access-control-allow-origin"), "*");
   const feedBody = await feed.json();
   assert.deepEqual(Object.keys(feedBody), ["result"]);
   assert.equal(feedBody.result.length, 4);
@@ -340,7 +341,7 @@ try {
   refused("GET /feed.json?page=2 (an undeclared query parameter)", feedQueryBody.error, 400);
   refused("Shape /feed.json as a JSON Feed document (version, title, items)", "No primitive: a route always answers { \"result\": [rows] }.");
   refused("Absolute image URLs in /feed.json", "No primitive: the only kernel binding is now; the statement cannot read the Deployment's origin.");
-  refused("Let a browser on another origin read /feed.json, or cache it", "No primitive: no Access-Control-Allow-Origin header and Cache-Control: no-store on every answer.");
+  refused("Let a browser cache /feed.json", "No primitive: Cache-Control: no-store on every answer. A page on another origin reads it, since the route answers Access-Control-Allow-Origin: *.");
   pass("/feed.json", `GET with no signature or key answers 200 application/json { result: [4 items] } newest first, with image paths that load; HEAD answers 405 Allow: GET with ${headBody ? "a body" : "no body"}; POST answers 405 Allow: GET "${postFeedBody.error}"; ?page=2 answers 400 "${feedQueryBody.error}".`);
 
   // contact.send: anonymous, records a Signal, and trips the per-address limit.
