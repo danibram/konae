@@ -100,6 +100,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 | `invitations.rs` | App invitations and the owner's user tools behind `manage_users` |
 | `mail.rs` | The email queue, its worker, the Resend, SMTP and development transports, the sender preflight and the limits |
 | `http.rs` | HTTP routes, their callers and signatures, signing secrets, API keys and `GET /_littlebox/files/<id>` |
+| `provider.rs` | A provider's signature schemes, a route's `fields` and the memory of accepted deliveries ([ADR-0015](./adr/0015-a-route-verifies-a-providers-own-signature.md)) |
 | `guard.rs` | A mutation's guard |
 | `sql_rules.rs` | The statement rules both doors share |
 | `usage.rs` | Usage and Signals |
@@ -162,7 +163,7 @@ The browser calls named server actions. An action declared `anonymous` may also 
 
 | Caller | Proof | Acts as |
 | --- | --- | --- |
-| A third-party service | The route's signature, an HMAC under the project's signing secret over the time, a nonce, the method, the path, the canonical query string and the body | A visitor, with no actor ID |
+| A third-party service | The route's signature, an HMAC under the project's signing secret over the time, a nonce, the method, the path, the canonical query string and the body, or over what the provider's own scheme signs ([ADR-0015](./adr/0015-a-route-verifies-a-providers-own-signature.md)) | A visitor, with no actor ID |
 | A program the owner wrote | An API key that names the action, sent as `Authorization: Bearer` | A Runtime Actor of kind service, with the key's ID |
 | A signed-in person | The app session cookie | The app user |
 

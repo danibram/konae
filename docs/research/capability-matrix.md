@@ -2,6 +2,8 @@
 
 Date: 2026-11-07, against `main` at `e9a0711`. This matrix takes ten app shapes people ask for and 24 features they expect, and gives every cell one verdict with the primitive behind it and the replay that proves it. Where no showcase replay proved a cell, a probe under [examples/probes](../../examples/probes/README.md) does, on its own local Kernel. Run them all with `bun run examples/probes/replay-all.ts`.
 
+Updated 2026-11-07 for [ADR-0015](../adr/0015-a-route-verifies-a-providers-own-signature.md): a route verifies a provider's own signature scheme and reads its nested body through `fields`. F9 moved from C to W, and from N to C for the integration hub; F20 moved from N to C. The counts below are taken again from the cells.
+
 The yardstick is the sentence at the top of AGENTS.md: a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.
 
 ## Verdicts
@@ -41,7 +43,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F6 | Public and private rows in one table | W | Each action projects and filters its own rows | booking "Public and staff views", gallery "Visitor view", community "Publishers and readers" |
 | F7 | Public read API | C | An unsigned GET route on a public app. It always answers `{ "result": [rows] }` as JSON with `Cache-Control: no-store` and no CORS headers, so a server reads it and a page on another origin cannot; an `OPTIONS` preflight answers 405. There is no XML or RSS. A private app's routes take a key, a signature or a session, never a caller with none, so a public API means a public app | gallery "/feed.json", dataset "Read API from another origin" |
 | F8 | Private write API with a key | W | A route with `"callers": ["key"]` and an API key that names the action | dataset "Private write API", habits "API key on an actor-bound route", booking "Check-in route" |
-| F9 | Signed webhooks in | C | A signed route in Littlebox's scheme only. A provider's own scheme answers 401 `invalid-signature`; a provider's body answers 400 `Unexpected action input: pusher` for a field the action does not declare, `ref must be a non-empty string.` for a nested object and `The request body must be a JSON object.` for a form body. A sender that cannot sign or send `Authorization: Bearer` lands only on an unsigned route of a public app, where anyone can post | inbox "Signed webhook on a private app", booking "Check-in route", hub "Provider signature", "Undeclared fields", "Nested value", "Form-encoded body", "Unsigned route on a public app" |
+| F9 | Signed webhooks in | W | A signed route in Littlebox's scheme or in a provider's own: `hmac-body` (GitHub, Shopify), `timestamped` (Stripe) or `svix` (Resend). `fields` reads each input from a JSON path into the provider's body and leaves the other keys out. Each delivery is accepted once: a second copy answers 409 `replayed-signature`, a wrong secret or a changed byte 401 `invalid-signature`. Before 2026-11-07 a provider's scheme answered 401 and its body 400 `Unexpected action input: pusher` | inbox "Signed webhook on a private app", "Webhooks from outside services", booking "Check-in route", hub "Provider signature", "Svix sender", "Undeclared fields", "Program API", "Unknown scheme at both doors" |
 | F10 | Files: public, private, per user; upload, publish, delete | W | `files_upload`, `files_update`, `files_delete` and `GET /_littlebox/files/<id>`; 2 MiB a file, 20 MiB a Deployment. A file is its uploader's or public, so no rule shares it with a role (`File not found.` to an editor), and a visitor cannot upload | gallery "Curator uploads", "Publish a draft", club "Files", community "Files by role" |
 | F11 | Images embedded | W | `<img src="/_littlebox/files/<id>">` under `img-src 'self' blob: data:`. Images from other origins and embedded players do not load, because the policy names no other origin and `frame-src` falls back to `default-src 'self'`. No resizing | gallery "Chrome", club "Browser", shop "Payment provider in the page" |
 | F12 | Search | C | `LIKE` with a nullable filter, a scan bounded by the 2-second statement deadline. Full-text search needs a virtual table, and both doors refuse it with `schema.sql may only create tables and indexes, but it contains CREATE VIRTUAL.` | dataset "Search", "Full-text search refused" |
@@ -52,7 +54,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F17 | Email on an event | N | The mail queue sends only account email: verification, recovery and invitations. The runtime door has no mail tool, and an action of kind `email` is refused (Gate `Invalid server action: notes.mail`, Kernel `Action notes.mail has an unsupported kind.`). The nearest alternative is that the owner reads Signals, or that a program the owner runs polls a keyed route and sends the mail itself | platform "Runtime tools", "Declare an action of kind email" |
 | F18 | Scheduled or delayed work | C | Nothing runs without a caller. Work that only has to look done when someone asks, such as a hold that lapses or a post that appears at its time, compares a stored time with `kernel.now` in each statement; lapsed rows stay in the table. Work that has to happen when nobody asks, such as a reminder, a digest or a retry, is N, because a `"schedule"` key passes both doors and runs nothing | shop "Holds that lapse", platform "A reminder without a worker", "Declare a schedule on a mutation" |
 | F19 | Realtime updates | C | The page polls a query with an `after` cursor, within 30 calls per 10 seconds per visitor address and 120 per signed-in user. Nothing is pushed: a `"subscribe"` key passes both doors and does nothing | community "Realtime by polling", platform "Declare a subscription on a query" |
-| F20 | Payments | N | The page policy refuses a provider's script, API calls, checkout frame and a form that posts to it, and a provider's signed webhook answers 401 `invalid-signature`. The nearest alternative is a plain link to a hosted payment page, which publishes and navigates, and a program the owner runs that confirms the payment with an API key | shop "Payment provider in the page", "Holds that lapse" (`payments.confirm` by key), hub "Payment provider signature" |
+| F20 | Payments | C | A plain link to the provider's hosted payment page, which publishes and navigates, carries the order as `client_reference_id`, and the provider's webhook on a `timestamped` route marks the order paid through a guarded mutation; a second payment for the order answers 403 with the guard. What is given up: checkout inside the page, since the page policy refuses the provider's script, API calls, checkout frame and a form that posts to it, and an amount the app computes, since no action calls out to create a checkout session, so each price is a payment link set up at the provider | shop "Payment provider in the page", hub "Payment provider signature" |
 | F21 | Third-party login | N | App accounts are email and password; the runtime tools are `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset`. Nothing inside Littlebox comes close, because an outside login does not produce a Runtime Actor | platform "Runtime tools" |
 | F22 | Custom domain | N | The Kernel answers only the hostnames it generates, `<slug>-<id>.<suffix>`: another Host answers 404 `{"error":"Littlebox deployment not found."}`. A proxy that rewrites Host still carries the page's Origin, and the runtime answers 403 `{"error":"Cross-origin or unrecognized-host MCP request rejected."}`. The nearest alternative is a redirect from the domain to the generated hostname | platform "Custom domain" |
 | F23 | Export and migration | W | `package_export` and an import into another Kernel, Eject, scheduled copies and restore | club "Export", "Import", habits "Eject and publish from outside", "Copy and restore" |
@@ -70,7 +72,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F6 Public and private rows in one table | W | **W** | W | W | **W** | W | W | W | **W** | **W** |
 | F7 Public read API | C | C | C | C | **C** | C | **C** | C | C | C |
 | F8 Private write API with a key | W | W | W | W | W | W | **W** | **W** | W | W |
-| F9 Signed webhooks in | C | C | C | C | C | C | C | **N** | C | C |
+| F9 Signed webhooks in | W | W | W | W | W | W | W | **C** | W | W |
 | F10 Files | W | W | **C** | **W** | W | **C** | W | W | W | **C** |
 | F11 Images embedded | **W** | W | W | **W** | **C** | W | W | W | W | W |
 | F12 Search | C | C | C | **C** | **C** | C | **C** | C | C | **C** |
@@ -81,7 +83,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F17 Email on an event | **N** | N | **N** | **N** | N | **N** | N | **N** | **N** | **N** |
 | F18 Scheduled or delayed work | N | **N** | **N** | N | **C** | N | C | **N** | **C** | C |
 | F19 Realtime updates | C | C | **C** | C | C | C | C | C | **C** | **C** |
-| F20 Payments | N | N | N | N | N | N | N | N | **N** | **N** |
+| F20 Payments | C | C | C | C | C | C | C | C | **C** | **C** |
 | F21 Third-party login | N | N | N | N | N | N | N | N | N | N |
 | F22 Custom domain | **N** | N | N | N | **N** | N | N | N | **N** | N |
 | F23 Export and migration | **W** | **W** | **W** | **W** | **W** | **W** | **W** | **W** | **W** | **W** |
@@ -89,7 +91,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 
 A cell differs from its feature's verdict where the shape changes the answer:
 
-- F9 in H is N. A hub's senders are outside services with their own signature schemes and payloads, and the hub probe shows each of them refused. The nearest alternative is an adapter outside Littlebox that verifies the sender and posts the declared fields to a signed route.
+- F9 in H is C. A hub's senders are outside services with their own signature schemes and payloads, and the four schemes take a code host's, a shop's, a payment provider's and a Svix sender's. A sender that posts a form-encoded body, as Slack's slash commands and Twilio do, still answers 400 `The request body must be a JSON object.`, a scheme with the timestamp in its own header, as Slack's, is not one of the four, and a delivery over 64 KiB answers 413. Such a sender still needs an adapter outside Littlebox. Before 2026-11-07 this cell was N.
 - F10 in C and J is C, because a file goes to its uploader or to everyone who may open the app, never to a role or to a publisher's followers. In F it is C, because a visitor cannot upload: `transfer_begin` needs a session, so a respondent creates an account before attaching a file.
 - F11 in E is C, because a post cannot embed an image or a video from another site.
 - F18 is C where the work is a time a query can compare (E publishes a post at its time, G and J filter by age, I lets a hold lapse) and N where something has to happen with nobody asking (A sends a launch notice, B reminds, C and D send a digest, F sends a daily summary, H retries an outbound call).
@@ -100,8 +102,8 @@ The counts are taken from the 240 cells above, by counting each letter.
 
 | | Works | Compromise | Not possible | Cells |
 | --- | --- | --- | --- | --- |
-| Every cell | 116 | 77 | 47 | 240 |
-| Cells a shape cannot ship without (bold) | 41 | 30 | 16 | 87 |
+| Every cell | 125 | 79 | 36 | 240 |
+| Cells a shape cannot ship without (bold) | 41 | 33 | 13 | 87 |
 
 | Shape | Needed | Not possible among them | Compromises among them |
 | --- | --- | --- | --- |
@@ -112,9 +114,9 @@ The counts are taken from the 240 cells above, by counting each letter.
 | E Blog or docs | 10 | F22 domain | F7, F11, F12, F18, F24 |
 | F Form collector | 6 | F17 email | F10, F24 |
 | G Public dataset | 7 | | F7, F12, F24 |
-| H Integration hub | 9 | F9 provider webhooks, F17 email, F18 retries | F15, F24 |
-| I Shop or booking | 10 | F17 email, F20 payments, F22 domain | F18, F19, F24 |
-| J Two-sided | 11 | F17 email, F20 payments | F5, F10, F12, F19, F24 |
+| H Integration hub | 9 | F17 email, F18 retries | F9, F15, F24 |
+| I Shop or booking | 10 | F17 email, F22 domain | F18, F19, F20, F24 |
+| J Two-sided | 11 | F17 email | F5, F10, F12, F19, F20, F24 |
 
 G is the only shape with nothing it needs marked N. Every other shape needs at least one feature no primitive provides, and email on an event is the one most of them share.
 
@@ -130,24 +132,22 @@ The probes found three declarations the Validation Gate and the Kernel answered 
 
 ## What blocks the most shapes
 
-Counting the bold N cells per feature gives five features with any, and they are the five in [the showcase findings](./showcase-findings.md#what-the-matrix-adds), each with the smallest primitive that would unblock it:
+Counting the bold N cells per feature gives three features with any, three of the five in [the showcase findings](./showcase-findings.md#what-the-matrix-adds), each with the smallest primitive that would unblock it:
 
 | Feature | Shapes it blocks | Shapes it degrades |
 | --- | --- | --- |
 | F17 Email on an event | A, C, D, F, H, I, J | |
 | F18 Scheduled or delayed work | B, C, H | E, I |
 | F22 Custom domain | A, E, I | |
-| F20 Payments | I, J | |
-| F9 Webhooks from outside services | H | |
 
-Payments and outside webhooks need the same primitive, because a payment provider tells the app about a payment with a webhook in its own scheme. The next features down block nothing but degrade the most shapes: search (D, E, G, J), realtime (C, I, J) and roles (C, D, J).
+Payments and webhooks from outside services blocked I, J and H until 2026-11-07. They needed one primitive, because a payment provider tells the app about a payment with a webhook in its own scheme, and [ADR-0015](../adr/0015-a-route-verifies-a-providers-own-signature.md) added it. The next features down block nothing but degrade the most shapes: search (D, E, G, J), realtime (C, I, J) and roles (C, D, J).
 
 ## Probes
 
 | Probe | Cells it decides | Checks |
 | --- | --- | --- |
 | [dataset](../../examples/probes/dataset/replay.ts) | F7, F8, F12, F13, F14 | 7 |
-| [hub](../../examples/probes/hub/replay.ts) | F9, F20, the hub's program API | 9 |
+| [hub](../../examples/probes/hub/replay.ts) | F9, F20, the hub's program API, a scheme refused at both doors | 9 |
 | [shop](../../examples/probes/shop/replay.ts) | F11, F18, F20, inventory under concurrency | 3 |
 | [community](../../examples/probes/community/replay.ts) | F5, F6, F10, F15, F19 | 6 |
 | [survey](../../examples/probes/survey/replay.ts) | F14, one vote per person, a multi-answer form in one write | 2 |

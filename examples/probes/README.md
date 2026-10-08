@@ -5,7 +5,7 @@ Small Capsules that decide the cells of the [capability matrix](../../docs/resea
 | Probe | What it is | Cells |
 | --- | --- | --- |
 | [dataset](dataset/replay.ts) | Public river levels with search, paging, sorting, totals and a keyed write route | Public read API, private write API, search, pagination and sorting, aggregates |
-| [hub](hub/replay.ts) | A private hub fed by outside services' webhooks | Webhooks in, a payment provider's signature, the program API |
+| [hub](hub/replay.ts) | A private hub fed by outside services' webhooks, each signed in its provider's own scheme | Webhooks in, payments confirmed by a provider's webhook, the program API |
 | [shop](shop/replay.ts) | Prints with limited stock and holds that lapse | Inventory under concurrency, delayed work, payments, what the page may load |
 | [community](community/replay.ts) | Publishers and readers on one public app | Roles inside the app, public and private rows, realtime by polling, audit, files by role |
 | [survey](survey/replay.ts) | An anonymous survey and a signed-in vote | Multi-answer form in one write, tallies, one vote per person |
