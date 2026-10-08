@@ -1,6 +1,6 @@
 # Probes
 
-Small Capsules that decide the cells of the [capability matrix](../../docs/research/capability-matrix.md) no [showcase](../showcase/README.md) replay proves. Each folder holds a Capsule (`index.html`, `app.js`, `schema.sql`, `actions.json`) and a `replay.ts` that publishes it on its own Kernel, asserts every answer the matrix quotes, and removes the Kernel and its data when it exits. `_kit.ts` is the harness they share.
+Small Capsules that decide the cells of the [capability matrix](../../docs/research/capability-matrix.md) no [showcase](../showcase/README.md) replay proves. Each folder holds a Capsule (`index.html`, `app.js`, `schema.sql`, `actions.json`), or one per app in its own subfolder, and a `replay.ts` that publishes it on its own Kernel, asserts every answer the matrix quotes, and removes the Kernel and its data when it exits. `_kit.ts` is the harness they share.
 
 | Probe | What it is | Cells |
 | --- | --- | --- |
@@ -10,6 +10,7 @@ Small Capsules that decide the cells of the [capability matrix](../../docs/resea
 | [community](community/replay.ts) | Publishers and readers on one public app | Roles inside the app, public and private rows, realtime by polling, audit, files by role |
 | [survey](survey/replay.ts) | An anonymous survey and a signed-in vote | Multi-answer form in one write, tallies, one vote per person |
 | [platform](platform/replay.ts) | Notes with reminders | Email on an event, scheduled work, realtime push, third-party login, custom domain |
+| [calls](calls/replay.ts) | A tasks app that escalates to a desk app, two Capsules in `tasks/` and `desk/` | Calls between apps, retries and the outbox, a page reading another app's public route |
 
 Run them all, each on its own port from 23000:
 
