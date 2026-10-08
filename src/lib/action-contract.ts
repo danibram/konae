@@ -405,6 +405,10 @@ function actionErrors(action: ServerActionDefinition, inputs: ContractInput[], a
       errors.push(fromSdk("The request body must be a JSON object.", "http"));
     } else {
       errors.push(fromSdk("Repeated query parameter: <key>", "http"));
+      errors.push({
+        ...fromSdk("A route does not answer HEAD. Send GET.", "http"),
+        when: "a HEAD reaches the route; it is refused before any SQL, with Allow: GET. HTTP carries no body on a HEAD answer, so the caller sees the 405 and the header, not the message",
+      });
     }
     errors.push({ ...fromSdk("rate-limited", "http"), status: 429 });
   }
@@ -783,7 +787,13 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
     } else if (action.output.kind === "queued") {
       lines.push("`{ callId, queued: true }`. The Kernel sends the request later, from its own process.", "");
     } else {
-      lines.push(`Records the Signal \`${action.output.signal}\`.`, "");
+      lines.push(`\`{ "recorded": true }\`. It runs no SQL and records the Signal \`${action.output.signal}\`.`, "");
+    }
+    if (action.signal) {
+      const { name, properties } = action.signal;
+      lines.push("### Signal", "");
+      const named = properties.map((property) => property === "actor" ? "`actor` (the app user's ID, the API key's ID, or null for a visitor or a signed request)" : `\`${property}\``);
+      lines.push(`Records \`${name}\`${named.length ? ` with ${named.join(", ")}` : ""}${action.kind === "mutation" ? " after the statement changes a row" : " on every call the bindings accept"}. A refused call records none.`, "");
     }
     if (action.call) {
       const call = action.call;

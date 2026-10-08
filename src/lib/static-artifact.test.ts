@@ -6,7 +6,7 @@ import path from "node:path";
 import { buildLocal } from "../../scripts/littlebox";
 import { createDefaultManifest, normalizeManifest } from "../deployments/manifest";
 import type { MiniAppProject } from "./types";
-import { assembleStaticArtifact, checkRouting, isDocument, resolveReference, routingMessage, runtimeFile, servedPath } from "./static-artifact.js";
+import { assembleStaticArtifact, checkRouting, isDocument, resolveReference, routingMessage, runtimeFile, servedPath, splitFragmentHead, stripModulePaths } from "./static-artifact.js";
 
 // esbuild-wasm starts only in a browser. The editor's build runs here on native
 // esbuild with the editor's own plugin, which resolves every import from the
@@ -100,10 +100,45 @@ describe("the artifact", () => {
     expect(artifact.files["index.html"]).toContain("<style>p{}</style>");
   });
 
+  test("a fragment that opens with a <title> and an icon <link> gets them in the head, and its icon file ships", async () => {
+    const fragment = '<title>Starter</title>\n<link rel="icon" href="favicon.svg" type="image/svg+xml">\n<main id=app><svg><title>Close</title></svg></main>';
+    const artifact = await assemble({ "index.html": fragment, "favicon.svg": "<svg xmlns=\"http://www.w3.org/2000/svg\"/>", "app.js": "" });
+    const html = artifact.files["index.html"];
+    const [head, body] = html.split("</head>");
+    expect(head).toContain('<title>Starter</title><link rel="icon" href="favicon.svg" type="image/svg+xml"><style>');
+    expect(body).not.toContain("<title>Starter</title>");
+    expect(body).not.toContain('rel="icon"');
+    expect(body).toContain("<main id=app><svg><title>Close</title></svg></main>");
+    expect(artifact.files["favicon.svg"]).toContain("<svg");
+  });
+
+  test("a data: SVG icon in a fragment is hoisted and needs no file", async () => {
+    const icon = '<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E">';
+    const artifact = await assemble({ "index.html": `${icon}<main id=app></main>`, "app.js": "" });
+    expect(artifact.files["index.html"].split("</head>")[0]).toContain(icon);
+    expect(Object.keys(artifact.files)).toEqual(["index.html"]);
+  });
+
+  test("only the elements a fragment opens with move: a stylesheet link or a later title stays in the body", () => {
+    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><title>A</title><main></main>')).toEqual({ head: "", body: '<link rel="stylesheet" href="x.css"><title>A</title><main></main>' });
+    expect(splitFragmentHead("<main></main><title>A</title>")).toEqual({ head: "", body: "<main></main><title>A</title>" });
+    expect(splitFragmentHead('<!-- top -->\n<title>A</title><link rel="apple-touch-icon" href="/t.png"><main></main>')).toEqual({ head: '<title>A</title><link rel="apple-touch-icon" href="/t.png">', body: "<main></main>" });
+  });
+
   test("a Capsule without index.html gets the default fragment home page", async () => {
     const artifact = await assemble({ "about.html": page("About"), "app.js": "" });
     expect(artifact.files["index.html"]).toContain("<main id=app></main>");
     expect(artifact.files["about.html"]).toContain("<title>About</title>");
+  });
+});
+
+describe("module path comments", () => {
+  test("drops a line that names a Capsule file, from either builder, and keeps every other comment", () => {
+    const held = new Set(["app.js", "lib/a.js", "lib/b.css"]);
+    expect(stripModulePaths("// lib/a.js\nvar a = 1;\n\n// littlebox:app.js\nconsole.log(a);\n", held)).toBe("var a = 1;\n\nconsole.log(a);\n");
+    expect(stripModulePaths("/* lib/b.css */\np { margin: 0 }\n", held)).toBe("p { margin: 0 }\n");
+    const kept = "// ../../tmp/other.js\n// see app.js\n/*! license */\nx();\n";
+    expect(stripModulePaths(kept, held)).toBe(kept);
   });
 });
 
@@ -186,12 +221,40 @@ describe("the CLI and the editor build the same artifact", () => {
       const editor = await buildProjectInBrowser(project(capsule));
       expect(Object.keys(cli.files).sort()).toEqual(["about.html", "app.js", "guide/install.html", "index.html", "robots.txt", "runtime.js", "styles.css"]);
       expect(Object.keys(editor.files).sort()).toEqual(Object.keys(cli.files).sort());
-      for (const file of ["index.html", "about.html", "guide/install.html", "robots.txt", "styles.css", "runtime.js"]) {
+      for (const file of ["index.html", "about.html", "guide/install.html", "robots.txt", "styles.css", "runtime.js", "app.js"]) {
         expect(editor.files[file]).toBe(cli.files[file]);
       }
       expect(cli.files["index.html"]).toContain('<head><script src="/runtime.js"></script>');
       expect(cli.files["app.js"]).toContain("document.title = greeting");
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  test("the same Capsule built from two folders gives byte-identical files, with no folder named", async () => {
+    const modular = {
+      "index.html": "<main id=app></main>",
+      "styles.css": "body { color: #222 }",
+      "app.js": 'import { greet } from "./lib/greet.js";\nimport "./lib/card.css";\n//! Kept: a legal comment.\ndocument.title = greet("Ana");\n',
+      "lib/greet.js": "export const greet = (name) => `Hello, ${name}`;\n",
+      "lib/card.css": ".card { padding: 4px }\n",
+    };
+    const first = await onDisk(modular);
+    const second = await onDisk(modular);
+    try {
+      const one = JSON.stringify((await buildLocal(first)).artifact);
+      const two = JSON.stringify((await buildLocal(second)).artifact);
+      expect(one).toBe(two);
+      expect(one).not.toContain(path.basename(first));
+      expect(one).not.toContain(path.basename(second));
+      for (const comment of ["// app.js", "// lib/greet.js", "/* lib/card.css */"]) expect(one).not.toContain(comment);
+      expect(one).toContain("Kept: a legal comment.");
+      expect(one).toContain(".card {");
+      // The editor names modules with its own namespace; its page carries the same script and styles.
+      const editor = await buildProjectInBrowser(project(modular));
+      expect(editor.files["index.html"]).toBe(JSON.parse(one).files["index.html"]);
+    } finally {
+      await rm(first, { recursive: true, force: true });
+      await rm(second, { recursive: true, force: true });
+    }
   });
 
   test("both refuse a missing reference with the same words", async () => {

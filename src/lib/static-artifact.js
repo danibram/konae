@@ -56,9 +56,29 @@ export function isDocument(html) {
  * local catch.
  */
 export function renderCapsuleDocument(input) {
+  const { head, body } = splitFragmentHead(input.body);
   return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${input.head ?? ""}<style>${input.styles}</style></head>
-<body>${input.body}<script ${runtimeScriptAttribute}>${escapeInlineScript(input.runtime)}</script><script type="module">${escapeInlineScript(input.script)}</script></body></html>`;
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${input.head ?? ""}${head}<style>${input.styles}</style></head>
+<body>${body}<script ${runtimeScriptAttribute}>${escapeInlineScript(input.runtime)}</script><script type="module">${escapeInlineScript(input.script)}</script></body></html>`;
+}
+
+/**
+ * Moves the <title> and the icon <link>s a fragment opens with into the head,
+ * where the browser reads them; in the body they are ignored and the browser
+ * asks for /favicon.ico. Only elements before the fragment's first other
+ * element move, so an SVG's <title> further down stays where it is.
+ */
+export function splitFragmentHead(fragment) {
+  const lead = /^\s*(?:<!--[\s\S]*?-->|<title(?:\s[^>]*)?>[^<]*<\/title\s*>|<link\s[^>]*>)/i;
+  const moved = [];
+  let rest = fragment;
+  for (let match = lead.exec(rest); match; match = lead.exec(rest)) {
+    const element = match[0].trim();
+    if (/^<link/i.test(element) && !/\bicon\b/i.test(parseAttributes(element.slice(5)).rel ?? "")) break;
+    if (!element.startsWith("<!--")) moved.push(element);
+    rest = rest.slice(match[0].length);
+  }
+  return moved.length ? { head: moved.join(""), body: rest.replace(/^\s+/, "") } : { head: "", body: fragment };
 }
 
 /**
@@ -124,7 +144,7 @@ export async function assembleStaticArtifact(input) {
   for (const [served, source] of pages) {
     const html = source === null ? defaultBody : await text(source);
     if (!isDocument(html)) {
-      compiled ??= await input.compile();
+      compiled ??= withoutModulePaths(await input.compile(), held);
       scanHtml(html, served, reference);
       scanCss(compiled.styles, served, reference);
       files[served] = renderCapsuleDocument({ body: html, styles: compiled.styles, script: compiled.script, runtime: input.runtime, head: input.head });
@@ -149,7 +169,7 @@ export async function assembleStaticArtifact(input) {
       if (bundled.has(target)) continue;
       bundled.add(target);
       if (!/\.m?js$/.test(target)) throw new Error(`${from} loads ${raw} as a module. A page loads JavaScript, so name a .js or .mjs file and let the build compile it.`);
-      const output = await input.bundle(source);
+      const output = withoutModulePaths(await input.bundle(source), held);
       if (output.styles) throw new Error(`${source} imports CSS. Link the stylesheet from the page instead.`);
       files[target] = output.script;
       continue;
@@ -166,6 +186,24 @@ export async function assembleStaticArtifact(input) {
   const artifact = { version: 1, entrypoint: "index.html", files };
   if (Object.keys(encodings).length) artifact.encodings = encodings;
   return artifact;
+}
+
+/**
+ * Drops the comment esbuild writes above each module it bundles, such as
+ * `// app.js` or `/* lib/b.css *\/`. The name is relative to the folder the
+ * builder ran in, so it would ship the builder's directory layout to every
+ * visitor and make two builds of one Capsule from two folders differ. Only a
+ * line that names a file the Capsule holds is dropped, with the `littlebox:`
+ * namespace the editor's builder adds. esbuild drops a page's other comments
+ * already, except legal ones, which stay.
+ */
+export function stripModulePaths(code, held) {
+  const named = (path) => held.has(path.startsWith("littlebox:") ? path.slice("littlebox:".length) : path);
+  return code.replace(/^(?:\/\/ (\S+)|\/\* (\S+) \*\/)\n/gm, (line, js, css) => named(js ?? css) ? "" : line);
+}
+
+function withoutModulePaths(output, held) {
+  return { ...output, script: stripModulePaths(output.script, held), styles: output.styles && stripModulePaths(output.styles, held) };
 }
 
 /**

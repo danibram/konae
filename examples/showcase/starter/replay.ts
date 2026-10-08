@@ -307,22 +307,17 @@ try {
   const managedReceipt = await A.owner.call<Receipt>("release_apply", { planId: managedPlan.planId });
   await A.owner.cancel(releaseUpload.transferId).catch(() => {});
   const M = app(A, managedReceipt);
-  // Every file the page loads, from both doors. The bundler names the folder it built from in a
-  // comment, so that line is the only one allowed to differ.
-  const builtFrom = /^\/\/ (.*)\/app\.js$/m;
-  let cliFolder = "";
+  // Every file the page loads, from both doors, built from two folders: byte for byte the same,
+  // and no bundler comment names either folder.
   let servedBytes = 0;
   for (const file of ["/", "/app.js", "/styles.css", "/favicon.svg"]) {
     const fromCli = await (await S.http("GET", file)).text();
     const fromManaged = await (await M.http("GET", file)).text();
-    cliFolder ||= fromCli.match(builtFrom)?.[1] ?? "";
-    assert.equal(fromManaged.replace(builtFrom, ""), fromCli.replace(builtFrom, ""), `${file} must be the same from both doors.`);
+    assert.equal(fromManaged, fromCli, `${file} must be the same from both doors.`);
+    assert(!fromCli.includes(path.basename(scratch)) && !/^\/\/ .*app\.js$/m.test(fromCli), `${file} names no build folder.`);
     servedBytes += fromCli.length;
   }
-  assert(cliFolder.endsWith("/cli"), "The CLI's app.js names the folder it was built from.");
-  const upward = cliFolder.match(/^(\.\.\/)+/)![0].length / 3;
-  refused("Build Artifact", "littlebox build of app.js", `The published app.js starts with a bundler comment naming the build folder, ${upward} levels up from the repository: "// ${cliFolder.replace(/^(\.\.\/)+/, "../".repeat(upward)).replace(/\/var\/folders\/.*\/(littlebox-showcase-starter-)/, "/var/folders/…/$1")}/app.js"`);
-  check("Managed publish", `project_sources_save reached revision ${saved.revision} and release_plan/release_apply served ${managedReceipt.url}. Its page, app.js, styles.css and favicon.svg (${servedBytes} bytes) equal the CLI deployment's, except for the bundler comment naming the folder each was built from.`);
+  check("Managed publish", `project_sources_save reached revision ${saved.revision} and release_plan/release_apply served ${managedReceipt.url}. Its page, app.js, styles.css and favicon.svg (${servedBytes} bytes) are byte for byte the CLI deployment's, though each was built in its own folder, and no bundler comment names either folder.`);
 
   // ----------------------------------------------- open signup, verification required
   const anaStart = await S.auth("/_littlebox/auth/signup", { email: people.ana });
@@ -652,15 +647,13 @@ try {
     conformFailures[label] = out.split("\n").filter((line) => line.startsWith("FAIL "));
     assert.match(conformRuns[label], /^\d+ passed, \d+ failed, \d+ skipped/, out + err);
   }
-  // The session run gets past every refusal but one: conform's probe that omits a nullable
-  // input does not accept the action's guard, which a member always meets on updates.publish.
-  const nullableProbe = "FAIL updates.publish: answers without the nullable body. Refused with \"Only team admins can publish an update.\" where the contract makes body optional.";
-  assert.deepEqual(conformFailures["session, key and secret"], [nullableProbe]);
-  assert.match(conformRuns["session, key and secret"], /^\d+ passed, 1 failed, 0 skipped/);
+  // A member holds no role, so every role-guarded mutation answers its guard, and the probe
+  // that omits updates.publish's nullable body passes on the same guard.
+  assert.deepEqual(conformFailures["session, key and secret"], []);
+  assert.match(conformRuns["session, key and secret"], /^\d+ passed, 0 failed, 0 skipped/);
   assert.deepEqual(conformFailures["key and secret"], []);
   assert.match(conformRuns["key and secret"], /^\d+ passed, 0 failed, \d+ skipped/);
-  refused("conform", "conform --token as a member, on updates.publish, a guarded mutation with a nullable body", nullableProbe.slice(5));
-  check("Action Contract and conform", `littlebox contract writes 27 actions with no warning, and every query names each column it returns. conform against ${managedReceipt.url}: with a session, a key and the secret "${conformRuns["session, key and secret"]}", the one failure being conform's nullable probe on a guarded mutation; with the key and the secret "${conformRuns["key and secret"]}", the session-only actions skipped.`);
+  check("Action Contract and conform", `littlebox contract writes 27 actions with no warning, and every query names each column it returns. conform against ${managedReceipt.url}: with a session, a key and the secret "${conformRuns["session, key and secret"]}", the member meeting every role's guard; with the key and the secret "${conformRuns["key and secret"]}", the session-only actions skipped.`);
 
   // ------------------------------------------- package export, import on Kernel B
   const exported = await A.owner.call<{ manifest: any; downloads: Record<string, Transfer> }>("package_export", { deploymentId: receipt.id });

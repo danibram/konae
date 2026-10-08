@@ -25,6 +25,12 @@ type Quirks = Partial<{
   private: boolean;
   /** Answers { changes: 0 } where a guarded mutation should refuse with its guard. */
   dropGuard: boolean;
+  /** The caller holds no role: every guarded mutation refuses with its guard, as for a member on an admin's action. */
+  withoutRole: boolean;
+  /** An API key the backend accepts on a route that takes keys, as the caller's ID. */
+  key: string;
+  /** Runs a GET route for HEAD instead of refusing it with 405. */
+  answerHead: boolean;
 }>;
 
 /**
@@ -59,7 +65,7 @@ function fakeBackend(contract: ActionContract, quirks: Quirks = {}, session = tr
     if (action.output.kind === "changes") {
       const times = (ran.get(action.name) ?? 0) + 1;
       ran.set(action.name, times);
-      if (action.guard && times > 1) return quirks.dropGuard ? { changes: 0, lastInsertId: 0 } : { guard: action.guard };
+      if (action.guard && (times > 1 || quirks.withoutRole)) return quirks.dropGuard ? { changes: 0, lastInsertId: 0 } : { guard: action.guard };
       return { changes: 1, lastInsertId: 7 };
     }
     if (action.output.kind !== "rows") return null;
@@ -91,14 +97,22 @@ function fakeBackend(contract: ActionContract, quirks: Quirks = {}, session = tr
     },
     async route(request: RouteRequest) {
       target.calls += 1;
-      const action = contract.actions.find((candidate) => candidate.http?.method === request.method && candidate.http.path === request.path);
+      if (request.method === "HEAD" && !quirks.answerHead && contract.actions.some((candidate) => candidate.http?.method === "GET" && candidate.http.path === request.path)) {
+        return { status: 405, body: "" };
+      }
+      const method = request.method === "HEAD" ? "GET" : request.method;
+      const action = contract.actions.find((candidate) => candidate.http?.method === method && candidate.http.path === request.path);
       if (!action) return request.method === "POST" ? { status: 405, body: { error: "No route accepts POST on this path." } } : { status: 200, body: "<html>" };
-      if (request.headers?.authorization?.startsWith("Bearer lbk_")) return { status: 401, body: { error: "invalid-api-key" } };
+      const http = action.http!;
+      const keyed = Boolean(quirks.key) && request.headers?.authorization === `Bearer ${quirks.key}`;
+      if (keyed && http.declaredCallers && !http.declaredCallers.includes("key")) return { status: 403, body: { error: "This route does not accept API keys." } };
+      if (!keyed && request.headers?.authorization?.startsWith("Bearer lbk_")) return { status: 401, body: { error: "invalid-api-key" } };
+      if (http.declaredCallers && !keyed && !(request.session && http.declaredCallers.includes("session"))) return { status: 401, body: { error: "authentication-required" } };
       if (quirks.private && !action.http!.signature && !request.session) return { status: 401, body: { error: "authentication-required" } };
       const signature = action.http!.signature;
       if (signature) {
         const header = request.headers?.[signature.header];
-        if (!header && !quirks.acceptUnsigned) return { status: quirks.unsignedStatus ?? 401, body: { error: "invalid-signature" } };
+        if (!header && !quirks.acceptUnsigned && !keyed) return { status: quirks.unsignedStatus ?? 401, body: { error: "invalid-signature" } };
         if (header && Math.abs(Number(/t=(\d+)/.exec(header)?.[1]) - 1_700_000_000) > 300) return { status: 401, body: { error: "stale-timestamp" } };
         if (header && seen.has(header)) return { status: 409, body: { error: "replayed-signature" } };
         if (header) seen.add(header);
@@ -111,12 +125,13 @@ function fakeBackend(contract: ActionContract, quirks: Quirks = {}, session = tr
       else {
         try { input = JSON.parse(request.body ?? "{}"); } catch { return { status: 400, body: { error: "The request body must be a JSON object." } }; }
       }
-      const refused = bind(action, input, Boolean(request.session));
+      const refused = bind(action, input, Boolean(request.session) || keyed);
       if (refused) return { status: 400, body: { error: refused } };
       const result = answer(action) as { guard?: string };
       return result?.guard ? { status: 403, body: { error: result.guard } } : { status: 200, body: { result } };
     },
-    secrets: { pings_webhook: "s3cret" },
+    secrets: { pings_webhook: "s3cret", status_webhook: "s3cret" },
+    ...(quirks.key ? { key: quirks.key } : {}),
   };
   return target;
 }
@@ -143,6 +158,8 @@ describe("conformance runner", () => {
     expect(checks).toContain("pass refuses an unsigned request");
     expect(checks).toContain("pass refuses a body that is not JSON");
     expect(checks).toContain("pass refuses a POST to a path no action binds");
+    expect(report.results.find((result) => result.action === "incidents.recent" && result.check === "refuses HEAD")).toMatchObject({ outcome: "pass", detail: "Answered 405; a HEAD answer carries no body." });
+    expect(report.results.some((result) => result.action === "pings.receive" && result.check === "refuses HEAD")).toBe(false);
   });
 
   const cases: [string, string, Quirks, RegExp][] = [
@@ -153,6 +170,7 @@ describe("conformance runner", () => {
     ["runs an authenticated action for a visitor", "journal", { anyoneMayCall: true }, /where the contract refuses with "authentication-required"/],
     ["accepts an unsigned webhook", "feed", { acceptUnsigned: true }, /Answered 200 .* where the contract says 401 "invalid-signature"/],
     ["refuses an unsigned webhook with the wrong status", "feed", { unsignedStatus: 403 }, /Answered 403 "invalid-signature" where the contract says 401/],
+    ["runs a GET route for HEAD", "feed", { answerHead: true }, /Answered 200 where the contract says 405/],
   ];
   for (const [quirk, example, quirks, message] of cases) {
     test(`fails a backend that ${quirk}`, async () => {
@@ -225,6 +243,62 @@ describe("conformance runner", () => {
     expect(honest.results.find((result) => result.check === "refuses with its guard when no row changes")).toMatchObject({ outcome: "pass" });
     const dropped = await runConformance(contract, fakeBackend(contract, { dropGuard: true }), noWait);
     expect(failures(dropped).map((result) => result.detail)).toEqual(['Answered {"changes":0,"lastInsertId":0} where the contract refuses with "Only an organizer can promote a member.".']);
+  });
+
+  test("the starter's member, who holds no role, passes every guard, the nullable probes included", async () => {
+    const starter = path.resolve(import.meta.dir, "../../examples/showcase/starter");
+    const { contract } = generateActionContract({
+      actionsSource: readFileSync(path.join(starter, "actions.json"), "utf8"),
+      schemaSource: readFileSync(path.join(starter, "schema.sql"), "utf8"),
+    });
+    const publish = contract.actions.find((action) => action.name === "updates.publish")!;
+    expect(publish.guard).toBe("Only team admins can publish an update.");
+    expect(publish.inputs.find((input) => input.key === "body")?.nullable).toBe(true);
+    const member = await runConformance(contract, fakeBackend(contract, { withoutRole: true, key: "lbk_starter_conform" }), noWait);
+    expect(failures(member)).toEqual([]);
+    const checks = member.results.filter((result) => result.action === "updates.publish").map((result) => `${result.outcome} ${result.check}: ${result.detail}`);
+    expect(checks).toContain('pass answers without the nullable body: Refused with its guard, "Only team admins can publish an update.": the bindings accepted the call without body.');
+    expect(checks).toContain('pass refuses with its guard when no row changes: Refused with "Only team admins can publish an update.".');
+    // A backend that drops the guard still fails, and so does another refusal on the nullable probe.
+    const dropped = await runConformance(contract, fakeBackend(contract, { withoutRole: true, dropGuard: true }), noWait);
+    expect(failures(dropped).some((result) => result.action === "updates.publish")).toBe(true);
+    const strict = fakeBackend(contract, { withoutRole: true });
+    const invoke = strict.invoke.bind(strict);
+    strict.invoke = async (name, input, as) => name === "updates.publish" && !("body" in (input as object)) ? { ok: false, message: "Missing action input: body" } : invoke(name, input, as);
+    const refusedProbe = await runConformance(contract, strict, noWait);
+    expect(failures(refusedProbe).map((result) => `${result.action}: ${result.check}`)).toEqual(["updates.publish: answers without the nullable body"]);
+  });
+
+  test("an actor-bound route is called with --key, whose ID is the actor, and is not skipped", async () => {
+    const { contract } = generateActionContract({
+      schemaSource: "CREATE TABLE IF NOT EXISTS updates (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id TEXT NOT NULL);",
+      actionsSource: JSON.stringify({ version: 1, actions: {
+        "updates.post": {
+          kind: "mutation", access: "anonymous", http: { method: "POST", path: "/api/updates", callers: ["key"] },
+          statement: "INSERT INTO updates (title, author_id) VALUES (?1, ?2)",
+          bindings: [{ source: "input", key: "title", type: "string", maxLength: 120 }, { source: "actor", field: "id" }],
+        },
+        "updates.mine": {
+          kind: "query", access: "anonymous", http: { method: "GET", path: "/api/mine" },
+          statement: "SELECT id, title FROM updates WHERE author_id = ?1 ORDER BY id DESC LIMIT 20",
+          bindings: [{ source: "actor", field: "id" }],
+        },
+      } }),
+    });
+    expect(contract.actions.every((action) => action.actorBound)).toBe(true);
+    const keyOnly = await runConformance(contract, fakeBackend(contract, { key: "lbk_conform" }, false), noWait);
+    expect(failures(keyOnly)).toEqual([]);
+    const lines = keyOnly.results.map((result) => `${result.outcome} ${result.action}: ${result.check}`);
+    expect(lines).toContain("pass updates.post: answers POST /api/updates with an API key");
+    expect(lines).toContain("pass updates.mine: answers GET /api/mine with an API key");
+    expect(lines).toContain("pass updates.post: refuses an undeclared input on the route");
+    expect(keyOnly.results.filter((result) => result.outcome === "skip").map((result) => `${result.action}: ${result.check}`)).toEqual([
+      // A key works only on routes; the runtime endpoint needs a session.
+      "updates.mine: answers a valid call", "updates.mine: refuses bad input",
+    ]);
+    const without = await runConformance(contract, fakeBackend(contract, {}, false), noWait);
+    expect(without.results.filter((result) => result.check.startsWith("answers POST") || result.check.startsWith("answers GET")).map((result) => `${result.outcome} ${result.detail}`))
+      .toEqual(["skip Needs an API key or a session (--key or --token).", "skip Needs an API key or a session (--key or --token)."]);
   });
 
   test("waits out a rate limit and sends the call again", async () => {
