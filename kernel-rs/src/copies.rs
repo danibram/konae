@@ -479,8 +479,9 @@ fn copy_deployment(source: &Path, target: &Path) -> Result<()> {
         let (from, to) = (entry.path(), target.join(&*name));
         match &*name {
             // The migration state travels, so a restore never revives an
-            // app that moved or was paused for a migration.
-            "deployment.json" | crate::migration::MARKER_FILE if kind.is_file() => {
+            // app that moved or was paused for a migration. The custom
+            // domain travels too, so a restored app keeps its alias.
+            "deployment.json" | crate::migration::MARKER_FILE | crate::domain::RECORD_FILE if kind.is_file() => {
                 std::fs::copy(&from, &to)?;
             }
             database if kind.is_file() && DEPLOYMENT_DATABASES.contains(&database) => vacuum_into(&from, &to)?,
@@ -1113,6 +1114,21 @@ fn invalidate_sessions(root: &Path) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_copy_carries_the_custom_domain_with_the_record_and_the_migration_state() {
+        let root = std::env::temp_dir().join(format!("littlebox-copy-domain-{}", uuid::Uuid::new_v4()));
+        let (source, target) = (root.join("source"), root.join("target"));
+        std::fs::create_dir_all(&source).unwrap();
+        for name in ["deployment.json", crate::domain::RECORD_FILE, "stray.tmp"] {
+            std::fs::write(source.join(name), "{}").unwrap();
+        }
+        copy_deployment(&source, &target).unwrap();
+        assert!(target.join("deployment.json").exists());
+        assert!(target.join(crate::domain::RECORD_FILE).exists());
+        assert!(!target.join("stray.tmp").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
     use crate::{
         Deployment, LockMap, SignupPolicy, auth::AuthService, initialize_database, limits::Guards,
         load_deployments, read_artifact,

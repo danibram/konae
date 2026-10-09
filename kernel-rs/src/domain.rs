@@ -22,7 +22,7 @@ use std::net::{IpAddr, SocketAddr};
 use anyhow::{bail, ensure, Context};
 use std::sync::OnceLock;
 
-const RECORD_FILE: &str = "domain.json";
+pub(crate) const RECORD_FILE: &str = "domain.json";
 /// The label under the alias that holds the token.
 pub(super) const TXT_LABEL: &str = "_littlebox";
 const LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
