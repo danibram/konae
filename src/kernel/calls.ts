@@ -16,11 +16,14 @@ export type CallAuth =
 /** The mutation that runs when a call ends, with inputs read from the answer. */
 export type CallThen = { action: string; inputs: Record<string, string> };
 
+/** What one body key sends: an input's value, or a constant fixed in actions.json. */
+export type CallBodyValue = string | { value: string | number | boolean | null };
+
 export type CallDeclaration = {
   url: string;
   method: "GET" | "POST";
-  /** Body key to input key. A GET sends them as query parameters. */
-  body: Record<string, string>;
+  /** Body key to what it sends. A GET sends them as query parameters. */
+  body: Record<string, CallBodyValue>;
   auth?: CallAuth;
   then?: CallThen;
 };
@@ -32,6 +35,7 @@ const CALL_KEYS = ["url", "method", "body", "auth", "then"] as const;
 const MAX_URL_CHARS = 2048;
 const MAX_BODY_KEYS = 32;
 const MAX_POINTER_CHARS = 200;
+const MAX_CONSTANT_CHARS = 1000;
 const MAX_THEN_INPUTS = 100;
 const RESERVED_SEGMENTS = new Set(["_littlebox", "oauth", ".well-known", "mcp"]);
 const ANSWER_ROOTS = new Set(["ok", "status", "error", "body", "input"]);
@@ -101,16 +105,26 @@ function sortedEntries(record: Record<string, unknown>): [string, unknown][] {
   return Object.entries(record).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
-function bodyMap(name: string, value: unknown, inputs: string[]): Record<string, string> {
+/** A constant body value: { "value": <string of at most 1000 characters, number, boolean or null> }. */
+function isConstant(value: unknown): value is { value: string | number | boolean | null } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== 1 || keys[0] !== "value") return false;
+  const constant = (value as { value: unknown }).value;
+  if (typeof constant === "string") return [...constant].length <= MAX_CONSTANT_CHARS;
+  return constant === null || typeof constant === "boolean" || (typeof constant === "number" && Number.isFinite(constant));
+}
+
+function bodyMap(name: string, value: unknown, inputs: string[]): Record<string, CallBodyValue> {
   if (value == null) return {};
-  const invalid = () => new Error(`Action ${name} has an invalid body. Map each body key to one of the call's input keys, at most 32.`);
+  const invalid = () => new Error(`Action ${name} has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with "value", at most 32.`);
   if (typeof value !== "object" || Array.isArray(value)) throw invalid();
   const entries = sortedEntries(value as Record<string, unknown>);
-  if (entries.length > MAX_BODY_KEYS || entries.some(([key, input]) => !BODY_KEY.test(key) || typeof input !== "string")) throw invalid();
-  for (const [key, input] of entries) {
-    if (!inputs.includes(input as string)) throw new Error(`Action ${name} sends body key ${key} from ${input}, which is not one of its input bindings.`);
+  if (entries.length > MAX_BODY_KEYS || entries.some(([key, sent]) => !BODY_KEY.test(key) || !(typeof sent === "string" || isConstant(sent)))) throw invalid();
+  for (const [key, sent] of entries) {
+    if (typeof sent === "string" && !inputs.includes(sent)) throw new Error(`Action ${name} sends body key ${key} from ${sent}, which is not one of its input bindings.`);
   }
-  return Object.fromEntries(entries) as Record<string, string>;
+  return Object.fromEntries(entries) as Record<string, CallBodyValue>;
 }
 
 function parseAuth(name: string, value: unknown): CallAuth | undefined {

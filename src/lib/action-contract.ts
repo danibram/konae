@@ -56,8 +56,8 @@ export type ContractOutput =
 export type ContractCall = {
   method: "GET" | "POST";
   url: string;
-  /** Body key to input key; a GET sends them as query parameters. */
-  body: Record<string, string>;
+  /** Body key to an input key or a constant; a GET sends them as query parameters. */
+  body: Record<string, string | { value: string | number | boolean | null }>;
   auth?: { secret: string; header: string; scheme: string } | { key: string };
   then?: { action: string; inputs: Record<string, string> };
   /** The document a then mutation's pointers read. */
@@ -798,7 +798,8 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
     if (action.call) {
       const call = action.call;
       lines.push("### Call", "");
-      lines.push(`Sends \`${call.method} ${call.url}\`${Object.keys(call.body).length ? ` with ${Object.entries(call.body).map(([key, input]) => `\`${key}\` from \`${input}\``).join(", ")}` : ""}.`, "");
+      const sent = Object.entries(call.body).map(([key, value]) => typeof value === "string" ? `\`${key}\` from \`${value}\`` : `\`${key}\` as \`${JSON.stringify(value.value)}\``);
+      lines.push(`Sends \`${call.method} ${call.url}\`${sent.length ? ` with ${sent.join(", ")}` : ""}.`, "");
       if (call.auth) lines.push("key" in call.auth ? `Sends the API key the secret \`${call.auth.key}\` holds as Authorization: Bearer.` : `Signs \`${call.auth.header}: ${call.auth.scheme}\` with the secret \`${call.auth.secret}\`.`, "");
       if (call.then) lines.push(`When it ends, runs \`${call.then.action}\` with ${Object.entries(call.then.inputs).map(([key, pointer]) => `\`${key}\` from \`${pointer}\``).join(", ") || "no inputs"}, read from ${call.answer}.`, "");
     }

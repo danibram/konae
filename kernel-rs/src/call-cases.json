@@ -1281,6 +1281,174 @@
   "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel."
  },
  {
+  "case": "a body with constants",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "id": "taskId",
+     "source": {
+      "value": "tasks"
+     },
+     "level": {
+      "value": 3
+     },
+     "urgent": {
+      "value": true
+     },
+     "note": {
+      "value": null
+     }
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a constant that is a list",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "tags": {
+      "value": [
+       "a"
+      ]
+     }
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
+ },
+ {
+  "case": "a constant with another key",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "source": {
+      "value": "tasks",
+      "from": "x"
+     }
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
+ },
+ {
+  "case": "a constant longer than 1000 characters",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "source": {
+      "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+     }
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
+ },
+ {
+  "case": "a constant of 1000 characters",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     },
+     {
+      "source": "input",
+      "key": "taskId",
+      "type": "number"
+     }
+    ],
+    "body": {
+     "title": "title",
+     "source": {
+      "value": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+     }
+    }
+   }
+  },
+  "error": null
+ },
+ {
   "case": "a body that is a list",
   "actions": {
    "inbox.tell": {
@@ -1306,7 +1474,7 @@
     ]
    }
   },
-  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys, at most 32."
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
  },
  {
   "case": "a body value that is not a string",
@@ -1334,7 +1502,7 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys, at most 32."
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
  },
  {
   "case": "a body key with a space",
@@ -1362,7 +1530,7 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys, at most 32."
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
  },
  {
   "case": "a body with 33 keys",
@@ -1422,7 +1590,7 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys, at most 32."
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
  },
  {
   "case": "a body key from an unknown input",

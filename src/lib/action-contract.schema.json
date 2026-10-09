@@ -135,7 +135,20 @@
       "properties": {
         "method": { "enum": ["GET", "POST"] },
         "url": { "type": "string" },
-        "body": { "type": "object", "additionalProperties": { "type": "string" } },
+        "body": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "required": ["value"],
+                "additionalProperties": false,
+                "properties": { "value": { "type": ["string", "number", "boolean", "null"] } }
+              }
+            ]
+          }
+        },
         "auth": {
           "oneOf": [
             {

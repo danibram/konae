@@ -395,7 +395,7 @@ An action of `"kind": "call"` sends one HTTP request to another app or an outsid
 }
 ```
 
-`miniapp.actions.call("tasks.escalate", { taskId, title })` checks the caller and the inputs as for any action, queues the call and answers `{ callId, queued: true }`. The call's bindings may only be inputs. `body` maps each body key to one of them: a `POST` sends a JSON object, a `GET` sends query parameters after the URL's own, and an input that is null or missing leaves its key out. Usage counts each queued call under `call`, by action.
+`miniapp.actions.call("tasks.escalate", { taskId, title })` checks the caller and the inputs as for any action, queues the call and answers `{ callId, queued: true }`. The call's bindings may only be inputs. `body` maps each body key to one of them, or to a constant written `{ "value": "tasks" }`, a string of at most 1000 characters, a number, a boolean or null, which the caller cannot change: a `POST` sends a JSON object, a `GET` sends query parameters after the URL's own, and an input that is null or missing leaves its key out. Usage counts each queued call under `call`, by action.
 
 `auth` is optional:
 
@@ -466,7 +466,7 @@ The Validation Gate and the Kernel parse calls and `connects` from one case file
 | A call with a statement, signal, guard or http | `Action <name> is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route.` |
 | A call that binds the actor, the time or a literal | `Action <name> is a call, so its bindings may only be inputs.` |
 | A method other than `"GET"` or `"POST"` | `Action <name> must call with "method": "GET" or "POST".` |
-| A `body` that is not an object of at most 32 keys of 1 to 64 letters, digits, `_`, `.` and `-`, each naming a string | `Action <name> has an invalid body. Map each body key to one of the call's input keys, at most 32.` |
+| A `body` that is not an object of at most 32 keys of 1 to 64 letters, digits, `_`, `.` and `-`, each naming an input or a constant | `Action <name> has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with "value", at most 32.` |
 | A body value that names no input | `Action <name> sends body key <key> from <input>, which is not one of its input bindings.` |
 | An `auth` with both or neither of `secret` and `key`, or another key | `Action <name> has an invalid auth. Name a secret with "secret" to sign the request, or with "key" to send the API key it holds.` |
 | A secret that is not a secret name | `Action <name> names an invalid auth secret. Use lowercase letters, digits and "_", starting with a letter.` |

@@ -86,11 +86,23 @@ impl CallKeys {
 pub(crate) struct Call {
     pub(crate) url: url::Url,
     pub(crate) method: String,
-    /// Body key to input key, sorted by body key.
-    pub(crate) body: Vec<(String, String)>,
+    /// Body key to what it sends, sorted by body key.
+    pub(crate) body: Vec<(String, BodyValue)>,
     pub(crate) auth: Option<Auth>,
     pub(crate) then: Option<Then>,
 }
+
+/// What one body key sends.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum BodyValue {
+    /// The value of this input.
+    Input(String),
+    /// A value fixed in actions.json, which the caller cannot change.
+    Constant(Value),
+}
+
+/// The longest constant string a body may carry.
+const MAX_CONSTANT_CHARS: usize = 1000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Auth {
@@ -194,20 +206,42 @@ fn valid_body_key(key: &str) -> bool {
     (1..=64).contains(&key.len()) && key.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
 }
 
-fn body_map(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Vec<(String, String)>, String> {
+/// A constant body value: `{ "value": <string of at most 1000 characters, number, boolean or null> }`.
+fn constant(value: &Value) -> Option<Value> {
+    let record = value.as_object().filter(|record| record.len() == 1)?;
+    let constant = record.get("value")?;
+    let valid = match constant {
+        Value::String(text) => text.chars().count() <= MAX_CONSTANT_CHARS,
+        Value::Number(_) | Value::Bool(_) | Value::Null => true,
+        _ => false,
+    };
+    valid.then(|| constant.clone())
+}
+
+fn body_map(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Vec<(String, BodyValue)>, String> {
     let Some(value) = value else { return Ok(Vec::new()) };
-    let invalid = || format!("Action {name} has an invalid body. Map each body key to one of the call's input keys, at most 32.");
+    let invalid = || {
+        format!(r#"Action {name} has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with "value", at most 32."#)
+    };
     let record = value.as_object().ok_or_else(invalid)?;
-    if record.len() > MAX_BODY_KEYS || record.iter().any(|(key, input)| !valid_body_key(key) || !input.is_string()) {
+    if record.len() > MAX_BODY_KEYS
+        || record.iter().any(|(key, sent)| !valid_body_key(key) || !(sent.is_string() || constant(sent).is_some()))
+    {
         return Err(invalid());
     }
-    let mut body: Vec<(String, String)> =
-        record.iter().map(|(key, input)| (key.clone(), input.as_str().unwrap_or_default().to_owned())).collect();
-    body.sort();
-    for (key, input) in &body {
-        if !inputs.contains(&input.as_str()) {
+    let mut keys: Vec<&String> = record.keys().collect();
+    keys.sort();
+    let mut body = Vec::new();
+    for key in keys {
+        let sent = &record[key];
+        let Some(input) = sent.as_str() else {
+            body.push((key.clone(), BodyValue::Constant(constant(sent).unwrap_or(Value::Null))));
+            continue;
+        };
+        if !inputs.contains(&input) {
             return Err(format!("Action {name} sends body key {key} from {input}, which is not one of its input bindings."));
         }
+        body.push((key.clone(), BodyValue::Input(input.to_owned())));
     }
     Ok(body)
 }
@@ -796,9 +830,16 @@ pub(crate) fn spawn_worker(state: AppState) {
 fn request_parts(call: &Call, input: &Value) -> (url::Url, Vec<u8>) {
     let mut url = call.url.clone();
     let mut body = serde_json::Map::new();
-    for (key, input_key) in &call.body {
-        if let Some(value) = input.get(input_key).filter(|value| !value.is_null()) {
-            body.insert(key.clone(), value.clone());
+    for (key, sent) in &call.body {
+        match sent {
+            BodyValue::Constant(value) => {
+                body.insert(key.clone(), value.clone());
+            }
+            BodyValue::Input(input_key) => {
+                if let Some(value) = input.get(input_key).filter(|value| !value.is_null()) {
+                    body.insert(key.clone(), value.clone());
+                }
+            }
         }
     }
     if call.method == "GET" {
@@ -1178,16 +1219,16 @@ mod tests {
         let action: ActionDefinition = serde_json::from_value(json!({
             "kind": "call", "access": "anonymous", "method": "GET", "url": "https://api.example.com/v1/items?fixed=1",
             "bindings": [{"source": "input", "key": "q", "type": "string"}, {"source": "input", "key": "n", "type": "number", "nullable": true}],
-            "body": {"query": "q", "limit": "n"}
+            "body": {"query": "q", "limit": "n", "source": {"value": "tasks"}}
         }))
         .unwrap();
         let call = declaration("items.find", &action).unwrap();
         let (url, body) = request_parts(&call, &json!({"q": "a b", "n": null}));
-        assert_eq!(url.as_str(), "https://api.example.com/v1/items?fixed=1&query=a+b");
+        assert_eq!(url.as_str(), "https://api.example.com/v1/items?fixed=1&query=a+b&source=tasks");
         assert!(body.is_empty());
         let post = Call { method: "POST".into(), ..call };
         let (_, body) = request_parts(&post, &json!({"q": "x", "n": 3}));
-        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({"query": "x", "limit": 3}));
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({"query": "x", "limit": 3, "source": "tasks"}));
     }
 
     #[test]
