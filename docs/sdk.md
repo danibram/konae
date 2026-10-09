@@ -29,8 +29,8 @@ Error messages below are the exact text a published app receives as `error.messa
 | Message | When | Source | Editor preview |
 | --- | --- | --- | --- |
 | `Sign in to use Littlebox MCP.` | the Deployment is private and the visitor has no session; actions.call then sends the browser to /_littlebox/login and auth.session returns the anonymous state instead | Kernel | Never refuses |
-| `Deployment not found.` | the host name matches no Deployment, or is a custom domain whose TXT record domain_set has not found yet | Kernel | Never refuses |
-| `Cross-origin or unrecognized-host MCP request rejected.` | the request does not come from the origin of the host it is sent to, the Deployment's generated hostname or its verified custom domain | Kernel | Never refuses |
+| `Deployment not found.` | the host name matches no Deployment | Kernel | Never refuses |
+| `Cross-origin or unrecognized-host MCP request rejected.` | the request does not come from the origin of the host it is sent to, or that host is neither the Deployment's generated hostname nor its verified custom domain, such as a custom domain whose TXT record domain_set has not found yet | Kernel | Never refuses |
 | `MCP request exceeds 200 KB.` | one request body is larger than 200,000 bytes | Kernel | Never refuses |
 | `Invalid MCP response.` | the response does not answer the request the SDK sent | SDK | Never refuses |
 

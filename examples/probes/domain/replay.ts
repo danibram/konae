@@ -45,6 +45,11 @@ await probe("domain", 23060, async (kit) => {
   assert.equal(pending.dns, `No TXT record at ${record} yet.`);
   const token = pending.record!.value;
   assert.equal((await page(aliasHost)).status, 404);
+  const pendingRuntime = await fetch(`${url}/_littlebox/mcp`, {
+    method: "POST", headers: { host: aliasHost, origin: aliasOrigin, "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "probe", version: "1" } } }),
+  });
+  assert.equal(pendingRuntime.status, 403, "a pending alias is not a host the runtime knows");
 
   // A record that holds something else is refused.
   dns.txt(record, ["littlebox-verify-not-this-one"]);

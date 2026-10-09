@@ -215,7 +215,7 @@ Limits:
 
 Any call that reaches the Kernel can also refuse with:
 - "Sign in to use Littlebox MCP." when the Deployment is private and the visitor has no session; actions.call then sends the browser to /_littlebox/login and auth.session returns the anonymous state instead
-- "Deployment not found." when the host name matches no Deployment, or is a custom domain whose TXT record domain_set has not found yet
-- "Cross-origin or unrecognized-host MCP request rejected." when the request does not come from the origin of the host it is sent to, the Deployment's generated hostname or its verified custom domain
+- "Deployment not found." when the host name matches no Deployment
+- "Cross-origin or unrecognized-host MCP request rejected." when the request does not come from the origin of the host it is sent to, or that host is neither the Deployment's generated hostname nor its verified custom domain, such as a custom domain whose TXT record domain_set has not found yet
 - "MCP request exceeds 200 KB." when one request body is larger than 200,000 bytes
 - "Invalid MCP response." when the response does not answer the request the SDK sent`;

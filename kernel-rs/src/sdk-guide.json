@@ -32,12 +32,12 @@
     },
     {
       "message": "Deployment not found.",
-      "when": "the host name matches no Deployment, or is a custom domain whose TXT record domain_set has not found yet",
+      "when": "the host name matches no Deployment",
       "source": "kernel"
     },
     {
       "message": "Cross-origin or unrecognized-host MCP request rejected.",
-      "when": "the request does not come from the origin of the host it is sent to, the Deployment's generated hostname or its verified custom domain",
+      "when": "the request does not come from the origin of the host it is sent to, or that host is neither the Deployment's generated hostname nor its verified custom domain, such as a custom domain whose TXT record domain_set has not found yet",
       "source": "kernel"
     },
     {
