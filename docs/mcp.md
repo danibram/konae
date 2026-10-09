@@ -759,6 +759,8 @@ The audit log records each migration tool with the Deployment as target and the 
 | The live artifact and `actions.json` | The origin's hostname; the destination builds one from its own origin |
 | The custom domain's hostname, pending until `domain_set` finds the destination's token | The custom domain's token; the destination issues its own |
 
+A custom domain moves in this order, so the alias never answers 404: activate the destination, read its new token with `domain_read`, add it to the TXT record next to the origin's value, call `domain_set` on the destination, then point the name's DNS at the destination. The paused import refuses `domain_set` until it is activated.
+
 | Refusal | Message |
 | --- | --- |
 | `migration_begin` without `export_data` | `Permission denied for export_data.` |

@@ -20,7 +20,7 @@ Over HTTPS an alias gets `Strict-Transport-Security: max-age=31536000` without `
 
 The Kernel issues no certificate. The operator's proxy terminates TLS for the alias and forwards `Host` unchanged; `ops/nginx.local.conf` shows how a second host reaches the Kernel.
 
-A package's manifest carries the hostname without its token. The import records it as a pending claim with a token the destination issues. Whoever uploads a package writes its manifest, so a token copied from public DNS into a manifest would otherwise let one owner claim another's pending name on a shared installation. The owner adds the destination's token to the same TXT record, which may hold both values during the move, and calls `domain_set` there. A migration confirmed without `newUrl` links the alias on the origin's maintenance page, and the page served on the alias itself shows no link to itself.
+A package's manifest carries the hostname without its token. The import records it as a pending claim with a token the destination issues. Whoever uploads a package writes its manifest, so a token copied from public DNS into a manifest would otherwise let one owner claim another's pending name on a shared installation. An imported app is paused until `migration_activate`, which refuses `domain_set`, so the order that leaves no gap on the alias is: activate the destination, read its token with `domain_read`, add it to the TXT record next to the origin's value, call `domain_set` on the destination, then point the name's DNS at the destination. A migration confirmed without `newUrl` links the alias on the origin's maintenance page, and the page served on the alias itself shows no link to itself.
 
 ## Considered options
 
