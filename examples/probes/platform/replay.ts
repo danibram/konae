@@ -1,7 +1,9 @@
 // Probe: what the platform has no primitive for. Decides the matrix cells for
-// email on an event, scheduled or delayed work, realtime push, third-party
-// login and a custom domain, by reading what the runtime door offers and how
-// the two doors answer a declaration for each.
+// email on an event, realtime push, third-party login and a custom domain, by
+// reading what the runtime door offers and how the two doors answer a
+// declaration for each. Scheduled work has a primitive since 2026-11-07; the
+// schedule probe proves it, and this one checks that both doors refuse the
+// forms it does not take.
 //
 //   LITTLEBOX_PROBE_PORT=23050 bun run examples/probes/platform/replay.ts
 import assert from "node:assert/strict";
@@ -22,7 +24,8 @@ await probe("platform", 23050, async (kit) => {
   const app = await kit.publish(here, { projectId: "probe_platform", visibility: "public", signup: { mode: "open" } });
   const cookie = await kit.signup(app.host, "nell@probe.example");
 
-  // Every tool the runtime door offers. None sends mail, schedules, subscribes, charges or signs in elsewhere.
+  // Every tool the runtime door offers. None sends mail, schedules, subscribes, charges or signs in elsewhere:
+  // a schedule is a declaration the Kernel's timer runs, never a tool an app calls.
   const member = await toolNames(kit.runtime(app.host, cookie));
   const visitor = await toolNames(kit.runtime(app.host));
   const absent = /mail|schedule|cron|subscribe|stream|watch|pay|charge|oauth|provider|domain/;
@@ -38,11 +41,14 @@ await probe("platform", 23050, async (kit) => {
     "a schedule on a mutation": (actions) => { actions["notes.add"].schedule = "0 8 * * *"; },
     "a subscription on a query": (actions) => { actions["notes.due"].subscribe = true; },
   };
-  // Today's answers. The first pair is one refusal with the same words at both doors (since 2026-11-07); the other two pass both doors and do nothing.
+  // Today's answers: one refusal with the same words at both doors for each. Until 2026-11-07 the
+  // schedule and the subscription passed both doors and did nothing. notes.add takes input, so a
+  // schedule on it is refused before its cron text is read; the schedule probe covers the rest.
+  const same = (message: string): [string, string] => [message, message];
   const expected: Record<string, [string, string]> = {
-    "an action of kind email": ['Action notes.mail has an invalid kind. Use "query", "mutation" or "signal".', 'Action notes.mail has an invalid kind. Use "query", "mutation" or "signal".'],
-    "a schedule on a mutation": ["passes", "passes"],
-    "a subscription on a query": ["passes", "passes"],
+    "an action of kind email": same('Action notes.mail has an invalid kind. Use "query", "mutation" or "signal".'),
+    "a schedule on a mutation": same("Action notes.add declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values."),
+    "a subscription on a query": same("Action notes.due declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead."),
   };
   for (const [label, change] of Object.entries(variants)) {
     const variant = JSON.parse(program);
@@ -61,7 +67,7 @@ await probe("platform", 23050, async (kit) => {
   assert.equal((await runtime.call<any[]>("actions_invoke", { name: "notes.due", input: {} })).length, 0);
   await Bun.sleep(1400);
   assert.equal((await runtime.call<any[]>("actions_invoke", { name: "notes.due", input: {} })).length, 1);
-  kit.pass("A reminder without a worker", "notes.due returns nothing before remind_at and the note after it, because the query compares remind_at with kernel.now when someone asks. Nothing is sent when nobody asks.");
+  kit.pass("A reminder without a worker", "notes.due returns nothing before remind_at and the note after it, because the query compares remind_at with kernel.now when someone asks. To act when nobody asks, a mutation declares a schedule (schedule probe); sending the reminder by email still has no primitive.");
 
   // A custom domain: the Kernel answers only the hostnames it generated.
   const custom = await fetch(`${url}/`, { headers: { host: "notes.example.org" } });
