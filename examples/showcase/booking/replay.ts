@@ -1,7 +1,8 @@
 // Replays the booking showcase against its own Kernel: publish, the signup
 // policy, the public and staff views, the one-statement booking, a race between
-// two staff members, the signed check-in route, the Action Contract and a
-// Chrome pass under the Content Security Policy. Exits 0 when every check holds.
+// two staff members, the signed check-in route, the scheduled release of
+// bookings nobody checked in, the Action Contract and a Chrome pass under the
+// Content Security Policy. Exits 0 when every check holds.
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -53,6 +54,8 @@ try {
       LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: path.join(scratch, "data"),
       LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: repo,
       LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1",
+      // bookings.release is declared every 15 minutes; the test clock runs it every 2 seconds.
+      LITTLEBOX_SCHEDULE_MIN_SECONDS: "2",
     },
     stdout: "ignore", stderr: "inherit",
   });
@@ -300,7 +303,32 @@ try {
   assert.equal(await refusal(call(ana, "panel.checkin", { room: "oak", day, hour: 11 })), unsignedRuntime);
   check("Check-in route", `POST /api/checkin refuses an unsigned body (401 invalid-signature) and a stale t (401 stale-timestamp), and accepts a signature or the panel's API key. A second check-in for the same hour and one for an hour nobody booked get 403 with the guard. A staff session cookie without a signature gets 401 invalid-signature. The runtime endpoint refuses the key with ${keyOnRuntime.status} "${keyOnRuntime.body.error}". A visitor and a staff member calling panel.checkin through actions_invoke get "${unsignedRuntime}".`);
 
-  // 9. The Action Contract, and conform with a session token and with an API key.
+  // 9. A booking nobody checked in within 15 minutes of its first hour is released, with
+  // nobody calling: bookings.release declares "schedule": { "every": "15m" }. Ana's
+  // "Late booking" for 09:00 yesterday, made in step 4, was never checked in. The owner
+  // adds one the panel checked in at 10:00, in one statement so no run can release it first.
+  const yesterday = utcDay(-1);
+  await sql(`INSERT INTO bookings (booking_ref, room_id, day, slot, user_id, title, created_at, checked_in_at) SELECT 'pine/${yesterday}/10/0', 'pine', '${yesterday}', 10, user_id, 'Checked in', 0, 1 FROM bookings WHERE title = 'Late booking'`);
+  let yesterdayHeld: any[] = [];
+  for (const deadline = Date.now() + 20_000; ; await Bun.sleep(250)) {
+    yesterdayHeld = await call<any[]>(visitor, "availability.day", { day: yesterday });
+    if (yesterdayHeld.length === 1) break;
+    assert(Date.now() < deadline, `The late booking was not released within 20 seconds: ${JSON.stringify(yesterdayHeld)}`);
+  }
+  assert.deepEqual(yesterdayHeld, [{ room: "pine", hour: 10 }]);
+  const releasedByBen = await call<{ changes: number }>(ben, "bookings.release");
+  assert.equal(releasedByBen.changes, 0, "A person's call binds an ID, and the statement releases only when it binds none.");
+  const cancelledAhead = Number((await sql(`SELECT count(*) AS n FROM bookings WHERE cancelled_at IS NOT NULL AND day >= '${utcDay(0)}'`)).rows[0].n);
+  assert.equal(cancelledAhead, 2, "Only Ana's cancelled planning hours are cancelled from today on.");
+  const releaseUsage = await owner.call<{ totals: Array<{ kind: string; name: string; count: number }>; scheduled: Array<{ action: string; outcome: string; changes: number }> }>("usage_read", { deploymentId, from: today, to: today });
+  assert(releaseUsage.scheduled.length > 0 && releaseUsage.scheduled.every((run) => run.action === "bookings.release" && run.outcome === "ok"), JSON.stringify(releaseUsage.scheduled));
+  assert.equal(releaseUsage.scheduled.reduce((sum, run) => sum + run.changes, 0), 1, "Exactly one hour was released.");
+  assert(!releaseUsage.totals.some((row) => row.kind === "refused" && row.name === "bookings.release"));
+  const releasedSignals = await owner.call<{ signals: any[] }>("signals_read", { deploymentId, name: "booking.released" });
+  assert.deepEqual(releasedSignals.signals.map((signal) => signal.properties), [{}]);
+  check("Release unclaimed bookings", `bookings.release, declared every 15 minutes and run here every 2 seconds, released Ana's unclaimed 09:00 booking for ${yesterday} with nobody calling; GET availability for that day now holds only the checked-in ${JSON.stringify(yesterdayHeld[0])}, and no booking from today on was touched. Ben calling bookings.release himself answers ${JSON.stringify(releasedByBen)}. usage_read lists ${releaseUsage.scheduled.length} runs, all ok, that changed 1 row between them, and one booking.released Signal records the run that did.`);
+
+  // 10. The Action Contract, and conform with a session token and with an API key.
   const contractDir = await copyOf("contract");
   const cli = async (args: string[]) => {
     const child = Bun.spawn(["bun", "run", path.join(repo, "scripts/littlebox.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
@@ -329,7 +357,7 @@ try {
   assert.equal(inProcess.failed, 0, formatConformanceReport(inProcess));
   check("Action Contract", `contract writes ${contract.actions.length} actions; warnings ${JSON.stringify(warnings ?? [])}; unnamed ${JSON.stringify(unnamed)}; columns typed unknown ${unknownColumns.join(", ")}. conform --token --secret: "${totals(withSecret)}". conform --token --key: "${totals(withKey)}". conform --key alone: "${totals(keyOnly)}".`);
 
-  // 10. Chrome under the Content Security Policy: visitor and staff, light and dark.
+  // 11. Chrome under the Content Security Policy: visitor and staff, light and dark.
   if (process.env.LITTLEBOX_SHOWCASE_BROWSER !== "0") {
     if (shots) await mkdir(shots, { recursive: true });
     const browser = await chromium.launch({ channel: "chrome" });
