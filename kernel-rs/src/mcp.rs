@@ -277,7 +277,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ),
         tool(
             "mail_status",
-            "Read whether this installation sends account email: transport, sender preflight, queue depth, last failure and limits. Set refresh to check the sender again.",
+            "Read whether this installation sends email, account email and notices: transport, sender preflight, queue depth, notice counts, last failure and limits. Set refresh to check the sender again.",
             json!({"refresh":{"type":"boolean"}}),
             &[],
             true,
