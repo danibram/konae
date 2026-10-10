@@ -964,6 +964,8 @@ async fn run_route(
     let db_path = database_path(state, &deployment.id);
     let _guard = database_lock(state, &deployment.id).await;
     let result = run_action(db_path, action, params).await;
+    // A notice below writes mail.sqlite; the app's other calls need not wait for it.
+    drop(_guard);
     match result {
         Ok(value) => {
             let changed = match super::guard::outcome(name, action, &value) {
