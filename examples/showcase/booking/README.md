@@ -1,6 +1,6 @@
 # Room board
 
-A room booking board for a small office. Anyone with the link sees which rooms are free each hour from 08:00 to 18:00. Staff sign in with an address at the office's domain, book one to four hours, cancel their own bookings and see who holds a room. A door panel checks a booking in over a signed HTTP route.
+A room booking board for a small office. Anyone with the link sees which rooms are free each hour from 08:00 to 18:00. Staff sign in with an address at the office's domain, book one to four hours, cancel their own bookings and see who holds a room. A booker whose account has proved its address gets a confirmation by email. A door panel checks a booking in over a signed HTTP route.
 
 This app is a product probe. It uses Littlebox the way a creator would and records what the platform let it do and what it refused. It changes nothing in the Kernel, the Validation Gate, the SDK or the editor.
 
@@ -17,6 +17,7 @@ This app is a product probe. It uses Littlebox the way a creator would and recor
 | HTTP route, signed, with an API key | `POST /api/checkin`, signed with the `panel_hook` secret, or called with a key that names `panel.checkin` |
 | Guards | `bookings.create`, `bookings.cancel` and `panel.checkin` declare the sentence a refused call answers with |
 | Signals | `booking.created` and `booking.cancelled`, each naming the caller as `actor`, read by the owner with `signals_read` |
+| Notices | `bookings.create` declares `"notify": { "to": "actor", ... }`, so a booking that inserted rows emails its booker, when the booker's account has proved its address |
 | Action Contract and `conform` | Generated from `actions.json` and `schema.sql`, run with a session token and with an API key |
 
 The owner adds rooms with `database_execute`, because `schema.sql` may only create tables and indexes.
@@ -31,7 +32,7 @@ LITTLEBOX_SHOWCASE_PORT=19473 bun run examples/showcase/booking/replay.ts
 
 The replay builds the Kernel offline, starts it on `LITTLEBOX_SHOWCASE_PORT` (default 19470) with a random setup key and a data directory under the system temp folder, and deletes both on exit. It refuses to start when something already answers on the port. `LITTLEBOX_SHOWCASE_BROWSER=0` skips Chrome. `LITTLEBOX_SHOWCASE_SCREENSHOTS=<dir>` writes `booking-visitor-light.png`, `booking-staff-light.png` and `booking-staff-dark.png` there.
 
-It prints one `PASS` line per group and a JSON report, and exits 0 when all ten hold. The last run, on 2026-11-07 after the review of the examples, printed these lines, trimmed where marked `[...]`:
+It prints one `PASS` line per group and a JSON report, and exits 0 when all eleven hold. The replay's Kernel uses the development mail transport, so email lands in `mailbox.jsonl` in its data directory. The last run, on 2026-11-07 after notices landed, printed these lines, trimmed where marked `[...]`:
 
 ```text
 PASS Validation Gate and Kernel. Both pass the Capsule and both refuse a trigger that writes the booking log, a mutation that starts with WITH, two statements in one action, a view of free hours with the same sentence. [...]
@@ -41,6 +42,7 @@ PASS One-statement booking. A two-hour booking writes two rows in one INSERT ...
 PASS Public and staff views. A visitor and GET /api/availability get only { room, hour }; titles and names need a session, and authenticated actions answer authentication-required. Ben sees Ana's title, is refused with the cancel guard on her booking, and books the hours she freed. [...]
 PASS Double booking under concurrency. 20 rounds of two overlapping bookings sent together: one wins with 2 rows, the other is refused with the guard (2/0, 0/2, 0 standing for the guard). Ten requests for one hour: 0,0,1,0,0,0,0,0,0,0. Owner SQL counts 1 holder.
 PASS Signals. 62 bookings.create calls: 25 bookings made and 25 booking.created Signals, each naming the booker as actor. One booking.cancelled names the canceller. Usage counts the 37 guard refusals under refused.
+PASS Booking confirmation. bookings.create declares "notify": { "to": "actor" }. Cara accepts an invitation, which proves her address, books pine and gets "Booked: pine on [...] at 15:00" in the development mailbox; her overlapping booking is refused with the guard and sends nothing. The 25 bookings Ana and Ben made after a local signup sent nothing, and usage_read says why: {"bookings.create: queued":1,"bookings.create: unverified-email":25}. mail_status counts 1 delivered notice.
 PASS Check-in route. POST /api/checkin refuses an unsigned body (401 invalid-signature) and a stale t (401 stale-timestamp), and accepts a signature or the panel's API key. A second check-in for the same hour and one for an hour nobody booked get 403 with the guard. [...] The runtime endpoint refuses the key with 403 [...]. A visitor and a staff member calling panel.checkin through actions_invoke get "Action panel.checkin answers only on its HTTP route, POST /api/checkin.".
 PASS Action Contract. [...] conform --token --secret: "77 passed, 0 failed, 0 skipped.". conform --token --key: "76 passed, 0 failed, 0 skipped.". conform --key alone: "28 passed, 0 failed, 14 skipped, 1 rate-limit waits.".
 PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no policy violation or page error; staff book two hours from the grid, and an offline day change shows a sentence instead of an unhandled error.
@@ -55,6 +57,7 @@ PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no
 - **No double booking.** Twenty rounds of two overlapping requests sent at once, and one round of ten requests for the same hour, each end with exactly one holder. The loser always gets the create guard, never SQLite's text.
 - **Backstops in the schema.** Owner SQL that skips the action's `WHERE` still meets `UNIQUE constraint failed: bookings.room_id, bookings.day, bookings.slot` and `CHECK constraint failed: typeof(slot) = 'integer' AND slot BETWEEN 8 AND 17`.
 - **Routes.** `GET /api/availability` returns the visitor's rows as JSON. `POST /api/checkin` refuses an unsigned body with 401 `invalid-signature`, a stale `t` with 401 `stale-timestamp`, and accepts a signature or the panel's API key. A second check-in for the same hour, or one for an hour nobody booked, gets 403 with the guard `No booking holds this room at this hour, or it is already checked in.` instead of `{ changes: 0 }`. A staff session cookie sent without a signature gets 401 too, and `panel.checkin` answers only on its route.
+- **A confirmation by email.** `bookings.create` declares `"notify": { "to": "actor", "subject": "Booked: {input.room} on {input.day} at {input.start}:00", ... }`. Cara, who joined by invitation, books two hours and gets one email with that subject; her overlapping attempt is refused with the guard and sends nothing. Ana and Ben signed up under the Allowlist in local mode, where nothing proves an address, so their 25 bookings succeeded and sent nothing; `usage_read` lists `bookings.create: unverified-email` 25 times beside `bookings.create: queued` once. On an installation with `LITTLEBOX_ACCOUNT_VERIFICATION=required` every booker has answered a link and gets the email.
 - **Content Security Policy.** The visitor page and the staff page load in Chrome under the Kernel's policy with no violation and no page error, and a staff member books two hours by clicking the grid.
 - **Errors on the page.** Every status line reads a failure through one `reason(error)` helper, the same in all five showcase apps. A refusal shows its own sentence, `rate-limited` becomes "Too many requests just now. Wait a few seconds and try again.", and a Kernel the browser cannot reach becomes "The board could not reach its server. Check the connection and try again." The replay takes the page offline and moves to the next day to prove the last one.
 
@@ -87,11 +90,11 @@ The guarantee comes from two places. The Kernel holds a per-Deployment database 
 
 ## Notifying staff
 
-A webhook out is not a primitive. Nothing in an app can tell a staff member that a room was booked, freed or checked in:
+Since 2026-11-07 a booking emails its own booker (see [What worked](#what-worked)). A webhook out is still not a primitive, and nothing in an app can tell another staff member that a room was booked, freed or checked in:
 
 - `connect-src 'self'` stops the page from calling another origin.
 - An action runs one SQL statement or records a Signal. There is no outbound HTTP and no queue.
-- The only email the Kernel sends is account mail: verification, recovery and invitations. An app cannot send its own.
+- Besides account mail, the Kernel sends only a mutation's `notify`, and only to the Project Owner or to the person who called the action. It cannot reach the staff member who held a room someone cancelled, or everyone who works in the office.
 - Signals are readable only by the owner through `signals_read`; the runtime endpoint does not list them.
 
 What the app does instead:
@@ -123,6 +126,7 @@ Messages are quoted exactly as the replay received them. "Gate" is the editor's 
 | The panel's API key on the runtime endpoint | Kernel | Fixed on 2026-11-06: 403 `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.` Before, visitor answers with no error | A misconfigured program learns where its key works |
 | An API key booking a room | Kernel | Not possible: keys work only on HTTP routes, and `bookings.create` is `authenticated`, which cannot declare `http` | A program, such as a calendar sync, cannot book on a person's behalf |
 | A webhook out to notify staff | none | No primitive exists | See [Notifying staff](#notifying-staff) |
+| A confirmation email to the booker | Kernel | Since 2026-11-07, `"notify": { "to": "actor" }` on `bookings.create`. A booker who signed up in local mode has proved no address, so the booking succeeds and Usage counts `bookings.create: unverified-email` | Cara, invited, gets the email; Ana and Ben do not until they answer a link |
 | Seeding rooms from `schema.sql` | Kernel | `schema.sql` may only create tables and indexes (docs/mcp.md; not run by the replay) | The owner inserts rooms with `database_execute` after the first publish |
 | `bun run littlebox -- publish` with an Allowlist | CLI | Fixed on 2026-11-06. `publishLocal` sent no `initialSignupPolicy`, so a public app published with the CLI started Open until the owner called `signup_policy_set`, and the replay published over MCP to avoid that window | `littlebox.json` now names `project.manifest.signupPolicy` and the replay publishes with `publishLocal` on a token without `manage_users`; the Allowlist is in place before the first request |
 | A whole-hour input | Kernel | No integer input type; `"type": "number"` accepts `13.5` | The statement checks `?4 = CAST(?4 AS INTEGER)`, and a CHECK on `typeof(slot)` backs it |

@@ -16,6 +16,25 @@
       ],
       "signal": { "name": "event.received", "properties": ["source", "severity"] }
     },
+    "pages.critical": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": { "method": "POST", "path": "/hooks/critical", "signature": { "header": "X-Inbox-Signature", "secret": "events_webhook" } },
+      "statement": "INSERT INTO events (source, external_id, severity, title, body, received_at) VALUES (?1, ?2, 'critical', ?3, COALESCE(?4, ''), ?5) ON CONFLICT (source, external_id) DO NOTHING",
+      "bindings": [
+        { "source": "input", "key": "source", "type": "string", "maxLength": 40 },
+        { "source": "input", "key": "id", "type": "string", "maxLength": 100 },
+        { "source": "input", "key": "title", "type": "string", "maxLength": 200 },
+        { "source": "input", "key": "body", "type": "string", "maxLength": 4000, "nullable": true },
+        { "source": "kernel", "field": "now" }
+      ],
+      "signal": { "name": "event.received", "properties": ["source"] },
+      "notify": {
+        "to": "owner",
+        "subject": "Critical: {input.title}",
+        "body": "{input.source} paged the inbox with a critical event.\n{input.title}\n{input.body}\nSign in to the inbox to acknowledge it."
+      }
+    },
     "events.feed": {
       "kind": "query",
       "access": "anonymous",

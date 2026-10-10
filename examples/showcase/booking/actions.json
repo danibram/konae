@@ -116,6 +116,11 @@
           "hours",
           "actor"
         ]
+      },
+      "notify": {
+        "to": "actor",
+        "subject": "Booked: {input.room} on {input.day} at {input.start}:00",
+        "body": "{input.hours} h in {input.room} on {input.day} from {input.start}:00, titled \"{input.title}\".\nCancel it on the room board if plans change."
       }
     },
     "bookings.cancel": {
