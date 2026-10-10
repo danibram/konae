@@ -9,7 +9,8 @@ Small Capsules that decide the cells of the [capability matrix](../../docs/resea
 | [shop](shop/replay.ts) | Prints with limited stock and holds that lapse | Inventory under concurrency, delayed work, payments, what the page may load |
 | [community](community/replay.ts) | Publishers and readers on one public app | Roles inside the app, public and private rows, realtime by polling, audit, files by role |
 | [survey](survey/replay.ts) | An anonymous survey and a signed-in vote | Multi-answer form in one write, tallies, one vote per person |
-| [platform](platform/replay.ts) | Notes with reminders | Email on an event, scheduled work, realtime push, third-party login, custom domain |
+| [notify](notify/replay.ts) | A print drop with a waitlist and orders | Email on an event: a notice to the owner, a confirmation to the person who ordered, what is not sent, what both doors refuse |
+| [platform](platform/replay.ts) | Notes with reminders | No mail tool or kind on the runtime door, scheduled work, realtime push, third-party login, custom domain |
 
 Run them all, each on its own port from 23000:
 

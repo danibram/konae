@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "actions": {
+    "waitlist.join": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "statement": "INSERT INTO waitlist (email, source, joined_at) VALUES (?1, ?2, ?3) ON CONFLICT (email) DO NOTHING",
+      "bindings": [
+        { "source": "input", "key": "email", "type": "string", "maxLength": 254 },
+        { "source": "input", "key": "source", "type": "string", "maxLength": 40 },
+        { "source": "kernel", "field": "now" }
+      ],
+      "notify": {
+        "to": "owner",
+        "subject": "New on the waitlist from {input.source}",
+        "body": "{input.email} joined the waitlist.\nThey came from {input.source}."
+      }
+    },
+    "orders.place": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "Sold out.",
+      "statement": "INSERT INTO orders (user_id, print_id, placed_at) SELECT ?1, id, ?3 FROM prints WHERE id = ?2 AND stock > (SELECT count(*) FROM orders WHERE print_id = ?2)",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "print", "type": "string", "maxLength": 40 },
+        { "source": "kernel", "field": "now" }
+      ],
+      "notify": {
+        "to": "actor",
+        "subject": "Your order for {input.print}",
+        "body": "We have your order for {input.print}.\nYour account is {actor.id}."
+      }
+    },
+    "prints.list": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT p.id, p.title, p.stock - (SELECT count(*) FROM orders o WHERE o.print_id = p.id) AS left FROM prints p ORDER BY p.id LIMIT 50",
+      "bindings": []
+    }
+  }
+}
