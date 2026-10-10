@@ -1,6 +1,6 @@
 # Can the typical apps be built?
 
-Date: 2026-11-07, against `main` at `e9a0711`. This matrix takes ten app shapes people ask for and 24 features they expect, and gives every cell one verdict with the primitive behind it and the replay that proves it. Where no showcase replay proved a cell, a probe under [examples/probes](../../examples/probes/README.md) does, on its own local Kernel. Run them all with `bun run examples/probes/replay-all.ts`.
+Date: 2026-11-07, against `main` at `e9a0711`. Updated the same day for scheduled work ([ADR-0015](../adr/0015-the-kernel-runs-a-declared-schedule.md)), which flips F18 and is proven by the [schedule probe](../../examples/probes/schedule/replay.ts) and the booking and habits replays. This matrix takes ten app shapes people ask for and 24 features they expect, and gives every cell one verdict with the primitive behind it and the replay that proves it. Where no showcase replay proved a cell, a probe under [examples/probes](../../examples/probes/README.md) does, on its own local Kernel. Run them all with `bun run examples/probes/replay-all.ts`.
 
 The yardstick is the sentence at the top of AGENTS.md: a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.
 
@@ -50,8 +50,8 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F15 | Audit of who did what | C | A Signal that lists `actor` gives the owner who did what, and only for calls that changed a row. The app's members see only what the rows keep, such as `author_id`, because one statement writes one table, so there is no history table written with the change | community "Audit", inbox "Usage and Signals", booking "Validation Gate and Kernel" (two statements refused) |
 | F16 | Signals and Usage for the owner | W | `signals_read`, `usage_read`, guard refusals under `refused` | inbox "Usage and Signals", habits "Signals and Usage", booking "Signals" |
 | F17 | Email on an event | N | The mail queue sends only account email: verification, recovery and invitations. The runtime door has no mail tool, and an action of kind `email` is refused (Gate `Invalid server action: notes.mail`, Kernel `Action notes.mail has an unsupported kind.`). The nearest alternative is that the owner reads Signals, or that a program the owner runs polls a keyed route and sends the mail itself | platform "Runtime tools", "Declare an action of kind email" |
-| F18 | Scheduled or delayed work | C | Nothing runs without a caller. Work that only has to look done when someone asks, such as a hold that lapses or a post that appears at its time, compares a stored time with `kernel.now` in each statement; lapsed rows stay in the table. Work that has to happen when nobody asks, such as a reminder, a digest or a retry, is N, because a `"schedule"` key passes both doors and runs nothing | shop "Holds that lapse", platform "A reminder without a worker", "Declare a schedule on a mutation" |
-| F19 | Realtime updates | C | The page polls a query with an `after` cursor, within 30 calls per 10 seconds per visitor address and 120 per signed-in user. Nothing is pushed: a `"subscribe"` key passes both doors and does nothing | community "Realtime by polling", platform "Declare a subscription on a query" |
+| F18 | Scheduled or delayed work | C | A mutation with no input declares `"schedule": { "every": "15m" }`, from 5 minutes to 24 hours, or `{ "daily": "02:00" }` in UTC, and the Kernel's timer runs it once a period with nobody calling, records each run under Usage's `scheduled`, retries a failure at the next tick and skips an app in maintenance. The compromise: a run is one SQL statement, so a reminder, a digest or a summary is written into the app's tables and reaches nobody who has not opened the app, because nothing sends email on an event (F17). A run can be up to a minute late, and a period is never shorter than 5 minutes. A retry of an outbound call is N, because no action calls out | schedule "A run with nobody asking", "Only the timer", "A failing run is retried", "Maintenance"; booking "Release unclaimed bookings"; habits "Close the day"; platform "Declare a schedule on a mutation" |
+| F19 | Realtime updates | C | The page polls a query with an `after` cursor, within 30 calls per 10 seconds per visitor address and 120 per signed-in user. Nothing is pushed: since 2026-11-07 both doors refuse a `"subscribe"` key with `Action notes.due declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead.` | community "Realtime by polling", platform "Declare a subscription on a query" |
 | F20 | Payments | N | The page policy refuses a provider's script, API calls, checkout frame and a form that posts to it, and a provider's signed webhook answers 401 `invalid-signature`. The nearest alternative is a plain link to a hosted payment page, which publishes and navigates, and a program the owner runs that confirms the payment with an API key | shop "Payment provider in the page", "Holds that lapse" (`payments.confirm` by key), hub "Payment provider signature" |
 | F21 | Third-party login | N | App accounts are email and password; the runtime tools are `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset`. Nothing inside Littlebox comes close, because an outside login does not produce a Runtime Actor | platform "Runtime tools" |
 | F22 | Custom domain | N | The Kernel answers only the hostnames it generates, `<slug>-<id>.<suffix>`: another Host answers 404 `{"error":"Littlebox deployment not found."}`. A proxy that rewrites Host still carries the page's Origin, and the runtime answers 403 `{"error":"Cross-origin or unrecognized-host MCP request rejected."}`. The nearest alternative is a redirect from the domain to the generated hostname | platform "Custom domain" |
@@ -79,7 +79,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F15 Audit of who did what | C | C | **C** | C | C | C | C | **C** | C | C |
 | F16 Signals and Usage for the owner | **W** | W | W | W | W | **W** | W | **W** | W | W |
 | F17 Email on an event | **N** | N | **N** | **N** | N | **N** | N | **N** | **N** | **N** |
-| F18 Scheduled or delayed work | N | **N** | **N** | N | **C** | N | C | **N** | **C** | C |
+| F18 Scheduled or delayed work | C | **C** | **C** | C | **W** | C | W | **N** | **W** | W |
 | F19 Realtime updates | C | C | **C** | C | C | C | C | C | **C** | **C** |
 | F20 Payments | N | N | N | N | N | N | N | N | **N** | **N** |
 | F21 Third-party login | N | N | N | N | N | N | N | N | N | N |
@@ -92,7 +92,7 @@ A cell differs from its feature's verdict where the shape changes the answer:
 - F9 in H is N. A hub's senders are outside services with their own signature schemes and payloads, and the hub probe shows each of them refused. The nearest alternative is an adapter outside Littlebox that verifies the sender and posts the declared fields to a signed route.
 - F10 in C and J is C, because a file goes to its uploader or to everyone who may open the app, never to a role or to a publisher's followers. In F it is C, because a visitor cannot upload: `transfer_begin` needs a session, so a respondent creates an account before attaching a file.
 - F11 in E is C, because a post cannot embed an image or a video from another site.
-- F18 is C where the work is a time a query can compare (E publishes a post at its time, G and J filter by age, I lets a hold lapse) and N where something has to happen with nobody asking (A sends a launch notice, B reminds, C and D send a digest, F sends a daily summary, H retries an outbound call).
+- F18 is W where the work is a change to the app's rows (E publishes a post at its time, G and J expire old rows, I releases a hold that lapsed, as booking does), C where the point of the work is to tell someone (A's launch notice, B's reminder, C's and D's digest, F's daily summary): the schedule writes it into the app, and it reaches a person only when they open the app, until F17 exists. It is N in H, because a retry of an outbound call needs an action that calls out. Until 2026-11-07 every one of these cells was C or N, because a `"schedule"` key passed both doors and ran nothing.
 
 ## Counts
 
@@ -100,23 +100,23 @@ The counts are taken from the 240 cells above, by counting each letter.
 
 | | Works | Compromise | Not possible | Cells |
 | --- | --- | --- | --- | --- |
-| Every cell | 116 | 77 | 47 | 240 |
-| Cells a shape cannot ship without (bold) | 41 | 30 | 16 | 87 |
+| Every cell | 120 | 78 | 42 | 240 |
+| Cells a shape cannot ship without (bold) | 43 | 30 | 14 | 87 |
 
 | Shape | Needed | Not possible among them | Compromises among them |
 | --- | --- | --- | --- |
 | A Landing page | 7 | F17 email, F22 domain | F24 |
-| B Personal tracker | 8 | F18 reminders | F24 |
-| C Team tool | 10 | F17 email, F18 reminders | F5, F10, F15, F19, F24 |
+| B Personal tracker | 8 | | F18, F24 |
+| C Team tool | 10 | F17 email | F5, F10, F15, F18, F19, F24 |
 | D Community | 9 | F17 email | F5, F12, F24 |
-| E Blog or docs | 10 | F22 domain | F7, F11, F12, F18, F24 |
+| E Blog or docs | 10 | F22 domain | F7, F11, F12, F24 |
 | F Form collector | 6 | F17 email | F10, F24 |
 | G Public dataset | 7 | | F7, F12, F24 |
 | H Integration hub | 9 | F9 provider webhooks, F17 email, F18 retries | F15, F24 |
-| I Shop or booking | 10 | F17 email, F20 payments, F22 domain | F18, F19, F24 |
+| I Shop or booking | 10 | F17 email, F20 payments, F22 domain | F19, F24 |
 | J Two-sided | 11 | F17 email, F20 payments | F5, F10, F12, F19, F24 |
 
-G is the only shape with nothing it needs marked N. Every other shape needs at least one feature no primitive provides, and email on an event is the one most of them share.
+G, and since scheduled work B, are the shapes with nothing they need marked N. Every other shape needs at least one feature no primitive provides, and email on an event is the one most of them share.
 
 ## Where the doors disagreed
 
@@ -126,7 +126,7 @@ The probes found three declarations the Validation Gate and the Kernel answered 
 | --- | --- | --- |
 | A binding `{ "source": "actor", "field": "email" }` | Refused before publishing with `Invalid binding 1 in members.join.` | community "No email from the actor" |
 | An action of `"kind": "email"` | Refused with `Action notes.mail has an invalid kind. Use "query", "mutation" or "signal".` | platform "Declare an action of kind email" |
-| A `"schedule"` key on a mutation, or `"subscribe"` on a query | Still passes both doors and does nothing; it matters once `schedule` becomes a primitive | platform "Declare a schedule on a mutation", "Declare a subscription on a query" |
+| A `"schedule"` key on a mutation, or `"subscribe"` on a query | Passed both doors and did nothing until 2026-11-07. A schedule is now a primitive that both doors parse from `kernel-rs/src/schedule-cases.json`, so `"0 8 * * *"` on `notes.add` is refused with `Action notes.add declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values.`, and `subscribe` is refused with a message that points at polling | platform "Declare a schedule on a mutation", "Declare a subscription on a query"; schedule "Declare a schedule" |
 
 ## What blocks the most shapes
 
@@ -135,7 +135,7 @@ Counting the bold N cells per feature gives five features with any, and they are
 | Feature | Shapes it blocks | Shapes it degrades |
 | --- | --- | --- |
 | F17 Email on an event | A, C, D, F, H, I, J | |
-| F18 Scheduled or delayed work | B, C, H | E, I |
+| F18 Scheduled or delayed work | H | B, C |
 | F22 Custom domain | A, E, I | |
 | F20 Payments | I, J | |
 | F9 Webhooks from outside services | H | |
@@ -151,8 +151,9 @@ Payments and outside webhooks need the same primitive, because a payment provide
 | [shop](../../examples/probes/shop/replay.ts) | F11, F18, F20, inventory under concurrency | 3 |
 | [community](../../examples/probes/community/replay.ts) | F5, F6, F10, F15, F19 | 6 |
 | [survey](../../examples/probes/survey/replay.ts) | F14, one vote per person, a multi-answer form in one write | 2 |
-| [platform](../../examples/probes/platform/replay.ts) | F17, F18, F19, F21, F22 | 6 |
+| [platform](../../examples/probes/platform/replay.ts) | F17, F19, F21, F22, and the F18 and F19 forms both doors refuse | 6 |
+| [schedule](../../examples/probes/schedule/replay.ts) | F18 | 6 |
 
 ## What this does not verify
 
-No probe drives the editor or its build agent; F24 rests on habits' simulation of the editor's calls. Verified signup is proven only by habits, on an installation that requires it; the probes run in local mode. The probes do not open Chrome, so F11 for images rests on the gallery and club Chrome passes, and the probes check the policy header instead. The product-fit examples, such as the launch page and the poll, are cited by the earlier assessment, not re-run here.
+No probe drives the editor or its build agent; F24 rests on habits' simulation of the editor's calls. The schedule probe and the booking and habits replays run their Kernels with `LITTLEBOX_SCHEDULE_MIN_SECONDS=2`, so every schedule runs every 2 seconds; that a `"daily"` job runs at its UTC time once a day, and resumes after a restart without running twice, is proven by the Kernel's unit tests in `kernel-rs/src/schedule.rs` on a clock they move, not by a replay. Verified signup is proven only by habits, on an installation that requires it; the probes run in local mode. The probes do not open Chrome, so F11 for images rests on the gallery and club Chrome passes, and the probes check the policy header instead. The product-fit examples, such as the launch page and the poll, are cited by the earlier assessment, not re-run here.
