@@ -504,7 +504,7 @@ Some work has to happen when nobody asks: a hold that lapsed is released so the 
 }
 ```
 
-`"every"` takes a whole number of minutes or hours, `"5m"` to `"24h"`, and periods count from 00:00 UTC, so `"15m"` runs at :00, :15, :30 and :45. `"daily": "HH:MM"` runs once a day at that UTC time. The Kernel looks once a minute and runs an action at the first look after its period opens, in the Kernel's one process. Nobody calls it, so `kernel.now` is the time of the run, literals bind as written and an `actor` binding is null. A person's call always binds an ID, so a `WHERE` that tests the actor binding with `IS NULL` holds only for the timer. The action still answers callers as its `access` says.
+`"every"` takes a whole number of minutes or hours, `"5m"` to `"24h"`, and periods count from 00:00 UTC, so `"15m"` runs at :00, :15, :30 and :45. `"daily": "HH:MM"` runs once a day at that UTC time. The Kernel looks once a minute and runs an action at the first look after its period opens, in the Kernel's one process. Nobody calls it, so `kernel.now` is the time of the run, literals bind as written and an `actor` binding, of the `id` or of the `role`, is null. A person's call always binds an ID, so a `WHERE` that tests the actor binding with `IS NULL` holds only for the timer. The action still answers callers as its `access` says.
 
 | Rule | What the Kernel does |
 | --- | --- |
