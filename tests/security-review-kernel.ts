@@ -23,7 +23,7 @@ export type Lab = {
 };
 
 const SHOWCASE = {
-  inbox: { visibility: "private", secrets: ["events_webhook", "events_feed"] },
+  inbox: { visibility: "private", secrets: ["events_webhook", "events_feed", "github_webhook", "payments_webhook"] },
   club: { visibility: "private", secrets: [] },
   gallery: { visibility: "public", secrets: [] },
   habits: { visibility: "private", secrets: [] },
