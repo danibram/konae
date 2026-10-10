@@ -11,6 +11,12 @@
 //! queue and writes each Deployment's file in one transaction per batch, so a
 //! response never waits on this store. When the queue is full the message is
 //! dropped and counted in `dropped`, rather than slowing the app down.
+//!
+//! The one other writer is the timer in `schedule.rs` (ADR-0015). It records
+//! each scheduled run, its `scheduled` count and the slot it ran for with
+//! `record_run`, directly and in one transaction, because a run the store lost
+//! would run again after a restart. SQLite's WAL and busy timeout let the two
+//! writers take turns.
 
 use super::{ActionDefinition, Deployment};
 use anyhow::Result;
@@ -34,6 +40,10 @@ pub(crate) const USAGE_DAYS: i64 = 400;
 pub(crate) const MAX_USAGE_ROWS: i64 = 100_000;
 /// Signals kept, oldest dropped first.
 pub(crate) const MAX_SIGNALS: i64 = 50_000;
+/// Scheduled runs kept, oldest dropped first. A job every 5 minutes makes 288 a day.
+pub(crate) const MAX_SCHEDULED_RUNS: i64 = 10_000;
+/// The scheduled runs `usage_read` returns, newest first.
+const SCHEDULED_PAGE: i64 = 500;
 pub(crate) const MAX_SIGNAL_PROPERTIES: usize = 8;
 /// The property that records the caller's ID instead of an input.
 const SIGNAL_ACTOR: &str = "actor";
@@ -229,9 +239,81 @@ fn open(path: &Path) -> Result<Connection> {
            PRIMARY KEY(day, kind, name));
          CREATE TABLE IF NOT EXISTS signals(
            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, at INTEGER NOT NULL, properties TEXT NOT NULL);
-         CREATE INDEX IF NOT EXISTS signals_by_name ON signals(name, id);",
+         CREATE INDEX IF NOT EXISTS signals_by_name ON signals(name, id);
+         CREATE TABLE IF NOT EXISTS scheduled_runs(
+           id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, at INTEGER NOT NULL,
+           outcome TEXT NOT NULL, changes INTEGER NOT NULL, error TEXT);
+         CREATE INDEX IF NOT EXISTS scheduled_runs_by_time ON scheduled_runs(at);
+         CREATE TABLE IF NOT EXISTS schedule_state(
+           action TEXT PRIMARY KEY, schedule TEXT NOT NULL, slot INTEGER NOT NULL);",
     )?;
     Ok(connection)
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled runs, written by `schedule.rs`.
+
+/// One finished scheduled run.
+pub(crate) struct Run<'a> {
+    pub(crate) action: &'a str,
+    /// The schedule as `schedule::Schedule::key` writes it.
+    pub(crate) schedule: &'a str,
+    /// The slot the run was for. A run that succeeded marks it done.
+    pub(crate) slot: i64,
+    pub(crate) at: u64,
+    /// The rows the statement changed, or None when it failed.
+    pub(crate) changes: Option<u64>,
+    pub(crate) error: Option<String>,
+}
+
+/// The slot each scheduled action last ran for, with the schedule it ran
+/// under, by action name. An action the store has not seen is absent.
+pub(crate) fn schedule_slots(folder: &Path) -> Result<HashMap<String, (String, i64)>> {
+    let db = open(&folder.join(USAGE_DATABASE))?;
+    let mut query = db.prepare("SELECT action, schedule, slot FROM schedule_state")?;
+    let rows = query.query_map([], |row| Ok((row.get::<_, String>(0)?, (row.get::<_, String>(1)?, row.get::<_, i64>(2)?))))?;
+    Ok(rows.collect::<rusqlite::Result<HashMap<_, _>>>()?)
+}
+
+/// Marks a slot as passed without a run: the first time the timer sees an
+/// action, or after its schedule changed, so the first run is the next
+/// occurrence and never the moment of publishing.
+pub(crate) fn schedule_baseline(folder: &Path, action: &str, schedule: &str, slot: i64) -> Result<()> {
+    let db = open(&folder.join(USAGE_DATABASE))?;
+    db.execute(
+        "INSERT INTO schedule_state(action, schedule, slot) VALUES(?1, ?2, ?3)
+         ON CONFLICT(action) DO UPDATE SET schedule = excluded.schedule, slot = excluded.slot",
+        params![action, schedule, slot],
+    )?;
+    Ok(())
+}
+
+/// Records a run, counts it under `scheduled` and, when it succeeded, marks
+/// its slot done, in one transaction. A failed run leaves the slot open, so
+/// the next tick tries again.
+pub(crate) fn record_run(folder: &Path, run: &Run) -> Result<()> {
+    let mut db = open(&folder.join(USAGE_DATABASE))?;
+    let transaction = db.transaction()?;
+    let outcome = if run.changes.is_some() { "ok" } else { "failed" };
+    transaction.execute(
+        "INSERT INTO scheduled_runs(action, at, outcome, changes, error) VALUES(?1, ?2, ?3, ?4, ?5)",
+        params![run.action, run.at as i64, outcome, run.changes.unwrap_or(0) as i64, run.error.as_deref().map(|text| truncate(text, 500))],
+    )?;
+    transaction.execute(
+        "INSERT INTO usage_daily(day, kind, name, count) VALUES(?1, 'scheduled', ?2, 1)
+         ON CONFLICT(day, kind, name) DO UPDATE SET count = count + 1",
+        params![day(run.at), run.action],
+    )?;
+    if run.changes.is_some() {
+        transaction.execute(
+            "INSERT INTO schedule_state(action, schedule, slot) VALUES(?1, ?2, ?3)
+             ON CONFLICT(action) DO UPDATE SET schedule = excluded.schedule, slot = excluded.slot",
+            params![run.action, run.schedule, run.slot],
+        )?;
+    }
+    prune(&transaction, run.at)?;
+    transaction.commit()?;
+    Ok(())
 }
 
 fn write(folder: &Path, batch: &Batch, now: u64) -> Result<()> {
@@ -272,6 +354,10 @@ fn prune(db: &Connection, now: u64) -> Result<()> {
     db.execute(
         "DELETE FROM signals WHERE id <= (SELECT MAX(id) FROM signals) - ?1",
         [MAX_SIGNALS],
+    )?;
+    db.execute(
+        "DELETE FROM scheduled_runs WHERE id <= (SELECT MAX(id) FROM scheduled_runs) - ?1",
+        [MAX_SCHEDULED_RUNS],
     )?;
     Ok(())
 }
@@ -420,7 +506,7 @@ pub(crate) fn admin_tools() -> Vec<Value> {
     vec![
         super::mcp::tool(
             "usage_read",
-            "Read a deployment's Usage: daily totals of the runtime operations the Kernel allowed (session, action, route, upload, file_read, signup, login) and of guard refusals (refused, by action) between two UTC dates written YYYY-MM-DD, both included, at most 400 days apart.",
+            "Read a deployment's Usage: daily totals of the runtime operations the Kernel allowed (session, action, route, upload, file_read, signup, login), of guard refusals (refused, by action) and of scheduled runs (scheduled, by action) between two UTC dates written YYYY-MM-DD, both included, at most 400 days apart, and the newest 500 scheduled runs in that range with their outcome and changes.",
             json!({"deploymentId": text, "from": date, "to": date}),
             &["deploymentId", "from", "to"],
             true,
@@ -467,7 +553,26 @@ pub(crate) fn read_usage(path: &Path, from: &str, to: &str) -> Result<Value> {
     anyhow::ensure!(end - start < USAGE_DAYS, "Usage covers at most 400 days at a time.");
     let mut days = Vec::new();
     let mut totals: Vec<Value> = Vec::new();
+    let mut scheduled: Vec<Value> = Vec::new();
     if let Some(db) = read_only(path)? {
+        // A store written before scheduled work existed has no runs table.
+        let has_runs: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scheduled_runs')", [], |row| row.get(0))?;
+        if has_runs {
+            let mut query = db.prepare(
+                "SELECT action, at, outcome, changes, error FROM scheduled_runs WHERE at >= ?1 AND at < ?2 ORDER BY id DESC LIMIT ?3",
+            )?;
+            let rows = query.query_map(params![start * 86_400_000, (end + 1) * 86_400_000, SCHEDULED_PAGE], |row| {
+                let error: Option<String> = row.get(4)?;
+                let mut run = json!({"action": row.get::<_, String>(0)?, "at": row.get::<_, i64>(1)?,
+                    "outcome": row.get::<_, String>(2)?, "changes": row.get::<_, i64>(3)?});
+                if let Some(error) = error {
+                    run["error"] = Value::String(error);
+                }
+                Ok(run)
+            })?;
+            scheduled = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        }
         let mut query = db.prepare(
             "SELECT day, kind, name, count FROM usage_daily WHERE day BETWEEN ?1 AND ?2 ORDER BY day, kind, name",
         )?;
@@ -486,7 +591,7 @@ pub(crate) fn read_usage(path: &Path, from: &str, to: &str) -> Result<Value> {
         sums.sort();
         totals = sums.into_iter().map(|((kind, name), count)| json!({"kind": kind, "name": name, "count": count})).collect();
     }
-    Ok(json!({"from": from, "to": to, "days": days, "totals": totals}))
+    Ok(json!({"from": from, "to": to, "days": days, "totals": totals, "scheduled": scheduled}))
 }
 
 pub(crate) fn read_signals(path: &Path, name: Option<&str>, cursor: Option<&str>) -> Result<Value> {

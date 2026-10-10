@@ -109,6 +109,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 | `security.rs` | The response headers of every host |
 | `limits.rs` | Per-client limits on unauthenticated requests |
 | `copies.rs` | Scheduled copies and `littlebox-kernel restore` |
+| `schedule.rs` | A mutation's schedule, the timer that runs it and the record of each run ([ADR-0015](./adr/0015-the-kernel-runs-a-declared-schedule.md)) |
 | `recovery.rs` | The revocation record and `littlebox-kernel reconcile` |
 | `package.rs` | The chunked package, `package_export` and its import |
 | `migration.rs` | Migration and maintenance |
@@ -118,7 +119,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 
 ### Two doors, one set of refusals
 
-A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before anything is applied. The Kernel parses the same `actions.json` and `schema.sql` again at `release_plan`, on every installation, including one unpacked from an export. Where both refuse a declaration they use the same words, and each rule has one case file that both test suites run: `sql-rule-cases.json` for statements, `http-binding-cases.json` for routes and their callers, `signal-cases.json` for Signals, `guard-cases.json` for guards and `signature-cases.json` for route signatures, all in `kernel-rs/src`. The query bound is `src/lib/query-bound.ts` on one side and its port in `main.rs` on the other ([ADR-0009](./adr/0009-the-gate-and-the-kernel-share-one-query-bound.md)). The Action Contract written from a Capsule lists the refusals a third backend would have to give.
+A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before anything is applied. The Kernel parses the same `actions.json` and `schema.sql` again at `release_plan`, on every installation, including one unpacked from an export. Where both refuse a declaration they use the same words, and each rule has one case file that both test suites run: `sql-rule-cases.json` for statements, `http-binding-cases.json` for routes and their callers, `signal-cases.json` for Signals, `guard-cases.json` for guards and `signature-cases.json` for route signatures and `schedule-cases.json` for schedules, all in `kernel-rs/src`. The query bound is `src/lib/query-bound.ts` on one side and its port in `main.rs` on the other ([ADR-0009](./adr/0009-the-gate-and-the-kernel-share-one-query-bound.md)). The Action Contract written from a Capsule lists the refusals a third backend would have to give.
 
 An artifact holds pages and the files they load. `kernel-rs/src/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page; under `spa` it serves `index.html`. The rules for which Capsule files become the artifact live in one file, `src/lib/static-artifact.js`, which the CLI, the editor and the exported kit all run. The [MCP guide](./mcp.md#what-the-build-publishes) lists both.
 

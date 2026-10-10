@@ -68,8 +68,8 @@ describe("what the prompt says a Deployment serves", () => {
     expect(prompt).toContain("This editor holds text files only.");
   });
 
-  test("shows guard, signal and http in the actions.json format, and that a signal action has no statement", () => {
-    for (const key of ['"guard":', '"signal":', '"http":', "a signal action has none"]) expect(prompt).toContain(key);
+  test("shows guard, schedule, signal and http in the actions.json format, and that a signal action has no statement", () => {
+    for (const key of ['"guard":', '"schedule":', '"signal":', '"http":', "a signal action has none"]) expect(prompt).toContain(key);
   });
 });
 

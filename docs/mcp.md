@@ -409,12 +409,13 @@ usage_read   { "deploymentId", "from": "2026-11-01", "to": "2026-11-06" }
 signals_read { "deploymentId", "name"?: "order.placed", "cursor"? }
 ```
 
-`usage_read` returns one row per UTC day, kind and name between two dates, both included, at most 400 days apart, and the totals over the range:
+`usage_read` returns one row per UTC day, kind and name between two dates, both included, at most 400 days apart, the totals over the range, and the newest 500 [scheduled runs](#scheduled-work) in it:
 
 ```json
 { "from": "2026-11-01", "to": "2026-11-06",
   "days": [{ "day": "2026-11-06", "kind": "action", "name": "notes.add", "count": 12 }],
-  "totals": [{ "kind": "action", "name": "notes.add", "count": 12 }] }
+  "totals": [{ "kind": "action", "name": "notes.add", "count": 12 }],
+  "scheduled": [{ "action": "holds.release", "at": 1762423200000, "outcome": "ok", "changes": 2 }] }
 ```
 
 | Kind | Name | Counted when |
@@ -427,6 +428,7 @@ signals_read { "deploymentId", "name"?: "order.placed", "cursor"? }
 | `signup` | | an account becomes active: a signup in local mode, an answered verification link or an accepted invitation |
 | `login` | | a password sign-in or an answered recovery link |
 | `refused` | the action | a mutation with a [guard](#guards) changed no row and the Kernel answered the guard, on `actions_invoke` or on its route |
+| `scheduled` | the action | the Kernel's timer ran a [scheduled](#scheduled-work) mutation, whether it succeeded or failed |
 
 Nothing else the Kernel refuses is counted: a call without the session it needs, an input the bindings reject, a statement SQLite refuses, a bad signature or a wrong password. A guard's refusal is the app's own rule saying no, which the owner wants to see next to the calls that ran. The Kernel writes Usage off the request path. A response never waits for it, and when more than 16,384 entries are waiting the newest are dropped and logged. The two read tools wait up to five seconds for the queue to drain, so they include every call that finished before them.
 
@@ -486,7 +488,50 @@ When the statement changes no row, the Kernel answers the guard as a refusal: a 
 
 The Validation Gate and the Kernel parse the same cases from `kernel-rs/src/guard-cases.json`; `kernel-rs/src/guard.rs` holds the Kernel's side.
 
-The store keeps 400 days and at most 100,000 rows of totals, and the newest 50,000 Signals; past those bounds the oldest rows go first. A string property keeps its first 128 bytes. The scheduled copy and `package_export` carry the store; `project_export` does not. A Development Kernel started with `bun run littlebox -- dev` records the same way, in `.littlebox/dev-data/deployments/<id>/usage.sqlite`. The editor preview has no store: a signal action there returns `{ "recorded": true }` and nothing is kept.
+The store keeps 400 days and at most 100,000 rows of totals, the newest 50,000 Signals and the newest 10,000 scheduled runs; past those bounds the oldest rows go first. A string property keeps its first 128 bytes. The scheduled copy and `package_export` carry the store; `project_export` does not. A Development Kernel started with `bun run littlebox -- dev` records the same way, in `.littlebox/dev-data/deployments/<id>/usage.sqlite`. The editor preview has no store: a signal action there returns `{ "recorded": true }` and nothing is kept.
+
+### Scheduled work
+
+Some work has to happen when nobody asks: a hold that lapsed is released so the hour shows free, a day is closed so tomorrow's page starts from a total. A mutation that takes no input may declare when the Kernel's own timer runs it ([ADR-0015](./adr/0015-the-kernel-runs-a-declared-schedule.md)):
+
+```json
+"holds.release": {
+  "kind": "mutation",
+  "access": "authenticated",
+  "schedule": { "every": "15m" },
+  "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+  "bindings": [{ "source": "kernel", "field": "now" }]
+}
+```
+
+`"every"` takes a whole number of minutes or hours, `"5m"` to `"24h"`, and periods count from 00:00 UTC, so `"15m"` runs at :00, :15, :30 and :45. `"daily": "HH:MM"` runs once a day at that UTC time. The Kernel looks once a minute and runs an action at the first look after its period opens, in the Kernel's one process. Nobody calls it, so `kernel.now` is the time of the run, literals bind as written and an `actor` binding is null. A person's call always binds an ID, so a `WHERE` that tests the actor binding with `IS NULL` holds only for the timer. The action still answers callers as its `access` says.
+
+| Rule | What the Kernel does |
+| --- | --- |
+| Once a period | The period it last ran for is kept in the Deployment's `usage.sqlite`. A restart, a copy, a package and a migration carry it, so a daily job does not run twice in a day. A Kernel that was down for several periods runs the action once when it is back |
+| Publishing | The first period an action is seen in counts as done, so publishing never runs it. A republish that changes the schedule starts again from the next period |
+| One run at a time | A run takes the Deployment's data lock and has the 2-second statement budget. A Deployment's scheduled actions run one after another in name order, and its next look waits until they finish |
+| Maintenance | A Deployment in maintenance runs nothing, and runs each due action once when it leaves maintenance |
+| Failure | A run SQLite refuses is logged, recorded with `outcome: "failed"` and its error, and tried again at the next look. Runs never pile up |
+| Guard and Signal | A run that changes no row had nothing to do: it is recorded with `changes: 0` and the guard does not apply. A run that changed a row records the action's Signal, with `actor` null |
+| Usage | Each run counts under `scheduled` by action name, and `usage_read` returns the newest 500 runs of its range with `action`, `at`, `outcome`, `changes` and, for a failed run, `error` |
+
+The editor preview runs no schedule. A Development Kernel started with `bun run littlebox -- dev` runs them as a Deployment does. A test can set `LITTLEBOX_SCHEDULE_MIN_SECONDS` to run every schedule once every few seconds instead of at its declared times; the Kernel refuses to start with it unless `LITTLEBOX_BIND` is a loopback address.
+
+Nothing is pushed to a page. A page that shows new rows polls a query with an `after` cursor, and a `subscribe` key is refused at both doors.
+
+| Declaration | Message |
+| --- | --- |
+| `schedule` on a query | `Action <name> is a query, so it cannot declare a schedule. Declare it on a mutation.` |
+| `schedule` on a signal action | `Action <name> is a signal action, so it cannot declare a schedule. Declare it on a mutation.` |
+| `schedule` on a mutation with an input binding | `Action <name> declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values.` |
+| A schedule that is not one of `every` and `daily` with a string, or an `every` that is not 1 to 5 digits and `m` or `h`, such as `"0 8 * * *"` | `Action <name> has an invalid schedule. Declare "every" with minutes or hours, such as "15m" or "6h", or "daily" with a UTC time, such as "02:00".` |
+| `every` below 5 minutes | `Action <name> runs every 4m, more often than every 5 minutes. Use "5m" or longer.` |
+| `every` above 24 hours | `Action <name> runs every 25h, less often than once a day. Use "daily" or a period of 24 hours or less.` |
+| `daily` that is not a time from `00:00` to `23:59` | `Action <name> has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59.` |
+| `subscribe` on any action | `Action <name> declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead.` |
+
+The Validation Gate and the Kernel parse the same cases from `kernel-rs/src/schedule-cases.json`; `kernel-rs/src/schedule.rs` holds the Kernel's side, the timer and the run.
 
 ## Build and publish
 

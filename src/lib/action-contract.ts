@@ -15,7 +15,7 @@
  * Error messages are not written here. They come from the SDK contract in
  * src/sdk/contract.ts, whose test checks each against the Kernel's source.
  */
-import { parseServerActionSource, type HttpBinding, type RouteCaller, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
+import { parseServerActionSource, type HttpBinding, type RouteCaller, type ScheduleDeclaration, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
 import { sdkContract, type SdkError } from "../sdk/contract";
 import { limitIndex } from "./query-bound";
 import { sqlStatementTokens, sqlTokens, type SqlToken } from "./sql-tokens";
@@ -123,6 +123,12 @@ export type ContractAction = {
   signal?: { name: string; properties: string[] };
   /** A mutation's refusal when its statement changes no row; it is listed among the errors too. */
   guard?: string;
+  /**
+   * When the Kernel's timer also runs the mutation, with no caller: `actor`
+   * binds null, the guard does not apply, and Usage counts the run under
+   * `scheduled` (ADR-0015).
+   */
+  schedule?: ScheduleDeclaration;
   runtime: { endpoint: string; tool: string; sdk: string; callers: ContractCaller[] };
   http?: ContractHttp;
   errors: ContractError[];
@@ -249,6 +255,7 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables): C
     output,
     ...(action.signal ? { signal: { name: action.signal.name, properties: [...action.signal.properties] } } : {}),
     ...(action.guard ? { guard: action.guard } : {}),
+    ...(action.schedule ? { schedule: { ...action.schedule } } : {}),
     runtime: { ...RUNTIME, callers: http?.onlyDoor === "always" ? [] : runtimeCallers(access, Boolean(http)) },
     ...(http ? { http } : {}),
     errors: actionErrors(action, inputs, actorBound),
@@ -747,6 +754,7 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
     } else if (action.output.kind === "changes") {
       lines.push("`{ changes, lastInsertId }`, both integers.", "");
       if (action.guard) lines.push(`When the statement changes no row the call is refused with \`${action.guard}\` instead.`, "");
+      if (action.schedule) lines.push(`The Kernel's timer also runs it ${"every" in action.schedule ? `every ${action.schedule.every}` : `daily at ${action.schedule.daily} UTC`}, with no caller: an \`actor\` binding is null and the guard does not apply. The owner reads each run under \`scheduled\` with \`usage_read\`.`, "");
     } else {
       lines.push(`\`{ "recorded": true }\`. It runs no SQL and records the Signal \`${action.output.signal}\`.`, "");
     }
@@ -906,6 +914,7 @@ export function programFromContract(contract: ActionContract): ServerActionProgr
       bindings,
       ...(action.signal ? { signal: { name: action.signal.name, properties: [...action.signal.properties] } } : {}),
       ...(action.guard ? { guard: action.guard } : {}),
+      ...(action.schedule ? { schedule: { ...action.schedule } } : {}),
       ...(action.http ? {
         http: {
           method: action.http.method,

@@ -38,6 +38,12 @@
           "properties": { "name": { "type": "string" }, "properties": { "type": "array", "items": { "type": "string" } } }
         },
         "guard": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "schedule": {
+          "oneOf": [
+            { "type": "object", "required": ["every"], "additionalProperties": false, "properties": { "every": { "type": "string", "pattern": "^[1-9][0-9]{0,4}[mh]$" } } },
+            { "type": "object", "required": ["daily"], "additionalProperties": false, "properties": { "daily": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" } } }
+          ]
+        },
         "runtime": {
           "type": "object",
           "required": ["endpoint", "tool", "sdk", "callers"],

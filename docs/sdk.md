@@ -127,6 +127,29 @@ Limits:
 
 - a guard is 1 to 200 characters on one line
 
+Declared with `schedule` in `actions.json`. "schedule": { "every": "15m" } or { "every": "6h" } or { "daily": "02:00" } on a mutation that takes no input. The Kernel's own timer runs it once in each period, or once a day at that UTC time, with no caller: an actor binding is null, kernel.now is the time of the run, and literals bind as written. Use it for work that must happen when nobody asks, such as releasing a hold that lapsed or closing a day. A run that changes no row had nothing to do, so the guard does not apply; a run that changed a row records the action's Signal with actor null. The owner reads each run, with its outcome and changes, under scheduled with usage_read. The action still answers callers as its access says; a WHERE that tests the actor binding with IS NULL holds only for the timer, because a person's call always binds an ID. The Validation Gate and the Kernel refuse the same declarations with the same messages. The editor preview runs no schedule; a Development Kernel and a Deployment do.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `Action <name> is a query, so it cannot declare a schedule. Declare it on a mutation.` | the action is a query | Kernel | Same |
+| `Action <name> is a signal action, so it cannot declare a schedule. Declare it on a mutation.` | the action is a signal action | Kernel | Same |
+| `Action <name> declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values.` | a binding has source input | Kernel | Same |
+| `Action <name> has an invalid schedule. Declare "every" with minutes or hours, such as "15m" or "6h", or "daily" with a UTC time, such as "02:00".` | schedule is not an object with exactly one of every and daily, or every is not a whole number of 1 to 5 digits followed by m or h, such as a cron expression | Kernel | Same |
+| `Action <name> runs every <key>, more often than every 5 minutes. Use "5m" or longer.` | every is shorter than 5 minutes | Kernel | Same |
+| `Action <name> runs every <key>, less often than once a day. Use "daily" or a period of 24 hours or less.` | every is longer than 24 hours | Kernel | Same |
+| `Action <name> has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59.` | daily is not two digits, a colon and two digits naming a time of day | Kernel | Same |
+| `Action <name> declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead.` | any action has a subscribe key | Kernel | Same |
+
+Limits:
+
+- every runs from 5 minutes to 24 hours; periods count from 00:00 UTC, so every 15m runs at :00, :15, :30 and :45
+- one run per period: a Kernel that was down for several periods runs the action once when it is back, and a restart does not run it again in the same period
+- publishing never runs it; the first run is at the next period
+- a run takes the app's data lock and has the 2-second statement budget
+- a run that fails is retried at the next tick, once a minute, and the Deployment's runs never overlap
+- an app in maintenance runs nothing, and runs once when it leaves it
+- the Kernel keeps the newest 10,000 runs per Deployment; usage_read returns the newest 500 in its range
+
 ### miniapp.actions.call(name, input = {})
 
 Invoke one declared Server Action as the current Runtime Actor.

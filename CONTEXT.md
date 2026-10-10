@@ -4,7 +4,7 @@ Littlebox is the guardrail that lets a person who does not write code, and a per
 
 ## Language
 
-Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key and SDK module. Usage, Signal and Action Contract keep their capitals, as the older terms do.
+Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, schedule, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key and SDK module. Usage, Signal and Action Contract keep their capitals, as the older terms do.
 
 **Account**:
 The authenticated identity and personal profile used to enter Littlebox and participate in Workspaces. An Account does not directly own runtime data or imply access to every Project.
@@ -119,7 +119,7 @@ The Project Owner's offer of an account on one Deployment to one email, sent as 
 _Avoid_: invite code (that names creator admission), allowlist entry
 
 **Runtime Actor**:
-Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a signed-in app user, or a service holding an API key. Its permissions are evaluated by server-side actions and never imply Project ownership. An `actor` binding of the `id` yields the app user's ID or the key's ID, and nothing for a visitor. One of the `role` yields the app user's role on that app: `owner` for the Project Owner's own app account, which only the owner's session or the owner's own invitation creates, and `member` for everyone else; a visitor, a key and a signed request have no role and bind null.
+Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a signed-in app user, or a service holding an API key. Its permissions are evaluated by server-side actions and never imply Project ownership. An `actor` binding of the `id` yields the app user's ID or the key's ID, and nothing for a visitor or for a schedule's run. One of the `role` yields the app user's role on that app: `owner` for the Project Owner's own app account, which only the owner's session or the owner's own invitation creates, and `member` for everyone else; a visitor, a key, a signed request and a schedule's run have no role and bind null.
 _Avoid_: Owner, editor user
 
 **API Key**:
@@ -146,6 +146,10 @@ _Avoid_: principals, auth mode, access level (that is `anonymous` or `authentica
 A mutation's declared refusal, `"guard": "<message>"`, which the Kernel answers instead of `{ changes: 0 }` when the statement changes no row because the app's own rule in its `WHERE` said no. It is a tool error on the runtime endpoint and 403 on a route, counts under Usage's `refused` and records no Signal.
 _Avoid_: check constraint, validation error
 
+**Schedule**:
+A mutation's declaration that the Kernel's own timer runs it, `"schedule": { "every": "15m" }` for a period from 5 minutes to 24 hours or `{ "daily": "02:00" }` at a UTC time, for work that must happen when nobody asks, such as releasing a hold that lapsed. The mutation takes no input, and a run has no caller, so an `actor` binding is null and the guard does not apply. It runs once a period under the Deployment's data lock with the 2-second statement budget, never while the app is in maintenance, and Usage records each run under `scheduled` with its outcome and changes. The period it last ran for is kept with Usage, so a restart, a copy or a migration does not run it twice, and publishing does not run it. Nothing is pushed to a page: a `subscribe` key is refused, and the page polls a query.
+_Avoid_: cron, job, worker, background task
+
 **Action Contract**:
 The generated description of a Capsule's Server Actions, `action-contract.json` with its JSON Schema and a Markdown rendering: for each action its inputs with types, nullability and limits, the columns a query returns or the `{ changes, lastInsertId }` a mutation returns, the Signal it records, who may call it on the runtime endpoint and on its HTTP route, the errors the Kernel answers with and the limits that apply. It is written from `actions.json` and `schema.sql`, never edited, and travels in the export. The conformance runner (`littlebox conform`) calls every action against a backend and checks the answers against it, which is how a second backend would show it serves the same app.
 _Avoid_: API spec, OpenAPI document, schema dump
@@ -155,7 +159,7 @@ A namespace on `window.miniapp`, such as `auth`, `actions` or `files`, with a co
 _Avoid_: plugin, library, extension
 
 **Usage**:
-The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations: sessions opened, actions by name, HTTP routes by method and path, uploads, file reads, signups and logins. A refused call counts nothing, except a guard's refusal, which counts under `refused` by action name. It lives in the Deployment's `usage.sqlite`, distinct from application rows, and only the Project Owner reads it.
+The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations: sessions opened, actions by name, HTTP routes by method and path, uploads, file reads, signups and logins, and the runs of each schedule under `scheduled` with their outcome and changes. A refused call counts nothing, except a guard's refusal, which counts under `refused` by action name. It lives in the Deployment's `usage.sqlite`, distinct from application rows, and only the Project Owner reads it.
 _Avoid_: analytics, telemetry, audit, metric
 
 **Signal**:
