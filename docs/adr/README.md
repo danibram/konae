@@ -1,6 +1,6 @@
 # Architecture decisions
 
-Each record states its status and which earlier record it amends on its first line, and keeps its later changes as dated notes at the end, oldest first. The next free number is 0015. Before taking it, check `main`, because another branch may have taken it.
+Each record states its status and which earlier record it amends on its first line, and keeps its later changes as dated notes at the end, oldest first. The next free number is 0016. Before taking it, check `main`, because another branch may have taken it.
 
 | ADR | Decides | Amends | Amended by |
 | --- | --- | --- | --- |
@@ -15,9 +15,10 @@ Each record states its status and which earlier record it amends on its first li
 | [0009](0009-the-gate-and-the-kernel-share-one-query-bound.md) | A query needs a top-level `LIMIT`, and the Gate and the Kernel refuse statements with the same words | | |
 | [0010](0010-kernel-owns-usage-and-signals.md) | The Kernel keeps Usage and Signals per Deployment; a mutation may declare a guard | | |
 | [0011](0011-one-verified-account-core-for-creators-and-app-users.md) | One verified account core for creators and app users; invitation codes; app invitations; HTTP routes, callers and API keys | 0001, 0002 | 0014 |
-| [0012](0012-account-email-goes-through-a-persistent-queue.md) | Account email leaves through a persistent queue with a sender preflight and limits | | |
+| [0012](0012-account-email-goes-through-a-persistent-queue.md) | Account email leaves through a persistent queue with a sender preflight and limits | | 0015 |
 | [0013](0013-an-app-leaves-as-a-chunked-package.md) | An app leaves as a chunked package behind `export_data`; API keys travel revoked | 0008 | 0014 |
 | [0014](0014-an-app-migrates-with-one-writer-at-a-time.md) | A migration keeps one writer through maintenance and a confirmation; a restore applies the revocation record | 0011, 0013 | |
+| [0015](0015-a-mutation-may-notify-the-owner-or-the-actor.md) | A mutation may queue one email to the Project Owner or to the caller's verified email when it changes a row | 0010, 0012 | |
 
 ## Which record answers a question
 
@@ -31,6 +32,7 @@ Each record states its status and which earlier record it amends on its first li
 | Which permission does a tool need? | 0008, 0011 (`manage_users`), 0013 (`export_data`), 0005 note on Eject (`manage_lifecycle`) |
 | Why do the editor and an exported Kernel refuse the same statement? | 0009 |
 | What is counted, and who reads it? | 0010 |
+| Who may an app email, and when? | 0012, 0015 |
 | How does an account prove its email, and how does a creator get in? | 0011, 0012 |
 | What leaves with an app, and what stays behind? | 0013, 0014 |
 | What does a restore bring back? | 0005 note of 2026-11-06, 0011 notes on API keys, 0014 |

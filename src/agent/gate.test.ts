@@ -456,7 +456,7 @@ describe("the gate and the Kernel refuse the same actions.json", () => {
 
   // signature-cases.json holds HMAC vectors for a route's sender, not
   // declarations, so src/lib/route-signature.test.ts runs it instead.
-  const files = ["action-cases.json", "sql-rule-cases.json", "http-binding-cases.json", "signal-cases.json", "guard-cases.json"];
+  const files = ["action-cases.json", "sql-rule-cases.json", "http-binding-cases.json", "signal-cases.json", "guard-cases.json", "notify-cases.json"];
 
   for (const file of files) {
     test(`every case in kernel-rs/src/${file}`, async () => {

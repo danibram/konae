@@ -4,7 +4,7 @@ Littlebox is the guardrail that lets a person who does not write code, and a per
 
 ## Language
 
-Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key and SDK module. Usage, Signal and Action Contract keep their capitals, as the older terms do.
+Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, notice, sender preflight, setup key and SDK module. Usage, Signal and Action Contract keep their capitals, as the older terms do.
 
 **Account**:
 The authenticated identity and personal profile used to enter Littlebox and participate in Workspaces. An Account does not directly own runtime data or imply access to every Project.
@@ -27,11 +27,11 @@ The installation secret in `LITTLEBOX_ADMIN_KEY` that creates the first creator 
 _Avoid_: installation key, admin password, Agent Credential
 
 **Email Job**:
-One account email in the installation's queue: its purpose, recipient, scope, idempotency key and state, pending, accepted by the provider, delivered to the recipient's server or failed. It commits with its Challenge and is sent only while that Challenge is open. Delivered says a mail server took it, not that a person read it.
+One email in the installation's queue: its purpose, recipient, scope, idempotency key and state, pending, accepted by the provider, delivered to the recipient's server or failed. An account email commits with its Challenge and is sent only while that Challenge is open; a notice has no Challenge and fails when it has not left within a day. Delivered says a mail server took it, not that a person read it.
 _Avoid_: notification, message log
 
 **Sender Preflight**:
-The Kernel's check that its mail transport may send as the configured sender, such as a domain verified in Resend. While it refuses, nothing is queued or sent.
+The Kernel's check that its mail transport may send as the configured sender, such as a domain verified in Resend. While it refuses, nothing is sent: account email is not queued, and a notice is recorded as a failed email job the owner can read.
 _Avoid_: email health
 
 **Verification Mode**:
@@ -145,6 +145,10 @@ _Avoid_: principals, auth mode, access level (that is `anonymous` or `authentica
 **Guard**:
 A mutation's declared refusal, `"guard": "<message>"`, which the Kernel answers instead of `{ changes: 0 }` when the statement changes no row because the app's own rule in its `WHERE` said no. It is a tool error on the runtime endpoint and 403 on a route, counts under Usage's `refused` and records no Signal.
 _Avoid_: check constraint, validation error
+
+**Notice**:
+The email a mutation declares with `"notify": { "to", "subject", "body" }`, queued as an email job when its statement changes a row. It goes to the Project Owner or to the calling account's verified email, never to an address from the input, and its templates take only `{input.<key>}` and `{actor.id}`. The mutation's answer never depends on it; Usage counts each one under `notify` with the outcome.
+_Avoid_: notification, alert, webhook
 
 **Action Contract**:
 The generated description of a Capsule's Server Actions, `action-contract.json` with its JSON Schema and a Markdown rendering: for each action its inputs with types, nullability and limits, the columns a query returns or the `{ changes, lastInsertId }` a mutation returns, the Signal it records, who may call it on the runtime endpoint and on its HTTP route, the errors the Kernel answers with and the limits that apply. It is written from `actions.json` and `schema.sql`, never edited, and travels in the export. The conformance runner (`littlebox conform`) calls every action against a backend and checks the answers against it, which is how a second backend would show it serves the same app.

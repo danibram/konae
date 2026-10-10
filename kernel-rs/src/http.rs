@@ -977,6 +977,12 @@ async fn run_route(
             super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Route(http.method.clone(), http.path.clone()));
             if changed {
                 super::usage::signal(&state.data_root, &deployment.id, name, action, &input, caller.actor_id());
+                let account = match &caller {
+                    Caller::Person(user) => Some(user.user_id.as_str()),
+                    Caller::Key(_) | Caller::Visitor => None,
+                };
+                let notice = super::notify::Caller { account, actor_id: caller.actor_id() };
+                super::notify::record(state, deployment, name, action, &input, notice).await;
             }
             let mut response = Json(json!({"result": value})).into_response();
             response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));

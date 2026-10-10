@@ -92,6 +92,7 @@ The only door to the database. A call names a Server Action declared in actions.
 - The Action Contract, action-contract.json, lists every action with its inputs, the columns it returns, its errors and limits. It is written from actions.json and schema.sql by littlebox contract and carried in the export; an expression the SELECT returns without AS has no name in it, and the Validation Gate warns.
 - To record that something happened, such as a signup to a newsletter or a finished lesson, declare a signal on the mutation that does it, or add an action of kind signal and call it with miniapp.actions.call. There is no other tracking call.
 - A call the Kernel refuses records no Signal and counts in no Usage total, except a guard's refusal, which Usage counts under refused.
+- To email someone when something happens, such as a booking or an alert, declare notify on the mutation that does it. It reaches the owner or the person who called the action, nobody else.
 
 Declared with `signal` in `actions.json`. { "name": "order.placed", "properties"?: ["input binding keys", "actor"] } on a mutation, or on an action of "kind": "signal" that has access and bindings but no statement. When the action succeeds, and for a mutation only when it changed at least one row, the Kernel records the Signal with the named inputs as its properties, in the Deployment's Usage store. The property actor records the caller's ID: the user's, the API key's, or null for a visitor or a signed request. A signal action runs no SQL and returns { recorded: true }. The owner reads Signals with signals_read; the app cannot. The Validation Gate and the Kernel refuse the same declarations with the same messages.
 
@@ -126,6 +127,27 @@ Declared with `guard` in `actions.json`. "guard": "<message>" on a mutation. Whe
 Limits:
 
 - a guard is 1 to 200 characters on one line
+
+Declared with `notify` in `actions.json`. "notify": { "to": "owner" or "actor", "subject": "<template>", "body": "<template>" } on a mutation. When its statement changes a row, the Kernel queues one email: to the Project Owner's account email, or to the calling account's email when that account proved it by answering a verification, invitation or recovery link. It never sends to an address from the input. The templates may use {input.<key>} for one of the action's input bindings and {actor.id}; a value loses its line breaks, keeps 200 characters and is escaped in the HTML part. The mutation answers as it would without notify, and an email that cannot be sent never fails it: Usage counts every notice under notify as "<action>: queued" or "<action>: <reason>", and the owner reads the queue with mail_status. The editor preview sends no email. The Validation Gate and the Kernel refuse the same declarations with the same messages.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `Action <name> is a query, so it cannot declare notify. Declare it on a mutation.` | the action is a query | Kernel | Same |
+| `Action <name> is a signal action, so it cannot declare notify. Declare it on a mutation.` | the action is a signal action | Kernel | Same |
+| `Action <name> has an invalid notify declaration. Give "to", "subject" and "body" and nothing else.` | notify is not an object, has another key, or subject or body is missing or not a string | Kernel | Same |
+| `Action <name> has an invalid notify recipient. Use "owner" or "actor".` | to is missing or is anything else, such as an address or an input | Kernel | Same |
+| `Action <name> has an invalid notify subject. Use 1 to 120 characters on one line.` | the subject is blank, longer than 120 characters, or holds a line break or another control character | Kernel | Same |
+| `Action <name> has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters.` | the body is blank, longer than 2000 characters, or holds a control character other than a line break | Kernel | Same |
+| `Action <name> names an unknown placeholder {<key>} in its notify <field>. Use {input.<key>} for one of its input bindings, or {actor.id}.` | a placeholder is not {actor.id} or {input.&lt;key&gt;} for one of the action's input bindings, such as {actor.email} or {input.email} with no email input | Kernel | Same |
+| `Action <name> has an unclosed placeholder in its notify <field>. Close it with "}".` | a { has no } after it | Kernel | Same |
+
+Limits:
+
+- a subject template is 1 to 120 characters on one line; a body template is 1 to 2000 characters
+- a placeholder's value keeps 200 characters on one line; a rendered subject keeps 200 characters and a body 5,000
+- notices count apart from account email: 200 a day per app, 500 a day per creator and 50 a day per recipient from one app, and every email counts toward the installation's 1,000 a day
+- nothing is sent while the installation's sender preflight is not ready; the notice is recorded as failed with sender-not-ready
+- a notice not sent within a day fails as notice-expired
 
 ### miniapp.actions.call(name, input = {})
 

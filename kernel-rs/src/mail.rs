@@ -2532,6 +2532,192 @@ mod tests {
         assert_eq!((job.1.as_str(), job.4.as_deref(), job.5), ("failed", Some("restored"), false));
     }
 
+    // -- Notices (ADR-0015) ----------------------------------------------------
+
+    /// One owner account in `owners.sqlite` and two app accounts, one that
+    /// answered a link and one that did not.
+    fn notice_accounts(fixture: &Fixture) {
+        Connection::open(fixture.root.join("owners.sqlite"))
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE app_users (id TEXT PRIMARY KEY, email TEXT NOT NULL, state TEXT NOT NULL);
+                 INSERT INTO app_users VALUES ('creator-1', 'owner@example.test', 'active');",
+            )
+            .unwrap();
+        Connection::open(fixture.root.join("deployments").join(&fixture.app.id).join("identity.sqlite"))
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE app_users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL,
+                   role TEXT NOT NULL DEFAULT 'member', created_at INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'active', verified_at INTEGER);
+                 INSERT INTO app_users (id, email, password_hash, created_at, state, verified_at)
+                   VALUES ('ana', 'ana@example.test', 'x', 1, 'active', 1), ('ben', 'ben@example.test', 'x', 1, 'active', NULL),
+                   ('cy', 'cy@example.test', 'x', 1, 'suspended', 1);",
+            )
+            .unwrap();
+    }
+
+    fn notice_program() -> ActionProgram {
+        serde_json::from_value(json!({"version": 1, "actions": {
+            "alerts.raise": {"kind": "mutation", "access": "anonymous", "statement": "INSERT INTO alerts (title) VALUES (?1)",
+                "bindings": [{"source": "input", "key": "title", "type": "string"}],
+                "notify": {"to": "owner", "subject": "Alert: {input.title}", "body": "Raised: {input.title}"}},
+            "bookings.create": {"kind": "mutation", "access": "authenticated", "statement": "INSERT INTO bookings (user_id, room) VALUES (?1, ?2)",
+                "bindings": [{"source": "actor", "field": "id"}, {"source": "input", "key": "room", "type": "string"}],
+                "notify": {"to": "actor", "subject": "Booked {input.room}", "body": "You booked {input.room} as {actor.id}."}}
+        }}))
+        .unwrap()
+    }
+
+    async fn notify(fixture: &Fixture, name: &str, input: Value, account: Option<&str>) {
+        let program = notice_program();
+        let caller = super::super::notify::Caller { account, actor_id: account };
+        super::super::notify::record(&fixture.state, &fixture.app, name, &program.actions[name], &input, caller).await;
+    }
+
+    /// The `notify` lines of the app's Usage, by name.
+    fn notice_usage(fixture: &Fixture) -> Vec<(String, i64)> {
+        super::super::usage::flush();
+        let db = Connection::open(fixture.root.join("deployments").join(&fixture.app.id).join("usage.sqlite")).unwrap();
+        let mut statement = db.prepare("SELECT name, SUM(count) FROM usage_daily WHERE kind = 'notify' GROUP BY name ORDER BY name").unwrap();
+        statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_notice_goes_to_the_owner_or_the_verified_actor_sealed_until_sent() {
+        let transport = Scripted::new();
+        let fixture = fixture(transport.clone()).await;
+        notice_accounts(&fixture);
+        notify(&fixture, "alerts.raise", json!({"title": "Disk <full>\r\nBcc: x@example.test"}), None).await;
+        notify(&fixture, "bookings.create", json!({"room": "Oak"}), Some("ana")).await;
+        let jobs = fixture.jobs();
+        assert_eq!(jobs.len(), 2);
+        assert!(jobs.iter().all(|job| job.1 == "pending" && job.5), "a queued notice keeps its text sealed");
+        let sealed: Vec<u8> = fixture.db().query_row("SELECT link_sealed FROM jobs LIMIT 1", [], |row| row.get(0)).unwrap();
+        assert!(!String::from_utf8_lossy(&sealed).contains("Disk"), "the text is not stored in clear");
+        fixture.queue().run_once().await.unwrap();
+        let sent = transport.sent();
+        assert_eq!(sent.len(), 2);
+        let owner = sent.iter().find(|email| email.to == "owner@example.test").unwrap();
+        assert_eq!(owner.subject, "Alert: Disk <full> Bcc: x@example.test");
+        assert!(owner.account.is_none() && owner.action.as_deref() == Some("alerts.raise"));
+        assert!(owner.html.contains("Raised: Disk &lt;full&gt; Bcc: x@example.test"));
+        let actor = sent.iter().find(|email| email.to == "ana@example.test").unwrap();
+        assert!(actor.text.starts_with("You booked Oak as ana."));
+        assert_eq!(actor.scope, format!("deployment:{}", fixture.app.id));
+        assert!(fixture.jobs().iter().all(|job| job.1 == "accepted" && !job.5), "the text is dropped once the provider takes it");
+        let status = fixture.queue().status().unwrap();
+        assert_eq!(status["queue"]["notices"]["accepted"], 2);
+        assert_eq!(notice_usage(&fixture), vec![("alerts.raise: queued".into(), 1), ("bookings.create: queued".into(), 1)]);
+    }
+
+    #[tokio::test]
+    async fn a_notice_without_a_proven_address_stores_nothing_and_says_why() {
+        let fixture = fixture(Scripted::new()).await;
+        notify(&fixture, "alerts.raise", json!({"title": "No owner email yet"}), None).await;
+        notice_accounts(&fixture);
+        notify(&fixture, "bookings.create", json!({"room": "Oak"}), Some("ben")).await;
+        notify(&fixture, "bookings.create", json!({"room": "Oak"}), Some("cy")).await;
+        notify(&fixture, "bookings.create", json!({"room": "Oak"}), None).await;
+        assert!(fixture.jobs().is_empty());
+        assert_eq!(
+            notice_usage(&fixture),
+            vec![
+                ("alerts.raise: owner-has-no-email".into(), 1),
+                ("bookings.create: no-account".into(), 1),
+                ("bookings.create: unverified-email".into(), 2),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_notice_while_the_sender_is_refused_is_recorded_failed_and_never_sent() {
+        let transport = Scripted::new();
+        *transport.preflight.lock().unwrap() = PreflightResult::Refused("The sender domain is not verified.".into());
+        let fixture = fixture(transport.clone()).await;
+        notice_accounts(&fixture);
+        notify(&fixture, "alerts.raise", json!({"title": "Down"}), None).await;
+        let jobs = fixture.jobs();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!((jobs[0].1.as_str(), jobs[0].4.as_deref(), jobs[0].5), ("failed", Some("sender-not-ready"), false));
+        *transport.preflight.lock().unwrap() = PreflightResult::Ready;
+        fixture.queue().run_preflight().await;
+        fixture.queue().run_once().await.unwrap();
+        assert!(transport.sent().is_empty(), "a notice refused while the sender was down is not sent later");
+        let status = fixture.queue().status().unwrap();
+        assert_eq!(status["queue"]["lastFailure"]["kind"], "sender-not-ready");
+        assert_eq!(status["queue"]["lastFailure"]["purpose"], "notify");
+        assert_eq!(notice_usage(&fixture), vec![("alerts.raise: sender-not-ready".into(), 1)]);
+    }
+
+    #[tokio::test]
+    async fn notices_have_their_own_budgets_and_never_use_up_account_email() {
+        let limits = Limits {
+            recipient_per_minute: 100,
+            app_per_day: 2,
+            notify_app_per_day: 3,
+            notify_recipient_per_day: 2,
+            ..Limits::default()
+        };
+        let fixture = fixture_with(Scripted::new(), limits).await;
+        notice_accounts(&fixture);
+        // Two to the actor, then the recipient's day is used up.
+        for _ in 0..3 {
+            notify(&fixture, "bookings.create", json!({"room": "Oak"}), Some("ana")).await;
+        }
+        // One to the owner, then the app's day of notices is used up.
+        for _ in 0..2 {
+            notify(&fixture, "alerts.raise", json!({"title": "x"}), None).await;
+        }
+        assert_eq!(fixture.jobs().len(), 3);
+        // Signup on the same app still has its own two account emails.
+        fixture.signup(&fixture.app, "one@example.test").await.unwrap();
+        fixture.signup(&fixture.app, "two@example.test").await.unwrap();
+        assert!(matches!(fixture.signup(&fixture.app, "three@example.test").await, Err(AuthError::MailLimit(_))));
+        assert_eq!(
+            notice_usage(&fixture),
+            vec![
+                ("alerts.raise: app-limit".into(), 1),
+                ("alerts.raise: queued".into(), 1),
+                ("bookings.create: queued".into(), 2),
+                ("bookings.create: recipient-limit".into(), 1),
+            ]
+        );
+
+        // The creator's notices and the installation's total.
+        let creator = fixture_with(Scripted::new(), Limits { notify_creator_per_day: 1, ..Limits::default() }).await;
+        notice_accounts(&creator);
+        notify(&creator, "alerts.raise", json!({"title": "x"}), None).await;
+        notify(&creator, "alerts.raise", json!({"title": "y"}), None).await;
+        let installation = fixture_with(Scripted::new(), Limits { installation_per_day: 1, ..Limits::default() }).await;
+        notice_accounts(&installation);
+        installation.signup(&installation.other, "someone@example.test").await.unwrap();
+        notify(&installation, "alerts.raise", json!({"title": "x"}), None).await;
+        assert_eq!(notice_usage(&creator), vec![("alerts.raise: creator-limit".into(), 1), ("alerts.raise: queued".into(), 1)]);
+        assert_eq!(notice_usage(&installation), vec![("alerts.raise: installation-limit".into(), 1)]);
+    }
+
+    #[tokio::test]
+    async fn a_notice_older_than_a_day_fails_instead_of_arriving_late() {
+        let transport = Scripted::new();
+        let fixture = fixture(transport.clone()).await;
+        notice_accounts(&fixture);
+        notify(&fixture, "alerts.raise", json!({"title": "Late"}), None).await;
+        fixture.db().execute("UPDATE jobs SET link_expires_at = 1", []).unwrap();
+        fixture.queue().run_once().await.unwrap();
+        assert!(transport.sent().is_empty());
+        let job = fixture.jobs()[0].clone();
+        assert_eq!((job.1.as_str(), job.4.as_deref(), job.5), ("failed", Some("notice-expired"), false));
+    }
+
+    #[tokio::test]
+    async fn a_queue_without_a_transport_records_no_transport() {
+        let mut fixture = fixture(Scripted::new()).await;
+        fixture.state.accounts.queue = None;
+        notice_accounts(&fixture);
+        notify(&fixture, "alerts.raise", json!({"title": "x"}), None).await;
+        assert_eq!(notice_usage(&fixture), vec![("alerts.raise: no-transport".into(), 1)]);
+    }
+
     #[test]
     fn a_queue_from_before_notices_is_rebuilt_with_its_jobs() {
         let db = Connection::open_in_memory().unwrap();

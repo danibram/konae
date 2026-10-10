@@ -47,6 +47,13 @@ export function routeCallers(http: HttpBinding, visibility: "public" | "private"
  */
 export type SignalDeclaration = { name: string; properties: string[] };
 
+/**
+ * The email a mutation queues when its statement changes a row. It goes to
+ * the Project Owner or to the calling account, never to an address from the
+ * input. See docs/adr/0015-a-mutation-may-notify-the-owner-or-the-actor.md.
+ */
+export type NotifyDeclaration = { to: "owner" | "actor"; subject: string; body: string };
+
 export type ServerActionDefinition = RuntimeActionDeclaration & {
   /** Empty for a `"kind": "signal"` action, which runs no SQL. */
   statement: string;
@@ -58,6 +65,8 @@ export type ServerActionDefinition = RuntimeActionDeclaration & {
    * instead of { changes: 0 }. See docs/mcp.md, "Guards".
    */
   guard?: string;
+  /** The email the mutation queues when it changes a row. See docs/mcp.md, "Notices". */
+  notify?: NotifyDeclaration;
 };
 
 export type ServerActionProgram = {
@@ -153,6 +162,7 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
     const signal = parseSignal(name, kind, bindings, candidate.signal);
     const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http);
     parseGuard(name, kind, candidate.guard);
+    parseNotify(name, kind, bindings, candidate.notify);
     return { name, kind, access, statement: "", bindings, ...(signal ? { signal } : {}), ...(http ? { http } : {}) };
   }
   const statement = candidate.statement as string;
@@ -167,9 +177,10 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
   const signal = parseSignal(name, kind, bindings, candidate.signal);
   const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http);
   const guard = parseGuard(name, kind, candidate.guard);
+  const notify = parseNotify(name, kind, bindings, candidate.notify);
   return {
     name, kind, access, statement: statement.trim(), bindings,
-    ...(signal ? { signal } : {}), ...(http ? { http } : {}), ...(guard ? { guard } : {}),
+    ...(signal ? { signal } : {}), ...(http ? { http } : {}), ...(guard ? { guard } : {}), ...(notify ? { notify } : {}),
   };
 }
 
@@ -185,6 +196,52 @@ function parseGuard(name: string, kind: "query" | "mutation" | "signal", value: 
     throw new Error(`Action ${name} has an invalid guard. Use a message of 1 to ${MAX_GUARD_LENGTH} characters on one line.`);
   }
   return value;
+}
+
+// The same checks, in the same order and with the same messages, as
+// kernel-rs/src/notify.rs `declaration`. kernel-rs/src/notify-cases.json holds
+// the cases both test suites run.
+const MAX_NOTIFY_SUBJECT = 120;
+const MAX_NOTIFY_BODY = 2000;
+
+function parseNotify(name: string, kind: "query" | "mutation" | "signal", bindings: ActionBinding[], value: unknown): NotifyDeclaration | undefined {
+  if (value === undefined) return undefined;
+  if (kind !== "mutation") throw new Error(`Action ${name} is a ${kind === "query" ? "query" : "signal action"}, so it cannot declare notify. Declare it on a mutation.`);
+  const record = value as Record<string, unknown> | null;
+  if (!record || typeof record !== "object" || Array.isArray(record)
+    || Object.keys(record).some((key) => !["to", "subject", "body"].includes(key))
+    || typeof record.subject !== "string" || typeof record.body !== "string") {
+    throw new Error(`Action ${name} has an invalid notify declaration. Give "to", "subject" and "body" and nothing else.`);
+  }
+  const to = record.to;
+  if (to !== "owner" && to !== "actor") throw new Error(`Action ${name} has an invalid notify recipient. Use "owner" or "actor".`);
+  // Characters, not bytes or UTF-16 units, so both doors count an accented letter once.
+  const { subject, body } = record;
+  if (!subject.trim() || [...subject].length > MAX_NOTIFY_SUBJECT || /[\u0000-\u001f\u007f]/.test(subject)) {
+    throw new Error(`Action ${name} has an invalid notify subject. Use 1 to ${MAX_NOTIFY_SUBJECT} characters on one line.`);
+  }
+  if (!body.trim() || [...body].length > MAX_NOTIFY_BODY || /[\u0000-\u0009\u000b-\u001f\u007f]/.test(body)) {
+    throw new Error(`Action ${name} has an invalid notify body. Use 1 to ${MAX_NOTIFY_BODY} characters, with line breaks and no other control characters.`);
+  }
+  const inputs = new Set(bindings.flatMap((binding) => binding.source === "input" ? [binding.key] : []));
+  assertPlaceholders(name, "subject", subject, inputs);
+  assertPlaceholders(name, "body", body, inputs);
+  return { to, subject, body };
+}
+
+/** Every "{" opens a placeholder the next "}" closes; a "}" on its own is text. */
+function assertPlaceholders(name: string, field: "subject" | "body", template: string, inputs: Set<string>) {
+  let rest = template;
+  for (let open = rest.indexOf("{"); open >= 0; open = rest.indexOf("{")) {
+    const close = rest.indexOf("}", open);
+    if (close < 0) throw new Error(`Action ${name} has an unclosed placeholder in its notify ${field}. Close it with "}".`);
+    const token = rest.slice(open + 1, close);
+    const known = token === "actor.id" || (token.startsWith("input.") && inputs.has(token.slice("input.".length)));
+    if (!known) {
+      throw new Error(`Action ${name} names an unknown placeholder {${token}} in its notify ${field}. Use {input.<key>} for one of its input bindings, or {actor.id}.`);
+    }
+    rest = rest.slice(close + 1);
+  }
 }
 
 // The same checks, in the same order and with the same messages, as

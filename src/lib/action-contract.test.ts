@@ -309,3 +309,22 @@ describe("schema check", () => {
     ]);
   });
 });
+
+describe("notify", () => {
+  test("the contract lists a mutation's notice, keeps its answer and round-trips it", () => {
+    const notify = { to: "actor" as const, subject: "Booked {input.room}", body: "You booked {input.room}." };
+    const actionsSource = JSON.stringify({ version: 1, actions: {
+      "bookings.create": { kind: "mutation", access: "authenticated", notify,
+        statement: "INSERT INTO bookings (user_id, room) VALUES (?1, ?2)",
+        bindings: [{ source: "actor", field: "id" }, { source: "input", key: "room", type: "string", maxLength: 40 }] },
+    } });
+    const schemaSource = "CREATE TABLE IF NOT EXISTS bookings (id INTEGER PRIMARY KEY, user_id TEXT NOT NULL, room TEXT NOT NULL);";
+    const { contract } = generateActionContract({ actionsSource, schemaSource });
+    const [action] = contract.actions;
+    expect(action.notify).toEqual(notify);
+    expect(action.output).toEqual({ kind: "changes", fields: ["changes", "lastInsertId"] });
+    expect(checkActionContract(JSON.parse(serializeActionContract(contract)))).toEqual([]);
+    expect(renderActionContractMarkdown(contract)).toContain("queues an email to the caller's verified email with the subject `Booked {input.room}`");
+    expect(programFromContract(contract).actions["bookings.create"].notify).toEqual(notify);
+  });
+});

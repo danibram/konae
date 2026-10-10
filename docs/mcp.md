@@ -144,17 +144,17 @@ Suspending a creator with `creator-account-suspend` deletes their sessions, open
 
 ## Account email
 
-Every account link leaves through the queue in `mail.sqlite` (`kernel-rs/src/mail.rs`). The README's [Account email](../README.md#account-email) section lists the transports and their variables. What a client sees:
+Every account link, and every notice a mutation declares with [`notify`](#notices), leaves through the queue in `mail.sqlite` (`kernel-rs/src/mail.rs`). The README's [Account email](../README.md#account-email) section lists the transports and their variables. What a client sees:
 
 - Signup and recovery store the challenge and its email job in one transaction and answer at once. The worker sends the job on its own task.
 - A job is `pending`, `accepted` (the provider took it), `delivered` (the provider reported delivery to the recipient's server) or `failed`. No job state activates an account; only the person answering the link does.
-- A refusal stores nothing. 503 means no transport, or a sender the preflight refused. 429 means a limit: per address 3 a minute across the installation and 10 a day in each scope, so requests on one app cannot use up an address's allowance on another app or in the editor; per client address 20 an hour, where one IPv6 /64 is one client; per creator 100 a day, per app 100 a day, per installation 1,000 a day. The address and client limits count requests, so an address with no account reaches them after the same number of requests as one with an account.
+- A refusal stores nothing. 503 means no transport, or a sender the preflight refused. 429 means a limit: per address 3 a minute across the installation and 10 a day in each scope, so requests on one app cannot use up an address's allowance on another app or in the editor; per client address 20 an hour, where one IPv6 /64 is one client; per creator 100 a day, per app 100 a day, per installation 1,000 a day. The address and client limits count requests, so an address with no account reaches them after the same number of requests as one with an account. The creator and app limits count account email only; notices have their own, and the installation's 1,000 counts both.
 
-`mail_status` is an admin tool for any owner credential. It returns the transport, the sender, `sending`, the preflight with its state (`checking`, `ready` or `refused`), reason and time, the queue depth and the count per state, the last failure as `{ kind, at, purpose }`, the limits, and whether provider events are configured. `refresh: true` runs the preflight again. It names no recipient. Without a transport it returns `sending: false` and how to configure one.
+`mail_status` is an admin tool for any owner credential. It returns the transport, the sender, `sending`, the preflight with its state (`checking`, `ready` or `refused`), reason and time, the queue depth and the count per state, the same counts for notices alone under `queue.notices`, the last failure as `{ kind, at, purpose }` where `purpose` is `verification`, `recovery`, `invitation` or `notify`, the limits, and whether provider events are configured. `refresh: true` runs the preflight again. It names no recipient. Without a transport it returns `sending: false` and how to configure one.
 
 `/_littlebox/health` carries a `mail` field when a transport is set: `transport`, `sending`, `preflight`, `depth` and `lastFailure` with its kind and time only.
 
-A failure kind is one of `provider-unavailable` (retrying, or out of retries), `rejected` (the provider refused that message), `sender-refused` (the provider refused the sender; sending stops until a preflight passes), `superseded` (a newer link replaced it, or its challenge ended), `link-expired`, `secret-unavailable` (the sealing secret changed), `bounced`, `provider-failed`, `suppressed` and `restored` (a restore ended it).
+A failure kind is one of `provider-unavailable` (retrying, or out of retries), `rejected` (the provider refused that message), `sender-refused` (the provider refused the sender; sending stops until a preflight passes), `superseded` (a newer link replaced it, or its challenge ended), `link-expired`, `secret-unavailable` (the sealing secret changed), `bounced`, `provider-failed`, `suppressed`, `restored` (a restore ended it), and for a notice `sender-not-ready` (the preflight was not ready when the mutation ran, so the notice was recorded and never sent) and `notice-expired` (not sent within a day).
 
 ### Resend
 
@@ -427,6 +427,7 @@ signals_read { "deploymentId", "name"?: "order.placed", "cursor"? }
 | `signup` | | an account becomes active: a signup in local mode, an answered verification link or an accepted invitation |
 | `login` | | a password sign-in or an answered recovery link |
 | `refused` | the action | a mutation with a [guard](#guards) changed no row and the Kernel answered the guard, on `actions_invoke` or on its route |
+| `notify` | `<action>: queued`, or `<action>: <reason>` | a mutation with [`notify`](#notices) changed a row; the name says whether its email was queued or why it was not |
 
 Nothing else the Kernel refuses is counted: a call without the session it needs, an input the bindings reject, a statement SQLite refuses, a bad signature or a wrong password. A guard's refusal is the app's own rule saying no, which the owner wants to see next to the calls that ran. The Kernel writes Usage off the request path. A response never waits for it, and when more than 16,384 entries are waiting the newest are dropped and logged. The two read tools wait up to five seconds for the queue to drain, so they include every call that finished before them.
 
@@ -487,6 +488,49 @@ When the statement changes no row, the Kernel answers the guard as a refusal: a 
 The Validation Gate and the Kernel parse the same cases from `kernel-rs/src/guard-cases.json`; `kernel-rs/src/guard.rs` holds the Kernel's side.
 
 The store keeps 400 days and at most 100,000 rows of totals, and the newest 50,000 Signals; past those bounds the oldest rows go first. A string property keeps its first 128 bytes. The scheduled copy and `package_export` carry the store; `project_export` does not. A Development Kernel started with `bun run littlebox -- dev` records the same way, in `.littlebox/dev-data/deployments/<id>/usage.sqlite`. The editor preview has no store: a signal action there returns `{ "recorded": true }` and nothing is kept.
+
+### Notices
+
+A mutation may send one email when its statement changes a row. [ADR-0015](./adr/0015-a-mutation-may-notify-the-owner-or-the-actor.md) records the decision; `kernel-rs/src/notify.rs` implements it.
+
+```json
+"bookings.create": {
+  "kind": "mutation",
+  "access": "authenticated",
+  "statement": "INSERT INTO bookings (user_id, room, day) VALUES (?1, ?2, ?3)",
+  "bindings": [{ "source": "actor", "field": "id" }, { "source": "input", "key": "room", "type": "string", "maxLength": 40 }, { "source": "input", "key": "day", "type": "string", "maxLength": 10 }],
+  "notify": { "to": "actor", "subject": "Booked: {input.room} on {input.day}", "body": "Your booking of {input.room} on {input.day} is confirmed." }
+}
+```
+
+`to` is `owner`, the email of the Project Owner's active account, or `actor`, the email of the calling app account, only when that account proved it by answering a verification, invitation or recovery link. The Kernel never sends to an address from the input, so an app cannot relay mail to whoever a visitor names. The subject and body are templates. Their only placeholders are `{input.<key>}`, for one of the action's input bindings, and `{actor.id}`, the caller's ID. A value loses its line breaks and keeps 200 characters; a missing or null value fills nothing. The body keeps the template's own line breaks, and the HTML part escapes every value. The Kernel adds one last line naming the app and why the recipient gets it.
+
+The notice is recorded only when the statement changed a row, after the answer is decided: a guard's refusal, an `INSERT ... ON CONFLICT DO NOTHING` that stored nothing and a failed statement send nothing. The mutation answers `{ changes, lastInsertId }` whether or not the notice can be sent. Usage counts every notice under `notify`: `bookings.create: queued` when it became a job, and otherwise the reason:
+
+| Reason | What happened |
+| --- | --- |
+| `no-transport` | The installation has no mail transport. Nothing is stored |
+| `owner-has-no-email` | `to` is `owner` and the owner signs in through Clerk, so the Kernel has no address |
+| `no-account` | `to` is `actor` and the caller is a visitor, a signed request or an API key |
+| `unverified-email` | `to` is `actor` and the account has not answered a link, or is not active |
+| `app-limit`, `creator-limit`, `recipient-limit`, `installation-limit` | A day's budget is used up. Nothing is stored |
+| `sender-not-ready` | The sender preflight was not ready. The job is stored as failed with this kind and never sent |
+| `storage-error` | The queue could not be written. The Kernel logs it |
+
+A queued notice is a job in the same queue as account email, with purpose `notify`, its text sealed with the queue's key until the provider accepts it. It is sent like any job, retried the same way, held while its app is paused for a migration, and fails as `notice-expired` when it has not left within a day. The owner reads its state with `mail_status`, whose `queue.notices` counts notice jobs per state. Notices count apart from account email so a busy app never uses up the allowance signup and recovery need: 200 a day per app, 500 per creator and 50 a day per recipient from one app; the installation's 1,000 a day counts every email. The editor preview sends no email. The Action Contract lists the notice on its action.
+
+| Declaration | Message |
+| --- | --- |
+| `notify` on a query | `Action <name> is a query, so it cannot declare notify. Declare it on a mutation.` |
+| `notify` on a signal action | `Action <name> is a signal action, so it cannot declare notify. Declare it on a mutation.` |
+| Not an object of `to`, `subject` and `body` strings, or another key such as `cc` | `Action <name> has an invalid notify declaration. Give "to", "subject" and "body" and nothing else.` |
+| `to` that is not `owner` or `actor`, such as an address or `{input.email}` | `Action <name> has an invalid notify recipient. Use "owner" or "actor".` |
+| A subject that is blank, over 120 characters or holds a line break | `Action <name> has an invalid notify subject. Use 1 to 120 characters on one line.` |
+| A body that is blank, over 2000 characters or holds a control character other than a line break | `Action <name> has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters.` |
+| A placeholder other than `{actor.id}` and `{input.<key>}` of an input binding, such as `{actor.email}` | `Action <name> names an unknown placeholder {<placeholder>} in its notify <subject or body>. Use {input.<key>} for one of its input bindings, or {actor.id}.` |
+| A `{` with no `}` after it | `Action <name> has an unclosed placeholder in its notify <subject or body>. Close it with "}".` |
+
+The Validation Gate and the Kernel parse the same cases from `kernel-rs/src/notify-cases.json`.
 
 ## Build and publish
 
