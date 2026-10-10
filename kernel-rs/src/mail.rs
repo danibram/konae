@@ -62,6 +62,12 @@ pub(crate) struct Limits {
     pub(crate) app_per_day: u32,
     pub(crate) installation_per_day: u32,
     pub(crate) client_per_hour: u32,
+    /// Notices (`notify`, ADR-0015) count apart from account email, so a
+    /// busy app never uses up the allowance that signup and recovery need.
+    pub(crate) notify_app_per_day: u32,
+    pub(crate) notify_creator_per_day: u32,
+    /// Notices one address receives from one app in a day.
+    pub(crate) notify_recipient_per_day: u32,
 }
 
 impl Default for Limits {
@@ -76,6 +82,9 @@ impl Default for Limits {
             app_per_day: 100,
             installation_per_day: 1000,
             client_per_hour: 20,
+            notify_app_per_day: 200,
+            notify_creator_per_day: 500,
+            notify_recipient_per_day: 50,
         }
     }
 }
@@ -100,6 +109,9 @@ impl Limits {
             app_per_day: read("LITTLEBOX_MAIL_LIMIT_APP_PER_DAY", defaults.app_per_day)?,
             installation_per_day: read("LITTLEBOX_MAIL_LIMIT_INSTALLATION_PER_DAY", defaults.installation_per_day)?,
             client_per_hour: read("LITTLEBOX_MAIL_LIMIT_CLIENT_PER_HOUR", defaults.client_per_hour)?,
+            notify_app_per_day: read("LITTLEBOX_MAIL_LIMIT_NOTIFY_APP_PER_DAY", defaults.notify_app_per_day)?,
+            notify_creator_per_day: read("LITTLEBOX_MAIL_LIMIT_NOTIFY_CREATOR_PER_DAY", defaults.notify_creator_per_day)?,
+            notify_recipient_per_day: read("LITTLEBOX_MAIL_LIMIT_NOTIFY_RECIPIENT_PER_DAY", defaults.notify_recipient_per_day)?,
         })
     }
 }
@@ -161,10 +173,27 @@ impl LinkKey {
 pub(crate) struct OutgoingEmail {
     pub(crate) id: String,
     pub(crate) from: String,
+    pub(crate) to: String,
+    /// `creator` or `deployment:<id>`.
+    pub(crate) scope: String,
     pub(crate) subject: String,
     pub(crate) text: String,
     pub(crate) html: String,
-    pub(crate) account: AccountMessage,
+    /// The challenge an account email carries. None for a notice.
+    pub(crate) account: Option<AccountMessage>,
+    /// The action that queued a notice, for the development mailbox.
+    pub(crate) action: Option<String>,
+}
+
+/// The development mailbox's line for a notice: no link, the rendered text.
+#[derive(Serialize)]
+struct NoticeLine<'a> {
+    to: &'a str,
+    purpose: &'static str,
+    scope: &'a str,
+    action: &'a str,
+    subject: &'a str,
+    text: &'a str,
 }
 
 /// What a transport did with one email.
@@ -210,7 +239,18 @@ impl Transport for DevelopmentTransport {
 
     fn send<'a>(&'a self, email: &'a OutgoingEmail) -> BoxFuture<'a, SendOutcome> {
         Box::pin(async move {
-            match self.0.deliver(&email.account) {
+            let written = match &email.account {
+                Some(account) => self.0.deliver(account),
+                None => self.0.append(&NoticeLine {
+                    to: &email.to,
+                    purpose: NOTIFY,
+                    scope: &email.scope,
+                    action: email.action.as_deref().unwrap_or_default(),
+                    subject: &email.subject,
+                    text: &email.text,
+                }),
+            };
+            match written {
                 Ok(()) => SendOutcome::Accepted { provider_id: None, delivered: true },
                 Err(error_value) => SendOutcome::Retry(format!("mailbox write failed: {error_value}")),
             }
@@ -265,7 +305,7 @@ impl Transport for ResendTransport {
         Box::pin(async move {
             let body = json!({
                 "from": email.from,
-                "to": [email.account.to],
+                "to": [email.to],
                 "subject": email.subject,
                 "text": email.text,
                 "html": email.html,
@@ -402,7 +442,7 @@ impl Transport for SmtpTransport {
         use lettre::{AsyncTransport, Message, message::MultiPart};
         Box::pin(async move {
             let domain = sender_domain(&email.from).unwrap_or_else(|| "littlebox.invalid".into());
-            let (Ok(from), Ok(to)) = (email.from.parse(), email.account.to.parse()) else {
+            let (Ok(from), Ok(to)) = (email.from.parse(), email.to.parse()) else {
                 return SendOutcome::Rejected("an address is not valid for SMTP".into());
             };
             let message = match Message::builder()
@@ -578,7 +618,7 @@ pub(crate) fn render(purpose: Purpose, app_name: &str, inviter: Option<&str>, li
 /// Control characters become spaces, runs of white space become one, and
 /// the result keeps at most `max` characters, so a value cannot break a
 /// header line.
-fn one_line(value: &str, max: usize) -> String {
+pub(crate) fn one_line(value: &str, max: usize) -> String {
     value
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -591,7 +631,7 @@ fn one_line(value: &str, max: usize) -> String {
         .collect()
 }
 
-fn escape_html(value: &str) -> String {
+pub(crate) fn escape_html(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for c in value.chars() {
         match c {
@@ -617,6 +657,32 @@ pub(crate) struct Preflight {
     pub(crate) reason: Option<String>,
     pub(crate) checked_at: Option<i64>,
 }
+
+/// One notice to record: the recipient the Kernel resolved, never an
+/// address from the input, and the text rendered from the declaration.
+pub(crate) struct Notice<'a> {
+    pub(crate) recipient: &'a str,
+    /// `deployment:<id>`.
+    pub(crate) scope: &'a str,
+    pub(crate) creator: &'a str,
+    pub(crate) app_name: &'a str,
+    pub(crate) action: &'a str,
+    pub(crate) subject: &'a str,
+    pub(crate) text: &'a str,
+    pub(crate) html: &'a str,
+}
+
+/// What became of a notice.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum NoticeOutcome {
+    /// A pending job the worker sends.
+    Queued,
+    /// Not sent, with the kind the owner reads in Usage.
+    Refused(&'static str),
+}
+
+/// How long a notice waits to be sent before it fails as `notice-expired`.
+const NOTICE_TTL_MS: i64 = DAY_MS;
 
 /// Who an email is for and who asks for it, checked before a challenge is
 /// issued so a refusal stores nothing.
@@ -658,7 +724,21 @@ struct Claimed {
     link_expires_at: i64,
     attempts: i64,
     created_at: i64,
+    /// The action that queued a notice.
+    action: Option<String>,
 }
+
+/// A notice's rendered text, sealed in the job's link columns until the
+/// provider accepts it, because it carries values from the app's input.
+#[derive(Serialize, Deserialize)]
+struct SealedNotice {
+    subject: String,
+    text: String,
+    html: String,
+}
+
+/// The purpose of a notice job (`notify` on a mutation, ADR-0015).
+pub(crate) const NOTIFY: &str = "notify";
 
 fn now() -> i64 {
     now_ms() as i64
@@ -761,6 +841,58 @@ impl MailQueue {
 
     pub(crate) fn wake(&self) {
         self.wake.notify_one();
+    }
+
+    /// Records one notice. Within its budgets it becomes a job: pending
+    /// while the sender preflight is ready, otherwise failed with
+    /// `sender-not-ready`, so nothing is sent and the owner can read why. A
+    /// notice over a budget stores nothing and returns the budget's kind.
+    pub(crate) fn record_notice(&self, notice: &Notice<'_>) -> Result<NoticeOutcome> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let at = now();
+        if let Some(kind) = check_notice_budget(&transaction, &self.limits, notice, at)? {
+            return Ok(NoticeOutcome::Refused(kind));
+        }
+        let ready = self.preflight().state == "ready";
+        let id = Uuid::new_v4().to_string();
+        let sealed = serde_json::to_string(&SealedNotice {
+            subject: notice.subject.to_owned(),
+            text: notice.text.to_owned(),
+            html: notice.html.to_owned(),
+        })?;
+        let (nonce, sealed) = if ready {
+            let (nonce, sealed) = self.key.seal(&id, &sealed).map_err(|_| anyhow::anyhow!("The notice could not be sealed."))?;
+            (Some(nonce), Some(sealed))
+        } else {
+            (None, None)
+        };
+        transaction.execute(
+            "INSERT INTO jobs (id, purpose, recipient, scope, creator, app_name, token_hash, link_nonce, link_sealed,
+               link_expires_at, state, attempts, next_attempt_at, error_kind, created_at, updated_at, action)
+             VALUES (?1, 'notify', ?2, ?3, ?4, ?5, '', ?6, ?7, ?8, ?9, 0, ?10, ?11, ?10, ?10, ?12)",
+            params![
+                id,
+                notice.recipient,
+                notice.scope,
+                notice.creator,
+                notice.app_name,
+                nonce,
+                sealed,
+                (at + NOTICE_TTL_MS) / 1000,
+                if ready { "pending" } else { "failed" },
+                at,
+                if ready { None } else { Some("sender-not-ready") },
+                notice.action,
+            ],
+        )?;
+        transaction.commit()?;
+        if ready {
+            self.wake();
+            Ok(NoticeOutcome::Queued)
+        } else {
+            Ok(NoticeOutcome::Refused("sender-not-ready"))
+        }
     }
 
     /// Refuses a request that would exceed a limit, or that this
@@ -867,7 +999,7 @@ impl MailQueue {
                  AND (leased_until IS NULL OR leased_until < ?2)
                ORDER BY next_attempt_at LIMIT ?3)
              RETURNING id, purpose, recipient, scope, app_name, token_hash, link_nonce, link_sealed,
-                       link_expires_at, attempts, created_at, inviter",
+                       link_expires_at, attempts, created_at, inviter, action",
         )?;
         let rows = statement
             .query_map(params![at + LEASE_MS, at, BATCH], |row| {
@@ -884,6 +1016,7 @@ impl MailQueue {
                     attempts: row.get(9)?,
                     created_at: row.get(10)?,
                     inviter: row.get(11)?,
+                    action: row.get(12)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -922,6 +1055,9 @@ impl MailQueue {
             self.release(&job.id, super::migration::MAIL_HOLD_MS, false, None)?;
             return Ok(false);
         }
+        if job.purpose == NOTIFY {
+            return self.process_notice(job).await;
+        }
         if job.link_expires_at * 1000 <= now() {
             self.finish_failed(&job.id, "link-expired")?;
             return Ok(false);
@@ -946,17 +1082,54 @@ impl MailQueue {
         let email = OutgoingEmail {
             id: job.id.clone(),
             from: self.from.clone(),
+            to: job.recipient.clone(),
+            scope: job.scope.clone(),
             subject,
             text,
             html,
-            account: AccountMessage {
+            account: Some(AccountMessage {
                 to: job.recipient.clone(),
                 purpose,
                 scope: job.scope.clone(),
                 link,
                 expires_at: job.link_expires_at,
-            },
+            }),
+            action: None,
         };
+        self.deliver(job, email).await
+    }
+
+    /// Sends a notice. It has no challenge to check; it fails once it is a
+    /// day old, so a notice never arrives long after the change it reports.
+    async fn process_notice(&self, job: Claimed) -> Result<bool> {
+        if job.link_expires_at * 1000 <= now() {
+            self.finish_failed(&job.id, "notice-expired")?;
+            return Ok(false);
+        }
+        let opened = match (&job.nonce, &job.sealed) {
+            (Some(nonce), Some(sealed)) => self.key.open(&job.id, nonce, sealed),
+            _ => None,
+        };
+        let Some(message) = opened.and_then(|text| serde_json::from_str::<SealedNotice>(&text).ok()) else {
+            self.finish_failed(&job.id, "secret-unavailable")?;
+            return Ok(false);
+        };
+        let email = OutgoingEmail {
+            id: job.id.clone(),
+            from: self.from.clone(),
+            to: job.recipient.clone(),
+            scope: job.scope.clone(),
+            subject: message.subject,
+            text: message.text,
+            html: message.html,
+            account: None,
+            action: job.action.clone(),
+        };
+        self.deliver(job, email).await
+    }
+
+    /// Hands one email to the transport and records what it answered.
+    async fn deliver(&self, job: Claimed, email: OutgoingEmail) -> Result<bool> {
         match self.transport.send(&email).await {
             SendOutcome::Accepted { provider_id, delivered } => {
                 self.record_accepted(&job.id, provider_id.as_deref(), delivered)?;
@@ -1040,10 +1213,15 @@ impl MailQueue {
     fn counts(&self) -> Result<Value> {
         let connection = self.connection()?;
         let mut counts = json!({"pending": 0, "accepted": 0, "delivered": 0, "failed": 0});
-        let mut statement = connection.prepare("SELECT state, COUNT(*) FROM jobs GROUP BY state")?;
-        for row in statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))? {
-            let (state, count) = row?;
-            counts[state] = json!(count);
+        let mut notices = counts.clone();
+        let mut statement =
+            connection.prepare("SELECT state, purpose = 'notify', COUNT(*) FROM jobs GROUP BY state, purpose = 'notify'")?;
+        for row in statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?, row.get::<_, i64>(2)?)))? {
+            let (state, notice, count) = row?;
+            counts[&state] = json!(counts[&state].as_i64().unwrap_or(0) + count);
+            if notice {
+                notices[&state] = json!(count);
+            }
         }
         let last: Option<(String, i64, String)> = connection
             .query_row(
@@ -1055,6 +1233,8 @@ impl MailQueue {
         Ok(json!({
             "depth": counts["pending"],
             "jobs": counts,
+            // The jobs above that are notices (`notify`, ADR-0015).
+            "notices": notices,
             "lastFailure": last.map(|(kind, at, purpose)| json!({"kind": kind, "at": at, "purpose": purpose})),
         }))
     }
@@ -1118,7 +1298,9 @@ fn check_job_budget(
 ) -> Result<(), AuthError> {
     let since = at - DAY_MS;
     let count = |filter: &str, value: Option<&str>| -> Result<u32, AuthError> {
-        let sql = format!("SELECT COUNT(*) FROM {schema}.jobs WHERE created_at > ?1 {filter}");
+        // Notices have their own allowance; only the installation's total counts them here.
+        let class = if filter.is_empty() { "" } else { "AND purpose <> 'notify'" };
+        let sql = format!("SELECT COUNT(*) FROM {schema}.jobs WHERE created_at > ?1 {class} {filter}");
         match value {
             Some(value) => connection.query_row(&sql, params![since, value], |row| row.get(0)),
             None => connection.query_row(&sql, params![since], |row| row.get(0)),
@@ -1141,6 +1323,36 @@ fn check_job_budget(
         return Err(AuthError::MailLimit("This app has sent its daily allowance of account emails. Try again tomorrow.".into()));
     }
     Ok(())
+}
+
+/// The budget a notice failed, as the kind Usage records: the installation's
+/// total of every email, then the creator's, the app's and the recipient's
+/// notices.
+fn check_notice_budget(connection: &Connection, limits: &Limits, notice: &Notice<'_>, at: i64) -> rusqlite::Result<Option<&'static str>> {
+    let since = at - DAY_MS;
+    let count = |filter: &str, values: &[&str]| -> rusqlite::Result<u32> {
+        let sql = format!("SELECT COUNT(*) FROM jobs WHERE created_at > ?1 {filter}");
+        match values {
+            [] => connection.query_row(&sql, params![since], |row| row.get(0)),
+            [one] => connection.query_row(&sql, params![since, one], |row| row.get(0)),
+            [one, two, ..] => connection.query_row(&sql, params![since, one, two], |row| row.get(0)),
+        }
+    };
+    if count("", &[])? >= limits.installation_per_day {
+        return Ok(Some("installation-limit"));
+    }
+    if count("AND purpose = 'notify' AND creator = ?2", &[notice.creator])? >= limits.notify_creator_per_day {
+        return Ok(Some("creator-limit"));
+    }
+    if count("AND purpose = 'notify' AND scope = ?2", &[notice.scope])? >= limits.notify_app_per_day {
+        return Ok(Some("app-limit"));
+    }
+    if count("AND purpose = 'notify' AND scope = ?2 AND recipient = ?3", &[notice.scope, notice.recipient])?
+        >= limits.notify_recipient_per_day
+    {
+        return Ok(Some("recipient-limit"));
+    }
+    Ok(None)
 }
 
 /// Moves a job forward on a provider event. States only advance:
@@ -1168,12 +1380,13 @@ fn advance(connection: &Connection, provider_id: &str, event: &str) -> rusqlite:
     )
 }
 
-pub(crate) fn install(connection: &Connection) -> rusqlite::Result<()> {
-    connection.execute_batch(
-        "PRAGMA journal_mode = WAL;
-         CREATE TABLE IF NOT EXISTS jobs (
+/// The jobs table. `notify` joined the purposes with ADR-0015, and `action`
+/// names the action that queued a notice.
+fn jobs_table(name: &str) -> String {
+    format!(
+        "CREATE TABLE IF NOT EXISTS {name} (
            id TEXT PRIMARY KEY,
-           purpose TEXT NOT NULL CHECK (purpose IN ('verification', 'invitation', 'recovery')),
+           purpose TEXT NOT NULL CHECK (purpose IN ('verification', 'invitation', 'recovery', 'notify')),
            recipient TEXT NOT NULL,
            scope TEXT NOT NULL,
            creator TEXT,
@@ -1189,12 +1402,23 @@ pub(crate) fn install(connection: &Connection) -> rusqlite::Result<()> {
            provider_id TEXT UNIQUE,
            error_kind TEXT,
            created_at INTEGER NOT NULL,
-           updated_at INTEGER NOT NULL
-         );
-         CREATE INDEX IF NOT EXISTS jobs_due ON jobs(state, next_attempt_at);
-         CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created_at);
-         CREATE INDEX IF NOT EXISTS jobs_recipient ON jobs(scope, recipient, purpose, state);
-         CREATE TABLE IF NOT EXISTS requests (
+           updated_at INTEGER NOT NULL,
+           inviter TEXT,
+           action TEXT
+         );"
+    )
+}
+
+const JOB_INDEXES: &str = "CREATE INDEX IF NOT EXISTS jobs_due ON jobs(state, next_attempt_at);
+     CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created_at);
+     CREATE INDEX IF NOT EXISTS jobs_recipient ON jobs(scope, recipient, purpose, state);";
+
+pub(crate) fn install(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch("PRAGMA journal_mode = WAL;")?;
+    connection.execute_batch(&jobs_table("jobs"))?;
+    connection.execute_batch(JOB_INDEXES)?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS requests (
            dimension TEXT NOT NULL,
            key TEXT NOT NULL,
            at INTEGER NOT NULL
@@ -1214,6 +1438,29 @@ pub(crate) fn install(connection: &Connection) -> rusqlite::Result<()> {
         .exists([])?;
     if !has_inviter {
         connection.execute("ALTER TABLE jobs ADD COLUMN inviter TEXT", [])?;
+    }
+    // Queues created before notices refuse the purpose in a CHECK, which
+    // SQLite cannot alter, so the table is rebuilt with its rows.
+    let definition: String =
+        connection.query_row("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'", [], |row| row.get(0))?;
+    if !definition.contains("'notify'") {
+        let has_action = connection
+            .prepare("SELECT 1 FROM pragma_table_info('jobs') WHERE name = 'action'")?
+            .exists([])?;
+        let columns = "id, purpose, recipient, scope, creator, app_name, token_hash, link_nonce, link_sealed, link_expires_at,
+             state, attempts, next_attempt_at, leased_until, provider_id, error_kind, created_at, updated_at, inviter";
+        // Dropping the transaction on an error rolls the rebuild back.
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(&format!(
+            "{}
+             INSERT INTO jobs_next ({columns}, action) SELECT {columns}, {} FROM jobs;
+             DROP TABLE jobs;
+             ALTER TABLE jobs_next RENAME TO jobs;
+             {JOB_INDEXES}",
+            jobs_table("jobs_next"),
+            if has_action { "action" } else { "NULL" },
+        ))?;
+        transaction.commit()?;
     }
     Ok(())
 }
@@ -1572,7 +1819,7 @@ mod tests {
     }
 
     fn token_of(email: &OutgoingEmail) -> String {
-        email.account.link.split_once('=').unwrap().1.to_owned()
+        email.account.as_ref().unwrap().link.split_once('=').unwrap().1.to_owned()
     }
 
     #[tokio::test]
@@ -1592,7 +1839,7 @@ mod tests {
         assert_eq!(sent.len(), 1);
         let token = token_of(&sent[0]);
         assert!(!raw.windows(token.len()).any(|window| window == token.as_bytes()), "the token is not stored in clear");
-        assert!(sent[0].account.link.starts_with("http://tasks.localhost/_littlebox/account#verification="));
+        assert!(sent[0].account.as_ref().unwrap().link.starts_with("http://tasks.localhost/_littlebox/account#verification="));
         assert_eq!(sent[0].id, jobs[0].0, "the job ID is the idempotency key");
         assert_eq!(sent[0].subject, "Confirm your email for Tasks <b>& co</b>");
         assert!(sent[0].html.contains("Tasks &lt;b&gt;&amp; co&lt;/b&gt;") && !sent[0].html.contains("<b>"));
@@ -1614,7 +1861,7 @@ mod tests {
         fixture.signup(&fixture.other, "person@example.test").await.unwrap();
         crate::migration::pause_for_test(&fixture.root, &fixture.app.id, true);
         assert_eq!(fixture.queue().run_once().await.unwrap(), 1, "only the other app's job leaves");
-        assert_eq!(transport.sent()[0].account.scope, format!("deployment:{}", fixture.other.id));
+        assert_eq!(transport.sent()[0].scope, format!("deployment:{}", fixture.other.id));
         let attempts: i64 = fixture
             .db()
             .query_row("SELECT attempts FROM jobs WHERE scope = ?1", [format!("deployment:{}", fixture.app.id)], |row| row.get(0))
@@ -2089,7 +2336,10 @@ mod tests {
             subject: "s".into(),
             text: "t".into(),
             html: "h".into(),
-            account: AccountMessage { to: "p@example.test".into(), purpose: Purpose::Recovery, scope: "creator".into(), link: "l".into(), expires_at: 1 },
+            to: "p@example.test".into(),
+            scope: "creator".into(),
+            account: Some(AccountMessage { to: "p@example.test".into(), purpose: Purpose::Recovery, scope: "creator".into(), link: "l".into(), expires_at: 1 }),
+            action: None,
         };
         fake.fail.store(503, Ordering::SeqCst);
         assert!(matches!(transport.send(&email).await, SendOutcome::Retry(_)));
@@ -2280,5 +2530,32 @@ mod tests {
         assert_eq!(end_pending_after_restore(&fixture.root.join(MAIL_DATABASE)).unwrap(), 1);
         let job = fixture.jobs()[0].clone();
         assert_eq!((job.1.as_str(), job.4.as_deref(), job.5), ("failed", Some("restored"), false));
+    }
+
+    #[test]
+    fn a_queue_from_before_notices_is_rebuilt_with_its_jobs() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE jobs (id TEXT PRIMARY KEY,
+               purpose TEXT NOT NULL CHECK (purpose IN ('verification', 'invitation', 'recovery')),
+               recipient TEXT NOT NULL, scope TEXT NOT NULL, creator TEXT, app_name TEXT NOT NULL, token_hash TEXT NOT NULL,
+               link_nonce BLOB, link_sealed BLOB, link_expires_at INTEGER NOT NULL,
+               state TEXT NOT NULL CHECK (state IN ('pending', 'accepted', 'delivered', 'failed')),
+               attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL, leased_until INTEGER,
+               provider_id TEXT UNIQUE, error_kind TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, inviter TEXT);
+             INSERT INTO jobs (id, purpose, recipient, scope, app_name, token_hash, link_expires_at, state, next_attempt_at, created_at, updated_at, inviter, provider_id)
+               VALUES ('old', 'invitation', 'a@example.test', 'deployment:x', 'Tasks', 'h', 1, 'accepted', 1, 1, 1, 'o@example.test', 'p-1');",
+        )
+        .unwrap();
+        assert!(db.execute("INSERT INTO jobs (id, purpose, recipient, scope, app_name, token_hash, link_expires_at, state, next_attempt_at, created_at, updated_at) VALUES ('n', 'notify', 'a', 's', 'T', '', 1, 'pending', 1, 1, 1)", []).is_err());
+        install(&db).unwrap();
+        install(&db).unwrap();
+        let kept: (String, String, String) =
+            db.query_row("SELECT purpose, inviter, provider_id FROM jobs WHERE id = 'old'", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
+        assert_eq!(kept, ("invitation".into(), "o@example.test".into(), "p-1".into()));
+        db.execute("INSERT INTO jobs (id, purpose, recipient, scope, app_name, token_hash, link_expires_at, state, next_attempt_at, created_at, updated_at, action) VALUES ('n', 'notify', 'a', 's', 'T', '', 1, 'pending', 1, 1, 1, 'alerts.raise')", []).unwrap();
+        assert!(db.execute("INSERT INTO jobs (id, purpose, recipient, scope, app_name, token_hash, link_expires_at, state, next_attempt_at, created_at, updated_at) VALUES ('x', 'marketing', 'a', 's', 'T', '', 1, 'pending', 1, 1, 1)", []).is_err());
+        let indexes: i64 = db.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'jobs_%'", [], |row| row.get(0)).unwrap();
+        assert_eq!(indexes, 3);
     }
 }

@@ -81,6 +81,13 @@ impl DevelopmentMailbox {
 
 impl AccountMail for DevelopmentMailbox {
     fn deliver(&self, message: &AccountMessage) -> Result<()> {
+        self.append(message)
+    }
+}
+
+impl DevelopmentMailbox {
+    /// Appends one JSON line, an account message or a notice.
+    pub(crate) fn append(&self, message: &impl Serialize) -> Result<()> {
         use std::io::Write;
         let _guard = self.lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut line = serde_json::to_vec(message)?;
@@ -268,7 +275,7 @@ async fn issue_and_send(
 }
 
 /// The creator who owns a Deployment's project, for the per-creator limit.
-fn project_creator(state: &AppState, project_id: &str) -> Option<String> {
+pub(crate) fn project_creator(state: &AppState, project_id: &str) -> Option<String> {
     let path = state.data_root.join("mcp.sqlite");
     let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     connection
