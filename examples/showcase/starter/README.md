@@ -1,6 +1,6 @@
 # Starter
 
-Starter is the typical small app in one Capsule, and the example to copy first. A visitor reads a public landing: service status, updates and downloads, also served as a JSON API. Anyone can create an account, and it opens only after they answer the emailed link. A member keeps private notes and files, sets a public avatar and publishes a file as a download. Team admins see a team area, post to the team and publish updates. The owner's account inside the app opens an admin area that promotes members. A program posts updates with an API key, and a monitoring service reports status through a signed webhook. The Project Owner reads the Signals.
+Starter is the typical small app in one Capsule, and the example to copy first. A visitor reads a public landing: service status, updates and downloads, also served as a JSON API. Anyone can create an account, and it opens only after they answer the emailed link. A member keeps private notes and files, sets a public avatar and publishes a file as a download. Team admins see a team area, post to the team and publish updates. The owner's account inside the app opens an admin area that promotes members. A program posts updates with an API key, and a monitoring service reports status through a signed webhook. A team admin tells the team's inbox app about a status change with a call the Kernel sends. The Project Owner reads the Signals and the calls.
 
 Every rule lives in `actions.json`. The Kernel binds the caller's ID and the SQL decides who may read or change each row; `app.js` only hides what a role cannot use.
 
@@ -12,8 +12,8 @@ Every rule lives in `actions.json`. The Kernel binds the caller's ID and the SQL
 | `styles.css` | The design system's tokens from `src/design-system.css`, light and dark, as plain CSS |
 | `app.js` | The page: `miniapp.auth`, `miniapp.actions` and `miniapp.files`, `textContent` only, no inline handlers |
 | `favicon.svg` | The icon, as text so the managed path can hold it |
-| `schema.sql`, `schema.ts` | Six tables; the SQL the Kernel runs and the Database Model the editor reads |
-| `actions.json` | 27 actions: the only door to the database |
+| `schema.sql`, `schema.ts` | Seven tables; the SQL the Kernel runs and the Database Model the editor reads |
+| `actions.json` | 30 actions: the only door to the database, and the one call to another app |
 | `replay.ts` | Starts two Kernels, proves every claim below and removes them |
 | `AGENT.md` | What an agent reads before adapting this app |
 
@@ -30,6 +30,7 @@ Every rule lives in `actions.json`. The Kernel binds the caller's ID and the SQL
 | The in-app owner | A key-only route, so only the Project Owner's key appoints it | `owners.appoint` at `POST /api/owners`, `"callers": ["key"]` |
 | Private write API | A key-only route on a public app; the key's ID is the actor | `updates.post` at `POST /api/updates` |
 | Signed webhook | A route with a signature and a signing secret set with `secret_set` | `status.report` at `POST /hooks/status`, header `X-Starter-Signature` |
+| Call to the team inbox | A call action the Kernel signs and sends to the [inbox](../inbox/README.md) showcase's webhook, with a `then` mutation that keeps the answer (ADR-0015) | `status.escalate`, `status.escalated`, `status.escalations`; the secret `inbox_events` set with `"use": "call"` |
 | Avatar | `miniapp.files.upload(file, { visibility: "public" })`, `miniapp.files.url` | `me.avatar` |
 | Private attachments | A private upload and a row that names it | `attachments.add`, `attachments.list` |
 | Publish and delete | `miniapp.files.update`, `miniapp.files.delete`, then the row | `attachments.publish`, `attachments.remove` |
@@ -57,6 +58,9 @@ cp examples/showcase/starter/{index.html,styles.css,app.js,favicon.svg,schema.sq
 # Set the webhook's secret before the first publish: in the editor's Auth > Integrations view, or over MCP
 # with an owner credential that holds publish: secret_set { "projectId": "<id in littlebox.json>",
 # "name": "status_webhook", "value": "<16 to 512 printable characters>" }.
+# status.escalate calls a team inbox. Publish examples/showcase/inbox first, put its URL with
+# /hooks/events in place of http://inbox.localhost/hooks/events in actions.json, and set
+# secret_set { "projectId": "<id>", "name": "inbox_events", "value": "<the inbox's events_webhook value>", "use": "call" }.
 bun run littlebox -- publish --dir /tmp/starter
 ```
 
@@ -74,11 +78,12 @@ The run of 2026-11-07 passed every check in about 75 seconds.
 | A team admin promoted by a guarded mutation sees the team area | Ben's and Ana's `members.promote` get the guard; the owner's promotes Ana; then `team.roster` and `team.posts` answer her and still answer Ben with no rows |
 | A key writes within its scope and is refused outside it | The Release bot key posts 12 updates whose `author_id` is the key's ID; on `/api/owners` and the webhook it gets 403 |
 | A signed webhook updates a row | Two deliveries insert and update `api`; unsigned, replayed, stale and wrongly signed deliveries answer 401, 409, 401, 401 |
+| A status change reaches the team inbox through a call | The replay publishes the inbox showcase on the same Kernel. Ana's `status.escalate` answers `{ callId, queued: true }`; the Kernel signs the request with `inbox_events` and the inbox's route files one event with source `starter`, which `GET /api/events` with an inbox key returns. `status.escalated` stores status 200 and filed 1, and filed 0 for the same change again. A visitor's call answers `authentication-required`, writing the answer by hand is refused, and `calls_read` lists three calls delivered on the first attempt |
 | Avatar public, attachment private, publish, delete and quota | See the Files check; 8 of Ben's 2 MiB files and Ana's 2 MiB attachment fill the 20 MiB quota, the next upload is refused, and deleting Ana's attachment lets the same upload through |
 | Pagination and search within the LIMIT rules | `updates.list` pages 10 and 2 and searches; `notes.list` pages 20 and 5; the Gate and the Kernel refuse `notes.list` without its `LIMIT` with the same words |
 | A guarded mutation shows its refusal in the page | Chrome, as Ana, renames her to "ben" and the page shows the guard |
 | Signals carry the actor and only real changes | 47 Signals: each person's `member.joined` once though each joined twice; program updates name the key; `status.changed` has `actor` null and skips the identical retry; no refused call records one |
-| The Action Contract names every column; conform passes with a session and with a key | 27 actions, no warning, no unnamed column; conform with a session, the key and the secret: 184 passed, 0 failed, 0 skipped, the member meeting each role's guard on the probes that omit a nullable input too; with the key and the secret: 65 passed, 0 failed, 40 skipped. Both counts include the HEAD probe on `GET /api/updates` |
+| The Action Contract names every column; conform passes with a session and with a key | 30 actions, no warning, no unnamed column; conform with a session, the key and the secret: 208 passed, 0 failed, 1 skipped, the skip being `status.escalate`'s valid call, which conform does not send, the member meeting each role's guard on the probes that omit a nullable input too; with the key and the secret: 68 passed, 0 failed, 44 skipped. Both counts include the HEAD probe on `GET /api/updates` |
 | The app exports as a package and imports with every rule intact | On the second Kernel, passwords, rows, roles, guards, file visibility, the deleted file, Signals and open signup with verification hold; old keys answer `invalid-api-key`; the origin's last webhook delivery answers 409 |
 | The same Capsule publishes from the CLI and the managed path | `littlebox login`, `init`, `build`, `publish` for one Deployment; `project_sources_save` and `release_plan`/`release_apply` for another; each is built in its own folder, and their page, script, styles and icon are byte for byte the same, with no bundler comment naming a folder |
 | No console error under the policy | A visitor in light, Ana in dark and the owner in light load with no violation, console error or failed request |
@@ -101,7 +106,10 @@ Each row is a limit the app met, with the exact answer. None was worked around.
 | Files and rows | Publishing or deleting an attachment | Two calls: `files_update` or `files_delete`, then the row's action | No transaction joins them. If the second call fails, a public file is not listed, or a row names a deleted file. An action cannot see the Kernel's file records, so a row's `file_id` is whatever the page sent |
 | Signals | The in-app owner's session calls `signals_read` | `Unknown tool or insufficient permission.` | The admin area cannot show Signals or Usage; the owner reads them outside the app |
 | Visitor | `app_users_list` on the runtime endpoint, as anyone in the app | `Unknown tool or insufficient permission.` | The in-app owner cannot invite, suspend or list accounts; those stay with the Project Owner's tools |
-| Signed route | `littlebox publish` before `secret_set` | `Action status.report signs with the secret status_webhook, which is not set for this project. Set it with secret_set before publishing.` | Each Kernel and each project needs `secret_set` before its first release: the CLI project, the managed project and the import |
+| Call action | Ben, a member with no team role, invokes `status.escalate` with a title of his own | `{ callId, queued: true }`; the inbox files "Ben says api is down" under source `starter` | A call runs no SQL, so no `WHERE` can check the caller's role, and it cannot read the app's rows, so the page supplies the title and the event ID. Only the action's access gates it. The page shows the button to team admins only, which is a courtesy; the inbox's one event per source and ID is the only other check |
+| Call action | Ana writes `status.escalated` herself | `Action status.escalated runs only after the call status.escalate answers.` | None. Only the Kernel records what the inbox answered |
+| Signing secret | `secret_set` of the inbox's `events_webhook` value as the starter's `inbox_events` | `Another of your projects already uses this secret value. ...` without `"use": "call"`; accepted with it | One owner's two apps need the call-only use to share a value |
+| Signed route | `littlebox publish` before `secret_set` | `Action status.report signs with the secret status_webhook, which is not set for this project. Set it with secret_set before publishing.` | Each Kernel and each project needs `secret_set` before its first release: the CLI project, the managed project and the import, for `status_webhook` and `inbox_events` both |
 | CLI | `littlebox init` | Writes `"visibility": "private"` and `{ "mode": "invitation" }`, plus the template's own files | A public, open app takes a hand edit of `littlebox.json`, and the template's own files have to be deleted before the Capsule goes in |
 | Signed webhook | A signed delivery with state "on fire" | `400 {"error":"CHECK constraint failed: state IN ('operational', 'degraded', 'down')"}` | The sender sees SQLite's words; an action has no way to state an allowed list as an input rule |
 | Package import | The origin's Release bot key on the destination | `401 invalid-api-key`; `api_keys_list` shows both keys with `revokedReason: "import"` | Every program needs a new key after a move, as documented |

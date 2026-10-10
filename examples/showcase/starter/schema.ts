@@ -40,6 +40,16 @@ export const status = sqliteTable("status", {
   updatedAt: integer("updated_at").notNull(),
 });
 
+export const escalations = sqliteTable("escalations", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  component: text("component").notNull(),
+  changedAt: integer("changed_at").notNull(),
+  status: integer("status"),
+  filed: integer("filed"),
+  error: text("error"),
+  answeredAt: integer("answered_at").notNull(),
+});
+
 export const attachments = sqliteTable("attachments", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: text("user_id").notNull(),

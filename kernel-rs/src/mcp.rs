@@ -214,7 +214,7 @@ fn validate_managed_sources(source: &Value, id: &str) -> Result<()> {
         && ["optional", "required"].contains(&manifest["runtime"]["auth"]["mode"].as_str().unwrap_or(""))
         && manifest["runtime"]["files"]["access"] == "deployment"
         && actions.is_some_and(|list| list.len() <= 50 && list.iter().all(|action|
-            string(&action["name"], 120) && ["query", "mutation", "signal"].contains(&action["kind"].as_str().unwrap_or(""))
+            string(&action["name"], 120) && ["query", "mutation", "signal", "call"].contains(&action["kind"].as_str().unwrap_or(""))
             && ["anonymous", "authenticated", "granted"].contains(&action["access"].as_str().unwrap_or("")))), "Invalid project manifest. Send {{ version: 1, visibility, runtime: {{ database: {{ mode: \"declared-actions\", actions: [{{ name, kind, access }}] }}, auth: {{ mode: \"optional\" or \"required\" }}, files: {{ access: \"deployment\" }} }} }} with up to 50 actions.");
     let mut names = std::collections::HashSet::new();
     for action in actions.unwrap() {
