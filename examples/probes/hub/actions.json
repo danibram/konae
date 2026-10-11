@@ -4,11 +4,61 @@
     "pushes.receive": {
       "kind": "mutation",
       "access": "anonymous",
-      "http": { "method": "POST", "path": "/hooks/push", "signature": { "header": "X-Hub-Signature-256", "secret": "push_hook" } },
-      "statement": "INSERT INTO events (source, ref, detail, received_at) VALUES ('push', ?1, ?2, ?3)",
+      "http": {
+        "method": "POST",
+        "path": "/hooks/push",
+        "signature": { "scheme": "hmac-body", "header": "X-Hub-Signature-256", "secret": "push_hook", "algorithm": "sha256", "encoding": "hex", "prefix": "sha256=" },
+        "fields": { "repo": "$.repository.full_name", "pusher": "$.pusher.name" }
+      },
+      "statement": "INSERT INTO events (source, ref, detail, received_at) VALUES ('push', ?1, ?2 || ' by ' || ?3, ?4)",
       "bindings": [
         { "source": "input", "key": "ref", "type": "string", "maxLength": 200 },
-        { "source": "input", "key": "after", "type": "string", "maxLength": 64 },
+        { "source": "input", "key": "repo", "type": "string", "maxLength": 200 },
+        { "source": "input", "key": "pusher", "type": "string", "maxLength": 100 },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "orders.create": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": { "method": "POST", "path": "/api/orders", "callers": ["key"] },
+      "statement": "INSERT INTO orders (id, item, created_at) VALUES (?1, ?2, ?3)",
+      "bindings": [
+        { "source": "input", "key": "id", "type": "string", "maxLength": 64 },
+        { "source": "input", "key": "item", "type": "string", "maxLength": 200 },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "payments.receive": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": {
+        "method": "POST",
+        "path": "/hooks/payment",
+        "signature": { "scheme": "timestamped", "header": "Stripe-Signature", "secret": "payment_hook", "prefix": "t=", "tag": "v1=", "window": 300 },
+        "fields": { "order": "$.data.object.client_reference_id", "payment": "$.data.object.id" }
+      },
+      "guard": "This order is unknown or already paid.",
+      "statement": "UPDATE orders SET payment_id = ?2, paid_at = ?3 WHERE id = ?1 AND paid_at IS NULL",
+      "bindings": [
+        { "source": "input", "key": "order", "type": "string", "maxLength": 64 },
+        { "source": "input", "key": "payment", "type": "string", "maxLength": 100 },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "emails.receive": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": {
+        "method": "POST",
+        "path": "/hooks/email",
+        "signature": { "scheme": "svix", "secret": "email_hook" },
+        "fields": { "kind": "$.type", "message": "$.data.email_id" }
+      },
+      "statement": "INSERT INTO events (source, ref, detail, received_at) VALUES ('email', ?1, ?2, ?3)",
+      "bindings": [
+        { "source": "input", "key": "kind", "type": "string", "maxLength": 60 },
+        { "source": "input", "key": "message", "type": "string", "maxLength": 100 },
         { "source": "kernel", "field": "now" }
       ]
     },
@@ -29,6 +79,13 @@
       "http": { "method": "GET", "path": "/api/events", "callers": ["key"] },
       "statement": "SELECT id, source, ref, detail FROM events WHERE (?1 IS NULL OR id > ?1) ORDER BY id LIMIT 100",
       "bindings": [{ "source": "input", "key": "after", "type": "number", "nullable": true }]
+    },
+    "orders.list": {
+      "kind": "query",
+      "access": "anonymous",
+      "http": { "method": "GET", "path": "/api/orders", "callers": ["key"] },
+      "statement": "SELECT id, item, payment_id, paid_at IS NOT NULL AS paid FROM orders ORDER BY created_at, id LIMIT 100",
+      "bindings": []
     }
   }
 }

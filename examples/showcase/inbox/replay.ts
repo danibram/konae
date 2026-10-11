@@ -1,5 +1,5 @@
 // Replays the inbox showcase against its own Kernel: publish, the signed webhook,
-// the keyed read route, invitations and suspension, Signals and Usage, the LIMIT
+// a GitHub-style and a Stripe-style webhook in the providers' own schemes, the keyed read route, invitations and suspension, Signals and Usage, the LIMIT
 // refusal in the Gate and the Kernel, the Action Contract, and a browser pass.
 //
 //   LITTLEBOX_SHOWCASE_PORT=19470 bun run examples/showcase/inbox/replay.ts
@@ -7,6 +7,7 @@
 // LITTLEBOX_SHOWCASE_BROWSER=0 skips Chrome. LITTLEBOX_SHOWCASE_SCREENSHOTS=<dir>
 // keeps the light and dark screenshots there.
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -34,6 +35,12 @@ const feedSecret = `feed_${crypto.randomUUID().replaceAll("-", "")}`;
 const openWebhookSecret = `whk_${crypto.randomUUID().replaceAll("-", "")}`;
 const signedWebhookSecret = `whk_${crypto.randomUUID().replaceAll("-", "")}`;
 const signedFeedSecret = `feed_${crypto.randomUUID().replaceAll("-", "")}`;
+// The two providers' secrets, one per project for the same reason.
+const providerSecrets = (label: string) => ({
+  github_webhook: `gh_${label}_${crypto.randomUUID().replaceAll("-", "")}`,
+  payments_webhook: `whsec_${label}_${crypto.randomUUID().replaceAll("-", "")}`,
+});
+const inboxProviders = providerSecrets("inbox");
 const today = new Date().toISOString().slice(0, 10);
 
 let kernel: ReturnType<typeof Bun.spawn> | undefined;
@@ -111,21 +118,22 @@ try {
   }
 
   const compiled = await buildLocal(root);
-  // One refusal names both unset secrets, so one failed plan tells the owner everything to set.
-  // The feed takes an API key, so only the webhook names a secret now.
-  const unsetSecret = await rejects(release(project, compiled.files, compiled.artifact), /which is not set for this project/);
-  assert.equal(unsetSecret, "Actions events.receive and pages.critical sign with the secret events_webhook, which is not set for this project. Set it with secret_set before publishing.");
+  // One refusal names every unset secret, so one failed plan tells the owner everything to set.
+  // The feed takes an API key; the inbox's own webhook, the critical page and the two providers' routes name three secrets.
+  const unsetSecret = await rejects(release(project, compiled.files, compiled.artifact), /which are not set for this project/);
+  for (const name of ["events.receive", "github.receive", "pages.critical", "payments.receive", "events_webhook", "github_webhook", "payments_webhook"]) assert(unsetSecret.includes(name), unsetSecret);
   refused("Publish before secret_set", unsetSecret);
   await owner.call("secret_set", { projectId: project.id, name: "events_webhook", value: webhookSecret });
   await owner.call("secret_set", { projectId: project.id, name: "events_feed", value: feedSecret });
+  for (const [name, value] of Object.entries(inboxProviders)) await owner.call("secret_set", { projectId: project.id, name, value });
   const listedSecrets = await owner.call<{ secrets: Array<{ name: string; value?: string }> }>("secrets_list", { projectId: project.id });
-  assert.deepEqual(listedSecrets.secrets.map((secret) => secret.name).sort(), ["events_feed", "events_webhook"]);
+  assert.deepEqual(listedSecrets.secrets.map((secret) => secret.name).sort(), ["events_feed", "events_webhook", "github_webhook", "payments_webhook"]);
   assert(!JSON.stringify(listedSecrets).includes(webhookSecret), "secrets_list must not return a value.");
   const inbox = await release(project, compiled.files, compiled.artifact, { initialSignupPolicy: { mode: "invitation", allowlist: [] } });
   const policy = await owner.call<{ mode: string; visibility: string }>("signup_policy_read", { deploymentId: inbox.id });
   assert.equal(policy.mode, "invitation");
   assert.equal(policy.visibility, "private");
-  pass("Publish", `The release with both secrets unset is refused with one message naming both; after secret_set it publishes private with signup by invitation at ${inbox.url}.`);
+  pass("Publish", `The release with its three webhook secrets unset is refused with one message naming each; after secret_set it publishes private with signup by invitation at ${inbox.url}.`);
 
   const host = (extra: Record<string, string> = {}) => ({ host: inbox.hostname, "x-forwarded-for": freshAddress(), ...extra });
   const runtime = (cookie?: string) => new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
@@ -284,7 +292,7 @@ try {
     return { receipt, root: variantRoot };
   };
   // Without callers or a signature, a private app's GET route takes a key or a session, as its shell does.
-  const open = (await variant("showcase_inbox_open", "inbox-open", { method: "GET", path: "/api/events" }, { events_webhook: openWebhookSecret })).receipt;
+  const open = (await variant("showcase_inbox_open", "inbox-open", { method: "GET", path: "/api/events" }, { events_webhook: openWebhookSecret, ...providerSecrets("open") })).receipt;
   const openShell = await fetch(`${url}/`, { headers: { host: open.hostname } });
   assert.match(await openShell.text(), /<title>Sign in<\/title>/);
   const unproven = await fetch(`${url}/api/events`, { headers: { host: open.hostname, "x-forwarded-for": freshAddress() } });
@@ -292,7 +300,8 @@ try {
   pass("Unsigned read route on a private app", "With no callers and no signature, GET /api/events on a private app answers 401 authentication-required to a request with no session and no key, as its shell asks for sign-in.");
 
   // A signed GET: the MAC covers the method, the path and the query string, and a nonce keeps two requests in one second apart.
-  const signedVariant = await variant("showcase_inbox_signed", "inbox-signed", { method: "GET", path: "/api/events", signature: { header: "X-Inbox-Signature", secret: "events_feed" } }, { events_webhook: signedWebhookSecret, events_feed: signedFeedSecret });
+  const signedProviders = providerSecrets("signed");
+  const signedVariant = await variant("showcase_inbox_signed", "inbox-signed", { method: "GET", path: "/api/events", signature: { header: "X-Inbox-Signature", secret: "events_feed" } }, { events_webhook: signedWebhookSecret, events_feed: signedFeedSecret, ...signedProviders });
   const signedHost = signedVariant.receipt.hostname;
   const signedGet = (query: string, signature: string) => fetch(`${url}/api/events${query ? `?${query}` : ""}`, { headers: { host: signedHost, "x-forwarded-for": freshAddress(), "x-inbox-signature": signature } });
   const feedAt = Math.floor(Date.now() / 1000);
@@ -527,6 +536,76 @@ try {
     pass("Browser", `Chrome signs in through the Kernel's page, renders ${before.total} events in light and dark, acknowledges one from the page, keeps the guard's refusal on screen for an event acknowledged first in another session, and reports no Content Security Policy violation${shots ? `; screenshots in ${shots}` : ""}.`);
   }
 
+
+  // ------------------------------------------- Webhooks from outside services
+  // A code host and a payment provider post their own payloads, signed their own way. The replay
+  // signs each with node:crypto as the provider's documentation says, not with Littlebox's signer.
+  const providerPost = async (route: string, body: string, headers: Record<string, string>) => {
+    const response = await fetch(`${url}${route}`, { method: "POST", headers: host({ "content-type": "application/json", ...headers }), body });
+    return { status: response.status, body: await response.json() as any };
+  };
+  const github = (body: string, secret = inboxProviders.github_webhook) =>
+    ({ "x-github-event": "issues", "x-github-delivery": crypto.randomUUID(), "x-hub-signature-256": `sha256=${createHmac("sha256", secret).update(body).digest("hex")}` });
+  const issue = JSON.stringify({
+    action: "opened",
+    issue: { number: 214, node_id: "I_kwDOBx1Ab84", title: "Checkout page shows the wrong currency", user: { login: "ana" }, labels: [{ name: "bug" }] },
+    repository: { full_name: "acme/storefront", private: true },
+    sender: { login: "ana", type: "User" },
+  });
+  const issueAnswer = await providerPost("/hooks/github", issue, github(issue));
+  assert.deepEqual(issueAnswer.status, 200, JSON.stringify(issueAnswer.body));
+  assert.equal(issueAnswer.body.result.changes, 1);
+  const issueReplay = await providerPost("/hooks/github", issue, github(issue));
+  assert.deepEqual(issueReplay, { status: 409, body: { error: "replayed-signature" } });
+  refused("A GitHub-style delivery sent twice, with a new X-GitHub-Delivery", issueReplay.body.error, 409);
+  const otherIssue = issue.replace("I_kwDOBx1Ab84", "I_kwDOBx1Ab85");
+  const issueWrongSecret = await providerPost("/hooks/github", otherIssue, github(otherIssue, "gh_not_the_inbox_secret_0123"));
+  assert.deepEqual(issueWrongSecret, { status: 401, body: { error: "invalid-signature" } });
+  refused("A GitHub-style delivery signed with another secret", issueWrongSecret.body.error, 401);
+  const issueTampered = await providerPost("/hooks/github", issue.replace("wrong currency", "right currency"), github(issue));
+  assert.deepEqual(issueTampered, { status: 401, body: { error: "invalid-signature" } });
+  refused("A GitHub-style delivery changed after signing", issueTampered.body.error, 401);
+
+  const stripe = (body: string, t = Math.floor(Date.now() / 1000), secret = inboxProviders.payments_webhook) =>
+    ({ "stripe-signature": `t=${t},v1=${createHmac("sha256", secret).update(`${t}.${body}`).digest("hex")},v0=${"0".repeat(64)}` });
+  const charge = JSON.stringify({
+    id: "evt_3Q9xLmAcme", object: "event", type: "charge.failed", livemode: false, created: Math.floor(Date.now() / 1000),
+    data: { object: { id: "ch_3Q9xLm", object: "charge", amount: 4900, currency: "eur", failure_code: "card_declined", failure_message: "Your card was declined." } },
+  });
+  const chargeHeaders = stripe(charge);
+  const chargeAnswer = await providerPost("/hooks/payments", charge, chargeHeaders);
+  assert.deepEqual(chargeAnswer.status, 200, JSON.stringify(chargeAnswer.body));
+  assert.equal(chargeAnswer.body.result.changes, 1);
+  const chargeReplay = await providerPost("/hooks/payments", charge, chargeHeaders);
+  assert.deepEqual(chargeReplay, { status: 409, body: { error: "replayed-signature" } });
+  refused("A Stripe-style delivery sent twice with the same header", chargeReplay.body.error, 409);
+  const chargeWrongSecret = await providerPost("/hooks/payments", charge, stripe(charge, undefined, "whsec_not_the_inbox_secret_01"));
+  assert.deepEqual(chargeWrongSecret, { status: 401, body: { error: "invalid-signature" } });
+  refused("A Stripe-style delivery signed with another secret", chargeWrongSecret.body.error, 401);
+  const chargeTampered = await providerPost("/hooks/payments", charge.replace("4900", "49"), stripe(charge));
+  assert.deepEqual(chargeTampered, { status: 401, body: { error: "invalid-signature" } });
+  refused("A Stripe-style delivery changed after signing", chargeTampered.body.error, 401);
+  const chargeStale = await providerPost("/hooks/payments", charge, stripe(charge, Math.floor(Date.now() / 1000) - 400));
+  assert.deepEqual(chargeStale, { status: 401, body: { error: "stale-timestamp" } });
+  refused("A Stripe-style delivery with t 400 seconds old", chargeStale.body.error, 401);
+  // The provider's retry signs again with a new t; the UNIQUE (source, external_id) stores it once.
+  const chargeRetry = await providerPost("/hooks/payments", charge, stripe(charge, Math.floor(Date.now() / 1000) + 1));
+  assert.deepEqual(chargeRetry, { status: 200, body: { result: { changes: 0, lastInsertId: 0 } } });
+
+  const providerReader = await owner.call<{ key: string }>("api_keys_create", { deploymentId: inbox.id, name: "Provider check", actions: ["events.feed"] });
+  const providerRows = (await feed(`?after=${Math.max(...Object.values(id))}`, providerReader.key)).body.result
+    .filter((row: any) => row.source === "github" || row.source === "payments")
+    .map((row: any) => [row.source, row.external_id, row.severity, row.title]);
+  assert.deepEqual(providerRows, [
+    ["github", "I_kwDOBx1Ab84", "warning", "Checkout page shows the wrong currency"],
+    ["payments", "evt_3Q9xLmAcme", "critical", "charge.failed"],
+  ]);
+  const providerUsage = await owner.call<{ totals: Array<{ kind: string; name: string; count: number }> }>("usage_read", { deploymentId: inbox.id, from: today, to: today });
+  const routeCount = (name: string) => providerUsage.totals.find((row) => row.kind === "route" && row.name === name)?.count ?? 0;
+  assert.equal(routeCount("POST /hooks/github"), 1, "Only the delivery that ran counts.");
+  assert.equal(routeCount("POST /hooks/payments"), 2, "The delivery and its retry ran; the refused ones count nothing.");
+  pass("Webhooks from outside services", "A GitHub-style issues event, signed sha256=<hex> over its body, and a Stripe-style charge.failed, signed t=...,v1=... over <t>.<body>, are stored from their nested payloads through fields, with every other key left out. A second copy of each answers 409 replayed-signature, a wrong secret and a changed byte answer 401 invalid-signature, a Stripe t 400 seconds old answers 401 stale-timestamp, and the provider's retry with a new t answers 200 and stores nothing. Usage counts the three deliveries that ran and none of the refused ones.");
+
   // ------------------------------------------------- Action Contract, conform
   const contractDir = path.join(scratch, "contract");
   await cp(root, contractDir, { recursive: true });
@@ -535,7 +614,8 @@ try {
   assert.equal(await contract.exited, 0, await new Response(contract.stderr).text());
   const written = JSON.parse(await readFile(path.join(contractDir, "action-contract.json"), "utf8"));
   assert.deepEqual(written.actions.map((item: { name: string }) => item.name).sort(),
-    ["events.acknowledge", "events.counts", "events.feed", "events.list", "events.receive", "members.hello", "pages.critical"]);
+    ["events.acknowledge", "events.counts", "events.feed", "events.list", "events.receive", "github.receive", "members.hello", "pages.critical", "payments.receive"]);
+  assert.equal(written.actions.find((item: { name: string }) => item.name === "payments.receive").http.signature.scheme, "timestamped");
   const inputsFile = path.join(scratch, "conform-inputs.json");
   await writeFile(inputsFile, JSON.stringify({
     "events.receive": { severity: "info" },
@@ -551,7 +631,8 @@ try {
     return { code, out: out + err, totals: lines.at(-1) ?? "", failures: lines.filter((line) => line.startsWith("FAIL")) };
   };
   // The program that reads /api/events holds a key, so conform reads it with the key.
-  const keyed = await runConform([`events_webhook=${webhookSecret}`]);
+  const providerArgs = (secrets: Record<string, string>) => Object.entries(secrets).map(([name, value]) => `${name}=${value}`);
+  const keyed = await runConform([`events_webhook=${webhookSecret}`, ...providerArgs(inboxProviders)]);
   assert.equal(keyed.code, 0, keyed.out);
   assert.match(keyed.totals, /^\d+ passed, 0 failed, 0 skipped/);
   // The signed variant's contract, checked with both secrets and no other credential:
@@ -560,11 +641,14 @@ try {
   await cp(signedVariant.root, signedContractDir, { recursive: true });
   const signedContract = cli(["contract", "--dir", signedContractDir]);
   assert.equal(await signedContract.exited, 0, await new Response(signedContract.stderr).text());
-  const signed = await runConform([`events_webhook=${signedWebhookSecret}`, `events_feed=${signedFeedSecret}`], signedVariant.receipt.url, path.join(signedContractDir, "action-contract.json"), []);
+  const signed = await runConform([`events_webhook=${signedWebhookSecret}`, `events_feed=${signedFeedSecret}`, ...providerArgs(signedProviders)], signedVariant.receipt.url, path.join(signedContractDir, "action-contract.json"), []);
   assert.equal(signed.code, 0, signed.out);
   assert.match(signed.totals, /^\d+ passed, 0 failed, \d+ skipped/);
   assert(signed.out.includes("PASS events.feed: answers GET /api/events."), signed.out);
-  pass("Action Contract", `littlebox contract writes 7 actions. littlebox conform against the private Deployment, reading the GET route with its key, reports "${keyed.totals}". Against the signed variant with both secrets and no session it reports "${signed.totals}": the signed GET and POST probes each carry a fresh nonce.`);
+  for (const route of ["github.receive: answers POST /hooks/github", "payments.receive: answers POST /hooks/payments", "payments.receive: refuses a stale timestamp", "github.receive: refuses a replayed signature"]) {
+    assert(keyed.out.includes(`PASS ${route}`), keyed.out);
+  }
+  pass("Action Contract", `littlebox contract writes 9 actions, naming each route's signature scheme. littlebox conform signs the provider routes' probes in their own schemes. littlebox conform against the private Deployment, reading the GET route with its key, reports "${keyed.totals}". Against the signed variant with both secrets and no session it reports "${signed.totals}": the signed GET and POST probes each carry a fresh nonce.`);
 
   console.log(JSON.stringify({ app: "inbox", checks: passes.length, refusals }, null, 2));
 } finally {

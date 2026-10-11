@@ -1,6 +1,7 @@
 import type { RuntimeActionDeclaration } from "../deployments/manifest";
 import { unboundedQueryReason } from "../lib/query-bound";
 import { assertRuntimeSql, validateRuntimeParams } from "../runtime/security";
+import { parseRouteFields, parseRouteSignature, type RouteSignature } from "./route-declaration";
 import { assertActionStatement } from "./sql-rules";
 
 type ActionBinding =
@@ -17,14 +18,16 @@ export type RouteCaller = "signature" | "key" | "session";
 export type HttpBinding = {
   method: "GET" | "POST";
   path: string;
-  /** `secret` names a value the owner sets with `secret_set`; it is never in actions.json. */
-  signature?: { header: string; secret: string };
+  /** `secret` names a value the owner sets with `secret_set`; it is never in actions.json. See route-declaration.ts for a provider's scheme. */
+  signature?: RouteSignature;
   /**
    * The route's callers. Without it a signed route takes the signature or a
    * key, an unsigned route on a private Deployment a key or a session, and an
    * unsigned route on a public Deployment anyone. See `routeCallers`.
    */
   callers?: RouteCaller[];
+  /** Input keys and the JSON path each reads from a POST body; other body keys are left out (ADR-0015). */
+  fields?: Record<string, string>;
 };
 
 const ROUTE_CALLERS: readonly RouteCaller[] = ["signature", "key", "session"];
@@ -168,7 +171,7 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
       throw new Error(`Action ${name} is a signal action, so it runs no SQL and cannot declare a statement.`);
     }
     const signal = parseSignal(name, kind, bindings, candidate.signal);
-    const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http);
+    const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http, bindings);
     parseGuard(name, kind, candidate.guard);
     parseNotify(name, kind, bindings, candidate.notify);
     assertNoSubscribe(name, candidate);
@@ -185,7 +188,7 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
     }
   }
   const signal = parseSignal(name, kind, bindings, candidate.signal);
-  const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http);
+  const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http, bindings);
   const guard = parseGuard(name, kind, candidate.guard);
   assertNoSubscribe(name, candidate);
   const schedule = parseSchedule(name, kind, bindings, candidate.schedule);
@@ -340,15 +343,12 @@ function parseSignal(name: string, kind: "query" | "mutation" | "signal", bindin
 // holds the cases both test suites run.
 const HTTP_PATH = /^(\/[A-Za-z0-9._~-]+)+$/;
 const RESERVED_SEGMENTS = new Set(["_littlebox", "oauth", ".well-known", "mcp"]);
-const SIGNATURE_HEADER = /^[A-Za-z0-9-]{1,64}$/;
-const UNSIGNABLE_HEADERS = new Set(["authorization", "cookie", "host", "content-type", "content-length"]);
-const SECRET_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 
-function parseHttpBinding(name: string, kind: "query" | "mutation" | "signal", access: "anonymous" | "authenticated", value: unknown): HttpBinding {
+function parseHttpBinding(name: string, kind: "query" | "mutation" | "signal", access: "anonymous" | "authenticated", value: unknown, bindings: ActionBinding[]): HttpBinding {
   const invalid = `Action ${name} has an invalid http binding.`;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(invalid);
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).some((key) => !["method", "path", "signature", "callers"].includes(key))) throw new Error(invalid);
+  if (Object.keys(record).some((key) => !["method", "path", "signature", "callers", "fields"].includes(key))) throw new Error(invalid);
   if (typeof record.path !== "string") throw new Error(invalid);
   if (!((record.method === "GET" && kind === "query") || (record.method === "POST" && kind === "mutation"))) {
     throw new Error(`Action ${name} must bind GET for a query and POST for a mutation.`);
@@ -365,18 +365,7 @@ function parseHttpBinding(name: string, kind: "query" | "mutation" | "signal", a
     throw new Error(`Action ${name} binds the reserved path ${path}. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel.`);
   }
   const binding: HttpBinding = { method: record.method, path };
-  if (record.signature !== undefined) {
-    const signature = record.signature as Record<string, unknown> | null;
-    if (!signature || typeof signature !== "object" || Array.isArray(signature)
-      || Object.keys(signature).some((key) => key !== "header" && key !== "secret")) throw new Error(invalid);
-    if (typeof signature.header !== "string" || !SIGNATURE_HEADER.test(signature.header) || UNSIGNABLE_HEADERS.has(signature.header.toLowerCase())) {
-      throw new Error(`Action ${name} has an invalid signature header.`);
-    }
-    if (typeof signature.secret !== "string" || !SECRET_NAME.test(signature.secret)) {
-      throw new Error(`Action ${name} names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter.`);
-    }
-    binding.signature = { header: signature.header, secret: signature.secret };
-  }
+  if (record.signature !== undefined) binding.signature = parseRouteSignature(name, record.method, record.signature);
   if (record.callers !== undefined) {
     const callers = record.callers;
     if (!Array.isArray(callers) || callers.length === 0 || new Set(callers).size !== callers.length
@@ -390,6 +379,10 @@ function parseHttpBinding(name: string, kind: "query" | "mutation" | "signal", a
       throw new Error(`Action ${name} declares a signature, so its callers must include "signature".`);
     }
     binding.callers = callers as RouteCaller[];
+  }
+  if (record.fields !== undefined) {
+    const inputs = new Set(bindings.flatMap((binding) => binding.source === "input" ? [binding.key] : []));
+    binding.fields = parseRouteFields(name, record.method, inputs, record.fields);
   }
   return binding;
 }

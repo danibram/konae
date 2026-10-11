@@ -29,6 +29,8 @@ import kernelMigrationSource from "../../kernel-rs/src/migration.rs?raw";
 import kernelNotifySource from "../../kernel-rs/src/notify.rs?raw";
 import kernelNotifyCases from "../../kernel-rs/src/notify-cases.json?raw";
 import kernelPackageSource from "../../kernel-rs/src/package.rs?raw";
+import kernelProviderSource from "../../kernel-rs/src/provider.rs?raw";
+import kernelProviderSignatureCases from "../../kernel-rs/src/provider-signature-cases.json?raw";
 import kernelRecoverySource from "../../kernel-rs/src/recovery.rs?raw";
 import kernelSecuritySource from "../../kernel-rs/src/security.rs?raw";
 import kernelSqlRulesSource from "../../kernel-rs/src/sql_rules.rs?raw";
@@ -76,6 +78,8 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/notify-cases.json", contents: kernelNotifyCases },
   { path: "kernel-rs/src/migration.rs", contents: kernelMigrationSource },
   { path: "kernel-rs/src/package.rs", contents: kernelPackageSource },
+  { path: "kernel-rs/src/provider.rs", contents: kernelProviderSource },
+  { path: "kernel-rs/src/provider-signature-cases.json", contents: kernelProviderSignatureCases },
   { path: "kernel-rs/src/recovery.rs", contents: kernelRecoverySource },
   { path: "kernel-rs/src/sdk-guide.json", contents: kernelSdkGuide },
   { path: "kernel-rs/src/security.rs", contents: kernelSecuritySource },

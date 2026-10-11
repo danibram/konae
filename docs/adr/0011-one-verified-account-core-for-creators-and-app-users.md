@@ -144,3 +144,6 @@ Decisions the plan left open:
 - The role travels with the identity file in a package, a portable export and a migration. After an import to another owner's installation, the previous owner's app account is still `owner`, and the new Project Owner's Open as owner adds a second one. No tool removes the role; suspending that account with `app_user_suspend` is the lever until one exists.
 - The editor's preview keeps Alice and Bob as members and has no owner persona. Adding one changes the preview's actor picker outside the Users view, so it waits for a delivery that owns the preview.
 
+## Note, 2026-11-07: a provider's own scheme
+
+A route's signature may name a `scheme` other than Littlebox's, `hmac-body`, `timestamped` or `svix`, and a route may declare `fields` that read a nested body. [ADR-0018](0018-a-route-verifies-a-providers-own-signature.md) records the decision. Littlebox's scheme stays the default and unchanged.

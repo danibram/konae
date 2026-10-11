@@ -1,6 +1,7 @@
 import type { ApiKey, AppInvitation, AppUserState, InvitationDelivery, InvitationResult, MailStatus, SignupMode } from "../deployments/client";
 import type { DeploymentVisibility } from "../deployments/manifest";
 import { parseServerActionSource, type ServerActionDefinition } from "../kernel/actions";
+import { bodyFromFields } from "../kernel/route-declaration";
 
 /**
  * What the Users and Integrations views and the publish dialog say. Kept apart
@@ -158,7 +159,7 @@ export function expiryText(invitation: Pick<AppInvitation, "status" | "expiresAt
 
 // Integrations
 
-export type RouteAction = { name: string; method: "GET" | "POST"; path: string; signature?: { header: string; secret: string }; inputs: Array<{ key: string; type: string }> };
+export type RouteAction = { name: string; method: "GET" | "POST"; path: string; signature?: { header: string; secret: string }; fields?: Record<string, string>; inputs: Array<{ key: string; type: string }> };
 
 function actionsOf(source: string | undefined): ServerActionDefinition[] {
   if (!source) return [];
@@ -176,6 +177,7 @@ export function routeActions(source: string | undefined): RouteAction[] {
     method: action.http.method,
     path: action.http.path,
     ...(action.http.signature ? { signature: action.http.signature } : {}),
+    ...(action.http.fields ? { fields: action.http.fields } : {}),
     inputs: action.bindings.flatMap((binding) => binding.source === "input" ? [{ key: binding.key, type: binding.type }] : []),
   }] : []).sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -222,7 +224,8 @@ export function routeCurl(appUrl: string, action: RouteAction, key = KEY_PLACEHO
     const query = new URLSearchParams(action.inputs.map((input) => [input.key, String(sample(input.type))])).toString();
     return `curl ${auth} "${base}${action.path}${query ? `?${query}` : ""}"`;
   }
-  const body = JSON.stringify(Object.fromEntries(action.inputs.map((input) => [input.key, sample(input.type)])));
+  // A route with fields reads each input at its path, from a key's request as from a provider's.
+  const body = JSON.stringify(bodyFromFields(action.fields, Object.fromEntries(action.inputs.map((input) => [input.key, sample(input.type)]))));
   return `curl -X POST ${auth} -H 'Content-Type: application/json' --data ${shellQuote(body)} "${base}${action.path}"`;
 }
 

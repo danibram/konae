@@ -46,6 +46,7 @@ mod migration;
 mod notify;
 mod oauth;
 mod package;
+mod provider;
 mod recovery;
 mod schedule;
 mod security;

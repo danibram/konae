@@ -290,21 +290,21 @@ An action declared `anonymous` may answer one method and path on its Deployment'
 
 A query binds `GET` and a mutation binds `POST`. An optional `"callers"` list, described under [Who may call a route](#who-may-call-a-route), names the proofs the route takes. A path starts with `/` and has segments of letters, digits, `.`, `_`, `~` and `-`, up to 200 characters, with no `.` or `..` segment and no trailing slash. Paths under `/_littlebox`, `/oauth`, `/.well-known` and `/mcp` belong to the Kernel. Two actions may share a path only with different methods. A binding wins over an artifact file at the same path for its method; every other `GET` still serves the Build Artifact, and a `POST` to a path no action binds answers 405. A `HEAD` on a `GET` route answers 405 rather than running the query to drop its rows. The Kernel reads a Deployment's routes from `actions.json` once per release, so a request for a static file does not parse it. The Validation Gate and the Kernel refuse the same declarations with the same messages, from one case file, `kernel-rs/src/http-binding-cases.json`, that both test suites run. An `authenticated` action may not declare `http`.
 
-The route answers to the callers it takes, described below, and on a private app an unsigned route takes an API key or a session, never a caller with neither. The action keeps its bindings, its query bound and the runtime endpoint's rate limits. A call that succeeds counts in [Usage](#usage-and-signals) under the route's method and path, and records the action's Signal if it declares one. A `GET` maps the query string onto the input bindings by their declared type, so `?min=10` binds the number 10; a `POST` reads a JSON object of at most 64 KiB. Inputs the action does not declare are refused, as with `miniapp.actions.call`, so a sender whose payload carries other fields needs an action that declares them or an adapter.
+The route answers to the callers it takes, described below, and on a private app an unsigned route takes an API key or a session, never a caller with neither. The action keeps its bindings, its query bound and the runtime endpoint's rate limits. A call that succeeds counts in [Usage](#usage-and-signals) under the route's method and path, and records the action's Signal if it declares one. A `GET` maps the query string onto the input bindings by their declared type, so `?min=10` binds the number 10; a `POST` reads a JSON object of at most 64 KiB. Inputs the action does not declare are refused, as with `miniapp.actions.call`, unless the route declares `fields`, described under [Webhooks from outside services](#webhooks-from-outside-services): then each input is read from its JSON path or its own key and the body's other keys are left out.
 
 | Answer | Status | When |
 | --- | --- | --- |
 | `{ "result": [rows] }` or `{ "result": { "changes", "lastInsertId" } }` | 200 | The action ran. Every answer carries `Cache-Control: no-store` |
 | `{ "error": "<binding message>" }` | 400 | An input is missing, unexpected or of the wrong type, the body is not a JSON object, or a query parameter repeats |
-| `{ "error": "invalid-signature" }` | 401 | A route that needs the signature from this caller got none, a malformed one, or one whose MAC does not match |
-| `{ "error": "stale-timestamp" }` | 401 | The signature's `t` is more than 300 seconds from the Kernel's clock. Checked before the MAC, so it says nothing about the secret |
+| `{ "error": "invalid-signature" }` | 401 | A route that needs the signature from this caller got none, a malformed one, one without its declared prefix, or one whose MAC does not match |
+| `{ "error": "stale-timestamp" }` | 401 | The signature's `t` is more than 300 seconds from the Kernel's clock, or outside a `timestamped` signature's `window`. Checked before the MAC, so it says nothing about the secret |
 | `{ "error": "authentication-required" }` | 401 | A route that takes an API key or a session, and no signature, got neither |
 | `{ "error": "invalid-api-key" }` | 401 | The bearer token starts with `lbk_` and names no live key of this Deployment |
 | `{ "error": "This route does not accept API keys." }` | 403 | The route's `callers` leave out `key` and the request carries a live key |
 | `{ "error": "This API key may not call <action>." }` | 403 | The key does not name the action |
 | `{ "error": "No route accepts POST on this path." }` | 405 | No action binds the path for `POST`. `Allow` is `GET` on a path a query binds, `GET, HEAD` elsewhere |
 | `{ "error": "A route does not answer HEAD. Send GET." }` | 405 | A `HEAD` reaches a path a query binds. It is refused before the caller is resolved and before any SQL, with `Allow: GET`. `HEAD` on every other path serves the Build Artifact's headers as before |
-| `{ "error": "replayed-signature" }` | 409 | The same signature arrived before, on this path, in the last 600 seconds, before or after a Kernel restart. A sender signs a retry again, with a new nonce |
+| `{ "error": "replayed-signature" }` | 409 | The same signature arrived before, on this path, in the last 600 seconds, before or after a Kernel restart. A sender signs a retry again, with a new nonce. For a provider's scheme, the delivery was accepted before, as described under [Webhooks from outside services](#webhooks-from-outside-services) |
 | `{ "error": "The request body exceeds 64 KiB." }` | 413 | |
 | `{ "error": "rate-limited" }` | 429 | With `Retry-After`. 30 calls per 10 seconds per client address without a key or session, 120 per user or key, shared with `actions_invoke`. Also after 10 unknown or revoked `lbk_` keys from one client address to one Deployment in a minute: from then on any key from that address, a valid one included, is refused without a lookup until the bucket refills, on routes and on the file read path |
 
@@ -381,7 +381,62 @@ curl -X POST "https://orders-1a2b3c.example.net/hooks/orders" \
   -H 'Content-Type: application/json' -H "X-Signature: t=$t,n=$n,v1=$sig" --data-binary "$body"
 ```
 
-Services with their own fixed signing scheme do not speak this one and need an adapter. `littlebox-kernel restore` brings back the table as the copy held it, so a signature accepted after that copy is accepted once more if it is replayed while its `t` is still within 300 seconds of the Kernel's clock.
+A service with its own fixed signing scheme declares it instead, as described next. `littlebox-kernel restore` brings back the table as the copy held it, so a signature accepted after that copy is accepted once more if it is replayed while its `t` is still within 300 seconds of the Kernel's clock.
+
+### Webhooks from outside services
+
+A service the owner does not control, such as a code host, a shop or a payment provider, signs its webhook its own way and posts its own nested JSON. A route takes it as it arrives when its signature names the provider's `"scheme"` and its `"fields"` say where each input sits in the body. `kernel-rs/src/provider.rs` implements it and [ADR-0018](./adr/0018-a-route-verifies-a-providers-own-signature.md) records the decision.
+
+```json
+"issues.receive": {
+  "kind": "mutation", "access": "anonymous",
+  "http": {
+    "method": "POST", "path": "/hooks/github",
+    "signature": { "scheme": "hmac-body", "header": "X-Hub-Signature-256", "secret": "github_webhook", "algorithm": "sha256", "encoding": "hex", "prefix": "sha256=" },
+    "fields": { "id": "$.issue.node_id", "title": "$.issue.title", "repo": "$.repository.full_name" }
+  },
+  "statement": "INSERT INTO issues (node_id, title, repo) VALUES (?1, ?2, ?3) ON CONFLICT (node_id) DO NOTHING",
+  "bindings": [
+    { "source": "input", "key": "id", "type": "string", "maxLength": 100 },
+    { "source": "input", "key": "title", "type": "string", "maxLength": 300 },
+    { "source": "input", "key": "repo", "type": "string", "maxLength": 200 }
+  ]
+}
+```
+
+| Scheme | Keys | What the sender puts in the request | Replay |
+| --- | --- | --- | --- |
+| `littlebox`, the default | `header`, `secret` | The header [above](#signatures) | The MAC, for 600 seconds |
+| `hmac-body` | `header`, `secret`, `algorithm` (`sha256` or `sha1`), `encoding` (`hex` or `base64`), optional `prefix` | In `header`, the prefix, then the HMAC of the raw body keyed with the secret. GitHub: `X-Hub-Signature-256`, `sha256`, `hex`, prefix `sha256=`. Shopify: `X-Shopify-Hmac-Sha256`, `sha256`, `base64` | The MAC, for 72 hours |
+| `timestamped` | `header`, `secret`, `prefix` (the timestamp field, such as `t=`), `tag` (the MAC field, such as `v1=`), `window` (1 to 3600 seconds) | In `header`, comma-separated fields: the Unix time after `prefix` and the hex HMAC-SHA256 of `<t>.<body>` after `tag`. Fields with another name, such as Stripe's `v0=`, are ignored. Stripe: `Stripe-Signature`, `t=`, `v1=`, `300` | `t` outside the window answers `stale-timestamp`; inside it, the MAC is accepted once |
+| `svix` | `secret` | `svix-id`, `svix-timestamp` and `svix-signature`, the base64 HMAC-SHA256 of `<id>.<t>.<body>` keyed with the base64 after `whsec_`, after `v1,`. Resend and Svix send it | A timestamp more than 300 seconds off answers `stale-timestamp`; the id is accepted once in 72 hours |
+
+The Kernel decodes the MAC from hex, in either case, or base64, recomputes it over the exact bytes it received and compares it in constant time. A `timestamped` or `svix` header may carry up to four MAC values while the provider rotates a secret; one with more answers `invalid-signature` before any MAC is computed, and a value that does not decode to 32 bytes is ignored. The secret is set with `secret_set` as for Littlebox's scheme. A svix secret is the `whsec_` value the provider shows, and a release whose svix route names a secret that is not `whsec_` and base64 is refused with `Action <name> verifies svix signatures with the secret <secret>, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_.` Only the Kernel makes that refusal, since the editor cannot see secrets. The `secret_set` rule for values applies, so a provider secret with a space cannot be set; give the provider one without.
+
+The Kernel records an accepted delivery before the action runs, in a `route_deliveries` table of the Deployment's `identity.sqlite` that a restart keeps and an export carries, so two copies sent at once do not both run. When the action then fails, for a missing input, a SQL error or a guard, the Kernel forgets the delivery, so the provider's retry of the same body runs. `hmac-body` signs the body alone, so the same body to another route with the same secret verifies there too; give each provider route its own secret. A body-only MAC cannot tell a delivery replayed after 72 hours from a new one. The provider's event ID in a `UNIQUE` column, with `ON CONFLICT DO NOTHING`, is the lasting guard, and every example above uses one.
+
+`fields` maps an input key to a JSON path into the POST body: `$`, then 1 to 16 steps of `.name` (letters, digits, `_` and `-`) or `[index]`, up to 200 characters, such as `$.data.object.id` or `$.commits[0].id`. With it the route reads each input fields names from its path and every other input from the body's key of the same name, and leaves out every other key of the body. A path the body does not have leaves its input out, so a required input answers `Missing action input: <key>` and a nullable one binds `NULL`. A value of the wrong type is refused as any input is, such as `id must be a non-empty string.` for a number; declare a number input for a provider's numeric ID. `fields` works on any POST route, signed or not, and a key or a session caller sends the same nested body. Without `fields` a route keeps refusing undeclared keys.
+
+The Validation Gate and the Kernel refuse the same declarations with the same messages, from `kernel-rs/src/http-binding-cases.json`, checking the scheme, the keys it takes, the method, the header, the secret and the scheme's settings in that order, then `fields` in sorted key order:
+
+| Declaration | Message |
+| --- | --- |
+| A scheme other than the four | `Action <name> names an unknown signature scheme. Use "littlebox", "hmac-body", "timestamped" or "svix".` |
+| A key the scheme does not take, such as `header` on `svix` or a secret value | `Action <name> has an invalid <scheme> signature. It takes "scheme", "header" and "secret".`, with the scheme's own list |
+| A provider's scheme on a `GET` route | `Action <name> binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body.` |
+| No header, or one the Kernel reads itself | `Action <name> has an invalid signature header.` |
+| `hmac-body` with no or another `algorithm` | `Action <name> has an invalid signature algorithm. Use "sha256" or "sha1".` |
+| `hmac-body` with no or another `encoding` | `Action <name> has an invalid signature encoding. Use "hex" or "base64".` |
+| `hmac-body` with a `prefix` of other characters or over 32 | `Action <name> has an invalid signature prefix. Use 1 to 32 letters, digits, "=", "-", "_", "." or ":", such as "sha256=".` |
+| `timestamped` with no `prefix`, or one that is not a name and `=` | `Action <name> has an invalid timestamp prefix. Use the field's name and "=", such as "t=".` |
+| `timestamped` with no `tag`, one that is not a name and `=`, or the prefix again | `Action <name> has an invalid signature tag. Use the field's name and "=", such as "v1=", other than the timestamp's.` |
+| `timestamped` with no `window`, or one that is not a whole number from 1 to 3600 | `Action <name> has an invalid signature window. Use a whole number of seconds from 1 to 3600.` |
+| `fields` on a `GET` route | `Action <name> binds GET, so it cannot declare fields. Fields read a POST body.` |
+| `fields` that is not an object, is empty or has more than 32 keys | `Action <name> has an invalid fields map. Map 1 to 32 input keys to JSON paths, such as "$.data.object.id".` |
+| A key no input binding declares | `Action <name> maps <key>, which is not one of its input bindings.` |
+| A path that is not text, lacks `$`, is `$` alone or has another step | `Action <name> maps <key> to an invalid JSON path. Use "$" and then ".name" or "[index]" steps, such as "$.data.object.id".` |
+
+`src/lib/provider-signature.ts` signs the way each provider does, and `kernel-rs/src/provider-signature-cases.json` holds vectors both sides check, GitHub's and Svix's published examples among them. A body is read up to 64 KiB, so a large delivery such as a push with many commits answers 413. A form-encoded body, as Slack's slash commands and Twilio send, still answers 400, and a scheme with the timestamp in a header of its own, as Slack's, is not one of the four.
 
 ### API keys
 

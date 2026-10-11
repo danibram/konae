@@ -4,7 +4,7 @@ Five apps built as product probes on 2026-11-06, and a sixth, starter, on 2026-1
 
 | App | What it is | Primitives it forces |
 | --- | --- | --- |
-| [inbox](inbox/README.md) | A private operations inbox fed by signed webhooks | Signed routes on a private app, API keys, Signals, invitations, suspension, an email to the owner on a critical event |
+| [inbox](inbox/README.md) | A private operations inbox fed by signed webhooks, a code host's and a payment provider's among them | Signed routes on a private app, provider signature schemes and `fields`, API keys, Signals, invitations, suspension, an email to the owner on a critical event |
 | [club](club/README.md) | A members-only book club with private and shared files | File visibility and the file read path, roles in SQL, recovery, package export and import |
 | [gallery](gallery/README.md) | A public portfolio with a contact form and a JSON feed | Public files under the CSP, anonymous rate limits, an open GET route, a multi-page artifact, a custom domain, the contract without a credential |
 | [habits](habits/README.md) | A personal tracker used from two devices | Required verification, actor-bound rows, a daily schedule that closes the day, Signals and Usage, Eject, copies and restore |

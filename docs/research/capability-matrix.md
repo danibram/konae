@@ -4,6 +4,8 @@ Date: 2026-11-07, against `main` at `e9a0711`. This matrix takes ten app shapes 
 
 Updated 2026-11-07 when the custom domain ([ADR-0015](../adr/0015-a-deployment-answers-on-one-custom-domain.md)), notices ([ADR-0016](../adr/0016-a-mutation-may-notify-the-owner-or-the-actor.md)) and scheduled work ([ADR-0017](../adr/0017-the-kernel-runs-a-declared-schedule.md)) landed: F17, F18 and F22, their cells, the counts, the shapes they unblock and the probes that prove them.
 
+Updated 2026-11-07 for [ADR-0018](../adr/0018-a-route-verifies-a-providers-own-signature.md): a route verifies a provider's own signature scheme and reads its nested body through `fields`. F9 moved from C to W, and from N to C for the integration hub; F20 moved from N to C. The counts below are taken again from the cells.
+
 The yardstick is the sentence at the top of AGENTS.md: a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.
 
 ## Verdicts
@@ -43,7 +45,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F6 | Public and private rows in one table | W | Each action projects and filters its own rows | booking "Public and staff views", gallery "Visitor view", community "Publishers and readers" |
 | F7 | Public read API | C | An unsigned GET route on a public app. It always answers `{ "result": [rows] }` as JSON with `Cache-Control: no-store` and no CORS headers, so a server reads it and a page on another origin cannot; an `OPTIONS` preflight answers 405. There is no XML or RSS. A private app's routes take a key, a signature or a session, never a caller with none, so a public API means a public app | gallery "/feed.json", dataset "Read API from another origin" |
 | F8 | Private write API with a key | W | A route with `"callers": ["key"]` and an API key that names the action | dataset "Private write API", habits "API key on an actor-bound route", booking "Check-in route" |
-| F9 | Signed webhooks in | C | A signed route in Littlebox's scheme only. A provider's own scheme answers 401 `invalid-signature`; a provider's body answers 400 `Unexpected action input: pusher` for a field the action does not declare, `ref must be a non-empty string.` for a nested object and `The request body must be a JSON object.` for a form body. A sender that cannot sign or send `Authorization: Bearer` lands only on an unsigned route of a public app, where anyone can post | inbox "Signed webhook on a private app", booking "Check-in route", hub "Provider signature", "Undeclared fields", "Nested value", "Form-encoded body", "Unsigned route on a public app" |
+| F9 | Signed webhooks in | W | A signed route in Littlebox's scheme or in a provider's own: `hmac-body` (GitHub, Shopify), `timestamped` (Stripe) or `svix` (Resend). `fields` reads each input from a JSON path into the provider's body and leaves the other keys out. Each delivery is accepted once: a second copy answers 409 `replayed-signature`, a wrong secret or a changed byte 401 `invalid-signature`. Before 2026-11-07 a provider's scheme answered 401 and its body 400 `Unexpected action input: pusher` | inbox "Signed webhook on a private app", "Webhooks from outside services", booking "Check-in route", hub "Provider signature", "Svix sender", "Undeclared fields", "Program API", "Unknown scheme at both doors" |
 | F10 | Files: public, private, per user; upload, publish, delete | W | `files_upload`, `files_update`, `files_delete` and `GET /_littlebox/files/<id>`; 2 MiB a file, 20 MiB a Deployment. A file is its uploader's or public, so no rule shares it with a role (`File not found.` to an editor), and a visitor cannot upload | gallery "Curator uploads", "Publish a draft", club "Files", community "Files by role" |
 | F11 | Images embedded | W | `<img src="/_littlebox/files/<id>">` under `img-src 'self' blob: data:`. Images from other origins and embedded players do not load, because the policy names no other origin and `frame-src` falls back to `default-src 'self'`. No resizing | gallery "Chrome", club "Browser", shop "Payment provider in the page" |
 | F12 | Search | C | `LIKE` with a nullable filter, a scan bounded by the 2-second statement deadline. Full-text search needs a virtual table, and both doors refuse it with `schema.sql may only create tables and indexes, but it contains CREATE VIRTUAL.` | dataset "Search", "Full-text search refused" |
@@ -54,7 +56,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F17 | Email on an event | W | Since 2026-11-07, `"notify": { "to": "owner" \| "actor", "subject", "body" }` on a mutation ([ADR-0015](../adr/0016-a-mutation-may-notify-the-owner-or-the-actor.md)) queues one email when the statement changes a row: to the Project Owner, or to the caller once the account answered a link. A local signup proves no address, so the call succeeds and Usage counts `unverified-email`. Templates take `{input.<key>}` and `{actor.id}` only, and no address from the input is ever a recipient, so a third person such as an assignee or a follower gets nothing. Notices count apart from account email: 200 a day per app, 500 per creator, 50 per recipient from one app. The runtime door still has no mail tool | notify "Owner notice", "Actor notice needs a proven email", "Owner reads the outcome", "Refusals at both doors"; booking "Booking confirmation"; inbox "Critical page by email" |
 | F18 | Scheduled or delayed work | C | A mutation with no input declares `"schedule": { "every": "15m" }`, from 5 minutes to 24 hours, or `{ "daily": "02:00" }` in UTC, and the Kernel's timer runs it once a period with nobody calling, records each run under Usage's `scheduled`, retries a failure at the next tick and skips an app in maintenance. The compromise: a run is one SQL statement, so a reminder, a digest or a summary is written into the app's tables and reaches nobody who has not opened the app, because nothing sends email on an event (F17). A run can be up to a minute late, and a period is never shorter than 5 minutes. A retry of an outbound call is N, because no action calls out | schedule "A run with nobody asking", "Only the timer", "A failing run is retried", "Maintenance"; booking "Release unclaimed bookings"; habits "Close the day"; platform "Declare a schedule on a mutation" |
 | F19 | Realtime updates | C | The page polls a query with an `after` cursor, within 30 calls per 10 seconds per visitor address and 120 per signed-in user. Nothing is pushed: a `"subscribe"` key passes both doors and does nothing | community "Realtime by polling", platform "Declare a subscription on a query" |
-| F20 | Payments | N | The page policy refuses a provider's script, API calls, checkout frame and a form that posts to it, and a provider's signed webhook answers 401 `invalid-signature`. The nearest alternative is a plain link to a hosted payment page, which publishes and navigates, and a program the owner runs that confirms the payment with an API key | shop "Payment provider in the page", "Holds that lapse" (`payments.confirm` by key), hub "Payment provider signature" |
+| F20 | Payments | C | A plain link to the provider's hosted payment page, which publishes and navigates, carries the order as `client_reference_id`, and the provider's webhook on a `timestamped` route marks the order paid through a guarded mutation; a second payment for the order answers 403 with the guard. What is given up: checkout inside the page, since the page policy refuses the provider's script, API calls, checkout frame and a form that posts to it, and an amount the app computes, since no action calls out to create a checkout session, so each price is a payment link set up at the provider | shop "Payment provider in the page", hub "Payment provider signature" |
 | F21 | Third-party login | N | App accounts are email and password; the runtime tools are `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset`. Nothing inside Littlebox comes close, because an outside login does not produce a Runtime Actor | platform "Runtime tools" |
 | F22 | Custom domain | W | `domain_set` with `publish` gives a Deployment one hostname alias next to its generated hostname, which keeps answering. The owner proves control with a TXT record `_littlebox.<hostname>` holding a token, which the Kernel looks up itself; then the alias is the app's own origin for the runtime's `Origin` check, cookies, the policy, routes, the file path and the maintenance page. A name under the suffix, a name another Deployment serves and a record holding another value are refused. The operator's proxy terminates TLS and forwards `Host` unchanged ([ADR-0015](../adr/0015-a-deployment-answers-on-one-custom-domain.md)). Until 2026-11-07 another `Host` answered 404 and this cell was N | domain "TXT proof", "Serve from the alias", "A name another Deployment holds", "Package", "Maintenance page"; gallery "Custom domain"; platform "Unclaimed hostname" |
 | F23 | Export and migration | W | `package_export` and an import into another Kernel, Eject, scheduled copies and restore | club "Export", "Import", habits "Eject and publish from outside", "Copy and restore" |
@@ -72,7 +74,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F6 Public and private rows in one table | W | **W** | W | W | **W** | W | W | W | **W** | **W** |
 | F7 Public read API | C | C | C | C | **C** | C | **C** | C | C | C |
 | F8 Private write API with a key | W | W | W | W | W | W | **W** | **W** | W | W |
-| F9 Signed webhooks in | C | C | C | C | C | C | C | **N** | C | C |
+| F9 Signed webhooks in | W | W | W | W | W | W | W | **C** | W | W |
 | F10 Files | W | W | **C** | **W** | W | **C** | W | W | W | **C** |
 | F11 Images embedded | **W** | W | W | **W** | **C** | W | W | W | W | W |
 | F12 Search | C | C | C | **C** | **C** | C | **C** | C | C | **C** |
@@ -83,7 +85,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F17 Email on an event | **W** | W | **C** | **C** | W | **W** | W | **W** | **W** | **C** |
 | F18 Scheduled or delayed work | C | **C** | **C** | C | **W** | C | W | **N** | **W** | W |
 | F19 Realtime updates | C | C | **C** | C | C | C | C | C | **C** | **C** |
-| F20 Payments | N | N | N | N | N | N | N | N | **N** | **N** |
+| F20 Payments | C | C | C | C | C | C | C | C | **C** | **C** |
 | F21 Third-party login | N | N | N | N | N | N | N | N | N | N |
 | F22 Custom domain | **W** | W | W | W | **W** | W | W | W | **W** | W |
 | F23 Export and migration | **W** | **W** | **W** | **W** | **W** | **W** | **W** | **W** | **W** | **W** |
@@ -91,7 +93,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 
 A cell differs from its feature's verdict where the shape changes the answer:
 
-- F9 in H is N. A hub's senders are outside services with their own signature schemes and payloads, and the hub probe shows each of them refused. The nearest alternative is an adapter outside Littlebox that verifies the sender and posts the declared fields to a signed route.
+- F9 in H is C. A hub's senders are outside services with their own signature schemes and payloads, and the four schemes take a code host's, a shop's, a payment provider's and a Svix sender's. A sender that posts a form-encoded body, as Slack's slash commands and Twilio do, still answers 400 `The request body must be a JSON object.`, a scheme with the timestamp in its own header, as Slack's, is not one of the four, and a delivery over 64 KiB answers 413. Such a sender still needs an adapter outside Littlebox. Before 2026-11-07 this cell was N.
 - F10 in C and J is C, because a file goes to its uploader or to everyone who may open the app, never to a role or to a publisher's followers. In F it is C, because a visitor cannot upload: `transfer_begin` needs a session, so a respondent creates an account before attaching a file.
 - F11 in E is C, because a post cannot embed an image or a video from another site.
 - F17 is C in C, D and J, because a notice reaches only the owner or the person who acted. A team tool cannot tell the assignee, a community its members, a two-sided app the followers; they see the change when they next open the app. Sending to account IDs a query returns is the form that would close it.
@@ -103,10 +105,10 @@ The counts are taken from the 240 cells above, by counting each letter.
 
 | | Works | Compromise | Not possible | Cells |
 | --- | --- | --- | --- | --- |
-| Every cell | 137 | 81 | 22 | 240 |
-| Cells a shape cannot ship without (bold) | 50 | 33 | 4 | 87 |
+| Every cell | 146 | 83 | 11 | 240 |
+| Cells a shape cannot ship without (bold) | 50 | 36 | 1 | 87 |
 
-On 2026-11-06 the counts were 116, 77 and 47 over every cell and 41, 30 and 16 over the bold ones. On 2026-11-07 the custom domain moved F22 to W, notices moved F17 to W or C, and scheduled work moved F18 to W or C, which gives the counts above.
+On 2026-11-06 the counts were 116, 77 and 47 over every cell and 41, 30 and 16 over the bold ones. On 2026-11-07 the custom domain moved F22 to W, notices moved F17 to W or C, scheduled work moved F18 to W or C, and provider signature schemes moved F9 to W and F20 to C, which gives the counts above.
 
 | Shape | Needed | Not possible among them | Compromises among them |
 | --- | --- | --- | --- |
@@ -117,9 +119,11 @@ On 2026-11-06 the counts were 116, 77 and 47 over every cell and 41, 30 and 16 o
 | E Blog or docs | 10 |  | F7, F11, F12, F24 |
 | F Form collector | 6 |  | F10, F24 |
 | G Public dataset | 7 |  | F7, F12, F24 |
-| H Integration hub | 9 | F9 provider webhooks, F18 retries | F15, F24 |
-| I Shop or booking | 10 | F20 payments | F19, F24 |
-| J Two-sided | 11 | F20 payments | F5, F10, F12, F17, F19, F24 |
+| H Integration hub | 9 | F18 retries | F9, F15, F24 |
+| I Shop or booking | 10 |  | F19, F20, F24 |
+| J Two-sided | 11 |  | F5, F10, F12, F17, F19, F20, F24 |
+
+A, B, C, D, E, F, G, I and J need nothing marked N. Before 2026-11-07 only G did. Every other shape still needs at least one feature that no primitive gives.
 
 A, B, C, D, E, F and G need nothing marked N. Before 2026-11-07 only G did. Every other shape still needs at least one feature that no primitive gives.
 
@@ -135,23 +139,24 @@ The probes found three declarations the Validation Gate and the Kernel answered 
 
 ## What blocks the most shapes
 
-Counting the bold N cells per feature gave five features with any on 2026-11-06, the five in [the showcase findings](./showcase-findings.md#what-the-matrix-adds), each with the smallest primitive that unblocks it. Two of them, email on an event and the custom domain, landed on 2026-11-07.
+Counting the bold N cells per feature gave five features with any on 2026-11-06, the five in [the showcase findings](./showcase-findings.md#what-the-matrix-adds), each with the smallest primitive that unblocks it. Four of them landed on 2026-11-07; the table shows what each still blocks or degrades.
 
 | Feature | Shapes it blocks | Shapes it degrades |
 | --- | --- | --- |
-| F17 Email on an event | | C, D, J |
+| F9 Signed webhooks in |  | H |
+| F17 Email on an event |  | C, D, J |
 | F18 Scheduled or delayed work | H | B, C |
-| F20 Payments | I, J | |
-| F9 Webhooks from outside services | H | |
+| F20 Payments |  | I, J |
+| F22 Custom domain |  |  |
 
-Payments and outside webhooks need the same primitive, because a payment provider tells the app about a payment with a webhook in its own scheme. The next features down block nothing but degrade the most shapes: search (D, E, G, J), realtime (C, I, J) and roles (C, D, J).
+Payments and webhooks from outside services blocked I, J and H until 2026-11-07. They needed one primitive, because a payment provider tells the app about a payment with a webhook in its own scheme, and [ADR-0018](../adr/0018-a-route-verifies-a-providers-own-signature.md) added it. The next features down block nothing but degrade the most shapes: search (D, E, G, J), realtime (C, I, J) and roles (C, D, J).
 
 ## Probes
 
 | Probe | Cells it decides | Checks |
 | --- | --- | --- |
 | [dataset](../../examples/probes/dataset/replay.ts) | F7, F8, F12, F13, F14 | 7 |
-| [hub](../../examples/probes/hub/replay.ts) | F9, F20, the hub's program API | 9 |
+| [hub](../../examples/probes/hub/replay.ts) | F9, F20, the hub's program API, a scheme refused at both doors | 9 |
 | [shop](../../examples/probes/shop/replay.ts) | F11, F18, F20, inventory under concurrency | 3 |
 | [community](../../examples/probes/community/replay.ts) | F5, F6, F10, F15, F19 | 6 |
 | [survey](../../examples/probes/survey/replay.ts) | F14, one vote per person, a multi-answer form in one write | 2 |

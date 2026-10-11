@@ -196,4 +196,15 @@ describe("integrations", () => {
     expect(routeCurl("https://orders-1a2b.example.net", receive)).toContain("Bearer $LITTLEBOX_API_KEY");
     expect(fileCurl("https://orders-1a2b.example.net", "lbk_test")).toBe('curl -OJ -H "Authorization: Bearer lbk_test" "https://orders-1a2b.example.net/_littlebox/files/<file id>"');
   });
+
+  test("a route with fields gets a curl whose body nests each input at its path", () => {
+    const source = JSON.stringify({ version: 1, actions: { "payments.receive": {
+      kind: "mutation", access: "anonymous", statement: "INSERT INTO payments (id, amount) VALUES (?1, ?2)",
+      bindings: [{ source: "input", key: "id", type: "string" }, { source: "input", key: "amount", type: "number" }],
+      http: { method: "POST", path: "/hooks/payments", signature: { scheme: "timestamped", header: "Stripe-Signature", secret: "payments_webhook", prefix: "t=", tag: "v1=", window: 300 }, fields: { id: "$.data.object.id" } },
+    } } });
+    const [route] = routeActions(source);
+    expect(route.fields).toEqual({ id: "$.data.object.id" });
+    expect(routeCurl("https://shop.example.net", route, "lbk_test")).toContain(`--data '{"data":{"object":{"id":"text"}},"amount":1}'`);
+  });
 });

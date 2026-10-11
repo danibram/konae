@@ -4,7 +4,7 @@ Littlebox is the guardrail that lets a person who does not write code, and a per
 
 ## Language
 
-Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, notice, schedule and SDK module. Usage, Signal and Action Contract keep their capitals, as the older terms do.
+Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, notice, schedule, signature scheme and SDK module. Usage, Signal and Action Contract keep their capitals, as the older terms do.
 
 **Account**:
 The authenticated identity and personal profile used to enter Littlebox and participate in Workspaces. An Account does not directly own runtime data or imply access to every Project.
@@ -131,8 +131,12 @@ A secret the Project Owner issues for one Deployment so a program can call it as
 _Avoid_: token (an Agent Credential), service account
 
 **Signing Secret**:
-A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. A sender proves a request with an HMAC under it of a timestamp, a nonce, the method, the path, the canonical query string and the body. It never appears in `actions.json`, a Build Artifact or an export.
+A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. In Littlebox's own signature scheme a sender proves a request with an HMAC under it of a timestamp, a nonce, the method, the path, the canonical query string and the body; in a provider's scheme, with the HMAC that provider computes. It never appears in `actions.json`, a Build Artifact or an export.
 _Avoid_: webhook token, API key
+
+**Signature Scheme**:
+How a route's signature is computed and where it travels, declared as `"scheme"` on the signature: `littlebox`, the default, or a provider's own, `hmac-body` (an HMAC of the body, as GitHub and Shopify send), `timestamped` (an HMAC of `<t>.<body>` with a window, as Stripe sends) or `svix` (three `svix-*` headers, as Resend sends). A provider's route may add `"fields"`, a JSON path into the body for each input, and then leaves out body keys no input names, so a provider's payload reaches the action with no adapter. Each scheme accepts a delivery once. The Validation Gate and the Kernel parse both from one case file.
+_Avoid_: webhook format, provider adapter
 
 **Project Owner**:
 An authenticated workspace member allowed to edit a Project and administer its data, schema, files, Usage and deployments.

@@ -35,6 +35,40 @@
         "body": "{input.source} paged the inbox with a critical event.\n{input.title}\n{input.body}\nSign in to the inbox to acknowledge it."
       }
     },
+    "github.receive": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": {
+        "method": "POST",
+        "path": "/hooks/github",
+        "signature": { "scheme": "hmac-body", "header": "X-Hub-Signature-256", "secret": "github_webhook", "algorithm": "sha256", "encoding": "hex", "prefix": "sha256=" },
+        "fields": { "id": "$.issue.node_id", "title": "$.issue.title", "repo": "$.repository.full_name" }
+      },
+      "statement": "INSERT INTO events (source, external_id, severity, title, body, received_at) VALUES ('github', ?1, 'warning', ?2, COALESCE(?3, ''), ?4) ON CONFLICT (source, external_id) DO NOTHING",
+      "bindings": [
+        { "source": "input", "key": "id", "type": "string", "maxLength": 100 },
+        { "source": "input", "key": "title", "type": "string", "maxLength": 200 },
+        { "source": "input", "key": "repo", "type": "string", "maxLength": 200, "nullable": true },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "payments.receive": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": {
+        "method": "POST",
+        "path": "/hooks/payments",
+        "signature": { "scheme": "timestamped", "header": "Stripe-Signature", "secret": "payments_webhook", "prefix": "t=", "tag": "v1=", "window": 300 },
+        "fields": { "id": "$.id", "title": "$.type", "detail": "$.data.object.failure_message" }
+      },
+      "statement": "INSERT INTO events (source, external_id, severity, title, body, received_at) VALUES ('payments', ?1, 'critical', ?2, COALESCE(?3, ''), ?4) ON CONFLICT (source, external_id) DO NOTHING",
+      "bindings": [
+        { "source": "input", "key": "id", "type": "string", "maxLength": 100 },
+        { "source": "input", "key": "title", "type": "string", "maxLength": 200 },
+        { "source": "input", "key": "detail", "type": "string", "maxLength": 4000, "nullable": true },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
     "events.feed": {
       "kind": "query",
       "access": "anonymous",
