@@ -1,6 +1,7 @@
 // Replays the habits showcase against its own Kernel: verified signup, rows
-// bound to the actor, an API key on a route, Signals and Usage, Eject from the
-// managed path, and a scheduled copy restored into a fresh Kernel. It asserts
+// bound to the actor, a day closed by a schedule, an API key on a route,
+// Signals and Usage, Eject from the managed path, and a scheduled copy
+// restored into a fresh Kernel. It asserts
 // what works and what each primitive refuses, then removes its Kernel and data.
 //
 //   LITTLEBOX_SHOWCASE_PORT=21410 bun run examples/showcase/habits/replay.ts
@@ -49,6 +50,8 @@ function kernelEnv(data: string, extra: Record<string, string> = {}) {
     LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: data, LITTLEBOX_ADMIN_KEY: setupKey,
     LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: repo, LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1",
     LITTLEBOX_ACCOUNT_VERIFICATION: "required", LITTLEBOX_MAIL_TRANSPORT: "development",
+    // days.close is declared daily at 00:05 UTC; the test clock runs it every 2 seconds.
+    LITTLEBOX_SCHEDULE_MIN_SECONDS: "2",
     ...extra,
   };
 }
@@ -329,6 +332,31 @@ try {
   assert.equal((await action(anaPhone, "checkins.since", { from: utcDay(-30) })).length, 6);
   check("Rows bound to the actor", "Ben reads no habit, check-in or streak of Ana's; archive, check-in and uncheck on her habit change 0 rows; a userId input is refused with \"Unexpected action input: userId\"; Ana's rows are unchanged. The archive is refused with its guard, \"This habit is already archived, or it is not yours.\"");
 
+  // ---------------------------------------------------------- close the day
+  // days.close has "schedule": { "daily": "00:05" }, so the Kernel runs it with nobody
+  // calling. A habit started today does not count against yesterday, and the replay made
+  // Ana's habits a moment ago, so the owner dates them a week back, as if she started then.
+  await sql(`UPDATE habits SET created_at = created_at - ${7 * 86_400_000} WHERE user_id = '${anaSession.userId}'`);
+  const yesterday = utcDay(-1);
+  type Day = { day: string; habits: number; done: number };
+  let closedDays: Day[] = [];
+  for (const deadline = Date.now() + 20_000; closedDays.length === 0; await Bun.sleep(250)) {
+    assert(Date.now() < deadline, "days.close did not close yesterday within 20 seconds.");
+    closedDays = await action<Day[]>(anaPhone, "days.recent");
+  }
+  assert.deepEqual(closedDays, [{ day: yesterday, habits: 2, done: 1 }]);
+  assert.deepEqual(await action(benClient, "days.recent"), [], "Ben's habit started today, so he had nothing to close yesterday.");
+  // A person's call binds their ID, and the statement asks for none, so only the timer closes a day.
+  const closedByBen = await action<{ changes: number }>(benClient, "days.close");
+  assert.equal(closedByBen.changes, 0);
+  await Bun.sleep(2500);
+  type Run = { action: string; at: number; outcome: string; changes: number };
+  const closeRuns = (await owner.call<{ scheduled: Run[] }>("usage_read", { deploymentId: receipt.id, from: utcDay(-1), to: utcDay(1) })).scheduled;
+  assert(closeRuns.length >= 2 && closeRuns.every((run) => run.action === "days.close" && run.outcome === "ok"), JSON.stringify(closeRuns));
+  assert.equal(closeRuns.filter((run) => run.changes > 0).length, 1, "Later runs find yesterday already closed.");
+  assert.deepEqual(await action(anaPhone, "days.recent"), closedDays);
+  check("Close the day", `days.close, declared daily at 00:05 UTC and run here every 2 seconds, closes ${yesterday} for Ana as ${JSON.stringify(closedDays[0])} with nobody calling; Ben, whose habit started today, gets no row. Ben calling days.close himself answers ${JSON.stringify(closedByBen)}. usage_read lists ${closeRuns.length} runs, all ok, and only the first changed a row: the others found the day closed.`);
+
   // ------------------------------------------- an API key on an actor-bound route
   const key = await owner.call<{ key: string; keyId: string }>("api_keys_create", { deploymentId: receipt.id, name: "Phone shortcut", actions: ["habits.import", "habits.mine", "checkins.log"] });
   const route = (method: "GET" | "POST", routePath: string, body?: unknown, headers: Record<string, string> = {}) => fetch(`${url}${routePath}`, {
@@ -410,7 +438,7 @@ try {
   const [contractCode, contractOut, contractErr] = await cli(["contract", "--dir", contractDir]);
   assert.equal(contractCode, 0, contractOut + contractErr);
   const contract = JSON.parse(await readFile(path.join(contractDir, "action-contract.json"), "utf8"));
-  assert.equal(contract.actions.length, 10);
+  assert.equal(contract.actions.length, 12);
   const [conformCode, conformOut, conformErr] = await cli(["conform", "--url", receipt.url, "--contract", path.join(contractDir, "action-contract.json"), "--token", conformToken, "--key", key.key]);
   const conformTotals = conformOut.trim().split("\n").at(-1)!;
   assert.equal(conformCode, 0, conformOut + conformErr);
@@ -423,7 +451,7 @@ try {
   for (const routeName of ["checkins.log", "habits.import", "habits.mine"]) {
     assert(conformOut.split("\n").some((line) => line.startsWith(`PASS ${routeName}: answers`) && line.includes("with an API key")), `${routeName} with the key:\n${conformOut}`);
   }
-  check("Action Contract", `littlebox contract writes 10 actions${contractErr.trim() ? ` with warnings: ${contractErr.trim()}` : " with no warning"}; littlebox conform reports "${conformTotals}" and calls the three actor-bound routes with the API key.`);
+  check("Action Contract", `littlebox contract writes 12 actions${contractErr.trim() ? ` with warnings: ${contractErr.trim()}` : " with no warning"}; littlebox conform reports "${conformTotals}" and calls the three actor-bound routes with the API key.`);
 
   // ------------------------------------------------------------------ Eject
   const lifecycle = await owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish", "manage_lifecycle"], projectIds: [projectId], ttlSeconds: 3600 });
@@ -492,6 +520,10 @@ try {
   assert.equal(keyAfter.body.result.length, 3);
   const restoredSignals = await restoredOwner.call<{ signals: unknown[]; nextCursor: string | null }>("signals_read", { deploymentId: receipt.id, name: "habit.completed" });
   assert.equal(restoredSignals.signals.length, signalCountBefore);
+  // The closed day and the runs travel in the copy, with the slot each run marked done.
+  assert.deepEqual(await action(anaRestored, "days.recent"), closedDays);
+  const restoredRuns = (await restoredOwner.call<{ scheduled: Run[] }>("usage_read", { deploymentId: receipt.id, from: utcDay(-1), to: utcDay(1) })).scheduled;
+  assert(restoredRuns.length >= closeRuns.length, `${restoredRuns.length} runs after the restore, ${closeRuns.length} before the copy.`);
   let restoredRefusal = "";
   const restoredUpload = await restoredOwner.upload(new TextEncoder().encode(JSON.stringify(managedSource(sources))), projectId);
   try {
@@ -500,7 +532,7 @@ try {
   assert.equal(restoredRefusal, managedRefusal);
   assert((await (await fetch(url, { headers: { host } })).text()).includes("Build 2"));
   check("Copy and restore",
-    `A directory copy taken ${copies!.targets[0].lastCopyId} restores into an empty data directory. The restored Kernel serves Build 2, signs out Ana's sessions, the owner's session and the delegated token, keeps the passwords, rows, streaks, ${signalCountBefore} Signals, the ejected state and the API key, which still reads GET /api/habits.`);
+    `A directory copy taken ${copies!.targets[0].lastCopyId} restores into an empty data directory. The restored Kernel serves Build 2, signs out Ana's sessions, the owner's session and the delegated token, keeps the passwords, rows, streaks, ${signalCountBefore} Signals, the closed day and ${restoredRuns.length} scheduled runs, the ejected state and the API key, which still reads GET /api/habits.`);
 
   // ------------------------------------------- Chrome under the app's policy
   if (process.env.LITTLEBOX_SHOWCASE_BROWSER !== "0") {

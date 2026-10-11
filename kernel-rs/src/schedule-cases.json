@@ -1,0 +1,920 @@
+[
+ {
+  "case": "every 15 minutes",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "15m"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "every 5 minutes, the shortest period",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "5m"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "every 4 minutes",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "4m"
+    }
+   }
+  },
+  "error": "Action holds.release runs every 4m, more often than every 5 minutes. Use \"5m\" or longer."
+ },
+ {
+  "case": "every 1 minute",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "1m"
+    }
+   }
+  },
+  "error": "Action holds.release runs every 1m, more often than every 5 minutes. Use \"5m\" or longer."
+ },
+ {
+  "case": "every 6 hours",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "6h"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "every 24 hours, the longest period",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "24h"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "every 1440 minutes",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "1440m"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "every 25 hours",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "25h"
+    }
+   }
+  },
+  "error": "Action holds.release runs every 25h, less often than once a day. Use \"daily\" or a period of 24 hours or less."
+ },
+ {
+  "case": "every 1441 minutes",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "1441m"
+    }
+   }
+  },
+  "error": "Action holds.release runs every 1441m, less often than once a day. Use \"daily\" or a period of 24 hours or less."
+ },
+ {
+  "case": "every with a leading zero",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "05m"
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+ },
+ {
+  "case": "every with seconds",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "300s"
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+ },
+ {
+  "case": "every with no unit",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "15"
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+ },
+ {
+  "case": "every with a space",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "15 m"
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+ },
+ {
+  "case": "every with a capital unit",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "15M"
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+ },
+ {
+  "case": "every with six digits",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "100000m"
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+ },
+ {
+  "case": "every as a number",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": 15
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+ },
+ {
+  "case": "a cron expression",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": "0 8 * * *"
+   }
+  },
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+ },
+ {
+  "case": "an empty schedule",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {}
+   }
+  },
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+ },
+ {
+  "case": "both every and daily",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "15m",
+     "daily": "02:00"
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+ },
+ {
+  "case": "an unknown key",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "weekly": "mon"
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+ },
+ {
+  "case": "schedule as true",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": true
+   }
+  },
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+ },
+ {
+  "case": "daily at two in the morning",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "02:00"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "daily at midnight",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "00:00"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "daily at 23:59",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "23:59"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "daily at 24:00",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "24:00"
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59."
+ },
+ {
+  "case": "daily at 12:60",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "12:60"
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59."
+ },
+ {
+  "case": "daily without a leading zero",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "2:00"
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59."
+ },
+ {
+  "case": "daily with seconds",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "02:00:00"
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59."
+ },
+ {
+  "case": "daily with a time zone",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "02:00Z"
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59."
+ },
+ {
+  "case": "daily as a number",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": 200
+    }
+   }
+  },
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+ },
+ {
+  "case": "a schedule on a mutation that binds the actor, a literal and the time",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1 AND ?2 IS NULL AND kind = ?3",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     },
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "literal",
+      "value": "room"
+     }
+    ],
+    "schedule": {
+     "every": "15m"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a schedule on a mutation with no bindings",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "DELETE FROM holds WHERE released_at IS NOT NULL",
+    "bindings": [],
+    "schedule": {
+     "daily": "03:30"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a schedule on a mutation with an input binding",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE room = ?2",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 40
+     }
+    ],
+    "schedule": {
+     "every": "15m"
+    }
+   }
+  },
+  "error": "Action holds.release declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values."
+ },
+ {
+  "case": "a schedule on a mutation with a nullable input binding",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE room = ?2",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "nullable": true
+     }
+    ],
+    "schedule": {
+     "every": "15m"
+    }
+   }
+  },
+  "error": "Action holds.release declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values."
+ },
+ {
+  "case": "input bindings are refused before a bad period",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = 1 WHERE room = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string"
+     }
+    ],
+    "schedule": {
+     "every": "1m"
+    }
+   }
+  },
+  "error": "Action holds.release declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values."
+ },
+ {
+  "case": "a schedule on a query",
+  "actions": {
+   "holds.due": {
+    "kind": "query",
+    "access": "authenticated",
+    "statement": "SELECT id FROM holds WHERE until < ?1 LIMIT 50",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "15m"
+    }
+   }
+  },
+  "error": "Action holds.due is a query, so it cannot declare a schedule. Declare it on a mutation."
+ },
+ {
+  "case": "a schedule on a signal action",
+  "actions": {
+   "holds.ping": {
+    "kind": "signal",
+    "access": "authenticated",
+    "bindings": [],
+    "signal": {
+     "name": "holds.pinged"
+    },
+    "schedule": {
+     "every": "15m"
+    }
+   }
+  },
+  "error": "Action holds.ping is a signal action, so it cannot declare a schedule. Declare it on a mutation."
+ },
+ {
+  "case": "a schedule with a guard and a signal",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "15m"
+    },
+    "guard": "Nothing to release.",
+    "signal": {
+     "name": "holds.released",
+     "properties": [
+      "actor"
+     ]
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a guard is checked before the schedule",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "1m"
+    },
+    "guard": ""
+   }
+  },
+  "error": "Action holds.release has an invalid guard. Use a message of 1 to 200 characters on one line."
+ },
+ {
+  "case": "subscribe on a query",
+  "actions": {
+   "notes.recent": {
+    "kind": "query",
+    "access": "authenticated",
+    "statement": "SELECT id FROM notes WHERE id > ?1 ORDER BY id LIMIT 50",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "after",
+      "type": "number"
+     }
+    ],
+    "subscribe": true
+   }
+  },
+  "error": "Action notes.recent declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead."
+ },
+ {
+  "case": "subscribe set to false is still refused",
+  "actions": {
+   "notes.recent": {
+    "kind": "query",
+    "access": "authenticated",
+    "statement": "SELECT id FROM notes LIMIT 50",
+    "bindings": [],
+    "subscribe": false
+   }
+  },
+  "error": "Action notes.recent declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead."
+ },
+ {
+  "case": "subscribe on a mutation",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "subscribe": {
+     "every": "15m"
+    }
+   }
+  },
+  "error": "Action holds.release declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead."
+ },
+ {
+  "case": "subscribe on a signal action",
+  "actions": {
+   "notes.seen": {
+    "kind": "signal",
+    "access": "authenticated",
+    "bindings": [],
+    "signal": {
+     "name": "notes.seen"
+    },
+    "subscribe": true
+   }
+  },
+  "error": "Action notes.seen declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead."
+ },
+ {
+  "case": "subscribe is refused before a schedule",
+  "actions": {
+   "holds.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "1m"
+    },
+    "subscribe": true
+   }
+  },
+  "error": "Action holds.release declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead."
+ },
+ {
+  "case": "with two bad actions the first in name order is named",
+  "actions": {
+   "zz.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "every": "1m"
+    }
+   },
+   "aa.release": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "25:00"
+    }
+   }
+  },
+  "error": "Action aa.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59."
+ }
+]

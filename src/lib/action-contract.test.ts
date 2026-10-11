@@ -283,6 +283,38 @@ describe("schema check", () => {
     expect(programFromContract(body as ActionContract)).toEqual(withoutFalseNullable(parseServerActionSource(actionsSource)));
   });
 
+  test("a scheduled mutation carries its schedule, says so in Markdown and round-trips", () => {
+    const actionsSource = JSON.stringify({ version: 1, actions: {
+      "holds.release": {
+        kind: "mutation",
+        access: "authenticated",
+        schedule: { every: "15m" },
+        statement: "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1 AND ?2 IS NULL",
+        bindings: [{ source: "kernel", field: "now" }, { source: "actor", field: "id" }],
+      },
+      "days.close": {
+        kind: "mutation",
+        access: "authenticated",
+        schedule: { daily: "00:05" },
+        statement: "DELETE FROM holds WHERE released_at IS NOT NULL",
+        bindings: [],
+      },
+    } });
+    const schemaSource = "CREATE TABLE IF NOT EXISTS holds (id INTEGER PRIMARY KEY, until INTEGER, released_at INTEGER);";
+    const { contract } = generateActionContract({ actionsSource, schemaSource });
+    expect(contract.actions.map((action) => [action.name, action.schedule])).toEqual([["days.close", { daily: "00:05" }], ["holds.release", { every: "15m" }]]);
+    const markdown = renderActionContractMarkdown(contract);
+    expect(markdown).toContain("The Kernel's timer also runs it every 15m, with no caller");
+    expect(markdown).toContain("The Kernel's timer also runs it daily at 00:05 UTC, with no caller");
+    const read = JSON.parse(serializeActionContract(contract));
+    expect(checkActionContract(read)).toEqual([]);
+    const { $schema, ...body } = read;
+    expect(programFromContract(body as ActionContract)).toEqual(withoutFalseNullable(parseServerActionSource(actionsSource)));
+    const bad = JSON.parse(serializeActionContract(contract));
+    bad.actions[1].schedule = { weekly: "mon" };
+    expect(checkActionContract(bad).length).toBeGreaterThan(0);
+  });
+
   test("accepts the reserved signal output", () => {
     const signal = valid();
     signal.actions[0].output = { kind: "signal", signal: "waitlist.joined" };

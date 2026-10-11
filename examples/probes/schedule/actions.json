@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "actions": {
+    "notes.add": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO notes (user_id, body, remind_at) VALUES (?1, ?2, ?3)",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "body", "type": "string", "maxLength": 500 },
+        { "source": "input", "key": "remind_at", "type": "number" }
+      ]
+    },
+    "notes.inbox": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT id, body, remind_at, surfaced_at FROM notes WHERE user_id = ?1 AND surfaced_at IS NOT NULL ORDER BY surfaced_at DESC, id LIMIT 50",
+      "bindings": [{ "source": "actor", "field": "id" }]
+    },
+    "notes.surface": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "schedule": { "every": "5m" },
+      "statement": "UPDATE notes SET surfaced_at = ?1 WHERE surfaced_at IS NULL AND remind_at <= ?1 AND ?2 IS NULL",
+      "bindings": [{ "source": "kernel", "field": "now" }, { "source": "actor", "field": "id" }],
+      "signal": { "name": "notes.surfaced" }
+    }
+  }
+}

@@ -102,6 +102,22 @@
         { "source": "kernel", "field": "now" }
       ],
       "signal": { "name": "habit.completed", "properties": ["habitId", "day", "device", "actor"] }
+    },
+    "days.close": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "schedule": { "daily": "00:05" },
+      "statement": "INSERT INTO days(user_id, day, habits, done, closed_at) SELECT h.user_id, date(?1 / 1000, 'unixepoch', '-1 day'), count(*), count(c.id), ?1 FROM habits h LEFT JOIN checkins c ON c.habit_id = h.id AND c.day = date(?1 / 1000, 'unixepoch', '-1 day') WHERE h.archived_at IS NULL AND h.created_at < (?1 / 86400000) * 86400000 AND ?2 IS NULL GROUP BY h.user_id ON CONFLICT(user_id, day) DO NOTHING",
+      "bindings": [
+        { "source": "kernel", "field": "now" },
+        { "source": "actor", "field": "id" }
+      ]
+    },
+    "days.recent": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT day, habits, done FROM days WHERE user_id = ?1 ORDER BY day DESC LIMIT 30",
+      "bindings": [{ "source": "actor", "field": "id" }]
     }
   }
 }

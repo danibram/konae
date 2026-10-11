@@ -47,6 +47,7 @@ mod notify;
 mod oauth;
 mod package;
 mod recovery;
+mod schedule;
 mod security;
 mod sql_rules;
 mod usage;
@@ -316,6 +317,12 @@ struct ActionDefinition {
     /// The email a mutation queues when it changes a row, checked by `notify::declaration`.
     #[serde(default)]
     notify: Option<Value>,
+    /// When the Kernel's timer runs a mutation, checked by `schedule::declaration`.
+    #[serde(default)]
+    schedule: Option<Value>,
+    /// Refused by `schedule::check_subscribe`: the Kernel pushes nothing.
+    #[serde(default)]
+    subscribe: Option<Value>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -359,6 +366,7 @@ async fn main() -> Result<()> {
     let artifact_bucket = env("LITTLEBOX_ARTIFACT_BUCKET", "littlebox-apps");
     let data_bucket = env("LITTLEBOX_DATA_BUCKET", "littlebox-data");
     let copy_config = copies::CopyConfig::from_env(&data_root, s3.is_some())?;
+    let schedule_clock = schedule::Clock::from_env(&bind)?;
     let deployments = load_deployments(&data_root).await?;
     let state = AppState {
         deployments: Arc::new(RwLock::new(deployments)),
@@ -379,6 +387,7 @@ async fn main() -> Result<()> {
     if let Some(config) = copy_config {
         copies::spawn_schedule(state.clone(), config);
     }
+    schedule::spawn(state.clone(), schedule_clock);
     if let Some(queue) = state.accounts.queue.clone() {
         mail::spawn_worker(queue);
     }
@@ -2333,6 +2342,8 @@ fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result
         http::binding(name, action)?;
         guard::declaration(name, action)?;
         notify::declaration(name, action)?;
+        schedule::check_subscribe(name, action)?;
+        schedule::declaration(name, action)?;
         return Ok(());
     }
     sql_rules::check_statement(name, action)?;
@@ -2347,6 +2358,8 @@ fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result
     http::binding(name, action)?;
     guard::declaration(name, action)?;
     notify::declaration(name, action)?;
+    schedule::check_subscribe(name, action)?;
+    schedule::declaration(name, action)?;
     Ok(())
 }
 
@@ -3334,6 +3347,8 @@ mod tests {
             signal: None,
             guard: None,
             notify: None,
+            schedule: None,
+            subscribe: None,
         }
     }
 

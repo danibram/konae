@@ -9,9 +9,9 @@ The app is a product probe. It uses Littlebox's primitives the way a creator wou
 | File | What it holds |
 | --- | --- |
 | `index.html`, `styles.css`, `app.js` | The page. Plain CSS with the design system's neutral surfaces and indigo accent, light and dark from `prefers-color-scheme`. Listeners are attached in JavaScript, so the page runs under the Kernel's Content Security Policy. |
-| `schema.sql` | `habits` and `checkins`. A check-in's `day` is a `YYYY-MM-DD` string with a `CHECK`, unique per habit. |
+| `schema.sql` | `habits`, `checkins` and `days`. A check-in's `day` is a `YYYY-MM-DD` string with a `CHECK`, unique per habit. A `days` row is one person's closed day. |
 | `schema.ts` | The Database Model the editor would hold, matching `schema.sql`. |
-| `actions.json` | Ten Server Actions. Seven are `authenticated` and bind the actor. Three are `anonymous` with an HTTP route that declares `"callers": ["key"]` and also bind the actor, for an API key. `habits.create`, `habits.import` and `habits.archive` declare a guard. |
+| `actions.json` | Twelve Server Actions. Nine are `authenticated` and bind the actor; one of them, `days.close`, declares a schedule. Three are `anonymous` with an HTTP route that declares `"callers": ["key"]` and also bind the actor, for an API key. `habits.create`, `habits.import` and `habits.archive` declare a guard. |
 | `replay.ts` | Starts its own Kernel, publishes the app and runs every flow below. |
 
 ## Primitives it uses
@@ -19,6 +19,7 @@ The app is a product probe. It uses Littlebox's primitives the way a creator wou
 - A Public Deployment with Open signup, on an installation started with `LITTLEBOX_ACCOUNT_VERIFICATION=required` and `LITTLEBOX_MAIL_TRANSPORT=development`.
 - `actor` bindings on every action, with ownership checked inside the SQL: `INSERT ... SELECT ... FROM habits WHERE id = ?1 AND user_id = ?2`.
 - A `kernel.now` binding that limits check-ins to the last 30 days and tomorrow.
+- A schedule: `days.close` declares `"schedule": { "daily": "00:05" }`, and the Kernel closes yesterday for each person, the habits they tracked and how many they ticked, with nobody calling. `days.recent` reads the closed days.
 - A streak computed in one `SELECT` with `ROW_NUMBER() OVER (...)` nested in two subqueries, under a top-level `LIMIT 20`.
 - The `habit.completed` Signal on `checkins.add` and on the `POST /api/checkins` route, with `habitId`, `day` and `device` as properties. The owner reads it with `signals_read` and the daily totals with `usage_read`.
 - HTTP routes `POST /api/habits`, `GET /api/habits` and `POST /api/checkins`, each with `"callers": ["key"]`, called with an API key from `api_keys_create`.
@@ -49,12 +50,13 @@ The replay runs in this order:
 3. The owner saves the sources at revision 1 and publishes them as the editor would, public with Open signup.
 4. Ana and Ben sign up and verify through the mailbox. Ana signs in on a phone session and a laptop session.
 5. Ana creates habits and check-ins from both sessions. Ben tries to read and change them.
-6. The owner issues an API key for the three routes, and the replay calls them with the key, with no credential, and with Ana's cookie, which the routes refuse.
-7. The owner reads Signals and Usage.
-8. `littlebox contract` writes the Action Contract and `littlebox conform` runs it against the Deployment.
-9. `littlebox eject` writes the project into an empty folder. The replay changes the footer to "Build 2" and runs `littlebox publish` from that folder.
-10. The replay waits for a copy newer than the last write, stops the Kernel, restores the copy into an empty directory and starts a Kernel on it.
-11. Chrome loads the restored app signed out and signed in, in light and dark, and fails on any policy violation or page error. Signed in, it double-presses Add habit and then adds the twenty-first habit.
+6. The owner dates Ana's habits a week back, and the replay waits for `days.close` to close yesterday. Its Kernels run with `LITTLEBOX_SCHEDULE_MIN_SECONDS=2`, so the daily schedule runs every 2 seconds.
+7. The owner issues an API key for the three routes, and the replay calls them with the key, with no credential, and with Ana's cookie, which the routes refuse.
+8. The owner reads Signals and Usage.
+9. `littlebox contract` writes the Action Contract and `littlebox conform` runs it against the Deployment.
+10. `littlebox eject` writes the project into an empty folder. The replay changes the footer to "Build 2" and runs `littlebox publish` from that folder.
+11. The replay waits for a copy newer than the last write, stops the Kernel, restores the copy into an empty directory and starts a Kernel on it.
+12. Chrome loads the restored app signed out and signed in, in light and dark, and fails on any policy violation or page error. Signed in, it double-presses Add habit and then adds the twenty-first habit.
 
 ## What worked
 
@@ -62,11 +64,12 @@ The replay runs in this order:
 - **Two devices.** Two sessions of one account see the same habits and check-ins. A second check-in for the same day from the other device changes 0 rows because of the `UNIQUE (habit_id, day)` key.
 - **Rows bound to the actor.** Ben lists no habit, check-in or streak of Ana's. His check-in and uncheck on her habit each change 0 rows, and his archive is refused with `This habit is already archived, or it is not yours.` Sending `userId` as an input answers `Unexpected action input: userId`. A check-in and an uncheck stay without a guard on purpose: a second tick of the same day from the other device is not an error.
 - **Streak in SQL.** With check-ins on days -6, -4, -3, -2, -1 and 0, the query returns current 5, best 5, total 6. The Gate and the Kernel accept it because of the top-level `LIMIT 20`.
+- **Close the day.** `days.close` is one `INSERT ... SELECT ... GROUP BY user_id ... ON CONFLICT DO NOTHING` that writes, for each person, yesterday's UTC date, the habits they tracked before today and how many of them have a check-in that day. With nobody calling, the Kernel's timer closes Ana's yesterday as `{ "day": <yesterday>, "habits": 2, "done": 1 }`. Ben started his habit today, so he gets no row. The statement asks for `?2 IS NULL` on its actor binding, which only the timer leaves empty, so Ben calling `days.close` himself answers `{ "changes": 0 }`. `usage_read` lists every run as ok, and only the first changed a row: the later runs found the day closed.
 - **API key as owner.** `POST /api/habits` with the key stores a habit whose `user_id` is the key's ID, `key_...`. `GET /api/habits` with the key returns only that habit. Since 2026-11-07 the routes declare `"callers": ["key"]`, the narrowest list for a phone shortcut: a visitor gets 401 `authentication-required` on POST and GET, and so does Ana's cookie from the app's own origin. The page checks in through `miniapp.actions.call`, never through the routes.
 - **Signals and Usage.** `signals_read` returns one `habit.completed` per check-in that added a row, with `habitId`, `day`, `device` and `actor`, the ID of the account or key that checked in. `usage_read` returns the day's totals by action, route, signup, login and session.
-- **Action Contract.** `littlebox contract` writes 10 actions with no warning. `littlebox conform` reported `72 passed, 0 failed, 2 skipped.` on 2026-11-07, one more than before the HEAD probe on its GET route, calling the three actor-bound routes with the API key. The count fell from 87 because the routed actions answer only on their routes now, so their inputs are probed there and not on the runtime endpoint. The two skips are the guards of `habits.create` and `habits.import`: below the limit of 20, conform's second identical call inserts again and cannot make the statement change nothing. The Chrome pass proves the limit's guard.
+- **Action Contract.** `littlebox contract` writes 12 actions with no warning. `littlebox conform` reported `78 passed, 0 failed, 2 skipped.` on 2026-11-07 after `days.close` and `days.recent` were added, from 72 before them, calling the three actor-bound routes with the API key. The count fell from 87 because the routed actions answer only on their routes now, so their inputs are probed there and not on the runtime endpoint. The two skips are the guards of `habits.create` and `habits.import`: below the limit of 20, conform's second identical call inserts again and cannot make the statement change nothing. The Chrome pass proves the limit's guard.
 - **Eject.** The ejected folder holds `README.md`, `actions.json`, `app.js`, `index.html`, `littlebox.json`, `schema.sql`, `schema.ts` and `styles.css`, with `sourceAuthority: "external"` and the Kernel's URL. The republished build serves "Build 2" at the same URL. Ana's phone session, her rows and Ben's password survive. `project_sources_save` is refused, and `project_sources_read` returns the frozen sources with `readOnly: true`.
-- **Copy and restore.** The restored Kernel serves Build 2 and keeps the accounts, passwords, rows, streaks, Signals, the ejected state and the API key, which still reads `GET /api/habits`. It signs out Ana's sessions, the owner's session and the delegated token.
+- **Copy and restore.** The restored Kernel serves Build 2 and keeps the accounts, passwords, rows, streaks, Signals, the closed day and the scheduled runs, the ejected state and the API key, which still reads `GET /api/habits`. It signs out Ana's sessions, the owner's session and the delegated token.
 - **Content Security Policy.** Chrome loads the signed-out gate and the signed-in page with no violation or page error.
 - **The page.** A double press of Add habit adds one habit, because the button stays disabled until the call answers. The twenty-first habit is refused on the page with the guard's sentence; before 2026-11-07 the page wrote that sentence itself from `{ changes: 0 }`. Every status line reads a failure through one `reason(error)` helper, the same in all five showcase apps.
 
@@ -93,4 +96,5 @@ ADR-0010 v1 keeps Usage and Signals away from the app. That does not hurt the pe
 | Required verification, login | Fixed on 2026-11-07. A pending account with no password still answers 401, and in the browser that asked for the link the message says to open it first; another browser gets the plain answer, so nobody learns whether the address has an account. | 401 `{ "error": "Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first." }`. Was `Email or password is incorrect.` in every browser |
 | CLI under required verification | Fixed on 2026-11-07: `littlebox login --verify-from <data folder>/mailbox.jsonl` creates the owner, answers the link from the development mailbox and saves the credential in one run, on a loopback Kernel only. The replay still verifies through the mailbox itself and creates tokens with `token_create`, which `docs/mcp.md` allows. | Was `This installation verifies email. Open the link sent to your address to choose your password, then run login again.` Without the flag the message now names both steps and the flag |
 | Time | The only clock binding is `kernel.now` in UTC milliseconds, and `usage_read` days are UTC. The app stores the person's local day and the 30-day window uses UTC dates. A person east of UTC who checks in just after their midnight stores the new local day, while Usage files the call under the previous UTC day. | No refusal. No timezone binding exists. |
+| Schedule and time | `days.close` closes the UTC day at 00:05 UTC, not the person's midnight. A schedule has no time zone, like `kernel.now`, so a person in New York sees yesterday closed at 19:05 their time. The replay cannot wait for 00:05, so it runs on a Kernel with the test clock. | No refusal. `"daily": "00:05"` is UTC. |
 | Copy and restore | The restore signs out every session and delegated token. The owner signs in again and issues new tokens; a person signs in again on each device. | Stale app cookie: `auth_session` answers `role: "anonymous"`. Stale owner cookie and token: MCP refuses. |

@@ -137,7 +137,7 @@ afterAll(async () => {
 
 describe("Usage and Signals", () => {
   test("a new Deployment has no store and reads as empty", async () => {
-    expect(await owner.call("usage_read", { deploymentId, from: today(), to: today() })).toEqual({ from: today(), to: today(), days: [], totals: [] });
+    expect(await owner.call("usage_read", { deploymentId, from: today(), to: today() })).toEqual({ from: today(), to: today(), days: [], totals: [], scheduled: [] });
     expect(await owner.call("signals_read", { deploymentId })).toEqual({ signals: [], nextCursor: null });
   });
 

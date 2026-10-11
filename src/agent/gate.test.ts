@@ -452,11 +452,12 @@ describe("the gate and the Kernel refuse the same actions.json", () => {
     "CREATE TABLE IF NOT EXISTS joins (source TEXT);",
     "CREATE TABLE IF NOT EXISTS checkins (habit_id INTEGER, user_id TEXT, day INTEGER);",
     "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, acknowledged_at INTEGER);",
+    "CREATE TABLE IF NOT EXISTS holds (id INTEGER PRIMARY KEY, room TEXT, kind TEXT, until INTEGER, released_at INTEGER);",
   ].join("\n");
 
   // signature-cases.json holds HMAC vectors for a route's sender, not
   // declarations, so src/lib/route-signature.test.ts runs it instead.
-  const files = ["action-cases.json", "sql-rule-cases.json", "http-binding-cases.json", "signal-cases.json", "guard-cases.json", "notify-cases.json"];
+  const files = ["action-cases.json", "sql-rule-cases.json", "http-binding-cases.json", "signal-cases.json", "guard-cases.json", "notify-cases.json", "schedule-cases.json"];
 
   for (const file of files) {
     test(`every case in kernel-rs/src/${file}`, async () => {

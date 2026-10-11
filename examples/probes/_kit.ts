@@ -74,6 +74,8 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
         LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: dataDir, LITTLEBOX_ADMIN_KEY: setupKey,
         LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: repo,
         LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development",
+        // The schedule probe sets it to watch a run in seconds instead of minutes.
+        ...(process.env.LITTLEBOX_SCHEDULE_MIN_SECONDS ? { LITTLEBOX_SCHEDULE_MIN_SECONDS: process.env.LITTLEBOX_SCHEDULE_MIN_SECONDS } : {}),
         ...options.env,
       },
       stdout: "ignore", stderr: "inherit",

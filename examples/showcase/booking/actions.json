@@ -152,6 +152,27 @@
         ]
       }
     },
+    "bookings.release": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "schedule": {
+        "every": "15m"
+      },
+      "statement": "UPDATE bookings SET cancelled_at = ?1 WHERE cancelled_at IS NULL AND ?2 IS NULL AND booking_ref IN (SELECT booking_ref FROM bookings WHERE cancelled_at IS NULL GROUP BY booking_ref HAVING max(checked_in_at) IS NULL AND (CAST(strftime('%s', min(day)) AS INTEGER) + min(slot) * 3600 + 900) * 1000 <= ?1)",
+      "bindings": [
+        {
+          "source": "kernel",
+          "field": "now"
+        },
+        {
+          "source": "actor",
+          "field": "id"
+        }
+      ],
+      "signal": {
+        "name": "booking.released"
+      }
+    },
     "staff.me": {
       "kind": "query",
       "access": "authenticated",

@@ -16,3 +16,11 @@ CREATE TABLE IF NOT EXISTS checkins (
   UNIQUE (habit_id, day)
 );
 CREATE INDEX IF NOT EXISTS checkins_by_user ON checkins(user_id, day);
+CREATE TABLE IF NOT EXISTS days (
+  user_id TEXT NOT NULL,
+  day TEXT NOT NULL CHECK (day GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]' AND date(day) = day),
+  habits INTEGER NOT NULL,
+  done INTEGER NOT NULL,
+  closed_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, day)
+);

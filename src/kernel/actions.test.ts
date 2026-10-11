@@ -228,6 +228,32 @@ describe("signals", () => {
   });
 });
 
+describe("schedules", () => {
+  // kernel-rs/src/schedule.rs runs the same cases against the Kernel's parser.
+  test("refuse the same declarations as the Kernel, with the same messages", async () => {
+    const cases: { case: string; actions: Record<string, unknown>; error: string | null }[] =
+      await Bun.file(new URL("../../kernel-rs/src/schedule-cases.json", import.meta.url)).json();
+    expect(cases.length).toBeGreaterThanOrEqual(20);
+    for (const item of cases) {
+      let message: string | null = null;
+      try {
+        parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message, item.case).toBe(item.error);
+    }
+  });
+
+  test("keep the schedule on the parsed mutation", () => {
+    const program = parseServerActionSource(JSON.stringify({ version: 1, actions: {
+      "holds.release": { kind: "mutation", access: "authenticated", schedule: { daily: "02:00" },
+        statement: "UPDATE holds SET released_at = ?1 WHERE until < ?1", bindings: [{ source: "kernel", field: "now" }] },
+    } }));
+    expect(program.actions["holds.release"].schedule).toEqual({ daily: "02:00" });
+  });
+});
+
 describe("guards", () => {
   // kernel-rs/src/guard.rs runs the same cases against the Kernel's parser.
   test("refuse the same declarations as the Kernel, with the same messages", async () => {

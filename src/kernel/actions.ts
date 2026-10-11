@@ -67,7 +67,15 @@ export type ServerActionDefinition = RuntimeActionDeclaration & {
   guard?: string;
   /** The email the mutation queues when it changes a row. See docs/mcp.md, "Notices". */
   notify?: NotifyDeclaration;
+  /**
+   * When the Kernel's timer runs a mutation that takes no input: every
+   * `<n>m` or `<n>h` from 5 minutes to 24 hours, or daily at `HH:MM` UTC.
+   * See docs/mcp.md, "Scheduled work".
+   */
+  schedule?: ScheduleDeclaration;
 };
+
+export type ScheduleDeclaration = { every: string } | { daily: string };
 
 export type ServerActionProgram = {
   version: 1;
@@ -163,6 +171,8 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
     const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http);
     parseGuard(name, kind, candidate.guard);
     parseNotify(name, kind, bindings, candidate.notify);
+    assertNoSubscribe(name, candidate);
+    parseSchedule(name, kind, bindings, candidate.schedule);
     return { name, kind, access, statement: "", bindings, ...(signal ? { signal } : {}), ...(http ? { http } : {}) };
   }
   const statement = candidate.statement as string;
@@ -177,11 +187,51 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
   const signal = parseSignal(name, kind, bindings, candidate.signal);
   const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http);
   const guard = parseGuard(name, kind, candidate.guard);
+  assertNoSubscribe(name, candidate);
+  const schedule = parseSchedule(name, kind, bindings, candidate.schedule);
   const notify = parseNotify(name, kind, bindings, candidate.notify);
   return {
     name, kind, access, statement: statement.trim(), bindings,
-    ...(signal ? { signal } : {}), ...(http ? { http } : {}), ...(guard ? { guard } : {}), ...(notify ? { notify } : {}),
+    ...(signal ? { signal } : {}), ...(http ? { http } : {}), ...(guard ? { guard } : {}), ...(notify ? { notify } : {}), ...(schedule ? { schedule } : {}),
   };
+}
+
+// The same checks, in the same order and with the same messages, as
+// kernel-rs/src/schedule.rs `check_subscribe` and `declaration`.
+// kernel-rs/src/schedule-cases.json holds the cases both test suites run.
+const MIN_SCHEDULE_MINUTES = 5;
+const MAX_SCHEDULE_MINUTES = 24 * 60;
+
+function assertNoSubscribe(name: string, candidate: Record<string, unknown>) {
+  if (candidate.subscribe !== undefined) {
+    throw new Error(`Action ${name} declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead.`);
+  }
+}
+
+function parseSchedule(name: string, kind: "query" | "mutation" | "signal", bindings: ActionBinding[], value: unknown): ScheduleDeclaration | undefined {
+  if (value === undefined) return undefined;
+  if (kind !== "mutation") throw new Error(`Action ${name} is a ${kind === "query" ? "query" : "signal action"}, so it cannot declare a schedule. Declare it on a mutation.`);
+  if (bindings.some((binding) => binding.source === "input")) {
+    throw new Error(`Action ${name} declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values.`);
+  }
+  const invalid = `Action ${name} has an invalid schedule. Declare "every" with minutes or hours, such as "15m" or "6h", or "daily" with a UTC time, such as "02:00".`;
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== 1) throw new Error(invalid);
+  const [key, text] = Object.entries(value)[0];
+  if (typeof text !== "string") throw new Error(invalid);
+  if (key === "every") {
+    const match = /^([1-9][0-9]{0,4})([mh])$/.exec(text);
+    if (!match) throw new Error(invalid);
+    const minutes = Number(match[1]) * (match[2] === "h" ? 60 : 1);
+    if (minutes < MIN_SCHEDULE_MINUTES) throw new Error(`Action ${name} runs every ${text}, more often than every 5 minutes. Use "5m" or longer.`);
+    if (minutes > MAX_SCHEDULE_MINUTES) throw new Error(`Action ${name} runs every ${text}, less often than once a day. Use "daily" or a period of 24 hours or less.`);
+    return { every: text };
+  }
+  if (key === "daily") {
+    const match = /^([0-9]{2}):([0-9]{2})$/.exec(text);
+    if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) throw new Error(`Action ${name} has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59.`);
+    return { daily: text };
+  }
+  throw new Error(invalid);
 }
 
 // The same checks and messages as kernel-rs/src/guard.rs `declaration`.

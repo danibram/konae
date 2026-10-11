@@ -1243,7 +1243,7 @@ Exporting needs `export_data`, which OAuth does not grant:
         "chunkBytes": 65536,
         "expiresAt": <time ms>,
         "sha256": "<sha256>",
-        "size": 24576,
+        "size": 40960,
         "transferId": "<usage download>"
       }
     },
@@ -1268,7 +1268,7 @@ Exporting needs `export_data`, which OAuth does not grant:
         {
           "name": "usage",
           "sha256": "<sha256>",
-          "size": 24576
+          "size": 40960
         }
       ],
       "createdAt": <time ms>,
