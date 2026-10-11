@@ -45,7 +45,7 @@ PASS Double booking under concurrency. 20 rounds of two overlapping bookings sen
 PASS Signals. 62 bookings.create calls: 25 bookings made and 25 booking.created Signals, each naming the booker as actor. One booking.cancelled names the canceller. Usage counts the 37 guard refusals under refused.
 PASS Booking confirmation. bookings.create declares "notify": { "to": "actor" }. Cara accepts an invitation, which proves her address, books pine and gets "Booked: pine on [...] at 15:00" in the development mailbox; her overlapping booking is refused with the guard and sends nothing. The 25 bookings Ana and Ben made after a local signup sent nothing, and usage_read says why: {"bookings.create: queued":1,"bookings.create: unverified-email":25}. mail_status counts 1 delivered notice.
 PASS Check-in route. POST /api/checkin refuses an unsigned body (401 invalid-signature) and a stale t (401 stale-timestamp), and accepts a signature or the panel's API key. A second check-in for the same hour and one for an hour nobody booked get 403 with the guard. [...] The runtime endpoint refuses the key with 403 [...]. A visitor and a staff member calling panel.checkin through actions_invoke get "Action panel.checkin answers only on its HTTP route, POST /api/checkin.".
-PASS Release unclaimed bookings. bookings.release, declared every 15 minutes and run here every 2 seconds, released Ana's unclaimed 09:00 booking for [...] with nobody calling; GET availability for that day now holds only the checked-in {"hour":10,"room":"pine"}, and no booking from today on was touched. Ben calling bookings.release himself answers {"changes":0,"lastInsertId":0}. usage_read lists 3 runs, all ok, that changed 1 row between them, and one booking.released Signal records the run that did.
+PASS Release unclaimed bookings. bookings.release, declared every 15 minutes and run here every 2 seconds, released Ana's unclaimed 09:00 booking for [...] with nobody calling; GET availability for that day now holds only the checked-in {"hour":10,"room":"pine"}, and no booking from today on was touched. Ben calling bookings.release himself is refused with "Action bookings.release runs only on its schedule.". usage_read lists 3 runs, all ok, that changed 1 row between them, and one booking.released Signal records the run that did.
 PASS Action Contract. [...] conform --token --secret: "80 passed, 0 failed, 0 skipped.". conform --token --key: "79 passed, 0 failed, 0 skipped.". conform --key alone: "29 passed, 0 failed, 16 skipped, 1 rate-limit waits.".
 PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no policy violation or page error; staff book two hours from the grid, and an offline day change shows a sentence instead of an unhandled error.
 ```
@@ -60,7 +60,7 @@ PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no
 - **Backstops in the schema.** Owner SQL that skips the action's `WHERE` still meets `UNIQUE constraint failed: bookings.room_id, bookings.day, bookings.slot` and `CHECK constraint failed: typeof(slot) = 'integer' AND slot BETWEEN 8 AND 17`.
 - **Routes.** `GET /api/availability` returns the visitor's rows as JSON. `POST /api/checkin` refuses an unsigned body with 401 `invalid-signature`, a stale `t` with 401 `stale-timestamp`, and accepts a signature or the panel's API key. A second check-in for the same hour, or one for an hour nobody booked, gets 403 with the guard `No booking holds this room at this hour, or it is already checked in.` instead of `{ changes: 0 }`. A staff session cookie sent without a signature gets 401 too, and `panel.checkin` answers only on its route.
 - **A confirmation by email.** `bookings.create` declares `"notify": { "to": "actor", "subject": "Booked: {input.room} on {input.day} at {input.start}:00", ... }`. Cara, who joined by invitation, books two hours and gets one email with that subject; her overlapping attempt is refused with the guard and sends nothing. Ana and Ben signed up under the Allowlist in local mode, where nothing proves an address, so their 25 bookings succeeded and sent nothing; `usage_read` lists `bookings.create: unverified-email` 25 times beside `bookings.create: queued` once. On an installation with `LITTLEBOX_ACCOUNT_VERIFICATION=required` every booker has answered a link and gets the email.
-- **Releasing a booking nobody claimed.** A booking that nobody checked in within 15 minutes of its first hour holds the room for no one. `bookings.release` is one `UPDATE` over every hour of such a booking, and its `"schedule": { "every": "15m" }` has the Kernel run it with nobody calling. The replay's Kernel sets `LITTLEBOX_SCHEDULE_MIN_SECONDS=2`, so it runs every 2 seconds: Ana's booking for 09:00 the day before is released, the one the panel checked in at 10:00 stays, and no booking from today on is touched. The statement asks for `?2 IS NULL` on its actor binding, which only the timer leaves empty, so Ben calling the action himself changes nothing. `usage_read` lists each run with its outcome and changes, and one `booking.released` Signal records the run that released a row.
+- **Releasing a booking nobody claimed.** A booking that nobody checked in within 15 minutes of its first hour holds the room for no one. `bookings.release` is one `UPDATE` over every hour of such a booking, and its `"schedule": { "every": "15m" }` has the Kernel run it with nobody calling. The replay's Kernel sets `LITTLEBOX_SCHEDULE_MIN_SECONDS=2`, so it runs every 2 seconds: Ana's booking for 09:00 the day before is released, the one the panel checked in at 10:00 stays, and no booking from today on is touched. A scheduled mutation with no route answers only to the timer, so Ben calling the action himself is refused with `Action bookings.release runs only on its schedule.` `usage_read` lists each run with its outcome and changes, and one `booking.released` Signal records the run that released a row.
 - **Content Security Policy.** The visitor page and the staff page load in Chrome under the Kernel's policy with no violation and no page error, and a staff member books two hours by clicking the grid.
 - **Errors on the page.** Every status line reads a failure through one `reason(error)` helper, the same in all five showcase apps. A refusal shows its own sentence, `rate-limited` becomes "Too many requests just now. Wait a few seconds and try again.", and a Kernel the browser cannot reach becomes "The board could not reach its server. Check the connection and try again." The replay takes the page offline and moves to the next day to prove the last one.
 
@@ -144,11 +144,11 @@ Messages are quoted exactly as the replay received them. "Gate" is the editor's 
 
 | Run | Result |
 | --- | --- |
-| `--token <session> --secret panel_hook=<secret>` | 80 passed, 0 failed, 0 skipped |
-| `--token <session> --key <panel key>` | 79 passed, 0 failed, 0 skipped |
-| `--key <panel key>` alone | 29 passed, 0 failed, 16 skipped |
+| `--token <session> --secret panel_hook=<secret>` | 78 passed, 0 failed, 0 skipped |
+| `--token <session> --key <panel key>` | 77 passed, 0 failed, 0 skipped |
+| `--key <panel key>` alone | 29 passed, 0 failed, 14 skipped |
 
-The counts fell on 2026-11-06 because `panel.checkin` answers only on its route, so its inputs are probed there and not on the runtime endpoint. The runs with a key gained one check on 2026-11-07, when `panel.checkin` declared its guard and `conform` probed it on the route. They grew again on 2026-11-07 with `bookings.release`: a run with a session calls it and gets `{ changes: 0 }`, because a person's call binds an ID, and a run with a key alone skips it, because it needs a session.
+The counts fell on 2026-11-06 because `panel.checkin` answers only on its route, so its inputs are probed there and not on the runtime endpoint. The runs with a key gained one check on 2026-11-07, when `panel.checkin` declared its guard and `conform` probed it on the route. They grew again on 2026-11-07 with `bookings.release`. On 2026-11-08 a scheduled mutation with no route began to refuse every caller, so `conform` expects `Action bookings.release runs only on its schedule.` instead of calling it, and the counts moved from 80, 79 and 29 with 16 skipped to the ones above.
 
 It also runs the same contract in-process with the token and the key from fresh client addresses, with 0 failed. `conform` runs every mutation once with generated input. Here `bookings.create` gets a day that is not a date and is refused with its guard, which `conform` checks, and `panel.checkin` matches no booking, so the run leaves the board unchanged.
 
@@ -507,10 +507,10 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 
 ### bookings.release
 
-A mutation declared authenticated. It binds the caller's ID, so a caller without one is refused.
+A mutation declared authenticated.
 
 ```sql
-UPDATE bookings SET cancelled_at = ?1 WHERE cancelled_at IS NULL AND ?2 IS NULL AND booking_ref IN (SELECT booking_ref FROM bookings WHERE cancelled_at IS NULL GROUP BY booking_ref HAVING max(checked_in_at) IS NULL AND (CAST(strftime('%s', min(day)) AS INTEGER) + min(slot) * 3600 + 900) * 1000 <= ?1)
+UPDATE bookings SET cancelled_at = ?1 WHERE cancelled_at IS NULL AND booking_ref IN (SELECT booking_ref FROM bookings WHERE cancelled_at IS NULL GROUP BY booking_ref HAVING max(checked_in_at) IS NULL AND (CAST(strftime('%s', min(day)) AS INTEGER) + min(slot) * 3600 + 900) * 1000 <= ?1)
 ```
 
 #### Input
@@ -521,7 +521,7 @@ None. Send `{}`.
 
 `{ changes, lastInsertId }`, both integers.
 
-The Kernel's timer also runs it every 15m, with no caller: an `actor` binding is null and the guard does not apply. The owner reads each run under `scheduled` with `usage_read`.
+The Kernel's timer runs it every 15m, with no caller: an `actor` binding is null and the guard does not apply. Only the timer runs it. The owner reads each run under `scheduled` with `usage_read`.
 
 #### Signal
 
@@ -529,16 +529,13 @@ Records `booking.released` after the statement changes a row. A refused call rec
 
 #### Callers
 
-Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
+Runtime endpoint: none; only the Kernel's timer runs it.
 
 #### Errors
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_littlebox/login |
-| `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
+| `Action bookings.release runs only on its schedule.` |  | runtime | the action is a mutation with a schedule and no http route, which only the Kernel's timer runs |
 
 #### Limits
 

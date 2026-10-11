@@ -31,6 +31,7 @@ await probe("schedule", 23060, async (kit) => {
     "every 25 hours": [(a) => { a["notes.surface"].schedule = { every: "25h" }; }, 'Action notes.surface runs every 25h, less often than once a day. Use "daily" or a period of 24 hours or less.'],
     "daily at 24:00": [(a) => { a["notes.surface"].schedule = { daily: "24:00" }; }, "Action notes.surface has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59."],
     "a cron expression": [(a) => { a["notes.surface"].schedule = "0 8 * * *"; }, 'Action notes.surface has an invalid schedule. Declare "every" with minutes or hours, such as "15m" or "6h", or "daily" with a UTC time, such as "02:00".'],
+    "a misspelled schedule": [(a) => { a["notes.surface"].shedule = a["notes.surface"].schedule; delete a["notes.surface"].schedule; }, "Action notes.surface has a key shedule that a mutation action does not take."],
     "subscribe on a query": [(a) => { a["notes.inbox"].subscribe = true; }, "Action notes.inbox declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead."],
   };
   const answers: string[] = [];
@@ -45,7 +46,7 @@ await probe("schedule", 23060, async (kit) => {
     answers.push(`${label}: "${message}"`);
   }
   const app = await kit.publish(here, { projectId: "probe_schedule", visibility: "private", signup: { mode: "open" } });
-  kit.pass("Declare a schedule", `"every": "5m" on notes.surface, which binds only kernel.now and the actor, publishes. Both doors refuse, with the same words, ${answers.join("; ")}.`);
+  kit.pass("Declare a schedule", `"every": "5m" on notes.surface, which binds only kernel.now, publishes. Both doors refuse, with the same words, ${answers.join("; ")}.`);
 
   const usage = () => owner.call<Usage>("usage_read", { deploymentId: app.deploymentId, from: today(), to: today() });
   const waitFor = async (what: string, test: (usage: Usage) => boolean, seconds = 20) => {
@@ -69,14 +70,14 @@ await probe("schedule", 23060, async (kit) => {
   const ran = first.scheduled.find((run) => run.changes === 1)!;
   kit.pass("A run with nobody asking", `With nobody calling, notes.surface ran at ${new Date(ran.at).toISOString()} and surfaced "Water the plants"; "Renew the passport", due in an hour, stays put.`);
 
-  // Only the timer: a person's call binds an ID, so "?2 IS NULL" holds only for the timer.
+  // Only the timer: a scheduled mutation with no route refuses every caller (ADR-0017, update of 2026-11-08).
   await person.call("actions_invoke", { name: "notes.add", input: { body: "Call the plumber", remind_at: Date.now() - 1000 } });
-  const byPerson = await person.call<{ changes: number }>("actions_invoke", { name: "notes.surface", input: {} });
-  assert.equal(byPerson.changes, 0);
+  const byPerson = await kit.errorText(person.call("actions_invoke", { name: "notes.surface", input: {} }));
+  assert.equal(byPerson, "Action notes.surface runs only on its schedule.");
   await waitFor("run that surfaced the second note", (current) => current.scheduled.filter((run) => run.changes === 1).length >= 2);
   const surfaced = (await person.call<{ body: string }[]>("actions_invoke", { name: "notes.inbox", input: {} })).map((note) => note.body).sort();
   assert.deepEqual(surfaced, ["Call the plumber", "Water the plants"]);
-  kit.pass("Only the timer", `Rosa calling notes.surface herself answers ${JSON.stringify(byPerson)}, because an actor binding holds her ID and the WHERE asks for NULL. The next run surfaces "Call the plumber".`);
+  kit.pass("Only the timer", `Rosa calling notes.surface herself is refused with "${byPerson}", and the statement has no actor clause to keep her out. The next run surfaces "Call the plumber".`);
 
   // Usage and Signals record each run.
   const seen = await usage();

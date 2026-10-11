@@ -92,15 +92,15 @@ describe("every documented message is one the code returns", () => {
   const preview = ["src/runtime/host.ts", "src/runtime/security.ts", "src/kernel/actions.ts", "src/mcp/preview.ts"].map(read).join("\n");
 
   /**
-   * Matches a message in source: <key>, <name>, <names> or <field> stand for a Rust {key}, a JS ${...}
+   * Matches a message in source: <key>, <name>, <names>, <field> or <kind> stand for a Rust {key}, a JS ${...}
    * or the same word written out, a number may be a JS ${...}, and a brace may be doubled, as Rust's
    * format! escapes it.
    */
   function inSource(message: string, source: string) {
     const pattern = message
-      .split(/(<key>|<names>|<name>|<field>|\d+)/)
+      .split(/(<key>|<names>|<name>|<field>|<kind>|\d+)/)
       .map((part) => {
-        if (part === "<key>" || part === "<name>" || part === "<names>" || part === "<field>") return String.raw`(?:\{\w+\}|\$\{[^}]+\}|${part})`;
+        if (part === "<key>" || part === "<name>" || part === "<names>" || part === "<field>" || part === "<kind>") return String.raw`(?:\{\w+\}|\$\{[^}]+\}|${part})`;
         if (/^\d+$/.test(part)) return String.raw`(?:${part}|\$\{[^}]+\})`;
         return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\([{}])/g, "\\$1\\$1?");
       })

@@ -2064,5 +2064,171 @@
    }
   },
   "error": "Action aa.list has an invalid access. Use \"anonymous\" or \"authenticated\"."
+ },
+ {
+  "case": "a mutation with an unknown key",
+  "actions": {
+   "orders.pay": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "UPDATE orders SET paid = 1 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     }
+    ],
+    "email": {
+     "to": "owner"
+    }
+   }
+  },
+  "error": "Action orders.pay has a key email that a mutation action does not take."
+ },
+ {
+  "case": "a mutation with a misspelled notify",
+  "actions": {
+   "orders.pay": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "UPDATE orders SET paid = 1 WHERE id = ?1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "id",
+      "type": "number"
+     }
+    ],
+    "notfy": {
+     "to": "owner",
+     "subject": "Paid",
+     "body": "Paid."
+    }
+   }
+  },
+  "error": "Action orders.pay has a key notfy that a mutation action does not take."
+ },
+ {
+  "case": "a query with an unknown key",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM orders LIMIT 50",
+    "bindings": [],
+    "description": "Every order"
+   }
+  },
+  "error": "Action orders.list has a key description that a query action does not take."
+ },
+ {
+  "case": "a query with two unknown keys names the first in sorted order",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM orders LIMIT 50",
+    "bindings": [],
+    "zone": "eu",
+    "limit": 50
+   }
+  },
+  "error": "Action orders.list has a key limit that a query action does not take."
+ },
+ {
+  "case": "a signal action with an unknown key",
+  "actions": {
+   "page.view": {
+    "kind": "signal",
+    "access": "anonymous",
+    "bindings": [],
+    "signal": {
+     "name": "page.viewed"
+    },
+    "properties": [
+     "path"
+    ]
+   }
+  },
+  "error": "Action page.view has a key properties that a signal action does not take."
+ },
+ {
+  "case": "an unknown key set to null counts as absent",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM orders LIMIT 50",
+    "bindings": [],
+    "description": null
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a signal action with an empty statement",
+  "actions": {
+   "page.view": {
+    "kind": "signal",
+    "access": "anonymous",
+    "bindings": [],
+    "signal": {
+     "name": "page.viewed"
+    },
+    "statement": ""
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "an unknown key is named after the action's own refusals",
+  "actions": {
+   "orders.list": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM orders LIMIT 50",
+    "bindings": [],
+    "email": "x",
+    "guard": "No order."
+   }
+  },
+  "error": "Action orders.list is a query, so it cannot declare a guard. Declare it on a mutation."
+ },
+ {
+  "case": "a signal action with an http route",
+  "actions": {
+   "page.view": {
+    "kind": "signal",
+    "access": "anonymous",
+    "bindings": [],
+    "signal": {
+     "name": "page.viewed"
+    },
+    "http": {
+     "method": "POST",
+     "path": "/hooks/view"
+    }
+   }
+  },
+  "error": "Action page.view is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route."
+ },
+ {
+  "case": "a signal action with a GET route",
+  "actions": {
+   "page.view": {
+    "kind": "signal",
+    "access": "anonymous",
+    "bindings": [],
+    "signal": {
+     "name": "page.viewed"
+    },
+    "http": {
+     "method": "GET",
+     "path": "/view"
+    }
+   }
+  },
+  "error": "Action page.view is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route."
  }
 ]

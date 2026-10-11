@@ -178,6 +178,12 @@ export async function runConformance(contract: ActionContract, target: Conforman
         () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
       continue;
     }
+    // A scheduled mutation with no route runs only on the Kernel's timer (ADR-0017, update of 2026-11-08).
+    if (action.schedule && !action.http) {
+      await expectRefusal(action, "runs only on its schedule", [`Action ${name} runs only on its schedule.`, "Sign in to use Littlebox MCP."],
+        () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
+      continue;
+    }
     const routeOnly = action.http ? `Action ${name} answers only on its HTTP route, ${action.http.method} ${action.http.path}.` : null;
     if (action.http?.onlyDoor === "always") {
       // The runtime endpoint refuses the action; its bindings are probed on the route.

@@ -612,6 +612,8 @@ export class MiniAppRuntimeHost {
     // A call's then mutation runs only after its call answers, on a Deployment too.
     const call = declaration ? thenOf(this.actionProgram.actions, declaration.name) : null;
     if (call) throw new Error(`Action ${declaration!.name} runs only after the call ${call} answers.`);
+    // A scheduled mutation with no route belongs to the Kernel's timer, on a Deployment too.
+    if (declaration?.schedule && !declaration.http) throw new Error(`Action ${declaration.name} runs only on its schedule.`);
     if (declaration && declaration.access !== "anonymous" && this.previewActor === "guest") {
       throw new Error("authentication-required");
     }

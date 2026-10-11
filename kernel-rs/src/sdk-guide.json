@@ -122,6 +122,18 @@
       "declarations": [
         {
           "file": "actions.json",
+          "key": "kind",
+          "summary": "Each kind takes its own top-level keys. A query takes kind, access, statement, bindings and http. A mutation takes kind, access, statement, bindings, http, signal, guard, notify and schedule. A signal action takes kind, access, bindings, signal and an empty statement. A call takes kind, access, bindings, url, method, body, headers, auth, then and an empty statement. Any other key is refused, so a misspelled or misplaced key cannot pass and do nothing. A key set to null counts as absent. A key with its own refusal, such as a guard on a query, gets that refusal instead. The Validation Gate and the Kernel refuse the same declarations with the same messages.",
+          "errors": [
+            {
+              "message": "Action <name> has a key <key> that a <kind> action does not take.",
+              "when": "the action declares a top-level key its kind does not take; with several, the first in sorted order",
+              "source": "kernel"
+            }
+          ]
+        },
+        {
+          "file": "actions.json",
           "key": "signal",
           "summary": "{ \"name\": \"order.placed\", \"properties\"?: [\"input binding keys\", \"actor\"] } on a mutation, or on an action of \"kind\": \"signal\" that has access and bindings but no statement. When the action succeeds, and for a mutation only when it changed at least one row, the Kernel records the Signal with the named inputs as its properties, in the Deployment's Usage store. The property actor records the caller's ID: the user's, the API key's, or null for a visitor or a signed request. A signal action runs no SQL and returns { recorded: true }. The owner reads Signals with signals_read; the app cannot. The Validation Gate and the Kernel refuse the same declarations with the same messages.",
           "limits": [
@@ -261,7 +273,7 @@
         {
           "file": "actions.json",
           "key": "schedule",
-          "summary": "\"schedule\": { \"every\": \"15m\" } or { \"every\": \"6h\" } or { \"daily\": \"02:00\" } on a mutation that takes no input. The Kernel's own timer runs it once in each period, or once a day at that UTC time, with no caller: an actor binding is null, kernel.now is the time of the run, and literals bind as written. Use it for work that must happen when nobody asks, such as releasing a hold that lapsed or closing a day. A run that changes no row had nothing to do, so the guard does not apply; a run that changed a row records the action's Signal with actor null. A changed run also processes notify through the notice queue. Use to owner for a scheduled notice; to actor records no-account because the timer has no caller. One changed run queues one notice even when it changes several rows. The owner reads each run, with its outcome and changes, under scheduled with usage_read. The action still answers callers as its access says; a WHERE that tests the actor binding with IS NULL holds only for the timer, because a person's call always binds an ID. The Validation Gate and the Kernel refuse the same declarations with the same messages. The editor preview runs no schedule; a Development Kernel and a Deployment do.",
+          "summary": "\"schedule\": { \"every\": \"15m\" } or { \"every\": \"6h\" } or { \"daily\": \"02:00\" } on a mutation that takes no input. The Kernel's own timer runs it once in each period, or once a day at that UTC time, with no caller: an actor binding is null, kernel.now is the time of the run, and literals bind as written. Use it for work that must happen when nobody asks, such as releasing a hold that lapsed or closing a day. A run that changes no row had nothing to do, so the guard does not apply; a run that changed a row records the action's Signal with actor null. A changed run also processes notify through the notice queue. Use to owner for a scheduled notice; to actor records no-account because the timer has no caller. One changed run queues one notice even when it changes several rows. The owner reads each run, with its outcome and changes, under scheduled with usage_read. Only the timer runs it: a call through miniapp.actions.call or actions_invoke is refused with \"Action <name> runs only on its schedule.\", unless the action also declares an http route, which answers as its callers say. The Validation Gate and the Kernel refuse the same declarations with the same messages. The editor preview runs no schedule; a Development Kernel and a Deployment do.",
           "limits": [
             "every runs from 5 minutes to 24 hours; periods count from 00:00 UTC, so every 15m runs at :00, :15, :30 and :45",
             "one run per period: a Kernel that was down for several periods runs the action once when it is back, and a restart does not run it again in the same period",
@@ -418,6 +430,11 @@
             {
               "message": "Action <name> runs only after the call <key> answers.",
               "when": "the action is the then mutation of a call, which only the Kernel runs",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> runs only on its schedule.",
+              "when": "the action is a mutation with a schedule and no http route, which only the Kernel's timer runs",
               "source": "kernel"
             }
           ],
@@ -948,6 +965,11 @@
             "50 live API keys per Deployment"
           ],
           "errors": [
+            {
+              "message": "Action <name> is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route.",
+              "when": "a signal action declares http",
+              "source": "kernel"
+            },
             {
               "message": "Action <name> must bind GET for a query and POST for a mutation.",
               "when": "the method does not match the action's kind, or is neither GET nor POST",

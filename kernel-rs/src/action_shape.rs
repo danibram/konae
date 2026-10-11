@@ -76,6 +76,45 @@ pub(crate) fn check_action(name: &str, action: &ActionDefinition) -> Result<(), 
     Ok(())
 }
 
+/// The top-level keys each kind takes. `parseAction` in src/kernel/actions.ts
+/// holds the same lists. `statement` on a signal action or a call may only be
+/// empty, which `usage` and `calls` check.
+fn allowed_keys(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "query" => &["kind", "access", "statement", "bindings", "http"],
+        "mutation" => &["kind", "access", "statement", "bindings", "http", "signal", "guard", "notify", "schedule"],
+        "signal" => &["kind", "access", "statement", "bindings", "signal"],
+        _ => &["kind", "access", "statement", "bindings", "url", "method", "body", "headers", "auth", "then"],
+    }
+}
+
+/// Refuses a key the action's kind does not take. It runs after the action's
+/// other checks, so a key with its own refusal, such as a guard on a query,
+/// keeps it. A key set to null counts as absent, on both doors. Keys are named
+/// in sorted order, as the editor names them.
+pub(crate) fn check_keys(name: &str, action: &ActionDefinition) -> Result<(), String> {
+    let declared = [
+        ("http", action.http.is_some()),
+        ("signal", action.signal.is_some()),
+        ("guard", action.guard.is_some()),
+        ("notify", action.notify.is_some()),
+        ("schedule", action.schedule.is_some()),
+        ("subscribe", action.subscribe.is_some()),
+    ];
+    let mut keys: Vec<&str> = declared.iter().filter(|(_, present)| *present).map(|(key, _)| *key).collect();
+    keys.extend(action.call.present());
+    keys.extend(action.extra.iter().filter(|(_, value)| !value.is_null()).map(|(key, _)| key.as_str()));
+    keys.sort_unstable();
+    let allowed = allowed_keys(&action.kind);
+    match keys.into_iter().find(|key| !allowed.contains(key)) {
+        Some(key) => {
+            let kind = &action.kind;
+            Err(format!("Action {name} has a key {key} that a {kind} action does not take."))
+        }
+        None => Ok(()),
+    }
+}
+
 /// Lowercase words of letters and digits, each starting with a letter, joined
 /// by dots, at least two of them and at most 100 characters in all.
 fn valid_name(name: &str) -> bool {

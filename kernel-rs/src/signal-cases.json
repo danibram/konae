@@ -579,7 +579,7 @@
     }
    }
   },
-  "error": "Action newsletter.join must bind GET for a query and POST for a mutation."
+  "error": "Action newsletter.join is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route."
  },
  {
   "case": "a signal that records the actor",

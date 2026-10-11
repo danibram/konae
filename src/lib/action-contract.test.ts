@@ -289,8 +289,8 @@ describe("schema check", () => {
         kind: "mutation",
         access: "authenticated",
         schedule: { every: "15m" },
-        statement: "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1 AND ?2 IS NULL",
-        bindings: [{ source: "kernel", field: "now" }, { source: "actor", field: "id" }],
+        statement: "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1",
+        bindings: [{ source: "kernel", field: "now" }],
       },
       "days.close": {
         kind: "mutation",
@@ -304,8 +304,14 @@ describe("schema check", () => {
     const { contract } = generateActionContract({ actionsSource, schemaSource });
     expect(contract.actions.map((action) => [action.name, action.schedule])).toEqual([["days.close", { daily: "00:05" }], ["holds.release", { every: "15m" }]]);
     const markdown = renderActionContractMarkdown(contract);
-    expect(markdown).toContain("The Kernel's timer also runs it every 15m, with no caller");
-    expect(markdown).toContain("The Kernel's timer also runs it daily at 00:05 UTC, with no caller");
+    expect(markdown).toContain("The Kernel's timer runs it every 15m, with no caller");
+    expect(markdown).toContain("The Kernel's timer runs it daily at 00:05 UTC, with no caller");
+    expect(markdown).toContain("Only the timer runs it.");
+    expect(markdown).toContain("Runtime endpoint: none; only the Kernel's timer runs it.");
+    expect(contract.actions.map((action) => [action.runtime.callers, action.errors.map((error) => error.message)])).toEqual([
+      [[], ["Action days.close runs only on its schedule."]],
+      [[], ["Action holds.release runs only on its schedule."]],
+    ]);
     const read = JSON.parse(serializeActionContract(contract));
     expect(checkActionContract(read)).toEqual([]);
     const { $schema, ...body } = read;

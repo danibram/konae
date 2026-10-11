@@ -346,16 +346,16 @@ try {
   }
   assert.deepEqual(closedDays, [{ day: yesterday, habits: 2, done: 1 }]);
   assert.deepEqual(await action(benClient, "days.recent"), [], "Ben's habit started today, so he had nothing to close yesterday.");
-  // A person's call binds their ID, and the statement asks for none, so only the timer closes a day.
-  const closedByBen = await action<{ changes: number }>(benClient, "days.close");
-  assert.equal(closedByBen.changes, 0);
+  // A scheduled mutation with no route refuses every caller, so only the timer closes a day.
+  const closedByBen = await action(benClient, "days.close").then(() => "answered", (error: Error) => error.message);
+  assert.equal(closedByBen, "Action days.close runs only on its schedule.");
   await Bun.sleep(2500);
   type Run = { action: string; at: number; outcome: string; changes: number };
   const closeRuns = (await owner.call<{ scheduled: Run[] }>("usage_read", { deploymentId: receipt.id, from: utcDay(-1), to: utcDay(1) })).scheduled;
   assert(closeRuns.length >= 2 && closeRuns.every((run) => run.action === "days.close" && run.outcome === "ok"), JSON.stringify(closeRuns));
   assert.equal(closeRuns.filter((run) => run.changes > 0).length, 1, "Later runs find yesterday already closed.");
   assert.deepEqual(await action(anaPhone, "days.recent"), closedDays);
-  check("Close the day", `days.close, declared daily at 00:05 UTC and run here every 2 seconds, closes ${yesterday} for Ana as ${JSON.stringify(closedDays[0])} with nobody calling; Ben, whose habit started today, gets no row. Ben calling days.close himself answers ${JSON.stringify(closedByBen)}. usage_read lists ${closeRuns.length} runs, all ok, and only the first changed a row: the others found the day closed.`);
+  check("Close the day", `days.close, declared daily at 00:05 UTC and run here every 2 seconds, closes ${yesterday} for Ana as ${JSON.stringify(closedDays[0])} with nobody calling; Ben, whose habit started today, gets no row. Ben calling days.close himself is refused with "${closedByBen}". usage_read lists ${closeRuns.length} runs, all ok, and only the first changed a row: the others found the day closed.`);
 
   // ------------------------------------------- an API key on an actor-bound route
   const key = await owner.call<{ key: string; keyId: string }>("api_keys_create", { deploymentId: receipt.id, name: "Phone shortcut", actions: ["habits.import", "habits.mine", "checkins.log"] });

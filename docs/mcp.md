@@ -271,6 +271,18 @@ Before it reads a statement, each door checks the action's name, access, kind, b
 | A binding of another source, an input with no key or another type, an actor field other than `id` or `role`, a kernel field other than `now`, a literal that is not a string, a number or null | `Invalid binding <index> in <name>.` |
 | A string input's `maxLength` outside 1 to 100,000 | `Invalid maxLength in <name>.` |
 | A statement longer than 20,000 bytes, or more than 100 bindings | `Action <name> exceeds statement or binding limits.` |
+| A top-level key the action's kind does not take, checked after every other check on the action | `Action <name> has a key <key> that a <kind> action does not take.` |
+
+Each kind takes its own top-level keys, and no other:
+
+| Kind | Keys |
+| --- | --- |
+| `query` | `kind`, `access`, `statement`, `bindings`, `http` |
+| `mutation` | `kind`, `access`, `statement`, `bindings`, `http`, `signal`, `guard`, `notify`, `schedule` |
+| `signal` | `kind`, `access`, `bindings`, `signal`, and `statement` only when it is empty |
+| `call` | `kind`, `access`, `bindings`, `url`, `method`, `body`, `headers`, `auth`, `then`, and `statement` only when it is empty |
+
+A misspelled key such as `"notfy"`, or `notify` on a call, is refused instead of passing and doing nothing. A key set to `null` counts as absent on both doors. A key that has its own refusal keeps it: a `guard` on a query gets the guard's sentence, not this one. With several keys out of place, both doors name the first in sorted order.
 
 A field of the wrong JSON type, such as `"bindings": {}` or a missing `kind`, is refused by both, but the Kernel answers with its JSON reader's message, `Invalid actions.json: ...`, where the Gate names the action.
 
@@ -636,7 +648,7 @@ A mutation may declare `signal` too, and records it after its statement changes 
 | `signal` that is not `{ name, properties? }` with a list of strings | `Action <name> has an invalid signal declaration.` |
 | A signal action without `signal` | `Action <name> is a signal action, so it must declare a signal.` |
 | A signal action with a statement | `Action <name> is a signal action, so it runs no SQL and cannot declare a statement.` |
-| A signal action with `http` | `Action <name> must bind GET for a query and POST for a mutation.` |
+| A signal action with `http` | `Action <name> is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route.` |
 | `usage_read` with a date that is not `YYYY-MM-DD` | `from and to must be dates written YYYY-MM-DD.` |
 | `usage_read` with `from` after `to` | `from must not be after to.` |
 | `usage_read` over more than 400 days | `Usage covers at most 400 days at a time.` |
@@ -684,7 +696,7 @@ Some work has to happen when nobody asks: a hold that lapsed is released so the 
 }
 ```
 
-`"every"` takes a whole number of minutes or hours, `"5m"` to `"24h"`, and periods count from 00:00 UTC, so `"15m"` runs at :00, :15, :30 and :45. `"daily": "HH:MM"` runs once a day at that UTC time. The Kernel looks once a minute and runs an action at the first look after its period opens, in the Kernel's one process. Nobody calls it, so `kernel.now` is the time of the run, literals bind as written and an `actor` binding, of the `id` or of the `role`, is null. A person's call always binds an ID, so a `WHERE` that tests the actor binding with `IS NULL` holds only for the timer. The action still answers callers as its `access` says.
+`"every"` takes a whole number of minutes or hours, `"5m"` to `"24h"`, and periods count from 00:00 UTC, so `"15m"` runs at :00, :15, :30 and :45. `"daily": "HH:MM"` runs once a day at that UTC time. The Kernel looks once a minute and runs an action at the first look after its period opens, in the Kernel's one process. Nobody calls it, so `kernel.now` is the time of the run, literals bind as written and an `actor` binding, of the `id` or of the `role`, is null. Only the timer runs it: `actions_invoke`, the page's `miniapp.actions.call` and the editor preview refuse it with `Action <name> runs only on its schedule.`, whoever calls. A scheduled mutation that also declares an `http` route answers on that route as its callers say.
 
 | Rule | What the Kernel does |
 | --- | --- |

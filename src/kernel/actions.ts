@@ -153,7 +153,32 @@ export function resolveServerAction(
   return { action, params };
 }
 
+/**
+ * The top-level keys each kind takes. A key outside its kind's list is refused
+ * after the action's other checks, so a key that has its own refusal, such as a
+ * guard on a query, keeps it. `statement` on a signal action or a call may only
+ * be empty. kernel-rs/src/action_shape.rs `check_keys` holds the same lists.
+ */
+const ACTION_KEYS: Record<ServerActionDefinition["kind"], readonly string[]> = {
+  query: ["kind", "access", "statement", "bindings", "http"],
+  mutation: ["kind", "access", "statement", "bindings", "http", "signal", "guard", "notify", "schedule"],
+  signal: ["kind", "access", "statement", "bindings", "signal"],
+  call: ["kind", "access", "statement", "bindings", "url", "method", "body", "headers", "auth", "then"],
+};
+
 function parseAction(name: string, value: unknown): ServerActionDefinition {
+  const action = parseActionBody(name, value);
+  // A key set to null counts as absent, as the Kernel reads it.
+  const record = value as Record<string, unknown>;
+  const allowed = ACTION_KEYS[action.kind];
+  const extra = Object.keys(record).sort().find((key) => record[key] != null && !allowed.includes(key));
+  if (extra !== undefined) {
+    throw new Error(`Action ${name} has a key ${extra} that a ${action.kind} action does not take.`);
+  }
+  return action;
+}
+
+function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   if (name.length > MAX_ACTION_NAME || !ACTION_NAME.test(name)) throw new Error(`Invalid server action name: ${name}`);
   if (!value || typeof value !== "object") throw new Error(`Invalid server action: ${name}`);
   const candidate = value as Record<string, unknown>;
@@ -352,6 +377,9 @@ const HTTP_PATH = /^(\/[A-Za-z0-9._~-]+)+$/;
 const RESERVED_SEGMENTS = new Set(["_littlebox", "oauth", ".well-known", "mcp"]);
 
 function parseHttpBinding(name: string, kind: "query" | "mutation" | "signal", access: "anonymous" | "authenticated", value: unknown, bindings: ActionBinding[]): HttpBinding {
+  if (kind === "signal") {
+    throw new Error(`Action ${name} is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route.`);
+  }
   const invalid = `Action ${name} has an invalid http binding.`;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(invalid);
   const record = value as Record<string, unknown>;

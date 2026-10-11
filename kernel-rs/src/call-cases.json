@@ -3093,5 +3093,131 @@
    "https://api.example.com"
   ],
   "error": "connects lists https://api.example.com twice."
+ },
+ {
+  "case": "a call with notify",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     }
+    ],
+    "body": {
+     "title": "title"
+    },
+    "notify": {
+     "to": "owner",
+     "subject": "Sent",
+     "body": "Sent."
+    }
+   }
+  },
+  "error": "Action inbox.tell has a key notify that a call action does not take."
+ },
+ {
+  "case": "a call with a schedule",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     }
+    ],
+    "body": {
+     "title": "title"
+    },
+    "schedule": {
+     "every": "15m"
+    }
+   }
+  },
+  "error": "Action inbox.tell has a key schedule that a call action does not take."
+ },
+ {
+  "case": "a call with subscribe",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     }
+    ],
+    "body": {
+     "title": "title"
+    },
+    "subscribe": true
+   }
+  },
+  "error": "Action inbox.tell has a key subscribe that a call action does not take."
+ },
+ {
+  "case": "a call with an unknown key",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     }
+    ],
+    "body": {
+     "title": "title"
+    },
+    "retries": 3
+   }
+  },
+  "error": "Action inbox.tell has a key retries that a call action does not take."
+ },
+ {
+  "case": "a call with an empty statement",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 200
+     }
+    ],
+    "body": {
+     "title": "title"
+    },
+    "statement": ""
+   }
+  },
+  "error": null
  }
 ]

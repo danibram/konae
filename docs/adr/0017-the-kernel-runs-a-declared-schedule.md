@@ -38,3 +38,9 @@ An app can release, close, expire and tidy without a caller. Outbound calls retr
 ## Integration check, 2026-11-07
 
 The schedule runner accepted `notify` but did not process it. It now calls the same notice recorder as a caller-driven mutation after a successful run changes rows. The schedule probe checks two changed runs, two owner notices and the Usage counts, and verifies that an unchanged run sends nothing. The slot is recorded before the notice, so a restart after recording the slot but before queueing its notice can lose that notice; the SQL write, Usage store and mail store are separate transactions.
+
+## Update, 2026-11-08: only the timer runs a scheduled mutation
+
+A scheduled mutation with no `http` route now answers only to the Kernel's timer. `actions_invoke`, the page bridge and the editor preview refuse every caller with `Action <name> runs only on its schedule.`, beside the refusals for a route-only action and a call's then mutation. `littlebox conform` expects the refusal, and the Action Contract lists no runtime caller for the action.
+
+Before, the action answered callers as its `access` said. Every app that had a schedule wanted the opposite, so each statement added `AND ?2 IS NULL` on an actor binding, which only the timer leaves null: the schedule probe, the habits showcase and the booking showcase all did. An author who forgot the clause let any member run the release or the close on demand. The rule now lives in the Kernel, and those statements dropped the clause and the actor binding. A mutation that must run on a schedule and on demand declares an `http` route, whose callers decide who may call it, or is written as two actions over the same statement.

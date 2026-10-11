@@ -172,9 +172,9 @@ export type ContractAction = {
    */
   notify?: { to: "owner" | "actor"; subject: string; body: string };
   /**
-   * When the Kernel's timer also runs the mutation, with no caller: `actor`
-   * binds null, the guard does not apply, and Usage counts the run under
-   * `scheduled` (ADR-0017).
+   * When the Kernel's timer runs the mutation, with no caller: `actor` binds
+   * null, the guard does not apply, and Usage counts the run under `scheduled`
+   * (ADR-0017). Without an http route only the timer runs it.
    */
   schedule?: ScheduleDeclaration;
   /** A call action's request and its then mutation. */
@@ -356,6 +356,8 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables, ca
         ? { kind: "queued", fields: ["callId", "queued"] }
         : { kind: "changes", fields: ["changes", "lastInsertId"] };
   const http = action.http ? contractHttp(action.http, action.kind) : undefined;
+  // A scheduled mutation with no route belongs to the Kernel's timer (ADR-0017, update of 2026-11-08).
+  const timerOnly = Boolean(action.schedule && !action.http);
   return {
     name: action.name,
     kind: action.kind,
@@ -369,11 +371,13 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables, ca
     ...(action.schedule ? { schedule: { ...action.schedule } } : {}),
     ...(action.call ? { call: contractCall(action.call) } : {}),
     ...(callOf ? { thenOf: callOf } : {}),
-    runtime: { ...RUNTIME, callers: http?.onlyDoor === "always" || callOf ? [] : runtimeCallers(access, Boolean(http)) },
+    runtime: { ...RUNTIME, callers: http?.onlyDoor === "always" || callOf || timerOnly ? [] : runtimeCallers(access, Boolean(http)) },
     ...(http ? { http } : {}),
     errors: callOf
       ? [fromSdk("Action <name> runs only after the call <key> answers.", "runtime", { name: action.name, key: callOf })]
-      : actionErrors(action, inputs, actorBound),
+      : timerOnly
+        ? [fromSdk("Action <name> runs only on its schedule.", "runtime", { name: action.name })]
+        : actionErrors(action, inputs, actorBound),
     limits: actionLimits(action),
     statement: action.statement,
     bindings,
@@ -876,7 +880,7 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
         const to = action.notify.to === "owner" ? "the Project Owner" : "the caller's verified email";
         lines.push(`When the statement changes a row the Kernel queues an email to ${to} with the subject \`${action.notify.subject}\`. The answer does not wait for it or depend on it; Usage counts it under \`notify\`.`, "");
       }
-      if (action.schedule) lines.push(`The Kernel's timer also runs it ${"every" in action.schedule ? `every ${action.schedule.every}` : `daily at ${action.schedule.daily} UTC`}, with no caller: an \`actor\` binding is null and the guard does not apply. The owner reads each run under \`scheduled\` with \`usage_read\`.`, "");
+      if (action.schedule) lines.push(`The Kernel's timer runs it ${"every" in action.schedule ? `every ${action.schedule.every}` : `daily at ${action.schedule.daily} UTC`}, with no caller: an \`actor\` binding is null and the guard does not apply. ${action.http ? "Its route answers callers too." : "Only the timer runs it."} The owner reads each run under \`scheduled\` with \`usage_read\`.`, "");
     } else if (action.output.kind === "queued") {
       lines.push("`{ callId, queued: true }`. The Kernel sends the request later, from its own process.", "");
     } else {
@@ -898,7 +902,8 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
     }
     if (action.thenOf) lines.push(`Only the Kernel runs this mutation, after the call \`${action.thenOf}\` ends.`, "");
     lines.push("### Callers", "");
-    lines.push(`Runtime endpoint: ${action.runtime.callers.length ? action.runtime.callers.map(describeCaller).join("; ") : "none; the action answers only on its route"}.`, "");
+    const closed = action.schedule && !action.http ? "none; only the Kernel's timer runs it" : "none; the action answers only on its route";
+    lines.push(`Runtime endpoint: ${action.runtime.callers.length ? action.runtime.callers.map(describeCaller).join("; ") : closed}.`, "");
     if (action.http) {
       const http = action.http;
       lines.push(`HTTP route \`${http.method} ${http.path}\` on the Deployment host. Input is ${http.input}. It answers \`{ "result": ... }\` with the same output, or \`{ "error": "<message>" }\` with a status.`, "");

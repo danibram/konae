@@ -356,8 +356,8 @@ try {
     assert(Date.now() < deadline, `The late booking was not released within 20 seconds: ${JSON.stringify(yesterdayHeld)}`);
   }
   assert.deepEqual(yesterdayHeld, [{ room: "pine", hour: 10 }]);
-  const releasedByBen = await call<{ changes: number }>(ben, "bookings.release");
-  assert.equal(releasedByBen.changes, 0, "A person's call binds an ID, and the statement releases only when it binds none.");
+  const releasedByBen = await refusal(call(ben, "bookings.release"));
+  assert.equal(releasedByBen, "Action bookings.release runs only on its schedule.", "A scheduled mutation with no route refuses every caller.");
   const cancelledAhead = Number((await sql(`SELECT count(*) AS n FROM bookings WHERE cancelled_at IS NOT NULL AND day >= '${utcDay(0)}'`)).rows[0].n);
   assert.equal(cancelledAhead, 2, "Only Ana's cancelled planning hours are cancelled from today on.");
   const releaseUsage = await owner.call<{ totals: Array<{ kind: string; name: string; count: number }>; scheduled: Array<{ action: string; outcome: string; changes: number }> }>("usage_read", { deploymentId, from: today, to: today });
@@ -366,7 +366,7 @@ try {
   assert(!releaseUsage.totals.some((row) => row.kind === "refused" && row.name === "bookings.release"));
   const releasedSignals = await owner.call<{ signals: any[] }>("signals_read", { deploymentId, name: "booking.released" });
   assert.deepEqual(releasedSignals.signals.map((signal) => signal.properties), [{}]);
-  check("Release unclaimed bookings", `bookings.release, declared every 15 minutes and run here every 2 seconds, released Ana's unclaimed 09:00 booking for ${yesterday} with nobody calling; GET availability for that day now holds only the checked-in ${JSON.stringify(yesterdayHeld[0])}, and no booking from today on was touched. Ben calling bookings.release himself answers ${JSON.stringify(releasedByBen)}. usage_read lists ${releaseUsage.scheduled.length} runs, all ok, that changed 1 row between them, and one booking.released Signal records the run that did.`);
+  check("Release unclaimed bookings", `bookings.release, declared every 15 minutes and run here every 2 seconds, released Ana's unclaimed 09:00 booking for ${yesterday} with nobody calling; GET availability for that day now holds only the checked-in ${JSON.stringify(yesterdayHeld[0])}, and no booking from today on was touched. Ben calling bookings.release himself is refused with "${releasedByBen}". usage_read lists ${releaseUsage.scheduled.length} runs, all ok, that changed 1 row between them, and one booking.released Signal records the run that did.`);
 
   // 10. The Action Contract, and conform with a session token and with an API key.
   const contractDir = await copyOf("contract");

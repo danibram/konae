@@ -94,6 +94,12 @@ The only door to the database. A call names a Server Action declared in actions.
 - A call the Kernel refuses records no Signal and counts in no Usage total, except a guard's refusal, which Usage counts under refused.
 - To email someone when something happens, such as a booking or an alert, declare notify on the mutation that does it. It reaches the owner or the person who called the action, nobody else.
 
+Declared with `kind` in `actions.json`. Each kind takes its own top-level keys. A query takes kind, access, statement, bindings and http. A mutation takes kind, access, statement, bindings, http, signal, guard, notify and schedule. A signal action takes kind, access, bindings, signal and an empty statement. A call takes kind, access, bindings, url, method, body, headers, auth, then and an empty statement. Any other key is refused, so a misspelled or misplaced key cannot pass and do nothing. A key set to null counts as absent. A key with its own refusal, such as a guard on a query, gets that refusal instead. The Validation Gate and the Kernel refuse the same declarations with the same messages.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `Action <name> has a key <key> that a <kind> action does not take.` | the action declares a top-level key its kind does not take; with several, the first in sorted order | Kernel | Same |
+
 Declared with `signal` in `actions.json`. { "name": "order.placed", "properties"?: ["input binding keys", "actor"] } on a mutation, or on an action of "kind": "signal" that has access and bindings but no statement. When the action succeeds, and for a mutation only when it changed at least one row, the Kernel records the Signal with the named inputs as its properties, in the Deployment's Usage store. The property actor records the caller's ID: the user's, the API key's, or null for a visitor or a signed request. A signal action runs no SQL and returns { recorded: true }. The owner reads Signals with signals_read; the app cannot. The Validation Gate and the Kernel refuse the same declarations with the same messages.
 
 | Message | When | Source | Editor preview |
@@ -149,7 +155,7 @@ Limits:
 - nothing is sent while the installation's sender preflight is not ready; the notice is recorded as failed with sender-not-ready
 - a notice not sent within a day fails as notice-expired
 
-Declared with `schedule` in `actions.json`. "schedule": { "every": "15m" } or { "every": "6h" } or { "daily": "02:00" } on a mutation that takes no input. The Kernel's own timer runs it once in each period, or once a day at that UTC time, with no caller: an actor binding is null, kernel.now is the time of the run, and literals bind as written. Use it for work that must happen when nobody asks, such as releasing a hold that lapsed or closing a day. A run that changes no row had nothing to do, so the guard does not apply; a run that changed a row records the action's Signal with actor null. A changed run also processes notify through the notice queue. Use to owner for a scheduled notice; to actor records no-account because the timer has no caller. One changed run queues one notice even when it changes several rows. The owner reads each run, with its outcome and changes, under scheduled with usage_read. The action still answers callers as its access says; a WHERE that tests the actor binding with IS NULL holds only for the timer, because a person's call always binds an ID. The Validation Gate and the Kernel refuse the same declarations with the same messages. The editor preview runs no schedule; a Development Kernel and a Deployment do.
+Declared with `schedule` in `actions.json`. "schedule": { "every": "15m" } or { "every": "6h" } or { "daily": "02:00" } on a mutation that takes no input. The Kernel's own timer runs it once in each period, or once a day at that UTC time, with no caller: an actor binding is null, kernel.now is the time of the run, and literals bind as written. Use it for work that must happen when nobody asks, such as releasing a hold that lapsed or closing a day. A run that changes no row had nothing to do, so the guard does not apply; a run that changed a row records the action's Signal with actor null. A changed run also processes notify through the notice queue. Use to owner for a scheduled notice; to actor records no-account because the timer has no caller. One changed run queues one notice even when it changes several rows. The owner reads each run, with its outcome and changes, under scheduled with usage_read. Only the timer runs it: a call through miniapp.actions.call or actions_invoke is refused with "Action <name> runs only on its schedule.", unless the action also declares an http route, which answers as its callers say. The Validation Gate and the Kernel refuse the same declarations with the same messages. The editor preview runs no schedule; a Development Kernel and a Deployment do.
 
 | Message | When | Source | Editor preview |
 | --- | --- | --- | --- |
@@ -205,6 +211,7 @@ Returns an array of row objects for a query action, { changes, lastInsertId } fo
 | `Query result exceeds 2 MiB or 1000 rows.` | a query produces more than 1000 rows or more than 2 MiB of JSON | Kernel | Same |
 | `This app reached its limit of calls in the last minute. Try again in a minute.` | the action is a call and the app queued 20 calls in the last 60 seconds, or the number the installation set | Kernel | Never refuses |
 | `Action <name> runs only after the call <key> answers.` | the action is the then mutation of a call, which only the Kernel runs | Kernel | Same |
+| `Action <name> runs only on its schedule.` | the action is a mutation with a schedule and no http route, which only the Kernel's timer runs | Kernel | Same |
 
 Limits:
 
@@ -449,6 +456,7 @@ Declared with `http` in `actions.json`. { "method": "GET" | "POST", "path": "/ap
 
 | Message | When | Source | Editor preview |
 | --- | --- | --- | --- |
+| `Action <name> is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route.` | a signal action declares http | Kernel | Same |
 | `Action <name> must bind GET for a query and POST for a mutation.` | the method does not match the action's kind, or is neither GET nor POST | Kernel | Same |
 | `Action <name> is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route.` | the action's access is authenticated | Kernel | Same |
 | `Action <name> has an invalid http path. Use a leading "/" and segments of letters, digits, ".", "_", "~" or "-", up to 200 characters.` | the path is "/", ends with "/", climbs with "..", or carries a query string | Kernel | Same |

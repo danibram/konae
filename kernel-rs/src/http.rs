@@ -74,6 +74,11 @@ const ROUTE_CALLERS: [&str; 3] = ["signature", "key", "session"];
 /// Parses and checks one action's `http` key. `Ok(None)` when it has none.
 pub(super) fn binding(name: &str, action: &ActionDefinition) -> Result<Option<HttpBinding>, String> {
     let Some(value) = action.http.as_ref() else { return Ok(None) };
+    if action.kind == "signal" {
+        return Err(format!(
+            "Action {name} is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route."
+        ));
+    }
     let invalid = || format!("Action {name} has an invalid http binding.");
     let record = value.as_object().ok_or_else(invalid)?;
     if record.keys().any(|key| !["method", "path", "signature", "callers", "fields"].contains(&key.as_str())) {

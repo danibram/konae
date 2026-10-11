@@ -272,6 +272,7 @@ describe("the preview refuses miniapp.actions.call with the Kernel's words", () 
     "items.mine": { kind: "query", access: "anonymous", statement: "SELECT id FROM items WHERE owner = ?1 LIMIT 5", bindings: [{ source: "actor", field: "id" }] },
     "items.private": { kind: "query", access: "authenticated", statement: "SELECT id FROM items LIMIT 5", bindings: [] },
     "items.feed": { kind: "query", access: "anonymous", statement: "SELECT id FROM items LIMIT 5", bindings: [], http: { method: "GET", path: "/api/feed", callers: ["key"] } },
+    "items.tidy": { kind: "mutation", access: "anonymous", schedule: { every: "15m" }, statement: "DELETE FROM items WHERE qty < 0", bindings: [] },
     "items.many": { kind: "query", access: "anonymous", statement: "SELECT d FROM (WITH RECURSIVE n(d) AS (SELECT 1 UNION ALL SELECT d + 1 FROM n WHERE d < 1500) SELECT d FROM n) LIMIT 1500", bindings: [] },
   } });
 
@@ -283,6 +284,7 @@ describe("the preview refuses miniapp.actions.call with the Kernel's words", () 
     ["an authenticated action and no one signed in", { name: "items.private" }, ["authentication-required"]],
     ["an anonymous action that binds the actor and no one signed in", { name: "items.mine" }, ["This action requires an authenticated actor."]],
     ["an action whose route is its only door", { name: "items.feed" }, ["Action <name> answers only on its HTTP route, <key>.", { name: "items.feed", key: "GET /api/feed" }]],
+    ["a scheduled mutation with no route", { name: "items.tidy" }, ["Action <name> runs only on its schedule.", { name: "items.tidy" }]],
     ["a required input left out", { name: "items.add", input: { qty: 1, done: true } }, ["Missing action input: <key>", { key: "title" }]],
     ["an empty string", { name: "items.add", input: { title: " ", qty: 1, done: true } }, ["<key> must be a non-empty string.", { key: "title" }]],
     ["a string past its maxLength", { name: "items.add", input: { title: "too long", qty: 1, done: true } }, ["<key> is too long.", { key: "title" }]],

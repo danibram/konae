@@ -350,6 +350,10 @@ struct ActionDefinition {
     /// checked by `calls::check_kind`.
     #[serde(flatten)]
     call: calls::CallKeys,
+    /// Every other key, refused by `action_shape::check_keys`. It comes after
+    /// `call` so serde hands it only the keys no field took.
+    #[serde(flatten)]
+    extra: serde_json::Map<String, Value>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -918,6 +922,11 @@ async fn invoke_action(
     // else may write it.
     if let Some(call) = calls::then_of(&program, &name) {
         return error(StatusCode::FORBIDDEN, &format!("Action {name} runs only after the call {call} answers."));
+    }
+    // A scheduled mutation with no route belongs to the Kernel's timer
+    // (ADR-0017, update of 2026-11-08).
+    if action.schedule.is_some() && action.http.is_none() {
+        return error(StatusCode::FORBIDDEN, &format!("Action {name} runs only on its schedule."));
     }
     let actor = match authenticate_deployment(&state, &deployment, &headers) {
         Ok(actor) => actor,
@@ -2447,6 +2456,11 @@ fn resolve_bindings(
 }
 
 fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result<(), String> {
+    validate_declarations(name, action)?;
+    action_shape::check_keys(name, action)
+}
+
+fn validate_declarations(name: &str, action: &ActionDefinition) -> std::result::Result<(), String> {
     action_shape::check_action(name, action)?;
     if calls::check_kind(name, action)?.is_some() {
         return Ok(());
@@ -3467,6 +3481,7 @@ mod tests {
             schedule: None,
             subscribe: None,
             call: Default::default(),
+            extra: Default::default(),
         }
     }
 
@@ -3738,6 +3753,25 @@ mod tests {
             deployment.manifest = json!({"visibility": "public"});
         }
         assert_eq!(call(state.clone()).await, StatusCode::OK);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_scheduled_mutation_without_a_route_runs_only_on_its_schedule() {
+        let root = std::env::temp_dir().join(format!("littlebox-scheduled-action-{}", Uuid::new_v4()));
+        let (state, headers) = login_test_state(&root, "public").await;
+        let program = json!({"version": 1, "actions": {"holds.release": {
+            "kind": "mutation", "access": "anonymous", "schedule": {"every": "15m"},
+            "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL", "bindings": [{"source": "kernel", "field": "now"}]
+        }}});
+        for deployment in state.deployments.write().await.values_mut() {
+            deployment.actions = program.to_string();
+            deployment.manifest = json!({"visibility": "public"});
+        }
+        let response = invoke_action(State(state), AxumPath("holds.release".into()), headers, Json(json!({}))).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("Action holds.release runs only on its schedule."));
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

@@ -78,6 +78,21 @@ pub(crate) struct CallKeys {
 }
 
 impl CallKeys {
+    /// The call keys the action declares, for `action_shape::check_keys`.
+    pub(crate) fn present(&self) -> Vec<&'static str> {
+        [
+            ("url", &self.url),
+            ("method", &self.method),
+            ("body", &self.body),
+            ("headers", &self.headers),
+            ("auth", &self.auth),
+            ("then", &self.then),
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| value.is_some().then_some(key))
+        .collect()
+    }
+
     fn any(&self) -> bool {
         self.url.is_some()
             || self.method.is_some()
