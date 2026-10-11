@@ -1,6 +1,6 @@
 # Architecture decisions
 
-Each record states its status and which earlier record it amends on its first line, and keeps its later changes as dated notes at the end, oldest first. The next free number is 0016. Before taking it, check `main`, because another branch may have taken it.
+Each record states its status and which earlier record it amends on its first line, and keeps its later changes as dated notes at the end, oldest first. The next free number is 0021. Before taking it, check `main`, because another branch may have taken it.
 
 | ADR | Decides | Amends | Amended by |
 | --- | --- | --- | --- |
@@ -23,6 +23,7 @@ Each record states its status and which earlier record it amends on its first li
 | [0017](0017-the-kernel-runs-a-declared-schedule.md) | A mutation may declare a schedule that the Kernel's timer runs once a period; `subscribe` is refused | 0010 | |
 | [0018](0018-a-route-verifies-a-providers-own-signature.md) | A route verifies a provider's own signature scheme and reads its nested body through `fields` | 0011 | |
 | [0019](0019-an-app-calls-another-from-the-kernel.md) | An app calls another app or a service through a call action the Kernel queues and sends; `connects` and open GET routes for direct reads | 0011 | |
+| [0020](0020-a-refusal-carries-a-stable-code.md) | Every refusal from the Gate and the Kernel is `{ code, message, hint }` from one shared table | 0009 | |
 
 ## Which record answers a question
 
@@ -45,3 +46,4 @@ Each record states its status and which earlier record it amends on its first li
 | Which headers keep hosted code on its own origin? | 0008 update of 2026-11-06 |
 | How does an app answer on its own domain? | 0015 |
 | How does a route take a webhook from an outside service? | 0011, 0018 |
+| What shape does a refusal have, and who fixes it? | 0009, 0020 |
