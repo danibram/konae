@@ -123,6 +123,11 @@ export type ContractAction = {
   signal?: { name: string; properties: string[] };
   /** A mutation's refusal when its statement changes no row; it is listed among the errors too. */
   guard?: string;
+  /**
+   * The email a mutation queues when it changes a row (ADR-0015). It does not
+   * change the answer: the call succeeds whether or not the email can be sent.
+   */
+  notify?: { to: "owner" | "actor"; subject: string; body: string };
   runtime: { endpoint: string; tool: string; sdk: string; callers: ContractCaller[] };
   http?: ContractHttp;
   errors: ContractError[];
@@ -249,6 +254,7 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables): C
     output,
     ...(action.signal ? { signal: { name: action.signal.name, properties: [...action.signal.properties] } } : {}),
     ...(action.guard ? { guard: action.guard } : {}),
+    ...(action.notify ? { notify: { ...action.notify } } : {}),
     runtime: { ...RUNTIME, callers: http?.onlyDoor === "always" ? [] : runtimeCallers(access, Boolean(http)) },
     ...(http ? { http } : {}),
     errors: actionErrors(action, inputs, actorBound),
@@ -747,6 +753,10 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
     } else if (action.output.kind === "changes") {
       lines.push("`{ changes, lastInsertId }`, both integers.", "");
       if (action.guard) lines.push(`When the statement changes no row the call is refused with \`${action.guard}\` instead.`, "");
+      if (action.notify) {
+        const to = action.notify.to === "owner" ? "the Project Owner" : "the caller's verified email";
+        lines.push(`When the statement changes a row the Kernel queues an email to ${to} with the subject \`${action.notify.subject}\`. The answer does not wait for it or depend on it; Usage counts it under \`notify\`.`, "");
+      }
     } else {
       lines.push(`\`{ "recorded": true }\`. It runs no SQL and records the Signal \`${action.output.signal}\`.`, "");
     }
@@ -906,6 +916,7 @@ export function programFromContract(contract: ActionContract): ServerActionProgr
       bindings,
       ...(action.signal ? { signal: { name: action.signal.name, properties: [...action.signal.properties] } } : {}),
       ...(action.guard ? { guard: action.guard } : {}),
+      ...(action.notify ? { notify: { ...action.notify } } : {}),
       ...(action.http ? {
         http: {
           method: action.http.method,

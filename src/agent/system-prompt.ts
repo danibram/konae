@@ -49,6 +49,7 @@ actions.json format:
       "statement": "<one SQL statement with ? placeholders; a signal action has none>",
       "bindings": [ ... ],
       "guard": "<optional, a mutation only: the refusal when no row changes>",
+      "notify": { "to": "owner" | "actor", "subject": "<optional, a mutation only>", "body": "<template>" },
       "signal": { "name": "<optional>", "properties": [] },
       "http": { "method": "GET", "path": "/api/<optional, an anonymous action only>" }
     }
@@ -71,6 +72,7 @@ Rules the Validation Gate checks for you:
 - For an optional filter or nullable field, add "nullable": true to its input binding. Omitted values and explicit null bind as SQL NULL; supplied values still follow the declared type. Pass null for an empty search box.
 - Mutations return { changes, lastInsertId }. Read changed rows with a separate query; mutation statements using RETURNING fail validation.
 - When a mutation's WHERE carries a rule, such as "only an organizer" or "the slot is free", add "guard": "<the sentence the person should see>" to it. When the statement changes no row the call is refused with that sentence instead of returning { changes: 0 }.
+- When the owner asks to hear about something, such as a new signup or an alert, or a person should get a confirmation, add "notify": { "to": "owner" or "actor", "subject": "...", "body": "..." } to the mutation that does it. It emails the owner, or the caller once their account has proved its email, when the statement changes a row. It never sends to an address from the input. The subject and body may use {input.<key>} for the action's input bindings and {actor.id}, nothing else. Add it only when the owner asked for email.
 - To let the owner see that something happened, such as a newsletter signup, add "signal": { "name": "newsletter.joined", "properties": ["source"] } to the mutation that does it. Properties are keys of its input bindings, or "actor" for the caller's ID. A mutation records its Signal only when it changed a row. With no table to write, use "kind": "signal" with access and bindings and no statement; it returns { recorded: true }. A query cannot declare a signal. There is no miniapp.track; the app calls the action with miniapp.actions.call, and only the owner reads Signals.
 - A query that reads rows needs a top-level LIMIT. The Validation Gate and the Kernel both refuse one that does not, including after the app is exported. A LIMIT inside a string, a comment or a subquery does not count. A query that only returns a total (count, sum, avg, min or max) with no GROUP BY, and a query that does not read a table, are the exceptions. LIMIT does not raise the 1000-row runtime cap.
 - schema.sql must run twice on the same database without failing, because the runtime re-runs it on every database open.

@@ -114,7 +114,7 @@ try {
   // One refusal names both unset secrets, so one failed plan tells the owner everything to set.
   // The feed takes an API key, so only the webhook names a secret now.
   const unsetSecret = await rejects(release(project, compiled.files, compiled.artifact), /which is not set for this project/);
-  assert.equal(unsetSecret, "Action events.receive signs with the secret events_webhook, which is not set for this project. Set it with secret_set before publishing.");
+  assert.equal(unsetSecret, "Actions events.receive and pages.critical sign with the secret events_webhook, which is not set for this project. Set it with secret_set before publishing.");
   refused("Publish before secret_set", unsetSecret);
   await owner.call("secret_set", { projectId: project.id, name: "events_webhook", value: webhookSecret });
   await owner.call("secret_set", { projectId: project.id, name: "events_feed", value: feedSecret });
@@ -441,6 +441,41 @@ try {
   refused("An app user calls usage_read on the runtime endpoint", runtimeUsage);
   pass("Usage and Signals", `usage_read counts ${delivered} POST /hooks/events and ${routeReads} GET /api/events, none of the refused requests, 2 events.acknowledge and 2 refused by its guard, 2 signups; signals_read returns ${received.signals.length} event.received, one per stored event, and 2 event.acknowledged naming Ana and Ben as actor.`);
 
+  // ------------------------------------------------- Critical page by email
+  // A sender posts a critical event to its own signed route, and the owner
+  // gets an email. A retry stores nothing and sends nothing.
+  const page = async (event: object, nonce?: string) => {
+    const body = JSON.stringify(event);
+    const signature = await signRoute(webhookSecret, { method: "POST", path: "/hooks/critical", body }, Math.floor(Date.now() / 1000), nonce);
+    const response = await fetch(`${url}/hooks/critical`, { method: "POST", headers: host({ "content-type": "application/json", "x-inbox-signature": signature }), body });
+    return { status: response.status, body: await response.json() as any };
+  };
+  const notices = async () => (await readFile(path.join(dataDir, "mailbox.jsonl"), "utf8").catch(() => "")).trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((message) => message.purpose === "notify");
+  const paged = { source: "payroll", id: "run-12", title: "Payroll export failed", body: "Bank file rejected.\r\nBcc: everyone@elsewhere.example" };
+  const firstPage = await page(paged, "page-first");
+  assert.equal(firstPage.status, 200, JSON.stringify(firstPage.body));
+  assert.equal(firstPage.body.result.changes, 1);
+  assert.deepEqual((await page(paged, "page-retry")).body, { result: { changes: 0, lastInsertId: 0 } });
+  let pageMails = await notices();
+  for (const deadline = Date.now() + 10_000; pageMails.length < 1 && Date.now() < deadline; pageMails = await notices()) await Bun.sleep(100);
+  await Bun.sleep(300);
+  pageMails = await notices();
+  assert.equal(pageMails.length, 1, "The retry stored nothing, so it sent nothing.");
+  const [pageMail] = pageMails;
+  assert.equal(pageMail.to, "owner@inbox.example");
+  assert.equal(pageMail.action, "pages.critical");
+  assert.equal(pageMail.subject, "Critical: Payroll export failed");
+  assert(pageMail.text.startsWith("payroll paged the inbox with a critical event.\nPayroll export failed\nBank file rejected. Bcc: everyone@elsewhere.example\nSign in to the inbox to acknowledge it.\n"), pageMail.text);
+  const [stored] = await action<any[]>(anaClient, "events.list", { severity: "critical", state: "open" });
+  assert.equal(stored.external_id, "run-12");
+  const pageUsage = await owner.call<{ totals: Array<{ kind: string; name: string; count: number }> }>("usage_read", { deploymentId: inbox.id, from: today, to: today });
+  assert.deepEqual(pageUsage.totals.filter((row) => row.kind === "notify").map((row) => [row.name, row.count]), [["pages.critical: queued", 1]]);
+  assert.equal(pageUsage.totals.find((row) => row.kind === "route" && row.name === "POST /hooks/critical")?.count, 2);
+  const status = await owner.call<any>("mail_status", {});
+  assert.equal(status.queue.notices.delivered, 1);
+  pass("Critical page by email", `POST /hooks/critical, signed like /hooks/events, stores a critical event and pages.critical's "notify": { "to": "owner" } emails owner@inbox.example "${pageMail.subject}". The sender's body with a Bcc line arrives as one line of text. A signed retry stores nothing and sends nothing. usage_read lists "pages.critical: queued" once; mail_status counts ${status.queue.notices.delivered} delivered notice.`);
+
   // ----------------------------------------------------------------- Browser
   if (process.env.LITTLEBOX_SHOWCASE_BROWSER !== "0") {
     const { chromium } = await import("playwright");
@@ -500,7 +535,7 @@ try {
   assert.equal(await contract.exited, 0, await new Response(contract.stderr).text());
   const written = JSON.parse(await readFile(path.join(contractDir, "action-contract.json"), "utf8"));
   assert.deepEqual(written.actions.map((item: { name: string }) => item.name).sort(),
-    ["events.acknowledge", "events.counts", "events.feed", "events.list", "events.receive", "members.hello"]);
+    ["events.acknowledge", "events.counts", "events.feed", "events.list", "events.receive", "members.hello", "pages.critical"]);
   const inputsFile = path.join(scratch, "conform-inputs.json");
   await writeFile(inputsFile, JSON.stringify({
     "events.receive": { severity: "info" },
@@ -529,7 +564,7 @@ try {
   assert.equal(signed.code, 0, signed.out);
   assert.match(signed.totals, /^\d+ passed, 0 failed, \d+ skipped/);
   assert(signed.out.includes("PASS events.feed: answers GET /api/events."), signed.out);
-  pass("Action Contract", `littlebox contract writes 6 actions. littlebox conform against the private Deployment, reading the GET route with its key, reports "${keyed.totals}". Against the signed variant with both secrets and no session it reports "${signed.totals}": the signed GET and POST probes each carry a fresh nonce.`);
+  pass("Action Contract", `littlebox contract writes 7 actions. littlebox conform against the private Deployment, reading the GET route with its key, reports "${keyed.totals}". Against the signed variant with both secrets and no session it reports "${signed.totals}": the signed GET and POST probes each carry a fresh nonce.`);
 
   console.log(JSON.stringify({ app: "inbox", checks: passes.length, refusals }, null, 2));
 } finally {

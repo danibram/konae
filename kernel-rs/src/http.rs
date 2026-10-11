@@ -964,6 +964,8 @@ async fn run_route(
     let db_path = database_path(state, &deployment.id);
     let _guard = database_lock(state, &deployment.id).await;
     let result = run_action(db_path, action, params).await;
+    // A notice below writes mail.sqlite; the app's other calls need not wait for it.
+    drop(_guard);
     match result {
         Ok(value) => {
             let changed = match super::guard::outcome(name, action, &value) {
@@ -977,6 +979,12 @@ async fn run_route(
             super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Route(http.method.clone(), http.path.clone()));
             if changed {
                 super::usage::signal(&state.data_root, &deployment.id, name, action, &input, caller.actor_id());
+                let account = match &caller {
+                    Caller::Person(user) => Some(user.user_id.as_str()),
+                    Caller::Key(_) | Caller::Visitor => None,
+                };
+                let notice = super::notify::Caller { account, actor_id: caller.actor_id() };
+                super::notify::record(state, deployment, name, action, &input, notice).await;
             }
             let mut response = Json(json!({"result": value})).into_response();
             response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));

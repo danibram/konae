@@ -253,3 +253,31 @@ describe("guards", () => {
     expect(program.actions["members.promote"].guard).toBe("Only an organizer can promote a member.");
   });
 });
+
+describe("notify", () => {
+  // kernel-rs/src/notify.rs runs the same cases against the Kernel's parser.
+  test("refuse the same declarations as the Kernel, with the same messages", async () => {
+    const cases: { case: string; actions: Record<string, unknown>; error: string | null }[] =
+      await Bun.file(new URL("../../kernel-rs/src/notify-cases.json", import.meta.url)).json();
+    expect(cases.length).toBeGreaterThanOrEqual(15);
+    for (const item of cases) {
+      let message: string | null = null;
+      try {
+        parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message, item.case).toBe(item.error);
+    }
+  });
+
+  test("keep the notice on the parsed mutation", () => {
+    const notify = { to: "actor", subject: "Booked {input.room}", body: "You booked {input.room}." };
+    const program = parseServerActionSource(JSON.stringify({ version: 1, actions: {
+      "bookings.create": { kind: "mutation", access: "authenticated", notify,
+        statement: "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+        bindings: [{ source: "actor", field: "id" }, { source: "input", key: "room", type: "string" }] },
+    } }));
+    expect(program.actions["bookings.create"].notify).toEqual(notify as never);
+  });
+});

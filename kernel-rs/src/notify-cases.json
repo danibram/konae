@@ -1,0 +1,813 @@
+[
+ {
+  "case": "notify to the actor on a mutation",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked {input.room}",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "notify to the owner on a mutation",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "owner",
+     "subject": "Booked {input.room}",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "notify on an anonymous mutation",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "INSERT INTO bookings (room_id) VALUES (?1)",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string"
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked {input.room}",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "notify next to a guard and a signal",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked {input.room}",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    },
+    "guard": "Not booked.",
+    "signal": {
+     "name": "room.booked",
+     "properties": [
+      "room",
+      "actor"
+     ]
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a subject of exactly 120 characters",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a subject counts characters, not bytes",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a body of exactly 2000 characters",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked {input.room}",
+     "body": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a lone closing brace is text",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked } {input.room}",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "notify on a query",
+  "actions": {
+   "bookings.mine": {
+    "kind": "query",
+    "access": "authenticated",
+    "statement": "SELECT room_id FROM bookings WHERE user_id = ?1 AND room_id = ?2 LIMIT 10",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked {input.room}",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": "Action bookings.mine is a query, so it cannot declare notify. Declare it on a mutation."
+ },
+ {
+  "case": "notify on a signal action",
+  "actions": {
+   "rooms.view": {
+    "kind": "signal",
+    "access": "authenticated",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "signal": {
+     "name": "room.viewed",
+     "properties": [
+      "room"
+     ]
+    },
+    "notify": {
+     "to": "actor",
+     "subject": "Booked {input.room}",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": "Action rooms.view is a signal action, so it cannot declare notify. Declare it on a mutation."
+ },
+ {
+  "case": "notify that is a string",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": "owner"
+   }
+  },
+  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else."
+ },
+ {
+  "case": "notify without a body",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "owner",
+     "subject": "Booked"
+    }
+   }
+  },
+  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else."
+ },
+ {
+  "case": "notify with an address of its own",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked {input.room}",
+     "body": "You booked {input.room}.\nYour account is {actor.id}.",
+     "cc": "x@example.test"
+    }
+   }
+  },
+  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else."
+ },
+ {
+  "case": "notify with a subject that is not a string",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": 5,
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else."
+ },
+ {
+  "case": "to an address",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "ana@example.test",
+     "subject": "Booked {input.room}",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\" or \"actor\"."
+ },
+ {
+  "case": "to an input",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "{input.room}",
+     "subject": "Booked {input.room}",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\" or \"actor\"."
+ },
+ {
+  "case": "without to",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "subject": "s",
+     "body": "b"
+    }
+   }
+  },
+  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\" or \"actor\"."
+ },
+ {
+  "case": "a subject of 121 characters",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": "Action bookings.create has an invalid notify subject. Use 1 to 120 characters on one line."
+ },
+ {
+  "case": "a blank subject",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "   ",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": "Action bookings.create has an invalid notify subject. Use 1 to 120 characters on one line."
+ },
+ {
+  "case": "a subject with a line break",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked\nBcc: x@example.test",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": "Action bookings.create has an invalid notify subject. Use 1 to 120 characters on one line."
+ },
+ {
+  "case": "a body of 2001 characters",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked {input.room}",
+     "body": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    }
+   }
+  },
+  "error": "Action bookings.create has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters."
+ },
+ {
+  "case": "an empty body",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked {input.room}",
+     "body": ""
+    }
+   }
+  },
+  "error": "Action bookings.create has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters."
+ },
+ {
+  "case": "a body with a carriage return",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked {input.room}",
+     "body": "Booked\r\nroom"
+    }
+   }
+  },
+  "error": "Action bookings.create has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters."
+ },
+ {
+  "case": "a placeholder for an input the action does not bind",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked {input.room}",
+     "body": "Booked {input.email}"
+    }
+   }
+  },
+  "error": "Action bookings.create names an unknown placeholder {input.email} in its notify body. Use {input.<key>} for one of its input bindings, or {actor.id}."
+ },
+ {
+  "case": "the actor's email as a placeholder",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "For {actor.email}",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": "Action bookings.create names an unknown placeholder {actor.email} in its notify subject. Use {input.<key>} for one of its input bindings, or {actor.id}."
+ },
+ {
+  "case": "a placeholder without a source",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked {room}",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": "Action bookings.create names an unknown placeholder {room} in its notify subject. Use {input.<key>} for one of its input bindings, or {actor.id}."
+ },
+ {
+  "case": "an empty placeholder",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked {input.room}",
+     "body": "Booked {}"
+    }
+   }
+  },
+  "error": "Action bookings.create names an unknown placeholder {} in its notify body. Use {input.<key>} for one of its input bindings, or {actor.id}."
+ },
+ {
+  "case": "an unclosed placeholder",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "Booked {input.room",
+     "body": "You booked {input.room}.\nYour account is {actor.id}."
+    }
+   }
+  },
+  "error": "Action bookings.create has an unclosed placeholder in its notify subject. Close it with \"}\"."
+ },
+ {
+  "case": "the subject is checked before the body",
+  "actions": {
+   "bookings.create": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO bookings (user_id, room_id) VALUES (?1, ?2)",
+    "bindings": [
+     {
+      "source": "actor",
+      "field": "id"
+     },
+     {
+      "source": "input",
+      "key": "room",
+      "type": "string",
+      "maxLength": 32
+     }
+    ],
+    "notify": {
+     "to": "actor",
+     "subject": "{x}",
+     "body": "{y}"
+    }
+   }
+  },
+  "error": "Action bookings.create names an unknown placeholder {x} in its notify subject. Use {input.<key>} for one of its input bindings, or {actor.id}."
+ }
+]

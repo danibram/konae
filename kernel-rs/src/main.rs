@@ -43,6 +43,7 @@ mod limits;
 mod mail;
 mod mcp;
 mod migration;
+mod notify;
 mod oauth;
 mod package;
 mod recovery;
@@ -312,6 +313,9 @@ struct ActionDefinition {
     /// A mutation's refusal when it changes no row, checked by `guard::declaration`.
     #[serde(default)]
     guard: Option<Value>,
+    /// The email a mutation queues when it changes a row, checked by `notify::declaration`.
+    #[serde(default)]
+    notify: Option<Value>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -892,6 +896,8 @@ async fn invoke_action(
                 usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
                 if matches!(changed, guard::Outcome::Changed) {
                     usage::signal(&state.data_root, &deployment.id, &name, action, &input, actor_id);
+                    let caller = notify::Caller { account: actor_id, actor_id };
+                    notify::record(&state, &deployment, &name, action, &input, caller).await;
                 }
                 Json(json!({"result": value})).into_response()
             }
@@ -2326,6 +2332,7 @@ fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result
         usage::declaration(name, action)?;
         http::binding(name, action)?;
         guard::declaration(name, action)?;
+        notify::declaration(name, action)?;
         return Ok(());
     }
     sql_rules::check_statement(name, action)?;
@@ -2339,6 +2346,7 @@ fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result
     usage::declaration(name, action)?;
     http::binding(name, action)?;
     guard::declaration(name, action)?;
+    notify::declaration(name, action)?;
     Ok(())
 }
 
@@ -3325,6 +3333,7 @@ mod tests {
             http: None,
             signal: None,
             guard: None,
+            notify: None,
         }
     }
 

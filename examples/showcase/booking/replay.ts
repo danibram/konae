@@ -1,6 +1,7 @@
 // Replays the booking showcase against its own Kernel: publish, the signup
 // policy, the public and staff views, the one-statement booking, a race between
-// two staff members, the signed check-in route, the Action Contract and a
+// two staff members, the booking confirmation by email, the signed check-in
+// route, the Action Contract and a
 // Chrome pass under the Content Security Policy. Exits 0 when every check holds.
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
@@ -52,7 +53,7 @@ try {
       LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_PUBLIC_ORIGIN: url,
       LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: path.join(scratch, "data"),
       LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: repo,
-      LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1",
+      LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development",
     },
     stdout: "ignore", stderr: "inherit",
   });
@@ -261,6 +262,45 @@ try {
   assert.deepEqual(cancelled.signals.map((signal) => signal.properties.ref), [planning.ref]);
   assert(staffIds.has(cancelled.signals[0].properties.actor) && cancelled.signals[0].properties.actor !== null, "booking.cancelled names who cancelled.");
   check("Signals", `${createCalls} bookings.create calls: ${booked} bookings made and ${booked} booking.created Signals, each naming the booker as actor. One booking.cancelled names the canceller. Usage counts the ${refusedCount} guard refusals under refused.`);
+
+  // 7a. A booking emails its confirmation to the booker, once the booker's
+  // account has proved its address. Ana and Ben signed up in local mode, which
+  // proves nothing, so their bookings sent nothing; Cara accepts an invitation.
+  const mailbox = async () => (await readFile(path.join(scratch, "data", "mailbox.jsonl"), "utf8").catch(() => ""))
+    .trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const mailFor = async (purpose: string, to: string) => {
+    for (const deadline = Date.now() + 10_000; Date.now() < deadline; await Bun.sleep(100)) {
+      const found = (await mailbox()).find((item) => item.purpose === purpose && item.to === to);
+      if (found) return found;
+    }
+    throw Error(`No ${purpose} email reached ${to}.`);
+  };
+  const invited = await owner.call<{ results: Array<{ status: string }> }>("app_invitations_create", { deploymentId, emails: ["cara@office.example"], idempotencyKey: "booking-cara-invite" });
+  assert.equal(invited.results[0].status, "invited");
+  const invitation = await mailFor("invitation", "cara@office.example");
+  const accepted = await fetch(`${url}/_littlebox/auth/accept`, {
+    method: "POST", headers: { host, "content-type": "application/json", "x-forwarded-for": freshAddress() },
+    body: JSON.stringify({ token: new URL(invitation.link).hash.slice("#invitation=".length), password }),
+  });
+  assert.equal(accepted.status, 200, await accepted.clone().text());
+  const cara = runtime(accepted.headers.get("set-cookie")!.split(";")[0]);
+  const confirmDay = utcDay(21);
+  assert.equal((await book(cara, { room: "pine", day: confirmDay, start: 15, hours: 2, title: "Customer call" })).changes, 2);
+  assert.equal((await book(cara, { room: "pine", day: confirmDay, start: 16, hours: 1, title: "Overlap" })).changes, 0, "An overlap is refused and sends nothing.");
+  const confirmation = await mailFor("notify", "cara@office.example");
+  await Bun.sleep(300);
+  const notices = (await mailbox()).filter((item) => item.purpose === "notify");
+  assert.equal(notices.length, 1, "Only the booker with a proven address gets a confirmation, once.");
+  assert.equal(confirmation.subject, `Booked: pine on ${confirmDay} at 15:00`);
+  assert.equal(confirmation.action, "bookings.create");
+  assert.equal(confirmation.scope, `deployment:${deploymentId}`);
+  assert(confirmation.text.startsWith(`2 h in pine on ${confirmDay} from 15:00, titled "Customer call".\nCancel it on the room board if plans change.\n`), confirmation.text);
+  const usageAfter = await owner.call<{ totals: Array<{ kind: string; name: string; count: number }> }>("usage_read", { deploymentId, from: today, to: today });
+  const noticeLines = Object.fromEntries(usageAfter.totals.filter((row) => row.kind === "notify").map((row) => [row.name, row.count]));
+  assert.deepEqual(noticeLines, { "bookings.create: queued": 1, "bookings.create: unverified-email": booked });
+  const mailStatus = await owner.call<any>("mail_status", {});
+  assert.equal(mailStatus.queue.notices.delivered, 1);
+  check("Booking confirmation", `bookings.create declares "notify": { "to": "actor" }. Cara accepts an invitation, which proves her address, books pine and gets "${confirmation.subject}" in the development mailbox; her overlapping booking is refused with the guard and sends nothing. The ${booked} bookings Ana and Ben made after a local signup sent nothing, and usage_read says why: ${JSON.stringify(noticeLines)}. mail_status counts ${mailStatus.queue.notices.delivered} delivered notice.`);
 
   // 8. The signed check-in route for a door panel, with a key or a signature.
   const panel = await owner.call<{ key: string; id?: string; keyId?: string }>("api_keys_create", { deploymentId, name: "Door panel", actions: ["panel.checkin"] });

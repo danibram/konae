@@ -2,6 +2,8 @@
 
 Date: 2026-11-07, against `main` at `e9a0711`. This matrix takes ten app shapes people ask for and 24 features they expect, and gives every cell one verdict with the primitive behind it and the replay that proves it. Where no showcase replay proved a cell, a probe under [examples/probes](../../examples/probes/README.md) does, on its own local Kernel. Run them all with `bun run examples/probes/replay-all.ts`. Update of 2026-11-07: F22 Custom domain moved from N to W when the custom domain primitive landed ([ADR-0015](../adr/0015-a-deployment-answers-on-one-custom-domain.md)), proved by the domain probe and the gallery replay.
 
+Updated 2026-11-07 when notices landed ([ADR-0015](../adr/0016-a-mutation-may-notify-the-owner-or-the-actor.md)): F17, its cells, the counts, the shape table and the notify probe. Every other cell is as the first run found it.
+
 The yardstick is the sentence at the top of AGENTS.md: a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.
 
 ## Verdicts
@@ -49,7 +51,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F14 | Counters and aggregates | W | `count`, `sum`, `avg`, `max` with `GROUP BY` and a `LIMIT`; a total with no `GROUP BY` needs none | dataset "Aggregates", survey "Multi-answer form", inbox "In-app list" |
 | F15 | Audit of who did what | C | A Signal that lists `actor` gives the owner who did what, and only for calls that changed a row. The app's members see only what the rows keep, such as `author_id`, because one statement writes one table, so there is no history table written with the change | community "Audit", inbox "Usage and Signals", booking "Validation Gate and Kernel" (two statements refused) |
 | F16 | Signals and Usage for the owner | W | `signals_read`, `usage_read`, guard refusals under `refused` | inbox "Usage and Signals", habits "Signals and Usage", booking "Signals" |
-| F17 | Email on an event | N | The mail queue sends only account email: verification, recovery and invitations. The runtime door has no mail tool, and an action of kind `email` is refused (Gate `Invalid server action: notes.mail`, Kernel `Action notes.mail has an unsupported kind.`). The nearest alternative is that the owner reads Signals, or that a program the owner runs polls a keyed route and sends the mail itself | platform "Runtime tools", "Declare an action of kind email" |
+| F17 | Email on an event | W | Since 2026-11-07, `"notify": { "to": "owner" \| "actor", "subject", "body" }` on a mutation ([ADR-0015](../adr/0016-a-mutation-may-notify-the-owner-or-the-actor.md)) queues one email when the statement changes a row: to the Project Owner, or to the caller once the account answered a link. A local signup proves no address, so the call succeeds and Usage counts `unverified-email`. Templates take `{input.<key>}` and `{actor.id}` only, and no address from the input is ever a recipient, so a third person such as an assignee or a follower gets nothing. Notices count apart from account email: 200 a day per app, 500 per creator, 50 per recipient from one app. The runtime door still has no mail tool | notify "Owner notice", "Actor notice needs a proven email", "Owner reads the outcome", "Refusals at both doors"; booking "Booking confirmation"; inbox "Critical page by email" |
 | F18 | Scheduled or delayed work | C | Nothing runs without a caller. Work that only has to look done when someone asks, such as a hold that lapses or a post that appears at its time, compares a stored time with `kernel.now` in each statement; lapsed rows stay in the table. Work that has to happen when nobody asks, such as a reminder, a digest or a retry, is N, because a `"schedule"` key passes both doors and runs nothing | shop "Holds that lapse", platform "A reminder without a worker", "Declare a schedule on a mutation" |
 | F19 | Realtime updates | C | The page polls a query with an `after` cursor, within 30 calls per 10 seconds per visitor address and 120 per signed-in user. Nothing is pushed: a `"subscribe"` key passes both doors and does nothing | community "Realtime by polling", platform "Declare a subscription on a query" |
 | F20 | Payments | N | The page policy refuses a provider's script, API calls, checkout frame and a form that posts to it, and a provider's signed webhook answers 401 `invalid-signature`. The nearest alternative is a plain link to a hosted payment page, which publishes and navigates, and a program the owner runs that confirms the payment with an API key | shop "Payment provider in the page", "Holds that lapse" (`payments.confirm` by key), hub "Payment provider signature" |
@@ -78,7 +80,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F14 Counters and aggregates | **W** | **W** | W | W | W | **W** | **W** | W | **W** | W |
 | F15 Audit of who did what | C | C | **C** | C | C | C | C | **C** | C | C |
 | F16 Signals and Usage for the owner | **W** | W | W | W | W | **W** | W | **W** | W | W |
-| F17 Email on an event | **N** | N | **N** | **N** | N | **N** | N | **N** | **N** | **N** |
+| F17 Email on an event | **W** | W | **C** | **C** | W | **W** | W | **W** | **W** | **C** |
 | F18 Scheduled or delayed work | N | **N** | **N** | N | **C** | N | C | **N** | **C** | C |
 | F19 Realtime updates | C | C | **C** | C | C | C | C | C | **C** | **C** |
 | F20 Payments | N | N | N | N | N | N | N | N | **N** | **N** |
@@ -92,6 +94,7 @@ A cell differs from its feature's verdict where the shape changes the answer:
 - F9 in H is N. A hub's senders are outside services with their own signature schemes and payloads, and the hub probe shows each of them refused. The nearest alternative is an adapter outside Littlebox that verifies the sender and posts the declared fields to a signed route.
 - F10 in C and J is C, because a file goes to its uploader or to everyone who may open the app, never to a role or to a publisher's followers. In F it is C, because a visitor cannot upload: `transfer_begin` needs a session, so a respondent creates an account before attaching a file.
 - F11 in E is C, because a post cannot embed an image or a video from another site.
+- F17 is C in C, D and J, because a notice reaches only the owner or the person who acted. A team tool cannot tell the assignee, a community its members, a two-sided app the followers; they see the change when they next open the app. Sending to account IDs a query returns is the form that would close it.
 - F18 is C where the work is a time a query can compare (E publishes a post at its time, G and J filter by age, I lets a hold lapse) and N where something has to happen with nobody asking (A sends a launch notice, B reminds, C and D send a digest, F sends a daily summary, H retries an outbound call).
 
 ## Counts
@@ -100,23 +103,25 @@ The counts are taken from the 240 cells above, by counting each letter.
 
 | | Works | Compromise | Not possible | Cells |
 | --- | --- | --- | --- | --- |
-| Every cell | 126 | 77 | 37 | 240 |
-| Cells a shape cannot ship without (bold) | 44 | 30 | 13 | 87 |
+| Every cell | 133 | 80 | 27 | 240 |
+| Cells a shape cannot ship without (bold) | 48 | 33 | 6 | 87 |
+
+On 2026-11-06 the counts were 116, 77 and 47 over every cell and 41, 30 and 16 over the bold ones. On 2026-11-07 the custom domain moved F22 to W and notices moved F17 to W or C, which gives the counts above.
 
 | Shape | Needed | Not possible among them | Compromises among them |
 | --- | --- | --- | --- |
-| A Landing page | 7 | F17 email | F24 |
+| A Landing page | 7 |  | F24 |
 | B Personal tracker | 8 | F18 reminders | F24 |
-| C Team tool | 10 | F17 email, F18 reminders | F5, F10, F15, F19, F24 |
-| D Community | 9 | F17 email | F5, F12, F24 |
-| E Blog or docs | 10 | | F7, F11, F12, F18, F24 |
-| F Form collector | 6 | F17 email | F10, F24 |
-| G Public dataset | 7 | | F7, F12, F24 |
-| H Integration hub | 9 | F9 provider webhooks, F17 email, F18 retries | F15, F24 |
-| I Shop or booking | 10 | F17 email, F20 payments | F18, F19, F24 |
-| J Two-sided | 11 | F17 email, F20 payments | F5, F10, F12, F19, F24 |
+| C Team tool | 10 | F18 reminders | F5, F10, F15, F17, F19, F24 |
+| D Community | 9 |  | F5, F12, F17, F24 |
+| E Blog or docs | 10 |  | F7, F11, F12, F18, F24 |
+| F Form collector | 6 |  | F10, F24 |
+| G Public dataset | 7 |  | F7, F12, F24 |
+| H Integration hub | 9 | F9 provider webhooks, F18 reminders | F15, F24 |
+| I Shop or booking | 10 | F20 payments | F18, F19, F24 |
+| J Two-sided | 11 | F20 payments | F5, F10, F12, F17, F19, F24 |
 
-E and G are the shapes with nothing they need marked N; E joined G on 2026-11-07, when the custom domain landed. Every other shape needs at least one feature no primitive provides, and email on an event is the one most of them share.
+A, D, E, F and G need nothing marked N. Before 2026-11-07 only G did. Every other shape still needs at least one feature that no primitive gives.
 
 ## Where the doors disagreed
 
@@ -130,11 +135,11 @@ The probes found three declarations the Validation Gate and the Kernel answered 
 
 ## What blocks the most shapes
 
-Counting the bold N cells per feature gave five features with any on 2026-11-07, the five in [the showcase findings](./showcase-findings.md#what-the-matrix-adds), each with the smallest primitive that would unblock it. The custom domain (F22) has since landed, so four remain:
+Counting the bold N cells per feature gave five features with any on 2026-11-06, the five in [the showcase findings](./showcase-findings.md#what-the-matrix-adds), each with the smallest primitive that unblocks it. Two of them, email on an event and the custom domain, landed on 2026-11-07.
 
 | Feature | Shapes it blocks | Shapes it degrades |
 | --- | --- | --- |
-| F17 Email on an event | A, C, D, F, H, I, J | |
+| F17 Email on an event | | C, D, J |
 | F18 Scheduled or delayed work | B, C, H | E, I |
 | F20 Payments | I, J | |
 | F9 Webhooks from outside services | H | |
@@ -150,8 +155,9 @@ Payments and outside webhooks need the same primitive, because a payment provide
 | [shop](../../examples/probes/shop/replay.ts) | F11, F18, F20, inventory under concurrency | 3 |
 | [community](../../examples/probes/community/replay.ts) | F5, F6, F10, F15, F19 | 6 |
 | [survey](../../examples/probes/survey/replay.ts) | F14, one vote per person, a multi-answer form in one write | 2 |
-| [platform](../../examples/probes/platform/replay.ts) | F17, F18, F19, F21, an unclaimed hostname | 6 |
+| [platform](../../examples/probes/platform/replay.ts) | F17 (no mail tool on the runtime door), F18, F19, F21, an unclaimed hostname | 6 |
 | [domain](../../examples/probes/domain/replay.ts) | F22 | 6 |
+| [notify](../../examples/probes/notify/replay.ts) | F17 | 4 |
 
 ## What this does not verify
 

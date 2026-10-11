@@ -57,6 +57,9 @@ pub(crate) enum Operation {
     /// A guarded mutation that changed no row, by action name. The one
     /// refusal Usage counts: the app's own rule said no (`guard.rs`).
     Refused(String),
+    /// A mutation's notice, named `<action>: queued` or `<action>: <reason>`
+    /// when nothing will be sent (`notify.rs`).
+    Notify(String),
 }
 
 impl Operation {
@@ -70,6 +73,7 @@ impl Operation {
             Operation::Signup => ("signup", String::new()),
             Operation::Login => ("login", String::new()),
             Operation::Refused(name) => ("refused", name),
+            Operation::Notify(name) => ("notify", name),
         }
     }
 }

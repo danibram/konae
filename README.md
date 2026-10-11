@@ -100,10 +100,13 @@ The Kernel reads these at startup. Defaults are the values in `kernel-rs/src` un
 | `LITTLEBOX_SMTP_USERNAME`, `LITTLEBOX_SMTP_PASSWORD` | unset | SMTP credentials. Set both or neither. |
 | `LITTLEBOX_MAIL_LIMIT_RECIPIENT_PER_MINUTE` | `3` | Account email requests one address may receive per minute. |
 | `LITTLEBOX_MAIL_LIMIT_RECIPIENT_PER_DAY` | `10` | Account email requests one address may receive per 24 hours. |
-| `LITTLEBOX_MAIL_LIMIT_CREATOR_PER_DAY` | `100` | Emails the apps of one creator may queue per 24 hours. |
-| `LITTLEBOX_MAIL_LIMIT_APP_PER_DAY` | `100` | Emails one Deployment may queue per 24 hours. |
-| `LITTLEBOX_MAIL_LIMIT_INSTALLATION_PER_DAY` | `1000` | Emails the installation may queue per 24 hours. Keep it at or below the provider's contracted limit. |
+| `LITTLEBOX_MAIL_LIMIT_CREATOR_PER_DAY` | `100` | Account emails the apps of one creator may queue per 24 hours. |
+| `LITTLEBOX_MAIL_LIMIT_APP_PER_DAY` | `100` | Account emails one Deployment may queue per 24 hours. |
+| `LITTLEBOX_MAIL_LIMIT_INSTALLATION_PER_DAY` | `1000` | Emails of every kind, account email and notices, the installation may queue per 24 hours. Keep it at or below the provider's contracted limit. |
 | `LITTLEBOX_MAIL_LIMIT_CLIENT_PER_HOUR` | `20` | Account email requests one client address may make per hour. |
+| `LITTLEBOX_MAIL_LIMIT_NOTIFY_APP_PER_DAY` | `200` | Notices (`notify` on a mutation) one Deployment may queue per 24 hours. |
+| `LITTLEBOX_MAIL_LIMIT_NOTIFY_CREATOR_PER_DAY` | `500` | Notices the apps of one creator may queue per 24 hours. |
+| `LITTLEBOX_MAIL_LIMIT_NOTIFY_RECIPIENT_PER_DAY` | `50` | Notices one address may receive from one Deployment per 24 hours. |
 | `LITTLEBOX_MAIL_WORKER_INTERVAL_MS` | `5000` | How often the worker looks for due jobs. A new job also wakes it. |
 | `LITTLEBOX_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses whose `X-Forwarded-For` header the Kernel trusts for rate limiting. CIDR ranges are rejected. |
 | `LITTLEBOX_DATA_DIR` | `/data` (`data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory: one folder per Deployment under `deployments/<id>/`, plus `owners.sqlite`, `mcp.sqlite` and `mail.sqlite`. |
@@ -282,7 +285,7 @@ Each queued link is encrypted with AES-256-GCM under a key derived from `LITTLEB
 
 To record delivery, add a webhook in Resend that posts `email.sent`, `email.delivered`, `email.bounced`, `email.failed` and `email.suppressed` to `<LITTLEBOX_PUBLIC_ORIGIN>/_littlebox/mail/resend-events`, and set `LITTLEBOX_RESEND_WEBHOOK_SECRET` to its signing secret. The Kernel rejects an event without a valid signature, records each event ID once, and only moves a job forward.
 
-The limits refuse a request with 429 and queue nothing. Each address takes at most 3 account emails a minute and 10 a day, one client address may ask for 20 an hour, the apps of one creator 100 a day, one app 100 a day and the installation 1,000 a day. The address and client limits count requests, including those for addresses with no account, so a refusal never tells who has one. The `LITTLEBOX_MAIL_LIMIT_*` variables change them; keep the installation limit at or below what the provider allows.
+The limits refuse a request with 429 and queue nothing. Each address takes at most 3 account emails a minute and 10 a day, one client address may ask for 20 an hour, the apps of one creator 100 a day, one app 100 a day and the installation 1,000 a day. Notices from a mutation's `notify` count apart, 200 a day per app, 500 per creator and 50 per address from one app, so a busy app never uses up the account email that signup and recovery need; every email counts toward the installation's 1,000. The address and client limits count requests, including those for addresses with no account, so a refusal never tells who has one. The `LITTLEBOX_MAIL_LIMIT_*` variables change them; keep the installation limit at or below what the provider allows.
 
 `mail.sqlite` travels in scheduled copies, with its links still encrypted. A restore ends every pending job, because the restore invalidates the challenges their links carry. An app export does not include the queue.
 
