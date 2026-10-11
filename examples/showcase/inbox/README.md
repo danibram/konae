@@ -8,7 +8,7 @@ The app is a probe as much as an app. It uses Littlebox the way a creator would 
 
 - Services post `{ source, id, severity, title, body? }` to `POST /hooks/events`, signed with the inbox's secret. A repeated `source` and `id` is stored once.
 - A service that has something critical posts `{ source, id, title, body? }` to `POST /hooks/critical`, signed the same way. The event is stored as critical and the owner gets an email.
-- A code host posts its issue events to `POST /hooks/github` and a payment provider its charge events to `POST /hooks/payments`, each as it sends them to anyone: its own nested payload, signed its own way. The routes declare the provider's signature scheme and read the event's ID and title from JSON paths.
+- A code host posts its issue events to `POST /hooks/github` and a payment provider its charge events to `POST /hooks/payments`, each as it sends them to anyone: its own nested payload, signed its own way. The routes name the provider, whose preset stands for its signature scheme, and read the event's ID and title from JSON paths.
 - Signed-in members see the newest 50 events, filter them by severity and by open or acknowledged, and acknowledge one. The list shows who acknowledged each event and when.
 - A program reads `GET /api/events?after=<id>` with an API key that names that route. The route declares `"callers": ["key"]`, so nothing else reads it.
 - The owner reads how often each route and action ran, how often the acknowledge guard refused, and the `event.received` and `event.acknowledged` Signals, the second naming who acknowledged.
@@ -25,8 +25,8 @@ The app is a probe as much as an app. It uses Littlebox the way a creator would 
 | Action | Kind and access | What it does |
 | --- | --- | --- |
 | `events.receive` | mutation, anonymous, `POST /hooks/events` signed with `events_webhook` | Inserts an event, `ON CONFLICT DO NOTHING`; declares the `event.received` Signal with `source` and `severity` |
-| `github.receive` | mutation, anonymous, `POST /hooks/github` with `"scheme": "hmac-body"` (`X-Hub-Signature-256`, `sha256=` and hex) and `github_webhook` | Reads `id`, `title` and `repo` from `$.issue.node_id`, `$.issue.title` and `$.repository.full_name`, and inserts a `warning` event, `ON CONFLICT DO NOTHING` |
-| `payments.receive` | mutation, anonymous, `POST /hooks/payments` with `"scheme": "timestamped"` (`Stripe-Signature`, `t=`, `v1=`, a 300-second window) and `payments_webhook` | Reads `id`, `title` and `detail` from `$.id`, `$.type` and `$.data.object.failure_message`, and inserts a `critical` event, `ON CONFLICT DO NOTHING` |
+| `github.receive` | mutation, anonymous, `POST /hooks/github` with `"provider": "github"`, which stands for `hmac-body` over `X-Hub-Signature-256` with `sha256=` and hex, and `github_webhook` | Reads `id`, `title` and `repo` from `$.issue.node_id`, `$.issue.title` and `$.repository.full_name`, and inserts a `warning` event, `ON CONFLICT DO NOTHING` |
+| `payments.receive` | mutation, anonymous, `POST /hooks/payments` with `"provider": "stripe"`, which stands for `timestamped` over `Stripe-Signature` with `t=`, `v1=` and a 300-second window, and `payments_webhook` | Reads `id`, `title` and `detail` from `$.id`, `$.type` and `$.data.object.failure_message`, and inserts a `critical` event, `ON CONFLICT DO NOTHING` |
 | `events.feed` | query, anonymous, `GET /api/events` with `"callers": ["key"]` | Up to 100 events after an optional `after` id |
 | `events.list` | query, authenticated | Nullable `severity` and `state` filters, `LIMIT 50` |
 | `events.counts` | query, authenticated | Total and acknowledged counts, no LIMIT needed |

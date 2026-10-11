@@ -33,6 +33,8 @@ import kernelNotifyCases from "../../kernel-rs/src/notify-cases.json?raw";
 import kernelPackageSource from "../../kernel-rs/src/package.rs?raw";
 import kernelProviderSource from "../../kernel-rs/src/provider.rs?raw";
 import kernelProviderSignatureCases from "../../kernel-rs/src/provider-signature-cases.json?raw";
+import kernelSignaturePresets from "../../kernel-rs/src/signature-presets.json?raw";
+import kernelSignaturePresetCases from "../../kernel-rs/src/signature-preset-cases.json?raw";
 import kernelRecoverySource from "../../kernel-rs/src/recovery.rs?raw";
 import kernelSecuritySource from "../../kernel-rs/src/security.rs?raw";
 import kernelSqlRulesSource from "../../kernel-rs/src/sql_rules.rs?raw";
@@ -84,6 +86,8 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/package.rs", contents: kernelPackageSource },
   { path: "kernel-rs/src/provider.rs", contents: kernelProviderSource },
   { path: "kernel-rs/src/provider-signature-cases.json", contents: kernelProviderSignatureCases },
+  { path: "kernel-rs/src/signature-presets.json", contents: kernelSignaturePresets },
+  { path: "kernel-rs/src/signature-preset-cases.json", contents: kernelSignaturePresetCases },
   { path: "kernel-rs/src/recovery.rs", contents: kernelRecoverySource },
   { path: "kernel-rs/src/sdk-guide.json", contents: kernelSdkGuide },
   { path: "kernel-rs/src/security.rs", contents: kernelSecuritySource },

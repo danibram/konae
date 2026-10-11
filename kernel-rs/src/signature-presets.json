@@ -1,0 +1,25 @@
+{
+ "github": {
+  "scheme": "hmac-body",
+  "header": "X-Hub-Signature-256",
+  "algorithm": "sha256",
+  "encoding": "hex",
+  "prefix": "sha256="
+ },
+ "shopify": {
+  "scheme": "hmac-body",
+  "header": "X-Shopify-Hmac-Sha256",
+  "algorithm": "sha256",
+  "encoding": "base64"
+ },
+ "stripe": {
+  "scheme": "timestamped",
+  "header": "Stripe-Signature",
+  "prefix": "t=",
+  "tag": "v1=",
+  "window": 300
+ },
+ "svix": {
+  "scheme": "svix"
+ }
+}

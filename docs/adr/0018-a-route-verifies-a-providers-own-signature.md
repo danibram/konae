@@ -33,3 +33,12 @@ Each scheme accepts a delivery once. The Kernel records it in a `route_deliverie
 - A delivery replayed more than 72 hours later passes an `hmac-body` route. The provider's event ID in a `UNIQUE` column is the lasting guard.
 - A delivery over 64 KiB answers 413, as every route body does. A form-encoded body and a scheme with the timestamp in its own header, such as Slack's, are still refused.
 - The Action Contract names each route's scheme, settings and fields, and the conformance runner signs its probes in that scheme.
+
+## Note, 2026-11-08: provider presets
+
+A GitHub or Stripe route took six signature keys copied from prose, and the Gate refused a wrong one per attempt. A route's `signature` may now name a `provider` and a `secret` instead: `{ "provider": "stripe", "secret": "payments_webhook" }`. The preset stands for that provider's long form, and both doors read the table from one file, kernel-rs/src/signature-presets.json, which src/kernel/route-declaration.ts imports and kernel-rs/src/provider.rs includes.
+
+- The table holds `github`, `shopify`, `stripe` and `svix`, the four forms kernel-rs/src/provider-signature-cases.json has vectors for. A test on each door refuses a row without a vector that names it, so a provider joins the table with a vector that signs as it does. Resend signs with Svix's scheme and uses `svix`.
+- A preset takes only `provider` and `secret`. A long-form key beside it is refused with `Action <name> names the signature provider "<provider>", so its signature takes only "provider" and "secret". Remove <keys>.`, so a route has one spelling. An unknown provider is refused with the list of the table's rows.
+- The long form stays for every other sender. When it has several wrong keys, one refusal names them all, one sentence each, where the parse used to stop at the first. An unknown scheme and a provider's scheme on GET still stop it.
+- The preset expands before the long-form checks, so the Kernel, the Action Contract and `littlebox conform` see the same scheme and settings as before. kernel-rs/src/signature-preset-cases.json holds the cases both doors run.

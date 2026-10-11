@@ -945,7 +945,8 @@
         "Without callers, a signed route takes the signature or a key, an unsigned route on a private app a key or a session, and an unsigned route on a public app anyone. A person whose session the route does not take must sign like any sender.",
         "An action whose route does not answer anyone answers only on that route: miniapp.actions.call refuses it. The app's own page calls such a route with fetch, which sends the session cookie.",
         "A signed route reads the declared header as t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256>. The MAC is keyed with the secret and covers t, the nonce, the method, the path, the canonical query string and the raw body, joined by newlines. The canonical query string is the pairs sorted by key, then value, written as application/x-www-form-urlencoded.",
-        "A provider's scheme. hmac-body: the header carries the prefix, if declared, then the HMAC of the raw body with the declared algorithm, in hex or base64 (GitHub: X-Hub-Signature-256, sha256, hex, prefix sha256=; Shopify: X-Shopify-Hmac-Sha256, sha256, base64). timestamped: the header carries comma-separated fields, the timestamp after prefix and the hex HMAC-SHA256 of <t>.<body> after tag (Stripe: Stripe-Signature, t=, v1=, window 300). svix: svix-id, svix-timestamp and svix-signature, the base64 HMAC-SHA256 of <id>.<t>.<body> keyed with the base64 after whsec_ (Resend, Svix). A provider's delivery is accepted once; one whose action fails is forgotten, so the provider's retry runs.",
+        "A provider's scheme. hmac-body: the header carries the prefix, if declared, then the HMAC of the raw body with the declared algorithm, in hex or base64 (GitHub: X-Hub-Signature-256, sha256, hex, prefix sha256=; Shopify: X-Shopify-Hmac-Sha256, sha256, base64). timestamped: the header carries comma-separated fields, the timestamp after prefix and the hex HMAC-SHA256 of <t>.<body> after tag (Stripe: Stripe-Signature, t=, v1=, window 300). svix: svix-id, svix-timestamp and svix-signature, the base64 HMAC-SHA256 of <id>.<t>.<body> keyed with the base64 after whsec_ (Resend, Svix). A provider's delivery is accepted once; one whose action fails is forgotten, so the provider's retry runs. A long form with several wrong keys is refused once, with one sentence per key in the order the parse checks them: keys the scheme does not take, the header, the secret, then the scheme's settings.",
+        "A provider's preset. { \"provider\": \"github\" | \"shopify\" | \"stripe\" | \"svix\", \"secret\": \"<name>\" } stands for that provider's long form: github for hmac-body over X-Hub-Signature-256 with sha256, hex and prefix sha256=; shopify for hmac-body over X-Shopify-Hmac-Sha256 with sha256 and base64; stripe for timestamped over Stripe-Signature with t=, v1= and window 300; svix for svix, which Resend also uses. A preset takes no other key, so a route has one spelling. Both doors read the table from kernel-rs/src/signature-presets.json, and each row verifies a published or provider-form vector. Any other sender uses the long form.",
         "fields maps an input key to a JSON path into the POST body, such as { \"id\": \"$.data.object.id\" }. Each input fields does not name is read from the body's key of that name, and every other key of the body is left out, so a provider's payload needs no adapter. A path that is missing leaves its input out: a required one is refused as missing, a nullable one binds NULL.",
         "The owner sets the secret with the secret_set admin tool before publishing. It never appears in actions.json, the Build Artifact or an export.",
         "GET /_littlebox/files/<id>, the path miniapp.files.url returns, answers a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it. A visitor without a session on a private app gets 401 authentication-required before any file is looked up; every other caller who may not read the file gets 404 File not found, the same as for a missing or deleted one.",
@@ -1023,6 +1024,16 @@
             {
               "message": "Action <name> binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body.",
               "when": "a query's route declares hmac-body, timestamped or svix",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> names an unknown signature provider. Use <names>.",
+              "when": "the signature's provider is not text or not a row of the preset table, in that letter case; <names> is the table's rows, \"github\", \"shopify\", \"stripe\" or \"svix\"",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> names the signature provider \"<key>\", so its signature takes only \"provider\" and \"secret\". Remove <names>.",
+              "when": "a preset has a long-form key beside it, such as header or scheme; the refusal names every such key in sorted order",
               "source": "kernel"
             },
             {

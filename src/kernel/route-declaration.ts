@@ -2,8 +2,10 @@
  * A route's signature scheme and its `fields` map, as the Validation Gate
  * reads them (ADR-0018). The same checks, in the same order and with the same
  * messages, as kernel-rs/src/provider.rs `signature` and `fields`;
- * kernel-rs/src/http-binding-cases.json holds the cases both test suites run.
+ * kernel-rs/src/http-binding-cases.json and signature-preset-cases.json hold
+ * the cases both test suites run.
  */
+import signaturePresets from "../../kernel-rs/src/signature-presets.json";
 
 export type SignatureScheme = "littlebox" | "hmac-body" | "timestamped" | "svix";
 
@@ -51,51 +53,90 @@ function quotedList(keys: readonly string[]): string {
   return quoted.length === 1 ? quoted[0] : `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
 }
 
-/** Parses a route's `signature`: its scheme, the keys that scheme takes, the header, the secret, then the scheme's own settings. */
+/**
+ * The providers a route may name instead of spelling out a scheme, each the
+ * long form it stands for without its secret. kernel-rs/src/provider.rs reads
+ * the same file, so both doors expand a preset alike.
+ */
+const PRESETS: Readonly<Record<string, Record<string, unknown>>> = signaturePresets;
+const PROVIDERS = Object.keys(PRESETS).sort();
+
+function quotedChoices(keys: readonly string[]): string {
+  const quoted = keys.map((key) => `"${key}"`);
+  return quoted.length === 1 ? quoted[0] : `${quoted.slice(0, -1).join(", ")} or ${quoted[quoted.length - 1]}`;
+}
+
+/**
+ * Parses a route's `signature`. A `provider` names a row of the preset table
+ * and takes only a `secret` beside it; it then parses as the long form that
+ * row spells.
+ */
 export function parseRouteSignature(name: string, method: "GET" | "POST", value: unknown): RouteSignature {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Action ${name} has an invalid http binding.`);
   const record = value as Record<string, unknown>;
+  if (record.provider === undefined) return parseLongForm(name, method, record);
+  const provider = typeof record.provider === "string" && Object.hasOwn(PRESETS, record.provider) ? record.provider : undefined;
+  if (provider === undefined) throw new Error(`Action ${name} names an unknown signature provider. Use ${quotedChoices(PROVIDERS)}.`);
+  const extra = Object.keys(record).filter((key) => key !== "provider" && key !== "secret").sort();
+  if (extra.length > 0) {
+    throw new Error(`Action ${name} names the signature provider "${provider}", so its signature takes only "provider" and "secret". Remove ${quotedList(extra)}.`);
+  }
+  return parseLongForm(name, method, { ...PRESETS[provider], ...(record.secret === undefined ? {} : { secret: record.secret }) });
+}
+
+/**
+ * Parses a long-form `signature`: its scheme, then every key that scheme
+ * takes. An unknown scheme, and a provider's scheme on GET, stop the parse;
+ * every other wrong key adds its sentence, so one refusal names them all.
+ */
+function parseLongForm(name: string, method: "GET" | "POST", record: Record<string, unknown>): RouteSignature {
   const scheme = record.scheme === undefined ? "littlebox" : SCHEMES.find((candidate) => candidate === record.scheme);
   if (!scheme) throw new Error(`Action ${name} names an unknown signature scheme. Use "littlebox", "hmac-body", "timestamped" or "svix".`);
+  const problems: string[] = [];
   const keys = SCHEME_KEYS[scheme];
   if (Object.keys(record).some((key) => !keys.includes(key))) {
-    throw new Error(`Action ${name} has an invalid ${scheme} signature. It takes ${quotedList(keys)}.`);
+    problems.push(`Action ${name} has an invalid ${scheme} signature. It takes ${quotedList(keys)}.`);
   }
   if (method === "GET" && scheme !== "littlebox") {
-    throw new Error(`Action ${name} binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body.`);
+    problems.push(`Action ${name} binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body.`);
+    throw new Error(problems.join(" "));
   }
-  let header = "svix-signature";
-  if (scheme !== "svix") {
-    if (typeof record.header !== "string" || !SIGNATURE_HEADER.test(record.header) || UNSIGNABLE_HEADERS.has(record.header.toLowerCase())) {
-      throw new Error(`Action ${name} has an invalid signature header.`);
-    }
-    header = record.header;
-  }
-  if (typeof record.secret !== "string" || !SECRET_NAME.test(record.secret)) {
-    throw new Error(`Action ${name} names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter.`);
-  }
-  const secret = record.secret;
+  const header =
+    scheme === "svix"
+      ? "svix-signature"
+      : typeof record.header === "string" && SIGNATURE_HEADER.test(record.header) && !UNSIGNABLE_HEADERS.has(record.header.toLowerCase())
+        ? record.header
+        : undefined;
+  if (header === undefined) problems.push(`Action ${name} has an invalid signature header.`);
+  const secret = typeof record.secret === "string" && SECRET_NAME.test(record.secret) ? record.secret : undefined;
+  if (secret === undefined) problems.push(`Action ${name} names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter.`);
+  let settings: Omit<RouteSignature, "header" | "secret"> = {};
   if (scheme === "hmac-body") {
-    if (record.algorithm !== "sha256" && record.algorithm !== "sha1") throw new Error(`Action ${name} has an invalid signature algorithm. Use "sha256" or "sha1".`);
-    if (record.encoding !== "hex" && record.encoding !== "base64") throw new Error(`Action ${name} has an invalid signature encoding. Use "hex" or "base64".`);
-    if (record.prefix !== undefined && (typeof record.prefix !== "string" || !BODY_PREFIX.test(record.prefix))) {
-      throw new Error(`Action ${name} has an invalid signature prefix. Use 1 to 32 letters, digits, "=", "-", "_", "." or ":", such as "sha256=".`);
+    const { algorithm, encoding, prefix } = record;
+    if (algorithm !== "sha256" && algorithm !== "sha1") problems.push(`Action ${name} has an invalid signature algorithm. Use "sha256" or "sha1".`);
+    if (encoding !== "hex" && encoding !== "base64") problems.push(`Action ${name} has an invalid signature encoding. Use "hex" or "base64".`);
+    if (prefix !== undefined && (typeof prefix !== "string" || !BODY_PREFIX.test(prefix))) {
+      problems.push(`Action ${name} has an invalid signature prefix. Use 1 to 32 letters, digits, "=", "-", "_", "." or ":", such as "sha256=".`);
     }
-    return { scheme, header, secret, algorithm: record.algorithm, encoding: record.encoding, ...(record.prefix === undefined ? {} : { prefix: record.prefix }) };
+    settings = { scheme, algorithm: algorithm as "sha256" | "sha1", encoding: encoding as "hex" | "base64", ...(prefix === undefined ? {} : { prefix: prefix as string }) };
+  } else if (scheme === "timestamped") {
+    const { prefix, tag, window } = record;
+    if (typeof prefix !== "string" || !FIELD_PREFIX.test(prefix)) {
+      problems.push(`Action ${name} has an invalid timestamp prefix. Use the field's name and "=", such as "t=".`);
+    }
+    if (typeof tag !== "string" || !FIELD_PREFIX.test(tag) || tag === prefix) {
+      problems.push(`Action ${name} has an invalid signature tag. Use the field's name and "=", such as "v1=", other than the timestamp's.`);
+    }
+    if (typeof window !== "number" || !Number.isInteger(window) || window < 1 || window > MAX_WINDOW) {
+      problems.push(`Action ${name} has an invalid signature window. Use a whole number of seconds from 1 to 3600.`);
+    }
+    settings = { scheme, prefix: prefix as string, tag: tag as string, window: window as number };
+  } else if (scheme === "svix") {
+    settings = { scheme };
   }
-  if (scheme === "timestamped") {
-    if (typeof record.prefix !== "string" || !FIELD_PREFIX.test(record.prefix)) {
-      throw new Error(`Action ${name} has an invalid timestamp prefix. Use the field's name and "=", such as "t=".`);
-    }
-    if (typeof record.tag !== "string" || !FIELD_PREFIX.test(record.tag) || record.tag === record.prefix) {
-      throw new Error(`Action ${name} has an invalid signature tag. Use the field's name and "=", such as "v1=", other than the timestamp's.`);
-    }
-    if (typeof record.window !== "number" || !Number.isInteger(record.window) || record.window < 1 || record.window > MAX_WINDOW) {
-      throw new Error(`Action ${name} has an invalid signature window. Use a whole number of seconds from 1 to 3600.`);
-    }
-    return { scheme, header, secret, prefix: record.prefix, tag: record.tag, window: record.window };
-  }
-  return scheme === "svix" ? { scheme, header, secret } : { header, secret };
+  if (problems.length > 0 || header === undefined || secret === undefined) throw new Error(problems.join(" "));
+  const { scheme: named, ...rest } = settings;
+  return named === undefined ? { header, secret } : { scheme: named, header, secret, ...rest };
 }
 
 /** The steps of a JSON path: `$`, then 1 to 16 of `.name` or `[index]`. Null when it is not one. */

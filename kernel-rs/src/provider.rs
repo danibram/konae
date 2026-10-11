@@ -106,11 +106,58 @@ fn valid_body_prefix(prefix: &str) -> bool {
     (1..=32).contains(&prefix.len()) && prefix.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"=-_.:".contains(&byte))
 }
 
-/// Parses a route's `signature`: its scheme, then the keys that scheme takes,
-/// then the header, the secret and the scheme's own settings. Returns the
-/// header the scheme reads its MAC from, the secret's name and the scheme.
+/// The providers a route may name instead of spelling out a scheme, each the
+/// long form it stands for without its secret. src/kernel/route-declaration.ts
+/// imports the same file, so both doors expand a preset alike.
+const PRESETS: &str = include_str!("signature-presets.json");
+
+fn presets() -> &'static serde_json::Map<String, Value> {
+    static TABLE: std::sync::OnceLock<serde_json::Map<String, Value>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| serde_json::from_str(PRESETS).expect("signature-presets.json is an object of long-form signatures"))
+}
+
+fn quoted_choices(keys: &[&str]) -> String {
+    let quoted = keys.iter().map(|key| format!("\"{key}\"")).collect::<Vec<_>>();
+    match quoted.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+        None => String::new(),
+    }
+}
+
+/// Parses a route's `signature`. A `provider` names a row of the preset table
+/// and takes only a `secret` beside it; it then parses as the long form that
+/// row spells. Returns the header the scheme reads its MAC from, the secret's
+/// name and the scheme.
 pub(super) fn signature(name: &str, method: &str, value: &Value) -> Result<(String, String, Scheme), String> {
     let record = value.as_object().ok_or_else(|| format!("Action {name} has an invalid http binding."))?;
+    let Some(provider) = record.get("provider") else { return long_form(name, method, record) };
+    let table = presets();
+    let Some((provider, row)) = provider.as_str().and_then(|provider| table.get_key_value(provider)) else {
+        let mut providers = table.keys().map(String::as_str).collect::<Vec<_>>();
+        providers.sort();
+        let choices = quoted_choices(&providers);
+        return Err(format!("Action {name} names an unknown signature provider. Use {choices}."));
+    };
+    let mut extra = record.keys().map(String::as_str).filter(|key| !["provider", "secret"].contains(key)).collect::<Vec<_>>();
+    if !extra.is_empty() {
+        extra.sort();
+        let remove = quoted_list(&extra);
+        return Err(format!(
+            r#"Action {name} names the signature provider "{provider}", so its signature takes only "provider" and "secret". Remove {remove}."#
+        ));
+    }
+    let mut expanded = row.as_object().cloned().unwrap_or_default();
+    if let Some(secret) = record.get("secret") {
+        expanded.insert("secret".into(), secret.clone());
+    }
+    long_form(name, method, &expanded)
+}
+
+/// Parses a long-form `signature`: its scheme, then every key that scheme
+/// takes. An unknown scheme, and a provider's scheme on GET, stop the parse;
+/// every other wrong key adds its sentence, so one refusal names them all.
+fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) -> Result<(String, String, Scheme), String> {
     let scheme = match record.get("scheme") {
         None => "littlebox",
         Some(Value::String(scheme)) if ["littlebox", "hmac-body", "timestamped", "svix"].contains(&scheme.as_str()) => scheme.as_str(),
@@ -120,26 +167,29 @@ pub(super) fn signature(name: &str, method: &str, value: &Value) -> Result<(Stri
             ));
         }
     };
+    let mut problems: Vec<String> = Vec::new();
     let keys = scheme_keys(scheme);
     if record.keys().any(|key| !keys.contains(&key.as_str())) {
         let takes = quoted_list(keys);
-        return Err(format!("Action {name} has an invalid {scheme} signature. It takes {takes}."));
+        problems.push(format!("Action {name} has an invalid {scheme} signature. It takes {takes}."));
     }
     if method == "GET" && scheme != "littlebox" {
-        return Err(format!(
+        problems.push(format!(
             "Action {name} binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body."
         ));
+        return Err(problems.join(" "));
     }
     let header = if scheme == "svix" {
-        "svix-signature"
+        Some("svix-signature")
     } else {
-        record.get("header").and_then(Value::as_str).filter(|header| valid_header(header)).ok_or_else(|| {
-            format!("Action {name} has an invalid signature header.")
-        })?
+        record.get("header").and_then(Value::as_str).filter(|header| valid_header(header))
     };
-    let secret = record.get("secret").and_then(Value::as_str).unwrap_or("");
-    if !valid_secret_name(secret) {
-        return Err(format!(
+    if header.is_none() {
+        problems.push(format!("Action {name} has an invalid signature header."));
+    }
+    let secret = record.get("secret").and_then(Value::as_str).filter(|secret| valid_secret_name(secret));
+    if secret.is_none() {
+        problems.push(format!(
             r#"Action {name} names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter."#
         ));
     }
@@ -147,45 +197,69 @@ pub(super) fn signature(name: &str, method: &str, value: &Value) -> Result<(Stri
     let parsed = match scheme {
         "hmac-body" => {
             let algorithm = match text("algorithm") {
-                Some("sha256") => Algorithm::Sha256,
-                Some("sha1") => Algorithm::Sha1,
-                _ => return Err(format!(r#"Action {name} has an invalid signature algorithm. Use "sha256" or "sha1"."#)),
+                Some("sha256") => Some(Algorithm::Sha256),
+                Some("sha1") => Some(Algorithm::Sha1),
+                _ => None,
             };
+            if algorithm.is_none() {
+                problems.push(format!(r#"Action {name} has an invalid signature algorithm. Use "sha256" or "sha1"."#));
+            }
             let encoding = match text("encoding") {
-                Some("hex") => Encoding::Hex,
-                Some("base64") => Encoding::Base64,
-                _ => return Err(format!(r#"Action {name} has an invalid signature encoding. Use "hex" or "base64"."#)),
+                Some("hex") => Some(Encoding::Hex),
+                Some("base64") => Some(Encoding::Base64),
+                _ => None,
             };
+            if encoding.is_none() {
+                problems.push(format!(r#"Action {name} has an invalid signature encoding. Use "hex" or "base64"."#));
+            }
             let prefix = match record.get("prefix") {
-                None => None,
-                Some(Value::String(prefix)) if valid_body_prefix(prefix) => Some(prefix.clone()),
-                Some(_) => {
-                    return Err(format!(
-                        r#"Action {name} has an invalid signature prefix. Use 1 to 32 letters, digits, "=", "-", "_", "." or ":", such as "sha256="."#
-                    ));
-                }
+                None => Some(None),
+                Some(Value::String(prefix)) if valid_body_prefix(prefix) => Some(Some(prefix.clone())),
+                Some(_) => None,
             };
-            Scheme::HmacBody { algorithm, encoding, prefix }
+            if prefix.is_none() {
+                problems.push(format!(
+                    r#"Action {name} has an invalid signature prefix. Use 1 to 32 letters, digits, "=", "-", "_", "." or ":", such as "sha256="."#
+                ));
+            }
+            match (algorithm, encoding, prefix) {
+                (Some(algorithm), Some(encoding), Some(prefix)) => Some(Scheme::HmacBody { algorithm, encoding, prefix }),
+                _ => None,
+            }
         }
         "timestamped" => {
-            let prefix = text("prefix").filter(|prefix| valid_field_prefix(prefix)).ok_or_else(|| {
-                format!(r#"Action {name} has an invalid timestamp prefix. Use the field's name and "=", such as "t="."#)
-            })?;
-            let tag = text("tag").filter(|tag| valid_field_prefix(tag) && tag != &prefix).ok_or_else(|| {
-                format!(r#"Action {name} has an invalid signature tag. Use the field's name and "=", such as "v1=", other than the timestamp's."#)
-            })?;
+            let prefix = text("prefix").filter(|prefix| valid_field_prefix(prefix));
+            if prefix.is_none() {
+                problems.push(format!(r#"Action {name} has an invalid timestamp prefix. Use the field's name and "=", such as "t="."#));
+            }
+            let tag = text("tag").filter(|tag| valid_field_prefix(tag) && Some(*tag) != text("prefix"));
+            if tag.is_none() {
+                problems.push(format!(
+                    r#"Action {name} has an invalid signature tag. Use the field's name and "=", such as "v1=", other than the timestamp's."#
+                ));
+            }
             // 300.0 is the integer 300 to the editor's JSON reader, so it is here too.
             let window = record
                 .get("window")
                 .and_then(Value::as_f64)
-                .filter(|seconds| seconds.fract() == 0.0 && (1.0..=MAX_WINDOW_SECONDS as f64).contains(seconds))
-                .ok_or_else(|| format!("Action {name} has an invalid signature window. Use a whole number of seconds from 1 to 3600."))?;
-            Scheme::Timestamped { prefix: prefix.to_owned(), tag: tag.to_owned(), window: window as u64 }
+                .filter(|seconds| seconds.fract() == 0.0 && (1.0..=MAX_WINDOW_SECONDS as f64).contains(seconds));
+            if window.is_none() {
+                problems.push(format!("Action {name} has an invalid signature window. Use a whole number of seconds from 1 to 3600."));
+            }
+            match (prefix, tag, window) {
+                (Some(prefix), Some(tag), Some(window)) => {
+                    Some(Scheme::Timestamped { prefix: prefix.to_owned(), tag: tag.to_owned(), window: window as u64 })
+                }
+                _ => None,
+            }
         }
-        "svix" => Scheme::Svix,
-        _ => Scheme::Littlebox,
+        "svix" => Some(Scheme::Svix),
+        _ => Some(Scheme::Littlebox),
     };
-    Ok((header.to_owned(), secret.to_owned(), parsed))
+    match (header, secret, parsed) {
+        (Some(header), Some(secret), Some(parsed)) if problems.is_empty() => Ok((header.to_owned(), secret.to_owned(), parsed)),
+        _ => Err(problems.join(" ")),
+    }
 }
 
 /// One step of a JSON path: `.name` or `[index]`.
@@ -459,6 +533,33 @@ mod tests {
             tampered.push(b' ');
             assert_eq!(verify(&scheme, &header_name, secret, &headers(pairs.clone()), &tampered, now), Delivery::Invalid, "{case}: tampered body");
             assert_eq!(verify(&scheme, &header_name, &format!("{secret}x"), &headers(pairs), body, now), Delivery::Invalid, "{case}: wrong secret");
+        }
+    }
+
+    /// src/lib/provider-signature.test.ts runs the same file against the
+    /// editor's parser.
+    #[test]
+    fn a_preset_expands_to_its_long_form_and_refusals_name_every_wrong_key() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("signature-preset-cases.json")).unwrap();
+        assert!(cases.len() >= 15);
+        for case in cases {
+            let label = case["case"].as_str().unwrap();
+            let method = case["method"].as_str().unwrap();
+            let outcome = signature("hooks.receive", method, &case["signature"]);
+            match case["error"].as_str() {
+                Some(message) => assert_eq!(outcome, Err(message.to_owned()), "{label}"),
+                None => assert_eq!(outcome, signature("hooks.receive", method, &case["expands"]), "{label}"),
+            }
+            assert!(case["error"].is_string() || outcome.is_ok(), "{label}");
+        }
+    }
+
+    /// A provider joins the table only with a vector that signs as it does.
+    #[test]
+    fn every_preset_verifies_a_vector() {
+        let vectors: Vec<Value> = serde_json::from_str(include_str!("provider-signature-cases.json")).unwrap();
+        for provider in presets().keys() {
+            assert!(vectors.iter().any(|vector| vector["signature"]["provider"] == provider.as_str()), "{provider} has no vector");
         }
     }
 

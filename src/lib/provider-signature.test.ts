@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseRouteSignature } from "../kernel/route-declaration";
+import signaturePresets from "../../kernel-rs/src/signature-presets.json";
 import { signDelivery } from "./provider-signature";
 
 type Vector = { case: string; signature: unknown; secret: string; body: string; t?: number; id?: string; headers: Record<string, string> };
@@ -11,6 +12,33 @@ describe("a provider's signature", () => {
     for (const vector of vectors) {
       const signature = parseRouteSignature("hooks.receive", "POST", vector.signature);
       expect(await signDelivery(signature, vector.secret, vector.body, { t: vector.t, id: vector.id }), vector.case).toEqual(vector.headers);
+    }
+  });
+
+  test("every preset in the table signs a vector", async () => {
+    const vectors: Vector[] = await Bun.file(new URL("../../kernel-rs/src/provider-signature-cases.json", import.meta.url)).json();
+    for (const provider of Object.keys(signaturePresets)) {
+      expect(vectors.some((vector) => (vector.signature as { provider?: string }).provider === provider), provider).toBe(true);
+    }
+  });
+
+  test("a preset expands to its long form and a refusal names every wrong key, as the Kernel does", async () => {
+    type Case = { case: string; method: "GET" | "POST"; signature: unknown; error?: string; expands?: unknown };
+    const cases: Case[] = await Bun.file(new URL("../../kernel-rs/src/signature-preset-cases.json", import.meta.url)).json();
+    expect(cases.length).toBeGreaterThanOrEqual(15);
+    for (const item of cases) {
+      const parse = (value: unknown) => () => parseRouteSignature("hooks.receive", item.method, value);
+      if (item.error !== undefined) {
+        let message = "";
+        try {
+          parse(item.signature)();
+        } catch (error) {
+          message = (error as Error).message;
+        }
+        expect(message, item.case).toBe(item.error);
+      } else {
+        expect(parse(item.signature)(), item.case).toEqual(parse(item.expands)());
+      }
     }
   });
 
