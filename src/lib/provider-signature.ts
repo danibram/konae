@@ -9,7 +9,7 @@ import type { RouteSignature } from "../kernel/route-declaration";
 
 const encoder = new TextEncoder();
 
-async function hmac(hash: "SHA-256" | "SHA-1", key: Uint8Array, message: string): Promise<Uint8Array> {
+async function hmac(hash: "SHA-256" | "SHA-1", key: Uint8Array<ArrayBuffer>, message: string): Promise<Uint8Array> {
   const imported = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash }, false, ["sign"]);
   return new Uint8Array(await crypto.subtle.sign("HMAC", imported, encoder.encode(message)));
 }
@@ -18,7 +18,7 @@ const hex = (bytes: Uint8Array) => Array.from(bytes, (byte) => byte.toString(16)
 const base64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
 
 /** The HMAC key of a Svix signing secret: the base64 after `whsec_`. */
-export function svixKey(secret: string): Uint8Array {
+export function svixKey(secret: string): Uint8Array<ArrayBuffer> {
   const decoded = atob(secret.replace(/^whsec_/, ""));
   return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
 }
