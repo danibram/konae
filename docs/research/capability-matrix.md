@@ -128,7 +128,7 @@ On 2026-11-06 the counts were 116, 77 and 47 over 240 cells and 41, 30 and 16 ov
 | I Shop or booking | 10 |  | F19, F20, F24 |
 | J Two-sided | 11 |  | F5, F10, F12, F17, F19, F20, F24 |
 
-A, B, C, D, E, F, G, I and J need nothing marked N. Before 2026-11-07 only G did. H still need at least one feature that no primitive gives.
+A, B, C, D, E, F, G, I and J need nothing marked N. Before 2026-11-07 only G did. H still needs one feature no primitive gives: retries of its outbound calls on a schedule.
 
 A, B, C, D, E, F, G, I and J need nothing marked N. Before 2026-11-07 only G did. Every other shape still needs at least one feature that no primitive gives.
 
