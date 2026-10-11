@@ -54,6 +54,8 @@ export type PackageManifest = {
   contents: PackageContent[];
   excluded: string[];
   migration?: MigrationStamp;
+  /** The custom domain's hostname, without its token; the destination issues a new one (ADR-0015). */
+  domain?: string;
 };
 
 /** Refuses a manifest the Kernel would refuse, with the Kernel's reason. */

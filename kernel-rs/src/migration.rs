@@ -299,6 +299,9 @@ pub(super) async fn guard(State(state): State<AppState>, request: Request, next:
         .and_then(|value| value.to_str().ok())
         .is_some_and(|accept| accept.contains("text/html"));
     let page = matches!(*request.method(), Method::GET | Method::HEAD) && (!path.starts_with("/_littlebox/") || wants_page);
+    // A custom domain still pointed at this origin would link to itself.
+    let host = request.headers().get(header::HOST).and_then(|value| value.to_str().ok()).and_then(|value| value.split(':').next()).map(str::to_ascii_lowercase);
+    let new_url = new_url.filter(|url| url::Url::parse(url).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase)) != host);
     if page {
         maintenance_page(&deployment.project_name, &operation, &message, new_url.as_deref())
     } else {
@@ -839,7 +842,13 @@ async fn confirm(state: &AppState, owner: &Owner, a: &Value) -> Result<Value> {
     marker.phase = CONFIRMED.into();
     marker.confirmed_at = Some(at);
     marker.retain_until = Some(retain_until);
-    marker.new_url = requested.clone();
+    // Without a newUrl, a verified custom domain is the new address: it
+    // travels in the package, and the owner points it at the destination.
+    marker.new_url = requested.or_else(|| {
+        let url = super::domain::app_url(state, &deployment);
+        (url != deployment.url).then(|| format!("{url}/"))
+    });
+    let requested = marker.new_url.clone();
     let receipt = json!({
         "operationId": marker.operation_id,
         "deploymentId": deployment.id,

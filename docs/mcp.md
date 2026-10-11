@@ -43,6 +43,7 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | Signup policy | `signup_policy_read`, `signup_policy_set` |
 | Signing secrets | `secrets_list`, `secret_set`, `secret_delete` |
 | API keys | `api_keys_list`, `api_keys_create`, `api_keys_revoke` |
+| Custom domain | `domain_read`; `domain_set`, `domain_clear` with `publish` |
 | Usage and Signals | `usage_read`, `signals_read` |
 | App users and invitations | `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_invitations_create`, `app_invitations_list`, `app_invitation_resend`, `app_invitation_revoke` |
 | Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
@@ -54,7 +55,7 @@ The catalog depends on the credentials. The Kernel checks the permission again o
 
 This changes the contract. `signup_policy_set` needed `publish` before `manage_users` existed, so a client that changed the policy with a `read`, `write` and `publish` token now gets "Unknown tool" and needs a new token that includes `manage_users`. `bun run littlebox -- login --manage-users` asks for one, and `bun run littlebox -- dev` asks for one on its Development Kernel.
 
-Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `usage_read` and `signals_read` need `read`.
+Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `domain_read` needs `read`; `domain_set` and `domain_clear` need `publish`. `usage_read` and `signals_read` need `read`.
 
 `project_create` returns a template and an External identity by default. Later sources stay in the user's folder; `project_inspect` returns metadata and the Deployment, without claiming to synchronize that code with the editor.
 
@@ -555,6 +556,41 @@ The 16 MiB artifact limit counts the bytes the Kernel stores, after base64 is de
 
 There is also `bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173`. It reads `LITTLEBOX_EMAIL` and `LITTLEBOX_PASSWORD` from the environment, obtains a 24-hour credential with `read`, `write` and `publish` and stores it with `0600` permissions in `.littlebox/credentials.json`, which `init`, `publish`, `export` and `eject` read when `LITTLEBOX_MCP_TOKEN` is unset. `--manage-users`, `--export-data` and `--manage-lifecycle` add those permissions; a delegated token cannot add one to itself later, so ask for every permission the work needs. `LITTLEBOX_INVITATION_CODE` lets it create the account if it does not exist yet, and `LITTLEBOX_SETUP_KEY` does so for an installation's first owner. On an installation that requires verification, creating the account sends a link, and `login` stops with the two steps: open the link, choose `LITTLEBOX_PASSWORD` as the password, then run `login` again without the code or key, which are used by then. On a development Kernel on the same machine, `--verify-from <data folder>/mailbox.jsonl` does both in one run: after the signup it waits up to 15 seconds for the newest creator verification line for that email in the development mailbox, answers it with `LITTLEBOX_PASSWORD` and goes on to save the credential. The flag refuses any Kernel URL that is not `localhost`, a `.localhost` name or a loopback address, because the mailbox is a file on the Kernel's machine and only the development transport writes it. The command adds `.littlebox/` to `.gitignore`; do not copy credentials into the frontend.
 
+## Custom domain
+
+A Deployment can answer on one hostname its owner controls, such as `notes.example.org`, next to its generated `<slug>-<id>.<suffix>`, which keeps answering. [ADR-0015](./adr/0015-a-deployment-answers-on-one-custom-domain.md) records the decisions.
+
+1. Point the hostname at the installation's proxy, with a CNAME to the installation's host or an A record. The proxy terminates TLS for it and forwards `Host` unchanged. Littlebox issues no certificate.
+2. Call `domain_set { deploymentId, hostname }`. It checks the name and answers with the record to add:
+
+   ```json
+   { "deploymentId": "…", "hostname": "notes.example.org", "status": "pending",
+     "url": "https://notes.example.org", "generatedUrl": "https://notes-1a2b3c.apps.example.com",
+     "record": { "type": "TXT", "name": "_littlebox.notes.example.org", "value": "littlebox-verify-3f0c…" },
+     "dns": "No TXT record at _littlebox.notes.example.org yet.",
+     "next": "Add a TXT record _littlebox.notes.example.org holding littlebox-verify-3f0c…, then call domain_set again with notes.example.org." }
+   ```
+
+3. Add the TXT record at the DNS provider and call `domain_set` again with the same hostname. The Kernel looks the record up itself, over UDP, from `LITTLEBOX_DNS_RESOLVER` (an IP address with an optional port) or the first `nameserver` in `/etc/resolv.conf`. When one of the record's values is the token, the answer is `status: "active"` and the alias serves. A record that holds other values refuses the call, except on the call that issued the token, which answers `pending` and names what the record holds.
+
+`bun run littlebox -- domain --deployment <id> --set <hostname>` runs steps 2 and 3 and prints the record; `--clear` removes the alias and no flag shows it. The CLI checks the name with `src/lib/domain-name.ts` first, by the same rules and words as the Kernel.
+
+On the alias the app has its own origin. The runtime endpoint takes requests whose `Origin` is the alias, cookies are host-only, with the `__Host-` name under HTTPS, so a session made on the alias stays there and one made on the generated hostname stays there. The Content Security Policy's `'self'` is the alias. HTTP routes, `GET /_littlebox/files/<id>` and the maintenance page answer on it, and the SDK calls `/_littlebox/mcp` on whichever host the page loaded from. Over HTTPS it gets `Strict-Transport-Security: max-age=31536000`, without the `includeSubDomains` the installation's own hosts get. Verification, recovery and invitation email links use the alias once it serves. Administrative MCP, owner sign-in and OAuth refuse a request whose `Origin` is any claimed name.
+
+`domain_read { deploymentId }` returns the same answer without a lookup, plus the installation's `rules`. The token belongs to the Deployment and stays when the hostname changes, so to switch names, add the record for the new name first; the old name stops serving when `domain_set` names the new one. `domain_clear { deploymentId }` deletes the alias and its token. A paused app refuses both changes. The Kernel checks DNS only when `domain_set` runs: a name stays verified until it is cleared, and a name whose DNS points elsewhere no longer reaches the Kernel.
+
+| Refusal | Message |
+| --- | --- |
+| A name that is not a DNS name, such as a URL, a port, `_` or `*` | `<name> is not a valid DNS name. Use labels of letters, digits and hyphens, 1 to 63 characters each, that do not start or end with a hyphen.` |
+| One label, an IP address, a local name | `<name> needs at least two labels, such as notes.example.org.` / `<name> is an IP address. Name a hostname under a domain you control.` / `<name> is a local name. …` |
+| A name under the installation's suffix | `<name> is under this installation's app suffix <suffix>, where Littlebox names apps itself. Name a hostname outside it.` |
+| The editor's or the MCP host | `<name> is this installation's own host. Name a hostname no Littlebox host uses.` |
+| A TXT record that holds another value | `The TXT record at _littlebox.<name> holds "<value>", not this Deployment's token. Set it to <token> and call domain_set again.` |
+| A name another Deployment serves | `<name> already serves another Deployment on this installation. Clear it there with domain_clear first.` |
+| `domain_set` or `domain_clear` without `publish` | `Unknown tool or insufficient permission. domain_set needs a credential with publish. …` |
+
+Two Deployments may both wait on a name; the first whose token appears in the record gets it, and the other is then refused. `kernel-rs/src/domain-cases.json` lists every rule with its message.
+
 ## Action Contract
 
 ```sh
@@ -733,7 +769,7 @@ The manifest is version 2. Its `migration` stamp names the operation, the origin
 
 `migration_status { deploymentId }` needs `read` and returns `role` (`origin` or `destination`), `phase`, `paused`, the operation, the package and, once confirmed, `confirmedAt`, `retainUntil` and `newUrl`. It never returns the confirmation.
 
-`migration_confirm { operationId, newUrl? }` needs `manage_lifecycle` and a captured operation. The origin stays paused for good, keeps its state and the kept package until `retainUntil`, seven days later, and shows `newUrl` on its maintenance page until then. `newUrl` must be an absolute `https` URL, or `http` on a loopback host, with no credentials, query or fragment, on another host than the app's. The receipt holds the `confirmation`. Repeating returns the same receipt.
+`migration_confirm { operationId, newUrl? }` needs `manage_lifecycle` and a captured operation. The origin stays paused for good, keeps its state and the kept package until `retainUntil`, seven days later, and shows `newUrl` on its maintenance page until then. `newUrl` must be an absolute `https` URL, or `http` on a loopback host, with no credentials, query or fragment, on another host than the app's generated one. Without `newUrl`, an app with a verified custom domain shows the alias, which moves with the package once its DNS points at the destination; the page served on the alias itself shows no link to itself. The receipt holds the `confirmation`. Repeating returns the same receipt.
 
 `migration_cancel { operationId }` needs `manage_lifecycle`. It resumes the origin, deletes the kept package and discards the confirmation, so a package already imported elsewhere can never be activated. Email ended by the pause is not sent again: resend invitations, and people ask again for verification or recovery links. Repeating returns the same receipt.
 
@@ -750,6 +786,9 @@ The audit log records each migration tool with the Deployment as target and the 
 | API keys, revoked at import, with their names and scopes | |
 | Visibility and signup policy | Queued email; pending invitations keep their recipient and are resent |
 | The live artifact and `actions.json` | The origin's hostname; the destination builds one from its own origin |
+| The custom domain's hostname, pending until `domain_set` finds the destination's token | The custom domain's token; the destination issues its own |
+
+A custom domain moves in this order, so the alias never answers 404: activate the destination, read its new token with `domain_read`, add it to the TXT record next to the origin's value, call `domain_set` on the destination, then point the name's DNS at the destination. The paused import refuses `domain_set` until it is activated.
 
 | Refusal | Message |
 | --- | --- |
@@ -765,6 +804,7 @@ The audit log records each migration tool with the Deployment as target and the 
 | `migration_activate` on an app that was not imported | `This app was not imported by a migration, so it has nothing to activate.` |
 | `newUrl` over plain `http`, with credentials, a query or fragment, or on the app's own host | `newUrl must use https.` and the like |
 | A second package into an app that has one | `Portable state can only be imported on the first deployment.` |
+| A package whose custom domain another Deployment on the destination serves | `Package import failed: <name> already serves another Deployment on this installation. …` |
 
 ### Restore and the revocation record
 

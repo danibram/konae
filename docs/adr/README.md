@@ -18,6 +18,7 @@ Each record states its status and which earlier record it amends on its first li
 | [0012](0012-account-email-goes-through-a-persistent-queue.md) | Account email leaves through a persistent queue with a sender preflight and limits | | |
 | [0013](0013-an-app-leaves-as-a-chunked-package.md) | An app leaves as a chunked package behind `export_data`; API keys travel revoked | 0008 | 0014 |
 | [0014](0014-an-app-migrates-with-one-writer-at-a-time.md) | A migration keeps one writer through maintenance and a confirmation; a restore applies the revocation record | 0011, 0013 | |
+| [0015](0015-a-deployment-answers-on-one-custom-domain.md) | A Deployment answers on one custom domain proved by a TXT record; a package carries the name without its token | 0008, 0013, 0014 | |
 
 ## Which record answers a question
 
@@ -35,3 +36,4 @@ Each record states its status and which earlier record it amends on its first li
 | What leaves with an app, and what stays behind? | 0013, 0014 |
 | What does a restore bring back? | 0005 note of 2026-11-06, 0011 notes on API keys, 0014 |
 | Which headers keep hosted code on its own origin? | 0008 update of 2026-11-06 |
+| How does an app answer on its own domain? | 0015 |

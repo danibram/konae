@@ -1,6 +1,6 @@
 # Can the typical apps be built?
 
-Date: 2026-11-07, against `main` at `e9a0711`. This matrix takes ten app shapes people ask for and 24 features they expect, and gives every cell one verdict with the primitive behind it and the replay that proves it. Where no showcase replay proved a cell, a probe under [examples/probes](../../examples/probes/README.md) does, on its own local Kernel. Run them all with `bun run examples/probes/replay-all.ts`.
+Date: 2026-11-07, against `main` at `e9a0711`. This matrix takes ten app shapes people ask for and 24 features they expect, and gives every cell one verdict with the primitive behind it and the replay that proves it. Where no showcase replay proved a cell, a probe under [examples/probes](../../examples/probes/README.md) does, on its own local Kernel. Run them all with `bun run examples/probes/replay-all.ts`. Update of 2026-11-07: F22 Custom domain moved from N to W when the custom domain primitive landed ([ADR-0015](../adr/0015-a-deployment-answers-on-one-custom-domain.md)), proved by the domain probe and the gallery replay.
 
 The yardstick is the sentence at the top of AGENTS.md: a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.
 
@@ -54,7 +54,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F19 | Realtime updates | C | The page polls a query with an `after` cursor, within 30 calls per 10 seconds per visitor address and 120 per signed-in user. Nothing is pushed: a `"subscribe"` key passes both doors and does nothing | community "Realtime by polling", platform "Declare a subscription on a query" |
 | F20 | Payments | N | The page policy refuses a provider's script, API calls, checkout frame and a form that posts to it, and a provider's signed webhook answers 401 `invalid-signature`. The nearest alternative is a plain link to a hosted payment page, which publishes and navigates, and a program the owner runs that confirms the payment with an API key | shop "Payment provider in the page", "Holds that lapse" (`payments.confirm` by key), hub "Payment provider signature" |
 | F21 | Third-party login | N | App accounts are email and password; the runtime tools are `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset`. Nothing inside Littlebox comes close, because an outside login does not produce a Runtime Actor | platform "Runtime tools" |
-| F22 | Custom domain | N | The Kernel answers only the hostnames it generates, `<slug>-<id>.<suffix>`: another Host answers 404 `{"error":"Littlebox deployment not found."}`. A proxy that rewrites Host still carries the page's Origin, and the runtime answers 403 `{"error":"Cross-origin or unrecognized-host MCP request rejected."}`. The nearest alternative is a redirect from the domain to the generated hostname | platform "Custom domain" |
+| F22 | Custom domain | W | `domain_set` with `publish` gives a Deployment one hostname alias next to its generated hostname, which keeps answering. The owner proves control with a TXT record `_littlebox.<hostname>` holding a token, which the Kernel looks up itself; then the alias is the app's own origin for the runtime's `Origin` check, cookies, the policy, routes, the file path and the maintenance page. A name under the suffix, a name another Deployment serves and a record holding another value are refused. The operator's proxy terminates TLS and forwards `Host` unchanged ([ADR-0015](../adr/0015-a-deployment-answers-on-one-custom-domain.md)). Until 2026-11-07 another `Host` answered 404 and this cell was N | domain "TXT proof", "Serve from the alias", "A name another Deployment holds", "Package", "Maintenance page"; gallery "Custom domain"; platform "Unclaimed hostname" |
 | F23 | Export and migration | W | `package_export` and an import into another Kernel, Eject, scheduled copies and restore | club "Export", "Import", habits "Eject and publish from outside", "Copy and restore" |
 | F24 | Same app from the editor's agent and an external agent | C | The editor saves Managed sources and publishes through the Gate; an external agent publishes from the CLI. No replay drives the build agent itself: habits sends the editor's save and publish over MCP and runs the Gate on sql.js. The two doors also disagree on three declarations, listed under [Where the doors disagree](#where-the-doors-disagree) | habits "Managed publish", "Streak SQL within the LIMIT rules"; community "No email from the actor"; platform "Declare ..." |
 
@@ -83,7 +83,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F19 Realtime updates | C | C | **C** | C | C | C | C | C | **C** | **C** |
 | F20 Payments | N | N | N | N | N | N | N | N | **N** | **N** |
 | F21 Third-party login | N | N | N | N | N | N | N | N | N | N |
-| F22 Custom domain | **N** | N | N | N | **N** | N | N | N | **N** | N |
+| F22 Custom domain | **W** | W | W | W | **W** | W | W | W | **W** | W |
 | F23 Export and migration | **W** | **W** | **W** | **W** | **W** | **W** | **W** | **W** | **W** | **W** |
 | F24 Same app from both agents | **C** | **C** | **C** | **C** | **C** | **C** | **C** | **C** | **C** | **C** |
 
@@ -100,23 +100,23 @@ The counts are taken from the 240 cells above, by counting each letter.
 
 | | Works | Compromise | Not possible | Cells |
 | --- | --- | --- | --- | --- |
-| Every cell | 116 | 77 | 47 | 240 |
-| Cells a shape cannot ship without (bold) | 41 | 30 | 16 | 87 |
+| Every cell | 126 | 77 | 37 | 240 |
+| Cells a shape cannot ship without (bold) | 44 | 30 | 13 | 87 |
 
 | Shape | Needed | Not possible among them | Compromises among them |
 | --- | --- | --- | --- |
-| A Landing page | 7 | F17 email, F22 domain | F24 |
+| A Landing page | 7 | F17 email | F24 |
 | B Personal tracker | 8 | F18 reminders | F24 |
 | C Team tool | 10 | F17 email, F18 reminders | F5, F10, F15, F19, F24 |
 | D Community | 9 | F17 email | F5, F12, F24 |
-| E Blog or docs | 10 | F22 domain | F7, F11, F12, F18, F24 |
+| E Blog or docs | 10 | | F7, F11, F12, F18, F24 |
 | F Form collector | 6 | F17 email | F10, F24 |
 | G Public dataset | 7 | | F7, F12, F24 |
 | H Integration hub | 9 | F9 provider webhooks, F17 email, F18 retries | F15, F24 |
-| I Shop or booking | 10 | F17 email, F20 payments, F22 domain | F18, F19, F24 |
+| I Shop or booking | 10 | F17 email, F20 payments | F18, F19, F24 |
 | J Two-sided | 11 | F17 email, F20 payments | F5, F10, F12, F19, F24 |
 
-G is the only shape with nothing it needs marked N. Every other shape needs at least one feature no primitive provides, and email on an event is the one most of them share.
+E and G are the shapes with nothing they need marked N; E joined G on 2026-11-07, when the custom domain landed. Every other shape needs at least one feature no primitive provides, and email on an event is the one most of them share.
 
 ## Where the doors disagreed
 
@@ -130,13 +130,12 @@ The probes found three declarations the Validation Gate and the Kernel answered 
 
 ## What blocks the most shapes
 
-Counting the bold N cells per feature gives five features with any, and they are the five in [the showcase findings](./showcase-findings.md#what-the-matrix-adds), each with the smallest primitive that would unblock it:
+Counting the bold N cells per feature gave five features with any on 2026-11-07, the five in [the showcase findings](./showcase-findings.md#what-the-matrix-adds), each with the smallest primitive that would unblock it. The custom domain (F22) has since landed, so four remain:
 
 | Feature | Shapes it blocks | Shapes it degrades |
 | --- | --- | --- |
 | F17 Email on an event | A, C, D, F, H, I, J | |
 | F18 Scheduled or delayed work | B, C, H | E, I |
-| F22 Custom domain | A, E, I | |
 | F20 Payments | I, J | |
 | F9 Webhooks from outside services | H | |
 
@@ -151,7 +150,8 @@ Payments and outside webhooks need the same primitive, because a payment provide
 | [shop](../../examples/probes/shop/replay.ts) | F11, F18, F20, inventory under concurrency | 3 |
 | [community](../../examples/probes/community/replay.ts) | F5, F6, F10, F15, F19 | 6 |
 | [survey](../../examples/probes/survey/replay.ts) | F14, one vote per person, a multi-answer form in one write | 2 |
-| [platform](../../examples/probes/platform/replay.ts) | F17, F18, F19, F21, F22 | 6 |
+| [platform](../../examples/probes/platform/replay.ts) | F17, F18, F19, F21, an unclaimed hostname | 6 |
+| [domain](../../examples/probes/domain/replay.ts) | F22 | 6 |
 
 ## What this does not verify
 

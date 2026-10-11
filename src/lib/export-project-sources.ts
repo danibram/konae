@@ -11,6 +11,8 @@ import kernelArtifactSource from "../../kernel-rs/src/artifact.rs?raw";
 import kernelInvitationsSource from "../../kernel-rs/src/invitations.rs?raw";
 import kernelClerkSource from "../../kernel-rs/src/clerk.rs?raw";
 import kernelCopiesSource from "../../kernel-rs/src/copies.rs?raw";
+import kernelDomainSource from "../../kernel-rs/src/domain.rs?raw";
+import kernelDomainCases from "../../kernel-rs/src/domain-cases.json?raw";
 import kernelEjectSource from "../../kernel-rs/src/eject.rs?raw";
 import kernelFilesSource from "../../kernel-rs/src/files.rs?raw";
 import kernelGuardSource from "../../kernel-rs/src/guard.rs?raw";
@@ -52,6 +54,8 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/invitations.rs", contents: kernelInvitationsSource },
   { path: "kernel-rs/src/clerk.rs", contents: kernelClerkSource },
   { path: "kernel-rs/src/copies.rs", contents: kernelCopiesSource },
+  { path: "kernel-rs/src/domain.rs", contents: kernelDomainSource },
+  { path: "kernel-rs/src/domain-cases.json", contents: kernelDomainCases },
   { path: "kernel-rs/src/eject.rs", contents: kernelEjectSource },
   { path: "kernel-rs/src/files.rs", contents: kernelFilesSource },
   { path: "kernel-rs/src/guard.rs", contents: kernelGuardSource },

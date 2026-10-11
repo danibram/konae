@@ -4,7 +4,7 @@ Littlebox is the guardrail that lets a person who does not write code, and a per
 
 ## Language
 
-Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key and SDK module. Usage, Signal and Action Contract keep their capitals, as the older terms do.
+Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain and SDK module. Usage, Signal and Action Contract keep their capitals, as the older terms do.
 
 **Account**:
 The authenticated identity and personal profile used to enter Littlebox and participate in Workspaces. An Account does not directly own runtime data or imply access to every Project.
@@ -79,8 +79,12 @@ The libraries a Managed Capsule states it needs, written as intent by its owner 
 _Avoid_: package.json, lockfile (those name the generated form, not the authority)
 
 **Deployment**:
-The published, addressable instance of a Project with its own hostname, visibility, signup policy and database. Everything it is lives in one folder on the Kernel volume: its record, Build Artifact, databases, files and backups. Republishing replaces its Build Artifact and keeps its hostname and data; immutable release history does not exist yet.
+The published, addressable instance of a Project with its own hostname, an optional custom domain, visibility, signup policy and database. Everything it is lives in one folder on the Kernel volume: its record, Build Artifact, databases, files and backups. Republishing replaces its Build Artifact and keeps its hostname and data; immutable release history does not exist yet.
 _Avoid_: Project, preview
+
+**Custom Domain**:
+A hostname its owner controls on which one Deployment answers next to its generated hostname, which keeps answering. The owner sets it with `domain_set`, which needs `publish`, and proves control with a TXT record `_littlebox.<hostname>` holding a token the Kernel issued; the Kernel looks the record up itself and the alias serves only once it holds the token. One name serves one Deployment. On it the app has its own origin: its own cookies, the same policy, routes, file path and maintenance page. The operator's proxy terminates TLS and forwards `Host` unchanged. A package carries the name without the token, and the destination issues its own.
+_Avoid_: vanity URL, CNAME (that is one way to point the name), domain mapping
 
 **Copy**:
 A consistent snapshot of every Deployment folder, with the owner, MCP and mail stores, sent off the Kernel volume to a second disk or an S3 prefix on a schedule. With a copy secret, the files sent to S3 are encrypted. Each copy target also keeps the revocation record. Restore installs one copy into an empty data directory, signs everyone out, ends every open Challenge and applies the revocation record, or holds the installation in maintenance when it cannot read it. A copy moves an installation; a package moves one app.

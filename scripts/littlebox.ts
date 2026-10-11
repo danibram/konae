@@ -13,6 +13,7 @@ import {
   actionContractSchema, generateActionContract, renderActionContractMarkdown, serializeActionContract,
 } from "../src/lib/action-contract";
 import { checkEjectPackage, type EjectPlan, type EjectReceipt } from "../src/lib/eject-package";
+import { checkHostname, type DomainRules } from "../src/lib/domain-name";
 import { assembleStaticArtifact } from "../src/lib/static-artifact.js";
 
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -95,6 +96,9 @@ export    --dir <folder> [--out <file>] [--with-data]   Writes a self-hosted kit
           live package and needs a credential from login --export-data.
 eject     --dir <empty folder> --project <id> --url <Kernel URL> [--revision <n>]
           Moves a Managed project's sources into the folder. Needs login --manage-lifecycle.
+domain    --deployment <id> [--set <hostname> | --clear] [--url <Kernel URL>]
+          Shows, sets or clears the app's custom domain. --set prints the TXT record that proves you
+          control the hostname; run it again once the record is at your DNS provider.
 
 Every command but login reads the credential from <folder>/.littlebox/credentials.json or LITTLEBOX_MCP_TOKEN.`;
 
@@ -430,6 +434,33 @@ async function assertEmptyForInit(root: string) {
   if (occupied.length > 0) throw Error(`Refusing to overwrite ${occupied.slice(0, 3).join(", ")}. Choose an empty directory.`);
 }
 
+type DomainView = {
+  hostname: string | null; status: "none" | "pending" | "active"; url?: string; generatedUrl: string;
+  record?: { type: "TXT"; name: string; value: string }; dns?: string; rules?: DomainRules;
+};
+
+/** domain_read, domain_set or domain_clear, with the hostname checked by the Kernel's rules first. Returns the lines to print. */
+export async function domainLocal(client: Pick<McpClient, "call">, deploymentId: string, request: { set?: string; clear?: boolean }): Promise<string[]> {
+  if (request.clear) {
+    const cleared = await client.call<{ cleared: string | null; generatedUrl: string }>("domain_clear", { deploymentId });
+    return [cleared.cleared ? `${cleared.cleared} no longer serves this app. ${cleared.generatedUrl} keeps answering.` : `This app had no custom domain. It answers at ${cleared.generatedUrl}.`];
+  }
+  const current = await client.call<DomainView>("domain_read", { deploymentId });
+  let view = current;
+  if (request.set !== undefined) {
+    const checked = checkHostname(request.set, current.rules ?? { suffix: "", installationHosts: [] });
+    if (!checked.ok) throw Error(checked.message);
+    view = await client.call<DomainView>("domain_set", { deploymentId, hostname: checked.hostname });
+  }
+  if (view.status === "none") return [`This app has no custom domain. It answers at ${view.generatedUrl}.`];
+  if (view.status === "active") return [`${view.url} serves this app, next to ${view.generatedUrl}. Your proxy must terminate TLS for ${view.hostname} and forward Host unchanged.`];
+  return [
+    `${view.hostname} does not serve yet.${view.dns ? ` ${view.dns}` : ""}`,
+    `Add this record at your DNS provider: ${view.record!.type} ${view.record!.name} "${view.record!.value}"`,
+    `Point ${view.hostname} at this installation's proxy, then run this command again with --set ${view.hostname}.`,
+  ];
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   if (argv[0] === "--") argv.shift();
@@ -438,7 +469,7 @@ async function main() {
     console.log(HELP);
     return;
   }
-  if (!["login", "init", "build", "contract", "conform", "eject", "export", "publish", "dev"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
+  if (!["login", "init", "build", "contract", "conform", "eject", "export", "publish", "dev", "domain"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
   const option = (name: string, fallback?: string) => {
     const i = args.indexOf(`--${name}`);
     if (i < 0) return fallback;
@@ -503,6 +534,14 @@ async function main() {
     const receipt = await ejectLocal(root, url, projectId, token, pinned === undefined ? undefined : Number(pinned));
     console.log(`Ejected ${projectId} at sources revision ${receipt.sourcesRevision} into ${root}.${receipt.deployment ? ` ${receipt.deployment.url} keeps serving.` : ""}`);
     console.log(`Publish from this folder with: bun run littlebox -- publish --dir ${root}`);
+    return;
+  }
+  if (command === "domain") {
+    const deploymentId = option("deployment");
+    if (!deploymentId) throw Error("Name the Deployment with --deployment <id>. project_inspect shows its ID.");
+    const saved = process.env.LITTLEBOX_MCP_TOKEN ? undefined : await json<{ url: string; token: string }>(path.join(root, ".littlebox/credentials.json"));
+    const url = option("url", saved?.url ?? process.env.LITTLEBOX_URL ?? "http://localhost:4173")!;
+    for (const line of await domainLocal(new McpClient(endpoint(url), { token: process.env.LITTLEBOX_MCP_TOKEN ?? saved!.token }), deploymentId, { set: option("set"), clear: args.includes("--clear") })) console.log(line);
     return;
   }
   const config = await json<Config>(path.join(root, "littlebox.json"));

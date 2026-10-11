@@ -96,6 +96,10 @@ pub(super) struct Manifest {
     /// Present only in a migration package; `migration.rs` reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) migration: Option<Value>,
+    /// The custom domain's hostname, without its token. The destination
+    /// issues its own token (`domain::arrive`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) domain: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -277,6 +281,7 @@ pub(super) async fn export_with(state: &AppState, owner: &Owner, principal: &str
         contents: components.iter().map(|(name, _, size, sha256)| Content { name: name.clone(), size: *size, sha256: sha256.clone() }).collect(),
         excluded: EXCLUDED.iter().map(|item| (*item).to_owned()).collect(),
         migration: stamp.as_ref().map(|stamp| stamp.migration.clone()),
+        domain: super::domain::for_package(state, &deployment.id),
     };
     if let Some(stamp) = &stamp {
         let kept = keep(&components, &stamp.keep).await;
@@ -697,6 +702,7 @@ pub(super) fn copy_database(state: &AppState, package: &InitialPackage, target: 
 /// uploads stay intact, so a failed release can be retried.
 pub(super) async fn install(state: &AppState, package: &InitialPackage, project_id: &str, directory: &Path) -> Result<()> {
     let uploads = component_uploads(state, None, project_id, package)?;
+    let folder = directory.to_owned();
     let directory = directory.to_owned();
     tokio::task::spawn_blocking(move || {
         let find = |name: &str| uploads.iter().find(|(c, _)| c.name == name);
@@ -718,9 +724,10 @@ pub(super) async fn install(state: &AppState, package: &InitialPackage, project_
         if let Some((content, source)) = find("usage") {
             copy_verified(source, &directory.join(usage::USAGE_DATABASE), content)?;
         }
-        Ok(())
+        Ok::<_, anyhow::Error>(())
     })
-    .await?
+    .await??;
+    super::domain::arrive(state, &folder, package.manifest.domain.as_deref()).await
 }
 
 fn copy_verified(source: &Path, target: &Path, content: &Content) -> Result<()> {
@@ -768,6 +775,7 @@ mod tests {
             contents: vec![Content { name: "database".into(), size: 4096, sha256: "a".repeat(64) }],
             excluded: vec![],
             migration: None,
+            domain: None,
         }
     }
 

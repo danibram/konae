@@ -110,6 +110,7 @@ The Kernel reads these at startup. Defaults are the values in `kernel-rs/src` un
 | `LITTLEBOX_PUBLIC_ORIGIN` | `http://localhost:8080` (`http://localhost:<kernel port>` under `dev:local`) | Origin used to build app URLs. Its scheme and port are copied onto each app hostname, and an `https://` origin makes OAuth metadata use HTTPS. |
 | `LITTLEBOX_HOST_SUFFIX` | `localhost` | Domain appended to new app hostnames, as in `<slug>-<id>.localhost`. |
 | `LITTLEBOX_MCP_ORIGIN` | unset | Public origin of the MCP endpoint, without a path, when it differs from the hosting origin. OAuth discovery advertises it. |
+| `LITTLEBOX_DNS_RESOLVER` | the first `nameserver` in `/etc/resolv.conf` | The resolver, as an IP address with an optional port, that the Kernel asks for a custom domain's TXT record `_littlebox.<hostname>` when `domain_set` runs (ADR-0015). |
 | `LITTLEBOX_S3_ENDPOINT` | unset | S3 endpoint URL. The Kernel always serves artifacts from its data directory; when this is set it also uploads each artifact to `LITTLEBOX_ARTIFACT_BUCKET` and can send copies to `LITTLEBOX_DATA_BUCKET`. When unset, the Kernel ignores the other S3 variables. |
 | `LITTLEBOX_S3_REGION` | `us-east-1` | S3 region. |
 | `LITTLEBOX_S3_ACCESS_KEY` | `littlebox` | S3 access key. |

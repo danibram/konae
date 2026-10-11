@@ -106,7 +106,7 @@ export const sdkContract = {
   version: 1,
   global: "miniapp",
   endpoint: "/_littlebox/mcp",
-  summary: "window.miniapp is the only host surface a Capsule has, in the editor preview and on every Deployment. Each module is a namespace on it. A published call is one or more MCP tool calls to the Deployment's runtime endpoint with the app session cookie.",
+  summary: "window.miniapp is the only host surface a Capsule has, in the editor preview and on every Deployment. Each module is a namespace on it. A published call is one or more MCP tool calls to the runtime endpoint on the host the page loaded from, the Deployment's generated hostname or its custom domain, with that host's app session cookie.",
   absent: [
     "no fetch to other origins",
     "no localStorage contract",
@@ -116,7 +116,7 @@ export const sdkContract = {
   errors: [
     { message: "Sign in to use Littlebox MCP.", when: "the Deployment is private and the visitor has no session; actions.call then sends the browser to /_littlebox/login and auth.session returns the anonymous state instead", source: "kernel", preview: null },
     { message: "Deployment not found.", when: "the host name matches no Deployment", source: "kernel", preview: null },
-    { message: "Cross-origin or unrecognized-host MCP request rejected.", when: "the request does not come from the Deployment's own origin", source: "kernel", preview: null },
+    { message: "Cross-origin or unrecognized-host MCP request rejected.", when: "the request does not come from the origin of the host it is sent to, or that host is neither the Deployment's generated hostname nor its verified custom domain, such as a custom domain whose TXT record domain_set has not found yet", source: "kernel", preview: null },
     { message: "MCP request exceeds 200 KB.", when: "one request body is larger than 200,000 bytes", source: "kernel", preview: null },
     { message: "Invalid MCP response.", when: "the response does not answer the request the SDK sent", source: "sdk", preview: null },
   ],
