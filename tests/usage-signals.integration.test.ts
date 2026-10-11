@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { UsageOverview, UsageSummary } from "../src/lib/usage";
 import { McpClient } from "../src/mcp/client";
 
 // ADR-0010 against a real Kernel, the same binary `bun run littlebox -- dev`
@@ -201,7 +202,7 @@ describe("Usage and Signals", () => {
   });
 
   test("only the owner reads Usage and Signals", async () => {
-    for (const name of ["usage_read", "signals_read"]) {
+    for (const name of ["usage_read", "signals_read", "usage_summary", "usage_overview"]) {
       await expect(runtime().call(name, { deploymentId, from: today(), to: today() })).rejects.toThrow("Unknown tool or insufficient permission.");
     }
     await owner.call("project_create", { projectId: "usage_other", name: "Other" });
@@ -218,6 +219,38 @@ describe("Usage and Signals", () => {
     await expect(owner.call("usage_read", { deploymentId, from: today(), to: yesterday() })).rejects.toThrow("from must not be after to.");
     await expect(owner.call("usage_read", { deploymentId, from: "2020-01-01", to: today() })).rejects.toThrow("Usage covers at most 400 days at a time.");
     await expect(owner.call("signals_read", { deploymentId, cursor: "next" })).rejects.toThrow("Invalid cursor.");
+  });
+
+  test("the monitor keeps execution failures separate and groups routes by their action", async () => {
+    const summary = await owner.call<UsageSummary>("usage_summary", { deploymentId, from: yesterday(), to: today() });
+    expect(summary.coverage.startedAt).toBeNumber();
+    expect(summary.actions.some((a) => a.name === "orders.receive" && a.http?.path === "/hooks/orders")).toBe(true);
+    expect(summary.metrics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ feature: "execution", name: "notes.add", origin: "runtime", outcome: "failed", count: 1 }),
+      expect.objectContaining({ feature: "execution", name: "orders.receive", origin: "route", outcome: "ok", count: 1 }),
+      expect.objectContaining({ feature: "signal", name: "page.liked", count: 2 }),
+    ]));
+    expect(summary.metrics.some((m) => m.name === "orders.receive" && m.origin === "runtime")).toBe(false);
+    expect(summary.metrics.some((m) => m.name === "notes.mine")).toBe(false);
+    expect(JSON.stringify(summary)).not.toContain("Tomatoes");
+  });
+
+  test("account overview includes unpublished apps and respects project grants", async () => {
+    const overview = await owner.call<UsageOverview>("usage_overview", { from: yesterday(), to: today() });
+    const appSummary = overview.apps.find((a) => a.projectId === "usage_app")?.summary;
+    expect(appSummary?.deploymentId).toBe(deploymentId);
+    expect(appSummary?.sourceAuthority).toBe("external");
+    expect(appSummary?.metrics.filter((m) => m.feature === "execution" && m.outcome === "failed").reduce((n, m) => n + m.count, 0)).toBe(1);
+    expect(appSummary?.usage.totals.filter((row) => row.kind === "action").reduce((n, row) => n + row.count, 0)).toBe(4);
+    expect(overview.apps.find((a) => a.projectId === "usage_other")?.summary).toBeNull();
+    const { token } = await owner.call<{ token: string }>("token_create", { scopes: ["read"], projectIds: ["usage_other"], ttlSeconds: 600 });
+    const limited = new McpClient(`${url}/mcp`, { token });
+    const allowed = await limited.call<UsageOverview>("usage_overview", { from: yesterday(), to: today() });
+    expect(allowed.apps.map((a) => a.projectId)).toEqual(["usage_other"]);
+    await expect(limited.call("usage_summary", { deploymentId, from: today(), to: today() })).rejects.toThrow("outside this token's grants");
+    const { token: writer } = await owner.call<{ token: string }>("token_create", { scopes: ["write"], projectIds: ["usage_app"], ttlSeconds: 600 });
+    await expect(new McpClient(`${url}/mcp`, { token: writer }).call("usage_overview", { from: today(), to: today() })).rejects.toThrow();
+    await expect(owner.call("usage_overview", { from: "2020-01-01", to: today() })).rejects.toThrow("at most 400 days");
   });
 
   test("a signal action counts toward the Kernel's action limit", async () => {

@@ -96,3 +96,13 @@ describe("initial user message", () => {
     expect(message).toContain("\n````");
   });
 });
+
+test("domain instructions separate owner intent, TXT ownership and network readiness", () => {
+  const prompt = buildSystemPrompt(cloneStarter());
+  for (const fragment of [
+    "domain_read, domain_set and domain_clear", "owner explicitly requests", "editor asks the owner to confirm",
+    "Replacing a hostname removes its previous alias", "first domain_set adds a pending TXT claim",
+    "does not verify A/CNAME routing or TLS", "Do not invent a platform DNS target",
+    "Capsule edits still require Apply and a passing Validation Gate",
+  ]) expect(prompt).toContain(fragment);
+});

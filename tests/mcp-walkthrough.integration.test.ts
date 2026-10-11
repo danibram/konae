@@ -205,12 +205,25 @@ describe("the MCP walkthrough", () => {
     const session = await tool("session_inspect");
     r.name((session.result as any).ownerId, "<owner id>");
     expect((session.result as any).scopes).toEqual(["read", "write", "publish", "manage_users", "export_data", "manage_lifecycle"]);
+    expect((session.result as any).can).toEqual({
+      read: true,
+      write: true,
+      publish: true,
+      manage_users: true,
+      export_data: true,
+      manage_lifecycle: true,
+      createTokens: false,
+    });
   }, 60_000);
 
   test("2. platform_describe and platform_guide", async () => {
     r.step("describe");
     const described = await tool("platform_describe");
-    expect((described.result as any).guideTopics).toEqual(["credentials", "development", "actions", "sdk", "publishing", "users", "portability"]);
+    expect((described.result as any).guideTopics).toEqual(["rules", "pieces", "credentials", "development", "actions", "sdk", "publishing", "users", "portability"]);
+    expect((described.result as any).yardstick).toContain("take it to another machine");
+    const rules = await callTool(`${a.url}/mcp`, { authorization: `Bearer ${s.token}` }, "platform_guide", { topic: "rules" });
+    expect((rules.result as any).readBack.map.release_apply).toBe("project_inspect");
+    expect((rules.result as any).firstRun.mcp).toHaveLength(3);
     r.step("guide");
     await tool("platform_guide", { topic: "credentials" });
   });

@@ -5,6 +5,7 @@ export type DatabaseMigrationPlan = {
   sql: string;
   statements: string[];
   destructive: boolean;
+  candidateModelSource?: string;
 };
 
 export type PlanDatabaseChangeInput = {

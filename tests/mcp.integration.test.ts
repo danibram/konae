@@ -4,6 +4,8 @@ import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient, checksum, encodeBase64 } from "../src/mcp/client";
+import { ManagedSources } from "../src/lib/managed-sources";
+import { createWorkspaceProject } from "../src/lib/workspace";
 import { signupModes } from "../src/deployments/client";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -113,6 +115,59 @@ async function loginPage(hostname: string) {
 }
 
 describe("authenticated MCP", () => {
+  test("an interrupted editor upload leaves no project and can be retried", async () => {
+    let interrupt = true;
+    const proxy = Bun.serve({ port: 0, async fetch(request) {
+      const body = await request.text();
+      const rpc = JSON.parse(body);
+      if (interrupt && rpc.params?.name === "transfer_write") {
+        interrupt = false;
+        return Response.json({ error: { message: "Upload interrupted" } }, { status: 503 });
+      }
+      return fetch(`${url}/mcp`, { method: "POST", headers: { "content-type": "application/json", cookie: aliceCookie }, body });
+    } });
+    try {
+      const sources = new ManagedSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+      const project = createWorkspaceProject("Interrupted creation", []);
+      await expect(sources.save(project)).rejects.toThrow("Upload interrupted");
+      const listed = await alice.call<{ projects: { project: { id: string } }[] }>("projects_list");
+      expect(listed.projects.some((item) => item.project.id === project.id)).toBe(false);
+      sources.retry(project.id);
+      await sources.save(project);
+      const edited = { ...project, files: { ...project.files, "index.html": "edited" } };
+      await sources.save(edited);
+      const loaded = await sources.load();
+      expect(loaded.projects.find((item) => item.id === project.id)).toEqual(edited);
+      expect(loaded.missing).toHaveLength(0);
+    } finally {
+      await proxy.stop(true);
+    }
+  });
+
+  test("creating an editor project saves its files atomically", async () => {
+    const id = "atomic_editor_creation";
+    const project = { id, name: "Atomic", slug: "atomic", files: { "index.html": "first" }, directories: [], databaseModel: { source: "", acceptedSource: "", revision: "" }, manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
+    const args = { projectId: id, name: project.name, sourceAuthority: "managed" };
+    const invalid = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...project, files: { "index.html": 123 } })));
+    await expect(alice.call("project_create", { ...args, sourcesTransferId: invalid.transferId })).rejects.toThrow("Invalid project files");
+    const listed = await alice.call<{ projects: { project: { id: string } }[] }>("projects_list");
+    expect(listed.projects.some(({ project }) => project.id === id)).toBe(false);
+    await alice.cancel(invalid.transferId);
+
+    const upload = await alice.upload(new TextEncoder().encode(JSON.stringify(project)));
+    await expect(bob.call("project_create", { ...args, sourcesTransferId: upload.transferId })).rejects.toThrow();
+    await alice.call("project_create", { ...args, sourcesTransferId: upload.transferId });
+    // Retrying a response lost in transit must not overwrite a later edit.
+    await alice.call("project_create", { ...args, sourcesTransferId: upload.transferId });
+    const saved = await alice.call<{ revision: number; transfer: Parameters<McpClient["download"]>[0] }>("project_sources_read", { projectId: id });
+    expect(saved.revision).toBe(1);
+    expect(JSON.parse(new TextDecoder().decode(await alice.download(saved.transfer)))).toEqual(project);
+    const changed = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...project, files: { "index.html": "changed" } })));
+    await expect(alice.call("project_create", { ...args, sourcesTransferId: changed.transferId })).rejects.toThrow("already has saved sources");
+    await alice.cancel(changed.transferId);
+    await alice.cancel(upload.transferId);
+  });
+
   test("Managed sources persist per owner and reject stale writes", async () => {
     const id = "managed_sources_proof";
     await alice.call("project_create", { projectId: id, name: "Managed", sourceAuthority: "managed" });
@@ -156,6 +211,25 @@ describe("authenticated MCP", () => {
     const externalUpload = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...project, id: external })), external);
     await expect(alice.call("project_sources_save", { projectId: external, transferId: externalUpload.transferId, expectedRevision: 0 })).rejects.toThrow("externally");
     await alice.cancel(externalUpload.transferId);
+  });
+
+  test("the account usage monitor isolates owners and paginates accessible projects", async () => {
+    const receipt = (await release("monitor_owner_app")).receipt;
+    const today = new Date().toISOString().slice(0, 10);
+    await expect(bob.call("usage_summary", { deploymentId: receipt.id, from: today, to: today })).rejects.toThrow("access denied");
+    const other = await bob.call<{ apps: { projectId: string }[] }>("usage_overview", { from: today, to: today });
+    expect(other.apps.some((app) => app.projectId === "monitor_owner_app")).toBe(false);
+    for (let index = 0; index < 52; index++) await alice.call("project_create", { projectId: `monitor_page_${String(index).padStart(2, "0")}`, name: `App ${index}` });
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await alice.call<{ apps: { projectId: string }[]; nextCursor: string | null }>("usage_overview", { from: today, to: today, ...(cursor ? { cursor } : {}) });
+      expect(page.apps.length).toBeLessThanOrEqual(50);
+      seen.push(...page.apps.map((app) => app.projectId));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen.filter((id) => id.startsWith("monitor_page_"))).toHaveLength(52);
   });
 
   test("app sessions and data do not cross deployment boundaries", async () => {

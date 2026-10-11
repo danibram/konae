@@ -89,7 +89,7 @@ The last run, on 2026-11-07 after notices and the provider schemes landed, passe
 | 15 | Check that the invitation names the inviting owner | The development mailbox writes `to`, `purpose`, `scope`, `link` and `expiresAt`, and no subject or body | Not checkable with the development transport |
 | 16 | Send a severity outside the CHECK | The sender receives SQLite's text, which shows the constraint | 400 `CHECK constraint failed: severity IN ('info', 'warning', 'critical')` |
 | 17 | Tell a suspended member why their session stopped | The runtime endpoint answers as if signed out. Only the login route says suspended | `Sign in to use Littlebox MCP.`, then 403 `This account is suspended.` |
-| 18 | Take a code host's or a payment provider's webhook as it arrives | Fixed on 2026-11-07. The routes declare the provider's signature scheme and `fields` ([ADR-0015](../../../docs/adr/0018-a-route-verifies-a-providers-own-signature.md)). Before, the provider's signature answered 401 and its payload 400, so the inbox needed an adapter outside Littlebox | 200 `{ "changes": 1 }`. Before: 401 `invalid-signature`, and 400 `Unexpected action input: action` once re-signed |
+| 18 | Take a code host's or a payment provider's webhook as it arrives | Fixed on 2026-11-07. The routes declare the provider's signature scheme and `fields` ([ADR-0018](../../../docs/adr/0018-a-route-verifies-a-providers-own-signature.md)). Before, the provider's signature answered 401 and its payload 400, so the inbox needed an adapter outside Littlebox | 200 `{ "changes": 1 }`. Before: 401 `invalid-signature`, and 400 `Unexpected action input: action` once re-signed |
 
 Other refusals the replay asserts, all as documented:
 

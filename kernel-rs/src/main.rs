@@ -90,6 +90,8 @@ struct Deployment {
     /// Who may create an account. Records written before this field existed
     /// get the default for their visibility when they load.
     signup_policy: SignupPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    database_model: Option<DatabaseModel>,
 }
 
 /// The stored form of a Deployment, where the signup policy may be missing.
@@ -108,6 +110,8 @@ struct DeploymentRecord {
     artifact_version: Option<String>,
     #[serde(default)]
     signup_policy: Option<SignupPolicy>,
+    #[serde(default)]
+    database_model: Option<DatabaseModel>,
 }
 
 impl From<DeploymentRecord> for Deployment {
@@ -132,6 +136,7 @@ impl From<DeploymentRecord> for Deployment {
             actions: record.actions,
             artifact_version: record.artifact_version,
             signup_policy,
+            database_model: record.database_model,
         }
     }
 }
@@ -261,6 +266,16 @@ struct DeployInput {
     /// A chunked package whose components were uploaded as transfers.
     #[serde(default)]
     initial_package: Option<package::InitialPackage>,
+    #[serde(default)]
+    initial_domain: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DatabaseModel {
+    source: String,
+    accepted_source: String,
+    revision: String,
 }
 
 #[derive(Deserialize)]
@@ -271,6 +286,8 @@ struct ProjectInput {
     slug: String,
     files: HashMap<String, String>,
     manifest: Value,
+    #[serde(default)]
+    database_model: Option<DatabaseModel>,
 }
 
 #[derive(Deserialize)]
@@ -291,6 +308,10 @@ struct DatabaseBackup {
     created_at: u64,
     size_bytes: u64,
     key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    database_model_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schema_revision: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -373,7 +394,7 @@ async fn main() -> Result<()> {
     let data_bucket = env("LITTLEBOX_DATA_BUCKET", "littlebox-data");
     let copy_config = copies::CopyConfig::from_env(&data_root, s3.is_some())?;
     let schedule_clock = schedule::Clock::from_env(&bind)?;
-    let deployments = load_deployments(&data_root).await?;
+    let deployments = load_deployments(&data_root, &public_origin).await?;
     let state = AppState {
         deployments: Arc::new(RwLock::new(deployments)),
         db_locks: LockMap::default(),
@@ -502,6 +523,9 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             );
         }
     };
+    if let Err(error_value) = mcp::validate_release(&state, &input).await {
+        return error(StatusCode::BAD_REQUEST, &error_value.to_string());
+    }
     if input.artifact.version != 1
         || input.artifact.entrypoint != "index.html"
         || !input.artifact.files.contains_key("index.html")
@@ -560,7 +584,8 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             || input.initial_identity.is_some()
             || input.initial_files.is_some()
             || input.initial_signup_policy.is_some()
-            || input.initial_package.is_some())
+            || input.initial_package.is_some()
+            || input.initial_domain.is_some())
     {
         return error(
             StatusCode::CONFLICT,
@@ -620,10 +645,15 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         .as_ref()
         .map(|item| item.url.clone())
         .unwrap_or_else(|| deployment_url(&state.public_origin, &hostname));
+    if let Some(model) = input.project.database_model.as_ref() {
+        if model.source != model.accepted_source || model.revision.is_empty() {
+            return error(StatusCode::BAD_REQUEST, "Publish the accepted database model. Apply its migration before publishing.");
+        }
+    }
     let mut manifest = input.project.manifest;
     manifest["visibility"] = Value::String(input.visibility.clone());
     let artifact_version = format!("v{}", Uuid::new_v4().simple());
-    let deployment = Deployment {
+    let mut deployment = Deployment {
         id: id.clone(),
         project_id: input.project.id,
         project_name: input.project.name,
@@ -636,6 +666,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         hostname: hostname.clone(),
         actions,
         artifact_version: Some(artifact_version.clone()),
+        database_model: input.project.database_model,
         signup_policy: match existing.as_ref() {
             Some(item) => item.signup_policy.for_republish(is_private(item), &input.visibility),
             None => initial_signup_policy.unwrap_or_else(|| SignupPolicy::initial(&input.visibility)),
@@ -653,6 +684,11 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         {
             let _ = tokio::fs::remove_dir_all(&directory).await;
             return error(StatusCode::BAD_REQUEST, &format!("Package import failed: {error_value:#}"));
+        }
+    }
+    if input.initial_package.is_none() {
+        if let Err(error_value) = domain::arrive(&state, &directory, input.initial_domain.as_deref()).await {
+            return error(StatusCode::BAD_REQUEST, &error_value.to_string());
         }
     }
     let db_path = directory.join("database.sqlite");
@@ -680,6 +716,13 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             StatusCode::BAD_REQUEST,
             &format!("Schema update failed: {error_value}"),
         );
+    }
+    if deployment.database_model.is_none() {
+        if let Some(model) = existing.as_ref().and_then(|d| d.database_model.clone()) {
+            if mcp::model_matches_path(&model.accepted_source, &db_path).await.unwrap_or(false) {
+                deployment.database_model = Some(model);
+            }
+        }
     }
     let identity_path = directory.join("identity.sqlite");
     if !identity_path.exists() {
@@ -917,10 +960,12 @@ async fn invoke_action(
     match result {
         Ok(value) => match guard::outcome(&name, action, &value) {
             guard::Outcome::Refused(message) => {
+                usage::execution(&state.data_root, &deployment.id, &name, "runtime", "refused");
                 usage::count(&state.data_root, &deployment.id, usage::Operation::Refused(name.clone()));
                 error(StatusCode::FORBIDDEN, &message)
             }
             changed => {
+                usage::execution(&state.data_root, &deployment.id, &name, "runtime", "ok");
                 usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
                 if matches!(changed, guard::Outcome::Changed) {
                     usage::signal(&state.data_root, &deployment.id, &name, action, &input, actor_id);
@@ -930,7 +975,10 @@ async fn invoke_action(
                 Json(json!({"result": value})).into_response()
             }
         },
-        Err(error_value) => error(StatusCode::BAD_REQUEST, &error_value.to_string()),
+        Err(error_value) => {
+            usage::execution(&state.data_root, &deployment.id, &name, "runtime", "failed");
+            error(StatusCode::BAD_REQUEST, &error_value.to_string())
+        },
     }
 }
 
@@ -1682,6 +1730,7 @@ async fn portable_state(state: &AppState, deployment: &Deployment) -> Result<Val
         anyhow::bail!("Portable state exceeds the 16 MiB combined export limit.");
     }
     Ok(json!({
+        "domain": domain::for_package(state, &deployment.id),
         "initialDatabase": encode_base64(&database),
         "initialIdentity": encode_base64(&identity),
         "initialFiles": encode_base64(&file_bundle),
@@ -1738,6 +1787,7 @@ async fn admin_database(
         }
     };
     let operation = body.get("operation").and_then(Value::as_str).unwrap_or("");
+    let _project_guard = database_lock(&state, &format!("project:{}", deployment.project_id)).await;
     let path = database_path(&state, &deployment.id);
     let _guard = database_lock(&state, &deployment.id).await;
     match operation {
@@ -2137,7 +2187,7 @@ async fn list_backups(state: &AppState, id: &str) -> Result<Vec<Value>> {
             continue;
         }
         let backup: DatabaseBackup = serde_json::from_slice(&tokio::fs::read(entry.path()).await?)?;
-        backups.push(json!({"id":backup.id,"label":backup.label,"createdAt":backup.created_at,"sizeBytes":backup.size_bytes}));
+        backups.push(json!({"id":backup.id,"label":backup.label,"createdAt":backup.created_at,"sizeBytes":backup.size_bytes,"databaseModelSource":backup.database_model_source,"schemaRevision":backup.schema_revision}));
     }
     backups.sort_by(|a, b| b["createdAt"].as_u64().cmp(&a["createdAt"].as_u64()));
     Ok(backups)
@@ -2152,7 +2202,13 @@ async fn create_backup(state: &AppState, id: &str, label: &str) -> Result<Value>
     let db = Connection::open(&db_path)?;
     db.execute("VACUUM INTO ?1", [snapshot_path.to_string_lossy().as_ref()])?;
     let size = tokio::fs::metadata(&snapshot_path).await?.len();
+    let model = state.deployments.read().await.values().find(|d| d.id == id).and_then(|d| d.database_model.clone());
+    let model = if let Some(model) = model {
+        if mcp::model_matches_path(&model.accepted_source, &snapshot_path).await.unwrap_or(false) { Some(model) } else { None }
+    } else { None };
     let backup = DatabaseBackup {
+        database_model_source: model.as_ref().map(|m| m.accepted_source.clone()),
+        schema_revision: model.map(|m| m.revision),
         id: backup_id.clone(),
         label: label.chars().take(120).collect(),
         created_at: now_ms(),
@@ -2165,7 +2221,7 @@ async fn create_backup(state: &AppState, id: &str, label: &str) -> Result<Value>
     )
     .await?;
     Ok(
-        json!({"id":backup.id,"label":backup.label,"createdAt":backup.created_at,"sizeBytes":backup.size_bytes}),
+        json!({"id":backup.id,"label":backup.label,"createdAt":backup.created_at,"sizeBytes":backup.size_bytes,"databaseModelSource":backup.database_model_source,"schemaRevision":backup.schema_revision}),
     )
 }
 
@@ -2173,6 +2229,7 @@ async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Result<V
     if backup_id.is_empty() || backup_id.contains('/') || backup_id.contains("..") {
         anyhow::bail!("Invalid backup ID.");
     }
+    let metadata: DatabaseBackup = serde_json::from_slice(&tokio::fs::read(backup_dir(state, id).join(format!("{backup_id}.json"))).await?)?;
     let backup_path = backup_dir(state, id).join(format!("{backup_id}.sqlite"));
     let bytes = tokio::fs::read(&backup_path).await?;
     create_backup(state, id, "Before restore").await?;
@@ -2186,7 +2243,20 @@ async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Result<V
         anyhow::bail!("The backup failed SQLite's integrity check.");
     }
     tokio::fs::rename(&temp_path, database_path(state, id)).await?;
-    Ok(json!({"id":backup_id,"sizeBytes":bytes.len()}))
+    let model = metadata.database_model_source.as_ref().zip(metadata.schema_revision.as_ref()).map(|(source, revision)| DatabaseModel {
+        source: source.clone(), accepted_source: source.clone(), revision: revision.clone(),
+    });
+    persist_database_model(state, id, model).await?;
+    Ok(json!({"id":backup_id,"sizeBytes":bytes.len(),"databaseModelSource":metadata.database_model_source,"schemaRevision":metadata.schema_revision}))
+}
+
+async fn persist_database_model(state: &AppState, id: &str, model: Option<DatabaseModel>) -> Result<()> {
+    let mut deployment = state.deployments.read().await.values().find(|d| d.id == id).cloned()
+        .ok_or_else(|| anyhow::anyhow!("Deployment not found."))?;
+    deployment.database_model = model;
+    persist_deployment(state, &deployment).await?;
+    state.deployments.write().await.insert(deployment.hostname.clone(), deployment);
+    Ok(())
 }
 
 async fn apply_migration(state: &AppState, id: &str, body: &Value) -> Result<Value> {
@@ -2197,24 +2267,47 @@ async fn apply_migration(state: &AppState, id: &str, body: &Value) -> Result<Val
     if statements.is_empty() || statements.len() > 200 {
         anyhow::bail!("Migration must contain 1 to 200 statements.");
     }
-    let backup = create_backup(state, id, "Before migration").await?;
-    let mut db = Connection::open(database_path(state, id))?;
-    restrict_database(&db)?;
-    let tx = db.transaction()?;
-    for statement in statements {
-        let sql = statement
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Migration statement must be text."))?;
-        if sql.len() > 100_000 {
-            anyhow::bail!("Migration statement is too large.");
+    let candidate = body["candidateModelSource"].as_str();
+    let next_model = if let Some(source) = candidate {
+        let previous = body["recoveryModelSource"].as_str().ok_or_else(|| anyhow::anyhow!("The migration needs its accepted model."))?;
+        let deployed = state.deployments.read().await.values().find(|d| d.id == id).and_then(|d| d.database_model.clone());
+        if let Some(deployed) = deployed {
+            anyhow::ensure!(deployed.accepted_source == previous, "The deployed database model changed. Reload and plan the migration again.");
         }
-        tx.execute_batch(sql)?;
+        let planned = mcp::schema_plan(json!({"acceptedSource":previous,"candidateSource":source})).await?;
+        anyhow::ensure!(planned["id"] == body["id"] && planned["fromHash"] == body["fromHash"] && planned["toHash"] == body["toHash"] && planned["statements"] == body["statements"],
+            "The migration differs from its database models. Plan it again.");
+        Some(DatabaseModel { source: source.into(), accepted_source: source.into(), revision: planned["toHash"].as_str().unwrap().into() })
+    } else { None };
+    let candidate_schema = match &next_model {
+        Some(model) => Some(mcp::model_schema(&model.accepted_source).await?),
+        None => None,
+    };
+    let backup = create_backup(state, id, "Before migration").await?;
+    {
+        let mut db = Connection::open(database_path(state, id))?;
+        restrict_database(&db)?;
+        let tx = db.transaction()?;
+        for statement in statements {
+            let sql = statement
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Migration statement must be text."))?;
+            if sql.len() > 100_000 {
+                anyhow::bail!("Migration statement is too large.");
+            }
+            tx.execute_batch(sql)?;
+        }
+        if let Some(expected) = &candidate_schema {
+            anyhow::ensure!(mcp::schema_tokens(expected)? == mcp::schema_tokens(&tx)?,
+                "The migrated database does not match its candidate model. The migration was rolled back.");
+        }
+        let integrity: String = tx.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        if integrity != "ok" {
+            anyhow::bail!("Migrated database failed SQLite integrity check.");
+        }
+        tx.commit()?;
     }
-    let integrity: String = tx.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-    if integrity != "ok" {
-        anyhow::bail!("Migrated database failed SQLite integrity check.");
-    }
-    tx.commit()?;
+    persist_database_model(state, id, next_model).await?;
     Ok(json!({"backup":backup}))
 }
 
@@ -2896,13 +2989,14 @@ async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Result
 
 /// Reads every Deployment record on the volume. A Kernel on a fresh volume
 /// starts empty; `littlebox-kernel restore` installs copied folders first.
-async fn load_deployments(root: &Path) -> Result<HashMap<String, Deployment>> {
+async fn load_deployments(root: &Path, public_origin: &str) -> Result<HashMap<String, Deployment>> {
     let mut result = HashMap::new();
     let mut entries = tokio::fs::read_dir(root.join("deployments")).await?;
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path().join("deployment.json");
         if let Ok(bytes) = tokio::fs::read(path).await {
-            if let Ok(deployment) = serde_json::from_slice::<Deployment>(&bytes) {
+            if let Ok(mut deployment) = serde_json::from_slice::<Deployment>(&bytes) {
+                deployment.url = deployment_url(public_origin, &deployment.hostname);
                 result.insert(deployment.hostname.clone(), deployment);
             }
         }
@@ -3329,6 +3423,7 @@ mod tests {
             hostname: "login-test.localhost".into(),
             actions: "{}".into(),
             artifact_version: None,
+            database_model: None,
             signup_policy: SignupPolicy::default(),
         };
         tokio::fs::create_dir_all(root.join("deployments").join(&deployment.id))
@@ -4278,9 +4373,9 @@ mod tests {
     #[tokio::test]
     async fn restoring_a_backup_first_backs_up_the_live_database() {
         let root = std::env::temp_dir().join(format!("littlebox-restore-{}", Uuid::new_v4()));
-        let state = test_state(&root);
-        let id = "restore-test";
-        tokio::fs::create_dir_all(root.join("deployments").join(id)).await.unwrap();
+        let (state, _) = login_test_state(&root, "public").await;
+        let deployment_id = state.deployments.read().await.values().next().unwrap().id.clone();
+        let id = deployment_id.as_str();
         let path = database_path(&state, id);
         initialize_database(&path).unwrap();
         Connection::open(&path)

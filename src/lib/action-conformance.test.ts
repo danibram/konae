@@ -89,7 +89,7 @@ function fakeBackend(contract: ActionContract, quirks: Quirks = {}, session = tr
       if ((action.http?.onlyDoor === "always" || (action.http && quirks.private)) && !quirks.anyoneMayCall) {
         return { ok: false, message: `Action ${name} answers only on its HTTP route, ${action.http.method} ${action.http.path}.` };
       }
-      // Only the Kernel runs a call's then mutation (ADR-0015).
+      // Only the Kernel runs a call's then mutation (ADR-0019).
       if (action.thenOf) return { ok: false, message: `Action ${name} runs only after the call ${action.thenOf} answers.` };
       if (action.access === "authenticated" && !actor && !quirks.anyoneMayCall) return { ok: false, message: "authentication-required" };
       const refused = bind(action, input as Record<string, unknown>, actor || Boolean(quirks.anyoneMayCall));

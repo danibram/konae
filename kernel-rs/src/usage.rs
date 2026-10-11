@@ -40,6 +40,8 @@ pub(crate) const USAGE_DAYS: i64 = 400;
 pub(crate) const MAX_USAGE_ROWS: i64 = 100_000;
 /// Signals kept, oldest dropped first.
 pub(crate) const MAX_SIGNALS: i64 = 50_000;
+/// Daily execution and Signal aggregates, bounded independently from operation totals.
+const MAX_METRIC_ROWS: i64 = 100_000;
 /// Scheduled runs kept, oldest dropped first. A job every 5 minutes makes 288 a day.
 pub(crate) const MAX_SCHEDULED_RUNS: i64 = 10_000;
 /// The scheduled runs `usage_read` returns, newest first.
@@ -94,11 +96,13 @@ impl Operation {
 enum Message {
     Count { folder: PathBuf, at: u64, kind: &'static str, name: String },
     Signal { folder: PathBuf, at: u64, name: String, properties: String },
+    Metric { folder: PathBuf, at: u64, feature: String, name: String, origin: String, outcome: String },
     Flush(SyncSender<()>),
 }
 
 static QUEUE_SENDER: OnceLock<SyncSender<Message>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);
+static WRITE_ERRORS: AtomicU64 = AtomicU64::new(0);
 
 fn sender() -> &'static SyncSender<Message> {
     QUEUE_SENDER.get_or_init(|| {
@@ -158,6 +162,12 @@ pub(crate) fn signal(data_root: &Path, deployment_id: &str, action_name: &str, a
     });
 }
 
+/// Records one completed execution without retaining its inputs or error text.
+pub(crate) fn execution(data_root: &Path, deployment_id: &str, name: &str, origin: &str, outcome: &str) {
+    enqueue(Message::Metric { folder: folder(data_root, deployment_id), at: super::now_ms(),
+        feature: "execution".into(), name: name.into(), origin: origin.into(), outcome: outcome.into() });
+}
+
 fn truncate(text: &str, bytes: usize) -> &str {
     if text.len() <= bytes {
         return text;
@@ -173,10 +183,12 @@ fn truncate(text: &str, bytes: usize) -> &str {
 /// seconds pass. `usage_read` and `signals_read` call it so the owner sees what
 /// happened up to the moment they asked.
 pub(crate) fn flush() {
+    let _ = flush_status();
+}
+
+pub(crate) fn flush_status() -> bool {
     let (done, wait) = sync_channel(1);
-    if send_waiting(Message::Flush(done)).is_ok() {
-        let _ = wait.recv_timeout(Duration::from_secs(5));
-    }
+    send_waiting(Message::Flush(done)).is_ok() && wait.recv_timeout(Duration::from_secs(5)).is_ok()
 }
 
 /// A flush is the one sender that waits for room, and only for five seconds.
@@ -202,6 +214,7 @@ fn send_waiting(message: Message) -> std::result::Result<(), ()> {
 struct Batch {
     counts: HashMap<(String, &'static str, String), i64>,
     signals: Vec<(u64, String, String)>,
+    metrics: Vec<(u64, String, String, String, String)>,
 }
 
 fn writer(receiver: Receiver<Message>) {
@@ -218,6 +231,9 @@ fn writer(receiver: Receiver<Message>) {
                 Message::Signal { folder, at, name, properties } => {
                     batches.entry(folder).or_default().signals.push((at, name, properties));
                 }
+                Message::Metric { folder, at, feature, name, origin, outcome } => {
+                    batches.entry(folder).or_default().metrics.push((at, feature, name, origin, outcome));
+                }
                 Message::Flush(done) => flushes.push(done),
             }
             taken += 1;
@@ -227,6 +243,7 @@ fn writer(receiver: Receiver<Message>) {
         }
         for (folder, batch) in batches {
             if let Err(error) = write(&folder, &batch, super::now_ms()) {
+                WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
                 eprintln!("Usage write failed for {}: {error}", folder.display());
             }
         }
@@ -254,6 +271,14 @@ fn open(path: &Path) -> Result<Connection> {
          CREATE TABLE IF NOT EXISTS schedule_state(
            action TEXT PRIMARY KEY, schedule TEXT NOT NULL, slot INTEGER NOT NULL);",
     )?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS metric_daily(
+           day TEXT NOT NULL, feature TEXT NOT NULL, name TEXT NOT NULL, origin TEXT NOT NULL,
+           outcome TEXT NOT NULL, count INTEGER NOT NULL, last_at INTEGER NOT NULL,
+           PRIMARY KEY(day, feature, name, origin, outcome));
+         CREATE TABLE IF NOT EXISTS metric_meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);",
+    )?;
+    connection.execute("INSERT OR IGNORE INTO metric_meta VALUES('started_at', ?1)", [super::now_ms() as i64])?;
     Ok(connection)
 }
 
@@ -311,6 +336,8 @@ pub(crate) fn record_run(folder: &Path, run: &Run) -> Result<()> {
          ON CONFLICT(day, kind, name) DO UPDATE SET count = count + 1",
         params![day(run.at), run.action],
     )?;
+    metric(&transaction, run.at, "execution", run.action, "schedule",
+        if run.changes == Some(0) { "unchanged" } else { outcome }, 1)?;
     if run.changes.is_some() {
         transaction.execute(
             "INSERT INTO schedule_state(action, schedule, slot) VALUES(?1, ?2, ?3)
@@ -337,7 +364,11 @@ fn write(folder: &Path, batch: &Batch, now: u64) -> Result<()> {
             params![day, kind, name, count],
         )?;
     }
+    for (at, feature, name, origin, outcome) in &batch.metrics {
+        metric(&transaction, *at, feature, name, origin, outcome, 1)?;
+    }
     for (at, name, properties) in &batch.signals {
+        metric(&transaction, *at, "signal", name, "kernel", "recorded", 1)?;
         transaction.execute(
             "INSERT INTO signals(name, at, properties) VALUES(?1, ?2, ?3)",
             params![name, *at as i64, properties],
@@ -348,16 +379,22 @@ fn write(folder: &Path, batch: &Batch, now: u64) -> Result<()> {
     Ok(())
 }
 
+fn metric(db: &Connection, at: u64, feature: &str, name: &str, origin: &str, outcome: &str, count: i64) -> Result<()> {
+    db.execute(
+        "INSERT INTO metric_daily VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(day, feature, name, origin, outcome) DO UPDATE SET
+           count = count + excluded.count, last_at = max(last_at, excluded.last_at)",
+        params![day(at), feature, name, origin, outcome, count, at as i64],
+    )?;
+    Ok(())
+}
+
 /// Keeps the store within its bounds: `USAGE_DAYS` days and `MAX_USAGE_ROWS`
 /// rows of totals, and the newest `MAX_SIGNALS` Signals.
 fn prune(db: &Connection, now: u64) -> Result<()> {
     let cutoff = day(now.saturating_sub((USAGE_DAYS as u64 - 1) * 86_400_000));
-    db.execute("DELETE FROM usage_daily WHERE day < ?1", [cutoff])?;
-    db.execute(
-        "DELETE FROM usage_daily WHERE rowid IN (SELECT rowid FROM usage_daily ORDER BY day, kind, name
-           LIMIT max(0, (SELECT COUNT(*) FROM usage_daily) - ?1))",
-        [MAX_USAGE_ROWS],
-    )?;
+    prune_daily(db, "usage_daily", MAX_USAGE_ROWS, &cutoff)?;
+    prune_daily(db, "metric_daily", MAX_METRIC_ROWS, &cutoff)?;
     db.execute(
         "DELETE FROM signals WHERE id <= (SELECT MAX(id) FROM signals) - ?1",
         [MAX_SIGNALS],
@@ -366,6 +403,18 @@ fn prune(db: &Connection, now: u64) -> Result<()> {
         "DELETE FROM scheduled_runs WHERE id <= (SELECT MAX(id) FROM scheduled_runs) - ?1",
         [MAX_SCHEDULED_RUNS],
     )?;
+    Ok(())
+}
+
+fn prune_daily(db: &Connection, table: &str, limit: i64, cutoff: &str) -> Result<()> {
+    // Table names come only from prune, never from a request.
+    let predicate = format!("day < ?1 OR rowid IN (SELECT rowid FROM {table} ORDER BY day LIMIT max(0, (SELECT COUNT(*) FROM {table}) - ?2))");
+    let latest: Option<String> = db.query_row(&format!("SELECT MAX(day) FROM {table} WHERE {predicate}"), params![cutoff, limit], |r| r.get(0))?;
+    if let Some(latest) = latest {
+        db.execute("INSERT INTO metric_meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = max(value, excluded.value)",
+            params![format!("{table}_pruned_through"), parse_day(&latest).unwrap_or(0) * 86_400_000])?;
+        db.execute(&format!("DELETE FROM {table} WHERE {predicate}"), params![cutoff, limit])?;
+    }
     Ok(())
 }
 
@@ -511,6 +560,8 @@ pub(crate) fn admin_tools() -> Vec<Value> {
     let text = json!({"type": "string", "minLength": 1});
     let date = json!({"type": "string", "minLength": 10, "maxLength": 10});
     vec![
+        super::mcp::tool("usage_summary", "Read a deployment usage monitor with daily execution outcomes, Signal totals, published configuration and coverage. Owner read permission required.", json!({"deploymentId": text, "from": date, "to": date}), &["deploymentId", "from", "to"], true),
+        super::mcp::tool("usage_overview", "Read usage for this account projects only, including external and unpublished apps, 50 per page. Pass nextCursor back as cursor.", json!({"from": date, "to": date, "cursor": {"type": "string", "maxLength": 100}}), &["from", "to"], true),
         super::mcp::tool(
             "usage_read",
             "Read a deployment's Usage: daily totals of the runtime operations the Kernel allowed (session, action, route, upload, file_read, signup, login, call), of guard refusals (refused, by action) and of scheduled runs (scheduled, by action) between two UTC dates written YYYY-MM-DD, both included, at most 400 days apart, and the newest 500 scheduled runs in that range with their outcome and changes.",
@@ -532,10 +583,13 @@ pub(crate) fn admin_tools() -> Vec<Value> {
 pub(crate) async fn admin_call(data_root: &Path, deployment: &Deployment, name: &str, a: &Value) -> Result<Value> {
     let path = folder(data_root, &deployment.id).join(USAGE_DATABASE);
     let arguments = a.clone();
+    let deployment = deployment.clone();
+    let data_root = data_root.to_path_buf();
     let name = name.to_owned();
     tokio::task::spawn_blocking(move || {
-        flush();
+        let flushed = flush_status();
         match name.as_str() {
+            "usage_summary" => read_summary(&data_root, &deployment, arguments["from"].as_str().unwrap_or(""), arguments["to"].as_str().unwrap_or(""), flushed),
             "usage_read" => read_usage(&path, arguments["from"].as_str().unwrap_or(""), arguments["to"].as_str().unwrap_or("")),
             _ => read_signals(&path, arguments["name"].as_str(), arguments["cursor"].as_str()),
         }
@@ -552,12 +606,17 @@ fn read_only(path: &Path) -> Result<Option<Connection>> {
     Ok(Some(connection))
 }
 
-pub(crate) fn read_usage(path: &Path, from: &str, to: &str) -> Result<Value> {
+pub(crate) fn validate_range(from: &str, to: &str) -> Result<(i64, i64)> {
     let (Some(start), Some(end)) = (parse_day(from), parse_day(to)) else {
         anyhow::bail!("from and to must be dates written YYYY-MM-DD.");
     };
     anyhow::ensure!(start <= end, "from must not be after to.");
     anyhow::ensure!(end - start < USAGE_DAYS, "Usage covers at most 400 days at a time.");
+    Ok((start, end))
+}
+
+pub(crate) fn read_usage(path: &Path, from: &str, to: &str) -> Result<Value> {
+    let (start, end) = validate_range(from, to)?;
     let mut days = Vec::new();
     let mut totals: Vec<Value> = Vec::new();
     let mut scheduled: Vec<Value> = Vec::new();
@@ -599,6 +658,76 @@ pub(crate) fn read_usage(path: &Path, from: &str, to: &str) -> Result<Value> {
         totals = sums.into_iter().map(|((kind, name), count)| json!({"kind": kind, "name": name, "count": count})).collect();
     }
     Ok(json!({"from": from, "to": to, "days": days, "totals": totals, "scheduled": scheduled}))
+}
+
+/// Reads only Kernel aggregates and published declarations, never application rows.
+pub(crate) fn read_summary(data_root: &Path, deployment: &Deployment, from: &str, to: &str, flushed: bool) -> Result<Value> {
+    let path = folder(data_root, &deployment.id).join(USAGE_DATABASE);
+    let usage = read_usage(&path, from, to)?;
+    let mut metrics = Vec::new();
+    let mut started_at: Option<i64> = None;
+    let mut earliest_day: Option<String> = None;
+    let mut pruned_through: Option<i64> = None;
+    if let Some(db) = read_only(&path)? {
+        let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'metric_daily')", [], |r| r.get(0))?;
+        if exists {
+            started_at = db.query_row("SELECT value FROM metric_meta WHERE key = 'started_at'", [], |r| r.get(0)).ok();
+            pruned_through = db.query_row("SELECT MAX(value) FROM metric_meta WHERE key IN ('usage_daily_pruned_through', 'metric_daily_pruned_through')", [], |r| r.get(0))?;
+            earliest_day = db.query_row("SELECT MIN(day) FROM metric_daily", [], |r| r.get(0))?;
+            let mut q = db.prepare("SELECT day, feature, name, origin, outcome, count, last_at FROM metric_daily WHERE day BETWEEN ?1 AND ?2 ORDER BY day, feature, name, origin, outcome")?;
+            metrics = q.query_map(params![from, to], |r| Ok(json!({"day": r.get::<_, String>(0)?, "feature": r.get::<_, String>(1)?,
+                "name": r.get::<_, String>(2)?, "origin": r.get::<_, String>(3)?, "outcome": r.get::<_, String>(4)?,
+                "count": r.get::<_, i64>(5)?, "lastAt": r.get::<_, i64>(6)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        }
+    }
+    let program: super::ActionProgram = serde_json::from_str(&deployment.actions)?;
+    let mut actions: Vec<Value> = program.actions.iter().map(|(name, a)| json!({"name": name, "kind": a.kind,
+        "http": a.http, "signal": a.signal, "schedule": a.schedule, "notify": a.notify})).collect();
+    actions.sort_by(|a,b| a["name"].as_str().cmp(&b["name"].as_str()));
+    let start = parse_day(from).unwrap() * 86_400_000;
+    let end = (parse_day(to).unwrap() + 1) * 86_400_000;
+    Ok(json!({"deploymentId": deployment.id, "projectId": deployment.project_id, "projectName": deployment.project_name, "sourceAuthority": "external", "url": deployment.url,
+        "usage": usage, "metrics": metrics, "actions": actions,
+        "calls": retained_states(&data_root.join("calls.sqlite"), "calls", "deployment", &deployment.id, start, end)?,
+        "mail": retained_states(&data_root.join("mail.sqlite"), "jobs", "scope", &format!("deployment:{}", deployment.id), start, end)?,
+        "coverage": {"startedAt": started_at, "earliestMetricDay": earliest_day, "prunedThrough": pruned_through, "retentionDays": USAGE_DAYS,
+            "approximate": true, "previewIncluded": false, "queueFlushed": flushed,
+            "installationDroppedSinceRestart": DROPPED.load(Ordering::Relaxed),
+            "installationWriteErrorsSinceRestart": WRITE_ERRORS.load(Ordering::Relaxed)}, "updatedAt": super::now_ms()}))
+}
+
+/// Keeps account responses bounded by operation and outcome categories, not event volume.
+pub(crate) fn compact_overview(mut summary: Value) -> Value {
+    let latest = summary["usage"]["days"].as_array().and_then(|days| days.last()).cloned();
+    summary["usage"]["days"] = json!(latest.into_iter().collect::<Vec<_>>());
+    summary["usage"]["scheduled"] = json!([]);
+    let mut totals: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    for row in summary["usage"]["totals"].as_array().into_iter().flatten() {
+        *totals.entry(row["kind"].as_str().unwrap_or("").to_owned()).or_default() += row["count"].as_i64().unwrap_or(0);
+    }
+    summary["usage"]["totals"] = json!(totals.into_iter().map(|(kind, count)| json!({"kind": kind, "name": "", "count": count})).collect::<Vec<_>>());
+    let mut outcomes: std::collections::BTreeMap<(String, String, String), (i64, i64)> = std::collections::BTreeMap::new();
+    for row in summary["metrics"].as_array().into_iter().flatten() {
+        let key = (row["feature"].as_str().unwrap_or("").to_owned(), row["origin"].as_str().unwrap_or("").to_owned(), row["outcome"].as_str().unwrap_or("").to_owned());
+        let entry = outcomes.entry(key).or_default();
+        entry.0 += row["count"].as_i64().unwrap_or(0);
+        entry.1 = entry.1.max(row["lastAt"].as_i64().unwrap_or(0));
+    }
+    summary["metrics"] = json!(outcomes.into_iter().map(|((feature, origin, outcome), (count, at))|
+        json!({"feature": feature, "name": "", "origin": origin, "outcome": outcome, "count": count, "lastAt": at, "day": day(at as u64)})).collect::<Vec<_>>());
+    summary
+}
+
+/// Current states of operations created in the period, limited to retained job records.
+fn retained_states(path: &Path, table: &str, column: &str, scope: &str, from: i64, to: i64) -> Result<Value> {
+    let Some(db) = read_only(path)? else { return Ok(json!({"states": [], "retainedOnly": true})); };
+    let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?1)", [table], |r| r.get(0))?;
+    if !exists { return Ok(json!({"states": [], "retainedOnly": true})); }
+    // All identifiers are constants supplied above; only scope and dates come from a caller.
+    let sql = format!("SELECT state, COUNT(*) FROM {table} WHERE {column} = ?1 AND created_at >= ?2 AND created_at < ?3{} GROUP BY state", if table == "jobs" { " AND purpose = 'notify'" } else { "" });
+    let mut q = db.prepare(&sql)?;
+    let states = q.query_map(params![scope, from, to], |r| Ok(json!({"state": r.get::<_, String>(0)?, "count": r.get::<_, i64>(1)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(json!({"states": states, "retainedOnly": true}))
 }
 
 pub(crate) fn read_signals(path: &Path, name: Option<&str>, cursor: Option<&str>) -> Result<Value> {
@@ -762,6 +891,28 @@ mod tests {
         assert_eq!(signal_count(&path), MAX_SIGNALS);
         let oldest_signal: i64 = db.query_row("SELECT MIN(at) FROM signals", [], |r| r.get(0)).unwrap();
         assert_eq!(oldest_signal, 25, "the first 25 Signals were dropped");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn daily_signal_totals_survive_detail_pruning_and_old_stores_stay_readable() {
+        let root = scratch("metric-history");
+        let path = root.join(USAGE_DATABASE);
+        let at = super::super::now_ms();
+        let mut db = open(&path).unwrap();
+        let tx = db.transaction().unwrap();
+        metric(&tx, at, "signal", "order.placed", "kernel", "recorded", MAX_SIGNALS + 10).unwrap();
+        tx.execute("INSERT INTO signals(name, at, properties) VALUES('order.placed', ?1, '{}')", [at as i64]).unwrap();
+        tx.execute("DELETE FROM signals", []).unwrap();
+        prune(&tx, at).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(signal_count(&path), 0);
+        assert_eq!(db.query_row("SELECT count FROM metric_daily WHERE name = 'order.placed'", [], |r| r.get::<_, i64>(0)).unwrap(), MAX_SIGNALS + 10);
+        // A pre-monitor store remains unchanged until its next write.
+        let old = root.join("old.sqlite");
+        Connection::open(&old).unwrap().execute_batch("CREATE TABLE usage_daily(day TEXT, kind TEXT, name TEXT, count INTEGER);").unwrap();
+        assert_eq!(read_usage(&old, &day(at), &day(at)).unwrap()["totals"], json!([]));
+        assert!(!Connection::open(&old).unwrap().query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='metric_daily')", [], |r| r.get::<_, bool>(0)).unwrap());
         let _ = std::fs::remove_dir_all(root);
     }
 

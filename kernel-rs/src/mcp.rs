@@ -270,7 +270,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ),
         tool(
             "session_inspect",
-            "Read the authenticated owner's grants.",
+            "Read the authenticated owner's grants and a can map of the scopes this credential holds.",
             json!({}),
             &[],
             true,
@@ -284,7 +284,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ),
         tool(
             "platform_guide",
-            "Read a guide topic: credentials (login, OAuth and which permission each tool needs), development (the CLI), actions (actions.json), sdk (window.miniapp and HTTP routes), publishing, users (signup policy and invitations), or portability (export, import, Eject and migration).",
+            "Read a guide topic. Start with rules (yardstick, first run, read-back, divergences), then pieces (which Capsule declaration to use). Also credentials, development, actions, sdk, publishing, users and portability.",
             json!({"topic":{"type":"string","enum":super::guide::TOPICS}}),
             &["topic"],
             true,
@@ -321,7 +321,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     ];
     if owner.scopes.iter().any(|s| s == "write") {
         tools.extend([
-            tool("project_create", "Register an external project. Repeating the same project ID returns it, except that an External project cannot become Managed.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourceAuthority":{"type":"string","enum":["managed","external"]}}), &["name"], false),
+            tool("project_create", "Register a project. For an editor project, upload its JSON without a projectId and pass sourcesTransferId to create the project and its files atomically. Repeating the same initial files is safe; existing saved files cannot be replaced here.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourceAuthority":{"type":"string","enum":["managed","external"]},"sourcesTransferId":text}), &["name"], false),
             tool("project_sources_save", "Save Managed project sources if the expected source revision still matches. Upload the project JSON first: { id, name, slug, files: { path: text }, directories, databaseModel: { source, acceptedSource, revision }, manifest, updatedAt }, the format the editor saves and docs/mcp.md describes under Eject.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
             tool("schema_plan", "Derive and validate SQL from two Drizzle models in an isolated subprocess.", json!({"acceptedSource":text,"candidateSource":text,"projectId":text}), &["acceptedSource","candidateSource"], false),
         ]);
@@ -720,7 +720,7 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
     let mut session_cookie: Option<HeaderValue> = None;
     let result = match method {
         "initialize" => Ok(
-            json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"littlebox","version":"0.1.0"},"instructions":"Use project-scoped credentials. Source and builds stay on your computer. Use platform_describe for the workflow."}),
+            json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"littlebox","version":"0.1.0"},"instructions":"Use project-scoped credentials. Source and builds stay on your computer. Call platform_describe, then platform_guide topics rules and pieces before building. After every write, use the read-back that rules names."}),
         ),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools":tools})),
@@ -1117,11 +1117,42 @@ async fn admin_call(
     match name {
         "platform_guide" => super::guide::topic(a["topic"].as_str().unwrap()),
         "platform_describe" => Ok(
-            json!({"name":"Littlebox","protocolVersion":VERSION,"sourceAuthority":"external","runtimeEndpoint":"/_littlebox/mcp","chunkBytes":CHUNK,"maxTransferBytes":MAX_TRANSFER,"workflow":["a credential: platform_guide topic credentials","project_create","secret_set for each secret a route signs with","build locally","transfer_begin/write/complete","release_plan","release_apply"],"guideTopics":super::guide::TOPICS,"runtimeTools":["auth_session","actions_invoke","files_list","files_read","files_upload","files_update","files_delete"],"localDevelopment":"Use bun run littlebox -- login, init, dev, build, contract, publish, conform, export or eject; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything."}),
+            json!({
+                "name":"Littlebox",
+                "protocolVersion":VERSION,
+                "sourceAuthority":"external",
+                "runtimeEndpoint":"/_littlebox/mcp",
+                "chunkBytes":CHUNK,
+                "maxTransferBytes":MAX_TRANSFER,
+                "yardstick":"A person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.",
+                "firstRun":"platform_guide topic rules, then pieces, then credentials. Publish with the publishing topic or bun run littlebox -- publish, then project_inspect and one actions_invoke.",
+                "workflow":[
+                    "platform_guide topic rules",
+                    "platform_guide topic pieces",
+                    "a credential: platform_guide topic credentials",
+                    "project_create",
+                    "secret_set for each secret a route signs with",
+                    "build locally",
+                    "transfer_begin/write/complete",
+                    "release_plan",
+                    "release_apply",
+                    "project_inspect"
+                ],
+                "guideTopics":super::guide::TOPICS,
+                "runtimeTools":["auth_session","actions_invoke","files_list","files_read","files_upload","files_update","files_delete"],
+                "localDevelopment":"Use bun run littlebox -- login, init, dev, build, contract, publish, conform, export or eject; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything."
+            }),
         ),
         "mail_status" => super::mail::status_tool(state, a["refresh"].as_bool().unwrap_or(false)).await,
         "session_inspect" => Ok(
-            json!({"ownerId":owner.id,"displayName":owner.display,"scopes":owner.scopes,"projectIds":owner.projects,"browserSession":owner.session}),
+            json!({
+                "ownerId":owner.id,
+                "displayName":owner.display,
+                "scopes":owner.scopes,
+                "can":super::guide::session_can(owner),
+                "projectIds":owner.projects,
+                "browserSession":owner.session
+            }),
         ),
         "projects_list" => {
             owner.require("read", None).or_else(|e| {
@@ -1163,8 +1194,21 @@ async fn admin_call(
                         .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c)),
                 "Invalid project ID."
             );
+            let initial_sources = if let Some(transfer_id) = a["sourcesTransferId"].as_str() {
+                anyhow::ensure!(a["sourceAuthority"] == "managed", "Initial editor files require a Managed project.");
+                let upload = transfer(state, principal, &json!({"transferId":transfer_id}))?;
+                anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload"
+                    && (upload["projectId"].is_null() || upload["projectId"] == id), "Completed upload for this project required.");
+                let bytes = tokio::fs::read(transfer_path(state, transfer_id)?).await?;
+                let source: Value = serde_json::from_slice(&bytes)?;
+                validate_managed_sources(&source, &id)?;
+                anyhow::ensure!(source["name"] == a["name"]
+                    && a.get("slug").is_none_or(|slug| *slug == source["slug"])
+                    && a.get("manifest").is_none_or(|manifest| *manifest == source["manifest"]), "Initial files must match the project metadata.");
+                Some(bytes)
+            } else { None };
             let _guard = database_lock(state, &format!("project:{id}")).await;
-            let db = store(state)?;
+            let mut db = store(state)?;
             let existing: Option<String> = db
                 .query_row("SELECT owner FROM projects WHERE id=?1", [&id], |r| {
                     r.get(0)
@@ -1172,11 +1216,26 @@ async fn admin_call(
                 .optional()?;
             if let Some(existing) = existing {
                 anyhow::ensure!(existing == owner.id, "Project not found or access denied.");
-                let project = owned_project(state, owner, &id, "read")?.0;
+                let mut project = owned_project(state, owner, &id, "read")?.0;
                 // Source authority does not come back: an External project asked
                 // to be Managed again gets the Eject refusal.
                 if a["sourceAuthority"] == "managed" && project["sourceAuthority"] != "managed" {
                     anyhow::bail!(if super::eject::is_ejected(&project) { super::eject::CLOSED } else { super::eject::ALWAYS_EXTERNAL });
+                }
+                if let Some(bytes) = initial_sources {
+                    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                    let saved: Option<(Vec<u8>, u64)> = tx.query_row(
+                        "SELECT body,revision FROM managed_sources WHERE project=?1", [&id], |r| Ok((r.get(0)?, r.get(1)?)),
+                    ).optional()?;
+                    let revision = if let Some((saved, revision)) = saved {
+                        anyhow::ensure!(saved == bytes, "This project already has saved sources. Reload before saving.");
+                        revision
+                    } else {
+                        tx.execute("INSERT INTO managed_sources(project,body,revision) VALUES(?1,?2,1)", params![id,bytes])?;
+                        1
+                    };
+                    tx.commit()?;
+                    project["sourcesRevision"] = json!(revision);
                 }
                 return Ok(project);
             }
@@ -1189,8 +1248,9 @@ async fn admin_call(
                     .any(|d| d.project_id == id),
                 "Existing deployments must be claimed by their original operator."
             );
-            let project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"sourceAuthority":a["sourceAuthority"].as_str().unwrap_or("external"),"manifest":a.get("manifest").cloned().unwrap_or(json!({"version":1,"visibility":"private"})),"files":starter_files()});
-            db.execute(
+            let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"sourceAuthority":a["sourceAuthority"].as_str().unwrap_or("external"),"manifest":a.get("manifest").cloned().unwrap_or(json!({"version":1,"visibility":"private"})),"files":starter_files()});
+            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute(
                 "INSERT INTO projects(id,owner,body) VALUES(?1,?2,?3)",
                 params![id, owner.id, {
                     let mut metadata = project.clone();
@@ -1198,12 +1258,17 @@ async fn admin_call(
                     metadata.to_string()
                 }],
             )?;
+            if let Some(bytes) = initial_sources {
+                tx.execute("INSERT INTO managed_sources(project,body,revision) VALUES(?1,?2,1)", params![id,bytes])?;
+                project["sourcesRevision"] = json!(1);
+            }
+            tx.commit()?;
             Ok(project)
         }
         "project_inspect" => {
             let id = a["projectId"].as_str().unwrap();
             let (project, revision) = owned_project(state, owner, id, "read")?;
-            let deployment = find_project_deployment(&*state.deployments.read().await, id);
+            let deployment = recover_deployed_model(state, id).await?;
             let sources_revision = super::eject::sources_revision(&store(state)?, id)?;
             Ok(json!({"project":project,"revision":revision,"sourcesRevision":sources_revision,"deployment":deployment}))
         }
@@ -1300,9 +1365,55 @@ async fn admin_call(
             let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "read").await?;
             super::calls::admin_call(state, &deployment, &a).await
         }
-        "usage_read" | "signals_read" => {
+        "usage_overview" => {
+            anyhow::ensure!(owner.scopes.iter().any(|s| s == "read"), "Permission denied for read.");
+            let cursor = a["cursor"].as_str().unwrap_or("");
+            let rows = {
+                let db = store(state)?;
+                let mut q = db.prepare("SELECT id, body FROM projects WHERE owner = ?1 AND id > ?2
+                    AND (?3 = '[]' OR id IN (SELECT value FROM json_each(?3))) ORDER BY id LIMIT 51")?;
+                let result = q.query_map(params![owner.id, cursor, serde_json::to_string(&owner.projects)?],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                result
+            };
+            let next = if rows.len() > 50 { rows.get(49).map(|r| r.0.clone()) } else { None };
+            let deployments = state.deployments.read().await;
+            let items = rows.into_iter().take(50).map(|(id, body)| {
+                let project: Value = serde_json::from_str(&body)?;
+                let deployment = find_project_deployment(&deployments, &id);
+                Ok((id, project["name"].clone(), project["sourceAuthority"].clone(), deployment))
+            }).collect::<Result<Vec<_>>>()?;
+            drop(deployments);
+            let root = state.data_root.clone();
+            let from = a["from"].as_str().unwrap_or("").to_owned();
+            let to = a["to"].as_str().unwrap_or("").to_owned();
+            tokio::task::spawn_blocking(move || {
+                // Validate the range even for an account without deployments.
+                super::usage::validate_range(&from, &to)?;
+                let flushed = super::usage::flush_status();
+                let apps: Vec<Value> = items.into_iter().map(|(id, name, authority, deployment)| {
+                    match deployment {
+                        None => json!({"projectId": id, "name": name, "summary": null}),
+                        Some(d) => match super::usage::read_summary(&root, &d, &from, &to, flushed) {
+                            Ok(mut summary) => {
+                                summary["sourceAuthority"] = authority;
+                                json!({"projectId": id, "name": name, "summary": super::usage::compact_overview(summary)})
+                            },
+                            Err(_) => json!({"projectId": id, "name": name, "summary": null, "error": "Usage could not be read. Try again."}),
+                        }
+                    }
+                }).collect();
+                Ok(json!({"apps": apps, "nextCursor": next, "from": from, "to": to}))
+            }).await?
+        }
+        "usage_read" | "signals_read" | "usage_summary" => {
             let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "read").await?;
-            super::usage::admin_call(&state.data_root, &deployment, name, &a).await
+            let mut value = super::usage::admin_call(&state.data_root, &deployment, name, &a).await?;
+            if name == "usage_summary" {
+                let (project, _) = owned_project(state, owner, &deployment.project_id, "read")?;
+                value["sourceAuthority"] = project["sourceAuthority"].clone();
+            }
+            Ok(value)
         }
         "signup_policy_read" => {
             let id = a["deploymentId"].as_str().unwrap();
@@ -1489,7 +1600,156 @@ fn starter_files() -> Value {
     json!({"index.html":"<main><h1>My app</h1><button id=login>Sign in</button><pre id=result></pre></main>","styles.css":"body { font: 16px system-ui; max-width: 48rem; margin: 3rem auto; padding: 1rem; }","app.js":"document.querySelector('#login').onclick = () => miniapp.auth.signIn();\nminiapp.auth.session().then(user => document.querySelector('#result').textContent = user.name);\n","schema.sql":"CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY, title TEXT NOT NULL, user_id TEXT NOT NULL);","actions.json":"{\"version\":1,\"actions\":{\"items.list\":{\"kind\":\"query\",\"access\":\"authenticated\",\"statement\":\"SELECT id,title FROM items WHERE user_id = ?1 LIMIT 50\",\"bindings\":[{\"source\":\"actor\",\"field\":\"id\"}]}}}"})
 }
 
-async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
+/// Legacy recovery proves the accepted model against SQLite before persisting it.
+/// Editable source and saved revision labels alone cannot establish deployment state.
+async fn recover_deployed_model(state: &AppState, project_id: &str) -> Result<Option<Deployment>> {
+    let _project = database_lock(state, &format!("project:{project_id}")).await;
+    let Some(mut deployment) = find_project_deployment(&*state.deployments.read().await, project_id) else { return Ok(None) };
+    if deployment.database_model.is_some() { return Ok(Some(deployment)); }
+    let saved: Option<Vec<u8>> = store(state)?.query_row(
+        "SELECT body FROM managed_sources WHERE project=?1", [project_id], |r| r.get(0)).optional()?;
+    let Some(saved) = saved else { return Ok(Some(deployment)) };
+    let saved: Value = serde_json::from_slice(&saved)?;
+    let Some(source) = saved["databaseModel"]["acceptedSource"].as_str() else { return Ok(Some(deployment)) };
+    let expected = match model_schema(source).await {
+        Ok(expected) => expected,
+        Err(_) => return Ok(Some(deployment)),
+    };
+    let _data = database_lock(state, &deployment.id).await;
+    let actual = Connection::open(database_path(state, &deployment.id))?;
+    if schema_tokens(&expected)? != schema_tokens(&actual)? { return Ok(Some(deployment)); }
+    deployment.database_model = Some(DatabaseModel {
+        source: source.to_owned(), accepted_source: source.to_owned(), revision: digest(source.as_bytes()),
+    });
+    persist_deployment(state, &deployment).await?;
+    state.deployments.write().await.insert(deployment.hostname.clone(), deployment.clone());
+    Ok(Some(deployment))
+}
+
+pub(super) async fn model_schema(source: &str) -> Result<Connection> {
+    let expected = Connection::open_in_memory()?;
+    if source.trim().is_empty() { return Ok(expected); }
+    // The temporary table lets Drizzle derive additions from a valid model.
+    let baseline = "import { sqliteTable as lbProofTable, integer as lbProofInteger } from \"drizzle-orm/sqlite-core\"; export const lbSchemaProof = lbProofTable(\"__littlebox_schema_proof\", { id: lbProofInteger(\"id\") });";
+    let plan = schema_plan(json!({"acceptedSource":baseline,"candidateSource":format!("{source}\n{baseline}")})).await?;
+    expected.execute_batch("CREATE TABLE __littlebox_schema_proof(id INTEGER)")?;
+    for sql in plan["statements"].as_array().into_iter().flatten() {
+        expected.execute_batch(sql.as_str().unwrap_or_default())?;
+    }
+    expected.execute_batch("DROP TABLE __littlebox_schema_proof")?;
+    Ok(expected)
+}
+
+pub(super) async fn model_matches_path(source: &str, path: &Path) -> Result<bool> {
+    let expected = model_schema(source).await?;
+    let actual = Connection::open(path)?;
+    Ok(schema_tokens(&expected)? == schema_tokens(&actual)?)
+}
+
+/// Token comparison retains defaults, constraints, indexes, triggers and views.
+/// SQLite's integer AUTOINCREMENT primary key already rejects a stored NULL.
+pub(super) fn schema_tokens(db: &Connection) -> Result<Vec<(String, String, Vec<String>)>> {
+    let mut query = db.prepare("SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name")?;
+    let rows = query.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?)))?;
+    let mut result = Vec::new();
+    for row in rows {
+        let (kind, name, sql) = row?;
+        let mut tokens = Vec::<String>::new();
+        let sql = sql.unwrap_or_default();
+        let mut chars = sql.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c.is_whitespace() || c == ';' { continue; }
+            let mut token = String::new();
+            if ['\'', '"', '`', '['].contains(&c) {
+                let end = if c == '[' { ']' } else { c };
+                if c == '\'' { token.push(c); }
+                while let Some(next) = chars.next() {
+                    if next == end {
+                        if chars.peek() == Some(&end) { token.push(next); chars.next(); }
+                        else { break; }
+                    } else { token.push(next); }
+                }
+                if c == '\'' { token.push(c); } else {
+                    token = token.to_ascii_lowercase();
+                    if ["null", "true", "false", "current_date", "current_time", "current_timestamp"].contains(&token.as_str()) {
+                        token.insert_str(0, "identifier:");
+                    }
+                }
+            } else if c.is_alphanumeric() || c == '_' {
+                token.push(c);
+                while chars.peek().is_some_and(|next| next.is_alphanumeric() || *next == '_') { token.push(chars.next().unwrap()); }
+                token = token.to_ascii_lowercase();
+            } else { token.push(c); }
+            tokens.push(token);
+        }
+        let mut at = 0;
+        while at + 2 < tokens.len() {
+            if tokens[at..at+3] == ["autoincrement", "not", "null"] { tokens.drain(at+1..at+3); }
+            at += 1;
+        }
+        let mut at = 0;
+        while at + 1 < tokens.len() {
+            if tokens[at] == "default" {
+                if tokens[at+1] == "false" { tokens[at+1] = "0".into(); }
+                if tokens[at+1] == "true" { tokens[at+1] = "1".into(); }
+                if at + 3 < tokens.len() && tokens[at+2..at+4] == ["not", "null"] {
+                    tokens[at..at+4].rotate_right(2);
+                    at += 2;
+                }
+            }
+            at += 1;
+        }
+        if kind == "table" { canonicalize_column_order(&mut tokens); }
+        result.push((kind, name, tokens));
+    }
+    Ok(result)
+}
+
+/// ALTER TABLE appends columns even when the model declares them earlier.
+/// Column definitions sort by name; composite constraints keep their own order.
+fn canonicalize_column_order(tokens: &mut Vec<String>) {
+    if tokens.first().map(String::as_str) != Some("create") || tokens.get(1).map(String::as_str) != Some("table") { return; }
+    let Some(open) = tokens.iter().position(|token| token == "(") else { return };
+    let mut depth = 1;
+    let mut start = open + 1;
+    let mut columns = Vec::new();
+    let mut constraints = Vec::new();
+    let mut close = None;
+    for at in open + 1..tokens.len() {
+        match tokens[at].as_str() {
+            "(" => depth += 1,
+            ")" => depth -= 1,
+            _ => {},
+        }
+        if depth == 0 || (depth == 1 && tokens[at] == ",") {
+            let definition = tokens[start..at].to_vec();
+            if definition.first().is_some_and(|word| ["constraint", "primary", "unique", "check", "foreign"].contains(&word.as_str())) {
+                constraints.push(definition);
+            } else { columns.push(definition); }
+            start = at + 1;
+        }
+        if depth == 0 { close = Some(at); break; }
+    }
+    let Some(close) = close else { return };
+    columns.sort();
+    let mut normalized = tokens[..open + 1].to_vec();
+    for definition in columns.into_iter().chain(constraints) {
+        if normalized.len() > open + 1 { normalized.push(",".into()); }
+        normalized.extend(definition);
+    }
+    normalized.extend_from_slice(&tokens[close..]);
+    *tokens = normalized;
+}
+
+pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
+    if let Some(model) = &input.project.database_model {
+        anyhow::ensure!(model.source == model.accepted_source && !model.revision.is_empty(),
+            "Publish the accepted database model. Apply its migration before publishing.");
+    }
+    if let Some(hostname) = &input.initial_domain {
+        super::domain::check_hostname(hostname, &super::domain::Rules::of(state)).map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(input.initial_package.is_none(), "Send the domain in the package manifest when importing a package.");
+    }
     anyhow::ensure!(
         input.artifact.version == 1
             && input.artifact.entrypoint == "index.html"
@@ -1537,7 +1797,8 @@ async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
             && input.initial_identity.is_none()
             && input.initial_files.is_none()
             && input.initial_signup_policy.is_none()
-            && input.initial_package.is_none()),
+            && input.initial_package.is_none()
+            && input.initial_domain.is_none()),
         "Portable state can only be imported on the first deployment."
     );
     if let Some(policy) = input.initial_signup_policy.as_ref() {
@@ -1568,6 +1829,17 @@ async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
             &program,
         )
     })();
+    let result = match result {
+        Ok(()) => match &input.project.database_model {
+            Some(model) => match model_matches_path(&model.accepted_source, &temp).await {
+                Ok(true) => Ok(()),
+                Ok(false) => Err(anyhow::anyhow!("The accepted database model does not match the deployed schema. Apply its migration before publishing.")),
+                Err(error) => Err(error),
+            },
+            None => Ok(()),
+        },
+        Err(error) => Err(error),
+    };
     let _ = tokio::fs::remove_file(temp).await;
     result
 }
@@ -1914,7 +2186,7 @@ async fn transfer_call(
     }
 }
 
-async fn schema_plan(input: Value) -> Result<Value> {
+pub(super) async fn schema_plan(input: Value) -> Result<Value> {
     let root = std::env::var("LITTLEBOX_SOURCE_ROOT")
         .map(PathBuf::from)
         .unwrap_or(std::env::current_dir()?);
@@ -1994,7 +2266,7 @@ async fn schema_plan(input: Value) -> Result<Value> {
         s.contains("DROP ") || s.contains("DELETE FROM")
     });
     Ok(
-        json!({"id":digest(format!("{from}:{to}:{sql}").as_bytes()),"fromHash":from,"toHash":to,"sql":sql,"statements":statements,"destructive":destructive}),
+        json!({"id":digest(format!("{from}:{to}:{sql}").as_bytes()),"fromHash":from,"toHash":to,"sql":sql,"statements":statements,"destructive":destructive,"candidateModelSource":input["candidateSource"]}),
     )
 }
 

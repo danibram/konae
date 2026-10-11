@@ -49,6 +49,15 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
 {
   "result": {
     "browserSession": false,
+    "can": {
+      "createTokens": false,
+      "export_data": true,
+      "manage_lifecycle": true,
+      "manage_users": true,
+      "publish": true,
+      "read": true,
+      "write": true
+    },
     "displayName": null,
     "ownerId": "<owner id>",
     "projectIds": [],
@@ -67,7 +76,7 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
 
 ## 2. Read what the platform says about itself
 
-`platform_describe` lists the workflow and the guide topics. `platform_guide` returns one topic; `credentials` says which permission each tool needs.
+`platform_describe` lists the yardstick, first run, workflow and guide topics. `platform_guide` returns one topic; start with `rules`, then `pieces`, then `credentials` for permissions.
 
 <!-- walkthrough:describe -->
 ```json
@@ -81,7 +90,10 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
 {
   "result": {
     "chunkBytes": 65536,
+    "firstRun": "platform_guide topic rules, then pieces, then credentials. Publish with the publishing topic or bun run littlebox -- publish, then project_inspect and one actions_invoke.",
     "guideTopics": [
+      "rules",
+      "pieces",
       "credentials",
       "development",
       "actions",
@@ -106,14 +118,18 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
     ],
     "sourceAuthority": "external",
     "workflow": [
+      "platform_guide topic rules",
+      "platform_guide topic pieces",
       "a credential: platform_guide topic credentials",
       "project_create",
       "secret_set for each secret a route signs with",
       "build locally",
       "transfer_begin/write/complete",
       "release_plan",
-      "release_apply"
-    ]
+      "release_apply",
+      "project_inspect"
+    ],
+    "yardstick": "A person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged."
   }
 }
 ```
@@ -147,7 +163,7 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
       "read": "projects_list, project_inspect, signup_policy_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, migration_status",
       "write": "project_create, project_sources_save, schema_plan, and database_execute changes"
     },
-    "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists what the current credential holds."
+    "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds."
   }
 }
 ```
@@ -224,6 +240,15 @@ content-type: application/json
 {
   "result": {
     "browserSession": false,
+    "can": {
+      "createTokens": false,
+      "export_data": false,
+      "manage_lifecycle": false,
+      "manage_users": true,
+      "publish": true,
+      "read": true,
+      "write": true
+    },
     "displayName": null,
     "ownerId": "<owner id>",
     "projectIds": [],
@@ -1244,7 +1269,7 @@ Exporting needs `export_data`, which OAuth does not grant:
         "chunkBytes": 65536,
         "expiresAt": <time ms>,
         "sha256": "<sha256>",
-        "size": 40960,
+        "size": 57344,
         "transferId": "<usage download>"
       }
     },
@@ -1269,7 +1294,7 @@ Exporting needs `export_data`, which OAuth does not grant:
         {
           "name": "usage",
           "sha256": "<sha256>",
-          "size": 40960
+          "size": 57344
         }
       ],
       "createdAt": <time ms>,

@@ -27,7 +27,7 @@ export type HttpBinding = {
    * unsigned route on a public Deployment anyone. See `routeCallers`.
    */
   callers?: RouteCaller[];
-  /** Input keys and the JSON path each reads from a POST body; other body keys are left out (ADR-0015). */
+  /** Input keys and the JSON path each reads from a POST body; other body keys are left out (ADR-0018). */
   fields?: Record<string, string>;
 };
 
@@ -54,7 +54,7 @@ export type SignalDeclaration = { name: string; properties: string[] };
 /**
  * The email a mutation queues when its statement changes a row. It goes to
  * the Project Owner or to the calling account, never to an address from the
- * input. See docs/adr/0015-a-mutation-may-notify-the-owner-or-the-actor.md.
+ * input. See docs/adr/0016-a-mutation-may-notify-the-owner-or-the-actor.md.
  */
 export type NotifyDeclaration = { to: "owner" | "actor"; subject: string; body: string };
 

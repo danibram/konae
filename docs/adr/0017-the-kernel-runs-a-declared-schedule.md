@@ -32,4 +32,9 @@ The editor preview runs no schedule. The Development Kernel is the same binary a
 
 ## Consequences
 
-An app can release, close, expire and tidy without a caller. A retry of an outbound call stays out of reach, because no action calls out. Email on a schedule waits for an email declaration; a scheduled statement can already mark the rows a notice would be about. A busy Kernel runs a schedule up to a minute late, and a Deployment with many slow scheduled actions delays only its own next look. `project_export`, the small portable format, does not carry the Usage store, so an app imported from it starts its schedules at the next slot: it may skip one run, and never repeats one.
+An app can release, close, expire and tidy without a caller. Outbound calls retry through their own worker under ADR-0019. A changed scheduled mutation processes its declared notice through ADR-0016's queue and budgets. It sends one notice per changed run, rather than per changed row. A notice to the owner works without a caller; a notice to actor records no-account. The templates have no row values, so a reminder can tell the owner that work is due and link to the app. A busy Kernel runs a schedule up to a minute late, and a Deployment with many slow scheduled actions delays only its own next look. `project_export`, the small portable format, does not carry the Usage store, so an app imported from it starts its schedules at the next slot: it may skip one run, and never repeats one.
+
+
+## Integration check, 2026-11-07
+
+The schedule runner accepted `notify` but did not process it. It now calls the same notice recorder as a caller-driven mutation after a successful run changes rows. The schedule probe checks two changed runs, two owner notices and the Usage counts, and verifies that an unchanged run sends nothing. The slot is recorded before the notice, so a restart after recording the slot but before queueing its notice can lose that notice; the SQL write, Usage store and mail store are separate transactions.

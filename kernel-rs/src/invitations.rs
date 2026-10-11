@@ -836,6 +836,7 @@ mod tests {
                 hostname: host.into(),
                 actions: "{}".into(),
                 artifact_version: None,
+                database_model: None,
                 signup_policy: SignupPolicy::from_input(mode, &[]).unwrap(),
             };
             std::fs::create_dir_all(root.join("deployments").join(&item.id)).unwrap();

@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "actions": {
+    "items.list": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT i.id, i.name, i.price, i.stock - coalesce((SELECT sum(o.qty) FROM orders o WHERE o.item_id = i.id AND (o.status = 'paid' OR o.created_at > ?1 - i.hold_ms)), 0) AS available FROM items i ORDER BY i.id LIMIT 50",
+      "bindings": [{ "source": "kernel", "field": "now" }]
+    },
+    "orders.hold": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "Not enough left, or the quantity is not 1 to 5.",
+      "statement": "INSERT INTO orders (item_id, user_id, qty, created_at) SELECT i.id, ?2, ?3, ?4 FROM items i WHERE i.id = ?1 AND ?3 BETWEEN 1 AND 5 AND i.stock - coalesce((SELECT sum(o.qty) FROM orders o WHERE o.item_id = i.id AND (o.status = 'paid' OR o.created_at > ?4 - i.hold_ms)), 0) >= ?3",
+      "bindings": [
+        { "source": "input", "key": "item", "type": "number" },
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "qty", "type": "number" },
+        { "source": "kernel", "field": "now" }
+      ],
+      "signal": { "name": "order.held", "properties": ["item", "qty", "actor"] }
+    },
+    "orders.mine": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT id, item_id, qty, status, session_id, payment_id, created_at FROM orders WHERE user_id = ?1 ORDER BY id DESC LIMIT 50",
+      "bindings": [{ "source": "actor", "field": "id" }]
+    },
+    "orders.checkout": {
+      "kind": "call",
+      "access": "authenticated",
+      "method": "POST",
+      "url": "http://pay.localhost/v1/checkout/sessions",
+      "bindings": [
+        { "source": "input", "key": "orderId", "type": "number" },
+        { "source": "input", "key": "idempotency", "type": "string", "maxLength": 64 }
+      ],
+      "body": {
+        "mode": { "value": "payment" },
+        "client_reference_id": "orderId",
+        "line_items.0.price": { "value": "price_print" },
+        "line_items.0.quantity": { "value": 1 }
+      },
+      "headers": { "Idempotency-Key": "idempotency" },
+      "auth": { "key": "pay_key" },
+      "then": {
+        "action": "orders.session",
+        "inputs": {
+          "orderId": "/input/orderId",
+          "sessionId": "/body/result/lastInsertId"
+        }
+      }
+    },
+    "orders.session": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "That hold is gone or already paid.",
+      "statement": "UPDATE orders SET session_id = ?2 WHERE id = ?1 AND status = 'held'",
+      "bindings": [
+        { "source": "input", "key": "orderId", "type": "number" },
+        { "source": "input", "key": "sessionId", "type": "number", "nullable": true }
+      ]
+    },
+    "payments.confirm": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": {
+        "method": "POST",
+        "path": "/hooks/payment",
+        "signature": {
+          "scheme": "timestamped",
+          "header": "Stripe-Signature",
+          "secret": "payment_hook",
+          "prefix": "t=",
+          "tag": "v1=",
+          "window": 300
+        },
+        "fields": {
+          "order": "$.data.object.client_reference_id",
+          "payment": "$.data.object.id"
+        }
+      },
+      "guard": "That hold is gone or already paid.",
+      "statement": "UPDATE orders SET status = 'paid', payment_id = ?2 WHERE id = ?1 AND status = 'held' AND created_at > ?3 - (SELECT hold_ms FROM items WHERE items.id = orders.item_id)",
+      "bindings": [
+        { "source": "input", "key": "order", "type": "number" },
+        { "source": "input", "key": "payment", "type": "string", "maxLength": 100 },
+        { "source": "kernel", "field": "now" }
+      ]
+    }
+  }
+}

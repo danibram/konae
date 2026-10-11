@@ -18,6 +18,8 @@ import type {
   LiveDatabaseExport,
   ValidationResult,
 } from "./contracts";
+import type { AgentDomainBinding } from "./domain-tools";
+export type { AgentDomainBinding, DomainMutationRequest } from "./domain-tools";
 import { createCapsuleValidator, type SqlJsLoader } from "./gate";
 import { buildAuth, buildModel, createStreamFn } from "./providers";
 import { buildInitialUserMessage, buildSystemPrompt } from "./system-prompt";
@@ -45,6 +47,7 @@ export type LittleboxAgentHandle = LittleboxAgent & {
 };
 
 export type LittleboxAgentOptions = {
+  domains?: AgentDomainBinding;
   /** Injected sql.js loader for the Validation Gate; defaults to the browser one. */
   loadSql?: SqlJsLoader;
   models?: Models;
@@ -124,11 +127,7 @@ class LittleboxAgentSession implements LittleboxAgentHandle {
         systemPrompt: systemPromptFor(project, sessionConfig),
         model,
         thinkingLevel: clampThinkingLevel(model, this.thinkingLevel) as ThinkingLevel,
-        tools: createCapsuleTools(this.workspace, this.validator, {
-          onValidated: (files, result) => this.recordValidation(files, result),
-          liveDatabase: options.liveDatabase,
-          previewErrors: options.previewErrors,
-        }),
+        tools: this.toolsForRun(this.runToken),
       },
       // Lever 6: escalate only once the change reaches the data contract.
       prepareNextTurn: () => (this.risky ? { thinkingLevel: this.escalated() } : undefined),
@@ -153,6 +152,7 @@ class LittleboxAgentSession implements LittleboxAgentHandle {
     this.reported = "";
     if (!this.applyConfig()) return;
     const token = ++this.runToken;
+    this.agent.state.tools = this.toolsForRun(token);
     try {
       await this.agent.prompt(this.seeded ? text : this.seedMessage(text));
     } catch (error) {
@@ -251,6 +251,20 @@ class LittleboxAgentSession implements LittleboxAgentHandle {
   }
 
   // --- internals ---------------------------------------------------------------
+
+  private toolsForRun(token: number) {
+    const projectId = this.project.id;
+    return createCapsuleTools(this.workspace, this.validator, {
+      onValidated: (files, result) => this.recordValidation(files, result),
+      liveDatabase: this.options.liveDatabase,
+      previewErrors: this.options.previewErrors,
+      domains: this.options.domains ? {
+        projectId,
+        isCurrent: () => this.project.id === projectId && this.runToken === token,
+        binding: this.options.domains,
+      } : undefined,
+    });
+  }
 
   private clearTranscriptWhenIdle() {
     this.pending = this.agent.waitForIdle().then(

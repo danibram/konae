@@ -50,14 +50,17 @@ async function createProject(page: Page, name: string, template: keyof typeof te
   await page.getByRole("button", { name: "New project" }).click();
   await page.getByLabel("Project name").fill(name);
   await page.getByRole("radio", { name: new RegExp(`^${templates[template]}`) }).check();
-  // The new project reaches the Kernel after a short debounce. Wait for that save so a
-  // test that logs out or reloads right after does not lose it.
-  const saved = page.waitForResponse((response) => new URL(response.url()).pathname === "/mcp" && response.ok() && (response.request().postData() ?? "").includes('"project_sources_save"'));
+  const saved = page.waitForResponse((response) => {
+    const body = response.request().postData() ?? "";
+    return new URL(response.url()).pathname === "/mcp" && response.ok()
+      && (body.includes('"project_sources_save"') || (body.includes('"project_create"') && body.includes('"sourcesTransferId"')));
+  });
   await page.getByRole("button", { name: /^Create/ }).click();
   await expect(page).toHaveURL(/\/app\/[^/]+$/);
   await expect(page.getByRole("banner").locator("summary").getByText(name, { exact: true })).toBeVisible();
   await saved;
   await expect(page.getByRole("banner").getByText("Saving")).toHaveCount(0);
+  await expect(page.getByRole("banner").getByText("Not saved")).toHaveCount(0);
   return new URL(page.url()).pathname;
 }
 
@@ -84,7 +87,14 @@ async function openExplorer(page: Page) {
 
 async function openFile(page: Page, path: string) {
   await showSection(page, "Files");
-  await page.getByLabel("Open file").selectOption(path);
+  const picker = page.getByLabel("Open file");
+  if (await picker.isVisible()) {
+    await picker.selectOption(path);
+  } else {
+    const explorer = page.getByRole("navigation", { name: "Project files" });
+    if (!(await explorer.isVisible())) await page.getByRole("button", { name: "File list", exact: true }).click();
+    await explorer.getByRole("button", { name: path, exact: true }).click();
+  }
   return page.getByLabel(`${path} code editor`);
 }
 
@@ -97,6 +107,89 @@ async function publish(page: Page) {
   await page.getByRole("button", { name: "Back to workshop" }).click();
   return url!;
 }
+
+test("workspace count follows Kernel projects across the component gallery", async ({ page }) => {
+  for (const name of ["Count one", "Count two", "Count three"]) await createProject(page, name);
+  await page.goto("/");
+  const projects = page.locator(".account-sidebar a[href='/']").first();
+  await expect(projects).toHaveText("Projects 3");
+  const drafts = page.getByRole("region", { name: "Draft apps" });
+  await expect(drafts.getByRole("button", { name: "Open editor", exact: true })).toHaveCount(3);
+  await expect(drafts.getByRole("link", { name: "Open published app" })).toHaveCount(0);
+  await page.goto("/design-system");
+  await expect(page.locator(".account-sidebar a[href='/']").first()).toHaveText("Projects 3");
+  await page.goto("/usage");
+  await expect(page.locator(".account-sidebar a[href='/']").first()).toHaveText("Projects 3");
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Projects" })).toHaveAttribute("href", "/");
+  await expect(page.locator(".account-content").getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
+});
+
+test("uploads added through the app appear in the editor file list", async ({ page }) => {
+  await createProject(page, "Preview files");
+  await showSection(page, "Preview");
+  const preview = page.frameLocator('iframe[title="Mini-app preview"]');
+  // Guest first: the app must sign in and still keep the chosen file.
+  await preview.locator('input[type="file"]').setInputFiles({ name: "elena furia.png", mimeType: "image/png", buffer: Buffer.from("fake-png-bytes") });
+  await expect(preview.getByRole("img", { name: "elena furia.png" })).toBeVisible();
+  await expect(preview.getByText("Alice", { exact: true })).toBeVisible();
+  await showSection(page, "Uploads");
+  const uploads = page.getByRole("region", { name: "Uploads", exact: true });
+  await expect(uploads.getByText("elena furia.png", { exact: true })).toBeVisible();
+});
+
+test("mobile domain settings persist claims, explain TXT checks and confirm changes", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.emulateMedia({ colorScheme: "dark" });
+  const projectPath = await createProject(page, "Mobile domain review");
+  await page.getByText("More", { exact: true }).click();
+  await page.getByRole("button", { name: "App settings", exact: true }).click();
+  let settings = page.getByRole("dialog", { name: "App settings", exact: true });
+  await expect(settings.getByText("Publish this app first.", { exact: false })).toBeVisible();
+  await settings.getByRole("button", { name: "Deploy app", exact: true }).click();
+  await page.getByRole("button", { name: "Deploy public", exact: true }).click();
+  await expect(page.locator("a.published-url")).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Connect a custom domain", exact: true }).click();
+  settings = page.getByRole("dialog", { name: "App settings", exact: true });
+  await settings.getByLabel("Domain", { exact: true }).fill("https://notes.example.test/path");
+  await settings.getByRole("button", { name: "Add domain", exact: true }).click();
+  await expect(settings.getByLabel("Domain", { exact: true })).toHaveAttribute("aria-invalid", "true");
+  await expect(settings.getByText("Enter only the hostname, without https:// or a path.", { exact: true })).toBeVisible();
+  await expect(settings.getByRole("button", { name: "Reload domain settings", exact: true })).toHaveCount(0);
+  await settings.getByLabel("Domain", { exact: true }).fill("notes.example.test");
+  await settings.getByRole("button", { name: "Add domain", exact: true }).click();
+  await expect(settings.getByText("Waiting for TXT", { exact: true })).toBeVisible();
+  await expect(settings.getByText("_littlebox.notes.example.test", { exact: true })).toBeVisible();
+  await expect(settings.getByRole("button", { name: "Copy TXT value", exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: "Copy TXT name", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("_littlebox.notes.example.test");
+  const token = await settings.locator(".domain-record code").nth(1).textContent();
+  await settings.getByRole("button", { name: "Copy TXT value", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(token);
+  await expect(settings.getByText("Not checked", { exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: "Check TXT record", exact: true }).click();
+  await expect(settings.getByText("Ownership is still pending.", { exact: false })).toBeVisible();
+  await page.goto(projectPath);
+  await page.getByText("More", { exact: true }).click();
+  await page.getByRole("button", { name: "App settings", exact: true }).click();
+  settings = page.getByRole("dialog", { name: "App settings", exact: true });
+  await expect(settings.getByLabel("Domain", { exact: true })).toHaveValue("notes.example.test");
+  await settings.getByLabel("Domain", { exact: true }).fill("new-notes.example.test");
+  await settings.getByRole("button", { name: "Change domain", exact: true }).click();
+  await expect(settings.getByRole("region", { name: "Confirm domain change", exact: true })).toContainText("even if the new TXT is still pending");
+  await settings.getByRole("button", { name: "Cancel change", exact: true }).click();
+  await expect(settings.getByText("_littlebox.notes.example.test", { exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: "Change domain", exact: true }).click();
+  await settings.getByRole("button", { name: "Replace domain", exact: true }).click();
+  await expect(settings.getByText("_littlebox.new-notes.example.test", { exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: "Remove domain", exact: true }).click();
+  await settings.getByRole("button", { name: "Confirm removal", exact: true }).click();
+  await expect(settings.getByText("No custom domain", { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: "light" });
+  const bounds = await settings.boundingBox();
+  expect(bounds?.width).toBeLessThanOrEqual(390);
+});
 
 test("browser builds, republishes, backs up and exports a persistent app", async ({ page, context }, testInfo) => {
   await createProject(page, `Browser tasks ${Date.now()}`);

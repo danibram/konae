@@ -16,14 +16,16 @@ export type CallAuth =
 /** The mutation that runs when a call ends, with inputs read from the answer. */
 export type CallThen = { action: string; inputs: Record<string, string> };
 
-/** What one body key sends: an input's value, or a constant fixed in actions.json. */
+/** What one body key or header sends: an input's value, or a constant fixed in actions.json. */
 export type CallBodyValue = string | { value: string | number | boolean | null };
 
 export type CallDeclaration = {
   url: string;
   method: "GET" | "POST";
-  /** Body key to what it sends. A GET sends them as query parameters. */
+  /** Body key to what it sends. A GET sends them as query parameters. A POST expands dotted keys into nested JSON. */
   body: Record<string, CallBodyValue>;
+  /** Extra request headers. Only Idempotency-Key is allowed. */
+  headers?: Record<string, CallBodyValue>;
   auth?: CallAuth;
   then?: CallThen;
 };
@@ -31,9 +33,10 @@ export type CallDeclaration = {
 /** What `miniapp.actions.call` answers for a call: the Kernel queued it. */
 export type CallQueued = { callId: string; queued: true };
 
-const CALL_KEYS = ["url", "method", "body", "auth", "then"] as const;
+const CALL_KEYS = ["url", "method", "body", "headers", "auth", "then"] as const;
 const MAX_URL_CHARS = 2048;
 const MAX_BODY_KEYS = 32;
+const MAX_HEADERS = 8;
 const MAX_POINTER_CHARS = 200;
 const MAX_CONSTANT_CHARS = 1000;
 const MAX_THEN_INPUTS = 100;
@@ -43,18 +46,18 @@ const LOCAL_NAMES = new Set(["localhost", "metadata", "instance-data"]);
 const SECRET_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const SIGNATURE_HEADER = /^[A-Za-z0-9-]{1,64}$/;
 const UNSIGNABLE_HEADERS = new Set(["authorization", "cookie", "host", "content-type", "content-length"]);
-const BODY_KEY = /^[A-Za-z0-9_.-]{1,64}$/;
+const ALLOWED_CALL_HEADER = "Idempotency-Key";
 const IPV4 = /^\d+\.\d+\.\d+\.\d+$/;
 export const DEFAULT_SIGNATURE_HEADER = "X-Littlebox-Signature";
 
 type Kind = "query" | "mutation" | "signal" | "call";
 type Binding = { source: string; key?: string; nullable?: boolean };
 
-/** Refuses url, method, body, auth and then on an action that is not a call. */
+/** Refuses url, method, body, headers, auth and then on an action that is not a call. */
 export function assertNoCallKeys(name: string, kind: Exclude<Kind, "call">, candidate: Record<string, unknown>) {
   if (CALL_KEYS.some((key) => candidate[key] != null)) {
     const word = kind === "signal" ? "signal action" : kind;
-    throw new Error(`Action ${name} is a ${word}, so it cannot declare url, method, body, auth or then. Those keys belong to an action of "kind": "call".`);
+    throw new Error(`Action ${name} is a ${word}, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of "kind": "call".`);
   }
 }
 
@@ -70,10 +73,18 @@ export function parseCall(name: string, bindings: Binding[], candidate: Record<s
   if (!method) throw new Error(`Action ${name} must call with "method": "GET" or "POST".`);
   const url = staticUrl(name, candidate.url);
   const inputs = bindings.flatMap((binding) => binding.key === undefined ? [] : [binding.key]);
-  const body = bodyMap(name, candidate.body, inputs);
+  const body = bodyMap(name, method, candidate.body, inputs);
+  const headers = headersMap(name, candidate.headers, inputs);
   const auth = parseAuth(name, candidate.auth);
   const then = parseThen(name, candidate.then, inputs);
-  return { url, method, body, ...(auth ? { auth } : {}), ...(then ? { then } : {}) };
+  return {
+    url,
+    method,
+    body,
+    ...(Object.keys(headers).length ? { headers } : {}),
+    ...(auth ? { auth } : {}),
+    ...(then ? { then } : {}),
+  };
 }
 
 function staticUrl(name: string, value: unknown): string {
@@ -115,14 +126,62 @@ function isConstant(value: unknown): value is { value: string | number | boolean
   return constant === null || typeof constant === "boolean" || (typeof constant === "number" && Number.isFinite(constant));
 }
 
-function bodyMap(name: string, value: unknown, inputs: string[]): Record<string, CallBodyValue> {
+const MAX_BODY_INDEX = 31;
+
+function validBodySegment(segment: string): boolean {
+  if (!segment) return false;
+  if (/^\d+$/.test(segment)) {
+    if (!(segment === "0" || !segment.startsWith("0"))) return false;
+    const index = Number(segment);
+    return Number.isInteger(index) && index >= 0 && index <= MAX_BODY_INDEX;
+  }
+  return /^[A-Za-z_][A-Za-z0-9_-]*$/.test(segment);
+}
+
+function validBodyKey(key: string): boolean {
+  return key.length >= 1 && key.length <= 64 && key.split(".").every(validBodySegment);
+}
+
+function bodyMap(name: string, method: "GET" | "POST", value: unknown, inputs: string[]): Record<string, CallBodyValue> {
   if (value == null) return {};
   const invalid = () => new Error(`Action ${name} has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with "value", at most 32.`);
   if (typeof value !== "object" || Array.isArray(value)) throw invalid();
   const entries = sortedEntries(value as Record<string, unknown>);
-  if (entries.length > MAX_BODY_KEYS || entries.some(([key, sent]) => !BODY_KEY.test(key) || !(typeof sent === "string" || isConstant(sent)))) throw invalid();
+  if (entries.length > MAX_BODY_KEYS || entries.some(([key, sent]) => !validBodyKey(key) || !(typeof sent === "string" || isConstant(sent)))) throw invalid();
+  for (let index = 0; index < entries.length; index++) {
+    const key = entries[index][0];
+    if (method === "GET" && key.includes(".")) {
+      throw new Error(`Action ${name} sends body key ${key} with a path. Nested body keys belong on POST.`);
+    }
+    for (const [other] of entries.slice(index + 1)) {
+      if (other.startsWith(`${key}.`)) {
+        throw new Error(`Action ${name} has body keys ${key} and ${other}, which overlap. Use one path or the other.`);
+      }
+    }
+  }
   for (const [key, sent] of entries) {
     if (typeof sent === "string" && !inputs.includes(sent)) throw new Error(`Action ${name} sends body key ${key} from ${sent}, which is not one of its input bindings.`);
+  }
+  return Object.fromEntries(entries) as Record<string, CallBodyValue>;
+}
+
+function headersMap(name: string, value: unknown, inputs: string[]): Record<string, CallBodyValue> {
+  if (value == null) return {};
+  const invalid = () => new Error(`Action ${name} has an invalid headers. Map Idempotency-Key to an input or a constant, at most 8.`);
+  if (typeof value !== "object" || Array.isArray(value)) throw invalid();
+  const entries = sortedEntries(value as Record<string, unknown>);
+  if (entries.length === 0 || entries.length > MAX_HEADERS) throw invalid();
+  for (const [key, sent] of entries) {
+    if (key !== ALLOWED_CALL_HEADER) {
+      throw new Error(`Action ${name} sets header ${key}, which is not allowed. Only Idempotency-Key is allowed.`);
+    }
+    if (!(typeof sent === "string" || isConstant(sent))) throw invalid();
+    if (isConstant(sent) && typeof sent.value !== "string" && typeof sent.value !== "number" && typeof sent.value !== "boolean") {
+      throw invalid();
+    }
+    if (typeof sent === "string" && !inputs.includes(sent)) {
+      throw new Error(`Action ${name} sends header ${key} from ${sent}, which is not one of its input bindings.`);
+    }
   }
   return Object.fromEntries(entries) as Record<string, CallBodyValue>;
 }

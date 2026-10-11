@@ -36,6 +36,8 @@ type Props = {
 };
 
 export function ProjectDashboard({ projects, deployments, ownerSession, external, missing, drafts, onImportDraft, onOpenProject, onCreateProject, ejected, eject }: Props) {
+  const interrupted = missing.filter((item) => !projects.some((project) => project.id === item.id));
+  const projectCount = projects.length + interrupted.length + external.length;
   const [ejecting, setEjecting] = useState<MiniAppProject | null>(null);
   const managed = projects.filter((project) => !ejected[project.id]);
   const [newestFirst, setNewestFirst] = useState(true);
@@ -60,21 +62,20 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
 
   return (
     <div className="account-home">
-      <WorkspaceNav active="projects" projectCount={projects.length} ownerSession={ownerSession} />
+      <WorkspaceNav active="projects" projectCount={projectCount} ownerSession={ownerSession} />
 
       <main className="account-main">
         <section className="account-content">
           <div className="account-hero">
             <Button variant="primary" className="new-project-button" onClick={() => setCreating(true)}><Plus size={15} /> New project</Button>
-            <h1>Describe an app, or edit its files. Both paths pass the same checks, and the app can leave with you.</h1>
-            <p className="hero-note">Owners deploy and keep the data. People who use an app sign in inside that app.</p>
+            <h1>Your apps</h1>
+            <p className="hero-note">Drafts open in the editor. Publish an app to give it a live address.</p>
           </div>
           {external.length > 0 && <section><h2>External projects</h2><p>These projects keep their sources on their owner's computer.</p><ul>{external.map((item) => <li key={item.id}>{item.name}</li>)}</ul></section>}
-          {missing.length > 0 && <section><h2>Projects without saved sources</h2><p>These projects have metadata on the server, but no saved editor sources.</p><ul>{missing.map((item) => <li key={item.id}>{item.name}</li>)}</ul></section>}
-          {drafts.length > 0 && <details><summary>Import drafts from this browser</summary><p>Choose a draft to restore missing sources or create a new project in this account.</p><ul>{drafts.map((draft, index) => <li key={`${draft.id}-${index}`}>{draft.name} <Button onClick={() => onImportDraft(index)}>{missing.some((item) => item.id === draft.id) ? "Restore sources" : "Import as new"}</Button></li>)}</ul></details>}
+          {drafts.some((draft) => !missing.some((item) => item.id === draft.id)) && <details><summary>Import apps from this browser</summary><p>Choose a local copy to add to this account.</p><ul>{drafts.map((draft, index) => !missing.some((item) => item.id === draft.id) && <li key={`${draft.id}-${index}`}>{draft.name} <Button onClick={() => onImportDraft(index)}>Import as new</Button></li>)}</ul></details>}
 
           <div className="project-list-heading">
-            <div><p>All projects</p><strong>{filtered.length} project{filtered.length === 1 ? "" : "s"}</strong></div>
+            <div><p>All projects</p><strong>{projectCount} project{projectCount === 1 ? "" : "s"}</strong>{interrupted.length > 0 && <p>{projects.length} editable · {interrupted.length} needing recovery{external.length > 0 ? ` · ${external.length} external` : ""}</p>}</div>
             <button
               className="project-sort"
               aria-label={`Sort by last updated, ${newestFirst ? "newest" : "oldest"} first`}
@@ -84,8 +85,14 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
             </button>
           </div>
 
-          <div className="project-grid">
-            {filtered.map((project, index) => (
+          {([true, false] as const).map((published) => {
+            const group = filtered.filter((project) => Boolean(deployments[project.id]) === published);
+            if (!group.length) return null;
+            return <section className="dashboard-app-group" aria-label={published ? "Published apps" : "Draft apps"} key={String(published)}>
+              <h2>{published ? "Published" : "Drafts"} <small>{group.length}</small></h2>
+              {!published && <p>These apps have no published address yet. Open the editor, then Deploy when ready.</p>}
+              <div className="project-grid">
+            {group.map((project, index) => (
               <ProjectCard
                 key={project.id}
                 project={project}
@@ -95,8 +102,26 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
                 onOpen={(entry) => onOpenProject(project.id, entry)}
               />
             ))}
-            {filtered.length === 0 && <div className="projects-empty"><strong>No projects yet</strong><p>Create one and describe what it should do.</p></div>}
-          </div>
+              </div>
+            </section>;
+          })}
+          {interrupted.length > 0 && <details className="dashboard-recovery"><summary>Older projects needing recovery · {interrupted.length}</summary><p>These records have no files for the editor. They are separate from your editable apps.</p><div className="project-grid">
+            {interrupted.map((item) => {
+              const draftIndex = drafts.findIndex((draft) => draft.id === item.id);
+              const deployment = deployments[item.id];
+              return <Card key={item.id} className="project-card">
+                <div className="project-card-body">
+                  <div className="project-card-title"><h2>{item.name}</h2><Badge tone="warning">Can't open editor</Badge></div>
+                  <p>The files needed to edit this app aren't saved in this account.{draftIndex >= 0 ? " A copy is available in this browser." : " Try recovering it from a browser where you edited it."}</p>
+                  {(draftIndex >= 0 || deployment) && <footer>
+                    {draftIndex >= 0 && <Button size="sm" onClick={() => onImportDraft(draftIndex)}>Recover app</Button>}
+                    {deployment && <a href={deployment.url} target="_blank" rel="noopener"><ExternalLink size={13} /> Open published app</a>}
+                  </footer>}
+                </div>
+              </Card>;
+            })}
+          </div></details>}
+          {projectCount === 0 && <div className="projects-empty"><strong>No projects yet</strong><p>Create one and describe what it should do.</p></div>}
           <section className="take-it-group" aria-labelledby="take-it-heading">
             <h2 id="take-it-heading">Take it with you</h2>
             <p>Open a project, then Export or Deploy. To edit a project's code outside Littlebox, Eject it. Its hosted app keeps running.</p>
@@ -170,13 +195,15 @@ function ProjectCard({ project, deployment, external, index, onOpen }: {
           </div>
           {external && <Badge tone="warning" className="external-badge">External</Badge>}
           {visibility && <Badge tone={visibility === "public" ? "success" : "accent"} className={`deployment-badge ${visibility}`}>{visibility === "public" ? <Globe2 size={11} /> : <LockKeyhole size={11} />}{visibility}</Badge>}
+          {!deployment && <Badge tone="neutral">Draft · Not published</Badge>}
         </div>
         <div className="project-meta"><span><Clock3 size={11} /> {relativeTime(project.updatedAt)}</span></div>
         <footer>
-          <Button variant="secondary" size="sm" onClick={() => onOpen("preview")}>Open</Button>
+          <Button variant="secondary" size="sm" onClick={() => onOpen("preview")}>Open editor</Button>
           {!external && <button type="button" className="project-door-link" onClick={() => onOpen("agent")}>Describe</button>}
           <button type="button" className="project-door-link edit-files" onClick={() => onOpen("code")}>{external ? "View files" : "Edit files"}</button>
-          {deployment && <a href={deployment.url} target="_blank" rel="noopener"><ExternalLink size={13} /> Open app</a>}
+          {deployment && <a href={`/usage?deployment=${encodeURIComponent(deployment.id)}`}>Usage</a>}
+          {deployment && <a href={deployment.url} target="_blank" rel="noopener"><ExternalLink size={13} /> Open published app</a>}
         </footer>
       </div>
     </Card>

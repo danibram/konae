@@ -1162,6 +1162,7 @@ mod tests {
     /// a live session and an uploaded file, plus an owner with a session.
     fn seed(root: &Path) -> (Deployment, String) {
         let deployment = Deployment {
+            database_model: None,
             id: uuid::Uuid::new_v4().to_string(),
             project_id: "app_copy".into(),
             project_name: "Copy test".into(),
@@ -1299,7 +1300,7 @@ mod tests {
 
         let summary = restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
         assert_eq!((summary.copy_id.as_str(), summary.deployments), (id.as_str(), 1));
-        let loaded = load_deployments(&restored).await.unwrap();
+        let loaded = load_deployments(&restored, "http://localhost").await.unwrap();
         let served = loaded.get("copy-test.localhost").expect("the restored Kernel knows the app");
         assert_eq!(read_artifact(&self::state(&restored), served, "index.html").await.unwrap(), b"<main>copied app</main>");
         let folder = restored.join("deployments").join(&deployment.id);

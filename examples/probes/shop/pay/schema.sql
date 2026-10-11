@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS sessions (
+  id INTEGER PRIMARY KEY,
+  order_ref INTEGER NOT NULL UNIQUE,
+  price TEXT NOT NULL,
+  quantity INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);

@@ -29,8 +29,13 @@ The Validation Gate and the Kernel parse calls and `connects` from `kernel-rs/sr
 
 ## Consequences
 
-Once scheduled work exists, a scheduled mutation can hand its rows to a call, and a payment confirmation can call a provider's API with a key. Neither is built here.
+A call's body may use dotted paths such as `line_items.0.price`, which expand into nested JSON on POST, and may set `Idempotency-Key` in `headers`, so a Checkout Session create reaches Stripe without a free-form object or a secret in the page. The shop probe creates a session through a call, stores the id in its then mutation, and marks the order paid from a Stripe-shaped webhook.
 
 Pending calls do not travel in a package or a migration; the outbox stays on the installation that queued them, and a retired origin ends its pending calls with `app-moved`. Scheduled copies carry `calls.sqlite` with the other root stores, and a restore brings it back as the copy held it, so a call queued after the copy is lost and one sent after it may be sent again; a receiver that matters keys its writes on the caller's reference, as the probe's desk does.
 
 The editor preview answers `{ callId, queued: true }` and sends nothing, because the browser cannot reach the other app's route without the secret. Calls run on a Development Kernel or a Deployment.
+
+
+## Integration check, 2026-11-07
+
+A changed `then` mutation processes its declared notice through ADR-0016's queue and budgets, with the inputs mapped from the answer. A notice to the owner works; a notice to actor records no-account because the answer has no caller. A refused or unchanged mutation sends nothing. The calls probe checks owner notices for three changed answers and the no-account outcome of a notice to actor.

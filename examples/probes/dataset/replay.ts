@@ -71,7 +71,7 @@ await probe("dataset", 23000, async (kit) => {
   kit.pass("Aggregates", "GET /api/summary groups 30 stations into 3 regions of 10 with count, avg and max.");
 
   // The read API from a page on another origin. A GET route that answers anyone
-  // allows every origin since ADR-0015; a page lists the origin in its connects.
+  // allows every origin since ADR-0019; a page lists the origin in its connects.
   const foreign = await get("/api/summary", "https://dashboard.example");
   assert.equal(foreign.status, 200);
   assert.equal(foreign.headers.get("access-control-allow-origin"), "*");

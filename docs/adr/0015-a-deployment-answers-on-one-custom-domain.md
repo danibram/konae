@@ -34,4 +34,6 @@ A package's manifest carries the hostname without its token. The import records 
 
 - A Deployment answers on two origins with separate cookies, so a person signed in on the generated hostname signs in again on the alias.
 - A name stays verified until the owner clears it, even after its TXT record is removed.
-- The editor has no view for it yet: an owner uses the MCP tools or `bun run littlebox -- domain`.
+- The editor exposes the domain under App settings, reachable from More and Deploy. It shows the hostname, TXT claim, verification result and actions to change or remove it. A change names the alias it replaces before confirmation. The integrated agent uses the same MCP operations, bound to the current project's deployment, with owner confirmation before mutation. The CLI remains available through `bun run littlebox -- domain`.
+- The editor labels `active` as ownership verified. Routing and HTTPS remain the hosting provider's work, and the editor does not report them as checked. An already verified record keeps its verification when refreshed; it does not trigger another DNS lookup.
+- Both the editor's self-host kit and the chunked package carry the hostname without a token. The destination creates a pending claim with a fresh token. The generated deploy script prints the TXT record and the verification operation.

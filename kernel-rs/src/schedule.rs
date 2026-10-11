@@ -226,7 +226,7 @@ async fn tick(state: &AppState, clock: Clock, running: &Arc<Mutex<HashSet<String
         work.sort_by(|a, b| a.0.cmp(&b.0));
         let (state, running, id) = (state.clone(), running.clone(), deployment.id.clone());
         tokio::spawn(async move {
-            if let Err(error) = run_due(&state, clock, &id, &work, &super::now_ms).await {
+            if let Err(error) = run_due(&state, clock, &deployment, &work, &super::now_ms).await {
                 eprintln!("Scheduled work for deployment {id} could not be read or recorded: {error:#}");
             }
             running.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&id);
@@ -239,10 +239,11 @@ async fn tick(state: &AppState, clock: Clock, running: &Arc<Mutex<HashSet<String
 async fn run_due(
     state: &AppState,
     clock: Clock,
-    id: &str,
+    deployment: &super::Deployment,
     work: &[(String, ActionDefinition, Schedule)],
     now: &(dyn Fn() -> u64 + Sync),
 ) -> anyhow::Result<()> {
+    let id = &deployment.id;
     let folder = state.data_root.join("deployments").join(id);
     if !folder.is_dir() {
         return Ok(());
@@ -281,6 +282,10 @@ async fn run_due(
         .await?;
         if changes.is_some_and(|changes| changes > 0) {
             usage::signal(&state.data_root, id, name, action, &json!({}), None);
+            super::notify::record(
+                state, deployment, name, action, &json!({}),
+                super::notify::Caller { account: None, actor_id: None },
+            ).await;
         }
     }
     Ok(())
@@ -416,7 +421,8 @@ mod tests {
                 .collect::<Vec<_>>();
             work.sort_by(|a, b| a.0.cmp(&b.0));
             let now = || self.now.load(std::sync::atomic::Ordering::SeqCst);
-            run_due(&self.state, clock, &self.id, &work, &now).await.unwrap();
+            let deployment = self.state.deployments.read().await.values().find(|deployment| deployment.id == self.id).unwrap().clone();
+            run_due(&self.state, clock, &deployment, &work, &now).await.unwrap();
         }
 
         fn sql(&self, statement: &str) {

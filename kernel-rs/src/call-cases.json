@@ -90,6 +90,181 @@
   "error": null
  },
  {
+  "case": "a Checkout Session body with nested paths and Idempotency-Key",
+  "actions": {
+   "orders.checkout": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://api.stripe.com/v1/checkout/sessions",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "orderId",
+      "type": "string",
+      "maxLength": 64
+     },
+     {
+      "source": "input",
+      "key": "qty",
+      "type": "number"
+     },
+     {
+      "source": "input",
+      "key": "price",
+      "type": "string",
+      "maxLength": 100
+     },
+     {
+      "source": "input",
+      "key": "idempotency",
+      "type": "string",
+      "maxLength": 64
+     }
+    ],
+    "body": {
+     "mode": {
+      "value": "payment"
+     },
+     "client_reference_id": "orderId",
+     "line_items.0.price": "price",
+     "line_items.0.quantity": "qty",
+     "success_url": {
+      "value": "https://shop.example/thanks"
+     },
+     "cancel_url": {
+      "value": "https://shop.example/cart"
+     }
+    },
+    "headers": {
+     "Idempotency-Key": "idempotency"
+    },
+    "auth": {
+     "key": "stripe_secret"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "nested body keys on GET",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "GET",
+    "url": "https://api.example.com/v1/items",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "price",
+      "type": "string",
+      "maxLength": 100
+     }
+    ],
+    "body": {
+     "line_items.0.price": "price"
+    }
+   }
+  },
+  "error": "Action inbox.tell sends body key line_items.0.price with a path. Nested body keys belong on POST."
+ },
+ {
+  "case": "overlapping body paths",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://api.example.com/v1/items",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "price",
+      "type": "string",
+      "maxLength": 100
+     }
+    ],
+    "body": {
+     "line_items": {
+      "value": "x"
+     },
+     "line_items.0.price": "price"
+    }
+   }
+  },
+  "error": "Action inbox.tell has body keys line_items and line_items.0.price, which overlap. Use one path or the other."
+ },
+ {
+  "case": "a body array index above 31",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://api.example.com/v1/items",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "price",
+      "type": "string",
+      "maxLength": 100
+     }
+    ],
+    "body": {
+     "line_items.32.price": "price"
+    }
+   }
+  },
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
+ },
+ {
+  "case": "a header that is not Idempotency-Key",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://api.example.com/v1/items",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "token",
+      "type": "string",
+      "maxLength": 100
+     }
+    ],
+    "headers": {
+     "Authorization": "token"
+    }
+   }
+  },
+  "error": "Action inbox.tell sets header Authorization, which is not allowed. Only Idempotency-Key is allowed."
+ },
+ {
+  "case": "headers from an unknown input",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://api.example.com/v1/items",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 100
+     }
+    ],
+    "headers": {
+     "Idempotency-Key": "missing"
+    }
+   }
+  },
+  "error": "Action inbox.tell sends header Idempotency-Key from missing, which is not one of its input bindings."
+ },
+ {
   "case": "an http URL is left to the Kernel's installation check",
   "actions": {
    "inbox.tell": {
@@ -336,7 +511,7 @@
     "url": "https://inbox.example.org/x"
    }
   },
-  "error": "Action tasks.noted is a mutation, so it cannot declare url, method, body, auth or then. Those keys belong to an action of \"kind\": \"call\"."
+  "error": "Action tasks.noted is a mutation, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of \"kind\": \"call\"."
  },
  {
   "case": "a then on a query",
@@ -351,7 +526,7 @@
     }
    }
   },
-  "error": "Action tasks.list is a query, so it cannot declare url, method, body, auth or then. Those keys belong to an action of \"kind\": \"call\"."
+  "error": "Action tasks.list is a query, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of \"kind\": \"call\"."
  },
  {
   "case": "a method on a signal action",
@@ -366,7 +541,7 @@
     "method": "POST"
    }
   },
-  "error": "Action tasks.seen is a signal action, so it cannot declare url, method, body, auth or then. Those keys belong to an action of \"kind\": \"call\"."
+  "error": "Action tasks.seen is a signal action, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of \"kind\": \"call\"."
  },
  {
   "case": "an unknown kind with a url",
@@ -1441,7 +1616,7 @@
     "body": {
      "title": "title",
      "source": {
-      "value": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+      "value": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9"
      }
     }
    }

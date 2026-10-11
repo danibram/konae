@@ -57,6 +57,7 @@ try {
     await finishImport(importState);
     await writeFile(stateMarkerPath, JSON.stringify({ projectId: project.id, port, deploymentId: deployment.id }, null, 2) + '\n');
     console.log('App already imported at ' + deployment.url);
+    await domainInstructions(deployment.id);
   } else {
     if (!remote.deployment && packageManifest) {
       if (importState?.packageId !== packageManifest.packageId) importState = { packageId: packageManifest.packageId, components: {} };
@@ -67,6 +68,7 @@ try {
       payload.visibility = packageManifest.visibility;
       payload.initialPackage = { manifest: packageManifest, components: importState.components };
     } else if (!remote.deployment) {
+      if (project.domain) payload.initialDomain = project.domain;
       for (const [field, filename] of [['initialDatabase', 'initial-database.sqlite'], ['initialIdentity', 'initial-identity.sqlite'], ['initialFiles', 'initial-files.portable']]) {
         try { payload[field] = (await readFile(path.join(root, 'littlebox', filename))).toString('base64'); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -95,6 +97,7 @@ try {
     if (payload.initialPackage) await finishImport(importState);
     await writeFile(stateMarkerPath, JSON.stringify({ projectId: project.id, port, deploymentId: deployment.id }, null, 2) + '\n');
     console.log('App ready at ' + deployment.url);
+    await domainInstructions(deployment.id);
   }
 } finally {
   await fetch(base + '/_littlebox/owner/logout', { method: 'POST', headers: { cookie } });
@@ -152,4 +155,13 @@ async function readProjectFiles(directory, prefix = '') {
     else if (entry.isFile()) result[relative] = await readFile(path.join(directory, entry.name), 'utf8');
   }
   return result;
+}
+
+async function domainInstructions(deploymentId) {
+  const domain = await call('domain_read', { deploymentId });
+  if (!domain.hostname || domain.status === 'active') return;
+  console.log('Custom domain ' + domain.hostname + ' needs verification on this Kernel.');
+  console.log('Set TXT ' + domain.record.name + ' to ' + domain.record.value);
+  console.log('Point the hostname at this server and configure TLS with Host forwarded unchanged.');
+  console.log('Verify through MCP domain_set with ' + JSON.stringify({ deploymentId, hostname: domain.hostname }));
 }

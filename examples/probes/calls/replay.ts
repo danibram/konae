@@ -1,4 +1,4 @@
-// Probe: one app calls another (ADR-0015). The tasks app escalates a task to
+// Probe: one app calls another (ADR-0019). The tasks app escalates a task to
 // the desk app's signed route with a call action; the Kernel sends it from its
 // own process, through the desk's route code, and the tasks app's then
 // mutation stores what the desk answered, including the desk's guard refusal.
@@ -81,6 +81,20 @@ await probe("calls", 23070, async (kit) => {
   const counts = await until(() => ana.call<{ open: number; status: number }[]>("actions_invoke", { name: "desk.counts" }), (rows) => rows.length > 0, "the keyed count");
   assert.deepEqual(counts, [{ open: 1, status: 200 }]);
   kit.pass("A call that sends an API key", `desk.count sends GET /api/count with the key desk_key holds as Authorization: Bearer; the route takes keys only, answers { result: [{ open: 1 }] }, and desk.counted stores open ${counts[0].open} from /body/result/0/open.`);
+
+  const notices = async () => (await readFile(path.join(kit.dataDir, "mailbox.jsonl"), "utf8").catch(() => ""))
+    .trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    .filter((mail) => mail.purpose === "notify" && mail.action === "tasks.escalated");
+  const mail = await until(notices, (messages) => messages.length >= 3, "the then mutation's notices");
+  assert.equal(mail.length, 3);
+  assert(mail.every((message) => message.to === "owner@probe.example"));
+  assert.deepEqual(mail.map((message) => message.subject).sort(), ["Task 1 answered 200", "Task 1 answered 403", "Task 2 answered 401"]);
+  const noticeUsage = await owner.call<{ totals: { kind: string; name: string; count: number }[] }>("usage_read", {
+    deploymentId: tasks.deploymentId, from: new Date().toISOString().slice(0, 10), to: new Date().toISOString().slice(0, 10),
+  });
+  assert.equal(noticeUsage.totals.find((row) => row.kind === "notify" && row.name === "tasks.escalated: queued")?.count, 3);
+  assert.equal(noticeUsage.totals.find((row) => row.kind === "notify" && row.name === "desk.counted: no-account")?.count, 1);
+  kit.pass("The then mutation's notices", "Three changed then mutations each emailed the owner with their bound inputs. A notice to actor records no-account because a call's answer has no caller.");
 
   // Only the Kernel runs a then mutation.
   const thenOnly = await kit.errorText(ana.call("actions_invoke", { name: "tasks.escalated", input: { id: 2, status: 200, note: null } }));

@@ -133,6 +133,7 @@ const emptyActionProgram: ServerActionProgram = { version: 1, actions: {} };
 export class MiniAppRuntimeHost {
   private previewActor: PreviewActor = "guest";
   private readonly sessionListeners = new Set<(session: RuntimeSession) => void>();
+  private readonly fileListeners = new Set<(files: StoredFile[]) => void>();
   private previewFailures: PreviewFailure[] = [];
   private readonly diagnosticListeners = new Set<(diagnostics: RuntimeDiagnostics) => void>();
   private dbPromise: Promise<Database>;
@@ -499,6 +500,24 @@ export class MiniAppRuntimeHost {
     return this.readFiles();
   }
 
+  subscribeFiles(listener: (files: StoredFile[]) => void) {
+    this.fileListeners.add(listener);
+    listener(this.getFiles());
+    const changedInAnotherTab = (event: StorageEvent) => {
+      if (event.key === this.filesKey) listener(this.getFiles());
+    };
+    window.addEventListener("storage", changedInAnotherTab);
+    return () => {
+      this.fileListeners.delete(listener);
+      window.removeEventListener("storage", changedInAnotherTab);
+    };
+  }
+
+  private notifyFiles() {
+    const files = this.getFiles();
+    for (const listener of this.fileListeners) listener(files);
+  }
+
   getSession(): RuntimeSession {
     return this.getRuntimeSession();
   }
@@ -524,6 +543,7 @@ export class MiniAppRuntimeHost {
   reset() {
     localStorage.removeItem(this.databaseKey);
     localStorage.removeItem(this.filesKey);
+    this.notifyFiles();
     this.dbPromise = this.openDatabase(true);
   }
 
@@ -734,6 +754,7 @@ export class MiniAppRuntimeHost {
     };
     const files = this.readFiles();
     localStorage.setItem(this.filesKey, JSON.stringify([file, ...files]));
+    this.notifyFiles();
     return file;
   }
 
@@ -778,6 +799,7 @@ export class MiniAppRuntimeHost {
     const { files, index } = this.ownedFile(payload);
     files[index] = { ...files[index], visibility };
     localStorage.setItem(this.filesKey, JSON.stringify(files));
+    this.notifyFiles();
     const { url: _url, ...file } = files[index];
     return file;
   }
@@ -786,6 +808,7 @@ export class MiniAppRuntimeHost {
     const { files, index } = this.ownedFile(payload);
     const [removed] = files.splice(index, 1);
     localStorage.setItem(this.filesKey, JSON.stringify(files));
+    this.notifyFiles();
     return { id: removed.id, deleted: true };
   }
 

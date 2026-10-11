@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "actions": {
+    "sessions.create": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": {
+        "method": "POST",
+        "path": "/v1/checkout/sessions",
+        "callers": ["key"],
+        "fields": {
+          "order": "$.client_reference_id",
+          "price": "$.line_items[0].price",
+          "quantity": "$.line_items[0].quantity"
+        }
+      },
+      "statement": "INSERT INTO sessions (order_ref, price, quantity, created_at) VALUES (?1, ?2, ?3, ?4)",
+      "bindings": [
+        { "source": "input", "key": "order", "type": "number" },
+        { "source": "input", "key": "price", "type": "string", "maxLength": 100 },
+        { "source": "input", "key": "quantity", "type": "number" },
+        { "source": "kernel", "field": "now" }
+      ]
+    }
+  }
+}

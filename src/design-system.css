@@ -70,7 +70,7 @@
     --ds-success-soft: #2a3318;
     --ds-warning: #e2b56a;
     --ds-warning-soft: #3a2e16;
-    --ds-danger: #9f1239;
+    --ds-danger: #ff9aae;
     --ds-danger-soft: #3a2226;
     --ds-shadow-sm: 2px 2px 0 #6a6f7c;
     --ds-shadow: 3px 3px 0 #6a6f7c;
@@ -137,6 +137,9 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   background: var(--ds-danger-soft);
 }
 .ui-button-danger:hover:not(:disabled) { background: #f0cdc4; }
+@media (prefers-color-scheme: dark) {
+  .ui-button-danger:hover:not(:disabled) { background: #4b2932; }
+}
 .ui-button-sm { min-height: 32px; padding: 0 10px; font-size: 11px; }
 .ui-button-icon, .ui-button.ui-button-icon { width: 32px; min-height: 32px; padding: 0; flex-shrink: 0; text-decoration: none; border: 1px solid var(--ds-ink); background: #fffdf7; color: var(--ds-text); box-shadow: var(--ds-shadow-sm); }
 .ui-button:disabled {
@@ -684,6 +687,7 @@ a.confirm-publish { text-decoration: none; }
   .platform-card { padding: 20px 16px; }
   .ui-dialog-backdrop { padding: 12px; }
   .ui-dialog { max-height: calc(100dvh - 24px); }
+  .ui-dialog .ui-dialog-close { width: 44px; min-height: 44px; top: 8px; right: 8px; }
   .ui-dialog-heading { padding: 22px 48px 20px 20px; }
   .ds-page { padding: 24px 20px; }
   .ds-swatches { grid-template-columns: repeat(2, minmax(0, 1fr)); }

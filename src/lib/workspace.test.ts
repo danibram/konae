@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { architectureProjectId } from "./architecture";
 import { cloneStarter } from "./starter";
-import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, resetWorkspaceProject } from "./workspace";
+import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, recoveryDrafts, resetWorkspaceProject } from "./workspace";
 
 function memoryStorage(seed: Record<string, string> = {}) {
   const values = new Map(Object.entries(seed));
@@ -13,6 +13,19 @@ function memoryStorage(seed: Record<string, string> = {}) {
 }
 
 describe("workspace project registry", () => {
+  test("local copies with another timestamp or deployed revision are not extra projects", () => {
+    const saved = cloneStarter();
+    const cached = { ...saved, updatedAt: saved.updatedAt - 100, databaseModel: { ...saved.databaseModel, revision: "old-browser-revision" } };
+    expect(recoveryDrafts([cached], [saved])).toEqual([]);
+  });
+
+  test("recovery keeps one newest unsaved source per project without changing storage", () => {
+    const saved = cloneStarter();
+    const first = { ...saved, updatedAt: 2, files: { ...saved.files, "app.js": "first unsaved change" } };
+    const last = { ...saved, updatedAt: 3, files: { ...saved.files, "app.js": "latest unsaved change" } };
+    expect(recoveryDrafts([first, last, first], [saved])).toEqual([last]);
+    expect(first.files["app.js"]).toBe("first unsaved change");
+  });
   test("migrates the original single-project draft and deployment", () => {
     const project = cloneStarter();
     const deployment = { id: "deploy_1", projectId: project.id, projectName: project.name, url: "http://tiny.localhost", createdAt: 1, manifest: project.manifest, accessCode: "secret" };
@@ -78,5 +91,31 @@ describe("workspace project registry", () => {
     }, storage);
     expect(storage.value("littlebox:projects")).toContain(project.name);
     expect(storage.value("littlebox:deployments")).not.toContain("secret");
+  });
+
+  test("repairs a starter that cleared the chosen file before sign-in finished", () => {
+    const broken = cloneStarter();
+    broken.files["app.js"] = broken.files["app.js"].replace(
+      `if ((await miniapp.auth.session()).role === 'anonymous') {
+    await miniapp.auth.signIn();
+    const session = await miniapp.auth.session();
+    if (session.role === 'anonymous') {
+      fileInput.value = '';
+      return;
+    }
+    identity.textContent = session.name;
+  }`,
+      `if ((await miniapp.auth.session()).role === 'anonymous') {
+    fileInput.value = '';
+    miniapp.auth.signIn();
+    return;
+  }`,
+    );
+    expect(broken.files["app.js"]).toContain("fileInput.value = '';\n    miniapp.auth.signIn();");
+    const storage = memoryStorage({ "littlebox:projects": JSON.stringify([broken]) });
+    const loaded = loadWorkspaceState(storage).projects.find((project) => project.id === broken.id);
+    expect(loaded?.files["app.js"]).toContain("await miniapp.auth.signIn();");
+    expect(loaded?.files["app.js"]).toContain("if (session.role === 'anonymous') {\n      fileInput.value = '';\n      return;\n    }");
+    expect(loaded?.files["app.js"]).not.toContain("fileInput.value = '';\n    miniapp.auth.signIn();");
   });
 });

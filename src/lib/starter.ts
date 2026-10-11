@@ -151,10 +151,16 @@ input.addEventListener('keydown', (event) => {
 fileInput.addEventListener('change', async () => {
   const file = fileInput.files[0];
   if (!file) return;
+  // Preview sign-in stays on this page, so keep the selected File until it finishes.
+  // A published app navigates to sign-in and requires selecting the file again.
   if ((await miniapp.auth.session()).role === 'anonymous') {
-    fileInput.value = '';
-    miniapp.auth.signIn();
-    return;
+    await miniapp.auth.signIn();
+    const session = await miniapp.auth.session();
+    if (session.role === 'anonymous') {
+      fileInput.value = '';
+      return;
+    }
+    identity.textContent = session.name;
   }
   await miniapp.files.upload(file);
   fileInput.value = '';
@@ -222,5 +228,31 @@ export function cloneStarter(): MiniAppProject {
     databaseModel: { ...starterProject.databaseModel },
     manifest: createDefaultManifest(),
     updatedAt: Date.now(),
+  };
+}
+
+const droppedPreviewUpload = `if ((await miniapp.auth.session()).role === 'anonymous') {
+    fileInput.value = '';
+    miniapp.auth.signIn();
+    return;
+  }`;
+
+const keptPreviewUpload = `if ((await miniapp.auth.session()).role === 'anonymous') {
+    await miniapp.auth.signIn();
+    const session = await miniapp.auth.session();
+    if (session.role === 'anonymous') {
+      fileInput.value = '';
+      return;
+    }
+    identity.textContent = session.name;
+  }`;
+
+/** Rewrites the starter upload handler that cleared the File before sign-in finished. */
+export function repairDroppedPreviewUpload(project: MiniAppProject): MiniAppProject {
+  const script = project.files["app.js"];
+  if (!script?.includes(droppedPreviewUpload)) return project;
+  return {
+    ...project,
+    files: { ...project.files, "app.js": script.replace(droppedPreviewUpload, keptPreviewUpload) },
   };
 }

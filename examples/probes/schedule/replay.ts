@@ -1,4 +1,4 @@
-// Probe: scheduled work (ADR-0015). Decides the matrix cell for work that has
+// Probe: scheduled work (ADR-0017). Decides the matrix cell for work that has
 // to happen when nobody asks. A reminder app surfaces due notes from a
 // "schedule" on a mutation; the Kernel's timer runs it with no caller.
 //
@@ -89,6 +89,19 @@ await probe("schedule", 23060, async (kit) => {
   assert(!seen.totals.some((row) => row.kind === "refused"));
   kit.pass("Usage and Signals", `usage_read counts ${total} runs under scheduled and lists each with its outcome and changes, such as ${JSON.stringify(seen.scheduled.find((run) => run.changes === 0) ?? seen.scheduled[0])}. Only the 2 runs that changed a row recorded notes.surfaced.`);
 
+  const notices = async () => (await readFile(path.join(kit.dataDir, "mailbox.jsonl"), "utf8").catch(() => ""))
+    .trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    .filter((mail) => mail.purpose === "notify" && mail.action === "notes.surface");
+  for (const deadline = Date.now() + 10_000; (await notices()).length < 2 && Date.now() < deadline;) await Bun.sleep(100);
+  const mail = await notices();
+  assert.equal(mail.length, 2, "Each scheduled mutation that changed a row must queue its notice.");
+  assert(mail.every((message) => message.to === "owner@probe.example" && message.subject === "Notes are due"));
+  const noticeUsage = await usage();
+  assert.equal(noticeUsage.totals.find((row) => row.kind === "notify" && row.name === "notes.surface: queued")?.count, 2);
+  await waitFor("run with no new notes", (current) => current.scheduled[0].changes === 0);
+  assert.equal((await notices()).length, 2, "A scheduled run that changes nothing sends no notice.");
+  kit.pass("Scheduled owner notice", "The two runs that surfaced a note each emailed the owner through the notice queue. Usage counts two queued notices; runs that change no row send nothing.");
+
   // A failing run is logged and tried again at the next tick, and runs never pile up.
   await owner.call("database_execute", { deploymentId: app.deploymentId, operation: "sql", input: { sql: "ALTER TABLE notes RENAME TO notes_moved" } });
   const failing = await waitFor("second failed run", (current) => current.scheduled.filter((run) => run.outcome === "failed").length >= 2);
@@ -110,5 +123,6 @@ await probe("schedule", 23060, async (kit) => {
   await owner.call("migration_cancel", { operationId: status.operationId });
   await waitFor("run after maintenance", (current) => current.scheduled.length > during);
   assert(during - paused <= 1, `${during - paused} runs started during maintenance.`);
+  assert.equal((await notices()).length, 2, "Failures, recovery without new rows and maintenance send no extra notice.");
   kit.pass("Maintenance", `While migration_begin held the app in maintenance for 5 seconds, ${during - paused} runs started (one may finish as the pause begins); after migration_cancel the next tick ran it again.`);
 });

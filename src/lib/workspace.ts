@@ -1,7 +1,7 @@
 import type { DeploymentReceipt } from "../deployments/client";
 import { normalizeManifest } from "../deployments/manifest";
 import { architectureProjectId, cloneArchitectureProject } from "./architecture";
-import { cloneStarter, starterDatabaseModelSource } from "./starter";
+import { cloneStarter, repairDroppedPreviewUpload, starterDatabaseModelSource } from "./starter";
 import type { MiniAppProject } from "./types";
 import { directoriesForFiles } from "./project-files";
 
@@ -12,6 +12,28 @@ export type WorkspaceState = {
   activeProjectId: string;
   deployments: DeploymentIndex;
 };
+
+/** Keep the newest local draft per project and omit copies of the saved sources. */
+export function recoveryDrafts(candidates: MiniAppProject[], saved: MiniAppProject[]): MiniAppProject[] {
+  const latest = new Map<string, MiniAppProject>();
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate.id !== "string" || !candidate.files || typeof candidate.files !== "object") continue;
+    const previous = latest.get(candidate.id);
+    if (!previous || candidate.updatedAt > previous.updatedAt) latest.set(candidate.id, candidate);
+  }
+  const current = new Map(saved.map((project) => [project.id, draftSignature(project)]));
+  return [...latest.values()].filter((draft) => current.get(draft.id) !== draftSignature(draft));
+}
+
+function draftSignature(project: MiniAppProject): string {
+  const repaired = repairDroppedPreviewUpload(project);
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)]));
+    return value;
+  };
+  return JSON.stringify(canonical({ name: repaired.name, slug: repaired.slug, files: repaired.files, directories: [...(repaired.directories ?? [])].sort(), model: repaired.databaseModel?.source, manifest: repaired.manifest }));
+}
 
 const projectsKey = "littlebox:projects";
 const activeProjectKey = "littlebox:active-project";
@@ -90,12 +112,12 @@ function normalizeProjects(projects: MiniAppProject[]) {
       ...project,
       files: { ...starter.files, ...project.files },
     });
-    return [{
+    return [repairDroppedPreviewUpload({
       ...refreshed,
       directories: project.directories ?? directoriesForFiles(refreshed.files ?? {}),
       databaseModel: project.databaseModel ?? legacyDatabaseModel(project.files?.["schema.sql"] ?? ""),
       manifest: normalizeManifest(project.manifest),
-    }];
+    })];
   });
 }
 

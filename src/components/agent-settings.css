@@ -47,3 +47,17 @@
   .agent-settings { width: 100vw; height: auto; max-height: 100dvh; box-shadow: none; }
   .agent-field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
 }
+
+@media (prefers-color-scheme: dark) {
+  .agent-field select,
+  .agent-field input,
+  .agent-settings-key input,
+  .agent-settings-key button {
+    background: var(--ds-surface);
+    color: var(--ds-text);
+    border-color: var(--ds-border);
+  }
+  .agent-settings-key { background: var(--ds-subtle); color: var(--ds-text); border-color: var(--ds-border); }
+  .agent-settings-key span { color: var(--ds-text); }
+  .agent-settings-key input::placeholder { color: var(--ds-muted); opacity: 1; }
+}

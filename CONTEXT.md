@@ -167,7 +167,7 @@ The email a mutation declares with `"notify": { "to", "subject", "body" }`, queu
 _Avoid_: notification, alert, webhook
 
 **Schedule**:
-A mutation's declaration that the Kernel's own timer runs it, `"schedule": { "every": "15m" }` for a period from 5 minutes to 24 hours or `{ "daily": "02:00" }` at a UTC time, for work that must happen when nobody asks, such as releasing a hold that lapsed. The mutation takes no input, and a run has no caller, so an `actor` binding is null and the guard does not apply. It runs once a period under the Deployment's data lock with the 2-second statement budget, never while the app is in maintenance, and Usage records each run under `scheduled` with its outcome and changes. The period it last ran for is kept with Usage, so a restart, a copy or a migration does not run it twice, and publishing does not run it. Nothing is pushed to a page: a `subscribe` key is refused, and the page polls a query.
+A mutation's declaration that the Kernel's own timer runs it, `"schedule": { "every": "15m" }` for a period from 5 minutes to 24 hours or `{ "daily": "02:00" }` at a UTC time, for work that must happen when nobody asks, such as releasing a hold that lapsed. The mutation takes no input, and a run has no caller, so an `actor` binding is null and the guard does not apply. It runs once a period under the Deployment's data lock with the 2-second statement budget, never while the app is in maintenance, and Usage records each run under `scheduled` with its outcome and changes. The period it last ran for is kept with Usage, so a restart, a copy or a migration does not run it twice, and publishing does not run it. A changed run processes its notice, once per run, through the existing mail queue. It can notify the owner; a notice to actor records no-account because the timer has no caller. Nothing is pushed to a page: a `subscribe` key is refused, and the page polls a query.
 _Avoid_: cron, job, worker, background task
 
 **Action Contract**:
@@ -179,7 +179,7 @@ A namespace on `window.miniapp`, such as `auth`, `actions` or `files`, with a co
 _Avoid_: plugin, library, extension
 
 **Usage**:
-The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations: sessions opened, actions by name, HTTP routes by method and path, uploads, file reads, signups and logins, and the runs of each schedule under `scheduled` with their outcome and changes. A refused call counts nothing, except a guard's refusal, which counts under `refused` by action name. It lives in the Deployment's `usage.sqlite`, distinct from application rows, and only the Project Owner reads it.
+The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations: sessions opened, actions by name, HTTP routes by method and path, uploads, file reads, signups and logins, and the runs of each schedule under `scheduled` with their outcome and changes. Operation totals exclude refused calls except a guard's refusal. Execution outcomes separately distinguish correct calls, app-rule refusals and execution failures, while platform authentication refusals and invalid inputs remain excluded. Usage belongs to the Deployment, distinct from application rows, and only the Project Owner reads it. The account overview includes only projects that owner may read.
 _Avoid_: analytics, telemetry, audit, metric
 
 **Signal**:
@@ -207,7 +207,7 @@ The disposable copy of a Project's source that the agent reads and edits during 
 _Avoid_: Project, filesystem
 
 **Validation Gate**:
-The check that every agent-proposed change must pass before it is applied to a Project. The schema must be valid, a schema change must come with a migration that converges, and every Server Action that runs SQL must remain executable against the migrated schema. Applying is versioned and reversible.
+The check that every agent-proposed change must pass before it is applied to a Project. The schema must be valid, a schema change must come with a migration that converges, and every Server Action that runs SQL must remain executable against the migrated schema. Applying is versioned and reversible. The Gate and the Kernel must refuse the same Capsule with the same words; that shared refusal is what lets the app leave with its rules unchanged.
 _Avoid_: linter, preview
 
 **Agent Credential**:

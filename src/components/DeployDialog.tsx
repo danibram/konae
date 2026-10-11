@@ -35,6 +35,7 @@ type Props = {
   onOpenUsers?: () => void;
   /** Opens Auth > Integrations, where the owner sets a signing secret. */
   onOpenIntegrations?: () => void;
+  onOpenAppSettings?: () => void;
 };
 
 type PolicyRead = { status: "loading" } | { status: "ready"; mode: SignupMode } | { status: "unknown"; reason: string };
@@ -54,7 +55,7 @@ function usePublishedPolicy(deploymentId: string | undefined) {
   return policy;
 }
 
-export function DeployDialog({ project, deployment, publishing, error, session, signInHref, onClose, onDeploy, onEditAuth, current = null, onOpenUsers, onOpenIntegrations }: Props) {
+export function DeployDialog({ project, deployment, publishing, error, session, signInHref, onClose, onDeploy, onEditAuth, current = null, onOpenUsers, onOpenIntegrations, onOpenAppSettings }: Props) {
   const republish = Boolean(current);
   const [chosenVisibility, setVisibility] = useState<DeploymentVisibility>(project.manifest.visibility);
   // A republish keeps the access set in Auth > Users; only a first publish chooses here.
@@ -76,7 +77,7 @@ export function DeployDialog({ project, deployment, publishing, error, session, 
   return (
     <Dialog title="Deploy application" showTitle={false} onClose={onClose} className={`publish-dialog${signedOut ? " is-signed-out" : ""}${listCanLeave ? "" : " is-refused-leave"}`}>
         {deployment ? (
-          <PublishedState deployment={deployment} onClose={onClose} onOpenUsers={onOpenUsers} />
+          <PublishedState deployment={deployment} onClose={onClose} onOpenUsers={onOpenUsers} onOpenAppSettings={onOpenAppSettings} />
         ) : (
           <>
             <div className="publish-scroll">
@@ -94,6 +95,7 @@ export function DeployDialog({ project, deployment, publishing, error, session, 
                 </dl>
                 <p>{republishAccessNote({ visibility: current.manifest.visibility, ...(publishedPolicy.status === "ready" ? { mode: publishedPolicy.mode } : {}) }, visibility)}</p>
                 {onOpenUsers && <button type="button" className="deploy-auth-link" onClick={onOpenUsers}>Open Auth &gt; Users</button>}
+                {onOpenAppSettings && <button type="button" className="deploy-auth-link" onClick={onOpenAppSettings}>Manage custom domain</button>}
               </section>
             ) : (
               <>
@@ -214,7 +216,7 @@ function actionTitle(name: string): string {
   return verb.replaceAll("_", " ");
 }
 
-function PublishedState({ deployment, onClose, onOpenUsers }: { deployment: DeploymentReceipt; onClose: () => void; onOpenUsers?: () => void }) {
+function PublishedState({ deployment, onClose, onOpenUsers, onOpenAppSettings }: { deployment: DeploymentReceipt; onClose: () => void; onOpenUsers?: () => void; onOpenAppSettings?: () => void }) {
   const isPrivate = deployment.manifest.visibility === "private";
   const policy = usePublishedPolicy(deployment.id);
   const urlRef = useRef<HTMLAnchorElement>(null);
@@ -230,8 +232,9 @@ function PublishedState({ deployment, onClose, onOpenUsers }: { deployment: Depl
       <div><strong>{isPrivate ? "People with an app account" : "Anyone with the link"}</strong><p>{isPrivate ? "Visitors sign in to an app account before the app loads." : "Visitors can open the app, but only declared actions can reach data."}{policy.status === "ready" && ` New app accounts: ${signupModeCopy[policy.mode].label}.`}</p></div>
     </div>
     {deployment.accessCode && <div className="published-access-code"><small>PRIVATE ACCESS CODE</small><code>{deployment.accessCode}</code><p>Keep it private. Anyone with this code can open this deployment.</p></div>}
-    <p className="deploy-note">Served by the local Littlebox Kernel. The same deployment contract can be backed by any infrastructure adapter.</p>
+    <p className="deploy-note">Accounts, rows and rules are published with this app. Export takes them to another machine.</p>
     {policy.status === "ready" && policy.mode === "invitation" && onOpenUsers && <Button className="published-invite" onClick={onOpenUsers}>Invite people</Button>}
+    {onOpenAppSettings && <Button onClick={onOpenAppSettings}>Connect a custom domain</Button>}
     <Button variant="primary" className="published-done" onClick={onClose}>Back to workshop</Button>
   </div>;
 }

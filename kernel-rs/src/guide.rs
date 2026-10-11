@@ -7,14 +7,125 @@ use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
 /// The topics `platform_guide` takes, in the order an agent meets them.
-pub(super) const TOPICS: [&str; 7] = ["credentials", "development", "actions", "sdk", "publishing", "users", "portability"];
+pub(super) const TOPICS: [&str; 9] = [
+    "rules",
+    "pieces",
+    "credentials",
+    "development",
+    "actions",
+    "sdk",
+    "publishing",
+    "users",
+    "portability",
+];
 
 /// The permissions a delegated credential may hold. The owner's browser
 /// session holds all of them.
 const SCOPES: [&str; 6] = ["read", "write", "publish", "manage_users", "export_data", "manage_lifecycle"];
 
+/// How to observe the effect of a write through the same door. A write with
+/// no entry here must be listed in [`READ_BACK_GAPS`]. Staging transfers are
+/// outside the rule until `transfer_complete` or a publish that consumes them.
+pub(super) const READ_BACK: &[(&str, &str)] = &[
+    ("project_create", "project_inspect"),
+    ("project_sources_save", "project_sources_read"),
+    ("schema_plan", "schema_plan"),
+    ("database_execute", "database_execute"),
+    ("secret_set", "secrets_list"),
+    ("secret_delete", "secrets_list"),
+    ("api_keys_create", "api_keys_list"),
+    ("api_keys_revoke", "api_keys_list"),
+    ("release_plan", "release_plan"),
+    ("release_apply", "project_inspect"),
+    ("signup_policy_set", "signup_policy_read"),
+    ("app_invitations_create", "app_invitations_list"),
+    ("app_invitation_resend", "app_invitations_list"),
+    ("app_invitation_revoke", "app_invitations_list"),
+    ("app_user_suspend", "app_users_list"),
+    ("app_user_resume", "app_users_list"),
+    ("app_owner_enter", "app_users_list"),
+    ("domain_set", "domain_read"),
+    ("domain_clear", "domain_read"),
+    ("transfer_begin", "transfer_status"),
+    ("transfer_write", "transfer_status"),
+    ("transfer_complete", "transfer_status"),
+    ("transfer_cancel", "transfer_status"),
+    ("package_export", "transfer_read"),
+    ("project_export", "transfer_read"),
+    ("database_export", "transfer_read"),
+    ("eject_plan", "eject_plan"),
+    ("eject_apply", "project_inspect"),
+    ("migration_begin", "migration_status"),
+    ("migration_confirm", "migration_status"),
+    ("migration_cancel", "migration_status"),
+    ("migration_activate", "migration_status"),
+    ("token_create", "tokens_list"),
+    ("token_revoke", "tokens_list"),
+    ("auth_logout", "auth_session"),
+    ("auth_signup", "auth_session"),
+    ("auth_verify", "auth_session"),
+    ("auth_recover", "mail_status"),
+    ("auth_reset", "auth_session"),
+    ("files_upload", "files_list"),
+    ("files_update", "files_list"),
+    ("files_delete", "files_list"),
+    ("actions_invoke", "actions_invoke"),
+];
+
+/// Writes whose effect this door cannot re-read yet. Each entry names what
+/// would close the gap. Kept empty on purpose when every write has a read-back.
+pub(super) const READ_BACK_GAPS: &[(&str, &str)] = &[];
+
 pub(super) fn topic(name: &str) -> Result<Value> {
     Ok(match name {
+        "rules" => json!({
+            "yardstick": "Littlebox lets a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.",
+            "decide": "A new capability belongs in the product only when the Validation Gate and the Kernel refuse it with the same words, and a Package can carry the app's accounts, data and rules. Anything else is operator work, not an App feature.",
+            "sameChecks": "A query that reads rows names a LIMIT in the editor and on the Kernel that leaves with the app. Who may open the app, and who may read a row, stay decisions of the app.",
+            "firstRun": {
+                "cli": [
+                    "bun run littlebox -- login --dir <folder> --url <Kernel URL>",
+                    "bun run littlebox -- init --dir <folder> --name '<name>' && bun run littlebox -- dev --dir <folder>",
+                    "bun run littlebox -- publish --dir <folder>, then open the Deployment URL and call one Server Action"
+                ],
+                "mcp": [
+                    "platform_guide topic rules, then pieces, then credentials",
+                    "project_create, build locally, transfer_begin/write/complete, release_plan, release_apply",
+                    "project_inspect for the URL, then actions_invoke on the runtime endpoint (or conform against action-contract.json)"
+                ],
+                "after": "If the first run grows past these steps, the product got harder. Prefer fixing the path over adding a guide page."
+            },
+            "readBack": {
+                "rule": "Every tool that writes has a tool that observes its effect through the same door. After a write, call that read-back before retrying or telling the owner it worked. A service_timeout or interrupted call must be verified the same way.",
+                "map": Value::Object(READ_BACK.iter().map(|(write, read)| ((*write).to_owned(), json!(*read))).collect()),
+                "gaps": Value::Object(READ_BACK_GAPS.iter().map(|(write, close)| ((*write).to_owned(), json!(*close))).collect()),
+                "staging": "Bytes in an open transfer are not a Deployment. transfer_status is the read-back of staging; project_inspect is the read-back of a release that consumed them."
+            },
+            "capabilities": "session_inspect answers can for the scopes this credential holds, and createTokens when it is the owner's browser session. Decide from can, not from memory of which flag login took.",
+            "divergences": [
+                {"where": "editor preview vs published Deployment", "fact": "The preview applies no Content Security Policy. Inline event handlers and other-origin fetches can still run there; a published app refuses them. Attach listeners in JavaScript and keep scripts and fetches on the app's own origin."},
+                {"where": "editor preview vs Deployment", "fact": "The preview has no HTTP routes, no schedule timer, no notice email, no Usage store, no call outbox, and no owner app account. Try those on bun run littlebox -- dev or on a published Deployment."},
+                {"where": "Validation Gate vs publish builders", "fact": "The Gate checks schema and actions.json. A page that names a missing file fails at build or release, not at validate_capsule. Check every path you write."}
+            ]
+        }),
+        "pieces" => json!({
+            "rule": "Pick the smallest piece that does the job. Do not invent a second process, a second database door or a host rule the Capsule can already declare.",
+            "choose": [
+                {"need": "Show a page and keep rows the app owns", "use": "Capsule files plus Server Actions in actions.json (query or mutation)", "not": "Raw SQL from the browser, or a Database API outside Server Actions"},
+                {"need": "Let a visitor or member change or read a row", "use": "A named Server Action with access and actor bindings", "not": "Owner SQL from database_execute in the app UI"},
+                {"need": "Refuse a mutation that matched no row", "use": "guard on that mutation", "not": "A second check statement or a platform error invent"},
+                {"need": "Email the owner or the caller when a row changes", "use": "notify on that mutation", "not": "A Call Action to a mail API from the browser"},
+                {"need": "Work that must run when nobody is looking", "use": "schedule on a mutation with no input", "not": "An external cron hitting a public route unless a human asked for that door"},
+                {"need": "Record that something happened for the owner", "use": "signal on a mutation, or kind signal", "not": "miniapp.track or a side table only the agent reads"},
+                {"need": "Another service calls this app", "use": "http on an anonymous action with callers, signature and/or API key", "not": "A Call Action (that is outbound)"},
+                {"need": "This app calls another app or https service", "use": "kind call with url, body, optional auth and then", "not": "fetch of a secret from the browser"},
+                {"need": "Files a person uploads", "use": "miniapp.files", "not": "Base64 in a SQLite column for large bytes"},
+                {"need": "Who may create an app account", "use": "Signup Policy and invitations", "not": "A homemade users table that bypasses Runtime Actor"},
+                {"need": "Take the app to another machine", "use": "Package export/import or Migration", "not": "Copy (that moves the whole installation)"},
+                {"need": "Leave managed editing for a folder on disk", "use": "Eject", "not": "Package (that moves data, not source authority)"}
+            ],
+            "unit": "A Deployment folder on the Kernel is the app: artifact, database, identity, files and Usage. Prefer adding a declaration inside the Capsule over adding a new platform resource."
+        }),
         "credentials" => json!({
             "login": "bun run littlebox -- login --dir <folder> --url <Kernel URL> reads LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD. Add LITTLEBOX_INVITATION_CODE, the code the operator issued with littlebox-kernel creator-code-create, to create the account, or LITTLEBOX_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.littlebox/credentials.json, which init, publish, export and eject read. LITTLEBOX_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with LITTLEBOX_PASSWORD in the same run.",
             "flags": {"--manage-users": "adds manage_users", "--export-data": "adds export_data", "--manage-lifecycle": "adds manage_lifecycle"},
@@ -27,7 +138,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "export_data": "package_export, project_export, database_export, and migration_begin together with manage_lifecycle",
                 "manage_lifecycle": "eject_plan, eject_apply and the migration tools"
             },
-            "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists what the current credential holds."
+            "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds."
         }),
         "development" => json!({
             "commands": [
@@ -54,7 +165,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "Build static HTML/CSS/JS locally. Inject the SDK using the local builder.",
                 "Upload JSON {project:{id,name,slug,files,manifest},visibility,artifact:{version:1,entrypoint:'index.html',files:{...}}} using transfer_begin with projectId, byte size and sha256, then transfer_write and transfer_complete.",
                 "Call release_plan with transferId, inspect its planId and expectedRevision, then call release_apply with planId.",
-                "Save the receipt and cancel the temporary transfer."
+                "Save the receipt and cancel the temporary transfer. Read the live Deployment with project_inspect."
             ],
             "cli": "bun run littlebox -- publish --dir <folder> runs these steps with the credential from login and sends project.manifest.signupPolicy from littlebox.json as initialSignupPolicy on the first release.",
             "concurrency": "An obsolete plan is rejected. Repeating an applied plan returns the same receipt.",
@@ -98,6 +209,21 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             ]
         }),
         _ => bail!("Unknown guide topic. Choose one of {}.", TOPICS.join(", ")),
+    })
+}
+
+/// What `session_inspect` reports under `can`: the scopes this credential
+/// holds, plus whether it may create tokens (owner browser session only).
+pub(super) fn session_can(owner: &Owner) -> Value {
+    let holds = |scope: &str| owner.scopes.iter().any(|s| s == scope);
+    json!({
+        "read": holds("read"),
+        "write": holds("write"),
+        "publish": holds("publish"),
+        "manage_users": holds("manage_users"),
+        "export_data": holds("export_data"),
+        "manage_lifecycle": holds("manage_lifecycle"),
+        "createTokens": owner.session
     })
 }
 
@@ -188,7 +314,7 @@ mod tests {
             .chain(runtime_tools())
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
-        let prefixes = ["platform_", "project_", "projects_", "schema_", "database_", "storage_", "release_", "signup_policy_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "eject_", "migration_", "package_", "mail_", "session_"];
+        let prefixes = ["platform_", "project_", "projects_", "schema_", "database_", "storage_", "release_", "signup_policy_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "eject_", "migration_", "package_", "mail_", "session_", "domain_"];
         for name in TOPICS {
             let text = topic(name).unwrap().to_string();
             for word in text.split(|c: char| !(c.is_ascii_lowercase() || c == '_')) {
@@ -198,5 +324,58 @@ mod tests {
             }
         }
         assert!(topic("nothing").unwrap_err().to_string().starts_with("Unknown guide topic."));
+    }
+
+    #[test]
+    fn every_write_tool_names_a_read_back_or_a_gap() {
+        let mut session = owner(&SCOPES);
+        session.session = true;
+        let writes: Vec<String> = admin_tools(&session)
+            .into_iter()
+            .chain(runtime_tools())
+            .filter(|tool| tool["annotations"]["readOnlyHint"] == false)
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect();
+        let served: Vec<String> = admin_tools(&session)
+            .into_iter()
+            .chain(runtime_tools())
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect();
+        let mapped: Vec<&str> = READ_BACK.iter().map(|(w, _)| *w).chain(READ_BACK_GAPS.iter().map(|(w, _)| *w)).collect();
+        for write in &writes {
+            assert!(mapped.contains(&write.as_str()), "write tool {write} has no read-back and no gap");
+        }
+        for (write, read) in READ_BACK {
+            assert!(served.iter().any(|s| s == *write), "read-back map names {write}, which the Kernel does not serve");
+            assert!(served.iter().any(|s| s == *read), "read-back for {write} names {read}, which the Kernel does not serve");
+        }
+        for (write, _) in READ_BACK_GAPS {
+            assert!(served.iter().any(|s| s == *write), "gap names {write}, which the Kernel does not serve");
+            assert!(!READ_BACK.iter().any(|(w, _)| w == write), "gap {write} also has a read-back");
+        }
+    }
+
+    #[test]
+    fn rules_and_pieces_topics_carry_the_operating_contract() {
+        let rules = topic("rules").unwrap();
+        assert!(rules["yardstick"].as_str().unwrap().contains("take it to another machine"));
+        assert_eq!(rules["firstRun"]["mcp"].as_array().unwrap().len(), 3);
+        assert_eq!(rules["readBack"]["map"]["release_apply"], "project_inspect");
+        assert!(rules["divergences"].as_array().unwrap().len() >= 3);
+        let pieces = topic("pieces").unwrap();
+        assert!(pieces["choose"].as_array().unwrap().len() >= 8);
+        assert!(pieces["unit"].as_str().unwrap().contains("Deployment folder"));
+    }
+
+    #[test]
+    fn session_can_follows_scopes_and_browser_session() {
+        let delegated = owner(&["read", "publish"]);
+        assert_eq!(session_can(&delegated)["publish"], true);
+        assert_eq!(session_can(&delegated)["write"], false);
+        assert_eq!(session_can(&delegated)["createTokens"], false);
+        let mut browser = owner(&SCOPES);
+        browser.session = true;
+        assert_eq!(session_can(&browser)["createTokens"], true);
+        assert_eq!(session_can(&browser)["manage_lifecycle"], true);
     }
 }

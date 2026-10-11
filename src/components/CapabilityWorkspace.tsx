@@ -8,11 +8,11 @@ import {
   UserRound,
   Users,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DatabaseAdminHost, MiniAppRuntimeHost, StoredFile } from "../runtime/host";
 import type { DrizzleDatabaseModel } from "../lib/types";
 import { parseServerActionSource, routeCallers } from "../kernel/actions";
-import { Button, EmptyState as UiEmptyState } from "./ui";
+import { Button, EmptyState as UiEmptyState, Field, Select } from "./ui";
 import { DatabaseStudio } from "./DatabaseStudio";
 import { AppUsersView } from "./AppUsersView";
 import { IntegrationsView } from "./IntegrationsView";
@@ -72,10 +72,13 @@ export function CapabilityWorkspace(props: Props) {
   return <AuthPanel {...props} />;
 }
 
-function FilesPanel({ host, onFilesChanged }: Props) {
+function FilesPanel({ host, onFilesChanged, deployment }: Props) {
   const [files, setFiles] = useState<StoredFile[]>(host.getFiles());
   const [error, setError] = useState("");
+  const [actor, setActor] = useState(host.getPreviewActor());
   const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => host.subscribeFiles(setFiles), [host]);
+  useEffect(() => host.subscribeSession(() => setActor(host.getPreviewActor())), [host]);
 
   const upload = async (file?: globalThis.File) => {
     if (!file) return;
@@ -86,23 +89,25 @@ function FilesPanel({ host, onFilesChanged }: Props) {
       setFiles(host.getFiles());
       onFilesChanged();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(cause instanceof Error && cause.message === "authentication-required" ? "Choose a preview user before uploading." : cause instanceof Error ? cause.message : String(cause));
     }
   };
 
   return (
     <section className="cap-workspace" aria-label="Uploads">
-      <input ref={inputRef} className="sr-only" type="file" onChange={(event) => { void upload(event.target.files?.[0]); event.target.value = ""; }} />
+      <p className="preview-uploads-context">Preview uploads in this browser. Files in the published app are separate.{deployment && <> <a href={deployment.url} target="_blank" rel="noreferrer">Open the published app</a></>}</p>
+      <div className="preview-upload-actor"><Field label="Upload as" help={actor === "guest" ? "Choose a preview user to upload a file. Owner sign-in is separate from the app's users." : "Files you upload belong to this preview user."}><Select value={actor} onChange={(event) => { host.setPreviewActor(event.target.value as "guest" | "alice" | "bob"); setError(""); onFilesChanged(); }}><option value="guest">Signed out</option><option value="alice">Alice</option><option value="bob">Bob</option></Select></Field></div>
+      <input ref={inputRef} className="sr-only" type="file" disabled={actor === "guest"} onChange={(event) => { void upload(event.target.files?.[0]); event.target.value = ""; }} />
       {files.length > 0 && (
         <div className="files-summary">
           <span>{files.length} upload{files.length === 1 ? "" : "s"}</span>
           <span>{formatBytes(files.reduce((sum, file) => sum + file.size, 0))}</span>
-          <Button variant="primary" className="files-upload" onClick={() => inputRef.current?.click()}><HardDriveUpload size={13} /> Upload file</Button>
+          <Button variant="primary" className="files-upload" disabled={actor === "guest"} onClick={() => inputRef.current?.click()}><HardDriveUpload size={13} /> Upload file</Button>
         </div>
       )}
-      {error && <div className="cap-error">{error}</div>}
+      {error && <div className="cap-error" role="alert">{error}</div>}
       <div className="file-grid">
-        {files.length === 0 ? <EmptyState onUpload={() => inputRef.current?.click()} text={previewUploadsNote} /> : files.map((file) => (
+        {files.length === 0 ? <EmptyState onUpload={() => inputRef.current?.click()} disabled={actor === "guest"} text={previewUploadsNote} /> : files.map((file) => (
           <article key={file.id} className="file-card">
             <div className="file-preview">{file.type.startsWith("image/") ? <img src={file.url} alt="" /> : <File size={27} />}</div>
             <div><strong>{file.name}</strong><small>{formatBytes(file.size)} · {file.type || "unknown"}</small></div>
@@ -167,7 +172,7 @@ function RulesView({ host, onFilesChanged, actionsSource, onSetAccess, visibilit
           setActor(next);
           host.setPreviewActor(next);
           onFilesChanged();
-        }}><option value="guest">Someone who has not signed in</option><option value="alice">A signed-in person</option><option value="bob">Another signed-in person</option></select></label>
+        }}><option value="guest">Signed out</option><option value="alice">Signed in as Alice</option><option value="bob">Signed in as Bob</option></select></label>
       </section>
       <div className="auth-grid">
         <article><ShieldCheck size={18} /><div><strong>The session belongs only to this app.</strong></div></article>
@@ -177,8 +182,8 @@ function RulesView({ host, onFilesChanged, actionsSource, onSetAccess, visibilit
   );
 }
 
-function EmptyState({ text, onUpload }: { text: string; onUpload: () => void }) {
-  return <UiEmptyState className="cap-empty" icon={<FileImage size={26} />} title="No files yet" description={text} action={<Button variant="primary" onClick={onUpload}><HardDriveUpload size={15} /> Upload file</Button>} />;
+function EmptyState({ text, onUpload, disabled }: { text: string; onUpload: () => void; disabled?: boolean }) {
+  return <UiEmptyState className="cap-empty" icon={<FileImage size={26} />} title="No files yet" description={text} action={<Button variant="primary" disabled={disabled} onClick={onUpload}><HardDriveUpload size={15} /> Upload file</Button>} />;
 }
 
 function rules(source: string | undefined) {

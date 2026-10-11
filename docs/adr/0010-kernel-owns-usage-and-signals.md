@@ -62,3 +62,17 @@ A Signal may list `actor` among its properties. It records the caller's ID: the 
 ## Note, 2026-11-07: scheduled runs
 
 [ADR-0017](0017-the-kernel-runs-a-declared-schedule.md) adds an eighth kind, `scheduled`, counted by action name for each run of a declared schedule, and two tables in `usage.sqlite`: `scheduled_runs`, the newest 10,000 runs with their outcome and changes, and `schedule_state`, the slot each scheduled action last ran for. The schedule's timer writes them directly rather than through the queue, because a lost write would let a run repeat after a restart. `usage_read` returns the newest 500 runs of its range under `scheduled`.
+
+## Update, 2026-11-07: an owner can monitor apps and features
+
+The editor exposes `/usage` for the account and `/usage?deployment=<id>` for one published app. Both read the Kernel. The account view includes managed, external and unpublished projects that the signed-in owner may read. It does not depend on sources saved in the browser.
+
+`usage_summary { deploymentId, from, to }` returns existing operation totals, the published action declarations, daily execution outcomes and daily Signal totals. `usage_overview { from, to, cursor? }` returns up to 50 accessible projects with summaries and a `nextCursor`. Both need `read`, check project grants and remain absent from the Runtime Interface. A failed read for one app does not hide the other apps.
+
+The same `usage.sqlite` now has `metric_daily`, keyed by UTC day, feature, name, origin and outcome, with a count and the latest occurrence time. Executions retain their action name and distinguish runtime, HTTP route, schedule and call continuation. Results distinguish correct execution, guard refusal and execution failure. Scheduled runs without changes have their own result. Binding errors and platform authentication refusals stay outside these execution totals. Existing `usage_read` counters keep their meanings and response shape.
+
+Signals increment a daily total in the transaction that stores the detailed event. Removing old detailed Signals no longer removes those totals. The table keeps up to 400 days and 100,000 rows. `metric_meta` records when aggregate capture began and the latest day affected by retention pruning. An older store upgrades on its next write. We do not reconstruct complete totals from a truncated Signal log.
+
+The monitor also reads counts of current states from retained calls and notice jobs, scoped to the Deployment and their creation dates. Those are partial job histories, not lifetime delivery totals. A queued call is not a delivered call, and an accepted email is not a confirmed delivery. Session checks never become unique visitors. Actions, Signals and notices are not summed as completed business tasks.
+
+The queue still drops entries under pressure. The summary exposes installation-wide dropped-entry and write-error counts since restart, without attributing them to an individual app. Counts remain approximate. Daily aggregates travel inside the existing Usage package component and scheduled copies. The export of code alone contains no runtime history.

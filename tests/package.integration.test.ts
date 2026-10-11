@@ -168,8 +168,17 @@ describe("chunked package", () => {
       { kind: "signup", name: "", count: 1 }, { kind: "action", name: "notes.create", count: 1 }, { kind: "upload", name: "", count: 1 },
     ]));
 
+    const monitor = await owner.call<{ metrics: { name: string; origin: string; count: number }[]; coverage: { startedAt: number } }>("usage_summary", { deploymentId: first.receipt.id, from: yesterday, to: today });
+    expect(monitor.coverage.startedAt).toBeNumber();
+    expect(monitor.metrics).toEqual(expect.arrayContaining([expect.objectContaining({ name: "notes.create", origin: "runtime", count: 1 })]));
+
     const moved = runtime(first.receipt.hostname, await account(first.receipt.hostname, "login", "writer@pkg_source.test"));
     expect(await moved.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Moved with the package" }]);
+    const continued = await owner.call<{ metrics: { name: string; origin: string; count: number }[] }>("usage_summary", { deploymentId: first.receipt.id, from: yesterday, to: today });
+    expect(continued.metrics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "notes.create", origin: "runtime", count: 1 }),
+      expect.objectContaining({ name: "notes.list", origin: "runtime", count: 1 }),
+    ]));
     expect(new TextDecoder().decode(await moved.download(await moved.call<Transfer>("files_read", { fileId })))).toBe("attachment bytes");
     expect(await runtime(first.receipt.hostname, cookie).call("auth_session")).toMatchObject({ role: "anonymous" });
     // The destination lists the origin's key as revoked at import, and refuses it.

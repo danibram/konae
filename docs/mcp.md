@@ -25,7 +25,7 @@ Clients that support headers can also use a delegated token.
 Authorization: Bearer YOUR_TOKEN
 ```
 
-Call `platform_describe` and `projects_list` after connecting. `platform_guide` takes the topics `credentials`, `development`, `actions`, `sdk`, `publishing`, `users` and `portability`, each a short form of a section of this page. [The walkthrough](mcp-walkthrough.md) runs every step from a credential to a migration against a Kernel, with the exact answers. An agent needs filesystem and local execution tools to create files and build an app. The MCP server does not read paths on the user's machine.
+Call `platform_describe` and `projects_list` after connecting. `platform_describe` states the yardstick, a short first run and the workflow. `platform_guide` takes `rules`, `pieces`, `credentials`, `development`, `actions`, `sdk`, `publishing`, `users` and `portability`. Start with `rules` (same checks in the Gate and the Kernel, first run, read-back after every write, named preview-vs-publish gaps) and `pieces` (which Capsule declaration to use). The other topics are short forms of sections on this page. `session_inspect` returns `can` for the scopes this credential holds. After a write, call the read-back named in `rules` before retrying or telling the owner it worked. [The walkthrough](mcp-walkthrough.md) runs every step from a credential to a migration against a Kernel, with the exact answers. An agent needs filesystem and local execution tools to create files and build an app. The MCP server does not read paths on the user's machine.
 
 If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_MCP_ORIGIN` to its public origin, without a path. The proxy must preserve `Host`. Owner signup answers on that host too, so the Kernel refuses to start with the default setup key when this host is not local. Browser calls to the editor and to the runtime use their own origin; there is no open CORS.
 
@@ -44,7 +44,7 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | Signing secrets | `secrets_list`, `secret_set`, `secret_delete` |
 | API keys | `api_keys_list`, `api_keys_create`, `api_keys_revoke` |
 | Custom domain | `domain_read`; `domain_set`, `domain_clear` with `publish` |
-| Usage and Signals | `usage_read`, `signals_read` |
+| Usage and Signals | `usage_read`, `signals_read`, `usage_summary`, `usage_overview` |
 | Calls between apps | `calls_read` |
 | App users and invitations | `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_invitations_create`, `app_invitations_list`, `app_invitation_resend`, `app_invitation_revoke` |
 | Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
@@ -56,9 +56,11 @@ The catalog depends on the credentials. The Kernel checks the permission again o
 
 This changes the contract. `signup_policy_set` needed `publish` before `manage_users` existed, so a client that changed the policy with a `read`, `write` and `publish` token now gets "Unknown tool" and needs a new token that includes `manage_users`. `bun run littlebox -- login --manage-users` asks for one, and `bun run littlebox -- dev` asks for one on its Development Kernel.
 
-Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `domain_read` needs `read`; `domain_set` and `domain_clear` need `publish`. `usage_read`, `signals_read` and `calls_read` need `read`.
+Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `domain_read` needs `read`; `domain_set` and `domain_clear` need `publish`. `usage_read`, `signals_read`, `usage_summary`, `usage_overview` and `calls_read` need `read`.
 
 `project_create` returns a template and an External identity by default. Later sources stay in the user's folder; `project_inspect` returns metadata and the Deployment, without claiming to synchronize that code with the editor.
+
+The editor uploads a new app's JSON without a `projectId`, then calls `project_create` with `sourceAuthority: "managed"` and `sourcesTransferId`. The Kernel validates the files and saves the project registry entry and files in one transaction, returning `sourcesRevision: 1`. A failed upload or validation leaves no project entry. Repeating the same initial files returns the saved revision; different files cannot overwrite an existing save through `project_create`. Subsequent edits use `project_sources_save` with that revision.
 
 ## Signup policy
 
@@ -526,6 +528,8 @@ When a call ends, delivered or failed, its `then` mutation runs once, with no ac
 
 A pointer that finds nothing, or null, leaves its input out, so it binds NULL when the input is nullable. A string input takes a number, a boolean or a structure as its JSON text. The `then` mutation must exist, be a mutation, have no HTTP route and no actor binding, and every required input must be filled; both doors refuse anything else at publish. Only the Kernel runs it: `miniapp.actions.call` refuses it with `Action <name> runs only after the call <call> answers.` It counts in Usage as an action, or under `refused` when its guard refuses, and records its Signal with `actor` null.
 
+A call's `then` mutation processes its declared `notify` when it changes a row, using the inputs mapped from the answer. It uses the same queue, budgets and Usage outcomes as other mutations. A notice to `owner` reaches the project owner. A notice to `actor` records `no-account` because the answer has no caller. A refused or unchanged mutation sends nothing.
+
 `calls_read { "deploymentId", "cursor"? }` needs `read` and lists the app's calls newest first, 50 at a time: the action, `pending`, `delivered` or `failed`, attempts, method, URL, status, error kind, the first 1 KiB of the answer and the `then` mutation's outcome (`done`, `refused` with the guard, or `failed` with the reason). The outbox keeps the newest 1000 finished calls per app. Pending calls do not travel in a package or a migration; on the destination, the page invokes them again, and a retired origin ends its pending calls with `app-moved`. Scheduled copies carry `calls.sqlite`, so a restore brings the outbox back as the copy held it.
 
 ### A page that reads another app
@@ -544,7 +548,7 @@ The Validation Gate and the Kernel parse calls and `connects` from one case file
 
 | Declaration | Message |
 | --- | --- |
-| A query, mutation or signal action with `url`, `method`, `body`, `auth` or `then` | `Action <name> is a <kind>, so it cannot declare url, method, body, auth or then. Those keys belong to an action of "kind": "call".` |
+| A query, mutation or signal action with `url`, `method`, `body`, `headers`, `auth` or `then` | `Action <name> is a <kind>, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of "kind": "call".` |
 | A call with a statement, signal, guard or http | `Action <name> is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route.` |
 | A call that binds the actor, the time or a literal | `Action <name> is a call, so its bindings may only be inputs.` |
 | A method other than `"GET"` or `"POST"` | `Action <name> must call with "method": "GET" or "POST".` |
@@ -562,6 +566,19 @@ The Validation Gate and the Kernel parse calls and `connects` from one case file
 The editor preview answers a call with `{ callId, queued: true }` and sends nothing. Try calls on a Development Kernel with `littlebox dev`, or on a Deployment. The [Action Contract](#action-contract) lists a call with its request and its `then`, and `conform` checks its refusals without sending one.
 
 ## Usage and Signals
+
+The owner's Usage page at `/usage` reads all accessible projects from the Kernel, including external projects and unpublished drafts. Open one published app for feature activity, execution outcomes, business event totals and retained delivery states. The page offers 7, 30 and 90 days and refreshes every minute while visible.
+
+```text
+usage_summary  { "deploymentId", "from", "to" }
+usage_overview { "from", "to", "cursor"? }
+```
+
+Both tools accept inclusive UTC dates and the same 400-day range limit as `usage_read`. The overview returns at most 50 projects and `nextCursor`. Its summaries aggregate operation kinds and execution outcomes across the period; per-action daily detail belongs to `usage_summary`. It checks the account owner and token project grants before reading summaries. Unpublished projects have `summary: null`; an unreadable published store also has an `error`, rather than appearing unused.
+
+`usage_summary` returns `usage` with the existing counters, `actions` from the published Deployment, `metrics` with daily execution and Signal aggregates, retained `calls` and `mail` state counts, `coverage` and `updatedAt`. Execution origins are `runtime`, `route`, `schedule` and `continuation`; outcomes are `ok`, `refused`, `failed` and `unchanged` for scheduled work without changes. A route retains the action's name and counts once in this execution table. The existing operation table still counts it only under `route`.
+
+Coverage includes `queueFlushed` to say whether earlier queued records finished writing before the read. A false value means recent activity may be missing. Coverage also names when new aggregates began, the earliest retained metric day, and the last day affected by pruning as `prunedThrough`. A null capture start means the old store has not received a new write. Earlier operation counters may exist. Dropped-entry and write-error counts cover the installation since restart. Retained call and mail states describe jobs created in the requested period; records already removed cannot contribute. These tools return neither Signal properties nor request bodies.
 
 Each Deployment keeps Usage and Signals in its own `usage.sqlite`, next to its database and accounts. [ADR-0010](./adr/0010-kernel-owns-usage-and-signals.md) records the decision; `kernel-rs/src/usage.rs` implements it. Only the owner reads them, through two tools that need `read` and the project grant. The runtime endpoint does not list them, so an app cannot read its own Usage.
 
@@ -677,6 +694,7 @@ Some work has to happen when nobody asks: a hold that lapsed is released so the 
 | Maintenance | A Deployment in maintenance runs nothing, and runs each due action once when it leaves maintenance |
 | Failure | A run SQLite refuses is logged, recorded with `outcome: "failed"` and its error, and tried again at the next look. Runs never pile up |
 | Guard and Signal | A run that changes no row had nothing to do: it is recorded with `changes: 0` and the guard does not apply. A run that changed a row records the action's Signal, with `actor` null |
+| Notice | A run that changes a row processes `notify` through the same queue and budgets as a caller's mutation. `to: "owner"` emails the owner once per changed run, even for several changed rows. `to: "actor"` records `no-account` under Usage because the timer has no caller. Failed runs and runs that change nothing send nothing |
 | Usage | Each run counts under `scheduled` by action name, and `usage_read` returns the newest 500 runs of its range with `action`, `at`, `outcome`, `changes` and, for a failed run, `error` |
 
 The editor preview runs no schedule. A Development Kernel started with `bun run littlebox -- dev` runs them as a Deployment does. A test can set `LITTLEBOX_SCHEDULE_MIN_SECONDS` to run every schedule once every few seconds instead of at its declared times; the Kernel refuses to start with it unless `LITTLEBOX_BIND` is a loopback address.
@@ -919,6 +937,16 @@ After Eject, `project_sources_read` still returns the frozen sources with `readO
 
 Returning to managed authoring is not supported. To edit in Littlebox again, create a new project; production data does not merge into it.
 
+## Deployed database models
+
+A release may include `project.databaseModel` with `source`, `acceptedSource` and `revision`. Publishing requires equal source strings and a nonempty revision. Both planning and applying derive that model through the isolated schema helper and compare it with SQLite after the proposed additive schema runs. A model that describes another schema is refused before the live deployment changes. The Kernel persists the accepted model in `deployment.json` and returns it through `release_apply` and `project_inspect`, so reloading the editor keeps the deployed schema revision.
+
+A release without `databaseModel`, such as a CLI publish, keeps the previous model only when it still matches the resulting schema. Otherwise the receipt has no model. For a legacy deployment without one, `project_inspect` may recover the saved model's `acceptedSource` only after deriving it and comparing it with live SQLite. It does not accept the current editable source or the saved revision label as proof. Recovery records the accepted source's SHA-256 as its revision. When derivation or comparison fails, the model remains absent and the editor keeps schema editing and publishing blocked.
+
+`schema_plan` returns `candidateModelSource` alongside its existing plan fields. Send the complete plan and `recoveryModelSource` to `database_execute` with `operation: "apply-migration"`. The Kernel checks the old accepted source, derives the plan again and compares its hashes and statements before applying it. A successful apply persists the candidate source and `toHash`. Older callers that omit the candidate can still apply SQL, but the Kernel clears the accepted model rather than retaining a stale revision.
+
+Database backups return `databaseModelSource` and `schemaRevision` when the deployment has an accepted model. Restore returns those fields and restores the persisted model with the database. A backup without model metadata clears the model; any later legacy recovery still has to prove it against SQLite.
+
 ## Export and import an app
 
 `package_export` takes a `deploymentId` and captures the app under its project, data and identity locks. No action, upload, signup, policy change or release lands halfway; they wait for the capture to finish. A 256 MiB database takes a few seconds. It returns a manifest and one download transfer per component.
@@ -1089,3 +1117,5 @@ Calls between apps (ADR-0019) change three answers a client may have recorded: `
 The editor preview still stores its test data in the browser, including uploads, which it keeps as data URLs in local storage. It uses MCP over a MessageChannel with an ephemeral preview credential. The registry of published projects and the credentials live in the Kernel.
 
 Remote development environments, teams with Workspace membership and immutable artifact history are outside this release. Publishing keeps the project's URL and database, matching the Kernel's current behavior. Each Deployment is one folder on the Kernel volume with its record, artifact, database, accounts, files and backups. Scheduled copies send those folders to a second disk or an S3 prefix, and `littlebox-kernel restore` installs a copy on a fresh volume; the README's section on the data directory and copies describes both.
+
+The editor's portable `project_export` also returns `domain`, a hostname string or null, under the export lock. It includes no domain verification token. The generated kit stores the hostname as `littlebox/project.json.domain` and sends `initialDomain` with its first release. `initialDomain` needs the release's `publish` permission, is refused on a republish, and cannot accompany `initialPackage`; a package uses `initialPackage.manifest.domain` instead. Both import paths create a pending claim with a new token issued by the destination. After import the generated deploy script calls `domain_read` and prints the TXT record and `domain_set` arguments for verification. Imported artifacts never establish domain ownership. The export still needs `export_data`, and a domain import does not change the snapshot's visibility or signup policy.

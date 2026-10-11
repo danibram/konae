@@ -72,7 +72,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 ├── owners.sqlite           # creator accounts, sessions, challenges and invitation codes
 ├── mcp.sqlite              # projects, saved sources, agent credentials, OAuth, signing secrets, audit
 ├── mail.sqlite             # the account email queue, ADR-0012
-├── calls.sqlite            # the call actions' queue and outbox, ADR-0015
+├── calls.sqlite            # the call actions' queue and outbox, ADR-0019
 ├── mailbox.jsonl           # the development mailbox, only with LITTLEBOX_MAIL_TRANSPORT=development
 ├── transfers/              # unfinished MCP uploads and downloads
 ├── recovery-hold.json      # only after a restore that could not read the revocation record

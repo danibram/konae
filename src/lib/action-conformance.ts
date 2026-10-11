@@ -172,7 +172,7 @@ export async function runConformance(contract: ActionContract, target: Conforman
   for (const action of contract.actions) {
     const name = action.name;
     const valid = minimal(action);
-    // A call's then mutation runs only after its call ends; the runtime endpoint refuses it (ADR-0015).
+    // A call's then mutation runs only after its call ends; the runtime endpoint refuses it (ADR-0019).
     if (action.thenOf) {
       await expectRefusal(action, "runs only after its call", [`Action ${name} runs only after the call ${action.thenOf} answers.`, "Sign in to use Littlebox MCP."],
         () => invoke(name, valid, target.hasSession ? "session" : "visitor"));

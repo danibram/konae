@@ -1133,6 +1133,7 @@ mod tests {
             hostname: format!("{id}.localhost"),
             actions: "{}".into(),
             artifact_version: None,
+            database_model: None,
             signup_policy: SignupPolicy::default(),
         }
     }

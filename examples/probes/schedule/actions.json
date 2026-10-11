@@ -23,7 +23,8 @@
       "schedule": { "every": "5m" },
       "statement": "UPDATE notes SET surfaced_at = ?1 WHERE surfaced_at IS NULL AND remind_at <= ?1 AND ?2 IS NULL",
       "bindings": [{ "source": "kernel", "field": "now" }, { "source": "actor", "field": "id" }],
-      "signal": { "name": "notes.surfaced" }
+      "signal": { "name": "notes.surfaced" },
+      "notify": { "to": "owner", "subject": "Notes are due", "body": "Open your notes to read the reminders." }
     }
   }
 }

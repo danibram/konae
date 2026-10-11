@@ -228,6 +228,10 @@ LITTLEBOX_DATA_DIR=data LITTLEBOX_KERNEL_PORT=\u0024{LITTLEBOX_PORT:-8787} LITTL
 
 When it answers on \u0060/_littlebox/health\u0060, run \u0060npm run deploy\u0060 in a second terminal. The database lives under \u0060data/\u0060 here too.
 
+## Custom domain
+
+An export carries the custom hostname without its verification token. The destination keeps the hostname pending and issues a new token. After importing, the deploy script prints the TXT record to set at your DNS provider. Point the hostname at the destination, configure TLS on its proxy and forward the Host header unchanged. Call domain_set with the printed arguments after updating DNS. The generated app URL keeps working while verification is pending.
+
 ## Changing the database
 
 \u0060app/schema.ts\u0060 is the Database Model the Littlebox editor used to plan migrations. This export has no migration generator, so editing it changes nothing. Change \u0060app/schema.sql\u0060 instead, and only in ways the Kernel accepts on every deploy: new tables and indexes with \u0060IF NOT EXISTS\u0060. Back up \u0060data/\u0060 before any change to an existing table.
@@ -270,7 +274,7 @@ export function projectExportEntries(
 ): TarEntry[] {
   if (state && "package" in state) {
     const manifest = checkPackageManifest(state.package);
-    const entries = projectExportEntries(project, artifact, kernelFiles, { visibility: manifest.visibility } as PortableProjectState);
+    const entries = projectExportEntries(project, artifact, kernelFiles, { visibility: manifest.visibility, domain: manifest.domain } as PortableProjectState);
     entries.splice(entries.findIndex((entry) => entry.path === "littlebox/artifact.json") + 1, 0,
       { path: "littlebox/package/manifest.json", contents: JSON.stringify(manifest, null, 2), mode: 0o600 });
     return entries;
@@ -327,6 +331,7 @@ export function projectExportEntries(
       slug: project.slug,
       manifest: portableState?.visibility ? { ...project.manifest, visibility: portableState.visibility } : project.manifest,
       databaseModel: project.databaseModel,
+      ...(portableState?.domain ? { domain: portableState.domain } : {}),
     }, null, 2) },
     { path: "littlebox/artifact.json", contents: JSON.stringify(normalizedArtifact, null, 2) },
     ...contract,

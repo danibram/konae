@@ -1,6 +1,6 @@
 import { FolderOpen, Plus, Settings2 } from "lucide-react";
-import { useMemo, useRef, useState, type ReactNode } from "react";
-import { loadWorkspaceState } from "../lib/workspace";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { readOwnerProjectCount } from "../lib/managed-sources";
 import { useOwnerSession } from "./owner-session";
 import { WorkspaceNav } from "./WorkspaceNav";
 import { Badge, Button, Card, Dialog, EmptyState, Field, IconButton, Input, Select, Textarea } from "./ui";
@@ -13,7 +13,19 @@ export function DesignSystem() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const [ownerSession] = useOwnerSession();
-  const projectCount = useMemo(() => loadWorkspaceState().projects.length, []);
+  const [projectCount, setProjectCount] = useState<number | undefined>();
+
+  useEffect(() => {
+    if (ownerSession.state !== "signed-in") {
+      setProjectCount(undefined);
+      return;
+    }
+    let active = true;
+    void readOwnerProjectCount(ownerSession.ownerId)
+      .then((count) => { if (active) setProjectCount(count); })
+      .catch(() => { if (active) setProjectCount(undefined); });
+    return () => { active = false; };
+  }, [ownerSession]);
 
   return (
     <div className="account-home">
@@ -23,7 +35,7 @@ export function DesignSystem() {
           <header className="account-hero ds-hero">
             <p className="account-kicker"><span>◆</span> Littlebox UI</p>
             <h1>Design system</h1>
-            <p>Ink borders, an offset shadow, and one lime primary. These are the pieces an app shares.</p>
+            <p>Component examples. These controls do not change projects or upload files. Open a project to work with its files.</p>
           </header>
           <div className="ds-page-inner">
             <Sample title="Foundations">

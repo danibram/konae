@@ -492,13 +492,12 @@ function SchemaView({ host, tables, databaseModel, onEdit, onApplied }: {
   // for example after a DROP TABLE in the SQL console.
   const missingTables = inSync ? modelTableNames(databaseModel.acceptedSource).filter((name) => !tables.some((table) => table.name === name)) : [];
   const drifted = missingTables.length > 0;
-  const lifecycleStatus = message
+  const lifecycleStatus = error || message
     || (applying ? "Applying migration · creating recovery point"
       : planning ? "Changes detected · generating Drizzle migration"
         : plan ? "Migration ready · review generated SQL"
-          : error ? "Migration planning failed"
-            : drifted ? `Database differs from schema.ts · missing ${missingTables.join(", ")}`
-              : inSync ? "These columns are what a row keeps." : "The columns changed. Apply writes the SQL.");
+          : drifted ? `Database differs from schema.ts · missing ${missingTables.join(", ")}`
+            : inSync ? "These columns are what a row keeps." : "The columns changed. Apply writes the SQL.");
 
   return (
     <div className="studio-document-view schema-model-view">
@@ -511,7 +510,7 @@ function SchemaView({ host, tables, databaseModel, onEdit, onApplied }: {
         ))}
       </ul>
       <div className="schema-actions"><button onClick={onEdit}><Pencil size={12} /> Edit the columns</button></div>
-      <div className={`schema-lifecycle-status ${error || (drifted && !message) ? "is-error" : plan ? "is-ready" : inSync ? "is-synced" : ""}`} role="status">{planning && <RefreshCw className="spin" size={12} />}{!planning && plan && <Check size={12} />}{lifecycleStatus}</div>
+      <div className={`schema-lifecycle-status ${error || (drifted && !message) ? "is-error" : plan ? "is-ready" : inSync ? "is-synced" : ""}`} role="status">{planning && <RefreshCw className="spin" size={12} />}{!planning && plan && !error && <Check size={12} />}{lifecycleStatus}</div>
       {error && <div className="backup-error" role="alert">{error}</div>}
       {plan ? (
         <section className="migration-plan" aria-label="Migration plan">

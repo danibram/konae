@@ -10,6 +10,7 @@ export type DeploymentReceipt = DeploymentRecord & { accessCode?: string; databa
 
 export type PortableProjectState = {
   visibility?: DeploymentVisibility;
+  domain?: string;
   initialDatabase: Uint8Array;
   initialIdentity?: Uint8Array;
   initialFiles?: Uint8Array;
@@ -203,10 +204,11 @@ export class HostedDatabaseClient implements DatabaseAdminHost {
 
   async exportPortableState(): Promise<PortableProjectState> {
     const transfer = await platformMcp.call<Transfer>("project_export", { deploymentId: this.deploymentId });
-    const body = JSON.parse(new TextDecoder().decode(await platformMcp.download(transfer))) as { result: { initialDatabase: string; initialIdentity?: string; initialFiles?: string; initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">; visibility?: DeploymentVisibility } };
+    const body = JSON.parse(new TextDecoder().decode(await platformMcp.download(transfer))) as { result: { initialDatabase: string; initialIdentity?: string; initialFiles?: string; initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">; visibility?: DeploymentVisibility; domain?: string } };
     if (!body.result?.initialDatabase) throw new Error("Portable export is missing its database.");
     return {
       ...(body.result.visibility ? { visibility: body.result.visibility } : {}),
+      ...(body.result.domain ? { domain: body.result.domain } : {}),
       initialDatabase: decodeBase64(body.result.initialDatabase),
       ...(body.result.initialIdentity ? { initialIdentity: decodeBase64(body.result.initialIdentity) } : {}),
       ...(body.result.initialFiles ? { initialFiles: decodeBase64(body.result.initialFiles) } : {}),

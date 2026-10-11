@@ -1,13 +1,21 @@
-import { McpClient } from "../mcp/client";
+import { McpClient, platformMcp } from "../mcp/client";
 import type { MiniAppProject } from "./types";
 import type { DeploymentReceipt } from "../deployments/client";
 import { checkEjectPackage, type EjectPlan, type EjectReceipt } from "./eject-package";
+import { repairDroppedPreviewUpload } from "./starter";
 import { createTar } from "./tar";
 
 /** Set by the Kernel's eject_apply: who ejected the project, when, and at which saved-sources revision. */
 export type EjectRecord = { at: number; by: string; via: "session" | "token"; planId: string; sourcesRevision: number };
 export type ProjectMetadata = { id: string; name: string; slug: string; sourceAuthority: "managed" | "external"; ejected?: EjectRecord };
 type SourceResult = { revision: number; transfer: Parameters<McpClient["download"]>[0] | null };
+
+/** How many Kernel projects the signed-in owner has, including ones without editor sources. */
+export async function readOwnerProjectCount(ownerId?: string): Promise<number> {
+  const client = ownerId ? new McpClient("/mcp", { ownerId }) : platformMcp;
+  const result = await client.call<{ projects: { project: ProjectMetadata }[] }>("projects_list");
+  return result.projects.length;
+}
 
 /** One instance remains bound to the owner that opened the workspace. */
 export class ManagedSources {
@@ -40,7 +48,7 @@ export class ManagedSources {
       const bytes = await this.client.download(saved.transfer);
       const source = JSON.parse(new TextDecoder().decode(bytes)) as MiniAppProject;
       if (source.id !== project.id) throw new Error("The saved source does not match its project.");
-      projects.push(source);
+      projects.push(project.ejected ? source : repairDroppedPreviewUpload(source));
     }
     for (const id of Object.keys(ejected)) this.ejected.add(id);
     return { projects, external, missing, deployments, ejected };
@@ -51,14 +59,14 @@ export class ManagedSources {
     const previous = this.tails.get(project.id) ?? Promise.resolve();
     const next = previous.then(async () => {
       if (!this.revisions.has(project.id)) {
-        const metadata = await this.client.call<ProjectMetadata>("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest, sourceAuthority: "managed" });
-        if (metadata.sourceAuthority !== "managed") throw new Error("This project is maintained externally.");
-        const saved = await this.client.call<SourceResult>("project_sources_read", { projectId: project.id });
-        if (saved.transfer) {
-          await this.client.cancel(saved.transfer.transferId);
-          throw new Error("This project already has saved sources. Reload before saving.");
+        const upload = await this.client.upload(new TextEncoder().encode(JSON.stringify(project)));
+        try {
+          const created = await this.client.call<ProjectMetadata & { sourcesRevision: number }>("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest, sourceAuthority: "managed", sourcesTransferId: upload.transferId });
+          this.revisions.set(project.id, created.sourcesRevision);
+        } finally {
+          await this.client.cancel(upload.transferId).catch(() => {});
         }
-        this.revisions.set(project.id, saved.revision);
+        return;
       }
       const upload = await this.client.upload(new TextEncoder().encode(JSON.stringify(project)), project.id);
       try {

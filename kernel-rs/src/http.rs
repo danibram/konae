@@ -1115,11 +1115,13 @@ async fn run_verified(
         Ok(value) => {
             let changed = match super::guard::outcome(name, action, &value) {
                 super::guard::Outcome::Refused(message) => {
+                    super::usage::execution(&state.data_root, &deployment.id, name, "route", "refused");
                     super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Refused(name.to_owned()));
                     return refusal(StatusCode::FORBIDDEN, &message);
                 }
                 outcome => matches!(outcome, super::guard::Outcome::Changed),
             };
+            super::usage::execution(&state.data_root, &deployment.id, name, "route", "ok");
             // A route counts under its method and path, not again as an action.
             super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Route(http.method.clone(), http.path.clone()));
             if changed {
@@ -1135,7 +1137,10 @@ async fn run_verified(
             response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             response
         }
-        Err(error_value) => refusal(StatusCode::BAD_REQUEST, &error_value.to_string()),
+        Err(error_value) => {
+            super::usage::execution(&state.data_root, &deployment.id, name, "route", "failed");
+            refusal(StatusCode::BAD_REQUEST, &error_value.to_string())
+        },
     }
 }
 

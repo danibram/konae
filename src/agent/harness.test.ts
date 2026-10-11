@@ -548,3 +548,52 @@ describe("littlebox agent", () => {
     });
   });
 });
+
+describe("agent domain binding", () => {
+  test("retarget resolves the new project's deployment on the next turn", async () => {
+    const seen: string[] = [];
+    const domains = {
+      deploymentForProject: (projectId: string) => { seen.push(projectId); return `deployment-${projectId}`; },
+      readDomain: async (deploymentId: string) => ({ deploymentId, hostname: null, status: "none" as const, generatedUrl: "https://generated.example.org" }),
+      setDomain: async () => { throw new Error("Unexpected mutation"); },
+      clearDomain: async () => { throw new Error("Unexpected mutation"); },
+    };
+    const { agent, events } = agentFor([
+      call({ name: "domain_read", arguments: {} }), say("Read the domain."),
+      call({ name: "domain_read", arguments: {} }), say("Read the other domain."),
+    ], { domains });
+    await agent.send("Read my domain");
+    agent.retarget({ ...starterProject, id: "other-project" });
+    await agent.send("Read this domain");
+    expect(seen).toContain(starterProject.id);
+    expect(seen).toContain("other-project");
+    expect(events.filter((event) => event.type === "tool-end" && event.name === "domain_read").every((event) => event.type === "tool-end" && event.ok)).toBe(true);
+    expect(agent.proposal()).toBeNull();
+    expect(agent.applyGateStatus().state).toBe("empty");
+    agent.dispose();
+  });
+
+  test("retarget during owner confirmation prevents the old run from mutating either app", async () => {
+    let confirm!: (approved: boolean) => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    const mutations: string[] = [];
+    const { agent } = agentFor([call({ name: "domain_clear", arguments: {} }), say("Done")], {
+      domains: {
+        deploymentForProject: (projectId) => `deployment-${projectId}`,
+        readDomain: async (deploymentId) => ({ deploymentId, hostname: "old.example.org", status: "active", generatedUrl: "https://generated.example.org" }),
+        setDomain: async () => { throw new Error("Unexpected set"); },
+        clearDomain: async (id) => { mutations.push(id); return { deploymentId: id, cleared: "old.example.org", status: "none", generatedUrl: "https://generated.example.org" }; },
+        confirmMutation: () => { entered(); return new Promise<boolean>((resolve) => { confirm = resolve; }); },
+      },
+    });
+    const run = agent.send("Remove my custom domain");
+    await waiting;
+    agent.retarget({ ...starterProject, id: "other-project" });
+    confirm(true);
+    await run;
+    expect(mutations).toEqual([]);
+    expect(agent.proposal()).toBeNull();
+    agent.dispose();
+  });
+});

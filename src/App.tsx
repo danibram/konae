@@ -31,7 +31,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEven
 import { PROVIDERS, defaultSessionConfig } from "./agent/catalog";
 import { mergeProposal } from "./agent/apply";
 import type { AgentProposal, AgentSessionConfig } from "./agent/contracts";
-import type { LittleboxAgentHandle } from "./agent/harness";
+import type { DomainMutationRequest, LittleboxAgentHandle } from "./agent/harness";
 import { createAgentKeyStore } from "./agent/key-store";
 import { Button, Dialog } from "./components/ui";
 import { AgentPanel } from "./components/AgentPanel";
@@ -52,6 +52,7 @@ import { usePreviewProblems } from "./components/usePreviewProblems";
 import { ProjectDashboard } from "./components/ProjectDashboard";
 import { EjectedNotice } from "./components/EjectDialog";
 import { deployProject, HostedDatabaseClient, type DeploymentReceipt, type SignupMode } from "./deployments/client";
+import { clearDomain, readDomain, setDomain } from "./deployments/domains";
 import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/manifest";
 import { createSchemaSnapshot } from "./database-lifecycle/schema-snapshot";
 import { parseServerActionSource } from "./kernel/actions";
@@ -62,7 +63,7 @@ import { cloneStarter } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
 import { createDirectory, createFile, directoriesForFiles, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
 import { actionReadout } from "./components/action-readiness";
-import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, resetWorkspaceProject } from "./lib/workspace";
+import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, recoveryDrafts, resetWorkspaceProject } from "./lib/workspace";
 import { ManagedSources, type EjectRecord, type ProjectMetadata } from "./lib/managed-sources";
 import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
@@ -71,6 +72,7 @@ import { useRuntimeBridge } from "./runtime/useRuntimeBridge";
 const CapabilityWorkspace = lazy(() =>
   import("./components/CapabilityWorkspace").then((module) => ({ default: module.CapabilityWorkspace })),
 );
+const AppSettingsDialog = lazy(() => import("./components/AppSettingsDialog").then((module) => ({ default: module.AppSettingsDialog })));
 
 type EditorFile = string;
 
@@ -82,6 +84,8 @@ const knownFileMeta: Record<string, { label: string; icon: typeof FileText; lang
   "schema.sql": { label: "SQL", icon: Database, language: "SQL" },
   "actions.json": { label: "actions.json", icon: ShieldCheck, language: "SERVER ACTIONS" },
 };
+
+const UsagePage = lazy(() => import("./components/UsagePage").then((module) => ({ default: module.UsagePage })));
 
 const DesignSystem = lazy(() => import("./components/DesignSystem").then((module) => ({ default: module.DesignSystem })));
 
@@ -108,6 +112,7 @@ function PlatformGate() {
   }
   if (session.state !== "signed-in") return <div className="capability-loading" role="status">Checking your platform session…</div>;
   if (window.location.pathname === "/design-system") return <Suspense fallback={<div className="capability-loading">Loading components…</div>}><DesignSystem /></Suspense>;
+  if (window.location.pathname === "/usage") return <Suspense fallback={<div className="capability-loading">Loading usage…</div>}><UsagePage key={session.ownerId} ownerSession={session} /></Suspense>;
   return <WorkspaceGate key={session.ownerId} ownerSession={session} refreshOwnerSession={refresh} />;
 }
 
@@ -146,15 +151,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       if (workspaceStorage.getItem("littlebox:projects") || workspaceStorage.getItem("littlebox:project")) candidates.push(...loadWorkspaceState(workspaceStorage).projects);
       if (localStorage.getItem("littlebox:projects") || localStorage.getItem("littlebox:project")) candidates.push(...loadWorkspaceState().projects);
     } catch { /* Invalid local drafts remain untouched. */ }
-    const current = new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)]));
-    const seen = new Set<string>();
-    return candidates.filter((item) => {
-      if (!item || typeof item.id !== "string" || !item.files || typeof item.files !== "object") return false;
-      const value = JSON.stringify(item);
-      if (seen.has(value) || current.get(item.id) === value) return false;
-      seen.add(value);
-      return true;
-    });
+    return recoveryDrafts(candidates, loaded.projects);
   });
   const [projects, setProjects] = useState(initialWorkspace.projects);
   const [deployments, setDeployments] = useState(initialWorkspace.deployments);
@@ -187,6 +184,12 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [saveError, setSaveError] = useState("");
   const [operationError, setOperationError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [appSettingsOpen, setAppSettingsOpen] = useState(false);
+  const [domainVersion, setDomainVersion] = useState(0);
+  const [domainConfirmation, setDomainConfirmation] = useState<DomainMutationRequest | null>(null);
+  const resolveDomainConfirmation = useRef<((approved: boolean) => void) | null>(null);
+  const deploymentsRef = useRef(deployments);
+  deploymentsRef.current = deployments;
   const [agent, setAgent] = useState<LittleboxAgentHandle | null>(null);
   const [agentSession, setAgentSession] = useState<AgentSessionConfig>(defaultSessionConfig);
   const [threadResetToken, setThreadResetToken] = useState(0);
@@ -267,11 +270,20 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   }, []);
 
   useEffect(() => {
-    if (deployOpen || resetOpen || settingsOpen) {
+    if (deployOpen || resetOpen || settingsOpen || appSettingsOpen || domainConfirmation) {
       projectMenu.current?.removeAttribute("open");
       switcherRef.current?.removeAttribute("open");
     }
-  }, [deployOpen, resetOpen, settingsOpen]);
+  }, [deployOpen, resetOpen, settingsOpen, appSettingsOpen, domainConfirmation]);
+
+  useEffect(() => {
+    setAppSettingsOpen(false);
+    setDomainConfirmation(null);
+    return () => {
+      resolveDomainConfirmation.current?.(false);
+      resolveDomainConfirmation.current = null;
+    };
+  }, [project.id]);
 
   const updateLayout = (next: LayoutState) => {
     if (compact) {
@@ -561,6 +573,22 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             liveDatabase: () => hostRef.current.exportDatabase(),
             // The other half of the gate: what the running preview actually threw.
             previewErrors: () => hostRef.current.previewErrors(),
+            domains: {
+              deploymentForProject: (projectId) => deploymentsRef.current[projectId]?.id ?? null,
+              readDomain,
+              setDomain,
+              clearDomain,
+              confirmMutation: (request) => new Promise<boolean>((resolve) => {
+                if (request.projectId !== projectRef.current.id) { resolve(false); return; }
+                resolveDomainConfirmation.current?.(false);
+                resolveDomainConfirmation.current = resolve;
+                setDeployOpen(false);
+                setSettingsOpen(false);
+                setAppSettingsOpen(false);
+                setDomainConfirmation(request);
+              }),
+              onChanged: () => setDomainVersion((version) => version + 1),
+            },
           });
           agentRef.current = handle;
           setAgent(handle);
@@ -1164,6 +1192,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           <details className="mobile-project-actions" ref={projectMenu} onToggle={(event) => { if (event.currentTarget.open) switcherRef.current?.removeAttribute("open"); }}>
             <summary>More</summary>
             <div>
+              <button onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); setAppSettingsOpen(true); }}>App settings</button>
               <a href="/design-system">Design system</a>
               <button onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); updateLayout(resetLayout()); }}>Reset layout</button>
               <button className="is-danger" onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); setResetOpen(true); }}><RotateCcw size={15} /> Reset project data…</button>
@@ -1184,6 +1213,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         </div>
       )}
       <nav className="section-nav" aria-label="Workspace sections">
+        <a className="usage-open-link" href={activeDeployment ? `/usage?deployment=${encodeURIComponent(activeDeployment.id)}` : "/usage"}>Usage</a>
         {sections.filter((section) => !compact || section.id === "preview" || section.id === "agent").map((section) => {
           const Icon = section.icon;
           const door = section.id === "preview" || section.id === "agent";
@@ -1223,7 +1253,14 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         providers={PROVIDERS}
       />
 
-      {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} session={ownerSession} signInHref={signInHref} onClose={() => setDeployOpen(false)} current={activeDeployment} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
+      {appSettingsOpen && <Suspense fallback={<div role="status">Loading app settings…</div>}><AppSettingsDialog key={`${project.id}-${domainVersion}`} projectName={project.name} deploymentId={activeDeployment?.id} onClose={() => setAppSettingsOpen(false)} onDeploy={() => { setAppSettingsOpen(false); setDeployment(null); setDeployError(""); setDeployOpen(true); }} onSignedOut={refreshOwnerSession} signInHref={signInHref} /></Suspense>}
+
+      {domainConfirmation && <Dialog title={domainConfirmation.operation === "clear" ? "Remove this app's domain?" : "Update this app's domain?"} description={project.name} onClose={() => { resolveDomainConfirmation.current?.(false); resolveDomainConfirmation.current = null; setDomainConfirmation(null); }} footer={<>
+        <Button onClick={() => { resolveDomainConfirmation.current?.(false); resolveDomainConfirmation.current = null; setDomainConfirmation(null); }}>Cancel</Button>
+        <Button variant="primary" onClick={() => { resolveDomainConfirmation.current?.(true); resolveDomainConfirmation.current = null; setDomainConfirmation(null); }}>Confirm domain change</Button>
+      </>}><div className="ui-dialog-body"><p style={{ overflowWrap: "anywhere" }}>{domainConfirmation.operation === "clear" ? `The agent will remove ${domainConfirmation.previousHostname ?? "the custom domain"}.` : `The agent will set ${domainConfirmation.hostname} and check its TXT record.`} {domainConfirmation.previousHostname && domainConfirmation.previousHostname !== domainConfirmation.hostname ? `${domainConfirmation.previousHostname} will stop serving this app.` : ""} The generated address keeps working. This does not configure traffic routing or HTTPS.</p></div></Dialog>}
+
+      {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} session={ownerSession} signInHref={signInHref} onClose={() => setDeployOpen(false)} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
 
       <Dialog
         open={resetOpen}

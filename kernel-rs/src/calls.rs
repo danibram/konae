@@ -70,6 +70,8 @@ pub(crate) struct CallKeys {
     #[serde(default)]
     body: Option<Value>,
     #[serde(default)]
+    headers: Option<Value>,
+    #[serde(default)]
     auth: Option<Value>,
     #[serde(default)]
     then: Option<Value>,
@@ -77,7 +79,12 @@ pub(crate) struct CallKeys {
 
 impl CallKeys {
     fn any(&self) -> bool {
-        self.url.is_some() || self.method.is_some() || self.body.is_some() || self.auth.is_some() || self.then.is_some()
+        self.url.is_some()
+            || self.method.is_some()
+            || self.body.is_some()
+            || self.headers.is_some()
+            || self.auth.is_some()
+            || self.then.is_some()
     }
 }
 
@@ -86,8 +93,11 @@ impl CallKeys {
 pub(crate) struct Call {
     pub(crate) url: url::Url,
     pub(crate) method: String,
-    /// Body key to what it sends, sorted by body key.
+    /// Body key to what it sends, sorted by body key. A key with `.` expands
+    /// into nested JSON on POST, so a Checkout Session can send `line_items.0.price`.
     pub(crate) body: Vec<(String, BodyValue)>,
+    /// Extra request headers, sorted by name. Only `Idempotency-Key` is allowed.
+    pub(crate) headers: Vec<(String, BodyValue)>,
     pub(crate) auth: Option<Auth>,
     pub(crate) then: Option<Then>,
 }
@@ -142,7 +152,7 @@ pub(crate) fn check_kind(name: &str, action: &ActionDefinition) -> Result<Option
                 _ => "signal action",
             };
             return Err(format!(
-                r#"Action {name} is a {kind}, so it cannot declare url, method, body, auth or then. Those keys belong to an action of "kind": "call"."#
+                r#"Action {name} is a {kind}, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of "kind": "call"."#
             ));
         }
         return Ok(None);
@@ -167,10 +177,11 @@ pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Call,
     };
     let url = static_url(name, action.call.url.as_ref())?;
     let inputs: Vec<&str> = action.bindings.iter().filter_map(|binding| binding.key.as_deref()).collect();
-    let body = body_map(name, action.call.body.as_ref(), &inputs)?;
+    let body = body_map(name, method, action.call.body.as_ref(), &inputs)?;
+    let headers = headers_map(name, action.call.headers.as_ref(), &inputs)?;
     let auth = auth(name, action.call.auth.as_ref())?;
     let then = then(name, action.call.then.as_ref(), &inputs)?;
-    Ok(Call { url, method: method.to_owned(), body, auth, then })
+    Ok(Call { url, method: method.to_owned(), body, headers, auth, then })
 }
 
 fn static_url(name: &str, value: Option<&Value>) -> Result<url::Url, String> {
@@ -203,7 +214,32 @@ fn static_url(name: &str, value: Option<&Value>) -> Result<url::Url, String> {
 }
 
 fn valid_body_key(key: &str) -> bool {
-    (1..=64).contains(&key.len()) && key.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+    if !(1..=64).contains(&key.len()) {
+        return false;
+    }
+    let mut segments = key.split('.');
+    let Some(first) = segments.next() else { return false };
+    std::iter::once(first).chain(segments).all(valid_body_segment)
+}
+
+/// The highest array index a nested body path may name. Keeps `nest_body` from
+/// allocating a huge sparse array from a key such as `items.999999.price`.
+const MAX_BODY_INDEX: usize = 31;
+
+/// One segment of a body path: an object key, or a non-negative array index.
+fn valid_body_segment(segment: &str) -> bool {
+    if segment.is_empty() {
+        return false;
+    }
+    if segment.bytes().all(|byte| byte.is_ascii_digit()) {
+        if !(segment == "0" || !segment.starts_with('0')) {
+            return false;
+        }
+        return segment.parse::<usize>().ok().is_some_and(|index| index <= MAX_BODY_INDEX);
+    }
+    let bytes = segment.as_bytes();
+    (bytes[0].is_ascii_alphabetic() || bytes[0] == b'_')
+        && bytes.iter().all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(byte))
 }
 
 /// A constant body value: `{ "value": <string of at most 1000 characters, number, boolean or null> }`.
@@ -218,7 +254,7 @@ fn constant(value: &Value) -> Option<Value> {
     valid.then(|| constant.clone())
 }
 
-fn body_map(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Vec<(String, BodyValue)>, String> {
+fn body_map(name: &str, method: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Vec<(String, BodyValue)>, String> {
     let Some(value) = value else { return Ok(Vec::new()) };
     let invalid = || {
         format!(r#"Action {name} has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with "value", at most 32."#)
@@ -231,6 +267,20 @@ fn body_map(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Vec<(S
     }
     let mut keys: Vec<&String> = record.keys().collect();
     keys.sort();
+    for (index, key) in keys.iter().enumerate() {
+        if method == "GET" && key.contains('.') {
+            return Err(format!(
+                "Action {name} sends body key {key} with a path. Nested body keys belong on POST."
+            ));
+        }
+        for other in keys.iter().skip(index + 1) {
+            if other.starts_with(&format!("{key}.")) {
+                return Err(format!(
+                    "Action {name} has body keys {key} and {other}, which overlap. Use one path or the other."
+                ));
+            }
+        }
+    }
     let mut body = Vec::new();
     for key in keys {
         let sent = &record[key];
@@ -244,6 +294,48 @@ fn body_map(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Vec<(S
         body.push((key.clone(), BodyValue::Input(input.to_owned())));
     }
     Ok(body)
+}
+
+/// The only request header a call may set besides auth and content-type.
+const ALLOWED_CALL_HEADER: &str = "Idempotency-Key";
+const MAX_HEADERS: usize = 8;
+
+fn headers_map(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Vec<(String, BodyValue)>, String> {
+    let Some(value) = value else { return Ok(Vec::new()) };
+    let invalid = || {
+        format!(r#"Action {name} has an invalid headers. Map Idempotency-Key to an input or a constant, at most 8."#)
+    };
+    let record = value.as_object().ok_or_else(invalid)?;
+    if record.is_empty() || record.len() > MAX_HEADERS {
+        return Err(invalid());
+    }
+    let mut keys: Vec<&String> = record.keys().collect();
+    keys.sort();
+    let mut headers = Vec::new();
+    for key in keys {
+        if key.as_str() != ALLOWED_CALL_HEADER {
+            return Err(format!(
+                "Action {name} sets header {key}, which is not allowed. Only Idempotency-Key is allowed."
+            ));
+        }
+        let sent = &record[key];
+        if !(sent.is_string() || constant(sent).is_some()) {
+            return Err(invalid());
+        }
+        let Some(input) = sent.as_str() else {
+            let value = constant(sent).unwrap_or(Value::Null);
+            if !value.is_string() && !value.is_number() && !value.is_boolean() {
+                return Err(invalid());
+            }
+            headers.push((key.clone(), BodyValue::Constant(value)));
+            continue;
+        };
+        if !inputs.contains(&input) {
+            return Err(format!("Action {name} sends header {key} from {input}, which is not one of its input bindings."));
+        }
+        headers.push((key.clone(), BodyValue::Input(input.to_owned())));
+    }
+    Ok(headers)
 }
 
 fn auth(name: &str, value: Option<&Value>) -> Result<Option<Auth>, String> {
@@ -825,27 +917,91 @@ pub(crate) fn spawn_worker(state: AppState) {
     });
 }
 
-/// The URL, query and body one call sends, from its declaration and inputs.
-/// A GET carries the body keys as query parameters after the URL's own.
-fn request_parts(call: &Call, input: &Value) -> (url::Url, Vec<u8>) {
-    let mut url = call.url.clone();
-    let mut body = serde_json::Map::new();
-    for (key, sent) in &call.body {
-        match sent {
-            BodyValue::Constant(value) => {
-                body.insert(key.clone(), value.clone());
-            }
-            BodyValue::Input(input_key) => {
-                if let Some(value) = input.get(input_key).filter(|value| !value.is_null()) {
-                    body.insert(key.clone(), value.clone());
+/// Resolves one declared body or header value from the call's inputs.
+fn resolve_sent(sent: &BodyValue, input: &Value) -> Option<Value> {
+    match sent {
+        BodyValue::Constant(value) => Some(value.clone()),
+        BodyValue::Input(input_key) => input.get(input_key).filter(|value| !value.is_null()).cloned(),
+    }
+}
+
+/// Expands flat body keys whose names contain `.` into nested JSON objects and
+/// arrays. `line_items.0.price` becomes `{ "line_items": [{ "price": ... }] }`.
+fn nest_body(flat: Vec<(String, Value)>) -> Value {
+    let mut root = Value::Object(serde_json::Map::new());
+    for (path, value) in flat {
+        if !path.contains('.') {
+            root.as_object_mut().expect("object").insert(path, value);
+            continue;
+        }
+        let segments: Vec<&str> = path.split('.').collect();
+        let mut cursor = &mut root;
+        for (index, segment) in segments.iter().enumerate() {
+            let last = index + 1 == segments.len();
+            let array_index = segment.bytes().all(|byte| byte.is_ascii_digit()).then(|| segment.parse::<usize>().expect("digit segment"));
+            if let Some(at) = array_index {
+                if !cursor.is_array() {
+                    *cursor = Value::Array(Vec::new());
                 }
+                let array = cursor.as_array_mut().expect("array");
+                while array.len() <= at {
+                    array.push(Value::Null);
+                }
+                if last {
+                    array[at] = value;
+                    break;
+                }
+                if array[at].is_null() {
+                    let next = segments[index + 1];
+                    array[at] = if next.bytes().all(|byte| byte.is_ascii_digit()) {
+                        Value::Array(Vec::new())
+                    } else {
+                        Value::Object(serde_json::Map::new())
+                    };
+                }
+                cursor = &mut array[at];
+            } else {
+                if !cursor.is_object() {
+                    *cursor = Value::Object(serde_json::Map::new());
+                }
+                let object = cursor.as_object_mut().expect("object");
+                if last {
+                    object.insert(segment.to_string(), value);
+                    break;
+                }
+                if !object.contains_key(*segment) {
+                    let next = segments[index + 1];
+                    object.insert(
+                        segment.to_string(),
+                        if next.bytes().all(|byte| byte.is_ascii_digit()) {
+                            Value::Array(Vec::new())
+                        } else {
+                            Value::Object(serde_json::Map::new())
+                        },
+                    );
+                }
+                cursor = object.get_mut(*segment).expect("just inserted");
             }
         }
     }
+    root
+}
+
+/// The URL, query and body one call sends, from its declaration and inputs.
+/// A GET carries the body keys as query parameters after the URL's own. A POST
+/// expands dotted keys into nested JSON.
+fn request_parts(call: &Call, input: &Value) -> (url::Url, Vec<u8>) {
+    let mut url = call.url.clone();
+    let mut flat = Vec::new();
+    for (key, sent) in &call.body {
+        if let Some(value) = resolve_sent(sent, input) {
+            flat.push((key.clone(), value));
+        }
+    }
     if call.method == "GET" {
-        if !body.is_empty() {
+        if !flat.is_empty() {
             let mut pairs = url.query_pairs_mut();
-            for (key, value) in &body {
+            for (key, value) in &flat {
                 let text = match value {
                     Value::String(text) => text.clone(),
                     other => other.to_string(),
@@ -855,8 +1011,22 @@ fn request_parts(call: &Call, input: &Value) -> (url::Url, Vec<u8>) {
         }
         (url, Vec::new())
     } else {
-        (url, Value::Object(body).to_string().into_bytes())
+        (url, nest_body(flat).to_string().into_bytes())
     }
+}
+
+/// The Idempotency-Key and other declared headers for one attempt.
+fn request_headers(call: &Call, input: &Value) -> Vec<(String, String)> {
+    let mut headers = Vec::new();
+    for (name, sent) in &call.headers {
+        let Some(value) = resolve_sent(sent, input) else { continue };
+        let text = match value {
+            Value::String(text) => text,
+            other => other.to_string(),
+        };
+        headers.push((name.clone(), text));
+    }
+    headers
 }
 
 /// A nonce for one signed attempt.
@@ -902,9 +1072,10 @@ async fn process(state: &AppState, job: Claimed) -> Result<()> {
         return finish(&data_root, &job.id, &attempt, None);
     };
     let (url, body) = request_parts(&call, &job.input);
+    let extra_headers = request_headers(&call, &job.input);
     let mut attempt = Attempt { method: Some(call.method.clone()), url: Some(url.to_string()), ..Default::default() };
     let mut retry = false;
-    match send(state, &deployment, &call, &url, &body).await {
+    match send(state, &deployment, &call, &url, &body, &extra_headers).await {
         Ok((status, answer)) => {
             attempt.status = Some(status);
             attempt.answer = answer;
@@ -928,7 +1099,14 @@ async fn process(state: &AppState, job: Claimed) -> Result<()> {
 
 /// Sends one attempt. `Ok((status, answer))` once an answer arrived;
 /// `Err((kind, retry))` when none did.
-async fn send(state: &AppState, deployment: &Deployment, call: &Call, url: &url::Url, body: &[u8]) -> Result<(u16, Vec<u8>), (&'static str, bool)> {
+async fn send(
+    state: &AppState,
+    deployment: &Deployment,
+    call: &Call,
+    url: &url::Url,
+    body: &[u8],
+    extra_headers: &[(String, String)],
+) -> Result<(u16, Vec<u8>), (&'static str, bool)> {
     let target = target(state, url).await?;
     let secret = match &call.auth {
         None => None,
@@ -944,6 +1122,7 @@ async fn send(state: &AppState, deployment: &Deployment, call: &Call, url: &url:
     let path = url.path().to_owned();
     let query = url.query().unwrap_or("").to_owned();
     let mut headers: Vec<(String, String)> = vec![("content-type".into(), "application/json".into())];
+    headers.extend(extra_headers.iter().cloned());
     match (&call.auth, secret) {
         (Some(Auth::Sign { header, .. }), Some(secret)) => {
             let signed = super::http::SignedRequest { method: &call.method, path: &path, query: &query, body };
@@ -1084,18 +1263,27 @@ async fn run_then(
     match result {
         Ok(value) => match super::guard::outcome(&then.action, mutation, &value) {
             super::guard::Outcome::Refused(message) => {
+                super::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "refused");
                 super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Refused(then.action.clone()));
                 ("refused", Some(message))
             }
             outcome => {
+                super::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "ok");
                 super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Action(then.action.clone()));
                 if matches!(outcome, super::guard::Outcome::Changed) {
                     super::usage::signal(&state.data_root, &deployment.id, &then.action, mutation, &values, None);
+                    super::notify::record(
+                        state, deployment, &then.action, mutation, &values,
+                        super::notify::Caller { account: None, actor_id: None },
+                    ).await;
                 }
                 ("done", None)
             }
         },
-        Err(error_value) => ("failed", Some(error_value.to_string())),
+        Err(error_value) => {
+            super::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "failed");
+            ("failed", Some(error_value.to_string()))
+        },
     }
 }
 
@@ -1235,6 +1423,39 @@ mod tests {
         let post = Call { method: "POST".into(), ..call };
         let (_, body) = request_parts(&post, &json!({"q": "x", "n": 3}));
         assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({"query": "x", "limit": 3, "source": "tasks"}));
+    }
+
+    #[test]
+    fn a_post_expands_dotted_body_keys_and_sets_idempotency_key() {
+        let action: ActionDefinition = serde_json::from_value(json!({
+            "kind": "call", "access": "authenticated", "method": "POST", "url": "https://api.stripe.com/v1/checkout/sessions",
+            "bindings": [
+                {"source": "input", "key": "orderId", "type": "string"},
+                {"source": "input", "key": "qty", "type": "number"},
+                {"source": "input", "key": "price", "type": "string"},
+                {"source": "input", "key": "idempotency", "type": "string"}
+            ],
+            "body": {
+                "mode": {"value": "payment"},
+                "client_reference_id": "orderId",
+                "line_items.0.price": "price",
+                "line_items.0.quantity": "qty"
+            },
+            "headers": {"Idempotency-Key": "idempotency"},
+            "auth": {"key": "stripe_secret"}
+        }))
+        .unwrap();
+        let call = declaration("orders.checkout", &action).unwrap();
+        let (_, body) = request_parts(&call, &json!({"orderId": "42", "qty": 2, "price": "price_print", "idempotency": "order-42"}));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({
+                "mode": "payment",
+                "client_reference_id": "42",
+                "line_items": [{"price": "price_print", "quantity": 2}]
+            })
+        );
+        assert_eq!(request_headers(&call, &json!({"idempotency": "order-42"})), vec![("Idempotency-Key".into(), "order-42".into())]);
     }
 
     #[test]

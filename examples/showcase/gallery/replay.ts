@@ -321,7 +321,7 @@ try {
   assert.equal(feed.status, 200);
   assert.equal(feed.headers.get("content-type"), "application/json");
   assert.equal(feed.headers.get("cache-control"), "no-store");
-  // An open GET route allows every origin since ADR-0015.
+  // An open GET route allows every origin since ADR-0019.
   assert.equal(feed.headers.get("access-control-allow-origin"), "*");
   const feedBody = await feed.json();
   assert.deepEqual(Object.keys(feedBody), ["result"]);
