@@ -101,6 +101,10 @@ The first domain_set adds a pending TXT claim. Show the returned record name and
 
 Domain operations take effect immediately after owner confirmation and do not edit the Capsule. Capsule edits still require Apply and a passing Validation Gate. Report domain state separately from source changes.
 
+# Where a project starts
+
+A project is born as one of seven templates, each a Capsule that already passes the Gate: shared list (anonymous rows anyone adds), private notes (rows bound to actor.id), members with roles (a profiles table with a role column; staff actions check (SELECT role FROM profiles WHERE user_id = ?1) IN ('admin', 'owner'), and promote and demote check actor.role = 'owner'), public form (an anonymous mutation with notify to the owner, read back only by the owner), webhook receiver (a POST route with a signature and fields, read only by the owner), nightly digest (a scheduled mutation with notify to the owner that no page calls) and file gallery (public miniapp.files uploads named in a table). Before your first edit, say in one sentence which template the request matches. If the Capsule is still an unedited template and the request matches another, rebuild it in that template's shape instead of bending the one you were given.
+
 # How to work
 
 - Every current file is already in the first message. Do not read it again before your first edit.

@@ -16,6 +16,7 @@ import type { EjectRecord, ProjectMetadata } from "../lib/managed-sources";
 import type { EjectPlan, EjectReceipt } from "../lib/eject-package";
 import { WorkspaceNav } from "./WorkspaceNav";
 import { EjectDialog } from "./EjectDialog";
+import { templateChoices, type TemplateId } from "../lib/templates";
 
 type Props = {
   projects: MiniAppProject[];
@@ -26,7 +27,7 @@ type Props = {
   drafts: MiniAppProject[];
   onImportDraft: (index: number) => void;
   onOpenProject: (projectId: string, entry?: "preview" | "agent" | "code") => void;
-  onCreateProject: (name: string, template: "tasks" | "notes" | "scratch") => void;
+  onCreateProject: (name: string, template: TemplateId | "scratch") => void;
   ejected: Record<string, EjectRecord>;
   eject: {
     prepare: (projectId: string, slug: string) => Promise<{ plan: EjectPlan; archive: Uint8Array }>;
@@ -44,7 +45,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
-  const [template, setTemplate] = useState<"tasks" | "notes">("tasks");
+  const [template, setTemplate] = useState<TemplateId>("tasks");
   const filtered = useMemo(
     () => [...projects].sort((a, b) => newestFirst ? b.updatedAt - a.updatedAt : a.updatedAt - b.updatedAt),
     [projects, newestFirst],
@@ -156,17 +157,14 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
           </Field>
           <fieldset className="start-cards">
             <legend>Start with</legend>
-            <p className="start-note">Describe is next. A shared list is the start for anything else.</p>
-            <label className={template === "tasks" ? "selected" : ""}>
-              <input type="radio" name="project-template" value="tasks" checked={template === "tasks"} onChange={() => setTemplate("tasks")} />
-              <strong>Shared list</strong>
-              <small>Anyone with the link can add a row.</small>
-            </label>
-            <label className={template === "notes" ? "selected" : ""}>
-              <input type="radio" name="project-template" value="notes" checked={template === "notes"} onChange={() => setTemplate("notes")} />
-              <strong>Private notes</strong>
-              <small>Each person signs in and only sees their own.</small>
-            </label>
+            <p className="start-note">Each one runs as it is. Describe what to change next.</p>
+            {templateChoices.map((choice) => (
+              <label key={choice.id} className={template === choice.id ? "selected" : ""}>
+                <input type="radio" name="project-template" value={choice.id} checked={template === choice.id} onChange={() => setTemplate(choice.id)} />
+                <strong>{choice.name}</strong>
+                <small>{choice.sentence}</small>
+              </label>
+            ))}
           </fieldset>
         </form>
       </Dialog>
