@@ -154,6 +154,7 @@ data/
 ├── owners.sqlite           # creator accounts, sessions and invitation codes
 ├── mcp.sqlite              # projects, sources, agent credentials, signing secrets, audit
 ├── mail.sqlite             # the account email queue
+├── calls.sqlite            # the call actions' queue and outbox
 ├── transfers/              # unfinished MCP uploads and downloads
 └── deployments/<id>/
     ├── deployment.json     # record, visibility, signup policy
