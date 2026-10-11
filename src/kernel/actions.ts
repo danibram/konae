@@ -3,6 +3,7 @@ import { unboundedQueryReason } from "../lib/query-bound";
 import { assertRuntimeSql, validateRuntimeParams } from "../runtime/security";
 import { parseRouteFields, parseRouteSignature, type RouteSignature } from "./route-declaration";
 import { assertActionStatement } from "./sql-rules";
+import { assertCallTargets, assertNoCallKeys, parseCall, type CallDeclaration } from "./calls";
 
 type ActionBinding =
   | { source: "input"; key: string; type: "string"; maxLength?: number; nullable?: boolean }
@@ -76,6 +77,8 @@ export type ServerActionDefinition = RuntimeActionDeclaration & {
    * See docs/mcp.md, "Scheduled work".
    */
   schedule?: ScheduleDeclaration;
+  /** An action of `"kind": "call"`. See docs/mcp.md, "Calls between apps". */
+  call?: CallDeclaration;
 };
 
 export type ScheduleDeclaration = { every: string } | { daily: string };
@@ -108,6 +111,7 @@ export function parseServerActionSource(source: string): ServerActionProgram {
   const actions: Record<string, ServerActionDefinition> = {};
   for (const name of Object.keys(declared)) actions[name] = parsed.get(name)!;
   assertDistinctRoutes(actions);
+  assertCallTargets(actions);
   return { version: 1, actions };
 }
 
@@ -159,13 +163,16 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
   }
   const access = candidate.access === "anonymous" || candidate.access === "authenticated" ? candidate.access : null;
   if (!access) throw new Error(`Action ${name} has an invalid access. Use "anonymous" or "authenticated".`);
-  const kind = candidate.kind === "query" || candidate.kind === "mutation" || candidate.kind === "signal" ? candidate.kind : null;
-  if (!kind) throw new Error(`Action ${name} has an invalid kind. Use "query", "mutation" or "signal".`);
+  const kind = candidate.kind === "query" || candidate.kind === "mutation" || candidate.kind === "signal" || candidate.kind === "call" ? candidate.kind : null;
+  if (!kind) throw new Error(`Action ${name} has an invalid kind. Use "query", "mutation", "signal" or "call".`);
   if (!Array.isArray(candidate.bindings)) throw new Error(`Action ${name} requires a bindings array.`);
   const bindings = candidate.bindings.map((binding, index) => parseBinding(name, index, binding));
-  if (kind !== "signal" && typeof candidate.statement !== "string") throw new Error(`Invalid server action: ${name}`);
+  if (kind !== "signal" && kind !== "call" && typeof candidate.statement !== "string") throw new Error(`Invalid server action: ${name}`);
   const statementBytes = typeof candidate.statement === "string" ? new TextEncoder().encode(candidate.statement).length : 0;
   if (statementBytes > MAX_STATEMENT_BYTES || bindings.length > MAX_BINDINGS) throw new Error(`Action ${name} exceeds statement or binding limits.`);
+  // A call runs no SQL; the Kernel's worker sends it (kernel-rs/src/calls.rs).
+  if (kind === "call") return { name, kind, access, statement: "", bindings, call: parseCall(name, bindings, candidate) };
+  assertNoCallKeys(name, kind, candidate);
   if (kind === "signal") {
     if (candidate.statement !== undefined && !(typeof candidate.statement === "string" && !candidate.statement.trim())) {
       throw new Error(`Action ${name} is a signal action, so it runs no SQL and cannot declare a statement.`);

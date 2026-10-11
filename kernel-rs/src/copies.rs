@@ -1,6 +1,6 @@
 //! One folder per Deployment, copied off the volume.
 //!
-//! The data directory holds `owners.sqlite`, `mcp.sqlite`, `mail.sqlite` and one folder per
+//! The data directory holds `owners.sqlite`, `mcp.sqlite`, `mail.sqlite`, `calls.sqlite` and one folder per
 //! Deployment under `deployments/<id>/`. A copy is a consistent snapshot of
 //! those, written to a directory target, an S3 prefix, or both, with a
 //! `manifest.json` that lists every file with its size and SHA-256. The
@@ -41,7 +41,8 @@ use crate::{
 /// `usage.sqlite` is ADR-0010's store; it is copied when it exists.
 const DEPLOYMENT_DATABASES: [&str; 3] = ["database.sqlite", "identity.sqlite", "usage.sqlite"];
 /// `mail.sqlite` is the email queue (`mail.rs`); its links stay sealed in a copy.
-const ROOT_DATABASES: [&str; 3] = ["owners.sqlite", "mcp.sqlite", crate::mail::MAIL_DATABASE];
+/// `calls.sqlite` is the call actions' queue and outbox (`calls.rs`).
+const ROOT_DATABASES: [&str; 4] = ["owners.sqlite", "mcp.sqlite", crate::mail::MAIL_DATABASE, crate::calls::CALLS_DATABASE];
 const MANIFEST: &str = "manifest.json";
 /// The only cipher a copy names in its manifest.
 const ENCRYPTION: &str = "AES-256-GCM";

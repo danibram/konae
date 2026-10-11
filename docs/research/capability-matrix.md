@@ -6,6 +6,8 @@ Updated 2026-11-07 when the custom domain ([ADR-0015](../adr/0015-a-deployment-a
 
 Updated 2026-11-07 for [ADR-0018](../adr/0018-a-route-verifies-a-providers-own-signature.md): a route verifies a provider's own signature scheme and reads its nested body through `fields`. F9 moved from C to W, and from N to C for the integration hub; F20 moved from N to C. The counts below are taken again from the cells.
 
+Updated 2026-11-07 for [ADR-0019](../adr/0019-an-app-calls-another-from-the-kernel.md): calls between apps add feature F25 and its cells.
+
 The yardstick is the sentence at the top of AGENTS.md: a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.
 
 ## Verdicts
@@ -43,7 +45,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F4 | Verified signup | W | `LITTLEBOX_ACCOUNT_VERIFICATION=required`. It is a switch for the whole installation, not one app | habits "Verified signup" |
 | F5 | Roles inside the app | C | Roles are rows that each action's `WHERE` checks, refused with a guard. The first role comes from the owner's `database_execute`. The `actor` binding yields an ID and never an email, so an admin promotes by ID or by a name the person typed, and an in-app role cannot invite, because invitations are owner tools that need `manage_users` | club "Roles", community "Roles inside the app" (`Only an editor can make someone a publisher.`), community "No email from the actor" |
 | F6 | Public and private rows in one table | W | Each action projects and filters its own rows | booking "Public and staff views", gallery "Visitor view", community "Publishers and readers" |
-| F7 | Public read API | C | An unsigned GET route on a public app. It always answers `{ "result": [rows] }` as JSON with `Cache-Control: no-store` and no CORS headers, so a server reads it and a page on another origin cannot; an `OPTIONS` preflight answers 405. There is no XML or RSS. A private app's routes take a key, a signature or a session, never a caller with none, so a public API means a public app | gallery "/feed.json", dataset "Read API from another origin" |
+| F7 | Public read API | C | An unsigned GET route on a public app. It always answers `{ "result": [rows] }` as JSON with `Cache-Control: no-store`. Since ADR-0015 it also answers `Access-Control-Allow-Origin: *`, so a page on another origin that lists the host in its `connects` reads it with a simple GET; an `OPTIONS` preflight still answers 405. There is no XML or RSS. A private app's routes take a key, a signature or a session, never a caller with none, so a public API means a public app | gallery "/feed.json", dataset "Read API from another origin", calls "connects" |
 | F8 | Private write API with a key | W | A route with `"callers": ["key"]` and an API key that names the action | dataset "Private write API", habits "API key on an actor-bound route", booking "Check-in route" |
 | F9 | Signed webhooks in | W | A signed route in Littlebox's scheme or in a provider's own: `hmac-body` (GitHub, Shopify), `timestamped` (Stripe) or `svix` (Resend). `fields` reads each input from a JSON path into the provider's body and leaves the other keys out. Each delivery is accepted once: a second copy answers 409 `replayed-signature`, a wrong secret or a changed byte 401 `invalid-signature`. Before 2026-11-07 a provider's scheme answered 401 and its body 400 `Unexpected action input: pusher` | inbox "Signed webhook on a private app", "Webhooks from outside services", booking "Check-in route", hub "Provider signature", "Svix sender", "Undeclared fields", "Program API", "Unknown scheme at both doors" |
 | F10 | Files: public, private, per user; upload, publish, delete | W | `files_upload`, `files_update`, `files_delete` and `GET /_littlebox/files/<id>`; 2 MiB a file, 20 MiB a Deployment. A file is its uploader's or public, so no rule shares it with a role (`File not found.` to an editor), and a visitor cannot upload | gallery "Curator uploads", "Publish a draft", club "Files", community "Files by role" |
@@ -60,6 +62,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F21 | Third-party login | N | App accounts are email and password; the runtime tools are `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset`. Nothing inside Littlebox comes close, because an outside login does not produce a Runtime Actor | platform "Runtime tools" |
 | F22 | Custom domain | W | `domain_set` with `publish` gives a Deployment one hostname alias next to its generated hostname, which keeps answering. The owner proves control with a TXT record `_littlebox.<hostname>` holding a token, which the Kernel looks up itself; then the alias is the app's own origin for the runtime's `Origin` check, cookies, the policy, routes, the file path and the maintenance page. A name under the suffix, a name another Deployment serves and a record holding another value are refused. The operator's proxy terminates TLS and forwards `Host` unchanged ([ADR-0015](../adr/0015-a-deployment-answers-on-one-custom-domain.md)). Until 2026-11-07 another `Host` answered 404 and this cell was N | domain "TXT proof", "Serve from the alias", "A name another Deployment holds", "Package", "Maintenance page"; gallery "Custom domain"; platform "Unclaimed hostname" |
 | F23 | Export and migration | W | `package_export` and an import into another Kernel, Eject, scheduled copies and restore | club "Export", "Import", habits "Eject and publish from outside", "Copy and restore" |
+| F25 | Calls to another app or a service | C | A call action, which the Kernel queues, signs with a signing secret set for calls only or sends with an API key, retries up to 5 times over about 7.5 minutes, and answers to a `then` mutation that stores what came back, the other app's guard refusal included. A call to an app of this installation runs that app's route code in process. What is given up: a call runs no SQL, so no `WHERE` can check the caller's role and the page supplies the fields that are not constants (starter's `Call action` row: Ben, a member, is queued); the page gets `{ callId, queued: true }` and reads the answer later from a row; only https outside the installation, and never a private, loopback, link-local or metadata address (`Action tasks.escalate calls the IP address 169.254.169.254. Name a host instead.` at both doors, `address-refused` at run) | calls "A signed call to another app", "The callee's guard reaches the caller's then", "A call that sends an API key", "Limits", "Refusals at publish", "connects"; starter "Call to the team inbox"; `cargo test calls::tests` for retries and the run-time address check |
 | F24 | Same app from the editor's agent and an external agent | C | The editor saves Managed sources and publishes through the Gate; an external agent publishes from the CLI. No replay drives the build agent itself: habits sends the editor's save and publish over MCP and runs the Gate on sql.js. The two doors also disagree on three declarations, listed under [Where the doors disagree](#where-the-doors-disagree) | habits "Managed publish", "Streak SQL within the LIMIT rules"; community "No email from the actor"; platform "Declare ..." |
 
 ## The matrix
@@ -90,6 +93,7 @@ Each row gives the verdict most shapes get, the primitive, what is given up or w
 | F22 Custom domain | **W** | W | W | W | **W** | W | W | W | **W** | W |
 | F23 Export and migration | **W** | **W** | **W** | **W** | **W** | **W** | **W** | **W** | **W** | **W** |
 | F24 Same app from both agents | **C** | **C** | **C** | **C** | **C** | **C** | **C** | **C** | **C** | **C** |
+| F25 Calls to another app or a service | C | C | C | C | C | C | C | **C** | C | C |
 
 A cell differs from its feature's verdict where the shape changes the answer:
 
@@ -98,17 +102,18 @@ A cell differs from its feature's verdict where the shape changes the answer:
 - F11 in E is C, because a post cannot embed an image or a video from another site.
 - F17 is C in C, D and J, because a notice reaches only the owner or the person who acted. A team tool cannot tell the assignee, a community its members, a two-sided app the followers; they see the change when they next open the app. Sending to account IDs a query returns is the form that would close it.
 - F18 is W where the work is a change to the app's rows (E publishes a post at its time, G and J expire old rows, I releases a hold that lapsed, as booking does), C where the point of the work is to tell someone (A's launch notice, B's reminder, C's and D's digest, F's daily summary): the schedule writes it into the app, and it reaches a person only when they open the app, until F17 exists. It is N in H, because a retry of an outbound call needs an action that calls out. Until 2026-11-07 every one of these cells was C or N, because a `"schedule"` key passed both doors and ran nothing.
+- F25 is bold in H, whose shape names outbound calls. Every other shape can use it to tell another app what changed, as starter tells the inbox.
 
 ## Counts
 
-The counts are taken from the 240 cells above, by counting each letter.
+The counts are taken from the 250 cells above, by counting each letter. Before F25 and the H cell of F18 they were 116, 77 and 47 of 240, and 41, 30 and 16 of 87 bold.
 
 | | Works | Compromise | Not possible | Cells |
 | --- | --- | --- | --- | --- |
-| Every cell | 146 | 83 | 11 | 240 |
-| Cells a shape cannot ship without (bold) | 50 | 36 | 1 | 87 |
+| Every cell | 146 | 93 | 11 | 250 |
+| Cells a shape cannot ship without (bold) | 50 | 37 | 1 | 88 |
 
-On 2026-11-06 the counts were 116, 77 and 47 over every cell and 41, 30 and 16 over the bold ones. On 2026-11-07 the custom domain moved F22 to W, notices moved F17 to W or C, scheduled work moved F18 to W or C, and provider signature schemes moved F9 to W and F20 to C, which gives the counts above.
+On 2026-11-06 the counts were 116, 77 and 47 over 240 cells and 41, 30 and 16 over the 87 bold ones. On 2026-11-07 the custom domain moved F22 to W, notices moved F17 to W or C, scheduled work moved F18 to W or C, provider signature schemes moved F9 to W and F20 to C, and calls between apps added F25 as a row of 10 cells, which gives the counts above.
 
 | Shape | Needed | Not possible among them | Compromises among them |
 | --- | --- | --- | --- |
@@ -119,9 +124,11 @@ On 2026-11-06 the counts were 116, 77 and 47 over every cell and 41, 30 and 16 o
 | E Blog or docs | 10 |  | F7, F11, F12, F24 |
 | F Form collector | 6 |  | F10, F24 |
 | G Public dataset | 7 |  | F7, F12, F24 |
-| H Integration hub | 9 | F18 retries | F9, F15, F24 |
+| H Integration hub | 10 | F18 retries | F9, F15, F24, F25 |
 | I Shop or booking | 10 |  | F19, F20, F24 |
 | J Two-sided | 11 |  | F5, F10, F12, F17, F19, F20, F24 |
+
+A, B, C, D, E, F, G, I and J need nothing marked N. Before 2026-11-07 only G did. H still need at least one feature that no primitive gives.
 
 A, B, C, D, E, F, G, I and J need nothing marked N. Before 2026-11-07 only G did. Every other shape still needs at least one feature that no primitive gives.
 
@@ -134,7 +141,7 @@ The probes found three declarations the Validation Gate and the Kernel answered 
 | Declaration | Both doors, since 2026-11-07 | Probe |
 | --- | --- | --- |
 | A binding `{ "source": "actor", "field": "email" }` | Refused before publishing with `Invalid binding 1 in members.join.` | community "No email from the actor" |
-| An action of `"kind": "email"` | Refused with `Action notes.mail has an invalid kind. Use "query", "mutation" or "signal".` | platform "Declare an action of kind email" |
+| An action of `"kind": "email"` | Refused with `Action notes.mail has an invalid kind. Use "query", "mutation", "signal" or "call".` | platform "Declare an action of kind email" |
 | A `"schedule"` key on a mutation, or `"subscribe"` on a query | Passed both doors and did nothing until 2026-11-07. A schedule is now a primitive that both doors parse from `kernel-rs/src/schedule-cases.json`, so `"0 8 * * *"` on `notes.add` is refused with `Action notes.add declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values.`, and `subscribe` is refused with a message that points at polling | platform "Declare a schedule on a mutation", "Declare a subscription on a query"; schedule "Declare a schedule" |
 
 ## What blocks the most shapes
@@ -143,11 +150,16 @@ Counting the bold N cells per feature gave five features with any on 2026-11-06,
 
 | Feature | Shapes it blocks | Shapes it degrades |
 | --- | --- | --- |
+Counting the bold N cells per feature gave five features with any on 2026-11-06, the five in [the showcase findings](./showcase-findings.md#what-the-matrix-adds), each with the smallest primitive that unblocks it. Four of them and calls between apps landed on 2026-11-07; the table shows what each still blocks or degrades.
+
+| Feature | Shapes it blocks | Shapes it degrades |
+| --- | --- | --- |
 | F9 Signed webhooks in |  | H |
 | F17 Email on an event |  | C, D, J |
 | F18 Scheduled or delayed work | H | B, C |
 | F20 Payments |  | I, J |
 | F22 Custom domain |  |  |
+| F25 Calls to another app or a service |  | H |
 
 Payments and webhooks from outside services blocked I, J and H until 2026-11-07. They needed one primitive, because a payment provider tells the app about a payment with a webhook in its own scheme, and [ADR-0018](../adr/0018-a-route-verifies-a-providers-own-signature.md) added it. The next features down block nothing but degrade the most shapes: search (D, E, G, J), realtime (C, I, J) and roles (C, D, J).
 
@@ -164,7 +176,8 @@ Payments and webhooks from outside services blocked I, J and H until 2026-11-07.
 | [domain](../../examples/probes/domain/replay.ts) | F22 | 6 |
 | [notify](../../examples/probes/notify/replay.ts) | F17 | 4 |
 | [schedule](../../examples/probes/schedule/replay.ts) | F18 | 6 |
+| [calls](../../examples/probes/calls/replay.ts) | F7, F25, the outbox, Usage on both apps | 10 |
 
 ## What this does not verify
 
-No probe drives the editor or its build agent; F24 rests on habits' simulation of the editor's calls. The schedule probe and the booking and habits replays run their Kernels with `LITTLEBOX_SCHEDULE_MIN_SECONDS=2`, so every schedule runs every 2 seconds; that a `"daily"` job runs at its UTC time once a day, and resumes after a restart without running twice, is proven by the Kernel's unit tests in `kernel-rs/src/schedule.rs` on a clock they move, not by a replay. Verified signup is proven only by habits, on an installation that requires it; the probes run in local mode. The probes do not open Chrome, so F11 for images rests on the gallery and club Chrome passes, and the probes check the policy header instead. The product-fit examples, such as the launch page and the poll, are cited by the earlier assessment, not re-run here.
+No probe drives the editor or its build agent; F24 rests on habits' simulation of the editor's calls. Verified signup is proven only by habits, on an installation that requires it; the probes run in local mode. The probes do not open Chrome, so F11 for images rests on the gallery and club Chrome passes, and the probes check the policy header instead. The product-fit examples, such as the launch page and the poll, are cited by the earlier assessment, not re-run here. No probe sends a call to an https host outside the installation, because the probes run without a network: `send_outside` is proven against a plain-HTTP server on loopback in `cargo test`, which also proves the timeout, the 64 KiB cap, that a redirect is not followed, and that `localhost` resolves to an address a call may not reach.

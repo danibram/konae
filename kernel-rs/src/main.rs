@@ -30,6 +30,7 @@ mod admission;
 mod app_owner;
 mod artifact;
 mod auth;
+mod calls;
 mod clerk;
 mod copies;
 mod domain;
@@ -324,6 +325,10 @@ struct ActionDefinition {
     /// Refused by `schedule::check_subscribe`: the Kernel pushes nothing.
     #[serde(default)]
     subscribe: Option<Value>,
+    /// An action of `"kind": "call"`: its url, method, body, auth and then,
+    /// checked by `calls::check_kind`.
+    #[serde(flatten)]
+    call: calls::CallKeys,
 }
 
 #[derive(Clone, Deserialize)]
@@ -392,6 +397,7 @@ async fn main() -> Result<()> {
     if let Some(queue) = state.accounts.queue.clone() {
         mail::spawn_worker(queue);
     }
+    calls::spawn_worker(state.clone());
     // Apply the verification mode to creator accounts before serving, so a
     // switch to required revokes unverified sessions at startup.
     accounts::creator_store(&state)?;
@@ -527,7 +533,10 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
     if let Err(message) = action_shape::check_program(&program) {
         return error(StatusCode::BAD_REQUEST, &message);
     }
-    if let Err(error_value) = mcp::store(&state).and_then(|db| http::require_secrets(&db, &input.project.id, &program)) {
+    if let Err(error_value) = mcp::store(&state).and_then(|db| {
+        http::require_secrets(&db, &input.project.id, &program)?;
+        calls::check_release(&state, &db, &input.project.id, &program)
+    }) {
         return error(StatusCode::BAD_REQUEST, &error_value.to_string());
     }
     if !input.artifact.files.keys().all(|path| safe_relative_path(path)) {
@@ -536,7 +545,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             "Artifact contains an invalid path.",
         );
     }
-    if let Err(message) = artifact::check_routing(&input.project.manifest) {
+    if let Err(message) = artifact::check_routing(&input.project.manifest).and_then(|_| calls::check_connects(&input.project.manifest)) {
         return error(StatusCode::BAD_REQUEST, &message);
     }
     let artifact_files = match artifact::decode(&input.artifact) {
@@ -862,6 +871,11 @@ async fn invoke_action(
     if let Some(route) = http::route_only(&name, action, is_private(&deployment)) {
         return error(StatusCode::FORBIDDEN, &format!("Action {name} answers only on its HTTP route, {route}."));
     }
+    // A call's then mutation records what the call's answer said, so no one
+    // else may write it.
+    if let Some(call) = calls::then_of(&program, &name) {
+        return error(StatusCode::FORBIDDEN, &format!("Action {name} runs only after the call {call} answers."));
+    }
     let actor = match authenticate_deployment(&state, &deployment, &headers) {
         Ok(actor) => actor,
         Err(response) => return response,
@@ -882,6 +896,10 @@ async fn invoke_action(
         Ok(value) => value,
         Err(message) => return error(StatusCode::BAD_REQUEST, &message),
     };
+    // A call is queued for the Kernel's worker and answered with its ID.
+    if action.kind == "call" {
+        return calls::enqueue(&state, &deployment, &name, &input).await;
+    }
     let db_path = state
         .data_root
         .join("deployments")
@@ -2337,6 +2355,9 @@ fn resolve_bindings(
 
 fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result<(), String> {
     action_shape::check_action(name, action)?;
+    if calls::check_kind(name, action)?.is_some() {
+        return Ok(());
+    }
     usage::check_signal_action(name, action)?;
     if action.kind == "signal" {
         usage::declaration(name, action)?;
@@ -3350,6 +3371,7 @@ mod tests {
             notify: None,
             schedule: None,
             subscribe: None,
+            call: Default::default(),
         }
     }
 

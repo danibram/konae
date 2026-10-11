@@ -57,6 +57,45 @@
       ],
       "signal": { "name": "status.changed", "properties": ["component", "state", "actor"] }
     },
+    "status.escalate": {
+      "kind": "call",
+      "access": "authenticated",
+      "method": "POST",
+      "url": "http://inbox.localhost/hooks/events",
+      "bindings": [
+        { "source": "input", "key": "component", "type": "string", "maxLength": 40 },
+        { "source": "input", "key": "changedAt", "type": "number" },
+        { "source": "input", "key": "eventId", "type": "string", "maxLength": 100 },
+        { "source": "input", "key": "severity", "type": "string", "maxLength": 10 },
+        { "source": "input", "key": "title", "type": "string", "maxLength": 200 }
+      ],
+      "body": { "source": { "value": "starter" }, "id": "eventId", "severity": "severity", "title": "title" },
+      "auth": { "secret": "inbox_events", "header": "X-Inbox-Signature" },
+      "then": {
+        "action": "status.escalated",
+        "inputs": { "component": "/input/component", "changedAt": "/input/changedAt", "status": "/status", "filed": "/body/result/changes", "error": "/body/error", "failure": "/error" }
+      }
+    },
+    "status.escalated": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO escalations (component, changed_at, status, filed, error, answered_at) VALUES (?1, ?2, ?3, ?4, COALESCE(?5, ?6), ?7)",
+      "bindings": [
+        { "source": "input", "key": "component", "type": "string", "maxLength": 40 },
+        { "source": "input", "key": "changedAt", "type": "number" },
+        { "source": "input", "key": "status", "type": "number", "nullable": true },
+        { "source": "input", "key": "filed", "type": "number", "nullable": true },
+        { "source": "input", "key": "error", "type": "string", "maxLength": 200, "nullable": true },
+        { "source": "input", "key": "failure", "type": "string", "maxLength": 40, "nullable": true },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "status.escalations": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT component, changed_at, status, filed, error, answered_at FROM escalations ORDER BY id DESC LIMIT 20",
+      "bindings": []
+    },
     "me.join": {
       "kind": "mutation",
       "access": "authenticated",

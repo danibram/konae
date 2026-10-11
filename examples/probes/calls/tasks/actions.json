@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "actions": {
+    "tasks.add": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO tasks (owner, title) VALUES (?1, ?2)",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "title", "type": "string", "maxLength": 200 }
+      ]
+    },
+    "tasks.mine": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT id, title, escalation_status, escalation_note FROM tasks WHERE owner = ?1 ORDER BY id LIMIT 50",
+      "bindings": [
+        { "source": "actor", "field": "id" }
+      ]
+    },
+    "tasks.escalate": {
+      "kind": "call",
+      "access": "authenticated",
+      "method": "POST",
+      "url": "http://desk.localhost/hooks/tickets",
+      "bindings": [
+        { "source": "input", "key": "taskId", "type": "number" },
+        { "source": "input", "key": "title", "type": "string", "maxLength": 200 }
+      ],
+      "body": { "ref": "taskId", "title": "title" },
+      "auth": { "secret": "desk_tickets", "header": "X-Desk-Signature" },
+      "then": { "action": "tasks.escalated", "inputs": { "id": "/input/taskId", "status": "/status", "note": "/body/error" } }
+    },
+    "tasks.forge": {
+      "kind": "call",
+      "access": "authenticated",
+      "method": "POST",
+      "url": "http://desk.localhost/hooks/tickets",
+      "bindings": [
+        { "source": "input", "key": "taskId", "type": "number" },
+        { "source": "input", "key": "title", "type": "string", "maxLength": 200 }
+      ],
+      "body": { "ref": "taskId", "title": "title" },
+      "auth": { "secret": "desk_guess", "header": "X-Desk-Signature" },
+      "then": { "action": "tasks.escalated", "inputs": { "id": "/input/taskId", "status": "/status", "note": "/body/error" } }
+    },
+    "tasks.escalated": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "UPDATE tasks SET escalation_status = ?2, escalation_note = ?3 WHERE id = ?1",
+      "bindings": [
+        { "source": "input", "key": "id", "type": "number" },
+        { "source": "input", "key": "status", "type": "number", "nullable": true },
+        { "source": "input", "key": "note", "type": "string", "maxLength": 200, "nullable": true }
+      ]
+    },
+    "desk.count": {
+      "kind": "call",
+      "access": "authenticated",
+      "method": "GET",
+      "url": "http://desk.localhost/api/count",
+      "bindings": [],
+      "auth": { "key": "desk_key" },
+      "then": { "action": "desk.counted", "inputs": { "open": "/body/result/0/open", "status": "/status" } }
+    },
+    "desk.counted": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO desk_counts (open, status, at) VALUES (?1, ?2, ?3)",
+      "bindings": [
+        { "source": "input", "key": "open", "type": "number", "nullable": true },
+        { "source": "input", "key": "status", "type": "number", "nullable": true },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "desk.counts": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT open, status FROM desk_counts ORDER BY id LIMIT 20",
+      "bindings": []
+    },
+    "nobody.ping": {
+      "kind": "call",
+      "access": "authenticated",
+      "method": "POST",
+      "url": "http://nobody.localhost/hooks/ping",
+      "bindings": []
+    }
+  }
+}

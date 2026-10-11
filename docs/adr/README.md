@@ -22,6 +22,7 @@ Each record states its status and which earlier record it amends on its first li
 | [0016](0016-a-mutation-may-notify-the-owner-or-the-actor.md) | A mutation may queue one email to the Project Owner or to the caller's verified email when it changes a row | 0010, 0012 | |
 | [0017](0017-the-kernel-runs-a-declared-schedule.md) | A mutation may declare a schedule that the Kernel's timer runs once a period; `subscribe` is refused | 0010 | |
 | [0018](0018-a-route-verifies-a-providers-own-signature.md) | A route verifies a provider's own signature scheme and reads its nested body through `fields` | 0011 | |
+| [0019](0019-an-app-calls-another-from-the-kernel.md) | An app calls another app or a service through a call action the Kernel queues and sends; `connects` and open GET routes for direct reads | 0011 | |
 
 ## Which record answers a question
 
@@ -29,6 +30,7 @@ Each record states its status and which earlier record it amends on its first li
 | --- | --- |
 | Who may open an app, and who may read a row? | 0001, 0002, 0011 |
 | Who may call an HTTP route, and how is a request signed? | 0011, update "a route binds its action" |
+| How does an app call another app or a service? | 0019 |
 | What does the agent run, and where? | 0003 |
 | Where does a build run, and what does the Kernel accept from it? | 0005, 0007 |
 | How does a schema change reach the database? | 0004, 0007 |

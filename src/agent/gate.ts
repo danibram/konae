@@ -255,8 +255,8 @@ function checkActions(db: Database, program: ServerActionProgram, stage: "action
   const errors: ValidationError[] = [];
 
   for (const action of Object.values(program.actions)) {
-    if (action.kind === "signal") {
-      // A signal action runs no SQL; its bindings still have to resolve.
+    if (action.kind === "signal" || action.kind === "call") {
+      // A signal action and a call run no SQL; their bindings still have to resolve.
       if (stage !== "actions") continue;
       try {
         resolveServerAction(program, action.name, syntheticInput(action), { actorId: "validation_actor", now: 0 });

@@ -12,5 +12,6 @@ Rename tables and actions freely, but keep these rules:
 8. Put `signal` on mutations that matter, with `actor`. Signals fire only when a row changed.
 9. Never change roles with `database_execute`; use a guarded action.
 10. Build elements with `textContent` and `addEventListener`; load nothing from another origin.
+11. Reach another app with a call action, never with `fetch` and a secret in the page. Point `status.escalate`'s `url` at your inbox, set `inbox_events` with `"use": "call"`, and keep fields the page must not change as `{ "value": ... }` constants.
 
 Then run `littlebox contract` and the replay.

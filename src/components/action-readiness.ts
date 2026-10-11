@@ -34,6 +34,7 @@ export function actionSentence(action: DescribedAction, visibility: Visibility):
     : `${actionWho(action.access, visibility)} can run it.${action.http ? ` It also answers on ${route}.` : ""}`;
   const guard = action.guard ? ` When no row changes it refuses with "${action.guard}"` : "";
   if (action.kind === "signal") return `${who} It records a Signal and writes no row.`;
+  if (action.kind === "call") return `${who} The Kernel sends the request it describes and writes no row itself.`;
   if (action.kind !== "query") return `${who}${guard ? `${guard}.` : ""}`;
   const limit = action.statement === undefined ? null : topLevelLimit(action.statement);
   if (limit !== null) return `${who} The list stops at ${limit} row${limit === 1 ? "" : "s"}.`;

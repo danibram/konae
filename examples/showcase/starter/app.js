@@ -73,12 +73,22 @@ function fill(list, empty, items) {
 
 async function loadStatus() {
   const rows = await call("status.list");
+  // Team admins may tell the team inbox about a component that is not operational.
+  // The Kernel sends the call; this page never holds the inbox's secret.
+  const escalates = RANK[state.me?.role ?? "anonymous"] >= RANK.admin;
   fill($("#status-list"), $("#status-empty"), rows.map((row) => el("li", { class: "row" },
     el("span", { class: `dot ${row.state}`, "aria-hidden": "true" }),
     el("strong", { text: row.component }),
     el("span", { class: `badge ${row.state}`, text: row.state }),
     el("span", { class: "muted grow", text: row.detail }),
     el("time", { class: "muted small", datetime: new Date(row.updated_at).toISOString(), text: when(row.updated_at) }),
+    escalates && row.state !== "operational" ? button("Tell the inbox", () => act(() => call("status.escalate", {
+      component: row.component,
+      changedAt: row.updated_at,
+      eventId: `${row.component}-${row.updated_at}`,
+      severity: row.state === "down" ? "critical" : "warning",
+      title: `${row.component} is ${row.state}${row.detail ? `: ${row.detail}` : ""}`.slice(0, 200),
+    }), "The team inbox will hear about it."), "ghost", `Tell the team inbox that ${row.component} is ${row.state}`) : null,
   )));
 }
 

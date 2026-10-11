@@ -113,6 +113,11 @@ impl Marker {
         Self { role: ORIGIN.into(), phase: UNREADABLE.into(), operation_id: "unknown".into(), ..Self::default() }
     }
 
+    /// An origin whose migration was confirmed: it stays paused for good.
+    pub(crate) fn retired(&self) -> bool {
+        self.role == ORIGIN && self.phase == CONFIRMED
+    }
+
     pub(crate) fn paused(&self) -> bool {
         match self.role.as_str() {
             ORIGIN => [PAUSING, CAPTURED, CONFIRMED, UNREADABLE].contains(&self.phase.as_str()),
@@ -194,6 +199,12 @@ fn save(data_root: &Path, id: &str, marker: &Marker) -> Result<()> {
 
 /// Pauses or resumes a Deployment as an origin migration would, for tests
 /// of the modules the pause reaches.
+#[cfg(test)]
+pub(crate) fn retire_for_test(data_root: &Path, id: &str) {
+    save(data_root, id, &Marker { role: ORIGIN.into(), phase: CONFIRMED.into(), operation_id: "op-test".into(), ..Marker::default() }).unwrap();
+}
+
+/// Pauses or resumes a Deployment as an origin migration would.
 #[cfg(test)]
 pub(crate) fn pause_for_test(data_root: &Path, id: &str, paused: bool) {
     let phase = if paused { PAUSING } else { CANCELLED };

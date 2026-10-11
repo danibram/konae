@@ -26,7 +26,7 @@ export type Kit = {
   owner: McpClient;
   pass(flow: string, result: string): void;
   /** Publishes the Capsule in `dir` as a first release and returns its host. */
-  publish(dir: string, options: { projectId: string; visibility: "public" | "private"; signup?: { mode: string; allowlist?: string[] }; files?: Record<string, string>; secrets?: Record<string, string>; initialPackage?: unknown }): Promise<Published>;
+  publish(dir: string, options: { projectId: string; visibility: "public" | "private"; signup?: { mode: string; allowlist?: string[] }; files?: Record<string, string>; secrets?: Record<string, string>; initialPackage?: unknown; manifest?: Record<string, unknown> }): Promise<Published>;
   /** The message release_plan answers for a Capsule whose sources are overridden by `files`. */
   planRefusal(dir: string, projectId: string, files: Record<string, string>): Promise<string>;
   /** The editor's Validation Gate on the same sources: its message and, when it has one, the detail under it. */
@@ -109,8 +109,8 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
       return { artifact, sources };
     };
     const created = new Set<string>();
-    const release = async (dir: string, projectId: string, visibility: "public" | "private", files: Record<string, string>, extra: object = {}, secrets: Record<string, string> = {}) => {
-      const project = { id: projectId, name: projectId, slug: projectId.replaceAll("_", "-"), manifest: { version: 1, visibility } };
+    const release = async (dir: string, projectId: string, visibility: "public" | "private", files: Record<string, string>, extra: object = {}, secrets: Record<string, string> = {}, manifest: Record<string, unknown> = {}) => {
+      const project = { id: projectId, name: projectId, slug: projectId.replaceAll("_", "-"), manifest: { version: 1, visibility, ...manifest } };
       if (!created.has(projectId)) {
         await owner.call("project_create", { projectId, name: project.name, slug: project.slug, manifest: project.manifest });
         created.add(projectId);
@@ -140,7 +140,7 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
         const receipt = await release(dir, options.projectId, options.visibility, options.files ?? {}, {
           ...(options.signup ? { initialSignupPolicy: { mode: options.signup.mode, allowlist: options.signup.allowlist ?? [] } } : {}),
           ...(options.initialPackage ? { initialPackage: options.initialPackage } : {}),
-        }, options.secrets);
+        }, options.secrets, options.manifest);
         return { receipt, host: receipt.hostname, deploymentId: receipt.id };
       },
       planRefusal: (dir, projectId, files) => errorText(release(dir, projectId, "public", files)),

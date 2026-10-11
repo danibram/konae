@@ -46,6 +46,18 @@ CREATE TABLE IF NOT EXISTS status (
   updated_at INTEGER NOT NULL
 );
 
+-- What the team inbox answered to each status the team told it about. Written
+-- only by status.escalated, which the Kernel runs after its call answers.
+CREATE TABLE IF NOT EXISTS escalations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  component TEXT NOT NULL,
+  changed_at INTEGER NOT NULL,
+  status INTEGER,
+  filed INTEGER,
+  error TEXT,
+  answered_at INTEGER NOT NULL
+);
+
 -- A member's file, private until they publish it. The bytes live with the Kernel.
 CREATE TABLE IF NOT EXISTS attachments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

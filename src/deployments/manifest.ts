@@ -1,6 +1,7 @@
+import { checkConnects } from "../kernel/calls";
 export type DeploymentVisibility = "public" | "private";
 export type RuntimeActionAccess = "anonymous" | "authenticated" | "granted";
-export type RuntimeActionKind = "query" | "mutation" | "signal";
+export type RuntimeActionKind = "query" | "mutation" | "signal" | "call";
 
 export type RuntimeActionDeclaration = {
   name: string;
@@ -13,6 +14,12 @@ export type CapsuleManifest = {
   visibility: DeploymentVisibility;
   /** How the Kernel answers a path the artifact does not hold. Absent means "pages". */
   routing?: "pages" | "spa";
+  /**
+   * Origins the page may reach with fetch, added to its connect-src, such as
+   * another app's public GET route. A key never goes to the browser; a call
+   * action carries it from the Kernel. See docs/mcp.md, "Calls between apps".
+   */
+  connects?: string[];
   runtime: {
     database: {
       mode: "declared-actions";
@@ -73,10 +80,12 @@ export function normalizeManifest(value: unknown): CapsuleManifest {
     : starterActions.map((action) => ({ ...action }));
 
   assertActions(normalizedActions);
+  const connects = checkConnects(candidate.connects);
   return {
     version: 1,
     visibility,
     ...(candidate.routing === "pages" || candidate.routing === "spa" ? { routing: candidate.routing } : {}),
+    ...(connects ? { connects } : {}),
     runtime: {
       database: { mode: "declared-actions", actions: normalizedActions },
       auth: { mode: visibility === "private" || candidate.runtime?.auth?.mode === "required" ? "required" : "optional" },
@@ -107,7 +116,7 @@ function normalizeAction(value: unknown): RuntimeActionDeclaration[] {
   if (!value || typeof value !== "object") return [];
   const action = value as Partial<RuntimeActionDeclaration>;
   if (typeof action.name !== "string" || !/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/.test(action.name)) return [];
-  if (action.kind !== "query" && action.kind !== "mutation" && action.kind !== "signal") return [];
+  if (action.kind !== "query" && action.kind !== "mutation" && action.kind !== "signal" && action.kind !== "call") return [];
   if (action.access !== "anonymous" && action.access !== "authenticated" && action.access !== "granted") return [];
   return [{ name: action.name, kind: action.kind, access: action.access }];
 }

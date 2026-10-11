@@ -185,7 +185,7 @@ Runtime MCP tools: `actions_invoke`.
 | `name` | `string` | Yes | A Server Action name declared in actions.json, e.g. tasks.list |
 | `input` | `object` | No | One value per input binding of the action, keyed by the binding's key. Defaults to {} |
 
-Returns an array of row objects for a query action, { changes, lastInsertId } for a mutation action, { recorded: true } for a signal action.
+Returns an array of row objects for a query action, { changes, lastInsertId } for a mutation action, { recorded: true } for a signal action, { callId, queued: true } for a call action.
 
 | Message | When | Source | Editor preview |
 | --- | --- | --- | --- |
@@ -203,6 +203,8 @@ Returns an array of row objects for a query action, { changes, lastInsertId } fo
 | `<key> must be a number.` | a number input is not a JSON number | Kernel | Same |
 | `<key> must be a boolean.` | a boolean input is not true or false | Kernel | Same |
 | `Query result exceeds 2 MiB or 1000 rows.` | a query produces more than 1000 rows or more than 2 MiB of JSON | Kernel | Same |
+| `This app reached its limit of calls in the last minute. Try again in a minute.` | the action is a call and the app queued 20 calls in the last 60 seconds, or the number the installation set | Kernel | Never refuses |
+| `Action <name> runs only after the call <key> answers.` | the action is the then mutation of a call, which only the Kernel runs | Kernel | Same |
 
 Limits:
 
@@ -212,7 +214,7 @@ Limits:
 - string inputs default to a maxLength of 10,000 UTF-16 code units
 - 256 MiB per app database
 
-Editor preview: Ignores the Deployment's visibility and rate limits, and keeps its database in the browser with a 10 MiB cap. A signal action returns { recorded: true } and records nothing; Signals exist only on a Deployment or a Development Kernel.
+Editor preview: Ignores the Deployment's visibility and rate limits, and keeps its database in the browser with a 10 MiB cap. A signal action returns { recorded: true } and records nothing; Signals exist only on a Deployment or a Development Kernel. A call action returns { callId, queued: true } and sends nothing; only a Kernel sends calls.
 
 ## miniapp.files
 
@@ -361,6 +363,68 @@ Returns { id, deleted: true }.
 Limits:
 
 - a row that still names the file ID keeps it; the app removes that row with its own action
+
+## The calls module, declared, with no browser call
+
+Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.
+
+- The Kernel resolves an outside host once per attempt and refuses it when any address it resolves to is loopback, private, link-local (where cloud metadata answers), shared, documentation, benchmarking, multicast, reserved, unspecified, unique-local, or an IPv4 address carried in IPv6. It then connects to the address it checked, so a second DNS answer cannot redirect the request.
+- http is allowed only to an app of this installation, which the Kernel reaches in its own process. Every other URL must be https.
+- Each attempt of a signed call signs again with a new nonce, so a retry is never refused as a replay.
+- A paused app sends no call and runs no then mutation until its pause ends.
+- Usage counts each queued call under call, by action. The then mutation counts as an action, or under refused when its guard refuses, and records its Signal with actor null.
+- The editor preview answers { callId, queued: true } and sends nothing. Run calls on a Development Kernel with littlebox dev, or on a Deployment.
+
+Declared with `kind: call` in `actions.json`. { "kind": "call", "access", "bindings": [input bindings only], "method": "GET" | "POST", "url": "https://inbox-2.apps.example.org/hooks/events", "body"?: { "<body key>": "<input key>" | { "value": <constant> } }, "auth"?: { "secret": "<name>", "header"?: "X-Inbox-Signature" } | { "key": "<name>" }, "then"?: { "action": "<mutation>", "inputs": { "<input key>": "<JSON pointer>" } } }. A POST sends the body keys as a JSON object and a GET as query parameters after the URL's own; a null or missing input leaves its key out, and a constant, a string of at most 1000 characters, a number, a boolean or null, is sent as actions.json writes it, so the caller cannot change it. auth.secret signs the request with Littlebox's route scheme in the header, X-Littlebox-Signature unless header names another; auth.key sends the secret's value, an API key, as Authorization: Bearer. The secret's value stays in the Kernel; it never reaches the browser, the artifact or an export. When the call ends, delivered or failed, the then mutation runs once with no actor, its inputs read by JSON pointers from { ok, status, error, body, input }: ok is true for a 2xx answer, status the HTTP status or null, error the Kernel's error kind or null, body the answer parsed as JSON or null, and input the call's own inputs. A then mutation runs only after its call. A URL whose host is an app of this installation goes through that app's route code in the Kernel's process, with the same callers check, signature check, guard, Usage and Signal. The owner reads every call with calls_read. The Validation Gate and the Kernel refuse the same declarations with the same messages, except the three marked as the Kernel's alone.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `Action <name> is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route.` | a call declares a statement, signal, guard or http | Kernel | Same |
+| `Action <name> is a <key>, so it cannot declare url, method, body, auth or then. Those keys belong to an action of "kind": "call".` | a query, mutation or signal action declares a call's keys | Kernel | Same |
+| `Action <name> is a call, so its bindings may only be inputs.` | a call binds the actor, the time or a literal; the Kernel adds no identity or clock to a request that leaves the app | Kernel | Same |
+| `Action <name> must call with "method": "GET" or "POST".` | method is missing, lowercase or another verb | Kernel | Same |
+| `Action <name> has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.` | url is missing, relative, not http or https, carries a user or password, a fragment, a space or a control character, or is longer than 2048 characters | Kernel | Same |
+| `Action <name> calls the IP address <key>. Name a host instead.` | the host is an IPv4 or IPv6 address, in any notation | Kernel | Same |
+| `Action <name> calls <key>, which names this machine or a cloud metadata service.` | the host is localhost, metadata, instance-data or a name under .internal | Kernel | Same |
+| `Action <name> calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel.` | the URL's first path segment is reserved, in any letter case | Kernel | Same |
+| `Action <name> has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with "value", at most 32.` | body is not an object, has more than 32 keys, a key that is not 1 to 64 letters, digits, _, . or -, or a value that is neither a string nor { "value": &lt;string of at most 1000 characters, number, boolean or null&gt; } | Kernel | Same |
+| `Action <name> sends body key <key> from <name>, which is not one of its input bindings.` | a body value names no input binding of the call | Kernel | Same |
+| `Action <name> has an invalid auth. Name a secret with "secret" to sign the request, or with "key" to send the API key it holds.` | auth is not an object, names both or neither, or has another key; header goes only with secret | Kernel | Same |
+| `Action <name> names an invalid auth secret. Use lowercase letters, digits and "_", starting with a letter.` | the secret is not a secret name | Kernel | Same |
+| `Action <name> has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer.` | then is not an object, has no action, has another key, or its inputs are not an object of strings | Kernel | Same |
+| `Action <name> reads <key> for then, which is not a JSON pointer into /ok, /status, /error, /body or /input.` | a pointer does not start with one of those, has a ~ not followed by 0 or 1, or is longer than 200 characters | Kernel | Same |
+| `Action <name> reads <key> for then, but <key> is not one of its input bindings.` | a pointer under /input names an input the call does not have | Kernel | Same |
+| `Action <name> names <name> as its then, which is not declared.` | the then action is not in actions.json | Kernel | Same |
+| `Action <name> names <name> as its then, which is not a mutation.` | the then action is a query, a signal action or a call | Kernel | Same |
+| `Action <name> names <name> as its then, which answers on an HTTP route. A then mutation runs only after its call.` | the then mutation declares http | Kernel | Same |
+| `Action <name> names <name> as its then, which binds the actor. A then mutation runs with no caller.` | the then mutation has an actor binding | Kernel | Same |
+| `Action <name> fills <key>, which is not an input of <name>.` | then.inputs names a key the mutation has no input binding for | Kernel | Same |
+| `Action <name> leaves <key> of <name> unfilled. Fill it from the answer or make the input nullable.` | a required input of the then mutation has no pointer | Kernel | Same |
+| `Action <name> calls http://<key>, which is not an app of this installation. Use https.` | publishing an http URL whose host is not under the installation's host suffix; the editor cannot see the installation, so only the Kernel refuses this | Kernel | Never refuses |
+| `Action <name> calls <key>, the editor's host. A call reaches an app or an outside service, never the editor.` | publishing a URL on the installation's own host or its MCP host; only the Kernel refuses this | Kernel | Never refuses |
+| `Action <name> calls with the secret <name>, which is not set for this project. Set it with secret_set before publishing.` | publishing, and the owner has not set the secret auth names; only the Kernel refuses this | Kernel | Never refuses |
+| `Action <name> signs its route with the secret <name>, which is set for calls only. Set a route secret with a value of its own.` | publishing a route whose signature names a secret set with use call | Kernel | Never refuses |
+
+Limits:
+
+- 20 calls queued per app in any 60 seconds, unless the installation sets LITTLEBOX_CALLS_PER_MINUTE
+- 10 seconds per attempt, from connecting to the last byte of the answer
+- 64 KiB per answer; a larger one ends the call as failed with answer-too-large
+- 5 attempts for a network failure, a timeout, 408, 425, 429 or a 5xx, waiting 30 seconds, then 1, 2 and 4 minutes; any other answer is final
+- no redirect is followed: a 3xx is the answer
+- the outbox keeps the newest 1000 finished calls per app and the first 1 KiB of each answer
+
+Declared with `connects` in `manifest`. "connects": ["https://api.example.com"] in the project manifest, or project.manifest.connects in littlebox.json. Each origin is added to the page's connect-src, so the page may fetch it directly: another app's public GET route, which answers with Access-Control-Allow-Origin: *, or an outside API that allows the app's origin. Nothing else is loosened. A key or a secret never goes to the browser: a request that needs one is a call action, which the Kernel sends.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `connects must be a list of at most 10 origins, such as ["https://api.example.com"].` | connects is not a list of strings or lists more than 10 | Kernel | Same |
+| `connects lists <key>, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost.` | an entry is not exactly an origin: http to a host outside localhost, a path or trailing slash, a wildcard, capitals, or the default port written out | Kernel | Same |
+| `connects lists <key> twice.` | an origin appears twice | Kernel | Same |
+
+Limits:
+
+- 10 origins
 
 ## The http module, declared, with no browser call
 

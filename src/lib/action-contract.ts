@@ -17,6 +17,7 @@
  */
 import { parseServerActionSource, type HttpBinding, type RouteCaller, type ScheduleDeclaration, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
 import type { RouteSignature, SignatureScheme } from "../kernel/route-declaration";
+import { thenOf, type CallDeclaration } from "../kernel/calls";
 import { sdkContract, type SdkError } from "../sdk/contract";
 import { limitIndex } from "./query-bound";
 import { sqlStatementTokens, sqlTokens, type SqlToken } from "./sql-tokens";
@@ -48,7 +49,21 @@ export type ContractOutput =
   }
   | { kind: "changes"; fields: ["changes", "lastInsertId"] }
   /** Reserved for actions that record a Signal (ADR-0010). The generator does not write it yet. */
-  | { kind: "signal"; signal: string };
+  | { kind: "signal"; signal: string }
+  /** A call action: the Kernel queued the request (ADR-0019). */
+  | { kind: "queued"; fields: ["callId", "queued"] };
+
+/** What a call action sends and what its then mutation reads (ADR-0019). */
+export type ContractCall = {
+  method: "GET" | "POST";
+  url: string;
+  /** Body key to an input key or a constant; a GET sends them as query parameters. */
+  body: Record<string, string | { value: string | number | boolean | null }>;
+  auth?: { secret: string; header: string; scheme: string } | { key: string };
+  then?: { action: string; inputs: Record<string, string> };
+  /** The document a then mutation's pointers read. */
+  answer: string;
+};
 
 export type ContractInput = {
   key: string;
@@ -137,7 +152,7 @@ export type ContractLimits = {
 
 export type ContractAction = {
   name: string;
-  kind: "query" | "mutation" | "signal";
+  kind: "query" | "mutation" | "signal" | "call";
   access: "anonymous" | "authenticated";
   /** Whether a binding passes the caller's ID; such an action refuses a caller without one. */
   actorBound: boolean;
@@ -162,6 +177,10 @@ export type ContractAction = {
    * `scheduled` (ADR-0017).
    */
   schedule?: ScheduleDeclaration;
+  /** A call action's request and its then mutation. */
+  call?: ContractCall;
+  /** The call whose then this mutation is: only the Kernel runs it, after that call ends. */
+  thenOf?: string;
   runtime: { endpoint: string; tool: string; sdk: string; callers: ContractCaller[] };
   http?: ContractHttp;
   errors: ContractError[];
@@ -260,7 +279,7 @@ export function contractFromProgram(program: ServerActionProgram, schemaSource: 
   const tables = parseSchemaTables(schemaSource);
   const warnings: ContractWarning[] = [];
   const actions = Object.keys(program.actions).sort().map((name) => {
-    const action = contractAction(program.actions[name], tables);
+    const action = contractAction(program.actions[name], tables, thenOf(program.actions, name));
     if (action.output.kind === "rows") {
       for (const column of action.output.unnamed) {
         warnings.push({ action: name, message: unnamedWarning(name, column.expression) });
@@ -296,7 +315,19 @@ export function unnamedWarning(action: string, expression: string): string {
   return `Server action ${action} returns ${expression} without a name. Add AS <name> so every backend returns the same key.`;
 }
 
-function contractAction(action: ServerActionDefinition, tables: SchemaTables): ContractAction {
+const CALL_ANSWER = "{ ok, status, error, body, input }: ok is true for a 2xx answer, status is the HTTP status or null, error is the Kernel's error kind or null, body is the answer parsed as JSON or null, input is the call's own inputs";
+
+function contractCall(call: CallDeclaration): ContractCall {
+  const auth = call.auth && ("key" in call.auth ? { key: call.auth.key } : { secret: call.auth.secret, header: call.auth.header, scheme: SIGNATURE_SCHEME });
+  return {
+    method: call.method, url: call.url, body: { ...call.body },
+    ...(auth ? { auth } : {}),
+    ...(call.then ? { then: { action: call.then.action, inputs: { ...call.then.inputs } } } : {}),
+    answer: CALL_ANSWER,
+  };
+}
+
+function contractAction(action: ServerActionDefinition, tables: SchemaTables, callOf: string | null = null): ContractAction {
   // The parser refuses "granted" until grants exist, so it never reaches here.
   if (action.access === "granted") throw new Error(`Action ${action.name} uses "access": "granted", which the Kernel does not support yet.`);
   const access = action.access;
@@ -321,7 +352,9 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables): C
     ? { kind: "rows", ...deriveOutputColumns(action.statement, tables) }
     : action.kind === "signal"
       ? { kind: "signal", signal: action.signal?.name ?? action.name }
-      : { kind: "changes", fields: ["changes", "lastInsertId"] };
+      : action.kind === "call"
+        ? { kind: "queued", fields: ["callId", "queued"] }
+        : { kind: "changes", fields: ["changes", "lastInsertId"] };
   const http = action.http ? contractHttp(action.http, action.kind) : undefined;
   return {
     name: action.name,
@@ -334,9 +367,13 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables): C
     ...(action.guard ? { guard: action.guard } : {}),
     ...(action.notify ? { notify: { ...action.notify } } : {}),
     ...(action.schedule ? { schedule: { ...action.schedule } } : {}),
-    runtime: { ...RUNTIME, callers: http?.onlyDoor === "always" ? [] : runtimeCallers(access, Boolean(http)) },
+    ...(action.call ? { call: contractCall(action.call) } : {}),
+    ...(callOf ? { thenOf: callOf } : {}),
+    runtime: { ...RUNTIME, callers: http?.onlyDoor === "always" || callOf ? [] : runtimeCallers(access, Boolean(http)) },
     ...(http ? { http } : {}),
-    errors: actionErrors(action, inputs, actorBound),
+    errors: callOf
+      ? [fromSdk("Action <name> runs only after the call <key> answers.", "runtime", { name: action.name, key: callOf })]
+      : actionErrors(action, inputs, actorBound),
     limits: actionLimits(action),
     statement: action.statement,
     bindings,
@@ -351,7 +388,7 @@ function runtimeCallers(access: "anonymous" | "authenticated", routed: boolean):
     : [person];
 }
 
-function contractHttp(http: HttpBinding, kind: "query" | "mutation" | "signal"): ContractHttp {
+function contractHttp(http: HttpBinding, kind: "query" | "mutation" | "signal" | "call"): ContractHttp {
   const declared = http.callers;
   const takes = (caller: RouteCaller) => declared ? declared.includes(caller) : caller !== "session" || !http.signature;
   const callers: ContractCaller[] = [];
@@ -429,6 +466,7 @@ function actionErrors(action: ServerActionDefinition, inputs: ContractInput[], a
     }
   }
   if (action.kind === "query") errors.push(fromSdk("Query result exceeds 2 MiB or 1000 rows.", both));
+  if (action.kind === "call") errors.push(fromSdk("This app reached its limit of calls in the last minute. Try again in a minute.", "runtime"));
   // The app's own refusal: 403 on a route, set below with the route's statuses.
   if (action.guard) errors.push({ message: action.guard, when: "the statement changes no row, so the action's rule refused the call. Usage counts it under refused and no Signal is recorded", via: both });
   errors.push(fromSdk("rate-limited", "runtime"));
@@ -808,7 +846,7 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
   for (const action of contract.actions) {
     lines.push(`## ${action.name}`, "");
     lines.push(`A ${action.kind} declared ${action.access}.${action.actorBound ? " It binds the caller's ID, so a caller without one is refused." : ""}`, "");
-    lines.push("```sql", action.statement, "```", "");
+    if (action.kind !== "call") lines.push("```sql", action.statement, "```", "");
     lines.push("### Input", "");
     if (action.inputs.length === 0) lines.push("None. Send `{}`.", "");
     else {
@@ -839,6 +877,8 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
         lines.push(`When the statement changes a row the Kernel queues an email to ${to} with the subject \`${action.notify.subject}\`. The answer does not wait for it or depend on it; Usage counts it under \`notify\`.`, "");
       }
       if (action.schedule) lines.push(`The Kernel's timer also runs it ${"every" in action.schedule ? `every ${action.schedule.every}` : `daily at ${action.schedule.daily} UTC`}, with no caller: an \`actor\` binding is null and the guard does not apply. The owner reads each run under \`scheduled\` with \`usage_read\`.`, "");
+    } else if (action.output.kind === "queued") {
+      lines.push("`{ callId, queued: true }`. The Kernel sends the request later, from its own process.", "");
     } else {
       lines.push(`\`{ "recorded": true }\`. It runs no SQL and records the Signal \`${action.output.signal}\`.`, "");
     }
@@ -848,6 +888,15 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
       const named = properties.map((property) => property === "actor" ? "`actor` (the app user's ID, the API key's ID, or null for a visitor or a signed request)" : `\`${property}\``);
       lines.push(`Records \`${name}\`${named.length ? ` with ${named.join(", ")}` : ""}${action.kind === "mutation" ? " after the statement changes a row" : " on every call the bindings accept"}. A refused call records none.`, "");
     }
+    if (action.call) {
+      const call = action.call;
+      lines.push("### Call", "");
+      const sent = Object.entries(call.body).map(([key, value]) => typeof value === "string" ? `\`${key}\` from \`${value}\`` : `\`${key}\` as \`${JSON.stringify(value.value)}\``);
+      lines.push(`Sends \`${call.method} ${call.url}\`${sent.length ? ` with ${sent.join(", ")}` : ""}.`, "");
+      if (call.auth) lines.push("key" in call.auth ? `Sends the API key the secret \`${call.auth.key}\` holds as Authorization: Bearer.` : `Signs \`${call.auth.header}: ${call.auth.scheme}\` with the secret \`${call.auth.secret}\`.`, "");
+      if (call.then) lines.push(`When it ends, runs \`${call.then.action}\` with ${Object.entries(call.then.inputs).map(([key, pointer]) => `\`${key}\` from \`${pointer}\``).join(", ") || "no inputs"}, read from ${call.answer}.`, "");
+    }
+    if (action.thenOf) lines.push(`Only the Kernel runs this mutation, after the call \`${action.thenOf}\` ends.`, "");
     lines.push("### Callers", "");
     lines.push(`Runtime endpoint: ${action.runtime.callers.length ? action.runtime.callers.map(describeCaller).join("; ") : "none; the action answers only on its route"}.`, "");
     if (action.http) {

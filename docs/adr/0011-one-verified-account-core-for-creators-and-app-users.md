@@ -147,3 +147,7 @@ Decisions the plan left open:
 ## Note, 2026-11-07: a provider's own scheme
 
 A route's signature may name a `scheme` other than Littlebox's, `hmac-body`, `timestamped` or `svix`, and a route may declare `fields` that read a nested body. [ADR-0018](0018-a-route-verifies-a-providers-own-signature.md) records the decision. Littlebox's scheme stays the default and unchanged.
+
+## Note, 2026-11-07: a secret for calls only
+
+[ADR-0019](0019-an-app-calls-another-from-the-kernel.md) lets an app sign a call to another app of the same owner, which means holding that app's route secret. `secret_set` keeps refusing a value another project holds as a route secret, but takes it with `"use": "call"`. Such a secret signs or carries the project's outgoing calls and verifies none of its routes: a release whose route names it is refused. The danger the reuse refusal guards against, two apps that both accept one signature, needs two routes verifying with the value, and a secret for calls only verifies nothing.

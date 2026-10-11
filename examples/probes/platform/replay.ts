@@ -46,7 +46,7 @@ await probe("platform", 23050, async (kit) => {
   // schedule on it is refused before its cron text is read; the schedule probe covers the rest.
   const same = (message: string): [string, string] => [message, message];
   const expected: Record<string, [string, string]> = {
-    "an action of kind email": same('Action notes.mail has an invalid kind. Use "query", "mutation" or "signal".'),
+    "an action of kind email": same('Action notes.mail has an invalid kind. Use "query", "mutation", "signal" or "call".'),
     "a schedule on a mutation": same("Action notes.add declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values."),
     "a subscription on a query": same("Action notes.due declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead."),
   };

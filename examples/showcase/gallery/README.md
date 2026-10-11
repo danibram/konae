@@ -115,7 +115,7 @@ Rows with a status or a quoted message are answers the replay received. Rows tha
 | `GET /feed.json?page=2` | 400 | `{"error":"Unexpected action input: page"}` |
 | Shape `/feed.json` as a JSON Feed document (`version`, `title`, `items`) | | No primitive. A route always answers `{ "result": [rows] }`. |
 | Absolute image URLs in `/feed.json` | | No primitive. The only kernel binding is `now`; the statement cannot read the Deployment's origin, so the feed carries `/_littlebox/files/<id>` paths. |
-| Let a feed reader in another origin's browser read `/feed.json`, or cache it | | No primitive. No `Access-Control-Allow-Origin` header, and `Cache-Control: no-store` on every answer. |
+| Let a browser cache `/feed.json` | | No primitive. `Cache-Control: no-store` on every answer. Since ADR-0015 (2026-11-07) a feed reader in another origin's browser reads it, because an open GET route answers `Access-Control-Allow-Origin: *`; the replay asserted the missing header before. |
 | Message 31 from one address within 10 seconds (`contact.send` over MCP) | 200 | `rate-limited`, as a JSON-RPC result with `isError: true` and `Retry-After: 1`. A route answers 429; the runtime endpoint answers 200. |
 | A tighter limit for `contact.send` alone, such as 3 an hour | | No primitive. `actions.json` declares no rate limit; every anonymous action shares 30 calls per 10 seconds per address, which lets one address send about 260,000 messages a day. |
 | `contact.send` with topic `spam` | | `CHECK constraint failed: topic IN ('commission', 'print', 'other')`. Inputs have type and length but no allowed values, so the CHECK in `schema.sql` is the only guard and its SQLite text reaches the visitor. |

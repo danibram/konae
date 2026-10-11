@@ -9,6 +9,7 @@ import {
   validateRuntimeParams,
 } from "./security";
 import { parseServerActionSource, resolveServerAction, routeCallers, type ServerActionProgram } from "../kernel/actions";
+import { thenOf } from "../kernel/calls";
 import type { ApplyDatabaseMigrationInput } from "../database-lifecycle/contracts";
 
 export type StoredFile = {
@@ -588,6 +589,9 @@ export class MiniAppRuntimeHost {
     if (declaration?.http && routeCallers(declaration.http, "public")) {
       throw new Error(`Action ${declaration.name} answers only on its HTTP route, ${declaration.http.method} ${declaration.http.path}.`);
     }
+    // A call's then mutation runs only after its call answers, on a Deployment too.
+    const call = declaration ? thenOf(this.actionProgram.actions, declaration.name) : null;
+    if (call) throw new Error(`Action ${declaration!.name} runs only after the call ${call} answers.`);
     if (declaration && declaration.access !== "anonymous" && this.previewActor === "guest") {
       throw new Error("authentication-required");
     }
@@ -598,6 +602,8 @@ export class MiniAppRuntimeHost {
     // The preview keeps no Usage store. A signal action runs no SQL and answers
     // as the Kernel does, which records the Signal on a Deployment.
     if (action.kind === "signal") return { recorded: true };
+    // The preview sends no call: a Deployment's Kernel does, from its own process.
+    if (action.kind === "call") return { callId: `preview_${crypto.randomUUID()}`, queued: true };
     if (action.kind === "query") return this.query({ sql: action.statement, params });
     const result = await this.execute({ sql: action.statement, params });
     // A guarded mutation that changed no row is refused with its guard, as on a Deployment.

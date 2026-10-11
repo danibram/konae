@@ -70,6 +70,8 @@ pub(crate) enum Operation {
     /// A mutation's notice, named `<action>: queued` or `<action>: <reason>`
     /// when nothing will be sent (`notify.rs`).
     Notify(String),
+    /// A call queued by an action of `"kind": "call"`, by action name (`calls.rs`).
+    Call(String),
 }
 
 impl Operation {
@@ -84,6 +86,7 @@ impl Operation {
             Operation::Login => ("login", String::new()),
             Operation::Refused(name) => ("refused", name),
             Operation::Notify(name) => ("notify", name),
+            Operation::Call(name) => ("call", name),
         }
     }
 }
@@ -510,7 +513,7 @@ pub(crate) fn admin_tools() -> Vec<Value> {
     vec![
         super::mcp::tool(
             "usage_read",
-            "Read a deployment's Usage: daily totals of the runtime operations the Kernel allowed (session, action, route, upload, file_read, signup, login), of guard refusals (refused, by action) and of scheduled runs (scheduled, by action) between two UTC dates written YYYY-MM-DD, both included, at most 400 days apart, and the newest 500 scheduled runs in that range with their outcome and changes.",
+            "Read a deployment's Usage: daily totals of the runtime operations the Kernel allowed (session, action, route, upload, file_read, signup, login, call), of guard refusals (refused, by action) and of scheduled runs (scheduled, by action) between two UTC dates written YYYY-MM-DD, both included, at most 400 days apart, and the newest 500 scheduled runs in that range with their outcome and changes.",
             json!({"deploymentId": text, "from": date, "to": date}),
             &["deploymentId", "from", "to"],
             true,

@@ -33,6 +33,10 @@ const ownerEmail = "owner@starter.test";
 const passwords = { owner: `owner-${crypto.randomUUID()}`, ana: `ana-${crypto.randomUUID()}`, ben: `ben-${crypto.randomUUID()}`, olga: `olga-${crypto.randomUUID()}` };
 const people = { ana: "ana@starter.test", ben: "ben@starter.test", olga: ownerEmail };
 const webhookSecret = `status-${crypto.randomUUID()}`;
+// The team inbox's route secret. The starter holds the same value to sign its calls,
+// set with "use": "call", since one owner's route secrets must differ.
+const inboxSecret = `inbox-${crypto.randomUUID()}`;
+const inboxPlaceholder = "http://inbox.localhost/hooks/events";
 const managedSecret = `managed-${crypto.randomUUID()}`;
 const MiB = 1024 * 1024;
 
@@ -178,6 +182,37 @@ function app(kernel: Kernel, receipt: Receipt) {
 
 const action = <T = any>(caller: McpClient, name: string, input: object = {}) => caller.call<T>("actions_invoke", { name, input });
 
+/** Publishes the inbox showcase on a Kernel, as the team inbox the starter calls. */
+async function publishInbox(kernel: Kernel): Promise<Receipt> {
+  const projectId = "showcase_inbox";
+  const manifest = { version: 1, visibility: "private" };
+  await kernel.owner.call("project_create", { projectId, name: "Inbox", slug: "inbox", manifest });
+  await kernel.owner.call("secret_set", { projectId, name: "events_webhook", value: inboxSecret });
+  // The inbox also takes a code host's and a payment provider's webhooks (ADR-0018); each route needs its own secret before it publishes.
+  await kernel.owner.call("secret_set", { projectId, name: "github_webhook", value: `gh_starter_${crypto.randomUUID().replaceAll("-", "")}` });
+  await kernel.owner.call("secret_set", { projectId, name: "payments_webhook", value: `whsec_starter_${crypto.randomUUID().replaceAll("-", "")}` });
+  const dir = path.join(scratch, "inbox");
+  await mkdir(dir);
+  for (const name of ["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]) await cp(path.join(import.meta.dir, "../inbox", name), path.join(dir, name));
+  const { artifact } = await buildLocal(dir);
+  const files: Record<string, string> = {};
+  for (const name of ["index.html", "schema.sql", "actions.json"]) files[name] = await readFile(path.join(dir, name), "utf8");
+  const upload = await kernel.owner.upload(json({ project: { id: projectId, name: "Inbox", slug: "inbox", manifest, files }, visibility: "private", artifact, initialSignupPolicy: { mode: "closed", allowlist: [] } }), projectId);
+  try {
+    const plan = await kernel.owner.call<{ planId: string }>("release_plan", { transferId: upload.transferId });
+    return await kernel.owner.call<Receipt>("release_apply", { planId: plan.planId });
+  } finally { await kernel.owner.cancel(upload.transferId).catch(() => {}); }
+}
+
+/** Reads until `done` holds, for answers the Kernel's call worker writes a moment later. */
+async function until<T>(read: () => Promise<T>, done: (value: T) => boolean, what: string): Promise<T> {
+  for (const deadline = Date.now() + 15_000; Date.now() < deadline; await Bun.sleep(100)) {
+    const value = await read();
+    if (done(value)) return value;
+  }
+  assert.fail(`Timed out waiting for ${what}.`);
+}
+
 async function upload(caller: McpClient, bytes: Uint8Array, name: string, type: string, visibility?: "public" | "private") {
   const transfer = await caller.upload(bytes);
   try { return await caller.call<{ id: string; name: string; size: number; visibility: string }>("files_upload", { transferId: transfer.transferId, name, type, ...(visibility ? { visibility } : {}) }); }
@@ -237,6 +272,13 @@ try {
   const A = await startKernel(port, "origin");
   const B = await startKernel(port + 1, "destination");
 
+  // The team inbox on the same Kernel. status.escalate names its route; the
+  // checked-in actions.json holds a placeholder the owner replaces with their inbox's URL.
+  const inbox = await publishInbox(A);
+  const inboxUrl = `${new URL(inbox.url).origin}/hooks/events`;
+  sources["actions.json"] = sources["actions.json"].replace(inboxPlaceholder, inboxUrl);
+  program.actions["status.escalate"].url = inboxUrl;
+
   // The Kernel refuses the same statement when a release carries it.
   await A.owner.call("project_create", { projectId: "starter_probe", name: "Starter probe", slug: "starter-probe", manifest: { version: 1, visibility: "public" } });
   const probe = { project: { id: "starter_probe", name: "Starter probe", slug: "starter-probe", manifest: { version: 1, visibility: "public" }, files: { ...sources, "actions.json": JSON.stringify(unbounded) } }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>probe</main>" } } };
@@ -245,7 +287,7 @@ try {
   await A.owner.cancel(probeUpload.transferId).catch(() => {});
   assert.equal(kernelLimitRefusal, gateLimitRefusal);
   refused("LIMIT rule", "notes.list without its LIMIT, in the Gate and on release_plan", kernelLimitRefusal);
-  check("Gate", `The Gate passes the Capsule's 26 actions. notes.list without its LIMIT is refused by the Gate and by the Kernel's release_plan with the same words: "${kernelLimitRefusal}"`);
+  check("Gate", `The Gate passes the Capsule's 29 actions. notes.list without its LIMIT is refused by the Gate and by the Kernel's release_plan with the same words: "${kernelLimitRefusal}"`);
 
   // ------------------------------------------------------- the CLI publishes
   const cliDir = path.join(scratch, "cli");
@@ -261,6 +303,7 @@ try {
   // Replace the template with the Capsule and ask for a public app with open signup.
   for (const name of await readdir(cliDir)) if (!name.startsWith(".") && name !== "littlebox.json") await rm(path.join(cliDir, name), { recursive: true });
   for (const name of capsuleFiles) await cp(path.join(import.meta.dir, name), path.join(cliDir, name));
+  await writeFile(path.join(cliDir, "actions.json"), sources["actions.json"]);
   config.project.manifest = { ...config.project.manifest, visibility: "public", signupPolicy: { mode: "open" } };
   await writeFile(path.join(cliDir, "littlebox.json"), JSON.stringify(config, null, 2));
   const projectId: string = config.project.id;
@@ -270,6 +313,10 @@ try {
   assert(unsetErr.includes(unsetSecret), unsetErr);
   refused("Signed route", "littlebox publish before secret_set", unsetSecret);
   await A.owner.call("secret_set", { projectId, name: "status_webhook", value: webhookSecret });
+  // The inbox's value as a route secret would collide with the inbox project's; for calls only it may repeat it.
+  const reusedSecret = await message(A.owner.call("secret_set", { projectId, name: "inbox_events", value: inboxSecret }));
+  assert.equal(reusedSecret, "Another of your projects already uses this secret value. A signature does not name the app, so a request signed for one would be accepted by the other. Set a different value.");
+  await A.owner.call("secret_set", { projectId, name: "inbox_events", value: inboxSecret, use: "call" });
   const [buildCode, buildOut, buildErr] = await cli(["build", "--dir", cliDir]);
   assert.equal(buildCode, 0, buildOut + buildErr);
   const [publishCode, publishOut, publishErr] = await cli(["publish", "--dir", cliDir]);
@@ -299,6 +346,7 @@ try {
   assert.deepEqual(saved, { revision: 1 });
   // One owner's two projects cannot share a signing secret, so the managed copy gets its own.
   await A.owner.call("secret_set", { projectId: managedId, name: "status_webhook", value: managedSecret });
+  await A.owner.call("secret_set", { projectId: managedId, name: "inbox_events", value: inboxSecret, use: "call" });
   const managedRoot = path.join(scratch, "managed");
   await mkdir(managedRoot);
   for (const name of capsuleFiles) await writeFile(path.join(managedRoot, name), sources[name]);
@@ -512,6 +560,40 @@ try {
   assert.deepEqual(publicStatus.map((row: any) => [row.component, row.state, row.detail]), [["api", "degraded", "Slow uploads"]]);
   check("Signed webhook", `POST /hooks/status signed with status_webhook inserts the api row and a second delivery updates it to degraded, which the visitor reads with status.list. Replayed answers ${replayed.status}, unsigned ${unsigned.status} ${unsigned.body.error}, stale ${stale.status} ${stale.body.error}, another secret ${forged.status}. An identical delivery with a fresh nonce changes 0 rows.`);
 
+  // ------------------------------------------ a call to the team inbox on the status change
+  const [apiStatus] = await action(visitor, "status.list");
+  const escalation = { component: "api", changedAt: apiStatus.updated_at, eventId: `api-${apiStatus.updated_at}`, severity: "warning", title: `api is ${apiStatus.state}: ${apiStatus.detail}` };
+  const visitorEscalates = await message(action(visitor, "status.escalate", escalation));
+  assert.equal(visitorEscalates, "authentication-required");
+  const queued = await action(ana, "status.escalate", escalation);
+  assert.equal(queued.queued, true);
+  const escalations = () => action<any[]>(ana, "status.escalations");
+  const pick = (row: any) => [row.component, row.changed_at, row.status, row.filed, row.error];
+  const firstAnswer = await until(escalations, (rows) => rows.length === 1, "the inbox's answer");
+  assert.deepEqual(pick(firstAnswer[0]), ["api", apiStatus.updated_at, 200, 1, null]);
+  const inboxKey = await A.owner.call<{ key: string }>("api_keys_create", { deploymentId: inbox.id, name: "Starter replay", actions: ["events.feed"] });
+  const I0 = app(A, inbox);
+  const inboxEvents = async () => (await I0.route("GET", "/api/events", { bearer: inboxKey.key })).body.result.map((row: any) => [row.source, row.external_id, row.severity, row.title]);
+  assert.deepEqual(await inboxEvents(), [["starter", escalation.eventId, "warning", "api is degraded: Slow uploads"]]);
+  // The same change again: the inbox keeps one event per source and ID, and the starter records that.
+  await action(ana, "status.escalate", escalation);
+  const secondAnswer = await until(escalations, (rows) => rows.length === 2, "the inbox's second answer");
+  assert.deepEqual(pick(secondAnswer[0]), ["api", apiStatus.updated_at, 200, 0, null]);
+  // A call runs no SQL, so no WHERE checks the caller's role: Ben, a member, is queued too.
+  const benQueued = await action(ben, "status.escalate", { ...escalation, eventId: "api-from-ben", title: "Ben says api is down" });
+  assert.equal(benQueued.queued, true);
+  await until(escalations, (rows) => rows.length === 3, "Ben's call");
+  assert.equal((await inboxEvents()).length, 2);
+  refused("Call action", "Ben, a member with no team role, invokes status.escalate with a title of his own", `{ callId, queued: true }; the inbox files "Ben says api is down" under source starter`);
+  const forgedAnswer = await message(action(ana, "status.escalated", { component: "api", changedAt: 1, status: 200, filed: 1, error: null, failure: null }));
+  assert.equal(forgedAnswer, "Action status.escalated runs only after the call status.escalate answers.");
+  refused("Call action", "Ana writes status.escalated herself", forgedAnswer);
+  const outbox = await A.owner.call<{ calls: { action: string; state: string; status: number; attempts: number; then: { state: string } }[] }>("calls_read", { deploymentId: receipt.id });
+  assert.deepEqual(outbox.calls.map((call) => [call.action, call.state, call.status, call.attempts, call.then.state]), [
+    ["status.escalate", "delivered", 200, 1, "done"], ["status.escalate", "delivered", 200, 1, "done"], ["status.escalate", "delivered", 200, 1, "done"],
+  ]);
+  check("Call to the team inbox", `After the webhook marks api degraded, Ana's status.escalate answers { callId, queued: true }. The Kernel signs POST ${inboxUrl} with inbox_events, a secret set for calls only because the inbox project holds the same value as its route secret, and the inbox's signed route files one event with source "starter", a constant the page cannot change. status.escalated stores status 200 and filed 1; the same change again stores filed 0, since the inbox keeps one event per ID. A visitor's call answers ${visitorEscalates}, writing the answer by hand answers "${forgedAnswer}", and calls_read lists the three calls delivered on the first attempt.`);
+
   // ------------------------------------------------------------------- files
   const avatar = await upload(ana, anaAvatar, "ana.png", "image/png", "public");
   assert.equal((await action(ana, "me.avatar", { fileId: avatar.id })).changes, 1);
@@ -635,7 +717,7 @@ try {
   assert.equal(contractCode, 0, contractOut + contractErr);
   assert.equal(contractErr.trim(), "", "contract warns about nothing");
   const written = JSON.parse(await readFile(path.join(contractDir, "action-contract.json"), "utf8"));
-  assert.equal(written.actions.length, 26);
+  assert.equal(written.actions.length, 29);
   const queries = written.actions.filter((item: any) => item.output?.kind === "rows");
   assert(queries.every((item: any) => item.output.unnamed.length === 0));
   for (const item of queries) {
@@ -666,10 +748,11 @@ try {
   // A member holds no role, so every role-guarded mutation answers its guard, and the probe
   // that omits updates.publish's nullable body passes on the same guard.
   assert.deepEqual(conformFailures["session, key and secret"], []);
-  assert.match(conformRuns["session, key and secret"], /^\d+ passed, 0 failed, 0 skipped/);
+  // conform sends no call, so status.escalate's valid call is the one skip.
+  assert.match(conformRuns["session, key and secret"], /^\d+ passed, 0 failed, 1 skipped/);
   assert.deepEqual(conformFailures["key and secret"], []);
   assert.match(conformRuns["key and secret"], /^\d+ passed, 0 failed, \d+ skipped/);
-  check("Action Contract and conform", `littlebox contract writes 26 actions with no warning, and every query names each column it returns. conform against ${managedReceipt.url}: with a session, a key and the secret "${conformRuns["session, key and secret"]}", the member meeting every role's guard; with the key and the secret "${conformRuns["key and secret"]}", the session-only actions skipped.`);
+  check("Action Contract and conform", `littlebox contract writes 29 actions with no warning, and every query names each column it returns. conform against ${managedReceipt.url}: with a session, a key and the secret "${conformRuns["session, key and secret"]}", the member meeting every role's guard; with the key and the secret "${conformRuns["key and secret"]}", the session-only actions skipped.`);
 
   // ------------------------------------------- package export, import on Kernel B
   const exported = await A.owner.call<{ manifest: any; downloads: Record<string, Transfer> }>("package_export", { deploymentId: receipt.id });
@@ -682,6 +765,7 @@ try {
   await B.owner.call("project_create", { projectId, name: project.name, slug: project.slug, manifest: projectManifest });
   // Secrets never travel. The sender keeps its one secret, so the destination's owner sets the same value.
   await B.owner.call("secret_set", { projectId, name: "status_webhook", value: webhookSecret });
+  await B.owner.call("secret_set", { projectId, name: "inbox_events", value: inboxSecret, use: "call" });
   const components: Record<string, string> = {};
   for (const content of exported.manifest.contents) components[content.name] = (await B.owner.upload(componentBytes[content.name], projectId, content.name)).transferId;
   const { artifact, files } = await buildLocal(cliDir);

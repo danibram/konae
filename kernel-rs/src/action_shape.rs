@@ -27,7 +27,8 @@ pub(crate) fn check_program(program: &ActionProgram) -> Result<(), String> {
     for name in names {
         super::validate_action(name, &program.actions[name])?;
     }
-    super::http::validate_routes(program)
+    super::http::validate_routes(program)?;
+    super::calls::check_program(program)
 }
 
 /// The checks that come before an action's SQL: its name, access, kind,
@@ -45,8 +46,8 @@ pub(crate) fn check_action(name: &str, action: &ActionDefinition) -> Result<(), 
     if action.access != "anonymous" && action.access != "authenticated" {
         return Err(format!(r#"Action {name} has an invalid access. Use "anonymous" or "authenticated"."#));
     }
-    if !matches!(action.kind.as_str(), "query" | "mutation" | "signal") {
-        return Err(format!(r#"Action {name} has an invalid kind. Use "query", "mutation" or "signal"."#));
+    if !matches!(action.kind.as_str(), "query" | "mutation" | "signal" | "call") {
+        return Err(format!(r#"Action {name} has an invalid kind. Use "query", "mutation", "signal" or "call"."#));
     }
     for (index, binding) in action.bindings.iter().enumerate() {
         if binding.nullable && binding.source != "input" {

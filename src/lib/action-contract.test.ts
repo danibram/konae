@@ -258,7 +258,7 @@ describe("schema check", () => {
     expect(checkActionContract(extra)).toContain("$.actions[0]: unexpected secret");
     const kind = valid();
     kind.actions[0].kind = "procedure";
-    expect(checkActionContract(kind)).toEqual([`$.actions[0].kind: must be one of "query", "mutation", "signal"`]);
+    expect(checkActionContract(kind)).toEqual([`$.actions[0].kind: must be one of "query", "mutation", "signal", "call"`]);
     const output = valid();
     output.actions[0].output = { kind: "rows", columns: [] };
     expect(checkActionContract(output)[0]).toMatch(/matches 0 of the allowed shapes/);

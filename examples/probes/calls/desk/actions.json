@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "actions": {
+    "tickets.open": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "http": { "method": "POST", "path": "/hooks/tickets", "signature": { "header": "X-Desk-Signature", "secret": "tickets_hook" } },
+      "guard": "A ticket for this task is already open.",
+      "statement": "INSERT INTO tickets (ref, title, opened_at) SELECT ?1, ?2, ?3 WHERE NOT EXISTS (SELECT 1 FROM tickets WHERE ref = ?1 AND closed_at IS NULL)",
+      "bindings": [
+        { "source": "input", "key": "ref", "type": "number" },
+        { "source": "input", "key": "title", "type": "string", "maxLength": 200 },
+        { "source": "kernel", "field": "now" }
+      ],
+      "signal": { "name": "ticket.opened", "properties": ["ref"] }
+    },
+    "tickets.count": {
+      "kind": "query",
+      "access": "anonymous",
+      "http": { "method": "GET", "path": "/api/count", "callers": ["key"] },
+      "statement": "SELECT COUNT(*) AS open FROM tickets WHERE closed_at IS NULL",
+      "bindings": []
+    },
+    "tickets.board": {
+      "kind": "query",
+      "access": "anonymous",
+      "http": { "method": "GET", "path": "/api/board" },
+      "statement": "SELECT ref, title FROM tickets WHERE closed_at IS NULL ORDER BY id LIMIT 20",
+      "bindings": []
+    }
+  }
+}
