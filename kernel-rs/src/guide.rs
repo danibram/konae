@@ -80,7 +80,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
     Ok(match name {
         "rules" => json!({
             "yardstick": "Littlebox lets a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.",
-            "decide": "A new capability belongs in the product only when the Validation Gate and the Kernel refuse it with the same words, and a Package can carry the app's accounts, data and rules. Anything else is operator work, not an App feature.",
+            "decide": "A new capability belongs in the product only when the Validation Gate and the Kernel refuse it with the same words, and a package can carry the app's accounts, data and rules. Anything else is operator work, not an App feature.",
             "sameChecks": "A query that reads rows names a LIMIT in the editor and on the Kernel that leaves with the app. Who may open the app, and who may read a row, stay decisions of the app.",
             "firstRun": {
                 "cli": [
@@ -121,7 +121,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 {"need": "This app calls another app or https service", "use": "kind call with url, body, optional auth and then", "not": "fetch of a secret from the browser"},
                 {"need": "Files a person uploads", "use": "miniapp.files", "not": "Base64 in a SQLite column for large bytes"},
                 {"need": "Who may create an app account", "use": "Signup Policy and invitations", "not": "A homemade users table that bypasses Runtime Actor"},
-                {"need": "Take the app to another machine", "use": "Package export/import or Migration", "not": "Copy (that moves the whole installation)"},
+                {"need": "Take the app to another machine", "use": "package export/import or migration", "not": "Copy (that moves the whole installation)"},
                 {"need": "Leave managed editing for a folder on disk", "use": "Eject", "not": "Package (that moves data, not source authority)"}
             ],
             "unit": "A Deployment folder on the Kernel is the app: artifact, database, identity, files and Usage. Prefer adding a declaration inside the Capsule over adding a new platform resource."
