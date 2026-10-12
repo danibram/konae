@@ -2,6 +2,7 @@ import type { Database, SqlJsStatic } from "sql.js";
 import { parseServerActionSource, resolveServerAction, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
 import { sqlStatementTokens, sqlWordsOf, type SqlToken } from "../lib/sql-tokens";
 import { contractFromProgram } from "../lib/action-contract";
+import { refusalNeedsSecret, releaseRefusal, type ReleaseFacts } from "./release-check";
 import type {
   CapsuleFiles,
   CapsuleValidator,
@@ -11,6 +12,8 @@ import type {
   ValidationStage,
   ValidationWarning,
 } from "./contracts";
+
+export { refusalNeedsSecret, releaseRefusal, type ReleaseFacts };
 
 export type SqlJsLoader = () => Promise<SqlJsStatic>;
 
@@ -32,6 +35,10 @@ export const loadBrowserSqlJs: SqlJsLoader = () => {
     });
   return browserSql;
 };
+
+/** Who clears a release refusal, beside the Kernel's sentence. */
+const RELEASE_OWNER = "The Kernel refuses this at publish. The owner sets the secret in Auth > Integrations; no edit to the files clears it.";
+const RELEASE_AUTHOR = "The Kernel refuses this at publish. Change actions.json.";
 
 export function createCapsuleValidator(loadSql: SqlJsLoader = loadBrowserSqlJs): CapsuleValidator {
   return new SqlJsCapsuleValidator(loadSql);
@@ -62,7 +69,7 @@ export function createCapsuleValidator(loadSql: SqlJsLoader = loadBrowserSqlJs):
 export class SqlJsCapsuleValidator implements CapsuleValidator {
   constructor(private readonly loadSql: SqlJsLoader = loadBrowserSqlJs) {}
 
-  async validate(files: CapsuleFiles, live: LiveDatabase = { state: "absent" }): Promise<ValidationResult> {
+  async validate(files: CapsuleFiles, live: LiveDatabase = { state: "absent" }, facts: ReleaseFacts = {}): Promise<ValidationResult> {
     const SQL = await this.loadSql();
     const errors: ValidationError[] = [];
     const checked: ValidationStage[] = [];
@@ -117,6 +124,9 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       }
 
       if (program) errors.push(...checkActions(fresh, program, "actions"));
+      // The Kernel parses before it plans a release, so its release sentence only follows a program that parsed.
+      const release = program && errors.length === 0 ? releaseRefusal(program, facts) : null;
+      if (release) errors.push({ stage: "actions", message: release, detail: refusalNeedsSecret(release) ? RELEASE_OWNER : RELEASE_AUTHOR });
       // A result column without a name a second backend could match passes, with a warning.
       if (program) warnings.push(...contractFromProgram(program, files["schema.sql"]).warnings.map(({ message }) => ({ stage: "actions" as const, message })));
       checked.push("actions");

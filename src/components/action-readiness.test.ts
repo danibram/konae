@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { cloneStarter } from "../lib/starter";
-import { actionReadout, actionSentence, deployReadiness, refusalNeedsSecret } from "./action-readiness";
+import { actionReadout, actionSentence, deployReadiness, namedSecrets, refusalNeedsSecret } from "./action-readiness";
 
 function withActions(actions: Record<string, unknown>) {
   const project = cloneStarter();
@@ -92,5 +92,52 @@ describe("a publish refusal that needs a secret", () => {
     expect(refusalNeedsSecret("Actions a.one and b.two sign with the secret hook, which is not set for this project. Set it with secret_set before publishing.")).toBe(true);
     expect(refusalNeedsSecret("Actions a.one, c.three and d.four sign with the secrets feed and hook, which are not set for this project. Set each with secret_set before publishing.")).toBe(true);
     expect(refusalNeedsSecret("Action orders.list reads rows and has no LIMIT.")).toBe(false);
+    expect(refusalNeedsSecret("Action hook.send calls with the secret api_key, which is not set for this project. Set it with secret_set before publishing.")).toBe(true);
+    expect(refusalNeedsSecret("Action orders.receive signs its route with the secret outbound, which is set for calls only. Set a route secret with a value of its own.")).toBe(true);
+    expect(refusalNeedsSecret("Action emails.receive verifies svix signatures with the secret resend_webhook, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_.")).toBe(true);
+    expect(refusalNeedsSecret("Action hook.send calls http://api.example.com, which is not an app of this installation. Use https.")).toBe(false);
+  });
+});
+
+describe("the Deploy dialog before release_plan", () => {
+  const signed = {
+    "orders.receive": { kind: "mutation", access: "anonymous", statement: "INSERT INTO tasks (title) VALUES (?1)",
+      bindings: [{ source: "input", key: "title", type: "string" }],
+      http: { method: "POST", path: "/hooks/orders", signature: { header: "X-Signature", secret: "orders_webhook" } } },
+    "hook.send": { kind: "call", access: "anonymous", method: "POST", url: "https://api.example.com/send", bindings: [], auth: { key: "api_key" } },
+  };
+  const rules = { suffix: "apps.example.org", installationHosts: ["editor.example.org"] };
+
+  test("says nothing about secrets it could not read", () => {
+    expect(deployReadiness(withActions(signed)).refusal).toBeNull();
+    expect(deployReadiness(withActions(signed), { rules }).refusal).toBeNull();
+  });
+
+  test("refuses an unset secret before Deploy and says the owner acts", () => {
+    const answer = deployReadiness(withActions(signed), { secrets: [{ name: "api_key", use: "call" }], rules });
+    expect(answer.refusal).toBe("Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing.");
+    expect(answer.ownerActs).toBe(true);
+    expect(answer.actions).toHaveLength(2);
+  });
+
+  test("refuses a call to the editor as an edit, not an owner step", () => {
+    const editor = { ...signed, "hook.send": { ...signed["hook.send"], url: "https://editor.example.org/x" } };
+    const answer = deployReadiness(withActions(editor), { secrets: [{ name: "orders_webhook", use: "route" }, { name: "api_key", use: "call" }], rules });
+    expect(answer.refusal).toBe("Action hook.send calls editor.example.org, the editor's host. A call reaches an app or an outside service, never the editor.");
+    expect(answer.ownerActs).toBe(false);
+  });
+
+  test("passes when every named secret is set and every call leaves the editor", () => {
+    expect(deployReadiness(withActions(signed), { secrets: [{ name: "orders_webhook" }, { name: "api_key", use: "call" }], rules }))
+      .toMatchObject({ refusal: null, ownerActs: false });
+  });
+
+  test("lists every secret actions.json names, from routes and calls", () => {
+    const named = namedSecrets(JSON.stringify({ version: 1, actions: signed }));
+    expect([...named.entries()]).toEqual([
+      ["api_key", { actions: ["hook.send"], route: false }],
+      ["orders_webhook", { actions: ["orders.receive"], route: true }],
+    ]);
+    expect(namedSecrets("not json").size).toBe(0);
   });
 });

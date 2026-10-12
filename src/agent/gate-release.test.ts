@@ -1,0 +1,63 @@
+import { describe, expect, test } from "bun:test";
+import initSqlJs from "sql.js";
+import { parseServerActionSource } from "../kernel/actions";
+import type { DomainRules } from "../lib/domain-name";
+import { createCapsuleValidator, releaseRefusal, type ReleaseFacts } from "./gate";
+
+type Case = { case: string; actions: Record<string, unknown>; secrets: NonNullable<ReleaseFacts["secrets"]>; error: string | null };
+const file: { rules: DomainRules; cases: Case[] } = await Bun.file(new URL("../../kernel-rs/src/release-cases.json", import.meta.url)).json();
+
+const schema = "CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, external_id TEXT);";
+const validator = createCapsuleValidator(() => initSqlJs());
+
+function capsule(actions: Record<string, unknown>) {
+  return { "index.html": "<!doctype html><title>t</title>", "schema.sql": schema, "actions.json": JSON.stringify({ version: 1, actions }) } as never;
+}
+
+describe("the release plan at the editor's door", () => {
+  // kernel-rs/src/http.rs `require_secrets` and calls.rs `check_release` give these answers at release_plan.
+  test("every case in kernel-rs/src/release-cases.json gets the Kernel's answer", () => {
+    expect(file.cases.length).toBeGreaterThanOrEqual(20);
+    for (const item of file.cases) {
+      const program = parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
+      expect(releaseRefusal(program, { secrets: item.secrets, rules: file.rules }), item.case).toEqual(item.error);
+    }
+  });
+
+  test("the Validation Gate refuses every case with the Kernel's words when it knows the facts", async () => {
+    for (const item of file.cases) {
+      const result = await validator.validate(capsule(item.actions), { state: "absent" }, { secrets: item.secrets, rules: file.rules });
+      expect(result.errors.map((error) => error.message), item.case).toEqual(item.error === null ? [] : [item.error]);
+    }
+  });
+
+  test("without secret names the Gate says nothing about secrets", async () => {
+    const unset = file.cases.find((item) => item.case === "a signed route whose secret is not set")!;
+    expect((await validator.validate(capsule(unset.actions))).errors).toEqual([]);
+    expect((await validator.validate(capsule(unset.actions), { state: "absent" }, { rules: file.rules })).errors).toEqual([]);
+    const keyed = file.cases.find((item) => item.case === "a call that sends an API key that is not set")!;
+    expect((await validator.validate(capsule(keyed.actions), { state: "absent" }, { rules: file.rules })).errors).toEqual([]);
+  });
+
+  test("without the installation's hosts the Gate says nothing about a call's host", async () => {
+    for (const name of ["a call to the editor's public host", "a call over http outside the installation"]) {
+      const item = file.cases.find((candidate) => candidate.case === name)!;
+      expect((await validator.validate(capsule(item.actions), { state: "absent" }, { secrets: [] })).errors, name).toEqual([]);
+    }
+  });
+
+  test("a refusal says who must act", async () => {
+    const unset = file.cases.find((item) => item.case === "a signed route whose secret is not set")!;
+    const [owner] = (await validator.validate(capsule(unset.actions), { state: "absent" }, { secrets: [] })).errors;
+    expect(owner.detail).toBe("The Kernel refuses this at publish. The owner sets the secret in Auth > Integrations; no edit to the files clears it.");
+    const editor = file.cases.find((item) => item.case === "a call to the editor's public host")!;
+    const [author] = (await validator.validate(capsule(editor.actions), { state: "absent" }, { rules: file.rules })).errors;
+    expect(author.detail).toBe("The Kernel refuses this at publish. Change actions.json.");
+  });
+
+  test("a parse refusal stops the run before the release check", async () => {
+    const result = await validator.validate(capsule({ "x.y": { kind: "query", access: "anonymous", statement: "SELECT 1", bindings: [], guard: "No." } }), { state: "absent" }, { secrets: [] });
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].message).toBe("actions.json is not a valid server action program.");
+  });
+});

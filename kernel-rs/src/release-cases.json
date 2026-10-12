@@ -1,0 +1,577 @@
+{
+ "rules": {
+  "suffix": "apps.example.org",
+  "installationHosts": [
+   "editor.example.org",
+   "mcp.example.org"
+  ]
+ },
+ "cases": [
+  {
+   "case": "a signed route whose secret is set",
+   "actions": {
+    "orders.receive": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/hooks/orders",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "orders_webhook"
+      }
+     }
+    }
+   },
+   "secrets": [
+    {
+     "name": "orders_webhook",
+     "use": "route"
+    }
+   ],
+   "error": null
+  },
+  {
+   "case": "a signed route whose secret is not set",
+   "actions": {
+    "orders.receive": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/hooks/orders",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "orders_webhook"
+      }
+     }
+    }
+   },
+   "secrets": [],
+   "error": "Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing."
+  },
+  {
+   "case": "two routes that sign with one unset secret",
+   "actions": {
+    "a.one": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/one",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "hook"
+      }
+     }
+    },
+    "b.two": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/two",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "hook"
+      }
+     }
+    }
+   },
+   "secrets": [],
+   "error": "Actions a.one and b.two sign with the secret hook, which is not set for this project. Set it with secret_set before publishing."
+  },
+  {
+   "case": "one refusal names every unset secret and leaves out the one that is set",
+   "actions": {
+    "a.one": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/one",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "feed"
+      }
+     }
+    },
+    "b.two": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/two",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "orders_webhook"
+      }
+     }
+    },
+    "c.three": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/three",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "hook"
+      }
+     }
+    },
+    "d.four": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/four",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "feed"
+      }
+     }
+    }
+   },
+   "secrets": [
+    {
+     "name": "orders_webhook",
+     "use": "route"
+    }
+   ],
+   "error": "Actions a.one, c.three and d.four sign with the secrets feed and hook, which are not set for this project. Set each with secret_set before publishing."
+  },
+  {
+   "case": "a route that signs with a secret set for calls only",
+   "actions": {
+    "orders.receive": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/hooks/orders",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "outbound"
+      }
+     }
+    }
+   },
+   "secrets": [
+    {
+     "name": "outbound",
+     "use": "call"
+    }
+   ],
+   "error": "Action orders.receive signs its route with the secret outbound, which is set for calls only. Set a route secret with a value of its own."
+  },
+  {
+   "case": "a secret set for calls only stops the check before the unset secrets are named",
+   "actions": {
+    "a.one": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/one",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "feed"
+      }
+     }
+    },
+    "b.two": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/two",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "outbound"
+      }
+     }
+    }
+   },
+   "secrets": [
+    {
+     "name": "outbound",
+     "use": "call"
+    }
+   ],
+   "error": "Action b.two signs its route with the secret outbound, which is set for calls only. Set a route secret with a value of its own."
+  },
+  {
+   "case": "a svix route whose secret is set passes on names alone",
+   "actions": {
+    "emails.receive": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/hooks/email",
+      "signature": {
+       "scheme": "svix",
+       "secret": "resend_webhook"
+      }
+     }
+    }
+   },
+   "secrets": [
+    {
+     "name": "resend_webhook",
+     "use": "route"
+    }
+   ],
+   "error": null
+  },
+  {
+   "case": "a call to the editor's public host",
+   "actions": {
+    "hook.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "https://editor.example.org/oauth2/x",
+     "bindings": []
+    }
+   },
+   "secrets": [],
+   "error": "Action hook.send calls editor.example.org, the editor's host. A call reaches an app or an outside service, never the editor."
+  },
+  {
+   "case": "a call to the editor's MCP host",
+   "actions": {
+    "hook.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "https://MCP.example.org./tools",
+     "bindings": []
+    }
+   },
+   "secrets": [],
+   "error": "Action hook.send calls mcp.example.org, the editor's host. A call reaches an app or an outside service, never the editor."
+  },
+  {
+   "case": "a call over http outside the installation",
+   "actions": {
+    "hook.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "http://api.example.com/send",
+     "bindings": []
+    }
+   },
+   "secrets": [],
+   "error": "Action hook.send calls http://api.example.com, which is not an app of this installation. Use https."
+  },
+  {
+   "case": "a call over http to a name under the installation's suffix",
+   "actions": {
+    "hook.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "http://gone-1.apps.example.org/send",
+     "bindings": []
+    }
+   },
+   "secrets": [],
+   "error": null
+  },
+  {
+   "case": "a call over http to the suffix itself",
+   "actions": {
+    "hook.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "http://apps.example.org/send",
+     "bindings": []
+    }
+   },
+   "secrets": [],
+   "error": null
+  },
+  {
+   "case": "a call over https to an outside service",
+   "actions": {
+    "hook.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "https://api.example.com/send",
+     "bindings": []
+    }
+   },
+   "secrets": [],
+   "error": null
+  },
+  {
+   "case": "a call that sends an API key that is not set",
+   "actions": {
+    "hook.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "https://api.example.com/send",
+     "bindings": [],
+     "auth": {
+      "key": "api_key"
+     }
+    }
+   },
+   "secrets": [],
+   "error": "Action hook.send calls with the secret api_key, which is not set for this project. Set it with secret_set before publishing."
+  },
+  {
+   "case": "a call that signs with a secret that is not set",
+   "actions": {
+    "hook.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "https://inbox.apps.example.org/hooks",
+     "bindings": [],
+     "auth": {
+      "secret": "inbox_events",
+      "header": "X-Inbox-Signature"
+     }
+    }
+   },
+   "secrets": [],
+   "error": "Action hook.send calls with the secret inbox_events, which is not set for this project. Set it with secret_set before publishing."
+  },
+  {
+   "case": "a call secret set for calls passes",
+   "actions": {
+    "hook.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "https://api.example.com/send",
+     "bindings": [],
+     "auth": {
+      "key": "api_key"
+     }
+    }
+   },
+   "secrets": [
+    {
+     "name": "api_key",
+     "use": "call"
+    }
+   ],
+   "error": null
+  },
+  {
+   "case": "a call may use a secret set for routes",
+   "actions": {
+    "hook.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "https://api.example.com/send",
+     "bindings": [],
+     "auth": {
+      "key": "api_key"
+     }
+    }
+   },
+   "secrets": [
+    {
+     "name": "api_key",
+     "use": "route"
+    }
+   ],
+   "error": null
+  },
+  {
+   "case": "the editor's host is refused before http",
+   "actions": {
+    "hook.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "http://editor.example.org/x",
+     "bindings": [],
+     "auth": {
+      "key": "api_key"
+     }
+    }
+   },
+   "secrets": [],
+   "error": "Action hook.send calls editor.example.org, the editor's host. A call reaches an app or an outside service, never the editor."
+  },
+  {
+   "case": "http is refused before an unset call secret",
+   "actions": {
+    "hook.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "http://api.example.com/x",
+     "bindings": [],
+     "auth": {
+      "key": "api_key"
+     }
+    }
+   },
+   "secrets": [],
+   "error": "Action hook.send calls http://api.example.com, which is not an app of this installation. Use https."
+  },
+  {
+   "case": "calls are checked in name order",
+   "actions": {
+    "b.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "https://editor.example.org/x",
+     "bindings": []
+    },
+    "a.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "http://api.example.com/x",
+     "bindings": []
+    }
+   },
+   "secrets": [],
+   "error": "Action a.send calls http://api.example.com, which is not an app of this installation. Use https."
+  },
+  {
+   "case": "route secrets are checked before calls",
+   "actions": {
+    "a.send": {
+     "kind": "call",
+     "access": "anonymous",
+     "method": "POST",
+     "url": "https://editor.example.org/x",
+     "bindings": []
+    },
+    "z.receive": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/hooks/z",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "hook"
+      }
+     }
+    }
+   },
+   "secrets": [],
+   "error": "Action z.receive signs with the secret hook, which is not set for this project. Set it with secret_set before publishing."
+  }
+ ]
+}

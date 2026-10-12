@@ -4,7 +4,8 @@ import {
   createApiKey, deleteSecret, listApiKeys, listSecrets, revokeApiKey, setSecret,
   type ApiKey, type FileVisibility, type ProjectSecret,
 } from "../deployments/client";
-import { apiKeyProblem, fileCurl, revokedKeyNotes, routeActions, routeCurl, secretProblem, secretUsage, type RouteAction } from "./app-access";
+import { namedSecrets } from "./action-readiness";
+import { apiKeyProblem, fileCurl, revokedKeyNotes, routeActions, routeCurl, secretProblem, type RouteAction } from "./app-access";
 import { Badge, Button, Card, Dialog, EmptyState, Field, Input } from "./ui";
 import { message, signedOut, useConfirm } from "./useConfirm";
 import "./app-access.css";
@@ -46,7 +47,8 @@ function SecretsCard({ projectId, actionsSource, onSignedOut }: { projectId: str
   const [formError, setFormError] = useState("");
   const [notice, setNotice] = useState("");
   const confirm = useConfirm(onSignedOut);
-  const usage = secretUsage(actionsSource);
+  // Route signatures and call auth: release_plan refuses while any of them is unset.
+  const usage = namedSecrets(actionsSource);
 
   useEffect(() => {
     let current = true;
@@ -92,15 +94,21 @@ function SecretsCard({ projectId, actionsSource, onSignedOut }: { projectId: str
         <li key={secret}>
           <code>{secret}</code>
           <Badge tone="warning">Not set</Badge>
-          <small>{usage.get(secret)!.join(", ")} {usage.get(secret)!.length === 1 ? "signs" : "sign"} with it. Publishing is refused until it is set.</small>
+          <small>{usedBy(usage.get(secret)!.actions)} Publishing is refused until it is set.</small>
           <Button size="sm" onClick={() => { setName(secret); setValue(""); }}>Set</Button>
         </li>
       ))}
-      {secrets.map((secret) => (
+      {secrets.map((secret) => {
+        const used = usage.get(secret.name);
+        // secrets_list answers each secret's use; a route cannot sign with one set for calls only.
+        const callsOnly = (secret as { use?: string }).use === "call" && used?.route;
+        return (
         <li key={secret.name}>
           <code>{secret.name}</code>
-          <Badge tone="success">Set</Badge>
-          <small>{usage.has(secret.name) ? `Used by ${usage.get(secret.name)!.join(", ")}. ` : ""}Updated {new Date(secret.updatedAt).toLocaleDateString()}</small>
+          {callsOnly ? <Badge tone="warning">Calls only</Badge> : <Badge tone="success">Set</Badge>}
+          <small>{callsOnly
+            ? `It is set for calls only, and a route signs with it. Publishing is refused until you replace it with a route secret of its own value.`
+            : `${used ? `${usedBy(used.actions)} ` : ""}Updated ${new Date(secret.updatedAt).toLocaleDateString()}`}</small>
           <span className="access-row-actions">
             <Button size="sm" onClick={() => { setName(secret.name); setValue(""); }}>Replace</Button>
             <Button size="sm" variant="ghost" aria-label={`Delete secret ${secret.name}`} onClick={() => confirm.ask({
@@ -111,7 +119,8 @@ function SecretsCard({ projectId, actionsSource, onSignedOut }: { projectId: str
             })}>Delete</Button>
           </span>
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 
@@ -132,6 +141,10 @@ function SecretsCard({ projectId, actionsSource, onSignedOut }: { projectId: str
       {confirm.dialog}
     </Card>
   );
+}
+
+function usedBy(actions: string[]): string {
+  return `${actions.join(", ")} ${actions.length === 1 ? "uses" : "use"} it.`;
 }
 
 function ApiKeysCard({ deploymentId, deploymentUrl, routes, onSignedOut }: { deploymentId: string; deploymentUrl: string; routes: RouteAction[]; onSignedOut: () => void }) {

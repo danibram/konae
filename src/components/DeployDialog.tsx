@@ -9,9 +9,10 @@ import {
 } from "lucide-react";
 import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { readSignupPolicy, type DeploymentReceipt, type SignupMode } from "../deployments/client";
+import { listSecrets, readSignupPolicy, type DeploymentReceipt, type SignupMode } from "../deployments/client";
+import { readDomain } from "../deployments/domains";
 import type { DeploymentVisibility } from "../deployments/manifest";
-import { actionSentence, deployReadiness, refusalNeedsSecret } from "./action-readiness";
+import { actionSentence, deployReadiness, refusalNeedsSecret, type ReleaseFacts } from "./action-readiness";
 import type { MiniAppProject } from "../lib/types";
 import type { OwnerSession } from "./owner-session";
 import { defaultSignupMode, firstPublishModes, republishAccessNote, signupModeCopy, visibilityCopy } from "./app-access";
@@ -55,6 +56,31 @@ function usePublishedPolicy(deploymentId: string | undefined) {
   return policy;
 }
 
+/**
+ * What release_plan reads that the editor can read too: the project's secret
+ * names (never values) and, once the app is published, the installation's
+ * hosts. A read that fails leaves its part out, and the check stays silent on it.
+ */
+function useReleaseFacts(projectId: string, deploymentId: string | undefined, signedIn: boolean): ReleaseFacts {
+  const [secrets, setSecrets] = useState<ReleaseFacts["secrets"]>();
+  const [rules, setRules] = useState<ReleaseFacts["rules"]>();
+  useEffect(() => {
+    if (!signedIn) return;
+    let live = true;
+    listSecrets(projectId).then((answer) => {
+      if (live) setSecrets(answer.secrets.map((secret) => ({ name: secret.name, use: (secret as { use?: string }).use })));
+    }, () => undefined);
+    return () => { live = false; };
+  }, [projectId, signedIn]);
+  useEffect(() => {
+    if (!signedIn || !deploymentId) return;
+    let live = true;
+    readDomain(deploymentId).then((view) => { if (live && view.rules) setRules(view.rules); }, () => undefined);
+    return () => { live = false; };
+  }, [deploymentId, signedIn]);
+  return { secrets, rules };
+}
+
 export function DeployDialog({ project, deployment, publishing, error, session, signInHref, onClose, onDeploy, onEditAuth, current = null, onOpenUsers, onOpenIntegrations, onOpenAppSettings }: Props) {
   const republish = Boolean(current);
   const [chosenVisibility, setVisibility] = useState<DeploymentVisibility>(project.manifest.visibility);
@@ -63,9 +89,10 @@ export function DeployDialog({ project, deployment, publishing, error, session, 
   const [chosenMode, setChosenMode] = useState<SignupMode | null>(null);
   const signupMode = chosenMode ?? defaultSignupMode(visibility);
   const publishedPolicy = usePublishedPolicy(republish && !deployment ? current?.id : undefined);
-  const { refusal, actions } = deployReadiness(project);
-  const errorRef = useRef<HTMLDivElement>(null);
   const signedOut = session.state === "signed-out";
+  const facts = useReleaseFacts(project.id, current?.id, session.state === "signed-in");
+  const { refusal, ownerActs, actions } = deployReadiness(project, facts);
+  const errorRef = useRef<HTMLDivElement>(null);
   const listCanLeave = refusal === null;
 
   // A failed deploy says why where focus is, so a screen reader hears it and
@@ -175,6 +202,12 @@ export function DeployDialog({ project, deployment, publishing, error, session, 
             <footer className="publish-actions">
               {signedOut ? (
                 <div className="publish-signin"><KeyRound size={13} /><span>Sign in as the owner to deploy. You come back to this app.</span></div>
+              ) : refusal ? (
+                <div className="publish-refusal" role="status">
+                  <KeyRound size={13} />
+                  <span>{ownerActs ? "Deploy is refused until the owner sets the secret named above." : "Deploy is refused until actions.json changes as the line above says."}</span>
+                  {ownerActs && onOpenIntegrations && <button type="button" className="deploy-auth-link" onClick={onOpenIntegrations}>Open Auth &gt; Integrations</button>}
+                </div>
               ) : (
                 <div><KeyRound size={13} /><span>Accounts, rows and rules stay with this app.</span></div>
               )}
