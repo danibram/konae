@@ -31,14 +31,7 @@ const actions = {
       http: {
         method: "POST",
         path: "/hooks/github",
-        signature: {
-          scheme: "hmac-body",
-          header: "X-Hub-Signature-256",
-          secret: "github_webhook",
-          algorithm: "sha256",
-          encoding: "hex",
-          prefix: "sha256=",
-        },
+        signature: { provider: "github", secret: "github_webhook" },
         fields: { id: "$.issue.node_id", title: "$.issue.title", repo: "$.repository.full_name" },
       },
       statement: "INSERT INTO events (external_id, title, repo, received_at) VALUES (?1, ?2, COALESCE(?3, ''), ?4) ON CONFLICT (external_id) DO NOTHING",

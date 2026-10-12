@@ -58,7 +58,7 @@ import { createSchemaSnapshot } from "./database-lifecycle/schema-snapshot";
 import { parseServerActionSource } from "./kernel/actions";
 import { applyLocalAgentEdit } from "./lib/agent";
 import { parseRoute, pushRoute } from "./lib/routing";
-import { withPrivateNotes } from "./lib/private-notes";
+import { applyTemplate, type TemplateId } from "./lib/templates";
 import { cloneStarter } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
 import { createDirectory, createFile, directoriesForFiles, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
@@ -805,10 +805,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     openEditorRoute(next.id);
   };
 
-  const createProject = (name: string, template: "tasks" | "notes" | "scratch" = "tasks") => {
+  const createProject = (name: string, template: TemplateId | "scratch" = "tasks") => {
     arrival.current = template === "scratch" ? "agent" : "preview";
     const base = createWorkspaceProject(name, projects);
-    const next = template === "notes" ? withPrivateNotes(base) : base;
+    const next = applyTemplate(base, template === "scratch" ? "tasks" : template);
     setProjects((current) => [...current, next]);
     setProject(next);
     setPreviewProject(next);
