@@ -1788,8 +1788,7 @@ pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> R
     )?;
     anyhow::ensure!(program.version == 1, "Unsupported action version.");
     super::action_shape::check_program(&program).map_err(anyhow::Error::msg)?;
-    super::http::require_secrets(&store(state)?, &input.project.id, &program)?;
-    super::calls::check_release(state, &store(state)?, &input.project.id, &program)?;
+    super::calls::check_release(&super::domain::Rules::of(state), &store(state)?, &input.project.id, &program)?;
     let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
     let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
     anyhow::ensure!(

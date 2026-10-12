@@ -560,37 +560,40 @@ fn host_of(url: &url::Url) -> String {
     url.host_str().unwrap_or("").trim_end_matches('.').to_ascii_lowercase()
 }
 
-fn configured_host(value: &str) -> Option<String> {
-    url::Url::parse(value).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase))
-}
-
 /// The editor's hosts: the public origin, where owners sign in and MCP
 /// answers, and the separate MCP origin when there is one.
-fn editor_host(state: &AppState, host: &str) -> bool {
-    configured_host(&state.public_origin).as_deref() == Some(host)
-        || std::env::var("LITTLEBOX_MCP_ORIGIN").ok().and_then(|value| configured_host(&value)).as_deref() == Some(host)
+fn editor_host(rules: &super::domain::Rules, host: &str) -> bool {
+    rules.installation_hosts.iter().any(|editor| editor == host)
 }
 
 /// A host under the installation's suffix: one of its apps, or a name it may give one.
-fn installation_host(state: &AppState, host: &str) -> bool {
-    let suffix = state.host_suffix.trim_start_matches('.').to_ascii_lowercase();
-    !suffix.is_empty() && (host == suffix || host.ends_with(&format!(".{suffix}")))
+fn installation_host(rules: &super::domain::Rules, host: &str) -> bool {
+    !rules.suffix.is_empty() && (host == rules.suffix || host.ends_with(&format!(".{}", rules.suffix)))
+}
+
+/// Every check release_plan runs on a parsed program before it builds
+/// anything, in order: route secrets (http.rs `require_secrets`), then
+/// calls. The cases are in release-cases.json, which the Validation Gate
+/// runs too.
+pub(crate) fn check_release(rules: &super::domain::Rules, db: &Connection, project: &str, program: &ActionProgram) -> Result<()> {
+    super::http::require_secrets(db, project, program)?;
+    check_calls(rules, db, project, program)
 }
 
 /// Refuses a release whose calls reach the editor, use http outside this
 /// installation, or use a secret the project does not have.
-pub(crate) fn check_release(state: &AppState, db: &Connection, project: &str, program: &ActionProgram) -> Result<()> {
+fn check_calls(rules: &super::domain::Rules, db: &Connection, project: &str, program: &ActionProgram) -> Result<()> {
     let mut names = program.actions.keys().collect::<Vec<_>>();
     names.sort();
     for name in names {
         let Ok(Some(call)) = check_kind(name, &program.actions[name]) else { continue };
         let host = host_of(&call.url);
         anyhow::ensure!(
-            !editor_host(state, &host),
+            !editor_host(rules, &host),
             "Action {name} calls {host}, the editor's host. A call reaches an app or an outside service, never the editor."
         );
         anyhow::ensure!(
-            call.url.scheme() == "https" || installation_host(state, &host),
+            call.url.scheme() == "https" || installation_host(rules, &host),
             "Action {name} calls http://{host}, which is not an app of this installation. Use https."
         );
         if let Some(auth) = &call.auth {
@@ -660,13 +663,14 @@ enum Target {
 /// Where a call goes, or the error kind that ends it. `Err((kind, retry))`.
 async fn target(state: &AppState, url: &url::Url) -> Result<Target, (&'static str, bool)> {
     let host = host_of(url);
-    if editor_host(state, &host) {
+    let rules = super::domain::Rules::of(state);
+    if editor_host(&rules, &host) {
         return Err(("editor-host", false));
     }
     if let Some(deployment) = state.deployments.read().await.get(&host).cloned() {
         return Ok(Target::App(deployment));
     }
-    if installation_host(state, &host) {
+    if installation_host(&rules, &host) {
         return Err(("app-not-found", false));
     }
     if url.scheme() != "https" {
@@ -1374,6 +1378,48 @@ mod tests {
 
     fn program(actions: &Value) -> ActionProgram {
         serde_json::from_value(json!({"version": 1, "actions": actions})).unwrap()
+    }
+
+    /// The Validation Gate runs the same file in src/agent/gate-release.test.ts.
+    /// The rules come from the file, not from LITTLEBOX_MCP_ORIGIN, so the
+    /// test does not race other tests that set the environment.
+    #[test]
+    fn release_checks_refuse_what_the_gate_refuses_with_the_same_message() {
+        use base64::Engine;
+        let file: Value = serde_json::from_str(include_str!("release-cases.json")).unwrap();
+        let hosts = file["rules"]["installationHosts"].as_array().unwrap();
+        let rules = super::super::domain::Rules {
+            suffix: file["rules"]["suffix"].as_str().unwrap().to_owned(),
+            installation_hosts: hosts.iter().map(|host| host.as_str().unwrap().to_owned()).collect(),
+        };
+        let cases = file["cases"].as_array().unwrap();
+        assert!(cases.len() >= 20);
+        for case in cases {
+            let name = case["case"].as_str().unwrap();
+            let db = Connection::open_in_memory().unwrap();
+            db.execute_batch("CREATE TABLE projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL);
+                INSERT INTO projects VALUES ('project_a', 'ana', '{}');").unwrap();
+            for (index, secret) in case["secrets"].as_array().unwrap().iter().enumerate() {
+                // A value that is not base64 when the case says it is no svix key.
+                let value = if secret["svixKey"] == json!(false) {
+                    format!("whsec_not*base64*{index}")
+                } else {
+                    format!("whsec_{}", base64::engine::general_purpose::STANDARD.encode(format!("release-case-key-{index}")))
+                };
+                let set = json!({"name": secret["name"], "value": value, "use": secret["use"]});
+                super::super::http::secrets_call(&db, "project_a", None, "secret_set", &set).unwrap();
+            }
+            let listed = super::super::http::secrets_call(&db, "project_a", None, "secrets_list", &json!({})).unwrap();
+            for secret in case["secrets"].as_array().unwrap() {
+                let row = listed["secrets"].as_array().unwrap().iter().find(|row| row["name"] == secret["name"]).unwrap();
+                assert_eq!(row["use"], secret["use"], "{name}: secrets_list answers the use the case set");
+                if let Some(flag) = secret.get("svixKey") {
+                    assert_eq!(&row["svixKey"], flag, "{name}: secrets_list answers whether the value is a svix key");
+                }
+            }
+            let outcome = check_release(&rules, &db, "project_a", &program(&case["actions"])).err().map(|error| error.to_string());
+            assert_eq!(outcome.as_deref(), case["error"].as_str(), "{name}");
+        }
     }
 
     /// The editor runs the same file in src/kernel/calls.test.ts.
