@@ -4,7 +4,8 @@
 // kernel-rs/src/calls.rs `declaration`, `check_program` and `check_connects`.
 // kernel-rs/src/call-cases.json holds the cases both test suites run. The
 // checks that need the installation, http only to its own apps and never the
-// editor's host, and the secrets a call names, are the Kernel's alone.
+// editor's host, and the secrets a call names, run in the Kernel at publish
+// and in src/agent/release-check.ts when the editor has those facts.
 
 /** How a call proves itself to the app it calls. */
 export type CallAuth =

@@ -889,17 +889,17 @@
             },
             {
               "message": "Action <name> calls http://<key>, which is not an app of this installation. Use https.",
-              "when": "publishing an http URL whose host is not under the installation's host suffix; the editor cannot see the installation, so only the Kernel refuses this",
+              "when": "publishing an http URL whose host is not under the installation's host suffix; the Kernel refuses this at publish, and the editor refuses it before Deploy once it has read the installation's hosts",
               "source": "kernel"
             },
             {
               "message": "Action <name> calls <key>, the editor's host. A call reaches an app or an outside service, never the editor.",
-              "when": "publishing a URL on the installation's own host or its MCP host; only the Kernel refuses this",
+              "when": "publishing a URL on the installation's own host or its MCP host; the Kernel refuses this at publish, and the editor before Deploy once it has read the installation's hosts",
               "source": "kernel"
             },
             {
               "message": "Action <name> calls with the secret <name>, which is not set for this project. Set it with secret_set before publishing.",
-              "when": "publishing, and the owner has not set the secret auth names; only the Kernel refuses this",
+              "when": "publishing, and the owner has not set the secret auth names; the Kernel refuses this at publish, and the editor before Deploy from the project's secret names",
               "source": "kernel"
             },
             {
@@ -1103,7 +1103,7 @@
             },
             {
               "message": "Action <name> signs with the secret <name>, which is not set for this project. Set it with secret_set before publishing.",
-              "when": "publishing, and the owner has not set the secret; the editor cannot see secrets, so only the Kernel refuses this",
+              "when": "publishing, and the owner has not set the secret; the Kernel refuses this at publish, and the editor before Deploy from the project's secret names, never their values",
               "source": "kernel"
             },
             {

@@ -65,3 +65,21 @@ Starts after A, B and D land, because it touches every refusal they add. Not dis
 ## Done when
 
 Each package's tests pass on both doors (`bun test` for the Gate, `cargo test` in `kernel-rs`), the showcase replays still pass (`bun examples/showcase/replay-all.ts`), and the package's report lists every refusal it added with its exact sentence.
+
+## Status, 2026-11-08
+
+Packages A to D landed on the branch `smooth-authoring`. Kernel `cargo test` 264 passed. Editor and Gate `bun test src scripts` 742 passed. The showcase replays pass for booking, club, gallery and inbox.
+
+Open, carried from the work brought into the branch (each also fails at commit 38f2251, before any package):
+
+- `tests/security-review-accounts.integration.test.ts` fails 7 of 11 when run alone.
+- The habits and starter replays stop at publish with "The accepted database model does not match the deployed schema. Apply its migration before publishing." (`kernel-rs/src/mcp.rs`). So package A's changes to `notes.surface` and `days.close` are covered by the schedule probe and `cargo test`, not yet by those two replays end to end.
+
+Next wave:
+
+- Rust runs `kernel-rs/src/release-cases.json`. Today only the Gate reads it, so a Kernel rewording would not fail a test. Inject `Rules` in the test instead of reading `LITTLEBOX_MCP_ORIGIN`, and set each case's secrets with `secret_set`.
+- Release facts reach the build agent's Gate (`harness.ts`, `tools.ts`, `App.tsx`). Decision for the owner: an unset secret cannot be fixed by the agent, so either it blocks the agent's apply or it shows as a warning in the agent panel and stays an error at Deploy.
+- The workshop footer renders a refusal's `detail` and the Integrations button. `ProjectSecret` carries `use`. `.publish-refusal` gets a style.
+- `secrets_list` says whether a svix secret's value decodes as `whsec_`, so the Gate can give the fifth publish-time refusal without seeing the value.
+- The build agent can read the template files. The design-system gallery shows the seven-card dialog, and the dialog body scrolls.
+- Package E, refusal codes (ADR-0020), then the items under "Not in this wave".

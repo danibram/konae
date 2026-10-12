@@ -250,9 +250,9 @@ Refusals:
 - "Action <name> names <name> as its then, which binds the actor. A then mutation runs with no caller." when the then mutation has an actor binding
 - "Action <name> fills <key>, which is not an input of <name>." when then.inputs names a key the mutation has no input binding for
 - "Action <name> leaves <key> of <name> unfilled. Fill it from the answer or make the input nullable." when a required input of the then mutation has no pointer
-- "Action <name> calls http://<key>, which is not an app of this installation. Use https." when publishing an http URL whose host is not under the installation's host suffix; the editor cannot see the installation, so only the Kernel refuses this
-- "Action <name> calls <key>, the editor's host. A call reaches an app or an outside service, never the editor." when publishing a URL on the installation's own host or its MCP host; only the Kernel refuses this
-- "Action <name> calls with the secret <name>, which is not set for this project. Set it with secret_set before publishing." when publishing, and the owner has not set the secret auth names; only the Kernel refuses this
+- "Action <name> calls http://<key>, which is not an app of this installation. Use https." when publishing an http URL whose host is not under the installation's host suffix; the Kernel refuses this at publish, and the editor refuses it before Deploy once it has read the installation's hosts
+- "Action <name> calls <key>, the editor's host. A call reaches an app or an outside service, never the editor." when publishing a URL on the installation's own host or its MCP host; the Kernel refuses this at publish, and the editor before Deploy once it has read the installation's hosts
+- "Action <name> calls with the secret <name>, which is not set for this project. Set it with secret_set before publishing." when publishing, and the owner has not set the secret auth names; the Kernel refuses this at publish, and the editor before Deploy from the project's secret names
 - "Action <name> signs its route with the secret <name>, which is set for calls only. Set a route secret with a value of its own." when publishing a route whose signature names a secret set with use call
 Limits:
 - 20 calls queued per app in any 60 seconds, unless the installation sets LITTLEBOX_CALLS_PER_MINUTE
@@ -313,7 +313,7 @@ Refusals:
 - "Action <name> has an invalid callers list. List one or more of "signature", "key" and "session", each once." when callers is not a list, is empty, repeats a caller or names another one
 - "Action <name> lists "signature" among its callers but declares no signature." when callers names signature and the binding has no signature
 - "Action <name> declares a signature, so its callers must include "signature"." when the binding has a signature and callers leaves it out
-- "Action <name> signs with the secret <name>, which is not set for this project. Set it with secret_set before publishing." when publishing, and the owner has not set the secret; the editor cannot see secrets, so only the Kernel refuses this
+- "Action <name> signs with the secret <name>, which is not set for this project. Set it with secret_set before publishing." when publishing, and the owner has not set the secret; the Kernel refuses this at publish, and the editor before Deploy from the project's secret names, never their values
 - "Actions <names> sign with the secret <name>, which is not set for this project. Set it with secret_set before publishing." when publishing, and several actions sign with one secret the owner has not set
 - "Actions <names> sign with the secrets <names>, which are not set for this project. Set each with secret_set before publishing." when publishing, and more than one secret is unset; one refusal names every action and every secret
 - "Action <name> verifies svix signatures with the secret <key>, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_." when publishing a svix route whose secret's value is not whsec_ and base64; the editor cannot see secrets, so only the Kernel refuses this
