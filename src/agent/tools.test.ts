@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import initSqlJs, { type SqlJsStatic } from "sql.js";
-import { starterProject } from "../lib/starter";
+import { cloneStarter, starterProject } from "../lib/starter";
+import { applyTemplate, templateChoices } from "../lib/templates";
 import { createCapsuleWorkspace } from "./capsule-env";
 import type { AgentTool, CapsuleFiles, CapsuleValidator, CapsuleWorkspace } from "./contracts";
 import { createCapsuleValidator } from "./gate";
@@ -80,6 +81,25 @@ describe("read", () => {
   test("rejects paths that do not exist yet", async () => {
     const { tools } = setup();
     await expect(call(tools, "read", { path: "/workspace/package.json" })).rejects.toThrow("No such file");
+  });
+
+  test("reads every template's files, so the agent loads the tested shape", async () => {
+    const { tools } = setup();
+    for (const id of templateChoices.map((choice) => choice.id)) {
+      const files = applyTemplate(cloneStarter(), id).files;
+      for (const name of ["index.html", "app.js", "schema.sql", "actions.json"] as const) {
+        expect(textOf(await call(tools, "read", { path: `/templates/${id}/${name}` })), `${id}/${name}`).toBe(files[name]);
+      }
+    }
+    const ranged = await call(tools, "read", { path: "/templates/webhook/actions.json", offset: 1, limit: 1 });
+    expect(textOf(ranged)).toStartWith("/templates/webhook/actions.json lines 1-1 of");
+  });
+
+  test("names the templates when a template path is wrong, and never writes one", async () => {
+    const { tools, workspace } = setup();
+    await expect(call(tools, "read", { path: "/templates/kanban/app.js" })).rejects.toThrow("tasks, notes, members, form, webhook, digest, gallery");
+    await expect(call(tools, "write", { path: "/templates/form/app.js", content: "x" })).rejects.toThrow();
+    expect(workspace.changedFiles()).toEqual([]);
   });
 });
 

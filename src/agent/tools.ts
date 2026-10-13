@@ -2,7 +2,7 @@ import { Type, type TSchema } from "@earendil-works/pi-ai";
 import type { FileError } from "@earendil-works/pi-agent-core";
 import type { ProjectFile } from "../lib/types";
 import { createDomainTools, type DomainToolContext } from "./domain-tools";
-import { capsuleFileFor, capsulePathFor } from "./capsule-env";
+import { capsuleFileFor, capsulePathFor, isTemplatePath, readTemplateFile } from "./capsule-env";
 import type {
   AgentTool,
   AgentToolResult,
@@ -68,15 +68,19 @@ function readTool(workspace: CapsuleWorkspace): AgentTool<any> {
     description:
       "Read one existing Capsule file. Every current file was already included in the first message, " +
       "so read only to re-check a file after several edits, or to fetch a line range of a long file. " +
-      "Use offset/limit to read part of a file; omit both to read all of it.",
+      "Use offset/limit to read part of a file; omit both to read all of it. " +
+      "The seven templates are read-only under /templates/<id>/ (tasks, notes, members, form, webhook, digest, gallery), " +
+      "each with index.html, styles.css, app.js, schema.sql and actions.json that already pass the Gate. " +
+      "Read the matching template's files before rebuilding a Capsule in its shape.",
     parameters: Type.Object({
-      path: Type.String({ description: "Capsule file path, for example /workspace/app.js" }),
+      path: Type.String({ description: "Capsule file path, for example /workspace/app.js, or a template file such as /templates/webhook/actions.json" }),
       offset: Type.Optional(Type.Integer({ minimum: 1, description: "First line to return, 1-based. Defaults to 1." })),
       limit: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum number of lines to return." })),
     }),
     async execute(_toolCallId, params: { path: string; offset?: number; limit?: number }, signal?: AbortSignal) {
-      const file = requireCapsuleFile(params.path);
-      const content = unwrap(await workspace.env.readTextFile(capsulePathFor(file), signal));
+      const template = isTemplatePath(params.path);
+      const file = template ? params.path : requireCapsuleFile(params.path);
+      const content = template ? unwrap(readTemplateFile(params.path)) : unwrap(await workspace.env.readTextFile(capsulePathFor(file), signal));
       const lines = content.split("\n");
       const start = Math.max((params.offset ?? 1) - 1, 0);
       const end = params.limit === undefined ? lines.length : Math.min(start + params.limit, lines.length);
@@ -84,7 +88,7 @@ function readTool(workspace: CapsuleWorkspace): AgentTool<any> {
       const partial = start > 0 || end < lines.length;
       const header = partial ? `${file} lines ${start + 1}-${end} of ${lines.length}\n` : "";
       return result(header + slice.join("\n"), {
-        path: capsulePathFor(file),
+        path: template ? file : capsulePathFor(file),
         startLine: start + 1,
         endLine: end,
         totalLines: lines.length,
