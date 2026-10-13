@@ -123,7 +123,12 @@ export function readMailStatus(refresh = false) {
 // Signing secrets belong to the project, so they can be set before the first
 // release. API keys belong to one Deployment. docs/mcp.md, "HTTP routes".
 
-export type ProjectSecret = { name: string; updatedAt: number };
+/**
+ * One row of `secrets_list`. `use` is "call" for a secret a route may not sign
+ * with. `svixKey` says whether the value decodes as a svix whsec_ key; a
+ * Kernel older than the flag leaves it out. The value never leaves the Kernel.
+ */
+export type ProjectSecret = { name: string; updatedAt: number; use: "route" | "call"; svixKey?: boolean };
 
 export function listSecrets(projectId: string) {
   return platformMcp.call<{ projectId: string; secrets: ProjectSecret[] }>("secrets_list", { projectId });

@@ -58,7 +58,7 @@ function usePublishedPolicy(deploymentId: string | undefined) {
 
 /**
  * What release_plan reads that the editor can read too: the project's secret
- * names (never values) and, once the app is published, the installation's
+ * names, uses and svix-key flags (never values) and, once the app is published, the installation's
  * hosts. A read that fails leaves its part out, and the check stays silent on it.
  */
 function useReleaseFacts(projectId: string, deploymentId: string | undefined, signedIn: boolean): ReleaseFacts {
@@ -68,7 +68,7 @@ function useReleaseFacts(projectId: string, deploymentId: string | undefined, si
     if (!signedIn) return;
     let live = true;
     listSecrets(projectId).then((answer) => {
-      if (live) setSecrets(answer.secrets.map((secret) => ({ name: secret.name, use: (secret as { use?: string }).use })));
+      if (live) setSecrets(answer.secrets);
     }, () => undefined);
     return () => { live = false; };
   }, [projectId, signedIn]);

@@ -101,7 +101,7 @@ function SecretsCard({ projectId, actionsSource, onSignedOut }: { projectId: str
       {secrets.map((secret) => {
         const used = usage.get(secret.name);
         // secrets_list answers each secret's use; a route cannot sign with one set for calls only.
-        const callsOnly = (secret as { use?: string }).use === "call" && used?.route;
+        const callsOnly = secret.use === "call" && used?.route;
         return (
         <li key={secret.name}>
           <code>{secret.name}</code>

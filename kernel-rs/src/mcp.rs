@@ -327,7 +327,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ]);
     }
     tools.extend([
-        tool("secrets_list", "List the names of a project's signing secrets. Values are never returned.", json!({"projectId":text}), &["projectId"], true),
+        tool("secrets_list", "List a project's signing secrets: each one's name, use and svixKey, which says whether its value decodes as a svix whsec_ key. Values are never returned.", json!({"projectId":text}), &["projectId"], true),
         tool("api_keys_list", "List a deployment's API keys without their secrets.", json!({"deploymentId":text}), &["deploymentId"], true),
         super::domain::read_tool(),
     ]);
