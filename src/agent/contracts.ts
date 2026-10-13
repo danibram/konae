@@ -1,6 +1,7 @@
 import type { AgentTool, AgentToolResult, ExecutionEnv, FileError, FileSystem, Result, Shell } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ProjectFile } from "../lib/types";
+import type { ReleaseFacts } from "./release-check";
 
 export type { AgentTool, AgentToolResult, ExecutionEnv, FileError, FileSystem, Result, Shell };
 export type { Api, Model };
@@ -80,6 +81,9 @@ export type ValidationError = {
 export type ValidationWarning = {
   stage: ValidationStage;
   message: string;
+  detail?: string;
+  /** The owner clears it outside the files, in Auth > Integrations; Deploy refuses until then. */
+  owner?: true;
 };
 
 export type ValidationResult = {
@@ -101,7 +105,7 @@ export type ValidationResult = {
  * must prepare against the migrated schema.
  */
 export interface CapsuleValidator {
-  validate(files: CapsuleFiles, live?: LiveDatabase): Promise<ValidationResult>;
+  validate(files: CapsuleFiles, live?: LiveDatabase, facts?: ReleaseFacts): Promise<ValidationResult>;
 }
 
 /**

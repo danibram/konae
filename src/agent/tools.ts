@@ -14,6 +14,7 @@ import type {
   Result,
   ValidationResult,
 } from "./contracts";
+import type { ReleaseFacts } from "./release-check";
 
 export type PreviewFailureReport = {
   kind: string;
@@ -30,6 +31,8 @@ export type CapsuleToolHooks = {
   liveDatabase?: LiveDatabaseExport;
   /** Runtime failures the running preview reported; absent when no preview is attached. */
   previewErrors?: () => PreviewFailureReport[];
+  /** The project's secret names and the installation's hosts, so the Gate gives release_plan's sentences. */
+  releaseFacts?: () => Promise<ReleaseFacts>;
 };
 
 /**
@@ -211,7 +214,7 @@ function validateTool(
       return queue(async () => {
         // The snapshot is taken inside the queue, so it is exactly what gets validated.
         const files = workspace.serialize().files;
-        const validation = await validator.validate(files, await readLiveDatabase(hooks));
+        const validation = await validator.validate(files, await readLiveDatabase(hooks), await readReleaseFacts(hooks));
         hooks.onValidated?.(files, validation);
         return result(formatValidation(validation), validation);
       });
@@ -234,13 +237,31 @@ export async function readLiveDatabase(hooks: CapsuleToolHooks): Promise<LiveDat
   }
 }
 
+/**
+ * What the editor could read of the facts release_plan reads. A read that
+ * fails gives no facts, and the Gate stays silent on what it would decide
+ * from them, the same as the Deploy dialog.
+ */
+export async function readReleaseFacts(hooks: CapsuleToolHooks): Promise<ReleaseFacts> {
+  if (!hooks.releaseFacts) return {};
+  try {
+    return await hooks.releaseFacts();
+  } catch {
+    return {};
+  }
+}
+
 /** Widen a concretely-typed tool: the loop validates arguments against `parameters` before calling `execute`. */
 function defineTool<T extends TSchema, D>(definition: AgentTool<T, D>): AgentTool<any> {
   return definition as unknown as AgentTool<any>;
 }
 
 export function formatValidation(validation: ValidationResult): string {
-  const warnings = (validation.warnings ?? []).map((warning) => `\n- [${warning.stage}] Warning: ${warning.message}`).join("");
+  const warnings = (validation.warnings ?? []).map((warning) => {
+    const detail = warning.detail ? `\n  ${warning.detail}` : "";
+    const owner = warning.owner ? " Tell the person which secret to set and that they set it in Auth > Integrations; Apply does not wait for it." : "";
+    return `\n- [${warning.stage}] Warning: ${warning.message}${detail}${owner}`;
+  }).join("");
   if (validation.ok) {
     const skipped = validation.checked.includes("migration")
       ? ""

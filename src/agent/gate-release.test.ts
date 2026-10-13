@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import initSqlJs from "sql.js";
 import { parseServerActionSource } from "../kernel/actions";
 import type { DomainRules } from "../lib/domain-name";
-import { createCapsuleValidator, releaseRefusal, type ReleaseFacts } from "./gate";
+import { createCapsuleValidator, refusalNeedsSecret, releaseRefusal, type ReleaseFacts } from "./gate";
 
 type Case = { case: string; actions: Record<string, unknown>; secrets: NonNullable<ReleaseFacts["secrets"]>; error: string | null };
 const file: { rules: DomainRules; cases: Case[] } = await Bun.file(new URL("../../kernel-rs/src/release-cases.json", import.meta.url)).json();
@@ -24,19 +24,40 @@ describe("the release plan at the editor's door", () => {
     }
   });
 
-  test("the Validation Gate refuses every case with the Kernel's words when it knows the facts", async () => {
+  test("the Validation Gate gives every case the Kernel's words when it knows the facts", async () => {
     for (const item of file.cases) {
       const result = await validator.validate(capsule(item.actions), { state: "absent" }, { secrets: item.secrets, rules: file.rules });
-      expect(result.errors.map((error) => error.message), item.case).toEqual(item.error === null ? [] : [item.error]);
+      const said = [...result.errors.map((error) => error.message), ...(result.warnings ?? []).map((warning) => warning.message)];
+      expect(said, item.case).toEqual(item.error === null ? [] : [item.error]);
     }
+  });
+
+  // The owner's decision: no edit to the files clears a secret, so the agent may
+  // apply and says what to set. Deploy still refuses (action-readiness.ts).
+  test("a refusal only the owner can clear is a warning; one the files clear stays an error", async () => {
+    let owner = 0;
+    for (const item of file.cases) {
+      if (item.error === null) continue;
+      const result = await validator.validate(capsule(item.actions), { state: "absent" }, { secrets: item.secrets, rules: file.rules });
+      if (refusalNeedsSecret(item.error)) {
+        owner += 1;
+        expect(result.ok, item.case).toBe(true);
+        expect(result.errors, item.case).toEqual([]);
+        expect(result.warnings, item.case).toEqual([{ stage: "actions", message: item.error, detail: "Deploy refuses this until the owner sets the secret in Auth > Integrations. No edit to the files clears it.", owner: true }]);
+      } else {
+        expect(result.ok, item.case).toBe(false);
+        expect(result.warnings, item.case).toBeUndefined();
+      }
+    }
+    expect(owner).toBeGreaterThan(0);
   });
 
   test("without secret names the Gate says nothing about secrets", async () => {
     const unset = file.cases.find((item) => item.case === "a signed route whose secret is not set")!;
-    expect((await validator.validate(capsule(unset.actions))).errors).toEqual([]);
-    expect((await validator.validate(capsule(unset.actions), { state: "absent" }, { rules: file.rules })).errors).toEqual([]);
+    expect((await validator.validate(capsule(unset.actions))).warnings).toBeUndefined();
+    expect((await validator.validate(capsule(unset.actions), { state: "absent" }, { rules: file.rules })).warnings).toBeUndefined();
     const keyed = file.cases.find((item) => item.case === "a call that sends an API key that is not set")!;
-    expect((await validator.validate(capsule(keyed.actions), { state: "absent" }, { rules: file.rules })).errors).toEqual([]);
+    expect((await validator.validate(capsule(keyed.actions), { state: "absent" }, { rules: file.rules })).warnings).toBeUndefined();
   });
 
   test("without the installation's hosts the Gate says nothing about a call's host", async () => {
@@ -48,8 +69,8 @@ describe("the release plan at the editor's door", () => {
 
   test("a refusal says who must act", async () => {
     const unset = file.cases.find((item) => item.case === "a signed route whose secret is not set")!;
-    const [owner] = (await validator.validate(capsule(unset.actions), { state: "absent" }, { secrets: [] })).errors;
-    expect(owner.detail).toBe("The Kernel refuses this at publish. The owner sets the secret in Auth > Integrations; no edit to the files clears it.");
+    const [owner] = (await validator.validate(capsule(unset.actions), { state: "absent" }, { secrets: [] })).warnings!;
+    expect(owner.owner).toBe(true);
     const editor = file.cases.find((item) => item.case === "a call to the editor's public host")!;
     const [author] = (await validator.validate(capsule(editor.actions), { state: "absent" }, { rules: file.rules })).errors;
     expect(author.detail).toBe("The Kernel refuses this at publish. Change actions.json.");

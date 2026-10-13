@@ -4,7 +4,7 @@ import { starterProject } from "../lib/starter";
 import { createCapsuleWorkspace } from "./capsule-env";
 import type { AgentTool, CapsuleFiles, CapsuleValidator, CapsuleWorkspace } from "./contracts";
 import { createCapsuleValidator } from "./gate";
-import { createCapsuleTools, formatValidation, readLiveDatabase } from "./tools";
+import { createCapsuleTools, formatValidation, readLiveDatabase, readReleaseFacts } from "./tools";
 
 let sql: Promise<SqlJsStatic> | undefined;
 const loadSql = () => (sql ??= initSqlJs());
@@ -243,6 +243,28 @@ describe("formatValidation", () => {
       .not.toContain("did not run");
     expect(formatValidation({ ok: true, errors: [], checked: ["schema", "actions"] }))
       .toContain("The migration stage did not run");
+  });
+});
+
+describe("release facts", () => {
+  const route = JSON.stringify({ version: 1, actions: { "orders.receive": { kind: "mutation", access: "anonymous", statement: "INSERT INTO tasks (title) VALUES (?1)", bindings: [{ source: "input", key: "title", type: "string" }], http: { method: "POST", path: "/hooks/orders", signature: { header: "X-Signature", secret: "orders_hook" } } } } });
+
+  test("validate_capsule passes the facts to the Gate, and an unset secret is a warning that names Auth > Integrations", async () => {
+    const workspace = createCapsuleWorkspace({ ...starterProject.files, "actions.json": route });
+    const tools = createCapsuleTools(workspace, createCapsuleValidator(loadSql), { releaseFacts: async () => ({ secrets: [] }) });
+    const result = await call(tools, "validate_capsule", {});
+    expect((result.details as { ok: boolean }).ok).toBe(true);
+    const text = textOf(result);
+    expect(text).toContain("Validation passed");
+    expect(text).toContain("Action orders.receive signs with the secret orders_hook, which is not set for this project. Set it with secret_set before publishing.");
+    expect(text).toContain("Auth > Integrations");
+    expect(text).toContain("Tell the person");
+  });
+
+  test("a fact that cannot be read leaves the Gate silent on it, never blocked", async () => {
+    expect(await readReleaseFacts({})).toEqual({});
+    expect(await readReleaseFacts({ releaseFacts: async () => { throw new Error("signed out"); } })).toEqual({});
+    expect(await readReleaseFacts({ releaseFacts: async () => ({ secrets: [{ name: "a" }] }) })).toEqual({ secrets: [{ name: "a" }] });
   });
 });
 

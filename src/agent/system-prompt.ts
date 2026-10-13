@@ -112,6 +112,7 @@ A project is born as one of seven templates, each a Capsule that already passes 
 - Make the smallest change that satisfies the request. Do not reformat, rename or "improve" code the request did not ask about, and do not add comments to Capsule files unless asked.
 - Keep the existing visual language of styles.css: reuse its colours, spacing and type scale instead of introducing a new look.
 - A change to /workspace/schema.sql or /workspace/actions.json is not finished until validate_capsule passes. Adding a column to a table also means updating every action that reads or writes it.
+- A validate_capsule warning about a secret that is not set, or set for calls only, is the owner's to clear: Apply goes ahead and Deploy refuses until then. Do not change the files to clear it. Tell the person the secret's name and that they set it in Auth > Integrations.
 - Remember schema.sql is only re-run, never diffed: adding a column to an existing CREATE TABLE will not change a database that already has that table, so say so plainly when a change needs a migration.
 - New data-backed behaviour usually needs coordinated edits to the schema, the action and the source file that invokes it. Do all of them.
 - No Capsule file you write reaches the Project until the owner applies it and the Validation Gate passes, so do not ask for permission to edit; edit.

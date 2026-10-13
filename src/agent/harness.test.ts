@@ -6,6 +6,7 @@ import type { MiniAppProject } from "../lib/types";
 import type { AgentSessionConfig, AgentUiEvent, CapsuleFiles, LiveDatabase, ValidationResult } from "./contracts";
 import { createLittleboxAgent, type LittleboxAgentOptions } from "./harness";
 import { emptyAgentKeyStore } from "./key-store";
+import type { ReleaseFacts } from "./release-check";
 
 // sql.js resolves its own wasm under bun; the browser path uses the bundled url loader.
 let sql: Promise<SqlJsStatic> | undefined;
@@ -139,13 +140,16 @@ const passing: ValidationResult = { ok: true, errors: [], checked: ["schema", "a
 function stubValidator(result: ValidationResult) {
   const seen: CapsuleFiles[] = [];
   const databases: LiveDatabase[] = [];
+  const facts: ReleaseFacts[] = [];
   return {
     seen,
     databases,
+    facts,
     validator: {
-      validate: async (files: CapsuleFiles, live: LiveDatabase = { state: "absent" }) => {
+      validate: async (files: CapsuleFiles, live: LiveDatabase = { state: "absent" }, known: ReleaseFacts = {}) => {
         seen.push(files);
         databases.push(live);
+        facts.push(known);
         return result;
       },
     },
@@ -281,6 +285,21 @@ describe("littlebox agent", () => {
 
     expect(gate.databases.length).toBeGreaterThan(0);
     expect(gate.databases.every((database) => database.state === "loaded" && database.bytes === live)).toBe(true);
+  });
+
+  test("the gate and validate_capsule both see the project's release facts", async () => {
+    const gate = stubValidator(passing);
+    const known: ReleaseFacts = { secrets: [{ name: "orders_hook", use: "route" }] };
+    const { agent } = agentFor([call(cssEdit, { name: "validate_capsule", arguments: {} }), call({ ...cssEdit, arguments: { ...cssEdit.arguments, old_string: "#3157d5", new_string: "#2147c5" } }), say("Hecho.")], {
+      validator: gate.validator,
+      releaseFacts: async () => known,
+    });
+
+    await agent.send("ponlo azul");
+
+    // One from validate_capsule, one from the gate that re-runs after the last edit.
+    expect(gate.facts.length).toBe(2);
+    expect(gate.facts.every((facts) => facts === known)).toBe(true);
   });
 
   test("a gate that cannot run blocks apply instead of waiting forever", async () => {
