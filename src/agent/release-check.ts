@@ -10,8 +10,11 @@ import type { DomainRules } from "../lib/domain-name";
  * it, and the Gate then says nothing about what it would decide.
  */
 export type ReleaseFacts = {
-  /** Names and use from `secrets_list`. Never a value. */
-  secrets?: { name: string; use?: string }[];
+  /**
+   * Names, use and whether the value decodes as a svix key, from
+   * `secrets_list`. Never a value.
+   */
+  secrets?: { name: string; use?: string; svixKey?: boolean }[];
   /** The installation's app suffix and its own hosts, from `domain_read`. */
   rules?: DomainRules;
 };
@@ -20,24 +23,29 @@ export type ReleaseFacts = {
  * The first sentence release_plan would refuse a parsed program with, from
  * names alone: kernel-rs/src/http.rs `require_secrets`, then calls.rs
  * `check_release`, each over actions in name order. The cases are in
- * kernel-rs/src/release-cases.json. A svix secret whose value is not a whsec_
- * key is refused only by the Kernel, which alone reads the value.
+ * kernel-rs/src/release-cases.json. A svix route is refused for its key only
+ * when `secrets_list` says the value does not decode, since the editor never
+ * reads the value.
  */
 export function releaseRefusal(program: ServerActionProgram, facts: ReleaseFacts): string | null {
   const names = Object.keys(program.actions).sort();
-  const known = facts.secrets ? new Map(facts.secrets.map((secret) => [secret.name, secret.use ?? "route"])) : null;
+  const known = facts.secrets ? new Map(facts.secrets.map((secret) => [secret.name, secret])) : null;
   if (known) {
     const actions: string[] = [];
     const unset: string[] = [];
     for (const name of names) {
-      const secret = program.actions[name].http?.signature?.secret;
-      if (!secret) continue;
-      if (known.get(secret) === "call") {
+      const signature = program.actions[name].http?.signature;
+      if (!signature) continue;
+      const secret = signature.secret;
+      const listed = known.get(secret);
+      if (listed?.use === "call") {
         return `Action ${name} signs its route with the secret ${secret}, which is set for calls only. Set a route secret with a value of its own.`;
       }
-      if (!known.has(secret)) {
+      if (!listed) {
         actions.push(name);
         if (!unset.includes(secret)) unset.push(secret);
+      } else if (signature.scheme === "svix" && listed.svixKey === false) {
+        return `Action ${name} verifies svix signatures with the secret ${secret}, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_.`;
       }
     }
     const unsetSentence = unsetSecretsSentence(actions, unset);

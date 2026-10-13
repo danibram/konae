@@ -322,6 +322,244 @@
    "error": null
   },
   {
+   "case": "a svix route whose secret is a whsec_ key",
+   "actions": {
+    "emails.receive": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/hooks/email",
+      "signature": {
+       "scheme": "svix",
+       "secret": "resend_webhook"
+      }
+     }
+    }
+   },
+   "secrets": [
+    {
+     "name": "resend_webhook",
+     "use": "route",
+     "svixKey": true
+    }
+   ],
+   "error": null
+  },
+  {
+   "case": "a svix route whose secret is not a whsec_ key",
+   "actions": {
+    "emails.receive": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/hooks/email",
+      "signature": {
+       "scheme": "svix",
+       "secret": "resend_webhook"
+      }
+     }
+    }
+   },
+   "secrets": [
+    {
+     "name": "resend_webhook",
+     "use": "route",
+     "svixKey": false
+    }
+   ],
+   "error": "Action emails.receive verifies svix signatures with the secret resend_webhook, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_."
+  },
+  {
+   "case": "a route that names the svix provider and whose secret is not a whsec_ key",
+   "actions": {
+    "emails.receive": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/hooks/email",
+      "signature": {
+       "provider": "svix",
+       "secret": "resend_webhook"
+      }
+     }
+    }
+   },
+   "secrets": [
+    {
+     "name": "resend_webhook",
+     "use": "route",
+     "svixKey": false
+    }
+   ],
+   "error": "Action emails.receive verifies svix signatures with the secret resend_webhook, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_."
+  },
+  {
+   "case": "a route of another scheme may sign with a secret that is not a svix key",
+   "actions": {
+    "orders.receive": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/hooks/orders",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "orders_webhook"
+      }
+     }
+    }
+   },
+   "secrets": [
+    {
+     "name": "orders_webhook",
+     "use": "route",
+     "svixKey": false
+    }
+   ],
+   "error": null
+  },
+  {
+   "case": "a svix secret that is not a key stops the check before the unset secrets are named",
+   "actions": {
+    "a.one": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/one",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "feed"
+      }
+     }
+    },
+    "b.two": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/two",
+      "signature": {
+       "scheme": "svix",
+       "secret": "resend_webhook"
+      }
+     }
+    },
+    "c.three": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/three",
+      "signature": {
+       "header": "X-Signature",
+       "secret": "hook"
+      }
+     }
+    }
+   },
+   "secrets": [
+    {
+     "name": "resend_webhook",
+     "use": "route",
+     "svixKey": false
+    }
+   ],
+   "error": "Action b.two verifies svix signatures with the secret resend_webhook, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_."
+  },
+  {
+   "case": "a svix route whose secret is set for calls only is refused for its use first",
+   "actions": {
+    "emails.receive": {
+     "kind": "mutation",
+     "access": "anonymous",
+     "statement": "INSERT INTO orders (external_id) VALUES (?1)",
+     "bindings": [
+      {
+       "source": "input",
+       "key": "id",
+       "type": "string"
+      }
+     ],
+     "http": {
+      "method": "POST",
+      "path": "/hooks/email",
+      "signature": {
+       "scheme": "svix",
+       "secret": "resend_webhook"
+      }
+     }
+    }
+   },
+   "secrets": [
+    {
+     "name": "resend_webhook",
+     "use": "call",
+     "svixKey": false
+    }
+   ],
+   "error": "Action emails.receive signs its route with the secret resend_webhook, which is set for calls only. Set a route secret with a value of its own."
+  },
+  {
    "case": "a call to the editor's public host",
    "actions": {
     "hook.send": {
