@@ -4,11 +4,12 @@ import type { TemplateSource } from "./types";
 const schema = `-- Written only by the signed route. A redelivery of the same event changes nothing.
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  external_id TEXT NOT NULL UNIQUE,
+  external_id TEXT NOT NULL,
   title TEXT NOT NULL,
   repo TEXT NOT NULL DEFAULT '',
   received_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS events_external_id_unique ON events(external_id);
 `;
 
 const model = `import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";

@@ -5,10 +5,11 @@ const schema = `-- One row per published image. The bytes live with the Kernel u
 CREATE TABLE IF NOT EXISTS photos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
-  file_id TEXT NOT NULL UNIQUE,
+  file_id TEXT NOT NULL,
   title TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS photos_file_id_unique ON photos(file_id);
 `;
 
 const model = `import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
