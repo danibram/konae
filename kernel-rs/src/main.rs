@@ -562,8 +562,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         return error(StatusCode::BAD_REQUEST, &message);
     }
     if let Err(error_value) = mcp::store(&state).and_then(|db| {
-        http::require_secrets(&db, &input.project.id, &program)?;
-        calls::check_release(&state, &db, &input.project.id, &program)
+        calls::check_release(&domain::Rules::of(&state), &db, &input.project.id, &program)
     }) {
         return error(StatusCode::BAD_REQUEST, &error_value.to_string());
     }

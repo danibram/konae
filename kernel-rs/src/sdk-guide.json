@@ -1118,7 +1118,7 @@
             },
             {
               "message": "Action <name> verifies svix signatures with the secret <key>, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_.",
-              "when": "publishing a svix route whose secret's value is not whsec_ and base64; the editor cannot see secrets, so only the Kernel refuses this",
+              "when": "publishing a svix route whose secret's value is not whsec_ and base64; the Kernel refuses this at publish, and the editor before Deploy from svixKey in secrets_list, never the value",
               "source": "kernel"
             },
             {

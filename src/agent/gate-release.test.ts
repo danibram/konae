@@ -50,6 +50,9 @@ describe("the release plan at the editor's door", () => {
     const unset = file.cases.find((item) => item.case === "a signed route whose secret is not set")!;
     const [owner] = (await validator.validate(capsule(unset.actions), { state: "absent" }, { secrets: [] })).errors;
     expect(owner.detail).toBe("The Kernel refuses this at publish. The owner sets the secret in Auth > Integrations; no edit to the files clears it.");
+    const svix = file.cases.find((item) => item.case === "a svix route whose secret is not a whsec_ key")!;
+    const [key] = (await validator.validate(capsule(svix.actions), { state: "absent" }, { secrets: svix.secrets })).errors;
+    expect(key.detail).toBe("The Kernel refuses this at publish. The owner sets the secret in Auth > Integrations; no edit to the files clears it.");
     const editor = file.cases.find((item) => item.case === "a call to the editor's public host")!;
     const [author] = (await validator.validate(capsule(editor.actions), { state: "absent" }, { rules: file.rules })).errors;
     expect(author.detail).toBe("The Kernel refuses this at publish. Change actions.json.");

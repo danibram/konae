@@ -316,10 +316,17 @@ pub(super) fn secrets_call(db: &Connection, project: &str, deployment: Option<&D
     secrets_table(db)?;
     match name {
         "secrets_list" => {
-            let mut query = db.prepare("SELECT name, updated_at, use FROM project_secrets WHERE project=?1 ORDER BY name")?;
+            // svixKey says whether the value decodes as a svix key, so the
+            // editor can refuse a svix route before publish without the value.
+            let mut query = db.prepare("SELECT name, updated_at, use, value FROM project_secrets WHERE project=?1 ORDER BY name")?;
             let secrets = query
                 .query_map([project], |row| {
-                    Ok(json!({"name": row.get::<_, String>(0)?, "updatedAt": row.get::<_, i64>(1)?, "use": row.get::<_, String>(2)?}))
+                    Ok(json!({
+                        "name": row.get::<_, String>(0)?,
+                        "updatedAt": row.get::<_, i64>(1)?,
+                        "use": row.get::<_, String>(2)?,
+                        "svixKey": super::provider::svix_key(&row.get::<_, String>(3)?).is_some(),
+                    }))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(json!({"projectId": project, "secrets": secrets}))
