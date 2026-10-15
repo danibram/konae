@@ -2,6 +2,7 @@
 // attacks in tests/security-review-*.integration.test.ts. Every app is
 // published with an Open signup policy so a test can make as many app users
 // as it needs; the attacks are about what those users can reach.
+import { setDefaultTimeout } from "bun:test";
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +11,12 @@ import { McpClient } from "../src/mcp/client";
 import { buildKernel, freshClient, password, release, startKernel, type Kernel } from "./migration-kernel";
 
 export { freshClient, password };
+
+// A sign-up or recovery attack takes about 6 seconds on a debug Kernel, over
+// bun's 5-second default. A timed-out test makes bun kill the processes it
+// started, the Kernel among them, and every later test then fails to connect.
+// This is the 30 seconds `bun run test` passes, so a file also passes alone.
+setDefaultTimeout(30_000);
 export const repo = path.resolve(import.meta.dir, "..");
 const showcase = path.join(repo, "examples/showcase");
 
