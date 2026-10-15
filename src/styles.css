@@ -292,6 +292,11 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
   font: 500 13px/1.45 "Satoshi Variable", sans-serif;
 }
 .gate-refusal strong { display: block; font-weight: 750; }
+.gate-refusal-detail { display: block; margin-top: var(--ds-space-1); overflow-wrap: anywhere; font: 12px/1.45 var(--ds-mono); }
+/* A refusal only the owner clears: the change applies, Deploy refuses. */
+.gate-refusal.is-owner { border-bottom-color: var(--ds-warning); background: var(--ds-warning-soft); color: var(--ds-text); }
+.gate-refusal.is-owner strong { color: var(--ds-warning); }
+.gate-refusal.is-owner .gate-refusal-detail { color: var(--ds-muted); }
 .gate-refusal button {
   margin-left: auto;
   flex: 0 0 auto;
@@ -1474,6 +1479,10 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .workshop.is-compact { grid-template-rows: auto auto minmax(0, 1fr); }
 .workshop.is-compact.has-error { grid-template-rows: auto auto auto minmax(0, 1fr); }
 .workshop.is-compact:has(.operation-error):has(.gate-refusal) { grid-template-rows: auto auto auto auto minmax(0, 1fr); }
+/* On a phone the button would squeeze the sentence into a narrow column, so it moves under it. */
+.workshop.is-compact .gate-refusal { flex-wrap: wrap; row-gap: var(--ds-space-2); }
+.workshop.is-compact .gate-refusal > div { flex: 1 1 100%; }
+.workshop.is-compact .gate-refusal button { margin-left: 0; }
 .workshop.is-compact .section-nav { height: auto; flex-wrap: nowrap; overflow-x: auto; row-gap: 0; padding-bottom: 0; }
 .workshop.is-compact .section-nav > button.section-tool { height: 32px; margin-left: 6px; padding: 0 10px; color: #f4f2ea; background: transparent; }
 .account-hero h1 { max-width: min(22em, 100%); overflow-wrap: break-word; }
