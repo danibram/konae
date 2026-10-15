@@ -1,6 +1,7 @@
 import { FolderOpen, Plus, Settings2 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { readOwnerProjectCount } from "../lib/managed-sources";
+import { templateChoices, type TemplateId } from "../lib/templates";
 import { useOwnerSession } from "./owner-session";
 import { WorkspaceNav } from "./WorkspaceNav";
 import { Badge, Button, Card, Dialog, EmptyState, Field, IconButton, Input, Select, Textarea } from "./ui";
@@ -11,6 +12,7 @@ function Sample({ title, children }: { title: string; children: ReactNode }) {
 
 export function DesignSystem() {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [sampleTemplate, setSampleTemplate] = useState<TemplateId>("tasks");
   const nameRef = useRef<HTMLInputElement>(null);
   const [ownerSession] = useOwnerSession();
   const [projectCount, setProjectCount] = useState<number | undefined>();
@@ -64,7 +66,22 @@ export function DesignSystem() {
           </div>
         </section>
       </main>
-      <Dialog open={dialogOpen} title="Name this app" description="Pick a name, then how it starts." initialFocus={nameRef} onClose={() => setDialogOpen(false)} footer={<><Button onClick={() => setDialogOpen(false)}>Cancel</Button><Button variant="primary" disabled onClick={() => setDialogOpen(false)}>Create</Button></>}><div className="ui-dialog-body new-project-dialog"><Field label="Project name" help="Choose a name you can recognize later."><Input ref={nameRef} placeholder="" /></Field><fieldset className="start-cards"><legend>Start with</legend><p className="start-note">Describe is next. A shared list is the start for anything else.</p><label className="selected"><input type="radio" name="sample-template" defaultChecked /><strong>Shared list</strong><small>Anyone with the link can add a row.</small></label><label><input type="radio" name="sample-template" /><strong>Private notes</strong><small>Each person signs in and only sees their own.</small></label></fieldset></div></Dialog>
+      <Dialog open={dialogOpen} className="new-project" title="Name this app" description="Pick a name, then how it starts." initialFocus={nameRef} onClose={() => setDialogOpen(false)} footer={<><Button onClick={() => setDialogOpen(false)}>Cancel</Button><Button variant="primary" disabled onClick={() => setDialogOpen(false)}>Create</Button></>}>
+        <div className="ui-dialog-body new-project-dialog">
+          <Field label="Project name" help="Choose a name you can recognize later."><Input ref={nameRef} placeholder="" /></Field>
+          <fieldset className="start-cards">
+            <legend>Start with</legend>
+            <p className="start-note">Each one runs as it is. Describe what to change next.</p>
+            {templateChoices.map((choice) => (
+              <label key={choice.id} className={sampleTemplate === choice.id ? "selected" : ""}>
+                <input type="radio" name="sample-template" value={choice.id} checked={sampleTemplate === choice.id} onChange={() => setSampleTemplate(choice.id)} />
+                <strong>{choice.name}</strong>
+                <small>{choice.sentence}</small>
+              </label>
+            ))}
+          </fieldset>
+        </div>
+      </Dialog>
     </div>
   );
 }

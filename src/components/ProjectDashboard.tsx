@@ -133,6 +133,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
       <EjectDialog project={ejecting} onClose={() => setEjecting(null)} prepare={eject.prepare} apply={eject.apply} onEjected={eject.onEjected} />
       <Dialog
         open={creating}
+        className="new-project"
         title="Name this app"
         description="Pick a name, then how it starts."
         onClose={() => { setCreating(false); setNameTouched(false); }}

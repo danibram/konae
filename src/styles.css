@@ -1279,6 +1279,10 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .new-project-dialog { padding: 4px 0 0; }
 .new-project-dialog .ui-field label { display: block; margin: 0 0 10px; line-height: 16px; position: relative; z-index: 1; }
 .start-cards small { display: block; font-size: 13px; font-weight: 450; line-height: 1.4; }
+/* Seven cards outgrow a short screen: the heading and the Create button stay put and the body scrolls. */
+.new-project.ui-dialog { display: flex; flex-direction: column; overflow: hidden; }
+.new-project .ui-dialog-heading, .new-project .ui-dialog-footer { flex: 0 0 auto; }
+.new-project .new-project-dialog { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--ds-space-6); }
 .cap-empty.ui-empty { min-height: 0; align-items: flex-start; text-align: left; padding: 8px 4px 20px; }
 .workshop .workbench { position: relative; z-index: 1; }
 .section-nav { overflow: visible; }
