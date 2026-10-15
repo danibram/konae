@@ -70,10 +70,12 @@ Each package's tests pass on both doors (`bun test` for the Gate, `cargo test` i
 
 Packages A to D landed on the branch `smooth-authoring`. Kernel `cargo test` 264 passed. Editor and Gate `bun test src scripts` 742 passed. The showcase replays pass for booking, club, gallery and inbox.
 
-Open, carried from the work brought into the branch (each also fails at commit 38f2251, before any package):
+Closed in the second wave:
 
-- `tests/security-review-accounts.integration.test.ts` fails 7 of 11 when run alone.
-- The habits and starter replays stop at publish with "The accepted database model does not match the deployed schema. Apply its migration before publishing." (`kernel-rs/src/mcp.rs`). So package A's changes to `notes.surface` and `days.close` are covered by the schedule probe and `cargo test`, not yet by those two replays end to end.
+- The habits and starter replays, and the members, digest, gallery and webhook templates, were refused at publish with "The accepted database model does not match the deployed schema. Apply its migration before publishing." The check compared CHECK clauses, which a Database Model cannot declare, and the schema.sql files wrote unique columns and foreign keys in a form the model does not derive. The Kernel now leaves CHECK groups out of the comparison, the schema.sql files write the model's form, and `tests/template-release.integration.test.ts` plans a release for every template and both showcases. All six showcase replays pass; habits covers `days.close` end to end, and `notes.surface` lives in the schedule probe, which passes.
+- `tests/security-review-accounts.integration.test.ts` failed 7 of 11 when run alone because two tests take about 6 seconds and bun's default timeout is 5. A timed-out test made bun kill the Kernel. The lab helper sets the 30 seconds `bun run test` uses.
+
+Open: a migration that recreates a table builds it from the model, so it drops CHECK constraints schema.sql added. Before the second wave such an app could not publish; now it can, so this needs a refusal or a model that can state a CHECK.
 
 Next wave:
 
