@@ -292,6 +292,11 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
   font: 500 13px/1.45 "Satoshi Variable", sans-serif;
 }
 .gate-refusal strong { display: block; font-weight: 750; }
+.gate-refusal-detail { display: block; margin-top: var(--ds-space-1); overflow-wrap: anywhere; font: 12px/1.45 var(--ds-mono); }
+/* A refusal only the owner clears: the change applies, Deploy refuses. */
+.gate-refusal.is-owner { border-bottom-color: var(--ds-warning); background: var(--ds-warning-soft); color: var(--ds-text); }
+.gate-refusal.is-owner strong { color: var(--ds-warning); }
+.gate-refusal.is-owner .gate-refusal-detail { color: var(--ds-muted); }
 .gate-refusal button {
   margin-left: auto;
   flex: 0 0 auto;
@@ -718,6 +723,9 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .publish-error span { font-size: 11px; line-height: 1.4; }
 .publish-actions { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; margin-top: 20px; padding: 13px 34px; border-top: 1px solid var(--line); background: #e5e2d8; }
 .publish-actions > div { display: flex; align-items: center; gap: 6px; color: var(--muted); font: 10px "JetBrains Mono Variable"; }
+.publish-actions > .publish-refusal { flex-wrap: wrap; gap: var(--ds-space-2); padding: var(--ds-space-2) var(--ds-space-3); border: 1px solid var(--ds-danger); background: var(--ds-danger-soft); color: var(--ds-danger); font: 600 12px/1.45 var(--ds-font); }
+.publish-refusal span { flex: 1 1 24ch; min-width: 0; }
+.publish-refusal .deploy-auth-link { margin: 0; height: 32px; }
 .confirm-publish, .published-done { display: flex; align-items: center; justify-content: center; gap: 7px; background: var(--acid); box-shadow: 3px 3px 0 var(--ink); }
 .confirm-publish.ui-button-secondary,
 .publish-dialog.is-refused-leave .confirm-publish {
@@ -1271,6 +1279,10 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .new-project-dialog { padding: 4px 0 0; }
 .new-project-dialog .ui-field label { display: block; margin: 0 0 10px; line-height: 16px; position: relative; z-index: 1; }
 .start-cards small { display: block; font-size: 13px; font-weight: 450; line-height: 1.4; }
+/* Seven cards outgrow a short screen: the heading and the Create button stay put and the body scrolls. */
+.new-project.ui-dialog { display: flex; flex-direction: column; overflow: hidden; }
+.new-project .ui-dialog-heading, .new-project .ui-dialog-footer { flex: 0 0 auto; }
+.new-project .new-project-dialog { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--ds-space-6); }
 .cap-empty.ui-empty { min-height: 0; align-items: flex-start; text-align: left; padding: 8px 4px 20px; }
 .workshop .workbench { position: relative; z-index: 1; }
 .section-nav { overflow: visible; }
@@ -1474,6 +1486,10 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .workshop.is-compact { grid-template-rows: auto auto minmax(0, 1fr); }
 .workshop.is-compact.has-error { grid-template-rows: auto auto auto minmax(0, 1fr); }
 .workshop.is-compact:has(.operation-error):has(.gate-refusal) { grid-template-rows: auto auto auto auto minmax(0, 1fr); }
+/* On a phone the button would squeeze the sentence into a narrow column, so it moves under it. */
+.workshop.is-compact .gate-refusal { flex-wrap: wrap; row-gap: var(--ds-space-2); }
+.workshop.is-compact .gate-refusal > div { flex: 1 1 100%; }
+.workshop.is-compact .gate-refusal button { margin-left: 0; }
 .workshop.is-compact .section-nav { height: auto; flex-wrap: nowrap; overflow-x: auto; row-gap: 0; padding-bottom: 0; }
 .workshop.is-compact .section-nav > button.section-tool { height: 32px; margin-left: 6px; padding: 0 10px; color: #f4f2ea; background: transparent; }
 .account-hero h1 { max-width: min(22em, 100%); overflow-wrap: break-word; }

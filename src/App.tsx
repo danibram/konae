@@ -53,6 +53,7 @@ import { ProjectDashboard } from "./components/ProjectDashboard";
 import { EjectedNotice } from "./components/EjectDialog";
 import { deployProject, HostedDatabaseClient, type DeploymentReceipt, type SignupMode } from "./deployments/client";
 import { clearDomain, readDomain, setDomain } from "./deployments/domains";
+import { readReleaseFacts } from "./deployments/release-facts";
 import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/manifest";
 import { createSchemaSnapshot } from "./database-lifecycle/schema-snapshot";
 import { parseServerActionSource } from "./kernel/actions";
@@ -573,6 +574,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             liveDatabase: () => hostRef.current.exportDatabase(),
             // The other half of the gate: what the running preview actually threw.
             previewErrors: () => hostRef.current.previewErrors(),
+            // What release_plan reads, as the Deploy dialog reads it: secret names and the installation's hosts.
+            releaseFacts: () => readReleaseFacts(projectRef.current.id, deploymentsRef.current[projectRef.current.id]?.id),
             domains: {
               deploymentForProject: (projectId) => deploymentsRef.current[projectId]?.id ?? null,
               readDomain,
@@ -1155,7 +1158,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   };
 
   return (
-    <div className={`workshop ${compact ? "is-compact" : ""} ${isVisible(displayedLayout, "code") ? "is-code-open" : ""} ${operationError || agentThread.footer.kind === "blocked" ? "has-error" : ""}`}>
+    <div className={`workshop ${compact ? "is-compact" : ""} ${isVisible(displayedLayout, "code") ? "is-code-open" : ""} ${operationError || agentThread.footer.kind === "blocked" || (agentThread.footer.kind === "validated" && agentThread.footer.owner) ? "has-error" : ""}`}>
       <header className="topbar">
         <button className="brand" aria-label="Littlebox home" onClick={() => goToProjects()}>
           <span className="brand-mark"><Box size={17} strokeWidth={2.4} /></span>
@@ -1208,8 +1211,19 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           <div>
             <strong>A check refused this change</strong>
             <span>{agentThread.footer.message}</span>
+            {agentThread.footer.detail && <span className="gate-refusal-detail">{agentThread.footer.detail}</span>}
           </div>
           <button type="button" onClick={() => reveal("agent")}>Open Describe</button>
+        </div>
+      )}
+      {agentThread.footer.kind === "validated" && agentThread.footer.owner && (
+        <div className="gate-refusal is-owner" role="status">
+          <div>
+            <strong>Apply works. Deploy waits for a secret</strong>
+            <span>{agentThread.footer.owner.message}</span>
+            {agentThread.footer.owner.detail && <span className="gate-refusal-detail">{agentThread.footer.owner.detail}</span>}
+          </div>
+          <button type="button" onClick={() => { setAuthView("integrations"); reveal("auth"); }}>Open Auth &gt; Integrations</button>
         </div>
       )}
       <nav className="section-nav" aria-label="Workspace sections">

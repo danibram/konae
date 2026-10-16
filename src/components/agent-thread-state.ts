@@ -180,8 +180,14 @@ export type ProposalFooter =
   | { kind: "unvalidated"; changedFiles: ProjectFile[]; canApply: false }
   /** `detail` carries the reason, such as the Kernel's sentence for an action it would refuse. */
   | { kind: "blocked"; changedFiles: ProjectFile[]; canApply: false; stage: ValidationStage; message: string; detail?: string }
-  /** `checked` is what the pass covers; the panel may not claim more than this. */
-  | { kind: "validated"; changedFiles: ProjectFile[]; canApply: true; checked: ValidationStage[] };
+  /**
+   * `checked` is what the pass covers; the panel may not claim more than this.
+   * `owner` is a release refusal only the owner clears: Apply stays open, Deploy refuses.
+   */
+  | { kind: "validated"; changedFiles: ProjectFile[]; canApply: true; checked: ValidationStage[]; owner?: OwnerRefusal };
+
+/** The Kernel's sentence for a refusal the owner clears in Auth > Integrations, and who acts. */
+export type OwnerRefusal = { message: string; detail?: string };
 
 const stageOrder: ValidationStage[] = ["schema", "migration", "actions"];
 
@@ -207,7 +213,14 @@ export function proposalFooter(state: AgentThreadState): ProposalFooter {
   const gate = state.gate;
   if (gate.state === "empty") return { kind: "empty", canApply: false };
   if (gate.state === "ready") {
-    return { kind: "validated", changedFiles: gate.changedFiles, canApply: true, checked: gate.result.checked };
+    const owner = gate.result.warnings?.find((warning) => warning.owner);
+    return {
+      kind: "validated",
+      changedFiles: gate.changedFiles,
+      canApply: true,
+      checked: gate.result.checked,
+      ...(owner ? { owner: { message: owner.message, ...(owner.detail ? { detail: owner.detail } : {}) } } : {}),
+    };
   }
   if (gate.state === "blocked") return blocked(gate.changedFiles, gate.result);
   return state.validation && !state.validation.ok

@@ -151,6 +151,12 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings }: Props) {
             {footer.kind === "blocked" && <><CircleAlert size={13} /> <em>{footer.stage}</em> {footer.message}</>}
           </p>
           {footer.kind === "blocked" && footer.detail && <p className="agent-proposal-detail">{footer.detail}</p>}
+          {footer.kind === "validated" && footer.owner && (
+            <div className="agent-proposal-owner" role="status">
+              <CircleAlert size={13} />
+              <p><strong>{footer.owner.message}</strong>{footer.owner.detail && <span>{footer.owner.detail}</span>}</p>
+            </div>
+          )}
           <div className="agent-proposal-actions">
             <button className="agent-discard" onClick={thread.discard}>Discard</button>
             <button className="agent-apply" disabled={!footer.canApply || running} onClick={thread.apply}>

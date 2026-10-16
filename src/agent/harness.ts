@@ -20,10 +20,10 @@ import type {
 } from "./contracts";
 import type { AgentDomainBinding } from "./domain-tools";
 export type { AgentDomainBinding, DomainMutationRequest } from "./domain-tools";
-import { createCapsuleValidator, type SqlJsLoader } from "./gate";
+import { createCapsuleValidator, type ReleaseFacts, type SqlJsLoader } from "./gate";
 import { buildAuth, buildModel, createStreamFn } from "./providers";
 import { buildInitialUserMessage, buildSystemPrompt } from "./system-prompt";
-import { createCapsuleTools, readLiveDatabase, type PreviewFailureReport } from "./tools";
+import { createCapsuleTools, readLiveDatabase, readReleaseFacts, type PreviewFailureReport } from "./tools";
 
 /**
  * The concrete agent. Beyond the `LittleboxAgent` contract it exposes the four
@@ -60,6 +60,8 @@ export type LittleboxAgentOptions = {
   liveDatabase?: LiveDatabaseExport;
   /** Runtime failures from the live preview, exposed to the model as `preview_errors`. */
   previewErrors?: () => PreviewFailureReport[];
+  /** The project's secret names and the installation's hosts, read when the Gate runs. */
+  releaseFacts?: () => Promise<ReleaseFacts>;
 };
 
 export function createLittleboxAgent(
@@ -258,6 +260,7 @@ class LittleboxAgentSession implements LittleboxAgentHandle {
       onValidated: (files, result) => this.recordValidation(files, result),
       liveDatabase: this.options.liveDatabase,
       previewErrors: this.options.previewErrors,
+      releaseFacts: this.options.releaseFacts,
       domains: this.options.domains ? {
         projectId,
         isCurrent: () => this.project.id === projectId && this.runToken === token,
@@ -379,7 +382,7 @@ class LittleboxAgentSession implements LittleboxAgentHandle {
     if (known && known.signature === signature && !known.retry) return;
     const files = this.workspace.serialize().files;
     try {
-      const result = await this.validator.validate(files, await this.liveDatabase());
+      const result = await this.validator.validate(files, await this.liveDatabase(), await readReleaseFacts({ releaseFacts: this.options.releaseFacts }));
       if (!this.stillCurrent(token, signature)) return;
       this.validated = { signature, result };
       this.emit({ type: "validation", result });

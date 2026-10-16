@@ -1,6 +1,8 @@
 import { ExecutionError, FileError, err, ok } from "@earendil-works/pi-agent-core";
 import type { FileInfo, FileKind, ShellExecOptions } from "@earendil-works/pi-agent-core";
 import type { ProjectFile } from "../lib/types";
+import { cloneStarter } from "../lib/starter";
+import { applyTemplate, templateChoices, type TemplateId } from "../lib/templates";
 import { directoriesForFiles, existingDirectory, existingFile, fileAncestor, normalizeProjectPath, reservedPathConflict } from "../lib/project-files";
 import type {
   CapsuleFiles,
@@ -39,6 +41,32 @@ export function capsuleFileFor(path: string): ProjectFile | null {
   if (!normalized || !normalized.startsWith(`${capsuleRoot}/`)) return null;
   const name = normalized.slice(capsuleRoot.length + 1);
   return name && normalizeProjectPath(name) === name ? name : null;
+}
+
+/**
+ * The seven templates, read-only beside the workspace, so the build agent can
+ * load a shape the Gate already passes instead of rewriting it from the prompt.
+ */
+export const templateRoot = "/templates";
+
+/** The text of `/templates/<id>/<file>`, or an error that names what exists. */
+export function readTemplateFile(path: string): Result<string, FileError> {
+  const normalized = normalizePath(path) ?? path;
+  const [id = "", ...rest] = normalized.slice(templateRoot.length + 1).split("/");
+  const name = rest.join("/");
+  const ids = templateChoices.map((choice) => choice.id);
+  if (!ids.includes(id as TemplateId)) {
+    return err(new FileError("not_found", `No template ${id || "named"}. Templates: ${ids.join(", ")}. Read /templates/<id>/actions.json, for example.`, normalized));
+  }
+  const files = applyTemplate(cloneStarter(), id as TemplateId).files;
+  if (!(name in files)) {
+    return err(new FileError("not_found", `No such file in template ${id}. Files: ${Object.keys(files).join(", ")}.`, normalized));
+  }
+  return ok(files[name]);
+}
+
+export function isTemplatePath(path: string): boolean {
+  return (normalizePath(path) ?? path).startsWith(`${templateRoot}/`);
 }
 
 export function createCapsuleWorkspace(seed: CapsuleFiles): CapsuleWorkspace {

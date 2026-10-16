@@ -37,7 +37,7 @@ export const loadBrowserSqlJs: SqlJsLoader = () => {
 };
 
 /** Who clears a release refusal, beside the Kernel's sentence. */
-const RELEASE_OWNER = "The Kernel refuses this at publish. The owner sets the secret in Auth > Integrations; no edit to the files clears it.";
+const RELEASE_OWNER = "Deploy refuses this until the owner sets the secret in Auth > Integrations. No edit to the files clears it.";
 const RELEASE_AUTHOR = "The Kernel refuses this at publish. Change actions.json.";
 
 export function createCapsuleValidator(loadSql: SqlJsLoader = loadBrowserSqlJs): CapsuleValidator {
@@ -126,7 +126,10 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       if (program) errors.push(...checkActions(fresh, program, "actions"));
       // The Kernel parses before it plans a release, so its release sentence only follows a program that parsed.
       const release = program && errors.length === 0 ? releaseRefusal(program, facts) : null;
-      if (release) errors.push({ stage: "actions", message: release, detail: refusalNeedsSecret(release) ? RELEASE_OWNER : RELEASE_AUTHOR });
+      // A secret only the owner can set does not block the change: the files are
+      // right, and Deploy still refuses until the owner sets it.
+      if (release && refusalNeedsSecret(release)) warnings.push({ stage: "actions", message: release, detail: RELEASE_OWNER, owner: true });
+      else if (release) errors.push({ stage: "actions", message: release, detail: RELEASE_AUTHOR });
       // A result column without a name a second backend could match passes, with a warning.
       if (program) warnings.push(...contractFromProgram(program, files["schema.sql"]).warnings.map(({ message }) => ({ stage: "actions" as const, message })));
       checked.push("actions");

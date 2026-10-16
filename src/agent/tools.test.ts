@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import initSqlJs, { type SqlJsStatic } from "sql.js";
-import { starterProject } from "../lib/starter";
+import { cloneStarter, starterProject } from "../lib/starter";
+import { applyTemplate, templateChoices } from "../lib/templates";
 import { createCapsuleWorkspace } from "./capsule-env";
 import type { AgentTool, CapsuleFiles, CapsuleValidator, CapsuleWorkspace } from "./contracts";
 import { createCapsuleValidator } from "./gate";
-import { createCapsuleTools, formatValidation, readLiveDatabase } from "./tools";
+import { createCapsuleTools, formatValidation, readLiveDatabase, readReleaseFacts } from "./tools";
 
 let sql: Promise<SqlJsStatic> | undefined;
 const loadSql = () => (sql ??= initSqlJs());
@@ -80,6 +81,25 @@ describe("read", () => {
   test("rejects paths that do not exist yet", async () => {
     const { tools } = setup();
     await expect(call(tools, "read", { path: "/workspace/package.json" })).rejects.toThrow("No such file");
+  });
+
+  test("reads every template's files, so the agent loads the tested shape", async () => {
+    const { tools } = setup();
+    for (const id of templateChoices.map((choice) => choice.id)) {
+      const files = applyTemplate(cloneStarter(), id).files;
+      for (const name of ["index.html", "app.js", "schema.sql", "actions.json"] as const) {
+        expect(textOf(await call(tools, "read", { path: `/templates/${id}/${name}` })), `${id}/${name}`).toBe(files[name]);
+      }
+    }
+    const ranged = await call(tools, "read", { path: "/templates/webhook/actions.json", offset: 1, limit: 1 });
+    expect(textOf(ranged)).toStartWith("/templates/webhook/actions.json lines 1-1 of");
+  });
+
+  test("names the templates when a template path is wrong, and never writes one", async () => {
+    const { tools, workspace } = setup();
+    await expect(call(tools, "read", { path: "/templates/kanban/app.js" })).rejects.toThrow("tasks, notes, members, form, webhook, digest, gallery");
+    await expect(call(tools, "write", { path: "/templates/form/app.js", content: "x" })).rejects.toThrow();
+    expect(workspace.changedFiles()).toEqual([]);
   });
 });
 
@@ -243,6 +263,28 @@ describe("formatValidation", () => {
       .not.toContain("did not run");
     expect(formatValidation({ ok: true, errors: [], checked: ["schema", "actions"] }))
       .toContain("The migration stage did not run");
+  });
+});
+
+describe("release facts", () => {
+  const route = JSON.stringify({ version: 1, actions: { "orders.receive": { kind: "mutation", access: "anonymous", statement: "INSERT INTO tasks (title) VALUES (?1)", bindings: [{ source: "input", key: "title", type: "string" }], http: { method: "POST", path: "/hooks/orders", signature: { header: "X-Signature", secret: "orders_hook" } } } } });
+
+  test("validate_capsule passes the facts to the Gate, and an unset secret is a warning that names Auth > Integrations", async () => {
+    const workspace = createCapsuleWorkspace({ ...starterProject.files, "actions.json": route });
+    const tools = createCapsuleTools(workspace, createCapsuleValidator(loadSql), { releaseFacts: async () => ({ secrets: [] }) });
+    const result = await call(tools, "validate_capsule", {});
+    expect((result.details as { ok: boolean }).ok).toBe(true);
+    const text = textOf(result);
+    expect(text).toContain("Validation passed");
+    expect(text).toContain("Action orders.receive signs with the secret orders_hook, which is not set for this project. Set it with secret_set before publishing.");
+    expect(text).toContain("Auth > Integrations");
+    expect(text).toContain("Tell the person");
+  });
+
+  test("a fact that cannot be read leaves the Gate silent on it, never blocked", async () => {
+    expect(await readReleaseFacts({})).toEqual({});
+    expect(await readReleaseFacts({ releaseFacts: async () => { throw new Error("signed out"); } })).toEqual({});
+    expect(await readReleaseFacts({ releaseFacts: async () => ({ secrets: [{ name: "a" }] }) })).toEqual({ secrets: [{ name: "a" }] });
   });
 });
 
