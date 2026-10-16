@@ -62,11 +62,12 @@ CREATE TABLE IF NOT EXISTS escalations (
 CREATE TABLE IF NOT EXISTS attachments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
-  file_id TEXT NOT NULL UNIQUE,
+  file_id TEXT NOT NULL,
   name TEXT NOT NULL,
   size INTEGER NOT NULL CHECK (size >= 0),
   public INTEGER NOT NULL DEFAULT 0 CHECK (public IN (0, 1)),
   created_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS attachments_file_id_unique ON attachments(file_id);
 CREATE INDEX IF NOT EXISTS attachments_by_user ON attachments(user_id, id);
 CREATE INDEX IF NOT EXISTS attachments_public ON attachments(public, id);

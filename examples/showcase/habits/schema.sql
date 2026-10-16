@@ -8,13 +8,14 @@ CREATE TABLE IF NOT EXISTS habits (
 CREATE INDEX IF NOT EXISTS habits_by_user ON habits(user_id, archived_at);
 CREATE TABLE IF NOT EXISTS checkins (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  habit_id INTEGER NOT NULL REFERENCES habits(id),
+  habit_id INTEGER NOT NULL,
   user_id TEXT NOT NULL,
   day TEXT NOT NULL CHECK (day GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]' AND date(day) = day),
   device TEXT NOT NULL CHECK (length(device) BETWEEN 1 AND 20),
   created_at INTEGER NOT NULL,
-  UNIQUE (habit_id, day)
+  FOREIGN KEY (habit_id) REFERENCES habits(id) ON UPDATE NO ACTION ON DELETE NO ACTION
 );
+CREATE UNIQUE INDEX IF NOT EXISTS checkins_habit_id_day_unique ON checkins(habit_id, day);
 CREATE INDEX IF NOT EXISTS checkins_by_user ON checkins(user_id, day);
 CREATE TABLE IF NOT EXISTS days (
   user_id TEXT NOT NULL,

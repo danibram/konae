@@ -1699,10 +1699,38 @@ pub(super) fn schema_tokens(db: &Connection) -> Result<Vec<(String, String, Vec<
             }
             at += 1;
         }
-        if kind == "table" { canonicalize_column_order(&mut tokens); }
+        if kind == "table" {
+            drop_checks(&mut tokens);
+            canonicalize_column_order(&mut tokens);
+        }
         result.push((kind, name, tokens));
     }
     Ok(result)
+}
+
+/// A Database Model cannot declare a CHECK: the model guard refuses `sql`, which
+/// Drizzle's `check()` needs. schema.sql may add CHECKs the model never states,
+/// so the comparison leaves out each CHECK group and a CONSTRAINT name before it.
+fn drop_checks(tokens: &mut Vec<String>) {
+    let mut kept = Vec::with_capacity(tokens.len());
+    let mut at = 0;
+    while at < tokens.len() {
+        let named = tokens[at] == "constraint" && tokens.get(at + 2).map(String::as_str) == Some("check");
+        let start = if named { at + 2 } else { at };
+        if tokens[start] == "check" && tokens.get(start + 1).map(String::as_str) == Some("(") {
+            let mut depth = 0;
+            at = start + 1;
+            while at < tokens.len() {
+                match tokens[at].as_str() { "(" => depth += 1, ")" => depth -= 1, _ => {} }
+                at += 1;
+                if depth == 0 { break; }
+            }
+            continue;
+        }
+        kept.push(std::mem::take(&mut tokens[at]));
+        at += 1;
+    }
+    *tokens = kept;
 }
 
 /// ALTER TABLE appends columns even when the model declares them earlier.
@@ -1723,7 +1751,8 @@ fn canonicalize_column_order(tokens: &mut Vec<String>) {
         }
         if depth == 0 || (depth == 1 && tokens[at] == ",") {
             let definition = tokens[start..at].to_vec();
-            if definition.first().is_some_and(|word| ["constraint", "primary", "unique", "check", "foreign"].contains(&word.as_str())) {
+            if definition.is_empty() {}
+            else if definition.first().is_some_and(|word| ["constraint", "primary", "unique", "check", "foreign"].contains(&word.as_str())) {
                 constraints.push(definition);
             } else { columns.push(definition); }
             start = at + 1;
@@ -2496,6 +2525,24 @@ async fn owner_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tokens_of(sql: &str) -> Vec<(String, String, Vec<String>)> {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(sql).unwrap();
+        schema_tokens(&db).unwrap()
+    }
+
+    #[test]
+    fn a_model_matches_a_schema_that_adds_check_constraints() {
+        // What Drizzle derives from a model: it has no way to declare a CHECK.
+        let model = tokens_of("CREATE TABLE `habits` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,\n\t`name` text NOT NULL,\n\t`state` text DEFAULT 'on' NOT NULL\n);");
+        let written = tokens_of("CREATE TABLE IF NOT EXISTS habits (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 60), state TEXT NOT NULL DEFAULT 'on' CHECK (state IN ('on', 'off')), CONSTRAINT short CHECK (length(name) < 99), CHECK (id > 0));");
+        assert_eq!(model, written);
+        let extra = tokens_of("CREATE TABLE habits (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL CHECK (length(name) > 0), state TEXT NOT NULL DEFAULT 'on', extra TEXT);");
+        assert_ne!(model, extra);
+        let nullable = tokens_of("CREATE TABLE habits (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT CHECK (length(name) > 0), state TEXT NOT NULL DEFAULT 'on');");
+        assert_ne!(model, nullable);
+    }
 
     #[tokio::test]
     async fn visitors_cannot_hold_the_transfers_signed_in_users_need() {
