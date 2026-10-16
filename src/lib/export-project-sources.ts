@@ -17,6 +17,8 @@ import kernelEjectSource from "../../kernel-rs/src/eject.rs?raw";
 import kernelFilesSource from "../../kernel-rs/src/files.rs?raw";
 import kernelGuardSource from "../../kernel-rs/src/guard.rs?raw";
 import kernelCallsSource from "../../kernel-rs/src/calls.rs?raw";
+import kernelChecksSource from "../../kernel-rs/src/checks.rs?raw";
+import kernelCheckCarryCases from "../../kernel-rs/src/check-carry-cases.json?raw";
 import kernelCallCases from "../../kernel-rs/src/call-cases.json?raw";
 import kernelGuardCases from "../../kernel-rs/src/guard-cases.json?raw";
 import kernelScheduleSource from "../../kernel-rs/src/schedule.rs?raw";
@@ -70,6 +72,8 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/files.rs", contents: kernelFilesSource },
   { path: "kernel-rs/src/guard.rs", contents: kernelGuardSource },
   { path: "kernel-rs/src/calls.rs", contents: kernelCallsSource },
+  { path: "kernel-rs/src/checks.rs", contents: kernelChecksSource },
+  { path: "kernel-rs/src/check-carry-cases.json", contents: kernelCheckCarryCases },
   { path: "kernel-rs/src/call-cases.json", contents: kernelCallCases },
   { path: "kernel-rs/src/guide.rs", contents: kernelGuideSource },
   { path: "kernel-rs/src/guard-cases.json", contents: kernelGuardCases },
