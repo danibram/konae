@@ -77,11 +77,9 @@ Closed in the second wave:
 
 Open: a migration that recreates a table builds it from the model, so it drops CHECK constraints schema.sql added. Before the second wave such an app could not publish; now it can, so this needs a refusal or a model that can state a CHECK.
 
+Also closed in the second wave: the Kernel runs `release-cases.json` (27 cases, `Rules` injected); `secrets_list` answers `svixKey`, so the editor gives all five publish-time refusals before Deploy; the build agent's Gate gets the release facts, and a refusal the owner must fix is a warning in the agent panel and the workshop footer and stays an error at Deploy (owner decision, 2026-11-08); the agent reads the templates under `/templates`; the new-project dialog shows seven cards and scrolls. After the merge: Kernel 267 passed, `bun test src scripts` 754 passed, all six showcase replays pass.
+
 Next wave:
 
-- Rust runs `kernel-rs/src/release-cases.json`. Today only the Gate reads it, so a Kernel rewording would not fail a test. Inject `Rules` in the test instead of reading `LITTLEBOX_MCP_ORIGIN`, and set each case's secrets with `secret_set`.
-- Release facts reach the build agent's Gate (`harness.ts`, `tools.ts`, `App.tsx`). Decision for the owner: an unset secret cannot be fixed by the agent, so either it blocks the agent's apply or it shows as a warning in the agent panel and stays an error at Deploy.
-- The workshop footer renders a refusal's `detail` and the Integrations button. `ProjectSecret` carries `use`. `.publish-refusal` gets a style.
-- `secrets_list` says whether a svix secret's value decodes as `whsec_`, so the Gate can give the fifth publish-time refusal without seeing the value.
-- The build agent can read the template files. The design-system gallery shows the seven-card dialog, and the dialog body scrolls.
+- A migration that recreates a table keeps the CHECK constraints schema.sql added, or both doors refuse it.
 - Package E, refusal codes (ADR-0020), then the items under "Not in this wave".
