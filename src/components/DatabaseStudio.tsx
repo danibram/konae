@@ -437,12 +437,14 @@ function QueryHistory({ history, onSelect }: { history: Array<{ sql: string; ela
  * doors apply it with (src/lib/carry-checks.ts). The statements the host
  * receives stay Drizzle's, since the host carries them again from its own tables.
  */
-async function carriedPlan(host: DatabaseAdminHost, plan: DatabaseMigrationPlan): Promise<{ plan: DatabaseMigrationPlan & { shownSql: string } } | { error: string }> {
-  const live = await host.runSql("SELECT name, sql FROM sqlite_master WHERE type = 'table' LIMIT 1000");
+async function carriedPlan(host: DatabaseAdminHost, plan: DatabaseMigrationPlan): Promise<{ plan: DatabaseMigrationPlan & { shownSql: string; shownCount: number } } | { error: string }> {
+  // Unread tables show Drizzle's plan; the host carries the CHECKs at apply all the same.
+  const live = await host.runSql("SELECT name, sql FROM sqlite_master WHERE type = 'table' LIMIT 1000").catch(() => null);
+  if (!live) return { plan: { ...plan, shownSql: plan.sql, shownCount: plan.statements.length } };
   const tables = new Map(live.rows.map((row) => [String(row.name).toLowerCase(), String(row.sql ?? "")]));
   const carried = carryChecks(plan.statements, (name) => tables.get(name.toLowerCase()) || null);
   if ("error" in carried) return carried;
-  return { plan: { ...plan, shownSql: carried.statements.join("\n--> statement-breakpoint\n") } };
+  return { plan: { ...plan, shownSql: carried.statements.join("\n--> statement-breakpoint\n"), shownCount: carried.statements.length } };
 }
 
 function SchemaView({ host, tables, databaseModel, onEdit, onApplied }: {
@@ -452,7 +454,7 @@ function SchemaView({ host, tables, databaseModel, onEdit, onApplied }: {
   onEdit: () => void;
   onApplied: (source: string, revision: string) => void | Promise<void>;
 }) {
-  const [plan, setPlan] = useState<(DatabaseMigrationPlan & { shownSql: string }) | null>(null);
+  const [plan, setPlan] = useState<(DatabaseMigrationPlan & { shownSql: string; shownCount: number }) | null>(null);
   const [planning, setPlanning] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState("");
@@ -495,7 +497,7 @@ function SchemaView({ host, tables, databaseModel, onEdit, onApplied }: {
     setError("");
     setMessage("");
     try {
-      const { shownSql: _shown, ...planned } = plan;
+      const { shownSql: _shown, shownCount: _count, ...planned } = plan;
       await host.applyDatabaseMigration({ ...planned, recoveryModelSource: databaseModel.acceptedSource });
       await onApplied(databaseModel.source, plan.toHash);
       setMessage("Migration applied · recovery point created");
@@ -533,7 +535,7 @@ function SchemaView({ host, tables, databaseModel, onEdit, onApplied }: {
       {error && <div className="backup-error" role="alert">{error}</div>}
       {plan ? (
         <section className="migration-plan" aria-label="Migration plan">
-          <header><div><p>DRIZZLE KIT PLAN</p><h4>Migration ready</h4><small>{plan.statements.length} statement{plan.statements.length === 1 ? "" : "s"} · {plan.id.slice(0, 8)}</small></div>{plan.destructive && <strong>OWNER APPROVAL REQUIRED</strong>}</header>
+          <header><div><p>DRIZZLE KIT PLAN</p><h4>Migration ready</h4><small>{plan.shownCount} statement{plan.shownCount === 1 ? "" : "s"} · {plan.id.slice(0, 8)}</small></div>{plan.destructive && <strong>OWNER APPROVAL REQUIRED</strong>}</header>
           <pre><code>{plan.shownSql}</code></pre>
           <footer><span>A backup will be created immediately before apply.</span><button onClick={() => void apply()} disabled={applying || !host.applyDatabaseMigration}>{applying ? "Applying…" : plan.destructive ? "Approve and apply migration" : "Apply migration"}</button></footer>
         </section>
