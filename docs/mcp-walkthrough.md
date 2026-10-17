@@ -100,7 +100,8 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
       "sdk",
       "publishing",
       "users",
-      "portability"
+      "portability",
+      "refusals"
     ],
     "localDevelopment": "Use bun run littlebox -- login, init, dev, build, contract, publish, conform, export or eject; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything.",
     "maxTransferBytes": 33554432,
