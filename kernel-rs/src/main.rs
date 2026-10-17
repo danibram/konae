@@ -31,6 +31,7 @@ mod app_owner;
 mod artifact;
 mod auth;
 mod calls;
+mod checks;
 mod clerk;
 mod copies;
 mod domain;
@@ -2291,18 +2292,29 @@ async fn apply_migration(state: &AppState, id: &str, body: &Value) -> Result<Val
         Some(model) => Some(mcp::model_schema(&model.accepted_source).await?),
         None => None,
     };
+    let mut planned = Vec::with_capacity(statements.len());
+    for statement in statements {
+        let sql = statement
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Migration statement must be text."))?;
+        if sql.len() > 100_000 {
+            anyhow::bail!("Migration statement is too large.");
+        }
+        planned.push(sql.to_owned());
+    }
+    // A rebuilt table keeps the CHECKs schema.sql gave it. Refused before the
+    // backup, so a refused migration leaves no recovery point behind.
+    let statements = {
+        let db = Connection::open(database_path(state, id))?;
+        let live = |name: &str| db.query_row("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1 COLLATE NOCASE", [name], |row| row.get::<_, String>(0)).ok();
+        checks::carry_checks(&planned, live).map_err(anyhow::Error::msg)?
+    };
     let backup = create_backup(state, id, "Before migration").await?;
     {
         let mut db = Connection::open(database_path(state, id))?;
         restrict_database(&db)?;
         let tx = db.transaction()?;
-        for statement in statements {
-            let sql = statement
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("Migration statement must be text."))?;
-            if sql.len() > 100_000 {
-                anyhow::bail!("Migration statement is too large.");
-            }
+        for sql in &statements {
             tx.execute_batch(sql)?;
         }
         if let Some(expected) = &candidate_schema {
@@ -2580,6 +2592,9 @@ struct SqlTok {
     kind: SqlTokKind,
     text: String,
     depth: i32,
+    /// Offsets in chars into the statement, so a reader can quote the token as written.
+    start: usize,
+    end: usize,
 }
 
 impl SqlTok {
@@ -2632,18 +2647,19 @@ fn sql_tokens(sql: &str) -> Vec<SqlTok> {
                 text.push(chars[end]);
                 end += 1;
             }
+            let span_end = (end + 1).min(chars.len());
             tokens.push(if char == '\'' {
-                SqlTok { kind: SqlTokKind::String, text: String::new(), depth }
+                SqlTok { kind: SqlTokKind::String, text: String::new(), depth, start: index, end: span_end }
             } else {
-                SqlTok { kind: SqlTokKind::Ident, text, depth }
+                SqlTok { kind: SqlTokKind::Ident, text, depth, start: index, end: span_end }
             });
-            index = (end + 1).min(chars.len());
+            index = span_end;
             continue;
         }
         if is_sql_word_start(char) {
             let mut end = index + 1;
             while end < chars.len() && is_sql_word_cont(chars[end]) { end += 1; }
-            tokens.push(SqlTok { kind: SqlTokKind::Word, text: chars[index..end].iter().collect(), depth });
+            tokens.push(SqlTok { kind: SqlTokKind::Word, text: chars[index..end].iter().collect(), depth, start: index, end });
             index = end;
             continue;
         }
@@ -2652,7 +2668,7 @@ fn sql_tokens(sql: &str) -> Vec<SqlTok> {
             while end < chars.len() && (chars[end].is_ascii_alphanumeric() || chars[end] == '.' || chars[end] == '_') {
                 end += 1;
             }
-            tokens.push(SqlTok { kind: SqlTokKind::Symbol, text: chars[index..end].iter().collect(), depth });
+            tokens.push(SqlTok { kind: SqlTokKind::Symbol, text: chars[index..end].iter().collect(), depth, start: index, end });
             index = end;
             continue;
         }
@@ -2661,7 +2677,7 @@ fn sql_tokens(sql: &str) -> Vec<SqlTok> {
             continue;
         }
         if char == ')' { depth = (depth - 1).max(0); }
-        tokens.push(SqlTok { kind: SqlTokKind::Symbol, text: char.to_string(), depth });
+        tokens.push(SqlTok { kind: SqlTokKind::Symbol, text: char.to_string(), depth, start: index, end: index + 1 });
         if char == '(' { depth += 1; }
         index += 1;
     }

@@ -11,6 +11,7 @@ import {
 import { parseServerActionSource, resolveServerAction, routeCallers, type ServerActionProgram } from "../kernel/actions";
 import { thenOf } from "../kernel/calls";
 import type { ApplyDatabaseMigrationInput } from "../database-lifecycle/contracts";
+import { carryChecks } from "../lib/carry-checks";
 
 export type StoredFile = {
   id: string;
@@ -318,9 +319,16 @@ export class MiniAppRuntimeHost {
     if (input.statements.length === 0) throw new Error("The migration plan has no statements.");
     const SQL = await loadSqlJs();
     const current = await this.dbPromise;
+    // A rebuilt table keeps the CHECKs schema.sql gave it, as on the Kernel.
+    const carried = carryChecks(input.statements, (name) => {
+      const sql = current.exec("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE", [name])[0]?.values[0]?.[0];
+      return typeof sql === "string" ? sql : null;
+    });
+    if ("error" in carried) throw new Error(carried.error);
+    const statements = carried.statements;
     const clone = new SQL.Database(current.export());
     try {
-      for (const statement of input.statements) clone.run(statement);
+      for (const statement of statements) clone.run(statement);
       const integrity = clone.exec("PRAGMA integrity_check")[0]?.values[0]?.[0];
       if (integrity !== "ok") throw new Error("The migrated database failed SQLite's integrity check.");
     } finally {
@@ -333,7 +341,7 @@ export class MiniAppRuntimeHost {
     });
     current.run("BEGIN IMMEDIATE");
     try {
-      for (const statement of input.statements) current.run(statement);
+      for (const statement of statements) current.run(statement);
       const integrity = current.exec("PRAGMA integrity_check")[0]?.values[0]?.[0];
       if (integrity !== "ok") throw new Error("The migrated database failed SQLite's integrity check.");
       current.run("COMMIT");
