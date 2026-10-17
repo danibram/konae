@@ -358,6 +358,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     }
     tools.extend(super::usage::admin_tools());
     tools.extend(super::calls::admin_tools());
+    tools.extend(super::mail::admin_tools());
     tools.push(tool(
         "signup_policy_read",
         "Read who may create an account on a deployment.",
@@ -1358,6 +1359,10 @@ async fn admin_call(
             let id = a["deploymentId"].as_str().unwrap();
             let deployment = owned_deployment(state, owner, id, if name == "api_keys_list" { "read" } else { "publish" }).await?;
             super::http::api_keys_call(state, &deployment, name, &a).await
+        }
+        "notices_read" => {
+            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "read").await?;
+            super::mail::notices_tool(state, &deployment, &a).await
         }
         "calls_read" => {
             let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "read").await?;

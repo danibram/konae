@@ -1325,15 +1325,21 @@ pub(crate) fn admin_tools() -> Vec<Value> {
     )]
 }
 
-pub(crate) async fn admin_call(state: &AppState, deployment: &Deployment, a: &Value) -> Result<Value> {
-    let before = match a.get("cursor").and_then(Value::as_str) {
-        None => i64::MAX,
+/// The row before which a page starts: `cursor` is the nextCursor of an
+/// earlier page. `notices_read` pages the same way.
+pub(crate) fn page_before(a: &Value) -> Result<i64> {
+    match a.get("cursor").and_then(Value::as_str) {
+        None => Ok(i64::MAX),
         Some(text) => text
             .parse::<i64>()
             .ok()
             .filter(|id| *id > 0)
-            .ok_or_else(|| anyhow::anyhow!("Invalid cursor. Pass back the nextCursor of an earlier page."))?,
-    };
+            .ok_or_else(|| anyhow::anyhow!("Invalid cursor. Pass back the nextCursor of an earlier page.")),
+    }
+}
+
+pub(crate) async fn admin_call(state: &AppState, deployment: &Deployment, a: &Value) -> Result<Value> {
+    let before = page_before(a)?;
     let data_root = state.data_root.clone();
     let id = deployment.id.clone();
     tokio::task::spawn_blocking(move || read_outbox(&data_root, &id, before)).await?
