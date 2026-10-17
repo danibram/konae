@@ -12,7 +12,7 @@
  * localStorage where an older or hand-edited value can turn up.
  */
 
-export type PanelId = "explorer" | "code" | "data" | "files" | "auth" | "preview" | "agent";
+export type PanelId = "explorer" | "code" | "data" | "files" | "auth" | "activity" | "preview" | "agent";
 
 export type StackNode = { type: "stack"; panels: PanelId[]; active: number };
 export type SplitNode = {
@@ -52,7 +52,7 @@ export type Placement = {
 /** A remembered slot, with the placement to restore and, for an edge, the share it had. */
 export type Home = Placement & { size?: number };
 
-export const panelIds: PanelId[] = ["explorer", "code", "data", "files", "auth", "preview", "agent"];
+export const panelIds: PanelId[] = ["explorer", "code", "data", "files", "auth", "activity", "preview", "agent"];
 
 export const panelLabels: Record<PanelId, string> = {
   explorer: "File list",
@@ -60,12 +60,13 @@ export const panelLabels: Record<PanelId, string> = {
   data: "Data",
   files: "Uploads",
   auth: "Auth",
+  activity: "What happened",
   preview: "Preview",
   agent: "Describe",
 };
 
 /** Panels that behave like documents: opening one goes to the focused group. */
-export const editorPanels: PanelId[] = ["code", "data", "files", "auth"];
+export const editorPanels: PanelId[] = ["code", "data", "files", "auth", "activity"];
 
 /** The smallest share a panel may be squeezed to, as a percentage of its split. */
 export const minShare = 8;
@@ -98,7 +99,7 @@ function round(value: number): number {
 export function defaultLayout(): LayoutState {
   return {
     root: split("row", [stack(["preview"]), stack(["agent"])], [64, 36]),
-    closed: ["explorer", "code", "data", "files", "auth"],
+    closed: ["explorer", "code", "data", "files", "auth", "activity"],
     focused: "preview",
   };
 }
