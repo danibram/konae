@@ -6,6 +6,7 @@
  * the cases both test suites run.
  */
 import signaturePresets from "../../kernel-rs/src/signature-presets.json";
+import { joinRefusals, refusal, type RefusalError } from "./refusal";
 
 export type SignatureScheme = "littlebox" | "hmac-body" | "timestamped" | "svix";
 
@@ -72,14 +73,14 @@ function quotedChoices(keys: readonly string[]): string {
  * row spells.
  */
 export function parseRouteSignature(name: string, method: "GET" | "POST", value: unknown): RouteSignature {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Action ${name} has an invalid http binding.`);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw refusal("route.invalid", `Action ${name} has an invalid http binding.`);
   const record = value as Record<string, unknown>;
   if (record.provider === undefined) return parseLongForm(name, method, record);
   const provider = typeof record.provider === "string" && Object.hasOwn(PRESETS, record.provider) ? record.provider : undefined;
-  if (provider === undefined) throw new Error(`Action ${name} names an unknown signature provider. Use ${quotedChoices(PROVIDERS)}.`);
+  if (provider === undefined) throw refusal("signature.provider-unknown", `Action ${name} names an unknown signature provider. Use ${quotedChoices(PROVIDERS)}.`);
   const extra = Object.keys(record).filter((key) => key !== "provider" && key !== "secret").sort();
   if (extra.length > 0) {
-    throw new Error(`Action ${name} names the signature provider "${provider}", so its signature takes only "provider" and "secret". Remove ${quotedList(extra)}.`);
+    throw refusal("signature.provider-extra-keys", `Action ${name} names the signature provider "${provider}", so its signature takes only "provider" and "secret". Remove ${quotedList(extra)}.`);
   }
   return parseLongForm(name, method, { ...PRESETS[provider], ...(record.secret === undefined ? {} : { secret: record.secret }) });
 }
@@ -91,15 +92,15 @@ export function parseRouteSignature(name: string, method: "GET" | "POST", value:
  */
 function parseLongForm(name: string, method: "GET" | "POST", record: Record<string, unknown>): RouteSignature {
   const scheme = record.scheme === undefined ? "littlebox" : SCHEMES.find((candidate) => candidate === record.scheme);
-  if (!scheme) throw new Error(`Action ${name} names an unknown signature scheme. Use "littlebox", "hmac-body", "timestamped" or "svix".`);
-  const problems: string[] = [];
+  if (!scheme) throw refusal("signature.scheme-unknown", `Action ${name} names an unknown signature scheme. Use "littlebox", "hmac-body", "timestamped" or "svix".`);
+  const problems: RefusalError[] = [];
   const keys = SCHEME_KEYS[scheme];
   if (Object.keys(record).some((key) => !keys.includes(key))) {
-    problems.push(`Action ${name} has an invalid ${scheme} signature. It takes ${quotedList(keys)}.`);
+    problems.push(refusal("signature.keys-invalid", `Action ${name} has an invalid ${scheme} signature. It takes ${quotedList(keys)}.`));
   }
   if (method === "GET" && scheme !== "littlebox") {
-    problems.push(`Action ${name} binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body.`);
-    throw new Error(problems.join(" "));
+    problems.push(refusal("signature.provider-on-get", `Action ${name} binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body.`));
+    throw joinRefusals(problems);
   }
   const header =
     scheme === "svix"
@@ -107,34 +108,34 @@ function parseLongForm(name: string, method: "GET" | "POST", record: Record<stri
       : typeof record.header === "string" && SIGNATURE_HEADER.test(record.header) && !UNSIGNABLE_HEADERS.has(record.header.toLowerCase())
         ? record.header
         : undefined;
-  if (header === undefined) problems.push(`Action ${name} has an invalid signature header.`);
+  if (header === undefined) problems.push(refusal("signature.header-invalid", `Action ${name} has an invalid signature header.`));
   const secret = typeof record.secret === "string" && SECRET_NAME.test(record.secret) ? record.secret : undefined;
-  if (secret === undefined) problems.push(`Action ${name} names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter.`);
+  if (secret === undefined) problems.push(refusal("signature.secret-invalid", `Action ${name} names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter.`));
   let settings: Omit<RouteSignature, "header" | "secret"> = {};
   if (scheme === "hmac-body") {
     const { algorithm, encoding, prefix } = record;
-    if (algorithm !== "sha256" && algorithm !== "sha1") problems.push(`Action ${name} has an invalid signature algorithm. Use "sha256" or "sha1".`);
-    if (encoding !== "hex" && encoding !== "base64") problems.push(`Action ${name} has an invalid signature encoding. Use "hex" or "base64".`);
+    if (algorithm !== "sha256" && algorithm !== "sha1") problems.push(refusal("signature.algorithm-invalid", `Action ${name} has an invalid signature algorithm. Use "sha256" or "sha1".`));
+    if (encoding !== "hex" && encoding !== "base64") problems.push(refusal("signature.encoding-invalid", `Action ${name} has an invalid signature encoding. Use "hex" or "base64".`));
     if (prefix !== undefined && (typeof prefix !== "string" || !BODY_PREFIX.test(prefix))) {
-      problems.push(`Action ${name} has an invalid signature prefix. Use 1 to 32 letters, digits, "=", "-", "_", "." or ":", such as "sha256=".`);
+      problems.push(refusal("signature.prefix-invalid", `Action ${name} has an invalid signature prefix. Use 1 to 32 letters, digits, "=", "-", "_", "." or ":", such as "sha256=".`));
     }
     settings = { scheme, algorithm: algorithm as "sha256" | "sha1", encoding: encoding as "hex" | "base64", ...(prefix === undefined ? {} : { prefix: prefix as string }) };
   } else if (scheme === "timestamped") {
     const { prefix, tag, window } = record;
     if (typeof prefix !== "string" || !FIELD_PREFIX.test(prefix)) {
-      problems.push(`Action ${name} has an invalid timestamp prefix. Use the field's name and "=", such as "t=".`);
+      problems.push(refusal("signature.timestamp-prefix-invalid", `Action ${name} has an invalid timestamp prefix. Use the field's name and "=", such as "t=".`));
     }
     if (typeof tag !== "string" || !FIELD_PREFIX.test(tag) || tag === prefix) {
-      problems.push(`Action ${name} has an invalid signature tag. Use the field's name and "=", such as "v1=", other than the timestamp's.`);
+      problems.push(refusal("signature.tag-invalid", `Action ${name} has an invalid signature tag. Use the field's name and "=", such as "v1=", other than the timestamp's.`));
     }
     if (typeof window !== "number" || !Number.isInteger(window) || window < 1 || window > MAX_WINDOW) {
-      problems.push(`Action ${name} has an invalid signature window. Use a whole number of seconds from 1 to 3600.`);
+      problems.push(refusal("signature.window-invalid", `Action ${name} has an invalid signature window. Use a whole number of seconds from 1 to 3600.`));
     }
     settings = { scheme, prefix: prefix as string, tag: tag as string, window: window as number };
   } else if (scheme === "svix") {
     settings = { scheme };
   }
-  if (problems.length > 0 || header === undefined || secret === undefined) throw new Error(problems.join(" "));
+  if (problems.length > 0 || header === undefined || secret === undefined) throw joinRefusals(problems);
   const { scheme: named, ...rest } = settings;
   return named === undefined ? { header, secret } : { scheme: named, header, secret, ...rest };
 }
@@ -154,18 +155,18 @@ export function jsonPathSteps(path: string): Array<string | number> | null {
 
 /** Parses a route's `fields`, input keys in sorted order, each one of the action's input bindings and mapped to a JSON path. */
 export function parseRouteFields(name: string, method: "GET" | "POST", inputs: ReadonlySet<string>, value: unknown): Record<string, string> {
-  if (method === "GET") throw new Error(`Action ${name} binds GET, so it cannot declare fields. Fields read a POST body.`);
+  if (method === "GET") throw refusal("route.fields-on-get", `Action ${name} binds GET, so it cannot declare fields. Fields read a POST body.`);
   const count = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value).length : 0;
   if (count < 1 || count > MAX_FIELDS) {
-    throw new Error(`Action ${name} has an invalid fields map. Map 1 to 32 input keys to JSON paths, such as "$.data.object.id".`);
+    throw refusal("route.fields-invalid", `Action ${name} has an invalid fields map. Map 1 to 32 input keys to JSON paths, such as "$.data.object.id".`);
   }
   const record = value as Record<string, unknown>;
   const fields: Record<string, string> = {};
   for (const key of Object.keys(record).sort()) {
-    if (!inputs.has(key)) throw new Error(`Action ${name} maps ${key}, which is not one of its input bindings.`);
+    if (!inputs.has(key)) throw refusal("route.field-unbound", `Action ${name} maps ${key}, which is not one of its input bindings.`);
     const path = record[key];
     if (typeof path !== "string" || !jsonPathSteps(path)) {
-      throw new Error(`Action ${name} maps ${key} to an invalid JSON path. Use "$" and then ".name" or "[index]" steps, such as "$.data.object.id".`);
+      throw refusal("route.field-path-invalid", `Action ${name} maps ${key} to an invalid JSON path. Use "$" and then ".name" or "[index]" steps, such as "$.data.object.id".`);
     }
     fields[key] = path;
   }

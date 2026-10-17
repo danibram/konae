@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolResult, ExecutionEnv, FileError, FileSystem, Result, Shell } from "@earendil-works/pi-agent-core";
+import type { RefusalCode, RefusalHint } from "../kernel/refusal";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ProjectFile } from "../lib/types";
 import type { ReleaseFacts } from "./release-check";
@@ -75,6 +76,9 @@ export type ValidationError = {
   stage: ValidationStage;
   message: string;
   detail?: string;
+  /** The Kernel's code for a refused Capsule, and who fixes it (ADR-0020). */
+  code?: RefusalCode;
+  hint?: RefusalHint;
 };
 
 /** A finding that does not block the change. */
@@ -84,6 +88,8 @@ export type ValidationWarning = {
   detail?: string;
   /** The owner clears it outside the files, in Auth > Integrations; Deploy refuses until then. */
   owner?: true;
+  code?: RefusalCode;
+  hint?: RefusalHint;
 };
 
 export type ValidationResult = {

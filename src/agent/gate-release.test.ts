@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import initSqlJs from "sql.js";
 import { parseServerActionSource } from "../kernel/actions";
 import type { DomainRules } from "../lib/domain-name";
-import { createCapsuleValidator, refusalNeedsSecret, releaseRefusal, type ReleaseFacts } from "./gate";
+import { createCapsuleValidator, ownerFixes, releaseRefusal, type ReleaseFacts } from "./gate";
+import { expectedOutcome } from "../kernel/refusal-cases";
 
-type Case = { case: string; actions: Record<string, unknown>; secrets: NonNullable<ReleaseFacts["secrets"]>; error: string | null };
+type Case = { case: string; actions: Record<string, unknown>; secrets: NonNullable<ReleaseFacts["secrets"]>; error: string | null; code?: string };
 const file: { rules: DomainRules; cases: Case[] } = await Bun.file(new URL("../../kernel-rs/src/release-cases.json", import.meta.url)).json();
 
 const schema = "CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, external_id TEXT);";
@@ -20,15 +21,16 @@ describe("the release plan at the editor's door", () => {
     expect(file.cases.length).toBeGreaterThanOrEqual(20);
     for (const item of file.cases) {
       const program = parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
-      expect(releaseRefusal(program, { secrets: item.secrets, rules: file.rules }), item.case).toEqual(item.error);
+      const refused = releaseRefusal(program, { secrets: item.secrets, rules: file.rules });
+      expect(refused && { code: refused.code, message: refused.message }, item.case).toEqual(expectedOutcome(item));
     }
   });
 
   test("the Validation Gate gives every case the Kernel's words when it knows the facts", async () => {
     for (const item of file.cases) {
       const result = await validator.validate(capsule(item.actions), { state: "absent" }, { secrets: item.secrets, rules: file.rules });
-      const said = [...result.errors.map((error) => error.message), ...(result.warnings ?? []).map((warning) => warning.message)];
-      expect(said, item.case).toEqual(item.error === null ? [] : [item.error]);
+      const said = [...result.errors, ...(result.warnings ?? [])].map((finding) => ({ code: finding.code, message: finding.message }));
+      expect(said, item.case).toEqual(item.error === null ? [] : [expectedOutcome(item)]);
     }
   });
 
@@ -39,11 +41,14 @@ describe("the release plan at the editor's door", () => {
     for (const item of file.cases) {
       if (item.error === null) continue;
       const result = await validator.validate(capsule(item.actions), { state: "absent" }, { secrets: item.secrets, rules: file.rules });
-      if (refusalNeedsSecret(item.error)) {
+      if (ownerFixes(item.code)) {
         owner += 1;
         expect(result.ok, item.case).toBe(true);
         expect(result.errors, item.case).toEqual([]);
-        expect(result.warnings, item.case).toEqual([{ stage: "actions", message: item.error, detail: "Deploy refuses this until the owner sets the secret in Auth > Integrations. No edit to the files clears it.", owner: true }]);
+        expect(result.warnings, item.case).toEqual([{
+          stage: "actions", message: item.error, detail: "Deploy refuses this until the owner sets the secret in Auth > Integrations. No edit to the files clears it.", owner: true,
+          code: item.code as never, hint: expect.objectContaining({ fix: "owner", tool: "secret_set" }),
+        }]);
       } else {
         expect(result.ok, item.case).toBe(false);
         expect(result.warnings, item.case).toBeUndefined();

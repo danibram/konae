@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { actionDeclarations, parseServerActionSource, resolveServerAction } from "./actions";
+import { expectedOutcome, outcomeOf } from "./refusal-cases";
 
 const source = JSON.stringify({
   version: 1,
@@ -144,17 +145,11 @@ describe("server actions", () => {
 describe("action shape", () => {
   // kernel-rs/src/action_shape.rs runs the same cases against the Kernel's parser.
   test("refuses the same names, access, kinds, bindings and sizes as the Kernel, with the same messages", async () => {
-    const cases: { case: string; actions: Record<string, unknown>; error: string | null }[] =
+    const cases: { case: string; actions: Record<string, unknown>; error: string | null; code?: string }[] =
       await Bun.file(new URL("../../kernel-rs/src/action-cases.json", import.meta.url)).json();
     expect(cases.length).toBeGreaterThanOrEqual(25);
     for (const item of cases) {
-      let message: string | null = null;
-      try {
-        parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
-      } catch (error) {
-        message = (error as Error).message;
-      }
-      expect(message, item.case).toBe(item.error);
+      expect(outcomeOf(() => parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }))), item.case).toEqual(expectedOutcome(item));
     }
   });
 
@@ -168,13 +163,11 @@ describe("action shape", () => {
 describe("http bindings", () => {
   // kernel-rs/src/http.rs runs the same cases against the Kernel's parser.
   test("refuse the same declarations as the Kernel, with the same messages", async () => {
-    const cases: { case: string; actions: Record<string, unknown>; error: string | null }[] =
+    const cases: { case: string; actions: Record<string, unknown>; error: string | null; code?: string }[] =
       await Bun.file(new URL("../../kernel-rs/src/http-binding-cases.json", import.meta.url)).json();
     expect(cases.length).toBeGreaterThan(15);
     for (const item of cases) {
-      const parse = () => parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
-      if (item.error === null) expect(parse, item.case).not.toThrow();
-      else expect(parse, item.case).toThrow(item.error);
+      expect(outcomeOf(() => parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }))), item.case).toEqual(expectedOutcome(item));
     }
   });
 
@@ -194,13 +187,11 @@ describe("http bindings", () => {
 describe("signals", () => {
   // kernel-rs/src/usage.rs runs the same cases against the Kernel's parser.
   test("refuse the same declarations as the Kernel, with the same messages", async () => {
-    const cases: { case: string; actions: Record<string, unknown>; error: string | null }[] =
+    const cases: { case: string; actions: Record<string, unknown>; error: string | null; code?: string }[] =
       await Bun.file(new URL("../../kernel-rs/src/signal-cases.json", import.meta.url)).json();
     expect(cases.length).toBeGreaterThan(15);
     for (const item of cases) {
-      const parse = () => parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
-      if (item.error === null) expect(parse, item.case).not.toThrow();
-      else expect(parse, item.case).toThrow(item.error);
+      expect(outcomeOf(() => parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }))), item.case).toEqual(expectedOutcome(item));
     }
   });
 
@@ -231,17 +222,11 @@ describe("signals", () => {
 describe("schedules", () => {
   // kernel-rs/src/schedule.rs runs the same cases against the Kernel's parser.
   test("refuse the same declarations as the Kernel, with the same messages", async () => {
-    const cases: { case: string; actions: Record<string, unknown>; error: string | null }[] =
+    const cases: { case: string; actions: Record<string, unknown>; error: string | null; code?: string }[] =
       await Bun.file(new URL("../../kernel-rs/src/schedule-cases.json", import.meta.url)).json();
     expect(cases.length).toBeGreaterThanOrEqual(20);
     for (const item of cases) {
-      let message: string | null = null;
-      try {
-        parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
-      } catch (error) {
-        message = (error as Error).message;
-      }
-      expect(message, item.case).toBe(item.error);
+      expect(outcomeOf(() => parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }))), item.case).toEqual(expectedOutcome(item));
     }
   });
 
@@ -257,17 +242,11 @@ describe("schedules", () => {
 describe("guards", () => {
   // kernel-rs/src/guard.rs runs the same cases against the Kernel's parser.
   test("refuse the same declarations as the Kernel, with the same messages", async () => {
-    const cases: { case: string; actions: Record<string, unknown>; error: string | null }[] =
+    const cases: { case: string; actions: Record<string, unknown>; error: string | null; code?: string }[] =
       await Bun.file(new URL("../../kernel-rs/src/guard-cases.json", import.meta.url)).json();
     expect(cases.length).toBeGreaterThanOrEqual(8);
     for (const item of cases) {
-      let message: string | null = null;
-      try {
-        parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
-      } catch (error) {
-        message = (error as Error).message;
-      }
-      expect(message, item.case).toBe(item.error);
+      expect(outcomeOf(() => parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }))), item.case).toEqual(expectedOutcome(item));
     }
   });
 
@@ -283,17 +262,11 @@ describe("guards", () => {
 describe("notify", () => {
   // kernel-rs/src/notify.rs runs the same cases against the Kernel's parser.
   test("refuse the same declarations as the Kernel, with the same messages", async () => {
-    const cases: { case: string; actions: Record<string, unknown>; error: string | null }[] =
+    const cases: { case: string; actions: Record<string, unknown>; error: string | null; code?: string }[] =
       await Bun.file(new URL("../../kernel-rs/src/notify-cases.json", import.meta.url)).json();
     expect(cases.length).toBeGreaterThanOrEqual(15);
     for (const item of cases) {
-      let message: string | null = null;
-      try {
-        parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
-      } catch (error) {
-        message = (error as Error).message;
-      }
-      expect(message, item.case).toBe(item.error);
+      expect(outcomeOf(() => parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }))), item.case).toEqual(expectedOutcome(item));
     }
   });
 

@@ -262,7 +262,7 @@ function defineTool<T extends TSchema, D>(definition: AgentTool<T, D>): AgentToo
 
 export function formatValidation(validation: ValidationResult): string {
   const warnings = (validation.warnings ?? []).map((warning) => {
-    const detail = warning.detail ? `\n  ${warning.detail}` : "";
+    const detail = (warning.detail ? `\n  ${warning.detail}` : "") + refusalLine(warning);
     const owner = warning.owner ? " Tell the person which secret to set and that they set it in Auth > Integrations; Apply does not wait for it." : "";
     return `\n- [${warning.stage}] Warning: ${warning.message}${detail}${owner}`;
   }).join("");
@@ -273,10 +273,15 @@ export function formatValidation(validation: ValidationResult): string {
     return `Validation passed: schema, server actions and bindings are consistent.${skipped}${warnings}`;
   }
   const lines = validation.errors.map((error) => {
-    const detail = error.detail ? `\n  ${error.detail}` : "";
+    const detail = (error.detail ? `\n  ${error.detail}` : "") + refusalLine(error);
     return `- [${error.stage}] ${error.message}${detail}`;
   });
   return `Validation failed with ${validation.errors.length} problem${validation.errors.length === 1 ? "" : "s"}:\n${lines.join("\n")}${warnings}`;
+}
+
+/** The Kernel's code for a refused Capsule and its remedy (ADR-0020), so the agent can name the rule. */
+function refusalLine(finding: { code?: string; hint?: { remedy: string } }): string {
+  return finding.code ? `\n  Code ${finding.code}: ${finding.hint?.remedy ?? ""}`.trimEnd() : "";
 }
 
 function requireCapsuleFile(path: string): ProjectFile {
