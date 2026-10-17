@@ -79,7 +79,9 @@ Open: a migration that recreates a table builds it from the model, so it drops C
 
 Also closed in the second wave: the Kernel runs `release-cases.json` (27 cases, `Rules` injected); `secrets_list` answers `svixKey`, so the editor gives all five publish-time refusals before Deploy; the build agent's Gate gets the release facts, and a refusal the owner must fix is a warning in the agent panel and the workshop footer and stays an error at Deploy (owner decision, 2026-11-08); the agent reads the templates under `/templates`; the new-project dialog shows seven cards and scrolls. After the merge: Kernel 267 passed, `bun test src scripts` 754 passed, all six showcase replays pass.
 
+Closed in the third wave: a migration that rebuilds a table carries the CHECKs schema.sql added, and a change that removes a column a CHECK names is refused at both doors (`schema.check-names-removed-column`); rebuilds now run on a deployment. Package E landed: 113 codes in `kernel-rs/src/refusal-codes.json`, every refusal case carries one, both runners check code and sentence, MCP answers `structuredContent.error`, and `platform_guide` has a `refusals` topic. ADR-0020 is accepted. After the merge: Kernel 275 passed, `bun test src scripts` 764 passed, all six showcase replays pass.
+
 Next wave:
 
-- A migration that recreates a table keeps the CHECK constraints schema.sql added, or both doors refuse it.
-- Package E, refusal codes (ADR-0020), then the items under "Not in this wave".
+- The migration refusal carries its code through `schema_apply` and the Database Studio, as Capsule refusals do; today only the case file names it.
+- The items under "Not in this wave": `{changes}` and `{kernel.now}` placeholders and `to` naming a column of account IDs for notices; a "What happened" owner view over notices, calls and scheduled runs; splitting CONTEXT.md and the agent prompt into author and maintainer parts.

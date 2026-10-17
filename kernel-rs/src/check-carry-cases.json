@@ -76,7 +76,8 @@
    "PRAGMA foreign_keys=ON;"
   ],
   "expected": null,
-  "error": "Table habits has a CHECK that names column note, which this migration removes. Rebuild habits without that CHECK in the SQL console, or keep note, then apply the migration again."
+  "error": "Table habits has a CHECK that names column note, which this migration removes. Rebuild habits without that CHECK in the SQL console, or keep note, then apply the migration again.",
+  "code": "schema.check-names-removed-column"
  },
  {
   "case": "another column's CHECK that names a removed column in brackets is refused",
@@ -92,7 +93,8 @@
    "PRAGMA foreign_keys=ON;"
   ],
   "expected": null,
-  "error": "Table habits has a CHECK that names column note, which this migration removes. Rebuild habits without that CHECK in the SQL console, or keep note, then apply the migration again."
+  "error": "Table habits has a CHECK that names column note, which this migration removes. Rebuild habits without that CHECK in the SQL console, or keep note, then apply the migration again.",
+  "code": "schema.check-names-removed-column"
  },
  {
   "case": "dropping a column a table CHECK names is refused",
@@ -103,7 +105,8 @@
    "ALTER TABLE `habits` DROP COLUMN `note`;"
   ],
   "expected": null,
-  "error": "Table habits has a CHECK that names column note, which this migration removes. Rebuild habits without that CHECK in the SQL console, or keep note, then apply the migration again."
+  "error": "Table habits has a CHECK that names column note, which this migration removes. Rebuild habits without that CHECK in the SQL console, or keep note, then apply the migration again.",
+  "code": "schema.check-names-removed-column"
  },
  {
   "case": "dropping a column that only its own CHECK names runs as planned",

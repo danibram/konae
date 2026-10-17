@@ -96,6 +96,7 @@
   "schedule.too-often": { "fix": "capsule", "remedy": "Run every 5 minutes or less often." },
   "schedule.too-rare": { "fix": "capsule", "remedy": "Use \"daily\" or a period of 24 hours or less." },
 
+  "schema.check-names-removed-column": { "fix": "capsule", "remedy": "Keep the column in schema.ts, or rebuild the table without that CHECK in the SQL console, then apply the migration again." },
   "schema.statement-refused": { "fix": "capsule", "remedy": "Keep only CREATE TABLE and CREATE INDEX in schema.sql. Rows change through mutations." },
 
   "signal.invalid": { "fix": "capsule", "remedy": "Give signal a \"name\" and optionally a \"properties\" list of input keys." },
