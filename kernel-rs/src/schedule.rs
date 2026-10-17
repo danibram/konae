@@ -32,6 +32,7 @@
 //! order with the same messages, and kernel-rs/src/schedule-cases.json holds
 //! the cases both test suites run.
 
+use super::refusal::{refuse, Refusal};
 use super::{usage, ActionDefinition, ActionProgram, AppState};
 use rusqlite::types::Value as SqlValue;
 use serde_json::{json, Value};
@@ -122,22 +123,22 @@ impl Clock {
 }
 
 /// Parses and checks one action's `schedule` key. `Ok(None)` when it has none.
-pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Option<Schedule>, String> {
+pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Option<Schedule>, Refusal> {
     let Some(value) = action.schedule.as_ref() else { return Ok(None) };
     // Each message is written out so src/sdk/contract.test.ts finds it.
     if action.kind == "query" {
-        return Err(format!("Action {name} is a query, so it cannot declare a schedule. Declare it on a mutation."));
+        return Err(refuse("schedule.not-mutation", format!("Action {name} is a query, so it cannot declare a schedule. Declare it on a mutation.")));
     }
     if action.kind != "mutation" {
-        return Err(format!("Action {name} is a signal action, so it cannot declare a schedule. Declare it on a mutation."));
+        return Err(refuse("schedule.not-mutation", format!("Action {name} is a signal action, so it cannot declare a schedule. Declare it on a mutation.")));
     }
     if action.bindings.iter().any(|binding| binding.source == "input") {
-        return Err(format!(
+        return Err(refuse("schedule.input", format!(
             "Action {name} declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values."
-        ));
+        )));
     }
     let invalid = || {
-        format!(r#"Action {name} has an invalid schedule. Declare "every" with minutes or hours, such as "15m" or "6h", or "daily" with a UTC time, such as "02:00"."#)
+        refuse("schedule.invalid", format!(r#"Action {name} has an invalid schedule. Declare "every" with minutes or hours, such as "15m" or "6h", or "daily" with a UTC time, such as "02:00"."#))
     };
     let record = value.as_object().filter(|record| record.len() == 1).ok_or_else(invalid)?;
     let (key, text) = record.iter().next().map(|(key, text)| (key.as_str(), text.as_str())).ok_or_else(invalid)?;
@@ -154,10 +155,10 @@ pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Optio
             }
             let minutes = digits.parse::<u64>().map_err(|_| invalid())? * if unit == "h" { 60 } else { 1 };
             if minutes < MIN_MINUTES {
-                return Err(format!(r#"Action {name} runs every {text}, more often than every 5 minutes. Use "5m" or longer."#));
+                return Err(refuse("schedule.too-often", format!(r#"Action {name} runs every {text}, more often than every 5 minutes. Use "5m" or longer."#)));
             }
             if minutes > MAX_MINUTES {
-                return Err(format!(r#"Action {name} runs every {text}, less often than once a day. Use "daily" or a period of 24 hours or less."#));
+                return Err(refuse("schedule.too-rare", format!(r#"Action {name} runs every {text}, less often than once a day. Use "daily" or a period of 24 hours or less."#)));
             }
             Ok(Some(Schedule::Every { minutes }))
         }
@@ -170,7 +171,7 @@ pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Optio
             };
             match time {
                 Some((hour, minute)) if hour < 24 && minute < 60 => Ok(Some(Schedule::Daily { minute_of_day: hour * 60 + minute })),
-                _ => Err(format!("Action {name} has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59.")),
+                _ => Err(refuse("schedule.daily-invalid", format!("Action {name} has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59."))),
             }
         }
         _ => Err(invalid()),
@@ -178,11 +179,11 @@ pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Optio
 }
 
 /// Refuses `subscribe` on any action: the Kernel pushes nothing to a page.
-pub(crate) fn check_subscribe(name: &str, action: &ActionDefinition) -> Result<(), String> {
+pub(crate) fn check_subscribe(name: &str, action: &ActionDefinition) -> Result<(), Refusal> {
     if action.subscribe.is_some() {
-        return Err(format!(
+        return Err(refuse("action.subscribe-unsupported", format!(
             "Action {name} declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead."
-        ));
+        )));
     }
     Ok(())
 }
@@ -333,10 +334,7 @@ mod tests {
             let mut names = program.actions.keys().collect::<Vec<_>>();
             names.sort();
             let outcome = names.into_iter().try_for_each(|name| crate::validate_action(name, &program.actions[name]));
-            match case["error"].as_str() {
-                None => assert_eq!(outcome, Ok(()), "{}", case["case"]),
-                Some(message) => assert_eq!(outcome, Err(message.to_owned()), "{}", case["case"]),
-            }
+            crate::refusal::assert_case(&case, outcome);
         }
     }
 

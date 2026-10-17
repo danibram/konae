@@ -49,6 +49,7 @@ mod oauth;
 mod package;
 mod provider;
 mod recovery;
+mod refusal;
 mod schedule;
 mod security;
 mod sql_rules;
@@ -558,13 +559,16 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
     if program.version != 1 {
         return error(StatusCode::BAD_REQUEST, "Unsupported actions.json version.");
     }
-    if let Err(message) = action_shape::check_program(&program) {
-        return error(StatusCode::BAD_REQUEST, &message);
+    if let Err(refused) = action_shape::check_program(&program) {
+        return refusal_error(&refused);
     }
     if let Err(error_value) = mcp::store(&state).and_then(|db| {
         calls::check_release(&domain::Rules::of(&state), &db, &input.project.id, &program)
     }) {
-        return error(StatusCode::BAD_REQUEST, &error_value.to_string());
+        return match refusal::of(&error_value) {
+            Some(refused) => refusal_error(refused),
+            None => error(StatusCode::BAD_REQUEST, &error_value.to_string()),
+        };
     }
     if !input.artifact.files.keys().all(|path| safe_relative_path(path)) {
         return error(
@@ -572,8 +576,11 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             "Artifact contains an invalid path.",
         );
     }
-    if let Err(message) = artifact::check_routing(&input.project.manifest).and_then(|_| calls::check_connects(&input.project.manifest)) {
+    if let Err(message) = artifact::check_routing(&input.project.manifest) {
         return error(StatusCode::BAD_REQUEST, &message);
+    }
+    if let Err(refused) = calls::check_connects(&input.project.manifest) {
+        return refusal_error(&refused);
     }
     let artifact_files = match artifact::decode(&input.artifact) {
         Ok(files) => files,
@@ -2454,12 +2461,12 @@ fn resolve_bindings(
         .collect()
 }
 
-fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result<(), String> {
+fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result<(), refusal::Refusal> {
     validate_declarations(name, action)?;
     action_shape::check_keys(name, action)
 }
 
-fn validate_declarations(name: &str, action: &ActionDefinition) -> std::result::Result<(), String> {
+fn validate_declarations(name: &str, action: &ActionDefinition) -> std::result::Result<(), refusal::Refusal> {
     action_shape::check_action(name, action)?;
     if calls::check_kind(name, action)?.is_some() {
         return Ok(());
@@ -2477,8 +2484,9 @@ fn validate_declarations(name: &str, action: &ActionDefinition) -> std::result::
     sql_rules::check_statement(name, action)?;
     if action.kind == "query" {
         if let Some(reason) = unbounded_query_reason(&action.statement) {
-            return Err(format!(
-                "Action {name} {reason} Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+            return Err(refusal::refuse(
+                "query.limit-missing",
+                format!("Action {name} {reason} Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."),
             ));
         }
     }
@@ -3403,6 +3411,12 @@ fn error(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({"error": message}))).into_response()
 }
 
+/// A refused Capsule: `error` stays the sentence clients read, and `code` and
+/// `hint` sit beside it (ADR-0020).
+fn refusal_error(refused: &refusal::Refusal) -> Response {
+    (StatusCode::BAD_REQUEST, Json(json!({"error": refused.message, "code": refused.code, "hint": refused.hint()}))).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3525,6 +3539,7 @@ mod tests {
         assert!(validate_action("tasks.delete", &granted).is_err());
         assert!(validate_action("tasks.list", &action("query", "SELECT id FROM tasks", vec![]))
             .unwrap_err()
+            .message
             .contains("reads rows and has no LIMIT"));
         assert!(validate_action("tasks.list", &action("query", "SELECT id FROM tasks WHERE title = 'LIMIT 5'", vec![])).is_err());
         assert!(validate_action("tasks.count", &action("query", "SELECT count(*) AS n FROM tasks", vec![])).is_ok());

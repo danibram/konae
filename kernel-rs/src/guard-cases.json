@@ -93,7 +93,8 @@
     "guard": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
    }
   },
-  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line."
+  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line.",
+  "code": "guard.invalid"
  },
  {
   "case": "an empty guard",
@@ -117,7 +118,8 @@
     "guard": ""
    }
   },
-  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line."
+  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line.",
+  "code": "guard.invalid"
  },
  {
   "case": "a guard of spaces",
@@ -141,7 +143,8 @@
     "guard": "   "
    }
   },
-  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line."
+  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line.",
+  "code": "guard.invalid"
  },
  {
   "case": "a guard on two lines",
@@ -165,7 +168,8 @@
     "guard": "Only an organizer\ncan promote."
    }
   },
-  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line."
+  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line.",
+  "code": "guard.invalid"
  },
  {
   "case": "a guard that is not a string",
@@ -189,7 +193,8 @@
     "guard": true
    }
   },
-  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line."
+  "error": "Action members.promote has an invalid guard. Use a message of 1 to 200 characters on one line.",
+  "code": "guard.invalid"
  },
  {
   "case": "a guard on a query",
@@ -202,7 +207,8 @@
     "guard": "Nothing to list."
    }
   },
-  "error": "Action members.list is a query, so it cannot declare a guard. Declare it on a mutation."
+  "error": "Action members.list is a query, so it cannot declare a guard. Declare it on a mutation.",
+  "code": "guard.not-mutation"
  },
  {
   "case": "a guard on a signal action",
@@ -217,7 +223,8 @@
     "guard": "Not seen."
    }
   },
-  "error": "Action members.seen is a signal action, so it cannot declare a guard. Declare it on a mutation."
+  "error": "Action members.seen is a signal action, so it cannot declare a guard. Declare it on a mutation.",
+  "code": "guard.not-mutation"
  },
  {
   "case": "a guard with a signal and a route",

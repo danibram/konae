@@ -6,6 +6,7 @@
 //! A statement is read with the tokenizer in main.rs, so a keyword or a `;`
 //! inside a string, a quoted name or a comment never counts.
 
+use super::refusal::{refuse, Refusal};
 use super::{sql_tokens, ActionDefinition, SqlTok, SqlTokKind};
 
 const MUTATION_WORDS: [&str; 4] = ["INSERT", "UPDATE", "DELETE", "REPLACE"];
@@ -13,7 +14,7 @@ const STRUCTURE_WORDS: [&str; 3] = ["CREATE", "ALTER", "DROP"];
 
 /// The first keyword, one statement, and no RETURNING on a mutation. A
 /// signal action has no statement and is not checked here.
-pub(super) fn check_statement(name: &str, action: &ActionDefinition) -> Result<(), String> {
+pub(super) fn check_statement(name: &str, action: &ActionDefinition) -> Result<(), Refusal> {
     let tokens = sql_tokens(&action.statement);
     let first = tokens
         .iter()
@@ -26,13 +27,13 @@ pub(super) fn check_statement(name: &str, action: &ActionDefinition) -> Result<(
     }
     if let Some(end) = tokens.iter().position(|token| token.is_symbol(";")) {
         if end + 1 < tokens.len() {
-            return Err(format!("Action {name} must contain one statement."));
+            return Err(refuse("statement.several", format!("Action {name} must contain one statement.")));
         }
     }
     if action.kind == "mutation" && returns_rows(&tokens) {
-        return Err(format!(
+        return Err(refuse("mutation.returning", format!(
             "Action {name} cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows."
-        ));
+        )));
     }
     Ok(())
 }
@@ -40,7 +41,7 @@ pub(super) fn check_statement(name: &str, action: &ActionDefinition) -> Result<(
 /// The refusal for a statement that starts with the wrong word, with a hint
 /// for the two mistakes the showcase apps made: a leading WITH, and schema
 /// work written as an action.
-fn first_word_refusal(name: &str, kind: &str, first: &str) -> String {
+fn first_word_refusal(name: &str, kind: &str, first: &str) -> Refusal {
     let rule = if kind == "query" {
         format!("Action {name} is a query, so it must start with SELECT.")
     } else {
@@ -54,7 +55,8 @@ fn first_word_refusal(name: &str, kind: &str, first: &str) -> String {
         }
         _ => "",
     };
-    format!("{rule}{hint}")
+    let code = if kind == "query" { "query.start" } else { "mutation.start" };
+    refuse(code, format!("{rule}{hint}"))
 }
 
 /// A RETURNING keyword outside parentheses. `:returning`, `@returning` and
@@ -100,10 +102,10 @@ pub(super) fn refused_schema_statements(schema: &str) -> Vec<String> {
 }
 
 /// The refusal for a schema with statements the Kernel will not apply.
-pub(super) fn schema_refusal(schema: &str) -> Option<String> {
+pub(super) fn schema_refusal(schema: &str) -> Option<Refusal> {
     let refused = refused_schema_statements(schema);
     (!refused.is_empty())
-        .then(|| format!("schema.sql may only create tables and indexes, but it contains {}.", refused.join(", ")))
+        .then(|| refuse("schema.statement-refused", format!("schema.sql may only create tables and indexes, but it contains {}.", refused.join(", "))))
 }
 
 /// Splits a script on `;`, keeping a trigger body (`BEGIN ...; END`) in its
@@ -170,7 +172,6 @@ mod tests {
         let cases: Vec<Value> = serde_json::from_str(include_str!("sql-rule-cases.json")).unwrap();
         assert!(cases.len() >= 12);
         for case in cases {
-            let label = case["case"].as_str().unwrap();
             let outcome = if let Some(schema) = case["schema"].as_str() {
                 schema_refusal(schema).map_or(Ok(()), Err)
             } else {
@@ -180,10 +181,7 @@ mod tests {
                 names.sort();
                 names.into_iter().try_for_each(|name| super::super::validate_action(name, &program.actions[name]))
             };
-            match case["error"].as_str() {
-                None => assert_eq!(outcome, Ok(()), "{label}"),
-                Some(message) => assert_eq!(outcome, Err(message.to_owned()), "{label}"),
-            }
+            crate::refusal::assert_case(&case, outcome);
         }
     }
 }

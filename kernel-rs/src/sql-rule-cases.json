@@ -9,7 +9,8 @@
     "bindings": []
    }
   },
-  "error": "Action habits.streaks is a query, so it must start with SELECT. Move the WITH clause into a subquery, as in SELECT ... FROM (WITH ... SELECT ...)."
+  "error": "Action habits.streaks is a query, so it must start with SELECT. Move the WITH clause into a subquery, as in SELECT ... FROM (WITH ... SELECT ...).",
+  "code": "query.start"
  },
  {
   "case": "the same CTE inside a subquery",
@@ -38,7 +39,8 @@
     ]
    }
   },
-  "error": "Action bookings.create is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Put the WITH clause after INSERT INTO <table> (<columns>), or inside a subquery."
+  "error": "Action bookings.create is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Put the WITH clause after INSERT INTO <table> (<columns>), or inside a subquery.",
+  "code": "mutation.start"
  },
  {
   "case": "the same CTE after INSERT INTO",
@@ -72,7 +74,8 @@
     ]
    }
   },
-  "error": "Action bookings.cancel must contain one statement."
+  "error": "Action bookings.cancel must contain one statement.",
+  "code": "statement.several"
  },
  {
   "case": "a second semicolon",
@@ -89,7 +92,8 @@
     ]
    }
   },
-  "error": "Action bookings.cancel must contain one statement."
+  "error": "Action bookings.cancel must contain one statement.",
+  "code": "statement.several"
  },
  {
   "case": "a semicolon inside a string",
@@ -152,7 +156,8 @@
     ]
    }
   },
-  "error": "Action bookings.log is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Tables and indexes belong in schema.sql, and Littlebox runs no triggers or views."
+  "error": "Action bookings.log is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Tables and indexes belong in schema.sql, and Littlebox runs no triggers or views.",
+  "code": "mutation.start"
  },
  {
   "case": "a view written as an action",
@@ -164,7 +169,8 @@
     "bindings": []
    }
   },
-  "error": "Action bookings.taken is a query, so it must start with SELECT. Tables and indexes belong in schema.sql, and Littlebox runs no triggers or views."
+  "error": "Action bookings.taken is a query, so it must start with SELECT. Tables and indexes belong in schema.sql, and Littlebox runs no triggers or views.",
+  "code": "query.start"
  },
  {
   "case": "a SELECT declared as a mutation",
@@ -181,7 +187,8 @@
     ]
    }
   },
-  "error": "Action notes.add is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE."
+  "error": "Action notes.add is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE.",
+  "code": "mutation.start"
  },
  {
   "case": "RETURNING on a mutation",
@@ -198,7 +205,8 @@
     ]
    }
   },
-  "error": "Action notes.add cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows."
+  "error": "Action notes.add cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.",
+  "code": "mutation.returning"
  },
  {
   "case": "RETURNING as a named parameter",
@@ -228,7 +236,8 @@
     "bindings": []
    }
   },
-  "error": "Action habits.streaks uses OVER, which keeps one result row per stored row, and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+  "error": "Action habits.streaks uses OVER, which keeps one result row per stored row, and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+  "code": "query.limit-missing"
  },
  {
   "case": "a window function with a LIMIT",
@@ -250,22 +259,26 @@
  {
   "case": "schema.sql with a trigger",
   "schema": "CREATE TABLE IF NOT EXISTS bookings (id INTEGER PRIMARY KEY, room_id INTEGER NOT NULL);\nCREATE TABLE IF NOT EXISTS log (id INTEGER PRIMARY KEY, booking_id INTEGER);\nCREATE TRIGGER IF NOT EXISTS log_bookings AFTER INSERT ON bookings BEGIN INSERT INTO log (booking_id) VALUES (NEW.id); END;",
-  "error": "schema.sql may only create tables and indexes, but it contains CREATE TRIGGER."
+  "error": "schema.sql may only create tables and indexes, but it contains CREATE TRIGGER.",
+  "code": "schema.statement-refused"
  },
  {
   "case": "schema.sql with a view",
   "schema": "CREATE TABLE IF NOT EXISTS bookings (id INTEGER PRIMARY KEY, room_id INTEGER NOT NULL, cancelled_at INTEGER);\nCREATE VIEW IF NOT EXISTS taken AS SELECT room_id FROM bookings WHERE cancelled_at IS NULL;",
-  "error": "schema.sql may only create tables and indexes, but it contains CREATE VIEW."
+  "error": "schema.sql may only create tables and indexes, but it contains CREATE VIEW.",
+  "code": "schema.statement-refused"
  },
  {
   "case": "schema.sql with a trigger and a view",
   "schema": "CREATE TABLE IF NOT EXISTS bookings (id INTEGER PRIMARY KEY, cancelled_at INTEGER);\nCREATE VIEW IF NOT EXISTS live AS SELECT id FROM bookings WHERE cancelled_at IS NULL;\nCREATE TRIGGER IF NOT EXISTS stamp AFTER UPDATE ON bookings BEGIN UPDATE bookings SET cancelled_at = 1 WHERE id = NEW.id; END;",
-  "error": "schema.sql may only create tables and indexes, but it contains CREATE VIEW, CREATE TRIGGER."
+  "error": "schema.sql may only create tables and indexes, but it contains CREATE VIEW, CREATE TRIGGER.",
+  "code": "schema.statement-refused"
  },
  {
   "case": "schema.sql that seeds a row",
   "schema": "CREATE TABLE IF NOT EXISTS rooms (id INTEGER PRIMARY KEY, name TEXT NOT NULL);\nINSERT INTO rooms (name) VALUES ('Atlas');",
-  "error": "schema.sql may only create tables and indexes, but it contains INSERT."
+  "error": "schema.sql may only create tables and indexes, but it contains INSERT.",
+  "code": "schema.statement-refused"
  },
  {
   "case": "a query that reads rows with no LIMIT",
@@ -277,7 +290,8 @@
     "bindings": []
    }
   },
-  "error": "Action orders.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+  "error": "Action orders.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+  "code": "query.limit-missing"
  },
  {
   "case": "a LIMIT inside a string does not count",
@@ -289,7 +303,8 @@
     "bindings": []
    }
   },
-  "error": "Action orders.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+  "error": "Action orders.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+  "code": "query.limit-missing"
  },
  {
   "case": "a LIMIT inside a comment does not count",
@@ -301,7 +316,8 @@
     "bindings": []
    }
   },
-  "error": "Action orders.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+  "error": "Action orders.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+  "code": "query.limit-missing"
  },
  {
   "case": "a LIMIT inside a subquery does not count",
@@ -313,7 +329,8 @@
     "bindings": []
    }
   },
-  "error": "Action orders.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+  "error": "Action orders.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+  "code": "query.limit-missing"
  },
  {
   "case": "a grouped query with no LIMIT",
@@ -325,7 +342,8 @@
     "bindings": []
    }
   },
-  "error": "Action orders.list groups rows and has no LIMIT, so the result can grow with the data. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+  "error": "Action orders.list groups rows and has no LIMIT, so the result can grow with the data. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+  "code": "query.limit-missing"
  },
  {
   "case": "a compound query with no LIMIT on the whole result",
@@ -337,7 +355,8 @@
     "bindings": []
    }
   },
-  "error": "Action orders.list combines more than one query and has no LIMIT on the whole result. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+  "error": "Action orders.list combines more than one query and has no LIMIT on the whole result. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+  "code": "query.limit-missing"
  },
  {
   "case": "totals with no GROUP BY need no LIMIT",
@@ -391,7 +410,8 @@
     ]
    }
   },
-  "error": "Action notes.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+  "error": "Action notes.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+  "code": "query.limit-missing"
  },
  {
   "case": "nor are @limit and $limit",
@@ -409,7 +429,8 @@
     ]
    }
   },
-  "error": "Action notes.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one."
+  "error": "Action notes.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+  "code": "query.limit-missing"
  },
  {
   "case": "a LIMIT bound to a parameter still counts",
@@ -439,7 +460,8 @@
     "bindings": []
    }
   },
-  "error": "Action notes.clear must contain one statement."
+  "error": "Action notes.clear must contain one statement.",
+  "code": "statement.several"
  },
  {
   "case": "an unclosed comment at the end is not a second statement",

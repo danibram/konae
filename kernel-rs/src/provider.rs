@@ -19,6 +19,7 @@
 //! because each entry has its own expiry. A request whose action then fails
 //! gives its entry back, so the provider's retry of the same delivery runs.
 
+use super::refusal::{refuse, Refusal};
 use super::*;
 use base64::Engine;
 use ring::hmac;
@@ -129,23 +130,23 @@ fn quoted_choices(keys: &[&str]) -> String {
 /// and takes only a `secret` beside it; it then parses as the long form that
 /// row spells. Returns the header the scheme reads its MAC from, the secret's
 /// name and the scheme.
-pub(super) fn signature(name: &str, method: &str, value: &Value) -> Result<(String, String, Scheme), String> {
-    let record = value.as_object().ok_or_else(|| format!("Action {name} has an invalid http binding."))?;
+pub(super) fn signature(name: &str, method: &str, value: &Value) -> Result<(String, String, Scheme), Refusal> {
+    let record = value.as_object().ok_or_else(|| refuse("route.invalid", format!("Action {name} has an invalid http binding.")))?;
     let Some(provider) = record.get("provider") else { return long_form(name, method, record) };
     let table = presets();
     let Some((provider, row)) = provider.as_str().and_then(|provider| table.get_key_value(provider)) else {
         let mut providers = table.keys().map(String::as_str).collect::<Vec<_>>();
         providers.sort();
         let choices = quoted_choices(&providers);
-        return Err(format!("Action {name} names an unknown signature provider. Use {choices}."));
+        return Err(refuse("signature.provider-unknown", format!("Action {name} names an unknown signature provider. Use {choices}.")));
     };
     let mut extra = record.keys().map(String::as_str).filter(|key| !["provider", "secret"].contains(key)).collect::<Vec<_>>();
     if !extra.is_empty() {
         extra.sort();
         let remove = quoted_list(&extra);
-        return Err(format!(
+        return Err(refuse("signature.provider-extra-keys", format!(
             r#"Action {name} names the signature provider "{provider}", so its signature takes only "provider" and "secret". Remove {remove}."#
-        ));
+        )));
     }
     let mut expanded = row.as_object().cloned().unwrap_or_default();
     if let Some(secret) = record.get("secret") {
@@ -157,27 +158,27 @@ pub(super) fn signature(name: &str, method: &str, value: &Value) -> Result<(Stri
 /// Parses a long-form `signature`: its scheme, then every key that scheme
 /// takes. An unknown scheme, and a provider's scheme on GET, stop the parse;
 /// every other wrong key adds its sentence, so one refusal names them all.
-fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) -> Result<(String, String, Scheme), String> {
+fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) -> Result<(String, String, Scheme), Refusal> {
     let scheme = match record.get("scheme") {
         None => "littlebox",
         Some(Value::String(scheme)) if ["littlebox", "hmac-body", "timestamped", "svix"].contains(&scheme.as_str()) => scheme.as_str(),
         Some(_) => {
-            return Err(format!(
+            return Err(refuse("signature.scheme-unknown", format!(
                 r#"Action {name} names an unknown signature scheme. Use "littlebox", "hmac-body", "timestamped" or "svix"."#
-            ));
+            )));
         }
     };
-    let mut problems: Vec<String> = Vec::new();
+    let mut problems: Vec<Refusal> = Vec::new();
     let keys = scheme_keys(scheme);
     if record.keys().any(|key| !keys.contains(&key.as_str())) {
         let takes = quoted_list(keys);
-        problems.push(format!("Action {name} has an invalid {scheme} signature. It takes {takes}."));
+        problems.push(refuse("signature.keys-invalid", format!("Action {name} has an invalid {scheme} signature. It takes {takes}.")));
     }
     if method == "GET" && scheme != "littlebox" {
-        problems.push(format!(
+        problems.push(refuse("signature.provider-on-get", format!(
             "Action {name} binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body."
-        ));
-        return Err(problems.join(" "));
+        )));
+        return Err(Refusal::join(problems));
     }
     let header = if scheme == "svix" {
         Some("svix-signature")
@@ -185,13 +186,13 @@ fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) 
         record.get("header").and_then(Value::as_str).filter(|header| valid_header(header))
     };
     if header.is_none() {
-        problems.push(format!("Action {name} has an invalid signature header."));
+        problems.push(refuse("signature.header-invalid", format!("Action {name} has an invalid signature header.")));
     }
     let secret = record.get("secret").and_then(Value::as_str).filter(|secret| valid_secret_name(secret));
     if secret.is_none() {
-        problems.push(format!(
+        problems.push(refuse("signature.secret-invalid", format!(
             r#"Action {name} names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter."#
-        ));
+        )));
     }
     let text = |key: &str| record.get(key).and_then(Value::as_str);
     let parsed = match scheme {
@@ -202,7 +203,7 @@ fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) 
                 _ => None,
             };
             if algorithm.is_none() {
-                problems.push(format!(r#"Action {name} has an invalid signature algorithm. Use "sha256" or "sha1"."#));
+                problems.push(refuse("signature.algorithm-invalid", format!(r#"Action {name} has an invalid signature algorithm. Use "sha256" or "sha1"."#)));
             }
             let encoding = match text("encoding") {
                 Some("hex") => Some(Encoding::Hex),
@@ -210,7 +211,7 @@ fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) 
                 _ => None,
             };
             if encoding.is_none() {
-                problems.push(format!(r#"Action {name} has an invalid signature encoding. Use "hex" or "base64"."#));
+                problems.push(refuse("signature.encoding-invalid", format!(r#"Action {name} has an invalid signature encoding. Use "hex" or "base64"."#)));
             }
             let prefix = match record.get("prefix") {
                 None => Some(None),
@@ -218,9 +219,9 @@ fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) 
                 Some(_) => None,
             };
             if prefix.is_none() {
-                problems.push(format!(
+                problems.push(refuse("signature.prefix-invalid", format!(
                     r#"Action {name} has an invalid signature prefix. Use 1 to 32 letters, digits, "=", "-", "_", "." or ":", such as "sha256="."#
-                ));
+                )));
             }
             match (algorithm, encoding, prefix) {
                 (Some(algorithm), Some(encoding), Some(prefix)) => Some(Scheme::HmacBody { algorithm, encoding, prefix }),
@@ -230,13 +231,13 @@ fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) 
         "timestamped" => {
             let prefix = text("prefix").filter(|prefix| valid_field_prefix(prefix));
             if prefix.is_none() {
-                problems.push(format!(r#"Action {name} has an invalid timestamp prefix. Use the field's name and "=", such as "t="."#));
+                problems.push(refuse("signature.timestamp-prefix-invalid", format!(r#"Action {name} has an invalid timestamp prefix. Use the field's name and "=", such as "t="."#)));
             }
             let tag = text("tag").filter(|tag| valid_field_prefix(tag) && Some(*tag) != text("prefix"));
             if tag.is_none() {
-                problems.push(format!(
+                problems.push(refuse("signature.tag-invalid", format!(
                     r#"Action {name} has an invalid signature tag. Use the field's name and "=", such as "v1=", other than the timestamp's."#
-                ));
+                )));
             }
             // 300.0 is the integer 300 to the editor's JSON reader, so it is here too.
             let window = record
@@ -244,7 +245,7 @@ fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) 
                 .and_then(Value::as_f64)
                 .filter(|seconds| seconds.fract() == 0.0 && (1.0..=MAX_WINDOW_SECONDS as f64).contains(seconds));
             if window.is_none() {
-                problems.push(format!("Action {name} has an invalid signature window. Use a whole number of seconds from 1 to 3600."));
+                problems.push(refuse("signature.window-invalid", format!("Action {name} has an invalid signature window. Use a whole number of seconds from 1 to 3600.")));
             }
             match (prefix, tag, window) {
                 (Some(prefix), Some(tag), Some(window)) => {
@@ -258,7 +259,7 @@ fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) 
     };
     match (header, secret, parsed) {
         (Some(header), Some(secret), Some(parsed)) if problems.is_empty() => Ok((header.to_owned(), secret.to_owned(), parsed)),
-        _ => Err(problems.join(" ")),
+        _ => Err(Refusal::join(problems)),
     }
 }
 
@@ -303,24 +304,24 @@ pub(super) fn json_path(path: &str) -> Option<Vec<Step>> {
 
 /// Parses a route's `fields`: input keys in sorted order, each an input
 /// binding of the action, each mapped to a JSON path.
-pub(super) fn fields(name: &str, method: &str, action: &ActionDefinition, value: &Value) -> Result<Vec<(String, Vec<Step>)>, String> {
+pub(super) fn fields(name: &str, method: &str, action: &ActionDefinition, value: &Value) -> Result<Vec<(String, Vec<Step>)>, Refusal> {
     if method == "GET" {
-        return Err(format!("Action {name} binds GET, so it cannot declare fields. Fields read a POST body."));
+        return Err(refuse("route.fields-on-get", format!("Action {name} binds GET, so it cannot declare fields. Fields read a POST body.")));
     }
     let record = value
         .as_object()
         .filter(|record| (1..=MAX_FIELDS).contains(&record.len()))
-        .ok_or_else(|| format!(r#"Action {name} has an invalid fields map. Map 1 to 32 input keys to JSON paths, such as "$.data.object.id"."#))?;
+        .ok_or_else(|| refuse("route.fields-invalid", format!(r#"Action {name} has an invalid fields map. Map 1 to 32 input keys to JSON paths, such as "$.data.object.id"."#)))?;
     let mut keys = record.keys().collect::<Vec<_>>();
     keys.sort();
     let mut parsed = Vec::new();
     for key in keys {
         let declared = action.bindings.iter().any(|binding| binding.source == "input" && binding.key.as_deref() == Some(key.as_str()));
         if !declared {
-            return Err(format!("Action {name} maps {key}, which is not one of its input bindings."));
+            return Err(refuse("route.field-unbound", format!("Action {name} maps {key}, which is not one of its input bindings.")));
         }
         let steps = record[key].as_str().and_then(json_path).ok_or_else(|| {
-            format!(r#"Action {name} maps {key} to an invalid JSON path. Use "$" and then ".name" or "[index]" steps, such as "$.data.object.id"."#)
+            refuse("route.field-path-invalid", format!(r#"Action {name} maps {key} to an invalid JSON path. Use "$" and then ".name" or "[index]" steps, such as "$.data.object.id"."#))
         })?;
         parsed.push((key.clone(), steps));
     }
@@ -546,11 +547,12 @@ mod tests {
             let label = case["case"].as_str().unwrap();
             let method = case["method"].as_str().unwrap();
             let outcome = signature("hooks.receive", method, &case["signature"]);
-            match case["error"].as_str() {
-                Some(message) => assert_eq!(outcome, Err(message.to_owned()), "{label}"),
-                None => assert_eq!(outcome, signature("hooks.receive", method, &case["expands"]), "{label}"),
+            if case["error"].is_null() {
+                assert_eq!(outcome, signature("hooks.receive", method, &case["expands"]), "{label}");
+                assert!(outcome.is_ok(), "{label}");
+            } else {
+                crate::refusal::assert_case(&case, outcome);
             }
-            assert!(case["error"].is_string() || outcome.is_ok(), "{label}");
         }
     }
 

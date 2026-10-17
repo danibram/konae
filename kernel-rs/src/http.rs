@@ -23,6 +23,7 @@
 //! A route may instead declare a provider's own scheme and a `fields` map
 //! that reads a nested payload; provider.rs holds both (ADR-0018).
 
+use super::refusal::{refuse, Refusal};
 use super::*;
 use std::sync::{Arc, OnceLock};
 
@@ -72,14 +73,14 @@ const RESERVED_SEGMENTS: [&str; 4] = ["_littlebox", "oauth", ".well-known", "mcp
 const ROUTE_CALLERS: [&str; 3] = ["signature", "key", "session"];
 
 /// Parses and checks one action's `http` key. `Ok(None)` when it has none.
-pub(super) fn binding(name: &str, action: &ActionDefinition) -> Result<Option<HttpBinding>, String> {
+pub(super) fn binding(name: &str, action: &ActionDefinition) -> Result<Option<HttpBinding>, Refusal> {
     let Some(value) = action.http.as_ref() else { return Ok(None) };
     if action.kind == "signal" {
-        return Err(format!(
+        return Err(refuse("signal.route", format!(
             "Action {name} is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route."
-        ));
+        )));
     }
-    let invalid = || format!("Action {name} has an invalid http binding.");
+    let invalid = || refuse("route.invalid", format!("Action {name} has an invalid http binding."));
     let record = value.as_object().ok_or_else(invalid)?;
     if record.keys().any(|key| !["method", "path", "signature", "callers", "fields"].contains(&key.as_str())) {
         return Err(invalid());
@@ -89,23 +90,23 @@ pub(super) fn binding(name: &str, action: &ActionDefinition) -> Result<Option<Ht
     let method = match (method, action.kind.as_str()) {
         (Some("GET"), "query") => "GET",
         (Some("POST"), "mutation") => "POST",
-        _ => return Err(format!("Action {name} must bind GET for a query and POST for a mutation.")),
+        _ => return Err(refuse("route.method-mismatch", format!("Action {name} must bind GET for a query and POST for a mutation."))),
     };
     if action.access != "anonymous" {
-        return Err(format!(
+        return Err(refuse("route.authenticated", format!(
             "Action {name} is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route."
-        ));
+        )));
     }
     if !valid_path(path) {
-        return Err(format!(
+        return Err(refuse("route.path-invalid", format!(
             r#"Action {name} has an invalid http path. Use a leading "/" and segments of letters, digits, ".", "_", "~" or "-", up to 200 characters."#
-        ));
+        )));
     }
     let first = path[1..].split('/').next().unwrap_or("").to_ascii_lowercase();
     if RESERVED_SEGMENTS.contains(&first.as_str()) {
-        return Err(format!(
+        return Err(refuse("route.path-reserved", format!(
             "Action {name} binds the reserved path {path}. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel."
-        ));
+        )));
     }
     let signature = match record.get("signature") {
         None => None,
@@ -118,7 +119,7 @@ pub(super) fn binding(name: &str, action: &ActionDefinition) -> Result<Option<Ht
         None => None,
         Some(value) => {
             let invalid_callers = || {
-                format!(r#"Action {name} has an invalid callers list. List one or more of "signature", "key" and "session", each once."#)
+                refuse("route.callers-invalid", format!(r#"Action {name} has an invalid callers list. List one or more of "signature", "key" and "session", each once."#))
             };
             let items = value.as_array().filter(|items| !items.is_empty()).ok_or_else(invalid_callers)?;
             let mut callers: Vec<String> = Vec::new();
@@ -131,10 +132,10 @@ pub(super) fn binding(name: &str, action: &ActionDefinition) -> Result<Option<Ht
             }
             let signs = callers.iter().any(|caller| caller == "signature");
             if signs && signature.is_none() {
-                return Err(format!(r#"Action {name} lists "signature" among its callers but declares no signature."#));
+                return Err(refuse("route.callers-no-signature", format!(r#"Action {name} lists "signature" among its callers but declares no signature."#)));
             }
             if !signs && signature.is_some() {
-                return Err(format!(r#"Action {name} declares a signature, so its callers must include "signature"."#));
+                return Err(refuse("route.callers-without-signature", format!(r#"Action {name} declares a signature, so its callers must include "signature"."#)));
             }
             Some(callers)
         }
@@ -188,7 +189,7 @@ fn valid_secret_name(name: &str) -> bool {
 
 /// Refuses two actions bound to the same method and path. Names are visited
 /// in sorted order, as the editor does, so both name the same pair.
-pub(super) fn validate_routes(program: &ActionProgram) -> Result<(), String> {
+pub(super) fn validate_routes(program: &ActionProgram) -> Result<(), Refusal> {
     let mut names = program.actions.keys().collect::<Vec<_>>();
     names.sort();
     let mut seen: HashMap<String, &str> = HashMap::new();
@@ -196,7 +197,7 @@ pub(super) fn validate_routes(program: &ActionProgram) -> Result<(), String> {
         let Some(http) = binding(name, &program.actions[name])? else { continue };
         let route = format!("{} {}", http.method, http.path);
         if let Some(earlier) = seen.get(&route) {
-            return Err(format!("Actions {earlier} and {name} both bind {route}."));
+            return Err(refuse("route.duplicate", format!("Actions {earlier} and {name} both bind {route}.")));
         }
         seen.insert(route, name);
     }
@@ -259,9 +260,10 @@ pub(super) fn require_secrets(db: &Connection, project: &str, program: &ActionPr
         };
         if secret_for_calls_only(db, project, &signature.secret)? {
             let secret = &signature.secret;
-            anyhow::bail!(
-                "Action {name} signs its route with the secret {secret}, which is set for calls only. Set a route secret with a value of its own."
-            );
+            anyhow::bail!(refuse(
+                "route.signature-secret-call-only",
+                format!("Action {name} signs its route with the secret {secret}, which is set for calls only. Set a route secret with a value of its own."),
+            ));
         }
         match secret_value(db, project, &signature.secret)? {
             None => {
@@ -274,14 +276,15 @@ pub(super) fn require_secrets(db: &Connection, project: &str, program: &ActionPr
             // decode could never verify a delivery.
             Some(value) if signature.scheme == super::provider::Scheme::Svix && super::provider::svix_key(&value).is_none() => {
                 let secret = &signature.secret;
-                anyhow::bail!(
-                    "Action {name} verifies svix signatures with the secret {secret}, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_."
-                );
+                anyhow::bail!(refuse(
+                    "route.signature-svix-secret-invalid",
+                    format!("Action {name} verifies svix signatures with the secret {secret}, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_."),
+                ));
             }
             Some(_) => {}
         }
     }
-    unset_secrets_message(&actions, &secrets).map_or(Ok(()), |message| Err(anyhow::anyhow!(message)))
+    unset_secrets_message(&actions, &secrets).map_or(Ok(()), |message| Err(anyhow::anyhow!(refuse("route.signature-secret-unset", message))))
 }
 
 /// One refusal that names every action whose secret is unset and every such
@@ -1241,10 +1244,7 @@ mod tests {
                 .into_iter()
                 .try_for_each(|name| validate_action(name, &program.actions[name]))
                 .and_then(|_| validate_routes(&program));
-            match case["error"].as_str() {
-                None => assert_eq!(outcome, Ok(()), "{}", case["case"]),
-                Some(message) => assert_eq!(outcome, Err(message.to_owned()), "{}", case["case"]),
-            }
+            crate::refusal::assert_case(&case, outcome);
         }
     }
 

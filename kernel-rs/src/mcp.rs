@@ -871,9 +871,7 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
                 Ok(value) => Ok(
                     json!({"content":[{"type":"text","text":serde_json::to_string(&value).unwrap()}],"structuredContent":{"result":value},"isError":false}),
                 ),
-                Err(e) => {
-                    Ok(json!({"content":[{"type":"text","text":e.to_string()}],"isError":true}))
-                }
+                Err(e) => Ok(tool_error(&e)),
             }
         }
         _ => return rpc_error(id, -32601, "Method not found."),
@@ -1770,13 +1768,23 @@ fn canonicalize_column_order(tokens: &mut Vec<String>) {
     *tokens = normalized;
 }
 
+/// A tool's failed result. The text stays the sentence clients read today; a
+/// refused Capsule also answers `{ error: { code, message, hint } }` (ADR-0020).
+fn tool_error(error: &anyhow::Error) -> Value {
+    let text = json!([{"type": "text", "text": error.to_string()}]);
+    match super::refusal::of(error) {
+        Some(refused) => json!({"content": text, "structuredContent": {"error": refused.to_json()}, "isError": true}),
+        None => json!({"content": text, "isError": true}),
+    }
+}
+
 pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
     if let Some(model) = &input.project.database_model {
         anyhow::ensure!(model.source == model.accepted_source && !model.revision.is_empty(),
             "Publish the accepted database model. Apply its migration before publishing.");
     }
     if let Some(hostname) = &input.initial_domain {
-        super::domain::check_hostname(hostname, &super::domain::Rules::of(state)).map_err(anyhow::Error::msg)?;
+        super::domain::check_hostname(hostname, &super::domain::Rules::of(state))?;
         anyhow::ensure!(input.initial_package.is_none(), "Send the domain in the package manifest when importing a package.");
     }
     anyhow::ensure!(
@@ -1804,7 +1812,7 @@ pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> R
         );
     }
     super::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
-    super::calls::check_connects(&input.project.manifest).map_err(anyhow::Error::msg)?;
+    super::calls::check_connects(&input.project.manifest)?;
     // The limit counts the bytes the Kernel stores, after base64 is decoded.
     let total: usize = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?.values().map(Vec::len).sum();
     anyhow::ensure!(total <= 16 * 1024 * 1024, "Artifact exceeds 16 MiB.");
@@ -1816,7 +1824,7 @@ pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> R
             .ok_or_else(|| anyhow::anyhow!("actions.json is required."))?,
     )?;
     anyhow::ensure!(program.version == 1, "Unsupported action version.");
-    super::action_shape::check_program(&program).map_err(anyhow::Error::msg)?;
+    super::action_shape::check_program(&program)?;
     super::calls::check_release(&super::domain::Rules::of(state), &store(state)?, &input.project.id, &program)?;
     let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
     let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
@@ -2525,6 +2533,21 @@ async fn owner_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A refused Capsule answers its code beside the sentence; any other
+    /// failure answers the sentence alone, as before.
+    #[test]
+    fn a_tool_refusal_answers_its_code_and_hint_beside_the_text() {
+        let refused = anyhow::Error::new(super::super::refusal::refuse("guard.invalid", "Action a.b has an invalid guard. Use a message of 1 to 200 characters on one line."));
+        let answer = tool_error(&refused);
+        assert_eq!(answer["content"][0]["text"], "Action a.b has an invalid guard. Use a message of 1 to 200 characters on one line.");
+        assert_eq!(answer["isError"], true);
+        assert_eq!(answer["structuredContent"]["error"]["code"], "guard.invalid");
+        assert_eq!(answer["structuredContent"]["error"]["message"], answer["content"][0]["text"]);
+        assert_eq!(answer["structuredContent"]["error"]["hint"]["fix"], "capsule");
+        let other = tool_error(&anyhow::anyhow!("Upload is not complete."));
+        assert_eq!(other, json!({"content": [{"type": "text", "text": "Upload is not complete."}], "isError": true}));
+    }
 
     fn tokens_of(sql: &str) -> Vec<(String, String, Vec<String>)> {
         let db = Connection::open_in_memory().unwrap();

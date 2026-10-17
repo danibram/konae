@@ -24,6 +24,7 @@
 //! installation and never the editor's host, run at release and again before
 //! each attempt, as unset secrets are refused only by the Kernel.
 
+use super::refusal::{refuse, Refusal};
 use super::*;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::OnceLock;
@@ -158,7 +159,7 @@ pub(crate) struct Then {
 
 /// Refuses call keys on an action of another kind, and checks a call. Runs
 /// after `action_shape::check_action`. `Ok(None)` for an action that is not a call.
-pub(crate) fn check_kind(name: &str, action: &ActionDefinition) -> Result<Option<Call>, String> {
+pub(crate) fn check_kind(name: &str, action: &ActionDefinition) -> Result<Option<Call>, Refusal> {
     if action.kind != "call" {
         if action.call.any() {
             let kind = match action.kind.as_str() {
@@ -166,9 +167,9 @@ pub(crate) fn check_kind(name: &str, action: &ActionDefinition) -> Result<Option
                 "mutation" => "mutation",
                 _ => "signal action",
             };
-            return Err(format!(
+            return Err(refuse("call.keys-on-other-kind", format!(
                 r#"Action {name} is a {kind}, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of "kind": "call"."#
-            ));
+            )));
         }
         return Ok(None);
     }
@@ -176,19 +177,19 @@ pub(crate) fn check_kind(name: &str, action: &ActionDefinition) -> Result<Option
 }
 
 /// Parses and checks one call.
-pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Call, String> {
+pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Call, Refusal> {
     if !action.statement.trim().is_empty() || action.signal.is_some() || action.guard.is_some() || action.http.is_some() {
-        return Err(format!(
+        return Err(refuse("call.keys-refused", format!(
             "Action {name} is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route."
-        ));
+        )));
     }
     if action.bindings.iter().any(|binding| binding.source != "input") {
-        return Err(format!("Action {name} is a call, so its bindings may only be inputs."));
+        return Err(refuse("call.bindings-input-only", format!("Action {name} is a call, so its bindings may only be inputs.")));
     }
     let method = match action.call.method.as_ref().and_then(Value::as_str) {
         Some("GET") => "GET",
         Some("POST") => "POST",
-        _ => return Err(format!(r#"Action {name} must call with "method": "GET" or "POST"."#)),
+        _ => return Err(refuse("call.method-invalid", format!(r#"Action {name} must call with "method": "GET" or "POST"."#))),
     };
     let url = static_url(name, action.call.url.as_ref())?;
     let inputs: Vec<&str> = action.bindings.iter().filter_map(|binding| binding.key.as_deref()).collect();
@@ -199,9 +200,9 @@ pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Call,
     Ok(Call { url, method: method.to_owned(), body, headers, auth, then })
 }
 
-fn static_url(name: &str, value: Option<&Value>) -> Result<url::Url, String> {
+fn static_url(name: &str, value: Option<&Value>) -> Result<url::Url, Refusal> {
     let invalid = || {
-        format!("Action {name} has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.")
+        refuse("call.url-invalid", format!("Action {name} has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."))
     };
     let text = value.and_then(Value::as_str).ok_or_else(invalid)?;
     if text.chars().count() > MAX_URL_CHARS || text.contains('#') || text.chars().any(|c| (c as u32) <= 0x20 || c as u32 == 0x7f) {
@@ -213,17 +214,17 @@ fn static_url(name: &str, value: Option<&Value>) -> Result<url::Url, String> {
     }
     let host = url.host_str().ok_or_else(invalid)?.to_ascii_lowercase();
     if matches!(url.host(), Some(url::Host::Ipv4(_) | url::Host::Ipv6(_))) {
-        return Err(format!("Action {name} calls the IP address {host}. Name a host instead."));
+        return Err(refuse("call.host-ip", format!("Action {name} calls the IP address {host}. Name a host instead.")));
     }
     let bare = host.trim_end_matches('.');
     if matches!(bare, "localhost" | "metadata" | "instance-data") || bare.ends_with(".internal") {
-        return Err(format!("Action {name} calls {host}, which names this machine or a cloud metadata service."));
+        return Err(refuse("call.host-local", format!("Action {name} calls {host}, which names this machine or a cloud metadata service.")));
     }
     let first = url.path().split('/').nth(1).unwrap_or("").to_ascii_lowercase();
     if RESERVED_SEGMENTS.contains(&first.as_str()) {
-        return Err(format!(
+        return Err(refuse("call.path-reserved", format!(
             "Action {name} calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel."
-        ));
+        )));
     }
     Ok(url)
 }
@@ -269,10 +270,10 @@ fn constant(value: &Value) -> Option<Value> {
     valid.then(|| constant.clone())
 }
 
-fn body_map(name: &str, method: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Vec<(String, BodyValue)>, String> {
+fn body_map(name: &str, method: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Vec<(String, BodyValue)>, Refusal> {
     let Some(value) = value else { return Ok(Vec::new()) };
     let invalid = || {
-        format!(r#"Action {name} has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with "value", at most 32."#)
+        refuse("call.body-invalid", format!(r#"Action {name} has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with "value", at most 32."#))
     };
     let record = value.as_object().ok_or_else(invalid)?;
     if record.len() > MAX_BODY_KEYS
@@ -284,15 +285,15 @@ fn body_map(name: &str, method: &str, value: Option<&Value>, inputs: &[&str]) ->
     keys.sort();
     for (index, key) in keys.iter().enumerate() {
         if method == "GET" && key.contains('.') {
-            return Err(format!(
+            return Err(refuse("call.body-path-on-get", format!(
                 "Action {name} sends body key {key} with a path. Nested body keys belong on POST."
-            ));
+            )));
         }
         for other in keys.iter().skip(index + 1) {
             if other.starts_with(&format!("{key}.")) {
-                return Err(format!(
+                return Err(refuse("call.body-overlap", format!(
                     "Action {name} has body keys {key} and {other}, which overlap. Use one path or the other."
-                ));
+                )));
             }
         }
     }
@@ -304,7 +305,7 @@ fn body_map(name: &str, method: &str, value: Option<&Value>, inputs: &[&str]) ->
             continue;
         };
         if !inputs.contains(&input) {
-            return Err(format!("Action {name} sends body key {key} from {input}, which is not one of its input bindings."));
+            return Err(refuse("call.body-unbound", format!("Action {name} sends body key {key} from {input}, which is not one of its input bindings.")));
         }
         body.push((key.clone(), BodyValue::Input(input.to_owned())));
     }
@@ -315,10 +316,10 @@ fn body_map(name: &str, method: &str, value: Option<&Value>, inputs: &[&str]) ->
 const ALLOWED_CALL_HEADER: &str = "Idempotency-Key";
 const MAX_HEADERS: usize = 8;
 
-fn headers_map(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Vec<(String, BodyValue)>, String> {
+fn headers_map(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Vec<(String, BodyValue)>, Refusal> {
     let Some(value) = value else { return Ok(Vec::new()) };
     let invalid = || {
-        format!(r#"Action {name} has an invalid headers. Map Idempotency-Key to an input or a constant, at most 8."#)
+        refuse("call.headers-invalid", format!(r#"Action {name} has an invalid headers. Map Idempotency-Key to an input or a constant, at most 8."#))
     };
     let record = value.as_object().ok_or_else(invalid)?;
     if record.is_empty() || record.len() > MAX_HEADERS {
@@ -329,9 +330,9 @@ fn headers_map(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Vec
     let mut headers = Vec::new();
     for key in keys {
         if key.as_str() != ALLOWED_CALL_HEADER {
-            return Err(format!(
+            return Err(refuse("call.header-refused", format!(
                 "Action {name} sets header {key}, which is not allowed. Only Idempotency-Key is allowed."
-            ));
+            )));
         }
         let sent = &record[key];
         if !(sent.is_string() || constant(sent).is_some()) {
@@ -346,17 +347,17 @@ fn headers_map(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Vec
             continue;
         };
         if !inputs.contains(&input) {
-            return Err(format!("Action {name} sends header {key} from {input}, which is not one of its input bindings."));
+            return Err(refuse("call.header-unbound", format!("Action {name} sends header {key} from {input}, which is not one of its input bindings.")));
         }
         headers.push((key.clone(), BodyValue::Input(input.to_owned())));
     }
     Ok(headers)
 }
 
-fn auth(name: &str, value: Option<&Value>) -> Result<Option<Auth>, String> {
+fn auth(name: &str, value: Option<&Value>) -> Result<Option<Auth>, Refusal> {
     let Some(value) = value else { return Ok(None) };
     let invalid = || {
-        format!(r#"Action {name} has an invalid auth. Name a secret with "secret" to sign the request, or with "key" to send the API key it holds."#)
+        refuse("call.auth-invalid", format!(r#"Action {name} has an invalid auth. Name a secret with "secret" to sign the request, or with "key" to send the API key it holds."#))
     };
     let record = value.as_object().ok_or_else(invalid)?;
     let signs = record.contains_key("secret");
@@ -367,9 +368,9 @@ fn auth(name: &str, value: Option<&Value>) -> Result<Option<Auth>, String> {
     }
     let secret = record.get(if signs { "secret" } else { "key" }).and_then(Value::as_str).unwrap_or("");
     if !valid_secret_name(secret) {
-        return Err(format!(
+        return Err(refuse("call.secret-invalid", format!(
             r#"Action {name} names an invalid auth secret. Use lowercase letters, digits and "_", starting with a letter."#
-        ));
+        )));
     }
     if !signs {
         return Ok(Some(Auth::Key { secret: secret.to_owned() }));
@@ -383,7 +384,7 @@ fn auth(name: &str, value: Option<&Value>) -> Result<Option<Auth>, String> {
                 || !header.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
                 || ["authorization", "cookie", "host", "content-type", "content-length"].contains(&header.to_ascii_lowercase().as_str())
             {
-                return Err(format!("Action {name} has an invalid signature header."));
+                return Err(refuse("call.signature-header-invalid", format!("Action {name} has an invalid signature header.")));
             }
             header.to_owned()
         }
@@ -397,9 +398,9 @@ fn valid_secret_name(name: &str) -> bool {
         && name.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
-fn then(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Option<Then>, String> {
+fn then(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Option<Then>, Refusal> {
     let Some(value) = value else { return Ok(None) };
-    let invalid = || format!("Action {name} has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer.");
+    let invalid = || refuse("call.then-invalid", format!("Action {name} has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer."));
     let record = value.as_object().ok_or_else(invalid)?;
     if record.keys().any(|key| key != "action" && key != "inputs") {
         return Err(invalid());
@@ -424,14 +425,14 @@ fn then(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Option<The
             || !escapes_valid
             || !ANSWER_ROOTS.contains(&segments[0])
         {
-            return Err(format!(
+            return Err(refuse("call.then-pointer-invalid", format!(
                 "Action {name} reads {pointer} for then, which is not a JSON pointer into /ok, /status, /error, /body or /input."
-            ));
+            )));
         }
         if segments[0] == "input" && segments.len() > 1 {
             let key = segments[1].replace("~1", "/").replace("~0", "~");
             if !inputs.contains(&key.as_str()) {
-                return Err(format!("Action {name} reads {pointer} for then, but {key} is not one of its input bindings."));
+                return Err(refuse("call.then-input-unbound", format!("Action {name} reads {pointer} for then, but {key} is not one of its input bindings.")));
             }
         }
     }
@@ -440,7 +441,7 @@ fn then(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Option<The
 
 /// Checks each call's `then` against the program, in sorted name order. Runs
 /// after every action passed its own checks and no two routes collide.
-pub(crate) fn check_program(program: &ActionProgram) -> Result<(), String> {
+pub(crate) fn check_program(program: &ActionProgram) -> Result<(), Refusal> {
     let mut names = program.actions.keys().collect::<Vec<_>>();
     names.sort();
     for name in names {
@@ -448,25 +449,25 @@ pub(crate) fn check_program(program: &ActionProgram) -> Result<(), String> {
         let Some(then) = call.then else { continue };
         let target = &then.action;
         let Some(mutation) = program.actions.get(target) else {
-            return Err(format!("Action {name} names {target} as its then, which is not declared."));
+            return Err(refuse("call.then-undeclared", format!("Action {name} names {target} as its then, which is not declared.")));
         };
         if mutation.kind != "mutation" {
-            return Err(format!("Action {name} names {target} as its then, which is not a mutation."));
+            return Err(refuse("call.then-not-mutation", format!("Action {name} names {target} as its then, which is not a mutation.")));
         }
         if mutation.http.is_some() {
-            return Err(format!(
+            return Err(refuse("call.then-routed", format!(
                 "Action {name} names {target} as its then, which answers on an HTTP route. A then mutation runs only after its call."
-            ));
+            )));
         }
         if mutation.bindings.iter().any(|binding| binding.source == "actor") {
-            return Err(format!(
+            return Err(refuse("call.then-binds-actor", format!(
                 "Action {name} names {target} as its then, which binds the actor. A then mutation runs with no caller."
-            ));
+            )));
         }
         let inputs: Vec<&ActionBinding> = mutation.bindings.iter().filter(|binding| binding.source == "input").collect();
         for (key, _) in &then.inputs {
             if !inputs.iter().any(|binding| binding.key.as_deref() == Some(key.as_str())) {
-                return Err(format!("Action {name} fills {key}, which is not an input of {target}."));
+                return Err(refuse("call.then-fills-unknown", format!("Action {name} fills {key}, which is not an input of {target}.")));
             }
         }
         let mut required: Vec<&str> =
@@ -474,9 +475,9 @@ pub(crate) fn check_program(program: &ActionProgram) -> Result<(), String> {
         required.sort();
         for key in required {
             if !then.inputs.iter().any(|(filled, _)| filled == key) {
-                return Err(format!(
+                return Err(refuse("call.then-unfilled", format!(
                     "Action {name} leaves {key} of {target} unfilled. Fill it from the answer or make the input nullable."
-                ));
+                )));
             }
         }
     }
@@ -514,9 +515,9 @@ pub(crate) fn secrets(program: &ActionProgram) -> Vec<(String, String)> {
 
 const MAX_CONNECTS: usize = 10;
 
-pub(crate) fn check_connects(manifest: &Value) -> Result<(), String> {
+pub(crate) fn check_connects(manifest: &Value) -> Result<(), Refusal> {
     let Some(value) = manifest.get("connects").filter(|value| !value.is_null()) else { return Ok(()) };
-    let invalid = || r#"connects must be a list of at most 10 origins, such as ["https://api.example.com"]."#.to_owned();
+    let invalid = || refuse("connects.invalid", r#"connects must be a list of at most 10 origins, such as ["https://api.example.com"]."#);
     let entries = value.as_array().filter(|entries| entries.len() <= MAX_CONNECTS).ok_or_else(invalid)?;
     let mut seen: Vec<&str> = Vec::new();
     for entry in entries {
@@ -529,12 +530,12 @@ pub(crate) fn check_connects(manifest: &Value) -> Result<(), String> {
             .filter(|url| (url.scheme() == "https" || (url.scheme() == "http" && local(url))) && !entry.contains('*'))
             .map(|url| url.origin().ascii_serialization());
         if origin.as_deref() != Some(entry) {
-            return Err(format!(
+            return Err(refuse("connects.origin-invalid", format!(
                 "connects lists {entry}, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
-            ));
+            )));
         }
         if seen.contains(&entry) {
-            return Err(format!("connects lists {entry} twice."));
+            return Err(refuse("connects.origin-twice", format!("connects lists {entry} twice.")));
         }
         seen.push(entry);
     }
@@ -590,17 +591,20 @@ fn check_calls(rules: &super::domain::Rules, db: &Connection, project: &str, pro
         let host = host_of(&call.url);
         anyhow::ensure!(
             !editor_host(rules, &host),
-            "Action {name} calls {host}, the editor's host. A call reaches an app or an outside service, never the editor."
+            refuse("call.host-editor", format!("Action {name} calls {host}, the editor's host. A call reaches an app or an outside service, never the editor."))
         );
         anyhow::ensure!(
             call.url.scheme() == "https" || installation_host(rules, &host),
-            "Action {name} calls http://{host}, which is not an app of this installation. Use https."
+            refuse("call.http-off-installation", format!("Action {name} calls http://{host}, which is not an app of this installation. Use https."))
         );
         if let Some(auth) = &call.auth {
             let secret = auth.secret();
             anyhow::ensure!(
                 super::http::project_secret(db, project, secret)?.is_some(),
-                "Action {name} calls with the secret {secret}, which is not set for this project. Set it with secret_set before publishing."
+                refuse(
+                    "call.secret-unset",
+                    format!("Action {name} calls with the secret {secret}, which is not set for this project. Set it with secret_set before publishing.")
+                )
             );
         }
     }
@@ -1417,8 +1421,9 @@ mod tests {
                     assert_eq!(&row["svixKey"], flag, "{name}: secrets_list answers whether the value is a svix key");
                 }
             }
-            let outcome = check_release(&rules, &db, "project_a", &program(&case["actions"])).err().map(|error| error.to_string());
-            assert_eq!(outcome.as_deref(), case["error"].as_str(), "{name}");
+            let outcome = check_release(&rules, &db, "project_a", &program(&case["actions"]))
+                .map_err(|error| crate::refusal::of(&error).cloned().unwrap_or_else(|| panic!("{name}: {error} carries no code")));
+            crate::refusal::assert_case(case, outcome);
         }
     }
 
@@ -1433,10 +1438,7 @@ mod tests {
             } else {
                 super::super::action_shape::check_program(&program(&case["actions"]))
             };
-            match case["error"].as_str() {
-                None => assert_eq!(outcome, Ok(()), "{}", case["case"]),
-                Some(message) => assert_eq!(outcome, Err(message.to_owned()), "{}", case["case"]),
-            }
+            crate::refusal::assert_case(&case, outcome);
         }
     }
 
