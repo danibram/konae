@@ -7,7 +7,7 @@ use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
 /// The topics `platform_guide` takes, in the order an agent meets them.
-pub(super) const TOPICS: [&str; 9] = [
+pub(super) const TOPICS: [&str; 10] = [
     "rules",
     "pieces",
     "credentials",
@@ -17,6 +17,7 @@ pub(super) const TOPICS: [&str; 9] = [
     "publishing",
     "users",
     "portability",
+    "refusals",
 ];
 
 /// The permissions a delegated credential may hold. The owner's browser
@@ -208,7 +209,29 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "migration_cancel { operationId } before migration_confirm resumes the app. migration_status reads the state."
             ]
         }),
+        "refusals" => refusals(),
         _ => bail!("Unknown guide topic. Choose one of {}.", TOPICS.join(", ")),
+    })
+}
+
+/// Every code a refused Capsule answers, rendered from refusal-codes.json
+/// (ADR-0020), grouped by the part of the Capsule it names.
+fn refusals() -> Value {
+    let mut groups = serde_json::Map::new();
+    for (code, row) in super::refusal::table() {
+        let group = code.split('.').next().unwrap_or(code);
+        let entry = groups.entry(group.to_owned()).or_insert_with(|| json!({}));
+        entry[code.as_str()] = row.clone();
+    }
+    json!({
+        "shape": "A refused Capsule answers { code, message, hint }. An MCP tool puts it under structuredContent.error and keeps the sentence in content[0].text; the editor's Validation Gate gives the same code and sentence.",
+        "fix": {
+            "capsule": "An edit to the app's files clears it. Change the file the message names and check again.",
+            "owner": "The owner clears it outside the files, with the tool the hint names, such as secret_set. No edit clears it.",
+            "operator": "Only the installation can clear it."
+        },
+        "rule": "Branch on code, never on message. A code never changes once released; a sentence may.",
+        "codes": groups
     })
 }
 
@@ -353,6 +376,23 @@ mod tests {
             assert!(served.iter().any(|s| s == *write), "gap names {write}, which the Kernel does not serve");
             assert!(!READ_BACK.iter().any(|(w, _)| w == write), "gap {write} also has a read-back");
         }
+    }
+
+    /// The refusals topic is the table, so an agent reads the remedy for a
+    /// code through the same door that refused it.
+    #[test]
+    fn the_refusals_topic_lists_every_code_with_its_fix() {
+        let topic = topic("refusals").unwrap();
+        let mut listed = 0;
+        for (group, codes) in topic["codes"].as_object().unwrap() {
+            for (code, row) in codes.as_object().unwrap() {
+                assert!(code.starts_with(&format!("{group}.")));
+                assert_eq!(row, &super::super::refusal::table()[code]);
+                listed += 1;
+            }
+        }
+        assert_eq!(listed, super::super::refusal::table().len());
+        assert_eq!(topic["codes"]["route"]["route.signature-secret-unset"]["fix"], "owner");
     }
 
     #[test]

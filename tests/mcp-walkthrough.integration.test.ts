@@ -219,7 +219,7 @@ describe("the MCP walkthrough", () => {
   test("2. platform_describe and platform_guide", async () => {
     r.step("describe");
     const described = await tool("platform_describe");
-    expect((described.result as any).guideTopics).toEqual(["rules", "pieces", "credentials", "development", "actions", "sdk", "publishing", "users", "portability"]);
+    expect((described.result as any).guideTopics).toEqual(["rules", "pieces", "credentials", "development", "actions", "sdk", "publishing", "users", "portability", "refusals"]);
     expect((described.result as any).yardstick).toContain("take it to another machine");
     const rules = await callTool(`${a.url}/mcp`, { authorization: `Bearer ${s.token}` }, "platform_guide", { topic: "rules" });
     expect((rules.result as any).readBack.map.release_apply).toBe("project_inspect");
