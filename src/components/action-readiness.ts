@@ -1,5 +1,6 @@
 import { parseServerActionSource, routeCallers, type HttpBinding, type RouteCaller } from "../kernel/actions";
-import { refusalNeedsSecret, releaseRefusal, type ReleaseFacts } from "../agent/release-check";
+import { releaseRefusal, type ReleaseFacts } from "../agent/release-check";
+import { ownerFixes } from "../kernel/refusal";
 import { limitIndex } from "../lib/query-bound";
 import { sqlTokens } from "../lib/sql-tokens";
 import type { RuntimeActionAccess } from "../deployments/manifest";
@@ -7,7 +8,7 @@ import type { RuntimeActionAccess } from "../deployments/manifest";
 export type DescribedAction = { name: string; kind: string; access: RuntimeActionAccess; statement?: string; http?: HttpBinding; guard?: string };
 type Visibility = "public" | "private";
 
-export { refusalNeedsSecret };
+export { ownerFixes };
 export type { ReleaseFacts };
 
 /**
@@ -25,7 +26,7 @@ export function deployReadiness(
   try {
     const program = parseServerActionSource(project.files["actions.json"] ?? "");
     const refusal = releaseRefusal(program, facts);
-    return { refusal, ownerActs: refusal !== null && refusalNeedsSecret(refusal), actions: Object.values(program.actions) };
+    return { refusal: refusal?.message ?? null, ownerActs: ownerFixes(refusal?.code), actions: Object.values(program.actions) };
   } catch (error) {
     return { refusal: error instanceof Error ? error.message : String(error), ownerActs: false, actions: project.manifest.runtime.database.actions };
   }

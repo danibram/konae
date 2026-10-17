@@ -3,28 +3,23 @@ import initSqlJs from "sql.js";
 import { createCapsuleValidator } from "../agent/gate";
 import { parseServerActionSource, resolveServerAction } from "./actions";
 import { checkConnects, thenOf } from "./calls";
+import { expectedOutcome, outcomeOf, type Outcome } from "./refusal-cases";
 import { normalizeManifest } from "../deployments/manifest";
 
-type Case = { case: string; actions?: Record<string, unknown>; connects?: unknown; error: string | null };
+type Case = { case: string; actions?: Record<string, unknown>; connects?: unknown; error: string | null; code?: string };
 const cases: Case[] = await Bun.file(new URL("../../kernel-rs/src/call-cases.json", import.meta.url)).json();
 const schema = "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, notice TEXT, owner TEXT);";
 
-/** The answer one door gives a case: null when it passes, else its message. */
-function editorAnswer(item: Case): string | null {
-  try {
-    if ("connects" in item) checkConnects(item.connects);
-    else parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
-    return null;
-  } catch (error) {
-    return (error as Error).message;
-  }
+/** The answer one door gives a case: null when it passes, else its code and message. */
+function editorAnswer(item: Case): Outcome {
+  return outcomeOf(() => "connects" in item ? checkConnects(item.connects) : parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions })));
 }
 
 describe("calls between apps at the editor's door", () => {
   // kernel-rs/src/calls.rs runs the same file.
   test("every case in kernel-rs/src/call-cases.json gets the Kernel's answer", () => {
     expect(cases.length).toBeGreaterThanOrEqual(40);
-    for (const item of cases) expect(editorAnswer(item), item.case).toEqual(item.error);
+    for (const item of cases) expect(editorAnswer(item), item.case).toEqual(expectedOutcome(item));
   });
 
   test("the Validation Gate refuses every action case with the Kernel's words", async () => {
@@ -34,7 +29,7 @@ describe("calls between apps at the editor's door", () => {
         "index.html": "<!doctype html><title>t</title>", "schema.sql": schema,
         "actions.json": JSON.stringify({ version: 1, actions: item.actions }),
       } as never);
-      expect(result.errors.map((error) => error.detail), item.case).toEqual(item.error === null ? [] : [item.error]);
+      expect(result.errors.map((error) => ({ code: error.code, message: error.detail })), item.case).toEqual(item.error === null ? [] : [expectedOutcome(item)]);
     }
   });
 

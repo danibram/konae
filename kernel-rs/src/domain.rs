@@ -17,6 +17,7 @@
 //! carries the hostname without its token, because a package manifest is
 //! written by whoever uploads it, and the destination issues a new token.
 
+use super::refusal::{refuse, Refusal};
 use super::*;
 use std::net::{IpAddr, SocketAddr};
 use anyhow::{bail, ensure, Context};
@@ -62,14 +63,14 @@ impl Rules {
 
 /// The hostname in its stored form, or the refusal. The CLI checks the same
 /// cases with `src/lib/domain-name.ts`, with the same words.
-pub(super) fn check_hostname(raw: &str, rules: &Rules) -> std::result::Result<String, String> {
+pub(super) fn check_hostname(raw: &str, rules: &Rules) -> std::result::Result<String, Refusal> {
     let trimmed = raw.trim();
     let hostname = trimmed.strip_suffix('.').unwrap_or(trimmed).to_lowercase();
     if hostname.is_empty() {
-        return Err("Name a hostname, such as notes.example.org.".into());
+        return Err(refuse("domain.missing", "Name a hostname, such as notes.example.org."));
     }
     if hostname.len() > 253 {
-        return Err("A hostname has at most 253 characters.".into());
+        return Err(refuse("domain.too-long", "A hostname has at most 253 characters."));
     }
     let labels: Vec<&str> = hostname.split('.').collect();
     let valid_label = |label: &&str| {
@@ -79,27 +80,27 @@ pub(super) fn check_hostname(raw: &str, rules: &Rules) -> std::result::Result<St
             && !label.ends_with('-')
     };
     if !labels.iter().all(valid_label) {
-        return Err(format!(
+        return Err(refuse("domain.name-invalid", format!(
             "{hostname} is not a valid DNS name. Use labels of letters, digits and hyphens, 1 to 63 characters each, that do not start or end with a hyphen."
-        ));
+        )));
     }
     if labels.len() < 2 {
-        return Err(format!("{hostname} needs at least two labels, such as notes.example.org."));
+        return Err(refuse("domain.one-label", format!("{hostname} needs at least two labels, such as notes.example.org.")));
     }
     if labels.last().is_some_and(|label| label.bytes().all(|b| b.is_ascii_digit())) {
-        return Err(format!("{hostname} is an IP address. Name a hostname under a domain you control."));
+        return Err(refuse("domain.ip", format!("{hostname} is an IP address. Name a hostname under a domain you control.")));
     }
     if !rules.suffix.is_empty() && (hostname == rules.suffix || hostname.ends_with(&format!(".{}", rules.suffix))) {
-        return Err(format!(
+        return Err(refuse("domain.app-suffix", format!(
             "{hostname} is under this installation's app suffix {}, where Littlebox names apps itself. Name a hostname outside it.",
             rules.suffix
-        ));
+        )));
     }
     if hostname == "localhost" || hostname.ends_with(".localhost") {
-        return Err(format!("{hostname} is a local name. Name a hostname under a domain you control."));
+        return Err(refuse("domain.local", format!("{hostname} is a local name. Name a hostname under a domain you control.")));
     }
     if rules.installation_hosts.iter().any(|host| host == &hostname) {
-        return Err(format!("{hostname} is this installation's own host. Name a hostname no Littlebox host uses."));
+        return Err(refuse("domain.installation-host", format!("{hostname} is this installation's own host. Name a hostname no Littlebox host uses.")));
     }
     Ok(hostname)
 }
@@ -414,7 +415,7 @@ pub(super) async fn admin_call(state: &AppState, owner: &mcp::Owner, name: &str,
 
 async fn set(state: &AppState, owner: &mcp::Owner, id: &str, raw: &str, server: Result<SocketAddr>) -> Result<Value> {
     let deployment = mcp::owned_deployment(state, owner, id, "publish").await?;
-    let hostname = check_hostname(raw, &Rules::of(state)).map_err(anyhow::Error::msg)?;
+    let hostname = check_hostname(raw, &Rules::of(state))?;
     let (record, fresh) = {
         let _domains = database_lock(state, "domains").await;
         ensure_free(state, &deployment.id, &hostname).await?;
@@ -501,9 +502,10 @@ mod tests {
         assert!(cases.len() >= 20);
         for case in cases {
             let outcome = check_hostname(case["hostname"].as_str().unwrap(), &rules);
-            match case["error"].as_str() {
-                None => assert_eq!(outcome, Ok(case["hostnameOut"].as_str().unwrap().to_owned()), "{}", case["case"]),
-                Some(message) => assert_eq!(outcome, Err(message.to_owned()), "{}", case["case"]),
+            if case["error"].is_null() {
+                assert_eq!(outcome, Ok(case["hostnameOut"].as_str().unwrap().to_owned()), "{}", case["case"]);
+            } else {
+                crate::refusal::assert_case(case, outcome);
             }
         }
     }
@@ -674,6 +676,11 @@ mod tests {
         let request = Request::builder().uri("/api/count").header(header::HOST, "notes.example.org").body(Body::empty()).unwrap();
         let response = http::get_route(State(state.clone()), axum::extract::Path("api/count".into()), request).await;
         assert_eq!(response.status(), StatusCode::OK);
+
+        // A refused hostname keeps its code through the tool, for mcp.rs to answer.
+        let local = set(&other.id, "notes.localhost").await.unwrap_err();
+        let refused = crate::refusal::of(&local).expect("domain_set refuses with a code");
+        assert_eq!((refused.code, local.to_string().as_str()), ("domain.local", "notes.localhost is a local name. Name a hostname under a domain you control."));
 
         // Another Deployment cannot take the name, even with its own record.
         let taken = set(&other.id, "notes.example.org").await.unwrap_err().to_string();

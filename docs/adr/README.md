@@ -12,7 +12,7 @@ Each record states its status and which earlier record it amends on its first li
 | [0006](0006-external-projects-use-a-local-development-kernel.md) | External Projects develop against a local Development Kernel | | |
 | [0007](0007-managed-builds-run-in-the-browser.md) | Managed builds run in the browser; schema derivation runs in a subprocess, never in the Kernel process | 0005 | |
 | [0008](0008-authenticated-mcp-is-the-platform-operation-protocol.md) | Authenticated MCP is the operation protocol for the editor, agents and apps; hosted-code isolation headers; the file lifecycle | 0001, 0002 | 0013 |
-| [0009](0009-the-gate-and-the-kernel-share-one-query-bound.md) | A query needs a top-level `LIMIT`, and the Gate and the Kernel refuse statements with the same words | | |
+| [0009](0009-the-gate-and-the-kernel-share-one-query-bound.md) | A query needs a top-level `LIMIT`, and the Gate and the Kernel refuse statements with the same words | | 0020 |
 | [0010](0010-kernel-owns-usage-and-signals.md) | The Kernel keeps Usage and Signals per Deployment; a mutation may declare a guard | | 0017 |
 | [0011](0011-one-verified-account-core-for-creators-and-app-users.md) | One verified account core for creators and app users; invitation codes; app invitations; HTTP routes, callers and API keys | 0001, 0002 | 0014 |
 | [0012](0012-account-email-goes-through-a-persistent-queue.md) | Account email leaves through a persistent queue with a sender preflight and limits | | 0016 |

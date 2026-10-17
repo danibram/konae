@@ -2,7 +2,8 @@ import type { Database, SqlJsStatic } from "sql.js";
 import { parseServerActionSource, resolveServerAction, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
 import { sqlStatementTokens, sqlWordsOf, type SqlToken } from "../lib/sql-tokens";
 import { contractFromProgram } from "../lib/action-contract";
-import { refusalNeedsSecret, releaseRefusal, type ReleaseFacts } from "./release-check";
+import { releaseRefusal, type ReleaseFacts } from "./release-check";
+import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
 import type {
   CapsuleFiles,
   CapsuleValidator,
@@ -13,7 +14,7 @@ import type {
   ValidationWarning,
 } from "./contracts";
 
-export { refusalNeedsSecret, releaseRefusal, type ReleaseFacts };
+export { ownerFixes, releaseRefusal, type ReleaseFacts };
 
 export type SqlJsLoader = () => Promise<SqlJsStatic>;
 
@@ -84,6 +85,8 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       if (refused.length > 0) {
         return failure({
           stage: "schema",
+          code: "schema.statement-refused",
+          hint: hintOf("schema.statement-refused"),
           message: `schema.sql may only create tables and indexes, but it contains ${refused.join(", ")}.`,
           detail:
             "The Kernel applies schema.sql with an authorizer that allows CREATE TABLE and CREATE [UNIQUE] INDEX and nothing else, " +
@@ -120,7 +123,9 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       try {
         program = parseServerActionSource(files["actions.json"]);
       } catch (error) {
-        errors.push({ stage: "actions", message: "actions.json is not a valid server action program.", detail: describe(error) });
+        // A refusal of the Capsule keeps the Kernel's code beside its sentence (ADR-0020).
+        const refused = refusalOf(error);
+        errors.push({ stage: "actions", message: "actions.json is not a valid server action program.", detail: describe(error), ...(refused ? { code: refused.code, hint: refused.hint } : {}) });
       }
 
       if (program) errors.push(...checkActions(fresh, program, "actions"));
@@ -128,8 +133,8 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       const release = program && errors.length === 0 ? releaseRefusal(program, facts) : null;
       // A secret only the owner can set does not block the change: the files are
       // right, and Deploy still refuses until the owner sets it.
-      if (release && refusalNeedsSecret(release)) warnings.push({ stage: "actions", message: release, detail: RELEASE_OWNER, owner: true });
-      else if (release) errors.push({ stage: "actions", message: release, detail: RELEASE_AUTHOR });
+      if (release && ownerFixes(release.code)) warnings.push({ stage: "actions", message: release.message, detail: RELEASE_OWNER, owner: true, code: release.code, hint: release.hint });
+      else if (release) errors.push({ stage: "actions", message: release.message, detail: RELEASE_AUTHOR, code: release.code, hint: release.hint });
       // A result column without a name a second backend could match passes, with a warning.
       if (program) warnings.push(...contractFromProgram(program, files["schema.sql"]).warnings.map(({ message }) => ({ stage: "actions" as const, message })));
       checked.push("actions");

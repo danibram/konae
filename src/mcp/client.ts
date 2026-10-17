@@ -1,7 +1,10 @@
 export type Transfer = { transferId: string; size: number; sha256: string; chunkBytes: number };
 
+/** A Capsule refusal a tool answers beside its text (ADR-0020). */
+export type McpRefusal = { code: string; message: string; hint?: { fix: string; remedy: string; tool?: string } };
+
 export class McpError extends Error {
-  constructor(message: string, readonly status?: number) { super(message); }
+  constructor(message: string, readonly status?: number, readonly refusal?: McpRefusal) { super(message); }
 }
 
 export class McpClient {
@@ -28,7 +31,7 @@ export class McpClient {
   async call<T = unknown>(name: string, args: object = {}, signal?: AbortSignal): Promise<T> {
     await this.connect();
     const result = await this.request("tools/call", { name, arguments: args }, false, signal);
-    if (result.isError) throw new McpError(result.content?.[0]?.text ?? "MCP tool failed.");
+    if (result.isError) throw new McpError(result.content?.[0]?.text ?? "MCP tool failed.", undefined, result.structuredContent?.error);
     if (!result.structuredContent || !("result" in result.structuredContent)) throw new McpError("The MCP tool returned no structured result.");
     return result.structuredContent.result as T;
   }

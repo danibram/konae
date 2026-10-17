@@ -21,7 +21,8 @@
     "bindings": []
    }
   },
-  "error": "Invalid server action name: Orders.list"
+  "error": "Invalid server action name: Orders.list",
+  "code": "action.name-invalid"
  },
  {
   "case": "a name with one word",
@@ -33,7 +34,8 @@
     "bindings": []
    }
   },
-  "error": "Invalid server action name: orders"
+  "error": "Invalid server action name: orders",
+  "code": "action.name-invalid"
  },
  {
   "case": "a name with a hyphen",
@@ -45,7 +47,8 @@
     "bindings": []
    }
   },
-  "error": "Invalid server action name: orders.mark-paid"
+  "error": "Invalid server action name: orders.mark-paid",
+  "code": "action.name-invalid"
  },
  {
   "case": "a name with an empty part",
@@ -57,7 +60,8 @@
     "bindings": []
    }
   },
-  "error": "Invalid server action name: orders..list"
+  "error": "Invalid server action name: orders..list",
+  "code": "action.name-invalid"
  },
  {
   "case": "a name of 100 characters",
@@ -81,7 +85,8 @@
     "bindings": []
    }
   },
-  "error": "Invalid server action name: orders.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  "error": "Invalid server action name: orders.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "code": "action.name-invalid"
  },
  {
   "case": "access granted is not supported yet",
@@ -93,7 +98,8 @@
     "bindings": []
    }
   },
-  "error": "Action orders.list uses \"access\": \"granted\", which the Kernel does not support yet. Use \"anonymous\" or \"authenticated\"."
+  "error": "Action orders.list uses \"access\": \"granted\", which the Kernel does not support yet. Use \"anonymous\" or \"authenticated\".",
+  "code": "action.access-unsupported"
  },
  {
   "case": "an unknown access",
@@ -105,7 +111,8 @@
     "bindings": []
    }
   },
-  "error": "Action orders.list has an invalid access. Use \"anonymous\" or \"authenticated\"."
+  "error": "Action orders.list has an invalid access. Use \"anonymous\" or \"authenticated\".",
+  "code": "action.access-invalid"
  },
  {
   "case": "an unknown kind",
@@ -117,7 +124,8 @@
     "bindings": []
    }
   },
-  "error": "Action orders.list has an invalid kind. Use \"query\", \"mutation\", \"signal\" or \"call\"."
+  "error": "Action orders.list has an invalid kind. Use \"query\", \"mutation\", \"signal\" or \"call\".",
+  "code": "action.kind-invalid"
  },
  {
   "case": "every binding form",
@@ -176,7 +184,8 @@
     ]
    }
   },
-  "error": "Invalid binding 0 in orders.create."
+  "error": "Invalid binding 0 in orders.create.",
+  "code": "action.binding-invalid"
  },
  {
   "case": "an input binding with no key",
@@ -193,7 +202,8 @@
     ]
    }
   },
-  "error": "Invalid binding 0 in orders.create."
+  "error": "Invalid binding 0 in orders.create.",
+  "code": "action.binding-invalid"
  },
  {
   "case": "an input binding of an unknown type",
@@ -211,7 +221,8 @@
     ]
    }
   },
-  "error": "Invalid binding 0 in orders.create."
+  "error": "Invalid binding 0 in orders.create.",
+  "code": "action.binding-invalid"
  },
  {
   "case": "an actor binding of the role",
@@ -250,7 +261,8 @@
     ]
    }
   },
-  "error": "Invalid binding 0 in orders.create."
+  "error": "Invalid binding 0 in orders.create.",
+  "code": "action.binding-invalid"
  },
  {
   "case": "a kernel binding of another field",
@@ -267,7 +279,8 @@
     ]
    }
   },
-  "error": "Invalid binding 0 in orders.create."
+  "error": "Invalid binding 0 in orders.create.",
+  "code": "action.binding-invalid"
  },
  {
   "case": "a literal that is a boolean",
@@ -284,7 +297,8 @@
     ]
    }
   },
-  "error": "Invalid binding 0 in orders.create."
+  "error": "Invalid binding 0 in orders.create.",
+  "code": "action.binding-invalid"
  },
  {
   "case": "a literal string",
@@ -323,7 +337,8 @@
     ]
    }
   },
-  "error": "Invalid binding 1 in orders.create."
+  "error": "Invalid binding 1 in orders.create.",
+  "code": "action.binding-invalid"
  },
  {
   "case": "a maxLength of 0",
@@ -342,7 +357,8 @@
     ]
    }
   },
-  "error": "Invalid maxLength in orders.create."
+  "error": "Invalid maxLength in orders.create.",
+  "code": "action.max-length-invalid"
  },
  {
   "case": "a maxLength above 100000",
@@ -361,7 +377,8 @@
     ]
    }
   },
-  "error": "Invalid maxLength in orders.create."
+  "error": "Invalid maxLength in orders.create.",
+  "code": "action.max-length-invalid"
  },
  {
   "case": "a maxLength of 100000",
@@ -398,7 +415,8 @@
     ]
    }
   },
-  "error": "Action orders.create has an invalid nullable input binding."
+  "error": "Action orders.create has an invalid nullable input binding.",
+  "code": "action.binding-nullable-invalid"
  },
  {
   "case": "a statement longer than 20000 bytes",
@@ -410,7 +428,8 @@
     "bindings": []
    }
   },
-  "error": "Action orders.list exceeds statement or binding limits."
+  "error": "Action orders.list exceeds statement or binding limits.",
+  "code": "action.limits-exceeded"
  },
  {
   "case": "more than 100 bindings",
@@ -827,7 +846,8 @@
     ]
    }
   },
-  "error": "Action orders.create exceeds statement or binding limits."
+  "error": "Action orders.create exceeds statement or binding limits.",
+  "code": "action.limits-exceeded"
  },
  {
   "case": "100 actions",
@@ -2045,7 +2065,8 @@
     "bindings": []
    }
   },
-  "error": "A project may declare at most 100 actions."
+  "error": "A project may declare at most 100 actions.",
+  "code": "action.count-over"
  },
  {
   "case": "with two bad actions the first name in sorted order is reported",
@@ -2063,7 +2084,8 @@
     "bindings": []
    }
   },
-  "error": "Action aa.list has an invalid access. Use \"anonymous\" or \"authenticated\"."
+  "error": "Action aa.list has an invalid access. Use \"anonymous\" or \"authenticated\".",
+  "code": "action.access-invalid"
  },
  {
   "case": "a mutation with an unknown key",
@@ -2084,7 +2106,8 @@
     }
    }
   },
-  "error": "Action orders.pay has a key email that a mutation action does not take."
+  "error": "Action orders.pay has a key email that a mutation action does not take.",
+  "code": "action.key-unknown"
  },
  {
   "case": "a mutation with a misspelled notify",
@@ -2107,7 +2130,8 @@
     }
    }
   },
-  "error": "Action orders.pay has a key notfy that a mutation action does not take."
+  "error": "Action orders.pay has a key notfy that a mutation action does not take.",
+  "code": "action.key-unknown"
  },
  {
   "case": "a query with an unknown key",
@@ -2120,7 +2144,8 @@
     "description": "Every order"
    }
   },
-  "error": "Action orders.list has a key description that a query action does not take."
+  "error": "Action orders.list has a key description that a query action does not take.",
+  "code": "action.key-unknown"
  },
  {
   "case": "a query with two unknown keys names the first in sorted order",
@@ -2134,7 +2159,8 @@
     "limit": 50
    }
   },
-  "error": "Action orders.list has a key limit that a query action does not take."
+  "error": "Action orders.list has a key limit that a query action does not take.",
+  "code": "action.key-unknown"
  },
  {
   "case": "a signal action with an unknown key",
@@ -2151,7 +2177,8 @@
     ]
    }
   },
-  "error": "Action page.view has a key properties that a signal action does not take."
+  "error": "Action page.view has a key properties that a signal action does not take.",
+  "code": "action.key-unknown"
  },
  {
   "case": "an unknown key set to null counts as absent",
@@ -2193,7 +2220,8 @@
     "guard": "No order."
    }
   },
-  "error": "Action orders.list is a query, so it cannot declare a guard. Declare it on a mutation."
+  "error": "Action orders.list is a query, so it cannot declare a guard. Declare it on a mutation.",
+  "code": "guard.not-mutation"
  },
  {
   "case": "a signal action with an http route",
@@ -2211,7 +2239,8 @@
     }
    }
   },
-  "error": "Action page.view is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route."
+  "error": "Action page.view is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route.",
+  "code": "signal.route"
  },
  {
   "case": "a signal action with a GET route",
@@ -2229,6 +2258,7 @@
     }
    }
   },
-  "error": "Action page.view is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route."
+  "error": "Action page.view is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route.",
+  "code": "signal.route"
  }
 ]

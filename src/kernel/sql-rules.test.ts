@@ -3,8 +3,9 @@ import initSqlJs from "sql.js";
 import { createCapsuleValidator } from "../agent/gate";
 import { starterProject } from "../lib/starter";
 import { parseServerActionSource } from "./actions";
+import { expectedOutcome, outcomeOf } from "./refusal-cases";
 
-type SqlRuleCase = { case: string; actions?: Record<string, unknown>; schema?: string; error: string | null };
+type SqlRuleCase = { case: string; actions?: Record<string, unknown>; schema?: string; error: string | null; code?: string };
 
 describe("SQL rules", () => {
   // kernel-rs/src/sql_rules.rs runs the same cases against the Kernel.
@@ -16,16 +17,10 @@ describe("SQL rules", () => {
       if (item.schema !== undefined) {
         const result = await gate.validate({ ...starterProject.files, "schema.sql": item.schema, "actions.json": JSON.stringify({ version: 1, actions: {} }) });
         if (item.error === null) expect(result.errors, item.case).toEqual([]);
-        else expect(result.errors[0]?.message, item.case).toBe(item.error);
+        else expect({ code: result.errors[0]?.code, message: result.errors[0]?.message }, item.case).toEqual(expectedOutcome(item));
         continue;
       }
-      let message: string | null = null;
-      try {
-        parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));
-      } catch (error) {
-        message = (error as Error).message;
-      }
-      expect(message, item.case).toBe(item.error);
+      expect(outcomeOf(() => parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }))), item.case).toEqual(expectedOutcome(item));
     }
   });
 });

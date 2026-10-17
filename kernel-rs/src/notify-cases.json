@@ -252,7 +252,8 @@
     }
    }
   },
-  "error": "Action bookings.mine is a query, so it cannot declare notify. Declare it on a mutation."
+  "error": "Action bookings.mine is a query, so it cannot declare notify. Declare it on a mutation.",
+  "code": "notify.not-mutation"
  },
  {
   "case": "notify on a signal action",
@@ -281,7 +282,8 @@
     }
    }
   },
-  "error": "Action rooms.view is a signal action, so it cannot declare notify. Declare it on a mutation."
+  "error": "Action rooms.view is a signal action, so it cannot declare notify. Declare it on a mutation.",
+  "code": "notify.not-mutation"
  },
  {
   "case": "notify that is a string",
@@ -305,7 +307,8 @@
     "notify": "owner"
    }
   },
-  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else."
+  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else.",
+  "code": "notify.invalid"
  },
  {
   "case": "notify without a body",
@@ -332,7 +335,8 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else."
+  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else.",
+  "code": "notify.invalid"
  },
  {
   "case": "notify with an address of its own",
@@ -361,7 +365,8 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else."
+  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else.",
+  "code": "notify.invalid"
  },
  {
   "case": "notify with a subject that is not a string",
@@ -389,7 +394,8 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else."
+  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else.",
+  "code": "notify.invalid"
  },
  {
   "case": "to an address",
@@ -417,7 +423,8 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\" or \"actor\"."
+  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\" or \"actor\".",
+  "code": "notify.recipient-invalid"
  },
  {
   "case": "to an input",
@@ -445,7 +452,8 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\" or \"actor\"."
+  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\" or \"actor\".",
+  "code": "notify.recipient-invalid"
  },
  {
   "case": "without to",
@@ -472,7 +480,8 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\" or \"actor\"."
+  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\" or \"actor\".",
+  "code": "notify.recipient-invalid"
  },
  {
   "case": "a subject of 121 characters",
@@ -500,7 +509,8 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify subject. Use 1 to 120 characters on one line."
+  "error": "Action bookings.create has an invalid notify subject. Use 1 to 120 characters on one line.",
+  "code": "notify.subject-invalid"
  },
  {
   "case": "a blank subject",
@@ -528,7 +538,8 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify subject. Use 1 to 120 characters on one line."
+  "error": "Action bookings.create has an invalid notify subject. Use 1 to 120 characters on one line.",
+  "code": "notify.subject-invalid"
  },
  {
   "case": "a subject with a line break",
@@ -556,7 +567,8 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify subject. Use 1 to 120 characters on one line."
+  "error": "Action bookings.create has an invalid notify subject. Use 1 to 120 characters on one line.",
+  "code": "notify.subject-invalid"
  },
  {
   "case": "a body of 2001 characters",
@@ -584,7 +596,8 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters."
+  "error": "Action bookings.create has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters.",
+  "code": "notify.body-invalid"
  },
  {
   "case": "an empty body",
@@ -612,7 +625,8 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters."
+  "error": "Action bookings.create has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters.",
+  "code": "notify.body-invalid"
  },
  {
   "case": "a body with a carriage return",
@@ -640,7 +654,8 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters."
+  "error": "Action bookings.create has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters.",
+  "code": "notify.body-invalid"
  },
  {
   "case": "a placeholder for an input the action does not bind",
@@ -668,7 +683,8 @@
     }
    }
   },
-  "error": "Action bookings.create names an unknown placeholder {input.email} in its notify body. Use {input.<key>} for one of its input bindings, or {actor.id}."
+  "error": "Action bookings.create names an unknown placeholder {input.email} in its notify body. Use {input.<key>} for one of its input bindings, or {actor.id}.",
+  "code": "notify.placeholder-unknown"
  },
  {
   "case": "the actor's email as a placeholder",
@@ -696,7 +712,8 @@
     }
    }
   },
-  "error": "Action bookings.create names an unknown placeholder {actor.email} in its notify subject. Use {input.<key>} for one of its input bindings, or {actor.id}."
+  "error": "Action bookings.create names an unknown placeholder {actor.email} in its notify subject. Use {input.<key>} for one of its input bindings, or {actor.id}.",
+  "code": "notify.placeholder-unknown"
  },
  {
   "case": "a placeholder without a source",
@@ -724,7 +741,8 @@
     }
    }
   },
-  "error": "Action bookings.create names an unknown placeholder {room} in its notify subject. Use {input.<key>} for one of its input bindings, or {actor.id}."
+  "error": "Action bookings.create names an unknown placeholder {room} in its notify subject. Use {input.<key>} for one of its input bindings, or {actor.id}.",
+  "code": "notify.placeholder-unknown"
  },
  {
   "case": "an empty placeholder",
@@ -752,7 +770,8 @@
     }
    }
   },
-  "error": "Action bookings.create names an unknown placeholder {} in its notify body. Use {input.<key>} for one of its input bindings, or {actor.id}."
+  "error": "Action bookings.create names an unknown placeholder {} in its notify body. Use {input.<key>} for one of its input bindings, or {actor.id}.",
+  "code": "notify.placeholder-unknown"
  },
  {
   "case": "an unclosed placeholder",
@@ -780,7 +799,8 @@
     }
    }
   },
-  "error": "Action bookings.create has an unclosed placeholder in its notify subject. Close it with \"}\"."
+  "error": "Action bookings.create has an unclosed placeholder in its notify subject. Close it with \"}\".",
+  "code": "notify.placeholder-unclosed"
  },
  {
   "case": "the subject is checked before the body",
@@ -808,6 +828,7 @@
     }
    }
   },
-  "error": "Action bookings.create names an unknown placeholder {x} in its notify subject. Use {input.<key>} for one of its input bindings, or {actor.id}."
+  "error": "Action bookings.create names an unknown placeholder {x} in its notify subject. Use {input.<key>} for one of its input bindings, or {actor.id}.",
+  "code": "notify.placeholder-unknown"
  }
 ]

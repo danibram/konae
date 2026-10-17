@@ -65,7 +65,8 @@
    "provider": "gitlab",
    "secret": "gitlab_webhook"
   },
-  "error": "Action hooks.receive names an unknown signature provider. Use \"github\", \"shopify\", \"stripe\" or \"svix\"."
+  "error": "Action hooks.receive names an unknown signature provider. Use \"github\", \"shopify\", \"stripe\" or \"svix\".",
+  "code": "signature.provider-unknown"
  },
  {
   "case": "a provider in another letter case",
@@ -74,7 +75,8 @@
    "provider": "GitHub",
    "secret": "github_webhook"
   },
-  "error": "Action hooks.receive names an unknown signature provider. Use \"github\", \"shopify\", \"stripe\" or \"svix\"."
+  "error": "Action hooks.receive names an unknown signature provider. Use \"github\", \"shopify\", \"stripe\" or \"svix\".",
+  "code": "signature.provider-unknown"
  },
  {
   "case": "a provider that is not text",
@@ -83,7 +85,8 @@
    "provider": 1,
    "secret": "github_webhook"
   },
-  "error": "Action hooks.receive names an unknown signature provider. Use \"github\", \"shopify\", \"stripe\" or \"svix\"."
+  "error": "Action hooks.receive names an unknown signature provider. Use \"github\", \"shopify\", \"stripe\" or \"svix\".",
+  "code": "signature.provider-unknown"
  },
  {
   "case": "an unknown provider with a long-form key names the provider first",
@@ -93,7 +96,8 @@
    "header": "X-Gitlab-Token",
    "secret": "gitlab_webhook"
   },
-  "error": "Action hooks.receive names an unknown signature provider. Use \"github\", \"shopify\", \"stripe\" or \"svix\"."
+  "error": "Action hooks.receive names an unknown signature provider. Use \"github\", \"shopify\", \"stripe\" or \"svix\".",
+  "code": "signature.provider-unknown"
  },
  {
   "case": "a preset with its header spelled out beside it",
@@ -103,7 +107,8 @@
    "header": "X-Hub-Signature-256",
    "secret": "github_webhook"
   },
-  "error": "Action hooks.receive names the signature provider \"github\", so its signature takes only \"provider\" and \"secret\". Remove \"header\"."
+  "error": "Action hooks.receive names the signature provider \"github\", so its signature takes only \"provider\" and \"secret\". Remove \"header\".",
+  "code": "signature.provider-extra-keys"
  },
  {
   "case": "a preset with a scheme and a window beside it names both, in sorted order",
@@ -114,7 +119,8 @@
    "scheme": "timestamped",
    "secret": "payments_webhook"
   },
-  "error": "Action hooks.receive names the signature provider \"stripe\", so its signature takes only \"provider\" and \"secret\". Remove \"scheme\" and \"window\"."
+  "error": "Action hooks.receive names the signature provider \"stripe\", so its signature takes only \"provider\" and \"secret\". Remove \"scheme\" and \"window\".",
+  "code": "signature.provider-extra-keys"
  },
  {
   "case": "a preset with no secret",
@@ -122,7 +128,8 @@
   "signature": {
    "provider": "github"
   },
-  "error": "Action hooks.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter."
+  "error": "Action hooks.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter.",
+  "code": "signature.secret-invalid"
  },
  {
   "case": "a preset with a secret that is not a secret name",
@@ -131,7 +138,8 @@
    "provider": "stripe",
    "secret": "Stripe-Secret"
   },
-  "error": "Action hooks.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter."
+  "error": "Action hooks.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter.",
+  "code": "signature.secret-invalid"
  },
  {
   "case": "a preset on GET",
@@ -140,7 +148,8 @@
    "provider": "github",
    "secret": "github_webhook"
   },
-  "error": "Action hooks.receive binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body."
+  "error": "Action hooks.receive binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body.",
+  "code": "signature.provider-on-get"
  },
  {
   "case": "a long form with three wrong keys names all three",
@@ -153,7 +162,8 @@
    "encoding": "hex",
    "prefix": "sha 256"
   },
-  "error": "Action hooks.receive has an invalid signature header. Action hooks.receive has an invalid signature algorithm. Use \"sha256\" or \"sha1\". Action hooks.receive has an invalid signature prefix. Use 1 to 32 letters, digits, \"=\", \"-\", \"_\", \".\" or \":\", such as \"sha256=\"."
+  "error": "Action hooks.receive has an invalid signature header. Action hooks.receive has an invalid signature algorithm. Use \"sha256\" or \"sha1\". Action hooks.receive has an invalid signature prefix. Use 1 to 32 letters, digits, \"=\", \"-\", \"_\", \".\" or \":\", such as \"sha256=\".",
+  "code": "signature.header-invalid"
  },
  {
   "case": "a timestamped long form with no prefix, tag or window",
@@ -163,7 +173,8 @@
    "header": "Stripe-Signature",
    "secret": "payments_webhook"
   },
-  "error": "Action hooks.receive has an invalid timestamp prefix. Use the field's name and \"=\", such as \"t=\". Action hooks.receive has an invalid signature tag. Use the field's name and \"=\", such as \"v1=\", other than the timestamp's. Action hooks.receive has an invalid signature window. Use a whole number of seconds from 1 to 3600."
+  "error": "Action hooks.receive has an invalid timestamp prefix. Use the field's name and \"=\", such as \"t=\". Action hooks.receive has an invalid signature tag. Use the field's name and \"=\", such as \"v1=\", other than the timestamp's. Action hooks.receive has an invalid signature window. Use a whole number of seconds from 1 to 3600.",
+  "code": "signature.timestamp-prefix-invalid"
  },
  {
   "case": "a key the scheme does not take and a bad secret",
@@ -173,13 +184,15 @@
    "header": "svix-signature",
    "secret": "Resend"
   },
-  "error": "Action hooks.receive has an invalid svix signature. It takes \"scheme\" and \"secret\". Action hooks.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter."
+  "error": "Action hooks.receive has an invalid svix signature. It takes \"scheme\" and \"secret\". Action hooks.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter.",
+  "code": "signature.keys-invalid"
  },
  {
   "case": "a littlebox signature with no header and no secret",
   "method": "POST",
   "signature": {},
-  "error": "Action hooks.receive has an invalid signature header. Action hooks.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter."
+  "error": "Action hooks.receive has an invalid signature header. Action hooks.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter.",
+  "code": "signature.header-invalid"
  },
  {
   "case": "a provider's scheme on GET with a key it does not take stops at the method",
@@ -189,7 +202,8 @@
    "header": "svix-signature",
    "secret": "bad name"
   },
-  "error": "Action hooks.receive has an invalid svix signature. It takes \"scheme\" and \"secret\". Action hooks.receive binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body."
+  "error": "Action hooks.receive has an invalid svix signature. It takes \"scheme\" and \"secret\". Action hooks.receive binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body.",
+  "code": "signature.keys-invalid"
  },
  {
   "case": "a long form still parses as it did",

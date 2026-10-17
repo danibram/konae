@@ -4,6 +4,7 @@ import { withPrivateNotes } from "../lib/private-notes";
 import { cloneStarter, starterProject } from "../lib/starter";
 import type { CapsuleFiles, LiveDatabase } from "./contracts";
 import { createCapsuleValidator } from "./gate";
+import { expectedOutcome } from "../kernel/refusal-cases";
 import { formatValidation } from "./tools";
 
 // sql.js resolves its own wasm under bun; the browser path uses the bundled url loader.
@@ -461,21 +462,21 @@ describe("the gate and the Kernel refuse the same actions.json", () => {
 
   for (const file of files) {
     test(`every case in kernel-rs/src/${file}`, async () => {
-      const cases: { case: string; actions?: Record<string, unknown>; schema?: string; error: string | null }[] =
+      const cases: { case: string; actions?: Record<string, unknown>; schema?: string; error: string | null; code?: string }[] =
         await Bun.file(new URL(`../../kernel-rs/src/${file}`, import.meta.url)).json();
       expect(cases.length).toBeGreaterThan(5);
       for (const item of cases) {
         if (item.schema !== undefined) {
           // A schema.sql case: the gate's own stage names the refusal.
           const result = await validator.validate(capsule({ "schema.sql": item.schema, "actions.json": actions({ version: 1, actions: {} }) }));
-          expect(result.errors.map((error) => error.message), item.case).toEqual(item.error === null ? [] : [item.error]);
+          expect(result.errors.map((error) => ({ code: error.code, message: error.message })), item.case).toEqual(item.error === null ? [] : [expectedOutcome(item)]);
           continue;
         }
         const result = await validator.validate(capsule({ "schema.sql": caseSchema, "actions.json": actions({ version: 1, actions: item.actions }) }));
         if (item.error === null) {
           expect(result.errors, item.case).toEqual([]);
         } else {
-          expect(result.errors.map((error) => error.detail), item.case).toEqual([item.error]);
+          expect(result.errors.map((error) => ({ code: error.code, message: error.detail })), item.case).toEqual([expectedOutcome(item)]);
           // The model reads the formatted result, so the Kernel's words reach it.
           expect(formatValidation(result), item.case).toContain(item.error);
         }

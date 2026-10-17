@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { parseRouteSignature } from "../kernel/route-declaration";
 import signaturePresets from "../../kernel-rs/src/signature-presets.json";
 import { signDelivery } from "./provider-signature";
+import { expectedOutcome, outcomeOf } from "../kernel/refusal-cases";
 
 type Vector = { case: string; signature: unknown; secret: string; body: string; t?: number; id?: string; headers: Record<string, string> };
 
@@ -23,19 +24,13 @@ describe("a provider's signature", () => {
   });
 
   test("a preset expands to its long form and a refusal names every wrong key, as the Kernel does", async () => {
-    type Case = { case: string; method: "GET" | "POST"; signature: unknown; error?: string; expands?: unknown };
+    type Case = { case: string; method: "GET" | "POST"; signature: unknown; error?: string; code?: string; expands?: unknown };
     const cases: Case[] = await Bun.file(new URL("../../kernel-rs/src/signature-preset-cases.json", import.meta.url)).json();
     expect(cases.length).toBeGreaterThanOrEqual(15);
     for (const item of cases) {
       const parse = (value: unknown) => () => parseRouteSignature("hooks.receive", item.method, value);
       if (item.error !== undefined) {
-        let message = "";
-        try {
-          parse(item.signature)();
-        } catch (error) {
-          message = (error as Error).message;
-        }
-        expect(message, item.case).toBe(item.error);
+        expect(outcomeOf(parse(item.signature)), item.case).toEqual(expectedOutcome({ error: item.error, code: item.code }));
       } else {
         expect(parse(item.signature)(), item.case).toEqual(parse(item.expands)());
       }

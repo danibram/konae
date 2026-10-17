@@ -57,7 +57,8 @@
     }
    }
   },
-  "error": "Action holds.release runs every 4m, more often than every 5 minutes. Use \"5m\" or longer."
+  "error": "Action holds.release runs every 4m, more often than every 5 minutes. Use \"5m\" or longer.",
+  "code": "schedule.too-often"
  },
  {
   "case": "every 1 minute",
@@ -77,7 +78,8 @@
     }
    }
   },
-  "error": "Action holds.release runs every 1m, more often than every 5 minutes. Use \"5m\" or longer."
+  "error": "Action holds.release runs every 1m, more often than every 5 minutes. Use \"5m\" or longer.",
+  "code": "schedule.too-often"
  },
  {
   "case": "every 6 hours",
@@ -157,7 +159,8 @@
     }
    }
   },
-  "error": "Action holds.release runs every 25h, less often than once a day. Use \"daily\" or a period of 24 hours or less."
+  "error": "Action holds.release runs every 25h, less often than once a day. Use \"daily\" or a period of 24 hours or less.",
+  "code": "schedule.too-rare"
  },
  {
   "case": "every 1441 minutes",
@@ -177,7 +180,8 @@
     }
    }
   },
-  "error": "Action holds.release runs every 1441m, less often than once a day. Use \"daily\" or a period of 24 hours or less."
+  "error": "Action holds.release runs every 1441m, less often than once a day. Use \"daily\" or a period of 24 hours or less.",
+  "code": "schedule.too-rare"
  },
  {
   "case": "every with a leading zero",
@@ -197,7 +201,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\".",
+  "code": "schedule.invalid"
  },
  {
   "case": "every with seconds",
@@ -217,7 +222,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\".",
+  "code": "schedule.invalid"
  },
  {
   "case": "every with no unit",
@@ -237,7 +243,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\".",
+  "code": "schedule.invalid"
  },
  {
   "case": "every with a space",
@@ -257,7 +264,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\".",
+  "code": "schedule.invalid"
  },
  {
   "case": "every with a capital unit",
@@ -277,7 +285,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\".",
+  "code": "schedule.invalid"
  },
  {
   "case": "every with six digits",
@@ -297,7 +306,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\".",
+  "code": "schedule.invalid"
  },
  {
   "case": "every as a number",
@@ -317,7 +327,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\".",
+  "code": "schedule.invalid"
  },
  {
   "case": "a cron expression",
@@ -335,7 +346,8 @@
     "schedule": "0 8 * * *"
    }
   },
-  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\".",
+  "code": "schedule.invalid"
  },
  {
   "case": "an empty schedule",
@@ -353,7 +365,8 @@
     "schedule": {}
    }
   },
-  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\".",
+  "code": "schedule.invalid"
  },
  {
   "case": "both every and daily",
@@ -374,7 +387,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\".",
+  "code": "schedule.invalid"
  },
  {
   "case": "an unknown key",
@@ -394,7 +408,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\".",
+  "code": "schedule.invalid"
  },
  {
   "case": "schedule as true",
@@ -412,7 +427,8 @@
     "schedule": true
    }
   },
-  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\".",
+  "code": "schedule.invalid"
  },
  {
   "case": "daily at two in the morning",
@@ -492,7 +508,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59."
+  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59.",
+  "code": "schedule.daily-invalid"
  },
  {
   "case": "daily at 12:60",
@@ -512,7 +529,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59."
+  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59.",
+  "code": "schedule.daily-invalid"
  },
  {
   "case": "daily without a leading zero",
@@ -532,7 +550,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59."
+  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59.",
+  "code": "schedule.daily-invalid"
  },
  {
   "case": "daily with seconds",
@@ -552,7 +571,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59."
+  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59.",
+  "code": "schedule.daily-invalid"
  },
  {
   "case": "daily with a time zone",
@@ -572,7 +592,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59."
+  "error": "Action holds.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59.",
+  "code": "schedule.daily-invalid"
  },
  {
   "case": "daily as a number",
@@ -592,7 +613,8 @@
     }
    }
   },
-  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\"."
+  "error": "Action holds.release has an invalid schedule. Declare \"every\" with minutes or hours, such as \"15m\" or \"6h\", or \"daily\" with a UTC time, such as \"02:00\".",
+  "code": "schedule.invalid"
  },
  {
   "case": "a schedule on a mutation that binds the actor, a literal and the time",
@@ -661,7 +683,8 @@
     }
    }
   },
-  "error": "Action holds.release declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values."
+  "error": "Action holds.release declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values.",
+  "code": "schedule.input"
  },
  {
   "case": "a schedule on a mutation with a nullable input binding",
@@ -687,7 +710,8 @@
     }
    }
   },
-  "error": "Action holds.release declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values."
+  "error": "Action holds.release declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values.",
+  "code": "schedule.input"
  },
  {
   "case": "input bindings are refused before a bad period",
@@ -708,7 +732,8 @@
     }
    }
   },
-  "error": "Action holds.release declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values."
+  "error": "Action holds.release declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values.",
+  "code": "schedule.input"
  },
  {
   "case": "a schedule on a query",
@@ -728,7 +753,8 @@
     }
    }
   },
-  "error": "Action holds.due is a query, so it cannot declare a schedule. Declare it on a mutation."
+  "error": "Action holds.due is a query, so it cannot declare a schedule. Declare it on a mutation.",
+  "code": "schedule.not-mutation"
  },
  {
   "case": "a schedule on a signal action",
@@ -745,7 +771,8 @@
     }
    }
   },
-  "error": "Action holds.ping is a signal action, so it cannot declare a schedule. Declare it on a mutation."
+  "error": "Action holds.ping is a signal action, so it cannot declare a schedule. Declare it on a mutation.",
+  "code": "schedule.not-mutation"
  },
  {
   "case": "a schedule with a guard and a signal",
@@ -793,7 +820,8 @@
     "guard": ""
    }
   },
-  "error": "Action holds.release has an invalid guard. Use a message of 1 to 200 characters on one line."
+  "error": "Action holds.release has an invalid guard. Use a message of 1 to 200 characters on one line.",
+  "code": "guard.invalid"
  },
  {
   "case": "subscribe on a query",
@@ -812,7 +840,8 @@
     "subscribe": true
    }
   },
-  "error": "Action notes.recent declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead."
+  "error": "Action notes.recent declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead.",
+  "code": "action.subscribe-unsupported"
  },
  {
   "case": "subscribe set to false is still refused",
@@ -825,7 +854,8 @@
     "subscribe": false
    }
   },
-  "error": "Action notes.recent declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead."
+  "error": "Action notes.recent declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead.",
+  "code": "action.subscribe-unsupported"
  },
  {
   "case": "subscribe on a mutation",
@@ -845,7 +875,8 @@
     }
    }
   },
-  "error": "Action holds.release declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead."
+  "error": "Action holds.release declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead.",
+  "code": "action.subscribe-unsupported"
  },
  {
   "case": "subscribe on a signal action",
@@ -860,7 +891,8 @@
     "subscribe": true
    }
   },
-  "error": "Action notes.seen declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead."
+  "error": "Action notes.seen declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead.",
+  "code": "action.subscribe-unsupported"
  },
  {
   "case": "subscribe is refused before a schedule",
@@ -881,7 +913,8 @@
     "subscribe": true
    }
   },
-  "error": "Action holds.release declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead."
+  "error": "Action holds.release declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead.",
+  "code": "action.subscribe-unsupported"
  },
  {
   "case": "with two bad actions the first in name order is named",
@@ -915,6 +948,7 @@
     }
    }
   },
-  "error": "Action aa.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59."
+  "error": "Action aa.release has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59.",
+  "code": "schedule.daily-invalid"
  }
 ]

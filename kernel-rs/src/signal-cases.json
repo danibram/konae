@@ -109,7 +109,8 @@
     }
    }
   },
-  "error": "Action orders.list is a query, so it cannot declare a signal. Declare it on a mutation or on a \"kind\": \"signal\" action."
+  "error": "Action orders.list is a query, so it cannot declare a signal. Declare it on a mutation or on a \"kind\": \"signal\" action.",
+  "code": "signal.on-query"
  },
  {
   "case": "a property that is not an input binding",
@@ -139,7 +140,8 @@
     }
    }
   },
-  "error": "Action orders.place names signal property coupon, which is not one of its input bindings."
+  "error": "Action orders.place names signal property coupon, which is not one of its input bindings.",
+  "code": "signal.property-unbound"
  },
  {
   "case": "a property naming the actor binding",
@@ -161,7 +163,8 @@
     }
    }
   },
-  "error": "Action lesson.finished names signal property id, which is not one of its input bindings."
+  "error": "Action lesson.finished names signal property id, which is not one of its input bindings.",
+  "code": "signal.property-unbound"
  },
  {
   "case": "a property listed twice",
@@ -192,7 +195,8 @@
     }
    }
   },
-  "error": "Action orders.place names signal property id twice."
+  "error": "Action orders.place names signal property id twice.",
+  "code": "signal.property-twice"
  },
  {
   "case": "more than eight properties",
@@ -263,7 +267,8 @@
     }
    }
   },
-  "error": "Action newsletter.join names more than 8 signal properties."
+  "error": "Action newsletter.join names more than 8 signal properties.",
+  "code": "signal.properties-too-many"
  },
  {
   "case": "a name with capitals and a space",
@@ -290,7 +295,8 @@
     }
    }
   },
-  "error": "Action orders.place names an invalid signal. Use dot-separated lowercase words, such as \"order.placed\", up to 64 characters."
+  "error": "Action orders.place names an invalid signal. Use dot-separated lowercase words, such as \"order.placed\", up to 64 characters.",
+  "code": "signal.name-invalid"
  },
  {
   "case": "a name with one word",
@@ -317,7 +323,8 @@
     }
    }
   },
-  "error": "Action orders.place names an invalid signal. Use dot-separated lowercase words, such as \"order.placed\", up to 64 characters."
+  "error": "Action orders.place names an invalid signal. Use dot-separated lowercase words, such as \"order.placed\", up to 64 characters.",
+  "code": "signal.name-invalid"
  },
  {
   "case": "a name with an empty part",
@@ -344,7 +351,8 @@
     }
    }
   },
-  "error": "Action orders.place names an invalid signal. Use dot-separated lowercase words, such as \"order.placed\", up to 64 characters."
+  "error": "Action orders.place names an invalid signal. Use dot-separated lowercase words, such as \"order.placed\", up to 64 characters.",
+  "code": "signal.name-invalid"
  },
  {
   "case": "a name longer than 64 characters",
@@ -371,7 +379,8 @@
     }
    }
   },
-  "error": "Action orders.place names an invalid signal. Use dot-separated lowercase words, such as \"order.placed\", up to 64 characters."
+  "error": "Action orders.place names an invalid signal. Use dot-separated lowercase words, such as \"order.placed\", up to 64 characters.",
+  "code": "signal.name-invalid"
  },
  {
   "case": "a name of exactly 64 characters",
@@ -423,7 +432,8 @@
     "signal": "order.placed"
    }
   },
-  "error": "Action orders.place has an invalid signal declaration."
+  "error": "Action orders.place has an invalid signal declaration.",
+  "code": "signal.invalid"
  },
  {
   "case": "a signal with an unknown key",
@@ -451,7 +461,8 @@
     }
    }
   },
-  "error": "Action orders.place has an invalid signal declaration."
+  "error": "Action orders.place has an invalid signal declaration.",
+  "code": "signal.invalid"
  },
  {
   "case": "properties that are not a list of keys",
@@ -479,7 +490,8 @@
     }
    }
   },
-  "error": "Action orders.place has an invalid signal declaration."
+  "error": "Action orders.place has an invalid signal declaration.",
+  "code": "signal.invalid"
  },
  {
   "case": "a signal with no name",
@@ -508,7 +520,8 @@
     }
    }
   },
-  "error": "Action orders.place has an invalid signal declaration."
+  "error": "Action orders.place has an invalid signal declaration.",
+  "code": "signal.invalid"
  },
  {
   "case": "a signal action without a signal",
@@ -526,7 +539,8 @@
     ]
    }
   },
-  "error": "Action newsletter.join is a signal action, so it must declare a signal."
+  "error": "Action newsletter.join is a signal action, so it must declare a signal.",
+  "code": "signal.missing"
  },
  {
   "case": "a signal action with a statement",
@@ -551,7 +565,8 @@
     "statement": "INSERT INTO joins (source) VALUES (?1)"
    }
   },
-  "error": "Action newsletter.join is a signal action, so it runs no SQL and cannot declare a statement."
+  "error": "Action newsletter.join is a signal action, so it runs no SQL and cannot declare a statement.",
+  "code": "signal.statement"
  },
  {
   "case": "a signal action with an http route",
@@ -579,7 +594,8 @@
     }
    }
   },
-  "error": "Action newsletter.join is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route."
+  "error": "Action newsletter.join is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route.",
+  "code": "signal.route"
  },
  {
   "case": "a signal that records the actor",
@@ -650,7 +666,8 @@
     }
    }
   },
-  "error": "Action notes.tag names signal property actor, which records the caller's ID, and also has an input named actor. Rename the input."
+  "error": "Action notes.tag names signal property actor, which records the caller's ID, and also has an input named actor. Rename the input.",
+  "code": "signal.property-actor-input"
  },
  {
   "case": "the actor named twice",
@@ -668,6 +685,7 @@
     }
    }
   },
-  "error": "Action page.liked names signal property actor twice."
+  "error": "Action page.liked names signal property actor twice.",
+  "code": "signal.property-twice"
  }
 ]

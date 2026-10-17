@@ -3,6 +3,7 @@
 // without the Gate's sql.js path (ADR-0003, lever 7).
 import type { ServerActionProgram } from "../kernel/actions";
 import type { DomainRules } from "../lib/domain-name";
+import { hintOf, type Refusal, type RefusalCode } from "../kernel/refusal";
 
 /**
  * What the editor knows about the project and its installation that
@@ -27,7 +28,7 @@ export type ReleaseFacts = {
  * when `secrets_list` says the value does not decode, since the editor never
  * reads the value.
  */
-export function releaseRefusal(program: ServerActionProgram, facts: ReleaseFacts): string | null {
+export function releaseRefusal(program: ServerActionProgram, facts: ReleaseFacts): Refusal | null {
   const names = Object.keys(program.actions).sort();
   const known = facts.secrets ? new Map(facts.secrets.map((secret) => [secret.name, secret])) : null;
   if (known) {
@@ -39,17 +40,17 @@ export function releaseRefusal(program: ServerActionProgram, facts: ReleaseFacts
       const secret = signature.secret;
       const listed = known.get(secret);
       if (listed?.use === "call") {
-        return `Action ${name} signs its route with the secret ${secret}, which is set for calls only. Set a route secret with a value of its own.`;
+        return refused("route.signature-secret-call-only", `Action ${name} signs its route with the secret ${secret}, which is set for calls only. Set a route secret with a value of its own.`);
       }
       if (!listed) {
         actions.push(name);
         if (!unset.includes(secret)) unset.push(secret);
       } else if (signature.scheme === "svix" && listed.svixKey === false) {
-        return `Action ${name} verifies svix signatures with the secret ${secret}, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_.`;
+        return refused("route.signature-svix-secret-invalid", `Action ${name} verifies svix signatures with the secret ${secret}, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_.`);
       }
     }
     const unsetSentence = unsetSecretsSentence(actions, unset);
-    if (unsetSentence) return unsetSentence;
+    if (unsetSentence) return refused("route.signature-secret-unset", unsetSentence);
   }
   for (const name of names) {
     const call = program.actions[name].call;
@@ -58,17 +59,17 @@ export function releaseRefusal(program: ServerActionProgram, facts: ReleaseFacts
       const url = new URL(call.url);
       const host = url.hostname.replace(/\.+$/, "").toLowerCase();
       if (facts.rules.installationHosts.some((editor) => editor.toLowerCase() === host)) {
-        return `Action ${name} calls ${host}, the editor's host. A call reaches an app or an outside service, never the editor.`;
+        return refused("call.host-editor", `Action ${name} calls ${host}, the editor's host. A call reaches an app or an outside service, never the editor.`);
       }
       const suffix = facts.rules.suffix.replace(/^\.+/, "").toLowerCase();
       const installation = suffix !== "" && (host === suffix || host.endsWith(`.${suffix}`));
       if (url.protocol !== "https:" && !installation) {
-        return `Action ${name} calls http://${host}, which is not an app of this installation. Use https.`;
+        return refused("call.http-off-installation", `Action ${name} calls http://${host}, which is not an app of this installation. Use https.`);
       }
     }
     const secret = call.auth ? ("secret" in call.auth ? call.auth.secret : call.auth.key) : null;
     if (known && secret && !known.has(secret)) {
-      return `Action ${name} calls with the secret ${secret}, which is not set for this project. Set it with secret_set before publishing.`;
+      return refused("call.secret-unset", `Action ${name} calls with the secret ${secret}, which is not set for this project. Set it with secret_set before publishing.`);
     }
   }
   return null;
@@ -87,12 +88,6 @@ function unsetSecretsSentence(actions: string[], secrets: string[]): string | nu
   return `Actions ${list(actions)} sign with the secrets ${list(secrets)}, which are not set for this project. Set each with secret_set before publishing.`;
 }
 
-/**
- * True when a publish refusal asks the owner to set or replace a secret: a
- * route or a call names one that is not set, a route signs with a secret set
- * for calls only, or a svix secret is not a whsec_ key. The Kernel's sentence
- * names the MCP tool; in the editor the owner acts in Auth > Integrations.
- */
-export function refusalNeedsSecret(sentence: string): boolean {
-  return /which (is|are) not set for this project|which is set for calls only|which is not a whsec_ signing secret/.test(sentence);
+function refused(code: RefusalCode, message: string): Refusal {
+  return { code, message, hint: hintOf(code) };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { cloneStarter } from "../lib/starter";
-import { actionReadout, actionSentence, deployReadiness, namedSecrets, refusalNeedsSecret } from "./action-readiness";
+import { actionReadout, actionSentence, deployReadiness, namedSecrets, ownerFixes } from "./action-readiness";
 
 function withActions(actions: Record<string, unknown>) {
   const project = cloneStarter();
@@ -86,18 +86,15 @@ describe("who an action line names", () => {
   });
 });
 
-describe("a publish refusal that needs a secret", () => {
-  test("matches the Kernel's sentences for one or several secrets and nothing else", () => {
-    expect(refusalNeedsSecret("Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing.")).toBe(true);
-    expect(refusalNeedsSecret("Actions a.one and b.two sign with the secret hook, which is not set for this project. Set it with secret_set before publishing.")).toBe(true);
-    expect(refusalNeedsSecret("Actions a.one, c.three and d.four sign with the secrets feed and hook, which are not set for this project. Set each with secret_set before publishing.")).toBe(true);
-    expect(refusalNeedsSecret("Action orders.list reads rows and has no LIMIT.")).toBe(false);
-    expect(refusalNeedsSecret("Action hook.send calls with the secret api_key, which is not set for this project. Set it with secret_set before publishing.")).toBe(true);
-    expect(refusalNeedsSecret("Action orders.receive signs its route with the secret outbound, which is set for calls only. Set a route secret with a value of its own.")).toBe(true);
-    expect(refusalNeedsSecret("Action emails.receive verifies svix signatures with the secret resend_webhook, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_.")).toBe(true);
-    expect(refusalNeedsSecret("Action hook.send calls http://api.example.com, which is not an app of this installation. Use https.")).toBe(false);
+describe("a publish refusal that needs the owner", () => {
+  test("follows the code's fix in kernel-rs/src/refusal-codes.json, not the sentence", () => {
+    for (const code of ["route.signature-secret-unset", "route.signature-secret-call-only", "route.signature-svix-secret-invalid", "call.secret-unset"]) {
+      expect(ownerFixes(code), code).toBe(true);
+    }
+    for (const code of ["query.limit-missing", "call.http-off-installation", "call.host-editor", undefined]) expect(ownerFixes(code), String(code)).toBe(false);
   });
 });
+
 
 describe("the Deploy dialog before release_plan", () => {
   const signed = {

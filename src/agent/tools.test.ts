@@ -258,6 +258,19 @@ describe("formatValidation", () => {
     );
   });
 
+  test("a refused Capsule names its code and remedy, so the model can name the rule", () => {
+    const text = formatValidation({
+      ok: false,
+      checked: ["schema"],
+      errors: [{
+        stage: "actions", message: "actions.json is not a valid server action program.",
+        detail: "Action notes.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+        code: "query.limit-missing", hint: { fix: "capsule", remedy: "Add a LIMIT to the outer SELECT. A total with no GROUP BY needs none." },
+      }],
+    });
+    expect(text).toEndWith("\n  Code query.limit-missing: Add a LIMIT to the outer SELECT. A total with no GROUP BY needs none.");
+  });
+
   test("a pass says which stages did not run, so the model cannot assume them", () => {
     expect(formatValidation({ ok: true, errors: [], checked: ["schema", "actions", "migration"] }))
       .not.toContain("did not run");

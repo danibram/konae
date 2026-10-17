@@ -19,6 +19,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 
 use super::mail::{self, Notice, NoticeOutcome};
+use super::refusal::{refuse, Refusal};
 use super::{ActionDefinition, AppState, Deployment};
 
 pub(crate) const MAX_SUBJECT_CHARS: usize = 120;
@@ -52,34 +53,34 @@ pub(crate) struct Declaration {
 }
 
 /// Parses and checks one action's `notify` key. `Ok(None)` when it has none.
-pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Option<Declaration>, String> {
+pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Option<Declaration>, Refusal> {
     let Some(value) = action.notify.as_ref() else { return Ok(None) };
     // Each message is written out so src/sdk/contract.test.ts finds it.
     if action.kind == "query" {
-        return Err(format!("Action {name} is a query, so it cannot declare notify. Declare it on a mutation."));
+        return Err(refuse("notify.not-mutation", format!("Action {name} is a query, so it cannot declare notify. Declare it on a mutation.")));
     }
     if action.kind != "mutation" {
-        return Err(format!("Action {name} is a signal action, so it cannot declare notify. Declare it on a mutation."));
+        return Err(refuse("notify.not-mutation", format!("Action {name} is a signal action, so it cannot declare notify. Declare it on a mutation.")));
     }
     let record = value
         .as_object()
         .filter(|record| record.keys().all(|key| matches!(key.as_str(), "to" | "subject" | "body")))
         .filter(|record| record.get("subject").is_some_and(Value::is_string) && record.get("body").is_some_and(Value::is_string))
-        .ok_or_else(|| format!(r#"Action {name} has an invalid notify declaration. Give "to", "subject" and "body" and nothing else."#))?;
+        .ok_or_else(|| refuse("notify.invalid", format!(r#"Action {name} has an invalid notify declaration. Give "to", "subject" and "body" and nothing else."#)))?;
     let to = match record.get("to").and_then(Value::as_str) {
         Some("owner") => Recipient::Owner,
         Some("actor") => Recipient::Actor,
-        _ => return Err(format!(r#"Action {name} has an invalid notify recipient. Use "owner" or "actor"."#)),
+        _ => return Err(refuse("notify.recipient-invalid", format!(r#"Action {name} has an invalid notify recipient. Use "owner" or "actor"."#))),
     };
     let subject = record["subject"].as_str().unwrap_or_default();
     if subject.trim().is_empty() || subject.chars().count() > MAX_SUBJECT_CHARS || subject.chars().any(is_control) {
-        return Err(format!("Action {name} has an invalid notify subject. Use 1 to 120 characters on one line."));
+        return Err(refuse("notify.subject-invalid", format!("Action {name} has an invalid notify subject. Use 1 to 120 characters on one line.")));
     }
     let body = record["body"].as_str().unwrap_or_default();
     if body.trim().is_empty() || body.chars().count() > MAX_BODY_CHARS || body.chars().any(|c| c != '\n' && is_control(c)) {
-        return Err(format!(
+        return Err(refuse("notify.body-invalid", format!(
             "Action {name} has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters."
-        ));
+        )));
     }
     let inputs: Vec<&str> = action
         .bindings
@@ -98,7 +99,7 @@ fn is_control(c: char) -> bool {
 
 /// Splits a template into text and placeholders. Every `{` opens a
 /// placeholder that the next `}` closes; a `}` on its own is text.
-fn parts(name: &str, field: &str, template: &str, inputs: &[&str]) -> Result<Vec<Part>, String> {
+fn parts(name: &str, field: &str, template: &str, inputs: &[&str]) -> Result<Vec<Part>, Refusal> {
     let mut parts = Vec::new();
     let mut rest = template;
     while let Some(open) = rest.find('{') {
@@ -106,16 +107,16 @@ fn parts(name: &str, field: &str, template: &str, inputs: &[&str]) -> Result<Vec
             parts.push(Part::Text(rest[..open].to_owned()));
         }
         let Some(close) = rest[open..].find('}') else {
-            return Err(format!(r#"Action {name} has an unclosed placeholder in its notify {field}. Close it with "}}"."#));
+            return Err(refuse("notify.placeholder-unclosed", format!(r#"Action {name} has an unclosed placeholder in its notify {field}. Close it with "}}"."#)));
         };
         let token = &rest[open + 1..open + close];
         let part = match token.strip_prefix("input.") {
             Some(key) if inputs.contains(&key) => Part::Input(key.to_owned()),
             _ if token == "actor.id" => Part::ActorId,
             _ => {
-                return Err(format!(
+                return Err(refuse("notify.placeholder-unknown", format!(
                     "Action {name} names an unknown placeholder {{{token}}} in its notify {field}. Use {{input.<key>}} for one of its input bindings, or {{actor.id}}."
-                ));
+                )));
             }
         };
         parts.push(part);
@@ -300,10 +301,7 @@ mod tests {
         for case in cases {
             let program = program(&case["actions"]);
             let outcome = super::super::action_shape::check_program(&program);
-            match case["error"].as_str() {
-                None => assert_eq!(outcome, Ok(()), "{}", case["case"]),
-                Some(message) => assert_eq!(outcome, Err(message.to_owned()), "{}", case["case"]),
-            }
+            crate::refusal::assert_case(&case, outcome);
         }
     }
 

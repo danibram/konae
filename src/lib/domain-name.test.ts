@@ -12,7 +12,7 @@ describe("custom domain hostnames", () => {
     test(item.case, () => {
       const outcome = checkHostname(item.hostname, rules);
       if (item.error === null) expect(outcome).toEqual({ ok: true, hostname: item.hostnameOut! });
-      else expect(outcome).toEqual({ ok: false, message: item.error });
+      else expect(outcome).toEqual({ ok: false, code: (item as { code?: string }).code ?? "the case names no code", message: item.error });
     });
   }
   test("the proof lives under _littlebox", () => {

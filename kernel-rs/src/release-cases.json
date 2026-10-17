@@ -64,7 +64,8 @@
     }
    },
    "secrets": [],
-   "error": "Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing."
+   "error": "Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing.",
+   "code": "route.signature-secret-unset"
   },
   {
    "case": "two routes that sign with one unset secret",
@@ -111,7 +112,8 @@
     }
    },
    "secrets": [],
-   "error": "Actions a.one and b.two sign with the secret hook, which is not set for this project. Set it with secret_set before publishing."
+   "error": "Actions a.one and b.two sign with the secret hook, which is not set for this project. Set it with secret_set before publishing.",
+   "code": "route.signature-secret-unset"
   },
   {
    "case": "one refusal names every unset secret and leaves out the one that is set",
@@ -203,7 +205,8 @@
      "use": "route"
     }
    ],
-   "error": "Actions a.one, c.three and d.four sign with the secrets feed and hook, which are not set for this project. Set each with secret_set before publishing."
+   "error": "Actions a.one, c.three and d.four sign with the secrets feed and hook, which are not set for this project. Set each with secret_set before publishing.",
+   "code": "route.signature-secret-unset"
   },
   {
    "case": "a route that signs with a secret set for calls only",
@@ -235,7 +238,8 @@
      "use": "call"
     }
    ],
-   "error": "Action orders.receive signs its route with the secret outbound, which is set for calls only. Set a route secret with a value of its own."
+   "error": "Action orders.receive signs its route with the secret outbound, which is set for calls only. Set a route secret with a value of its own.",
+   "code": "route.signature-secret-call-only"
   },
   {
    "case": "a secret set for calls only stops the check before the unset secrets are named",
@@ -287,7 +291,8 @@
      "use": "call"
     }
    ],
-   "error": "Action b.two signs its route with the secret outbound, which is set for calls only. Set a route secret with a value of its own."
+   "error": "Action b.two signs its route with the secret outbound, which is set for calls only. Set a route secret with a value of its own.",
+   "code": "route.signature-secret-call-only"
   },
   {
    "case": "a svix route whose secret is set passes on names alone",
@@ -385,7 +390,8 @@
      "svixKey": false
     }
    ],
-   "error": "Action emails.receive verifies svix signatures with the secret resend_webhook, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_."
+   "error": "Action emails.receive verifies svix signatures with the secret resend_webhook, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_.",
+   "code": "route.signature-svix-secret-invalid"
   },
   {
    "case": "a route that names the svix provider and whose secret is not a whsec_ key",
@@ -418,7 +424,8 @@
      "svixKey": false
     }
    ],
-   "error": "Action emails.receive verifies svix signatures with the secret resend_webhook, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_."
+   "error": "Action emails.receive verifies svix signatures with the secret resend_webhook, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_.",
+   "code": "route.signature-svix-secret-invalid"
   },
   {
    "case": "a route of another scheme may sign with a secret that is not a svix key",
@@ -524,7 +531,8 @@
      "svixKey": false
     }
    ],
-   "error": "Action b.two verifies svix signatures with the secret resend_webhook, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_."
+   "error": "Action b.two verifies svix signatures with the secret resend_webhook, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_.",
+   "code": "route.signature-svix-secret-invalid"
   },
   {
    "case": "a svix route whose secret is set for calls only is refused for its use first",
@@ -557,7 +565,8 @@
      "svixKey": false
     }
    ],
-   "error": "Action emails.receive signs its route with the secret resend_webhook, which is set for calls only. Set a route secret with a value of its own."
+   "error": "Action emails.receive signs its route with the secret resend_webhook, which is set for calls only. Set a route secret with a value of its own.",
+   "code": "route.signature-secret-call-only"
   },
   {
    "case": "a call to the editor's public host",
@@ -571,7 +580,8 @@
     }
    },
    "secrets": [],
-   "error": "Action hook.send calls editor.example.org, the editor's host. A call reaches an app or an outside service, never the editor."
+   "error": "Action hook.send calls editor.example.org, the editor's host. A call reaches an app or an outside service, never the editor.",
+   "code": "call.host-editor"
   },
   {
    "case": "a call to the editor's MCP host",
@@ -585,7 +595,8 @@
     }
    },
    "secrets": [],
-   "error": "Action hook.send calls mcp.example.org, the editor's host. A call reaches an app or an outside service, never the editor."
+   "error": "Action hook.send calls mcp.example.org, the editor's host. A call reaches an app or an outside service, never the editor.",
+   "code": "call.host-editor"
   },
   {
    "case": "a call over http outside the installation",
@@ -599,7 +610,8 @@
     }
    },
    "secrets": [],
-   "error": "Action hook.send calls http://api.example.com, which is not an app of this installation. Use https."
+   "error": "Action hook.send calls http://api.example.com, which is not an app of this installation. Use https.",
+   "code": "call.http-off-installation"
   },
   {
    "case": "a call over http to a name under the installation's suffix",
@@ -658,7 +670,8 @@
     }
    },
    "secrets": [],
-   "error": "Action hook.send calls with the secret api_key, which is not set for this project. Set it with secret_set before publishing."
+   "error": "Action hook.send calls with the secret api_key, which is not set for this project. Set it with secret_set before publishing.",
+   "code": "call.secret-unset"
   },
   {
    "case": "a call that signs with a secret that is not set",
@@ -676,7 +689,8 @@
     }
    },
    "secrets": [],
-   "error": "Action hook.send calls with the secret inbox_events, which is not set for this project. Set it with secret_set before publishing."
+   "error": "Action hook.send calls with the secret inbox_events, which is not set for this project. Set it with secret_set before publishing.",
+   "code": "call.secret-unset"
   },
   {
    "case": "a call secret set for calls passes",
@@ -737,7 +751,8 @@
     }
    },
    "secrets": [],
-   "error": "Action hook.send calls editor.example.org, the editor's host. A call reaches an app or an outside service, never the editor."
+   "error": "Action hook.send calls editor.example.org, the editor's host. A call reaches an app or an outside service, never the editor.",
+   "code": "call.host-editor"
   },
   {
    "case": "http is refused before an unset call secret",
@@ -754,7 +769,8 @@
     }
    },
    "secrets": [],
-   "error": "Action hook.send calls http://api.example.com, which is not an app of this installation. Use https."
+   "error": "Action hook.send calls http://api.example.com, which is not an app of this installation. Use https.",
+   "code": "call.http-off-installation"
   },
   {
    "case": "calls are checked in name order",
@@ -775,7 +791,8 @@
     }
    },
    "secrets": [],
-   "error": "Action a.send calls http://api.example.com, which is not an app of this installation. Use https."
+   "error": "Action a.send calls http://api.example.com, which is not an app of this installation. Use https.",
+   "code": "call.http-off-installation"
   },
   {
    "case": "route secrets are checked before calls",
@@ -809,7 +826,8 @@
     }
    },
    "secrets": [],
-   "error": "Action z.receive signs with the secret hook, which is not set for this project. Set it with secret_set before publishing."
+   "error": "Action z.receive signs with the secret hook, which is not set for this project. Set it with secret_set before publishing.",
+   "code": "route.signature-secret-unset"
   }
  ]
 }

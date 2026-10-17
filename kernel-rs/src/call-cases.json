@@ -167,7 +167,8 @@
     }
    }
   },
-  "error": "Action inbox.tell sends body key line_items.0.price with a path. Nested body keys belong on POST."
+  "error": "Action inbox.tell sends body key line_items.0.price with a path. Nested body keys belong on POST.",
+  "code": "call.body-path-on-get"
  },
  {
   "case": "overlapping body paths",
@@ -193,7 +194,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has body keys line_items and line_items.0.price, which overlap. Use one path or the other."
+  "error": "Action inbox.tell has body keys line_items and line_items.0.price, which overlap. Use one path or the other.",
+  "code": "call.body-overlap"
  },
  {
   "case": "a body array index above 31",
@@ -216,7 +218,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32.",
+  "code": "call.body-invalid"
  },
  {
   "case": "a header that is not Idempotency-Key",
@@ -239,7 +242,8 @@
     }
    }
   },
-  "error": "Action inbox.tell sets header Authorization, which is not allowed. Only Idempotency-Key is allowed."
+  "error": "Action inbox.tell sets header Authorization, which is not allowed. Only Idempotency-Key is allowed.",
+  "code": "call.header-refused"
  },
  {
   "case": "headers from an unknown input",
@@ -262,7 +266,32 @@
     }
    }
   },
-  "error": "Action inbox.tell sends header Idempotency-Key from missing, which is not one of its input bindings."
+  "error": "Action inbox.tell sends header Idempotency-Key from missing, which is not one of its input bindings.",
+  "code": "call.header-unbound"
+ },
+ {
+  "case": "headers written as a list",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call",
+    "access": "authenticated",
+    "method": "POST",
+    "url": "https://api.example.com/v1/items",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "title",
+      "type": "string",
+      "maxLength": 100
+     }
+    ],
+    "headers": [
+     "Idempotency-Key"
+    ]
+   }
+  },
+  "error": "Action inbox.tell has an invalid headers. Map Idempotency-Key to an input or a constant, at most 8.",
+  "code": "call.headers-invalid"
  },
  {
   "case": "an http URL is left to the Kernel's installation check",
@@ -511,7 +540,8 @@
     "url": "https://inbox.example.org/x"
    }
   },
-  "error": "Action tasks.noted is a mutation, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of \"kind\": \"call\"."
+  "error": "Action tasks.noted is a mutation, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of \"kind\": \"call\".",
+  "code": "call.keys-on-other-kind"
  },
  {
   "case": "a then on a query",
@@ -526,7 +556,8 @@
     }
    }
   },
-  "error": "Action tasks.list is a query, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of \"kind\": \"call\"."
+  "error": "Action tasks.list is a query, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of \"kind\": \"call\".",
+  "code": "call.keys-on-other-kind"
  },
  {
   "case": "a method on a signal action",
@@ -541,7 +572,8 @@
     "method": "POST"
    }
   },
-  "error": "Action tasks.seen is a signal action, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of \"kind\": \"call\"."
+  "error": "Action tasks.seen is a signal action, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of \"kind\": \"call\".",
+  "code": "call.keys-on-other-kind"
  },
  {
   "case": "an unknown kind with a url",
@@ -570,7 +602,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid kind. Use \"query\", \"mutation\", \"signal\" or \"call\"."
+  "error": "Action inbox.tell has an invalid kind. Use \"query\", \"mutation\", \"signal\" or \"call\".",
+  "code": "action.kind-invalid"
  },
  {
   "case": "a call with a statement",
@@ -600,7 +633,8 @@
     "statement": "SELECT 1"
    }
   },
-  "error": "Action inbox.tell is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route."
+  "error": "Action inbox.tell is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route.",
+  "code": "call.keys-refused"
  },
  {
   "case": "a call with a signal",
@@ -632,7 +666,8 @@
     }
    }
   },
-  "error": "Action inbox.tell is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route."
+  "error": "Action inbox.tell is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route.",
+  "code": "call.keys-refused"
  },
  {
   "case": "a call with a guard",
@@ -662,7 +697,8 @@
     "guard": "No."
    }
   },
-  "error": "Action inbox.tell is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route."
+  "error": "Action inbox.tell is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route.",
+  "code": "call.keys-refused"
  },
  {
   "case": "a call with an http route",
@@ -695,7 +731,8 @@
     }
    }
   },
-  "error": "Action inbox.tell is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route."
+  "error": "Action inbox.tell is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route.",
+  "code": "call.keys-refused"
  },
  {
   "case": "a call that binds the actor",
@@ -727,7 +764,8 @@
     }
    }
   },
-  "error": "Action inbox.tell is a call, so its bindings may only be inputs."
+  "error": "Action inbox.tell is a call, so its bindings may only be inputs.",
+  "code": "call.bindings-input-only"
  },
  {
   "case": "a call that binds the time",
@@ -759,7 +797,8 @@
     }
    }
   },
-  "error": "Action inbox.tell is a call, so its bindings may only be inputs."
+  "error": "Action inbox.tell is a call, so its bindings may only be inputs.",
+  "code": "call.bindings-input-only"
  },
  {
   "case": "no method",
@@ -787,7 +826,8 @@
     }
    }
   },
-  "error": "Action inbox.tell must call with \"method\": \"GET\" or \"POST\"."
+  "error": "Action inbox.tell must call with \"method\": \"GET\" or \"POST\".",
+  "code": "call.method-invalid"
  },
  {
   "case": "a PUT",
@@ -816,7 +856,8 @@
     }
    }
   },
-  "error": "Action inbox.tell must call with \"method\": \"GET\" or \"POST\"."
+  "error": "Action inbox.tell must call with \"method\": \"GET\" or \"POST\".",
+  "code": "call.method-invalid"
  },
  {
   "case": "a lowercase post",
@@ -845,7 +886,8 @@
     }
    }
   },
-  "error": "Action inbox.tell must call with \"method\": \"GET\" or \"POST\"."
+  "error": "Action inbox.tell must call with \"method\": \"GET\" or \"POST\".",
+  "code": "call.method-invalid"
  },
  {
   "case": "no url",
@@ -873,7 +915,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.",
+  "code": "call.url-invalid"
  },
  {
   "case": "a relative url",
@@ -902,7 +945,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.",
+  "code": "call.url-invalid"
  },
  {
   "case": "an ftp url",
@@ -931,7 +975,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.",
+  "code": "call.url-invalid"
  },
  {
   "case": "a file url",
@@ -960,7 +1005,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.",
+  "code": "call.url-invalid"
  },
  {
   "case": "a url with credentials",
@@ -989,7 +1035,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.",
+  "code": "call.url-invalid"
  },
  {
   "case": "a url with a fragment",
@@ -1018,7 +1065,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.",
+  "code": "call.url-invalid"
  },
  {
   "case": "a url with a space",
@@ -1047,7 +1095,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.",
+  "code": "call.url-invalid"
  },
  {
   "case": "a url longer than 2048 characters",
@@ -1076,7 +1125,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.",
+  "code": "call.url-invalid"
  },
  {
   "case": "a url that is a number",
@@ -1105,7 +1155,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+  "error": "Action inbox.tell has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.",
+  "code": "call.url-invalid"
  },
  {
   "case": "an IPv4 literal",
@@ -1134,7 +1185,8 @@
     }
    }
   },
-  "error": "Action inbox.tell calls the IP address 10.0.0.5. Name a host instead."
+  "error": "Action inbox.tell calls the IP address 10.0.0.5. Name a host instead.",
+  "code": "call.host-ip"
  },
  {
   "case": "an IPv4 literal written short",
@@ -1163,7 +1215,8 @@
     }
    }
   },
-  "error": "Action inbox.tell calls the IP address 127.0.0.1. Name a host instead."
+  "error": "Action inbox.tell calls the IP address 127.0.0.1. Name a host instead.",
+  "code": "call.host-ip"
  },
  {
   "case": "the metadata address",
@@ -1192,7 +1245,8 @@
     }
    }
   },
-  "error": "Action inbox.tell calls the IP address 169.254.169.254. Name a host instead."
+  "error": "Action inbox.tell calls the IP address 169.254.169.254. Name a host instead.",
+  "code": "call.host-ip"
  },
  {
   "case": "an IPv6 literal",
@@ -1221,7 +1275,8 @@
     }
    }
   },
-  "error": "Action inbox.tell calls the IP address [::1]. Name a host instead."
+  "error": "Action inbox.tell calls the IP address [::1]. Name a host instead.",
+  "code": "call.host-ip"
  },
  {
   "case": "localhost",
@@ -1250,7 +1305,8 @@
     }
    }
   },
-  "error": "Action inbox.tell calls localhost, which names this machine or a cloud metadata service."
+  "error": "Action inbox.tell calls localhost, which names this machine or a cloud metadata service.",
+  "code": "call.host-local"
  },
  {
   "case": "localhost with a trailing dot",
@@ -1279,7 +1335,8 @@
     }
    }
   },
-  "error": "Action inbox.tell calls localhost., which names this machine or a cloud metadata service."
+  "error": "Action inbox.tell calls localhost., which names this machine or a cloud metadata service.",
+  "code": "call.host-local"
  },
  {
   "case": "the Google metadata host",
@@ -1308,7 +1365,8 @@
     }
    }
   },
-  "error": "Action inbox.tell calls metadata.google.internal, which names this machine or a cloud metadata service."
+  "error": "Action inbox.tell calls metadata.google.internal, which names this machine or a cloud metadata service.",
+  "code": "call.host-local"
  },
  {
   "case": "an app under localhost is allowed",
@@ -1366,7 +1424,8 @@
     }
    }
   },
-  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel."
+  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel.",
+  "code": "call.path-reserved"
  },
  {
   "case": "the Kernel's admin paths",
@@ -1395,7 +1454,8 @@
     }
    }
   },
-  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel."
+  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel.",
+  "code": "call.path-reserved"
  },
  {
   "case": "OAuth discovery",
@@ -1424,7 +1484,8 @@
     }
    }
   },
-  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel."
+  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel.",
+  "code": "call.path-reserved"
  },
  {
   "case": "the reserved path in capitals",
@@ -1453,7 +1514,8 @@
     }
    }
   },
-  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel."
+  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel.",
+  "code": "call.path-reserved"
  },
  {
   "case": "a body with constants",
@@ -1527,7 +1589,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32.",
+  "code": "call.body-invalid"
  },
  {
   "case": "a constant with another key",
@@ -1559,7 +1622,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32.",
+  "code": "call.body-invalid"
  },
  {
   "case": "a constant longer than 1000 characters",
@@ -1590,7 +1654,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32.",
+  "code": "call.body-invalid"
  },
  {
   "case": "a constant of 1000 characters",
@@ -1649,7 +1714,8 @@
     ]
    }
   },
-  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32.",
+  "code": "call.body-invalid"
  },
  {
   "case": "a body value that is not a string",
@@ -1677,7 +1743,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32.",
+  "code": "call.body-invalid"
  },
  {
   "case": "a body key with a space",
@@ -1705,7 +1772,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32.",
+  "code": "call.body-invalid"
  },
  {
   "case": "a body with 33 keys",
@@ -1765,7 +1833,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32."
+  "error": "Action inbox.tell has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32.",
+  "code": "call.body-invalid"
  },
  {
   "case": "a body key from an unknown input",
@@ -1794,7 +1863,8 @@
     }
    }
   },
-  "error": "Action inbox.tell sends body key severity from level, which is not one of its input bindings."
+  "error": "Action inbox.tell sends body key severity from level, which is not one of its input bindings.",
+  "code": "call.body-unbound"
  },
  {
   "case": "an auth that is a string",
@@ -1824,7 +1894,8 @@
     "auth": "inbox_events"
    }
   },
-  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds."
+  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds.",
+  "code": "call.auth-invalid"
  },
  {
   "case": "an auth with both secret and key",
@@ -1857,7 +1928,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds."
+  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds.",
+  "code": "call.auth-invalid"
  },
  {
   "case": "an auth with neither",
@@ -1887,7 +1959,8 @@
     "auth": {}
    }
   },
-  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds."
+  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds.",
+  "code": "call.auth-invalid"
  },
  {
   "case": "a key auth with a header",
@@ -1920,7 +1993,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds."
+  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds.",
+  "code": "call.auth-invalid"
  },
  {
   "case": "an auth with an unknown key",
@@ -1953,7 +2027,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds."
+  "error": "Action inbox.tell has an invalid auth. Name a secret with \"secret\" to sign the request, or with \"key\" to send the API key it holds.",
+  "code": "call.auth-invalid"
  },
  {
   "case": "an auth secret with capitals",
@@ -1985,7 +2060,8 @@
     }
    }
   },
-  "error": "Action inbox.tell names an invalid auth secret. Use lowercase letters, digits and \"_\", starting with a letter."
+  "error": "Action inbox.tell names an invalid auth secret. Use lowercase letters, digits and \"_\", starting with a letter.",
+  "code": "call.secret-invalid"
  },
  {
   "case": "an auth key secret that is a number",
@@ -2017,7 +2093,8 @@
     }
    }
   },
-  "error": "Action inbox.tell names an invalid auth secret. Use lowercase letters, digits and \"_\", starting with a letter."
+  "error": "Action inbox.tell names an invalid auth secret. Use lowercase letters, digits and \"_\", starting with a letter.",
+  "code": "call.secret-invalid"
  },
  {
   "case": "an auth header the Kernel sets itself",
@@ -2050,7 +2127,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid signature header."
+  "error": "Action inbox.tell has an invalid signature header.",
+  "code": "call.signature-header-invalid"
  },
  {
   "case": "an auth header with a space",
@@ -2083,7 +2161,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has an invalid signature header."
+  "error": "Action inbox.tell has an invalid signature header.",
+  "code": "call.signature-header-invalid"
  },
  {
   "case": "a then that is a string",
@@ -2132,7 +2211,8 @@
     ]
    }
   },
-  "error": "Action inbox.tell has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer."
+  "error": "Action inbox.tell has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer.",
+  "code": "call.then-invalid"
  },
  {
   "case": "a then with no action",
@@ -2183,7 +2263,8 @@
     ]
    }
   },
-  "error": "Action inbox.tell has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer."
+  "error": "Action inbox.tell has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer.",
+  "code": "call.then-invalid"
  },
  {
   "case": "a then with an unknown key",
@@ -2236,7 +2317,8 @@
     ]
    }
   },
-  "error": "Action inbox.tell has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer."
+  "error": "Action inbox.tell has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer.",
+  "code": "call.then-invalid"
  },
  {
   "case": "a then whose pointer is a number",
@@ -2290,7 +2372,8 @@
     ]
    }
   },
-  "error": "Action inbox.tell has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer."
+  "error": "Action inbox.tell has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer.",
+  "code": "call.then-invalid"
  },
  {
   "case": "a pointer without a leading slash",
@@ -2345,7 +2428,8 @@
     ]
    }
   },
-  "error": "Action inbox.tell reads body/error for then, which is not a JSON pointer into /ok, /status, /error, /body or /input."
+  "error": "Action inbox.tell reads body/error for then, which is not a JSON pointer into /ok, /status, /error, /body or /input.",
+  "code": "call.then-pointer-invalid"
  },
  {
   "case": "a pointer outside the answer",
@@ -2400,7 +2484,8 @@
     ]
    }
   },
-  "error": "Action inbox.tell reads /headers/x for then, which is not a JSON pointer into /ok, /status, /error, /body or /input."
+  "error": "Action inbox.tell reads /headers/x for then, which is not a JSON pointer into /ok, /status, /error, /body or /input.",
+  "code": "call.then-pointer-invalid"
  },
  {
   "case": "a pointer with a bad escape",
@@ -2455,7 +2540,8 @@
     ]
    }
   },
-  "error": "Action inbox.tell reads /body/a~2 for then, which is not a JSON pointer into /ok, /status, /error, /body or /input."
+  "error": "Action inbox.tell reads /body/a~2 for then, which is not a JSON pointer into /ok, /status, /error, /body or /input.",
+  "code": "call.then-pointer-invalid"
  },
  {
   "case": "the empty pointer",
@@ -2510,7 +2596,8 @@
     ]
    }
   },
-  "error": "Action inbox.tell reads  for then, which is not a JSON pointer into /ok, /status, /error, /body or /input."
+  "error": "Action inbox.tell reads  for then, which is not a JSON pointer into /ok, /status, /error, /body or /input.",
+  "code": "call.then-pointer-invalid"
  },
  {
   "case": "a pointer to an input the call does not have",
@@ -2565,7 +2652,8 @@
     ]
    }
   },
-  "error": "Action inbox.tell reads /input/task for then, but task is not one of its input bindings."
+  "error": "Action inbox.tell reads /input/task for then, but task is not one of its input bindings.",
+  "code": "call.then-input-unbound"
  },
  {
   "case": "a then naming an undeclared action",
@@ -2598,7 +2686,8 @@
     }
    }
   },
-  "error": "Action inbox.tell names tasks.gone as its then, which is not declared."
+  "error": "Action inbox.tell names tasks.gone as its then, which is not declared.",
+  "code": "call.then-undeclared"
  },
  {
   "case": "a then naming a query",
@@ -2637,7 +2726,8 @@
     "bindings": []
    }
   },
-  "error": "Action inbox.tell names tasks.list as its then, which is not a mutation."
+  "error": "Action inbox.tell names tasks.list as its then, which is not a mutation.",
+  "code": "call.then-not-mutation"
  },
  {
   "case": "a then naming another call",
@@ -2693,7 +2783,8 @@
     }
    }
   },
-  "error": "Action inbox.tell names inbox.again as its then, which is not a mutation."
+  "error": "Action inbox.tell names inbox.again as its then, which is not a mutation.",
+  "code": "call.then-not-mutation"
  },
  {
   "case": "a then naming a routed mutation",
@@ -2752,7 +2843,8 @@
     }
    }
   },
-  "error": "Action inbox.tell names tasks.noted as its then, which answers on an HTTP route. A then mutation runs only after its call."
+  "error": "Action inbox.tell names tasks.noted as its then, which answers on an HTTP route. A then mutation runs only after its call.",
+  "code": "call.then-routed"
  },
  {
   "case": "a then naming a mutation that binds the actor",
@@ -2810,7 +2902,8 @@
     ]
    }
   },
-  "error": "Action inbox.tell names tasks.noted as its then, which binds the actor. A then mutation runs with no caller."
+  "error": "Action inbox.tell names tasks.noted as its then, which binds the actor. A then mutation runs with no caller.",
+  "code": "call.then-binds-actor"
  },
  {
   "case": "a then that fills an input the mutation lacks",
@@ -2865,7 +2958,8 @@
     ]
    }
   },
-  "error": "Action inbox.tell fills colour, which is not an input of tasks.noted."
+  "error": "Action inbox.tell fills colour, which is not an input of tasks.noted.",
+  "code": "call.then-fills-unknown"
  },
  {
   "case": "a then that leaves a required input empty",
@@ -2919,7 +3013,8 @@
     ]
    }
   },
-  "error": "Action inbox.tell leaves id of tasks.noted unfilled. Fill it from the answer or make the input nullable."
+  "error": "Action inbox.tell leaves id of tasks.noted unfilled. Fill it from the answer or make the input nullable.",
+  "code": "call.then-unfilled"
  },
  {
   "case": "two bad calls name the first in sorted order",
@@ -2971,7 +3066,8 @@
     }
    }
   },
-  "error": "Action inbox.alpha has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters."
+  "error": "Action inbox.alpha has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.",
+  "code": "call.url-invalid"
  },
  {
   "case": "two https origins",
@@ -2997,7 +3093,8 @@
  {
   "case": "connects that is a string",
   "connects": "https://api.example.com",
-  "error": "connects must be a list of at most 10 origins, such as [\"https://api.example.com\"]."
+  "error": "connects must be a list of at most 10 origins, such as [\"https://api.example.com\"].",
+  "code": "connects.invalid"
  },
  {
   "case": "eleven origins",
@@ -3014,77 +3111,88 @@
    "https://a9.example.com",
    "https://a10.example.com"
   ],
-  "error": "connects must be a list of at most 10 origins, such as [\"https://api.example.com\"]."
+  "error": "connects must be a list of at most 10 origins, such as [\"https://api.example.com\"].",
+  "code": "connects.invalid"
  },
  {
   "case": "an origin that is a number",
   "connects": [
    5
   ],
-  "error": "connects must be a list of at most 10 origins, such as [\"https://api.example.com\"]."
+  "error": "connects must be a list of at most 10 origins, such as [\"https://api.example.com\"].",
+  "code": "connects.invalid"
  },
  {
   "case": "an http origin",
   "connects": [
    "http://api.example.com"
   ],
-  "error": "connects lists http://api.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+  "error": "connects lists http://api.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost.",
+  "code": "connects.origin-invalid"
  },
  {
   "case": "an origin with a path",
   "connects": [
    "https://api.example.com/v1"
   ],
-  "error": "connects lists https://api.example.com/v1, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+  "error": "connects lists https://api.example.com/v1, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost.",
+  "code": "connects.origin-invalid"
  },
  {
   "case": "an origin with a trailing slash",
   "connects": [
    "https://api.example.com/"
   ],
-  "error": "connects lists https://api.example.com/, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+  "error": "connects lists https://api.example.com/, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost.",
+  "code": "connects.origin-invalid"
  },
  {
   "case": "a wildcard",
   "connects": [
    "https://*.example.com"
   ],
-  "error": "connects lists https://*.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+  "error": "connects lists https://*.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost.",
+  "code": "connects.origin-invalid"
  },
  {
   "case": "an origin in capitals",
   "connects": [
    "https://API.example.com"
   ],
-  "error": "connects lists https://API.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+  "error": "connects lists https://API.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost.",
+  "code": "connects.origin-invalid"
  },
  {
   "case": "an origin with its default port",
   "connects": [
    "https://api.example.com:443"
   ],
-  "error": "connects lists https://api.example.com:443, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+  "error": "connects lists https://api.example.com:443, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost.",
+  "code": "connects.origin-invalid"
  },
  {
   "case": "a bare host",
   "connects": [
    "api.example.com"
   ],
-  "error": "connects lists api.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+  "error": "connects lists api.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost.",
+  "code": "connects.origin-invalid"
  },
  {
   "case": "a data URL",
   "connects": [
    "data:text/plain,x"
   ],
-  "error": "connects lists data:text/plain,x, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+  "error": "connects lists data:text/plain,x, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost.",
+  "code": "connects.origin-invalid"
  },
  {
   "case": "http to a host outside localhost",
   "connects": [
    "http://localhost.example.com"
   ],
-  "error": "connects lists http://localhost.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost."
+  "error": "connects lists http://localhost.example.com, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost.",
+  "code": "connects.origin-invalid"
  },
  {
   "case": "an origin listed twice",
@@ -3092,7 +3200,8 @@
    "https://api.example.com",
    "https://api.example.com"
   ],
-  "error": "connects lists https://api.example.com twice."
+  "error": "connects lists https://api.example.com twice.",
+  "code": "connects.origin-twice"
  },
  {
   "case": "a call with notify",
@@ -3120,7 +3229,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has a key notify that a call action does not take."
+  "error": "Action inbox.tell has a key notify that a call action does not take.",
+  "code": "action.key-unknown"
  },
  {
   "case": "a call with a schedule",
@@ -3146,7 +3256,8 @@
     }
    }
   },
-  "error": "Action inbox.tell has a key schedule that a call action does not take."
+  "error": "Action inbox.tell has a key schedule that a call action does not take.",
+  "code": "action.key-unknown"
  },
  {
   "case": "a call with subscribe",
@@ -3170,7 +3281,8 @@
     "subscribe": true
    }
   },
-  "error": "Action inbox.tell has a key subscribe that a call action does not take."
+  "error": "Action inbox.tell has a key subscribe that a call action does not take.",
+  "code": "action.key-unknown"
  },
  {
   "case": "a call with an unknown key",
@@ -3194,7 +3306,8 @@
     "retries": 3
    }
   },
-  "error": "Action inbox.tell has a key retries that a call action does not take."
+  "error": "Action inbox.tell has a key retries that a call action does not take.",
+  "code": "action.key-unknown"
  },
  {
   "case": "a call with an empty statement",

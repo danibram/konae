@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { listSecrets, readSignupPolicy, type DeploymentReceipt, type SignupMode } from "../deployments/client";
 import { readDomain } from "../deployments/domains";
 import type { DeploymentVisibility } from "../deployments/manifest";
-import { actionSentence, deployReadiness, refusalNeedsSecret, type ReleaseFacts } from "./action-readiness";
+import { actionSentence, deployReadiness, ownerFixes, type ReleaseFacts } from "./action-readiness";
 import type { MiniAppProject } from "../lib/types";
 import type { OwnerSession } from "./owner-session";
 import { defaultSignupMode, firstPublishModes, republishAccessNote, signupModeCopy, visibilityCopy } from "./app-access";
@@ -24,6 +24,8 @@ type Props = {
   deployment: DeploymentReceipt | null;
   publishing: boolean;
   error: string;
+  /** The Kernel's refusal code for `error`, when it refused the Capsule (ADR-0020). */
+  errorCode?: string;
   /** Signed out means deploying cannot work, so the dialog offers sign-in instead. */
   session: OwnerSession;
   signInHref: string;
@@ -81,7 +83,7 @@ function useReleaseFacts(projectId: string, deploymentId: string | undefined, si
   return { secrets, rules };
 }
 
-export function DeployDialog({ project, deployment, publishing, error, session, signInHref, onClose, onDeploy, onEditAuth, current = null, onOpenUsers, onOpenIntegrations, onOpenAppSettings }: Props) {
+export function DeployDialog({ project, deployment, publishing, error, errorCode, session, signInHref, onClose, onDeploy, onEditAuth, current = null, onOpenUsers, onOpenIntegrations, onOpenAppSettings }: Props) {
   const republish = Boolean(current);
   const [chosenVisibility, setVisibility] = useState<DeploymentVisibility>(project.manifest.visibility);
   // A republish keeps the access set in Auth > Users; only a first publish chooses here.
@@ -194,7 +196,7 @@ export function DeployDialog({ project, deployment, publishing, error, session, 
                 <strong>Deployment failed</strong>
                 <span>{error}</span>
                 {signedOut && <a href={signInHref}>Sign in to deploy</a>}
-                {onOpenIntegrations && refusalNeedsSecret(error) && <button type="button" className="deploy-auth-link" onClick={onOpenIntegrations}>Set it in Auth &gt; Integrations</button>}
+                {onOpenIntegrations && ownerFixes(errorCode) && <button type="button" className="deploy-auth-link" onClick={onOpenIntegrations}>Set it in Auth &gt; Integrations</button>}
               </div>
             )}
 

@@ -52,6 +52,7 @@ import { usePreviewProblems } from "./components/usePreviewProblems";
 import { ProjectDashboard } from "./components/ProjectDashboard";
 import { EjectedNotice } from "./components/EjectDialog";
 import { deployProject, HostedDatabaseClient, type DeploymentReceipt, type SignupMode } from "./deployments/client";
+import { McpError } from "./mcp/client";
 import { clearDomain, readDomain, setDomain } from "./deployments/domains";
 import { readReleaseFacts } from "./deployments/release-facts";
 import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/manifest";
@@ -181,6 +182,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [exporting, setExporting] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [deployError, setDeployError] = useState("");
+  const [deployErrorCode, setDeployErrorCode] = useState<string | undefined>();
   const [saved, setSaved] = useState(true);
   const [saveError, setSaveError] = useState("");
   const [operationError, setOperationError] = useState("");
@@ -775,6 +777,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     } catch (error) {
       if (isSignedOutError(error)) refreshOwnerSession();
       setDeployError(error instanceof Error ? error.message : String(error));
+      setDeployErrorCode(error instanceof McpError ? error.refusal?.code : undefined);
     } finally {
       setPublishing(false);
     }
@@ -1274,7 +1277,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         <Button variant="primary" onClick={() => { resolveDomainConfirmation.current?.(true); resolveDomainConfirmation.current = null; setDomainConfirmation(null); }}>Confirm domain change</Button>
       </>}><div className="ui-dialog-body"><p style={{ overflowWrap: "anywhere" }}>{domainConfirmation.operation === "clear" ? `The agent will remove ${domainConfirmation.previousHostname ?? "the custom domain"}.` : `The agent will set ${domainConfirmation.hostname} and check its TXT record.`} {domainConfirmation.previousHostname && domainConfirmation.previousHostname !== domainConfirmation.hostname ? `${domainConfirmation.previousHostname} will stop serving this app.` : ""} The generated address keeps working. This does not configure traffic routing or HTTPS.</p></div></Dialog>}
 
-      {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} session={ownerSession} signInHref={signInHref} onClose={() => setDeployOpen(false)} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
+      {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => setDeployOpen(false)} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
 
       <Dialog
         open={resetOpen}

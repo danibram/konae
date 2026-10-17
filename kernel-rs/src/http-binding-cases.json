@@ -144,7 +144,8 @@
     }
    }
   },
-  "error": "Actions orders.again and orders.receive both bind POST /hooks/orders."
+  "error": "Actions orders.again and orders.receive both bind POST /hooks/orders.",
+  "code": "route.duplicate"
  },
  {
   "case": "GET on a mutation",
@@ -167,7 +168,8 @@
     }
    }
   },
-  "error": "Action orders.receive must bind GET for a query and POST for a mutation."
+  "error": "Action orders.receive must bind GET for a query and POST for a mutation.",
+  "code": "route.method-mismatch"
  },
  {
   "case": "POST on a query",
@@ -183,7 +185,8 @@
     }
    }
   },
-  "error": "Action orders.list must bind GET for a query and POST for a mutation."
+  "error": "Action orders.list must bind GET for a query and POST for a mutation.",
+  "code": "route.method-mismatch"
  },
  {
   "case": "an unknown method",
@@ -199,7 +202,8 @@
     }
    }
   },
-  "error": "Action orders.list must bind GET for a query and POST for a mutation."
+  "error": "Action orders.list must bind GET for a query and POST for a mutation.",
+  "code": "route.method-mismatch"
  },
  {
   "case": "http on an authenticated action",
@@ -215,7 +219,8 @@
     }
    }
   },
-  "error": "Action orders.mine is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route."
+  "error": "Action orders.mine is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route.",
+  "code": "route.authenticated"
  },
  {
   "case": "a path under /_littlebox",
@@ -231,7 +236,8 @@
     }
    }
   },
-  "error": "Action orders.list binds the reserved path /_littlebox/files. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel."
+  "error": "Action orders.list binds the reserved path /_littlebox/files. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel.",
+  "code": "route.path-reserved"
  },
  {
   "case": "the MCP path",
@@ -254,7 +260,8 @@
     }
    }
   },
-  "error": "Action orders.receive binds the reserved path /mcp. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel."
+  "error": "Action orders.receive binds the reserved path /mcp. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel.",
+  "code": "route.path-reserved"
  },
  {
   "case": "a reserved path in other letter case",
@@ -270,7 +277,8 @@
     }
    }
   },
-  "error": "Action orders.list binds the reserved path /OAuth/token. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel."
+  "error": "Action orders.list binds the reserved path /OAuth/token. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel.",
+  "code": "route.path-reserved"
  },
  {
   "case": "the root path",
@@ -286,7 +294,8 @@
     }
    }
   },
-  "error": "Action orders.list has an invalid http path. Use a leading \"/\" and segments of letters, digits, \".\", \"_\", \"~\" or \"-\", up to 200 characters."
+  "error": "Action orders.list has an invalid http path. Use a leading \"/\" and segments of letters, digits, \".\", \"_\", \"~\" or \"-\", up to 200 characters.",
+  "code": "route.path-invalid"
  },
  {
   "case": "a path that climbs",
@@ -302,7 +311,8 @@
     }
    }
   },
-  "error": "Action orders.list has an invalid http path. Use a leading \"/\" and segments of letters, digits, \".\", \"_\", \"~\" or \"-\", up to 200 characters."
+  "error": "Action orders.list has an invalid http path. Use a leading \"/\" and segments of letters, digits, \".\", \"_\", \"~\" or \"-\", up to 200 characters.",
+  "code": "route.path-invalid"
  },
  {
   "case": "a trailing slash",
@@ -318,7 +328,8 @@
     }
    }
   },
-  "error": "Action orders.list has an invalid http path. Use a leading \"/\" and segments of letters, digits, \".\", \"_\", \"~\" or \"-\", up to 200 characters."
+  "error": "Action orders.list has an invalid http path. Use a leading \"/\" and segments of letters, digits, \".\", \"_\", \"~\" or \"-\", up to 200 characters.",
+  "code": "route.path-invalid"
  },
  {
   "case": "a query string in the path",
@@ -334,7 +345,8 @@
     }
    }
   },
-  "error": "Action orders.list has an invalid http path. Use a leading \"/\" and segments of letters, digits, \".\", \"_\", \"~\" or \"-\", up to 200 characters."
+  "error": "Action orders.list has an invalid http path. Use a leading \"/\" and segments of letters, digits, \".\", \"_\", \"~\" or \"-\", up to 200 characters.",
+  "code": "route.path-invalid"
  },
  {
   "case": "an unknown key in http",
@@ -351,7 +363,8 @@
     }
    }
   },
-  "error": "Action orders.list has an invalid http binding."
+  "error": "Action orders.list has an invalid http binding.",
+  "code": "route.invalid"
  },
  {
   "case": "http that is not an object",
@@ -364,7 +377,8 @@
     "http": "/api/orders"
    }
   },
-  "error": "Action orders.list has an invalid http binding."
+  "error": "Action orders.list has an invalid http binding.",
+  "code": "route.invalid"
  },
  {
   "case": "a secret value written into actions.json",
@@ -392,7 +406,8 @@
     }
    }
   },
-  "error": "Action orders.receive has an invalid littlebox signature. It takes \"scheme\", \"header\" and \"secret\"."
+  "error": "Action orders.receive has an invalid littlebox signature. It takes \"scheme\", \"header\" and \"secret\".",
+  "code": "signature.keys-invalid"
  },
  {
   "case": "a signature header the Kernel reads itself",
@@ -419,7 +434,8 @@
     }
    }
   },
-  "error": "Action orders.receive has an invalid signature header."
+  "error": "Action orders.receive has an invalid signature header.",
+  "code": "signature.header-invalid"
  },
  {
   "case": "a secret name with capitals",
@@ -446,7 +462,8 @@
     }
    }
   },
-  "error": "Action orders.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter."
+  "error": "Action orders.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter.",
+  "code": "signature.secret-invalid"
  },
  {
   "case": "a GET route for keys only",
@@ -563,7 +580,8 @@
     }
    }
   },
-  "error": "Action orders.list has an invalid callers list. List one or more of \"signature\", \"key\" and \"session\", each once."
+  "error": "Action orders.list has an invalid callers list. List one or more of \"signature\", \"key\" and \"session\", each once.",
+  "code": "route.callers-invalid"
  },
  {
   "case": "an unknown caller",
@@ -582,7 +600,8 @@
     }
    }
   },
-  "error": "Action orders.list has an invalid callers list. List one or more of \"signature\", \"key\" and \"session\", each once."
+  "error": "Action orders.list has an invalid callers list. List one or more of \"signature\", \"key\" and \"session\", each once.",
+  "code": "route.callers-invalid"
  },
  {
   "case": "a caller listed twice",
@@ -602,7 +621,8 @@
     }
    }
   },
-  "error": "Action orders.list has an invalid callers list. List one or more of \"signature\", \"key\" and \"session\", each once."
+  "error": "Action orders.list has an invalid callers list. List one or more of \"signature\", \"key\" and \"session\", each once.",
+  "code": "route.callers-invalid"
  },
  {
   "case": "callers that are not a list",
@@ -619,7 +639,8 @@
     }
    }
   },
-  "error": "Action orders.list has an invalid callers list. List one or more of \"signature\", \"key\" and \"session\", each once."
+  "error": "Action orders.list has an invalid callers list. List one or more of \"signature\", \"key\" and \"session\", each once.",
+  "code": "route.callers-invalid"
  },
  {
   "case": "the signature as a caller with no signature",
@@ -639,7 +660,8 @@
     }
    }
   },
-  "error": "Action orders.list lists \"signature\" among its callers but declares no signature."
+  "error": "Action orders.list lists \"signature\" among its callers but declares no signature.",
+  "code": "route.callers-no-signature"
  },
  {
   "case": "a signature the callers leave out",
@@ -669,7 +691,8 @@
     }
    }
   },
-  "error": "Action orders.receive declares a signature, so its callers must include \"signature\"."
+  "error": "Action orders.receive declares a signature, so its callers must include \"signature\".",
+  "code": "route.callers-without-signature"
  },
  {
   "case": "a GitHub-style signature with fields into a nested body",
@@ -1000,7 +1023,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive names an unknown signature scheme. Use \"littlebox\", \"hmac-body\", \"timestamped\" or \"svix\"."
+  "error": "Action hooks.receive names an unknown signature scheme. Use \"littlebox\", \"hmac-body\", \"timestamped\" or \"svix\".",
+  "code": "signature.scheme-unknown"
  },
  {
   "case": "a scheme that is not a string",
@@ -1041,7 +1065,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive names an unknown signature scheme. Use \"littlebox\", \"hmac-body\", \"timestamped\" or \"svix\"."
+  "error": "Action hooks.receive names an unknown signature scheme. Use \"littlebox\", \"hmac-body\", \"timestamped\" or \"svix\".",
+  "code": "signature.scheme-unknown"
  },
  {
   "case": "an hmac-body signature with no header",
@@ -1081,7 +1106,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid signature header."
+  "error": "Action hooks.receive has an invalid signature header.",
+  "code": "signature.header-invalid"
  },
  {
   "case": "a timestamped signature with no header",
@@ -1121,7 +1147,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid signature header."
+  "error": "Action hooks.receive has an invalid signature header.",
+  "code": "signature.header-invalid"
  },
  {
   "case": "a timestamped signature that reads Authorization",
@@ -1162,7 +1189,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid signature header."
+  "error": "Action hooks.receive has an invalid signature header.",
+  "code": "signature.header-invalid"
  },
  {
   "case": "an hmac-body signature with a window",
@@ -1204,7 +1232,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid hmac-body signature. It takes \"scheme\", \"header\", \"secret\", \"algorithm\", \"encoding\" and \"prefix\"."
+  "error": "Action hooks.receive has an invalid hmac-body signature. It takes \"scheme\", \"header\", \"secret\", \"algorithm\", \"encoding\" and \"prefix\".",
+  "code": "signature.keys-invalid"
  },
  {
   "case": "a timestamped signature with an algorithm",
@@ -1246,7 +1275,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid timestamped signature. It takes \"scheme\", \"header\", \"secret\", \"prefix\", \"tag\" and \"window\"."
+  "error": "Action hooks.receive has an invalid timestamped signature. It takes \"scheme\", \"header\", \"secret\", \"prefix\", \"tag\" and \"window\".",
+  "code": "signature.keys-invalid"
  },
  {
   "case": "a svix signature with a header",
@@ -1284,7 +1314,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid svix signature. It takes \"scheme\" and \"secret\"."
+  "error": "Action hooks.receive has an invalid svix signature. It takes \"scheme\" and \"secret\".",
+  "code": "signature.keys-invalid"
  },
  {
   "case": "a provider scheme on a GET route",
@@ -1325,7 +1356,8 @@
     "statement": "SELECT id FROM orders WHERE external_id = ?1 AND note = ?2 AND created_at < ?3 LIMIT 10"
    }
   },
-  "error": "Action hooks.receive binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body."
+  "error": "Action hooks.receive binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body.",
+  "code": "signature.provider-on-get"
  },
  {
   "case": "an hmac-body signature with an unknown algorithm",
@@ -1366,7 +1398,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid signature algorithm. Use \"sha256\" or \"sha1\"."
+  "error": "Action hooks.receive has an invalid signature algorithm. Use \"sha256\" or \"sha1\".",
+  "code": "signature.algorithm-invalid"
  },
  {
   "case": "an hmac-body signature with no encoding",
@@ -1406,7 +1439,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid signature encoding. Use \"hex\" or \"base64\"."
+  "error": "Action hooks.receive has an invalid signature encoding. Use \"hex\" or \"base64\".",
+  "code": "signature.encoding-invalid"
  },
  {
   "case": "an hmac-body prefix with a space",
@@ -1447,7 +1481,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid signature prefix. Use 1 to 32 letters, digits, \"=\", \"-\", \"_\", \".\" or \":\", such as \"sha256=\"."
+  "error": "Action hooks.receive has an invalid signature prefix. Use 1 to 32 letters, digits, \"=\", \"-\", \"_\", \".\" or \":\", such as \"sha256=\".",
+  "code": "signature.prefix-invalid"
  },
  {
   "case": "an hmac-body secret that is not a secret name",
@@ -1488,7 +1523,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter."
+  "error": "Action hooks.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter.",
+  "code": "signature.secret-invalid"
  },
  {
   "case": "a timestamp prefix with no =",
@@ -1529,7 +1565,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid timestamp prefix. Use the field's name and \"=\", such as \"t=\"."
+  "error": "Action hooks.receive has an invalid timestamp prefix. Use the field's name and \"=\", such as \"t=\".",
+  "code": "signature.timestamp-prefix-invalid"
  },
  {
   "case": "a signature tag equal to the timestamp prefix",
@@ -1570,7 +1607,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid signature tag. Use the field's name and \"=\", such as \"v1=\", other than the timestamp's."
+  "error": "Action hooks.receive has an invalid signature tag. Use the field's name and \"=\", such as \"v1=\", other than the timestamp's.",
+  "code": "signature.tag-invalid"
  },
  {
   "case": "a timestamped signature with no window",
@@ -1610,7 +1648,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid signature window. Use a whole number of seconds from 1 to 3600."
+  "error": "Action hooks.receive has an invalid signature window. Use a whole number of seconds from 1 to 3600.",
+  "code": "signature.window-invalid"
  },
  {
   "case": "a window of two hours",
@@ -1651,7 +1690,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid signature window. Use a whole number of seconds from 1 to 3600."
+  "error": "Action hooks.receive has an invalid signature window. Use a whole number of seconds from 1 to 3600.",
+  "code": "signature.window-invalid"
  },
  {
   "case": "a window written as text",
@@ -1692,7 +1732,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid signature window. Use a whole number of seconds from 1 to 3600."
+  "error": "Action hooks.receive has an invalid signature window. Use a whole number of seconds from 1 to 3600.",
+  "code": "signature.window-invalid"
  },
  {
   "case": "a window with a fraction",
@@ -1733,7 +1774,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid signature window. Use a whole number of seconds from 1 to 3600."
+  "error": "Action hooks.receive has an invalid signature window. Use a whole number of seconds from 1 to 3600.",
+  "code": "signature.window-invalid"
  },
  {
   "case": "fields on a GET route",
@@ -1769,7 +1811,8 @@
     "statement": "SELECT id FROM orders WHERE external_id = ?1 AND note = ?2 AND created_at < ?3 LIMIT 10"
    }
   },
-  "error": "Action hooks.receive binds GET, so it cannot declare fields. Fields read a POST body."
+  "error": "Action hooks.receive binds GET, so it cannot declare fields. Fields read a POST body.",
+  "code": "route.fields-on-get"
  },
  {
   "case": "an empty fields map",
@@ -1811,7 +1854,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid fields map. Map 1 to 32 input keys to JSON paths, such as \"$.data.object.id\"."
+  "error": "Action hooks.receive has an invalid fields map. Map 1 to 32 input keys to JSON paths, such as \"$.data.object.id\".",
+  "code": "route.fields-invalid"
  },
  {
   "case": "fields as a list",
@@ -1855,7 +1899,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive has an invalid fields map. Map 1 to 32 input keys to JSON paths, such as \"$.data.object.id\"."
+  "error": "Action hooks.receive has an invalid fields map. Map 1 to 32 input keys to JSON paths, such as \"$.data.object.id\".",
+  "code": "route.fields-invalid"
  },
  {
   "case": "a path for an input the action does not bind",
@@ -1900,7 +1945,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive maps amount, which is not one of its input bindings."
+  "error": "Action hooks.receive maps amount, which is not one of its input bindings.",
+  "code": "route.field-unbound"
  },
  {
   "case": "a path for a binding that is not an input",
@@ -1944,7 +1990,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive maps now, which is not one of its input bindings."
+  "error": "Action hooks.receive maps now, which is not one of its input bindings.",
+  "code": "route.field-unbound"
  },
  {
   "case": "a path without $",
@@ -1988,7 +2035,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive maps id to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\"."
+  "error": "Action hooks.receive maps id to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\".",
+  "code": "route.field-path-invalid"
  },
  {
   "case": "a path that is the whole body",
@@ -2032,7 +2080,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive maps id to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\"."
+  "error": "Action hooks.receive maps id to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\".",
+  "code": "route.field-path-invalid"
  },
  {
   "case": "a path with a quoted step",
@@ -2076,7 +2125,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive maps title to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\"."
+  "error": "Action hooks.receive maps title to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\".",
+  "code": "route.field-path-invalid"
  },
  {
   "case": "a path that is not text",
@@ -2120,7 +2170,8 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive maps id to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\"."
+  "error": "Action hooks.receive maps id to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\".",
+  "code": "route.field-path-invalid"
  },
  {
   "case": "two bad paths name the first in sorted order",
@@ -2165,6 +2216,7 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive maps id to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\"."
+  "error": "Action hooks.receive maps id to an invalid JSON path. Use \"$\" and then \".name\" or \"[index]\" steps, such as \"$.data.object.id\".",
+  "code": "route.field-path-invalid"
  }
 ]

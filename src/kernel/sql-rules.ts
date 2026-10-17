@@ -1,4 +1,5 @@
 import { sqlTokens, type SqlToken } from "../lib/sql-tokens";
+import { refusal } from "./refusal";
 
 // The same checks, in the same order and with the same messages, as
 // kernel-rs/src/sql_rules.rs `check_statement`. kernel-rs/src/sql-rule-cases.json
@@ -14,10 +15,10 @@ export function assertActionStatement(name: string, kind: "query" | "mutation", 
   const first = tokens.find((token) => token.kind === "word");
   const word = first?.kind === "word" ? first.text.toUpperCase() : "";
   const startsRight = kind === "query" ? word === "SELECT" : MUTATION_WORDS.has(word);
-  if (!startsRight) throw new Error(firstWordRefusal(name, kind, word));
+  if (!startsRight) throw refusal(kind === "query" ? "query.start" : "mutation.start", firstWordRefusal(name, kind, word));
   assertSingleStatement(name, tokens);
   if (kind === "mutation" && returnsRows(tokens)) {
-    throw new Error(`Action ${name} cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.`);
+    throw refusal("mutation.returning", `Action ${name} cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.`);
   }
 }
 
@@ -49,5 +50,5 @@ function returnsRows(tokens: SqlToken[]): boolean {
  */
 function assertSingleStatement(name: string, tokens: SqlToken[]) {
   const end = tokens.findIndex((token) => token.kind === "symbol" && token.text === ";");
-  if (end !== -1 && end + 1 < tokens.length) throw new Error(`Action ${name} must contain one statement.`);
+  if (end !== -1 && end + 1 < tokens.length) throw refusal("statement.several", `Action ${name} must contain one statement.`);
 }

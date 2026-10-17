@@ -56,7 +56,7 @@ Owns `src/agent/gate.ts`, `src/components/action-readiness.ts`, `src/components/
 
 ### E. Refusal codes (ADR-0020)
 
-Starts after A, B and D land, because it touches every refusal they add. Not dispatched in the first wave.
+Starts after A, B and D land, because it touches every refusal they add. Not dispatched in the first wave. Built in the third wave, 2026-11-08: see the update at the end of ADR-0020.
 
 ## Not in this wave
 

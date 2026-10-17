@@ -11,20 +11,21 @@
 //! Signal. `parseGuard` in src/kernel/actions.ts makes the same checks, and
 //! kernel-rs/src/guard-cases.json holds the cases both test suites run.
 
+use super::refusal::{refuse, Refusal};
 use super::ActionDefinition;
 use serde_json::Value;
 
 pub(crate) const MAX_GUARD_CHARS: usize = 200;
 
 /// Parses and checks one action's `guard` key. `Ok(None)` when it has none.
-pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Option<String>, String> {
+pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Option<String>, Refusal> {
     let Some(value) = action.guard.as_ref() else { return Ok(None) };
     // Each message is written out so src/sdk/contract.test.ts finds it.
     if action.kind == "query" {
-        return Err(format!("Action {name} is a query, so it cannot declare a guard. Declare it on a mutation."));
+        return Err(refuse("guard.not-mutation", format!("Action {name} is a query, so it cannot declare a guard. Declare it on a mutation.")));
     }
     if action.kind != "mutation" {
-        return Err(format!("Action {name} is a signal action, so it cannot declare a guard. Declare it on a mutation."));
+        return Err(refuse("guard.not-mutation", format!("Action {name} is a signal action, so it cannot declare a guard. Declare it on a mutation.")));
     }
     let valid = value.as_str().filter(|text| {
         !text.trim().is_empty()
@@ -33,7 +34,7 @@ pub(crate) fn declaration(name: &str, action: &ActionDefinition) -> Result<Optio
     });
     match valid {
         Some(text) => Ok(Some(text.to_owned())),
-        None => Err(format!("Action {name} has an invalid guard. Use a message of 1 to 200 characters on one line.")),
+        None => Err(refuse("guard.invalid", format!("Action {name} has an invalid guard. Use a message of 1 to 200 characters on one line."))),
     }
 }
 
@@ -78,10 +79,7 @@ mod tests {
             let mut names = program.actions.keys().collect::<Vec<_>>();
             names.sort();
             let outcome = names.into_iter().try_for_each(|name| super::super::validate_action(name, &program.actions[name]));
-            match case["error"].as_str() {
-                None => assert_eq!(outcome, Ok(()), "{}", case["case"]),
-                Some(message) => assert_eq!(outcome, Err(message.to_owned()), "{}", case["case"]),
-            }
+            crate::refusal::assert_case(&case, outcome);
         }
     }
 
