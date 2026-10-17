@@ -351,6 +351,7 @@ describe("a preview migration keeps the CHECKs schema.sql added", () => {
     const host = new MiniAppRuntimeHost("carry-refused", checked, '{"version":1,"actions":{}}');
     const before = (await host.runSql("SELECT sql FROM sqlite_master WHERE name = 'habits'")).rows;
     await expect(host.applyDatabaseMigration(plan(rebuild(["id", "name", "state"])))).rejects.toThrow("Table habits has a CHECK that names column note, which this migration removes. Rebuild habits without that CHECK in the SQL console, or keep note, then apply the migration again.");
+    await expect(host.applyDatabaseMigration(plan(rebuild(["id", "name", "state"])))).rejects.toMatchObject({ code: "schema.check-names-removed-column" });
     expect((await host.runSql("SELECT sql FROM sqlite_master WHERE name = 'habits'")).rows).toEqual(before);
     expect(await host.listDatabaseBackups()).toEqual([]);
   });

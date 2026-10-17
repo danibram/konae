@@ -1095,6 +1095,11 @@ async fn response_value(response: Response) -> Result<Value> {
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), MAX_TRANSFER).await?;
     let value: Value = serde_json::from_slice(&bytes)?;
+    if !status.is_success() {
+        if let Some(refused) = super::refusal::from_body(&value) {
+            return Err(refused.into());
+        }
+    }
     anyhow::ensure!(
         status.is_success(),
         "{}",
@@ -2533,6 +2538,22 @@ async fn owner_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Kernel route that refuses with `refusal_error` keeps its code
+    /// through a tool that calls the route, as `database_execute` does for
+    /// `apply-migration`.
+    #[tokio::test]
+    async fn a_route_refusal_keeps_its_code_through_the_tool() {
+        let sentence = "Table habits has a CHECK that names column note, which this migration removes. Rebuild habits without that CHECK in the SQL console, or keep note, then apply the migration again.";
+        let refused = super::super::refusal::refuse("schema.check-names-removed-column", sentence);
+        let error = response_value(super::super::refusal_error(&refused)).await.unwrap_err();
+        let answer = tool_error(&error);
+        assert_eq!(answer["content"][0]["text"], sentence);
+        assert_eq!(answer["structuredContent"]["error"]["code"], "schema.check-names-removed-column");
+        assert_eq!(answer["structuredContent"]["error"]["hint"]["fix"], "capsule");
+        let plain = response_value(super::super::error(StatusCode::BAD_REQUEST, "Unknown database operation.")).await.unwrap_err();
+        assert!(tool_error(&plain).get("structuredContent").is_none());
+    }
 
     /// A refused Capsule answers its code beside the sentence; any other
     /// failure answers the sentence alone, as before.

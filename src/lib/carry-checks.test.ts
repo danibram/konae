@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import initSqlJs from "sql.js";
 import { carryChecks } from "./carry-checks";
 
-type Case = { case: string; tables: Record<string, string>; statements: string[]; expected: string[] | null; error: string | null };
+type Case = { case: string; tables: Record<string, string>; statements: string[]; expected: string[] | null; error: string | null; code?: string };
 
 const cases: Case[] = await Bun.file(new URL("../../kernel-rs/src/check-carry-cases.json", import.meta.url)).json();
 
@@ -12,7 +12,8 @@ describe("carryChecks", () => {
     expect(cases.length).toBeGreaterThanOrEqual(11);
     for (const item of cases) {
       const outcome = carryChecks(item.statements, (name) => item.tables[name] ?? null);
-      expect(outcome, item.case).toEqual(item.error === null ? { statements: item.expected! } : { error: item.error });
+      if (item.error === null) expect(outcome, item.case).toEqual({ statements: item.expected! });
+      else expect("error" in outcome ? { code: outcome.error.code, message: outcome.error.message } : outcome, item.case).toEqual({ code: item.code as never, message: item.error });
     }
   });
 

@@ -5,6 +5,7 @@
 //! for the editor's preview, and check-carry-cases.json holds the cases both
 //! test suites run.
 
+use super::refusal::{refuse, Refusal};
 use super::{sql_tokens, SqlTok, SqlTokKind};
 
 struct Check {
@@ -30,7 +31,7 @@ const CONSTRAINT_WORDS: [&str; 5] = ["CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK",
 /// Drizzle's `PRAGMA foreign_keys` lines are left out: inside the transaction
 /// a migration runs in, SQLite ignores them, and the Kernel's authorizer
 /// refuses every pragma a migration does not need.
-pub(super) fn carry_checks(statements: &[String], live_table: impl Fn(&str) -> Option<String>) -> Result<Vec<String>, String> {
+pub(super) fn carry_checks(statements: &[String], live_table: impl Fn(&str) -> Option<String>) -> Result<Vec<String>, Refusal> {
     let mut renames = std::collections::HashMap::new();
     for statement in statements {
         let tokens = sql_tokens(statement);
@@ -92,8 +93,8 @@ pub(super) fn carry_checks(statements: &[String], live_table: impl Fn(&str) -> O
     Ok(result)
 }
 
-fn refusal(table: &str, column: &str) -> String {
-    format!("Table {table} has a CHECK that names column {column}, which this migration removes. Rebuild {table} without that CHECK in the SQL console, or keep {column}, then apply the migration again.")
+fn refusal(table: &str, column: &str) -> Refusal {
+    refuse("schema.check-names-removed-column", format!("Table {table} has a CHECK that names column {column}, which this migration removes. Rebuild {table} without that CHECK in the SQL console, or keep {column}, then apply the migration again."))
 }
 
 /// The first column of the old table that `check` names and the new table
@@ -177,10 +178,10 @@ mod tests {
             let label = case["case"].as_str().unwrap();
             let statements: Vec<String> = serde_json::from_value(case["statements"].clone()).unwrap();
             let outcome = carry_checks(&statements, |name| case["tables"][name].as_str().map(str::to_owned));
-            match case["error"].as_str() {
-                None => assert_eq!(outcome, Ok(serde_json::from_value(case["expected"].clone()).unwrap()), "{label}"),
-                Some(message) => assert_eq!(outcome, Err(message.to_owned()), "{label}"),
+            if let Ok(statements) = &outcome {
+                assert_eq!(statements, &serde_json::from_value::<Vec<String>>(case["expected"].clone()).unwrap(), "{label}");
             }
+            crate::refusal::assert_case(&case, outcome);
         }
     }
 }
