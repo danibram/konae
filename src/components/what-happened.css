@@ -1,0 +1,38 @@
+/* What happened: the owner's list of what a published app sent and ran.
+   Tokens only, so the system theme carries light and dark. */
+
+.cap-workspace.happened > .happened-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; align-content: start; gap: var(--ds-space-3); padding: var(--ds-space-4) 20px 20px; color: var(--ds-text); }
+.cap-workspace.happened > .happened-empty { margin: auto; }
+.happened-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--ds-space-3); }
+.happened-head h2 { margin: 0 0 var(--ds-space-1); font: 650 16px/1.3 var(--ds-font); }
+.happened-head p { margin: 0; max-width: 70ch; color: var(--ds-muted); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.happened-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ds-space-2); }
+.happened-controls .ui-select { width: auto; }
+.happened-note { margin: 0; color: var(--ds-muted); font-size: 12px; line-height: 1.5; }
+.happened-error { margin: 0; padding: var(--ds-space-2) var(--ds-space-3); border: 1px solid var(--ds-danger); background: var(--ds-danger-soft); font-size: 12px; line-height: 1.45; }
+.happened-summary { margin: 0; padding: var(--ds-space-2) var(--ds-space-3); border: 1px solid var(--ds-danger); border-radius: var(--ds-radius-sm); background: var(--ds-danger-soft); font: 650 13px/1.4 var(--ds-font); }
+
+.happened-day { display: grid; gap: var(--ds-space-2); }
+.happened-day h3 { margin: var(--ds-space-2) 0 0; color: var(--ds-muted); font: 650 12px/1.3 var(--ds-font); }
+.happened-list { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--ds-border); border-radius: var(--ds-radius); background: var(--ds-surface); }
+.happened-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--ds-space-3); padding: var(--ds-space-3); border-bottom: 1px solid var(--ds-border); }
+.happened-row:last-child { border-bottom: 0; }
+.happened-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--ds-radius); background: var(--ds-subtle); color: var(--ds-muted); }
+.happened-row.is-danger .happened-icon { background: var(--ds-danger-soft); color: var(--ds-danger); }
+.happened-row.is-warning .happened-icon { background: var(--ds-warning-soft); color: var(--ds-warning); }
+.happened-row.is-success .happened-icon { background: var(--ds-success-soft); color: var(--ds-success); }
+.happened-body { display: grid; gap: var(--ds-space-1); min-width: 0; }
+.happened-title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ds-space-1) var(--ds-space-2); }
+.happened-title strong { font: 650 13px/1.4 var(--ds-font); overflow-wrap: anywhere; }
+.happened-title time { margin-left: auto; color: var(--ds-muted); font-size: 11px; white-space: nowrap; }
+.happened-detail { color: var(--ds-muted); font: 11px/1.5 var(--ds-mono); overflow-wrap: anywhere; }
+.happened-body > p { margin: 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.happened-fix { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ds-space-2); padding: var(--ds-space-2) var(--ds-space-3); border-left: 2px solid var(--ds-border); background: var(--ds-subtle); font-size: 12px; }
+.happened-row.is-danger .happened-fix { border-left-color: var(--ds-danger); }
+.happened-row.is-warning .happened-fix { border-left-color: var(--ds-warning); }
+.happened-fix > span { flex: 1 1 24ch; line-height: 1.5; }
+
+@media (max-width: 520px) {
+  .cap-workspace.happened > .happened-scroll { padding: var(--ds-space-3); }
+  .happened-title time { margin-left: 0; width: 100%; }
+}

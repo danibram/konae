@@ -1,4 +1,5 @@
 import {
+  Activity,
   Box,
   ChevronDown,
   CircleAlert,
@@ -71,6 +72,9 @@ import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
 import { useRuntimeBridge } from "./runtime/useRuntimeBridge";
 
+const WhatHappenedView = lazy(() =>
+  import("./components/WhatHappenedView").then((module) => ({ default: module.WhatHappenedView })),
+);
 const CapabilityWorkspace = lazy(() =>
   import("./components/CapabilityWorkspace").then((module) => ({ default: module.CapabilityWorkspace })),
 );
@@ -897,6 +901,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     { id: "code", label: "Files", icon: Code2 },
     { id: "data", label: "Data", icon: Database },
     { id: "files", label: "Uploads", icon: FolderOpen },
+    { id: "activity", label: "What happened", icon: Activity },
   ];
 
   const reveal = (panel: PanelId) => {
@@ -1109,6 +1114,25 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     ),
   });
 
+  const activityPanel: PanelRender = {
+    id: "activity",
+    title: "What happened",
+    icon: <Activity size={11} />,
+    body: (
+      <Suspense fallback={<div className="capability-loading"><RefreshCw className="spin" size={17} /> Loading…</div>}>
+        <WhatHappenedView
+          deployment={activeDeployment ? { id: activeDeployment.id, url: activeDeployment.url } : undefined}
+          onDeploy={ejectRecord ? undefined : () => { setDeployment(null); setDeployError(""); setDeployOpen(true); refreshOwnerSession(); }}
+          onOpen={(place) => {
+            if (place === "capsule") { setActiveFile("actions.json"); reveal("code"); return; }
+            setAuthView(place);
+            reveal("auth");
+          }}
+        />
+      </Suspense>
+    ),
+  };
+
   const previewPanel: PanelRender = {
     id: "preview",
     title: project.name,
@@ -1258,7 +1282,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         ))}
       </nav>
 
-      <WorkbenchLayout layout={displayedLayout} compact={compact} onLayoutChange={updateLayout} panels={[codePanel, capabilityPanel("data", "Data", <Database size={11} />), capabilityPanel("files", "Uploads", <FolderOpen size={11} />), capabilityPanel("auth", "Auth", <UserRound size={11} />), previewPanel, agentPanel]} />
+      <WorkbenchLayout layout={displayedLayout} compact={compact} onLayoutChange={updateLayout} panels={[codePanel, capabilityPanel("data", "Data", <Database size={11} />), capabilityPanel("files", "Uploads", <FolderOpen size={11} />), capabilityPanel("auth", "Auth", <UserRound size={11} />), activityPanel, previewPanel, agentPanel]} />
 
       <AgentSettingsModal
         open={settingsOpen}

@@ -46,6 +46,7 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | Custom domain | `domain_read`; `domain_set`, `domain_clear` with `publish` |
 | Usage and Signals | `usage_read`, `signals_read`, `usage_summary`, `usage_overview` |
 | Calls between apps | `calls_read` |
+| Email notices | `notices_read` |
 | App users and invitations | `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_invitations_create`, `app_invitations_list`, `app_invitation_resend`, `app_invitation_revoke` |
 | Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
 | Credentials from the owner session | `tokens_list`, `token_create`, `token_revoke` |
@@ -56,7 +57,7 @@ The catalog depends on the credentials. The Kernel checks the permission again o
 
 This changes the contract. `signup_policy_set` needed `publish` before `manage_users` existed, so a client that changed the policy with a `read`, `write` and `publish` token now gets "Unknown tool" and needs a new token that includes `manage_users`. `bun run littlebox -- login --manage-users` asks for one, and `bun run littlebox -- dev` asks for one on its Development Kernel.
 
-Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `domain_read` needs `read`; `domain_set` and `domain_clear` need `publish`. `usage_read`, `signals_read`, `usage_summary`, `usage_overview` and `calls_read` need `read`.
+Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `domain_read` needs `read`; `domain_set` and `domain_clear` need `publish`. `usage_read`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read` and `notices_read` need `read`.
 
 `project_create` returns a template and an External identity by default. Later sources stay in the user's folder; `project_inspect` returns metadata and the Deployment, without claiming to synchronize that code with the editor.
 
@@ -754,7 +755,7 @@ The notice is recorded only when the statement changed a row, after the answer i
 | `sender-not-ready` | The sender preflight was not ready. The job is stored as failed with this kind and never sent |
 | `storage-error` | The queue could not be written. The Kernel logs it |
 
-A queued notice is a job in the same queue as account email, with purpose `notify`, its text sealed with the queue's key until the provider accepts it. It is sent like any job, retried the same way, held while its app is paused for a migration, and fails as `notice-expired` when it has not left within a day. The owner reads its state with `mail_status`, whose `queue.notices` counts notice jobs per state. Notices count apart from account email so a busy app never uses up the allowance signup and recovery need: 200 a day per app, 500 per creator and 50 a day per recipient from one app; the installation's 1,000 a day counts every email. The editor preview sends no email. The Action Contract lists the notice on its action.
+A queued notice is a job in the same queue as account email, with purpose `notify`, its text sealed with the queue's key until the provider accepts it. It is sent like any job, retried the same way, held while its app is paused for a migration, and fails as `notice-expired` when it has not left within a day. The owner reads its state with `mail_status`, whose `queue.notices` counts notice jobs per state, and each notice with `notices_read { "deploymentId", "cursor"? }`, which needs `read` and lists that app's notice jobs newest first, 50 at a time: the action, `pending`, `accepted`, `delivered` or `failed`, attempts, the failure kind, and when it was queued, last changed and, while pending, next tried. It names no recipient. A notice the Kernel did not queue is no job; Usage counts it under `notify` with its reason. The editor's What happened panel reads it with `calls_read`, `usage_summary` and `signals_read`. Notices count apart from account email so a busy app never uses up the allowance signup and recovery need: 200 a day per app, 500 per creator and 50 a day per recipient from one app; the installation's 1,000 a day counts every email. The editor preview sends no email. The Action Contract lists the notice on its action.
 
 | Declaration | Message |
 | --- | --- |

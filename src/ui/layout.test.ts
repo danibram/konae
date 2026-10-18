@@ -244,7 +244,7 @@ describe("the default arrangement", () => {
   test("opens with explorer, code, preview and agent, and the rest closed", () => {
     const state = defaultLayout();
     expect(panelsIn(state.root)).toEqual(["preview", "agent"]);
-    expect([...state.closed].sort()).toEqual(["auth", "code", "data", "explorer", "files"]);
+    expect([...state.closed].sort()).toEqual(["activity", "auth", "code", "data", "explorer", "files"]);
     expect(state.focused).toBe("preview");
     expect(split("row", [stack(["code"])]).children).toHaveLength(1);
   });

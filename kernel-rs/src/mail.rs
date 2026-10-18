@@ -1285,6 +1285,65 @@ pub(crate) async fn status_tool(state: &AppState, refresh: bool) -> Result<Value
     tokio::task::spawn_blocking(move || queue.status()).await?
 }
 
+/// Notices a page of `notices_read` holds.
+const NOTICE_PAGE: i64 = 50;
+
+/// The `notices_read` admin tool: one Deployment's notice jobs, newest first,
+/// 50 at a time, with state, attempts and failure kind. It names no recipient,
+/// as `mail_status` names none. A notice the Kernel did not queue is no job;
+/// Usage counts it under `notify` with its reason.
+pub(crate) fn admin_tools() -> Vec<Value> {
+    let text = json!({"type": "string", "minLength": 1});
+    vec![super::mcp::tool(
+        "notices_read",
+        "Read the email notices a deployment's mutations queued, newest first, 50 at a time: the action, state (pending, accepted, delivered or failed), attempts, failure kind and times. Names no recipient. Notices the Kernel did not queue are counted under notify by usage_read. Pass nextCursor back as cursor for the next page.",
+        json!({"deploymentId": text, "cursor": {"type": "string", "minLength": 1, "maxLength": 20}}),
+        &["deploymentId"],
+        true,
+    )]
+}
+
+pub(crate) async fn notices_tool(state: &AppState, deployment: &Deployment, a: &Value) -> Result<Value> {
+    let before = super::calls::page_before(a)?;
+    let path = state.data_root.join(MAIL_DATABASE);
+    let scope = format!("deployment:{}", deployment.id);
+    tokio::task::spawn_blocking(move || read_notices(&path, &scope, before)).await?
+}
+
+fn read_notices(path: &Path, scope: &str, before: i64) -> Result<Value> {
+    if !path.is_file() {
+        return Ok(json!({"notices": [], "nextCursor": null}));
+    }
+    let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    db.busy_timeout(Duration::from_secs(5))?;
+    let mut query = db.prepare(
+        "SELECT rowid, id, action, state, attempts, error_kind, created_at, updated_at, next_attempt_at
+         FROM jobs WHERE scope = ?1 AND purpose = 'notify' AND rowid < ?2 ORDER BY rowid DESC LIMIT ?3",
+    )?;
+    let rows = query
+        .query_map(params![scope, before, NOTICE_PAGE + 1], |row| {
+            let state: String = row.get(3)?;
+            Ok((
+                row.get::<_, i64>(0)?,
+                json!({
+                    "noticeId": row.get::<_, String>(1)?,
+                    "action": row.get::<_, Option<String>>(2)?,
+                    "attempts": row.get::<_, i64>(4)?,
+                    "errorKind": row.get::<_, Option<String>>(5)?,
+                    "createdAt": row.get::<_, i64>(6)?,
+                    "updatedAt": row.get::<_, i64>(7)?,
+                    "nextAttemptAt": if state == "pending" { Some(row.get::<_, i64>(8)?) } else { None },
+                    "state": state,
+                }),
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let more = rows.len() as i64 > NOTICE_PAGE;
+    let page: Vec<_> = rows.into_iter().take(NOTICE_PAGE as usize).collect();
+    let next = if more { page.last().map(|(rowid, _)| rowid.to_string()) } else { None };
+    Ok(json!({"notices": page.into_iter().map(|(_, notice)| notice).collect::<Vec<_>>(), "nextCursor": next}))
+}
+
 /// Refuses when the creator, the app or the installation has used its daily
 /// allowance of jobs. `schema` is `main` in the queue's own connection and
 /// `outbox` inside an identity transaction.
@@ -2609,6 +2668,33 @@ mod tests {
         let status = fixture.queue().status().unwrap();
         assert_eq!(status["queue"]["notices"]["accepted"], 2);
         assert_eq!(notice_usage(&fixture), vec![("alerts.raise: queued".into(), 1), ("bookings.create: queued".into(), 1)]);
+    }
+
+    #[tokio::test]
+    async fn notices_read_lists_one_apps_notices_newest_first_without_the_recipient() {
+        let fixture = fixture(Scripted::new()).await;
+        notice_accounts(&fixture);
+        notify(&fixture, "alerts.raise", json!({"title": "First"}), None).await;
+        notify(&fixture, "bookings.create", json!({"room": "Oak"}), Some("ana")).await;
+        let read = |deployment: &Deployment, cursor: Option<&str>| {
+            let a = match cursor { Some(c) => json!({"cursor": c}), None => json!({}) };
+            let (state, deployment) = (&fixture.state, deployment.clone());
+            async move { notices_tool(state, &deployment, &a).await }
+        };
+        let page = read(&fixture.app, None).await.unwrap();
+        let notices = page["notices"].as_array().unwrap();
+        assert_eq!(notices.iter().map(|n| n["action"].as_str().unwrap()).collect::<Vec<_>>(), ["bookings.create", "alerts.raise"]);
+        assert!(notices.iter().all(|n| n["state"] == "pending" && n["attempts"] == 0 && n["errorKind"].is_null() && n["nextAttemptAt"].is_i64()));
+        assert!(!page.to_string().contains("@example.test"), "the read names no recipient");
+        assert!(page["nextCursor"].is_null());
+        assert_eq!(read(&fixture.other, None).await.unwrap()["notices"], json!([]), "another app's notices stay out");
+        assert_eq!(
+            read(&fixture.app, Some("x")).await.unwrap_err().to_string(),
+            "Invalid cursor. Pass back the nextCursor of an earlier page."
+        );
+        fixture.queue().run_once().await.unwrap();
+        let sent = read(&fixture.app, None).await.unwrap();
+        assert!(sent["notices"].as_array().unwrap().iter().all(|n| n["state"] == "accepted" && n["nextAttemptAt"].is_null()));
     }
 
     #[tokio::test]
