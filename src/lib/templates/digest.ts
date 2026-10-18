@@ -1,19 +1,14 @@
 import { templateHelpers, templateStyles } from "./shared";
 import type { TemplateSource } from "./types";
 
-const schema = `-- What members write during the day.
+const schema = `-- What members write during the day. The nightly digest stamps digested_at
+-- on the entries it mailed, so an entry goes out once.
 CREATE TABLE IF NOT EXISTS entries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
   body TEXT NOT NULL CHECK (length(trim(body)) BETWEEN 1 AND 500),
-  created_at INTEGER NOT NULL
-);
-
--- One row per UTC day that had entries, written only by the nightly digest.
-CREATE TABLE IF NOT EXISTS digests (
-  day TEXT PRIMARY KEY NOT NULL,
-  entries INTEGER NOT NULL,
-  sent_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  digested_at INTEGER
 );
 `;
 
@@ -24,12 +19,7 @@ export const entries = sqliteTable("entries", {
   userId: text("user_id").notNull(),
   body: text("body").notNull(),
   createdAt: integer("created_at").notNull(),
-});
-
-export const digests = sqliteTable("digests", {
-  day: text("day").primaryKey(),
-  entries: integer("entries").notNull(),
-  sentAt: integer("sent_at").notNull(),
+  digestedAt: integer("digested_at"),
 });
 `;
 
@@ -39,8 +29,8 @@ const actions = {
     "entries.list": {
       kind: "query",
       access: "authenticated",
-      statement: "SELECT id, body, created_at FROM entries ORDER BY id DESC LIMIT 50",
-      bindings: [],
+      statement: "SELECT id, body, created_at, digested_at FROM entries WHERE user_id = ?1 ORDER BY id DESC LIMIT 50",
+      bindings: [{ source: "actor", field: "id" }],
     },
     "entries.add": {
       kind: "mutation",
@@ -52,29 +42,26 @@ const actions = {
         { source: "kernel", field: "now" },
       ],
     },
-    "digests.list": {
-      kind: "query",
-      access: "authenticated",
-      statement: "SELECT day, entries, sent_at FROM digests ORDER BY day DESC LIMIT 14",
-      bindings: [],
-    },
+    // Every entry written before today's UTC midnight and not yet mailed. The
+    // Kernel sends each author one email listing only the entries they wrote.
     "digest.send": {
       kind: "mutation",
       access: "authenticated",
       schedule: { daily: "07:00" },
-      statement: "INSERT INTO digests (day, entries, sent_at) SELECT day, n, ?1 FROM (SELECT date(?1 / 1000, 'unixepoch', '-1 day') AS day, count(*) AS n FROM entries WHERE created_at >= (CAST(?1 / 86400000 AS INTEGER) - 1) * 86400000 AND created_at < CAST(?1 / 86400000 AS INTEGER) * 86400000) WHERE n > 0 ON CONFLICT (day) DO NOTHING",
+      statement: "UPDATE entries SET digested_at = ?1 WHERE digested_at IS NULL AND created_at < CAST(?1 / 86400000 AS INTEGER) * 86400000",
       bindings: [{ source: "kernel", field: "now" }],
       notify: {
-        to: "owner",
-        subject: "Yesterday in the log",
-        body: "New entries arrived in the log yesterday.\nOpen the app to read them.",
+        to: { column: "user_id" },
+        changes: ["body"],
+        subject: "Your log: {changes.count} entries",
+        body: "What you wrote before {kernel.now}:\n{changes}",
       },
     },
   },
 };
 
 const html = `
-<main class="app-shell" data-purpose="A shared log. Members write entries; every morning at 07:00 UTC the owner gets one email when yesterday had any.">
+<main class="app-shell" data-purpose="A daily log. Each member writes entries; every morning at 07:00 UTC each member who wrote gets one email listing their entries.">
   <header>
     <div>
       <p class="eyebrow">Daily log</p>
@@ -83,7 +70,7 @@ const html = `
     <div class="identity"><span id="identity"></span><button id="sign-in" class="quiet" hidden>Sign in</button></div>
   </header>
 
-  <p class="intro">Every morning at 07:00 UTC the app emails its owner when the day before had entries. Nobody presses a button for it.</p>
+  <p class="intro">Every morning at 07:00 UTC the app emails each member the entries they wrote the day before. Nobody presses a button for it.</p>
   <p id="status" class="status" role="status" aria-live="polite"></p>
 
   <section id="log" hidden>
@@ -91,22 +78,18 @@ const html = `
       <label>New entry<input id="entry-body" maxlength="500" autocomplete="off" required></label>
       <button class="primary" type="submit">Add</button>
     </form>
-    <div class="section-label"><span>Entries</span></div>
+    <div class="section-label"><span>Your entries</span></div>
     <div id="entries" class="rows"></div>
-    <div class="section-label"><span>Digests sent</span></div>
-    <div id="digests" class="rows"></div>
   </section>
 </main>`;
 
 const script = `${templateHelpers}
 async function load() {
-  const [entries, digests] = await Promise.all([miniapp.actions.call('entries.list'), miniapp.actions.call('digests.list')]);
+  const entries = await miniapp.actions.call('entries.list');
   $('#entries').innerHTML = entries.length ? entries.map(entry =>
-    '<article class="row"><div><p>' + escapeHtml(entry.body) + '</p><small>' + when(entry.created_at) + '</small></div><span></span></article>'
-  ).join('') : '<p class="empty">No entries yet.</p>';
-  $('#digests').innerHTML = digests.length ? digests.map(digest =>
-    '<article class="row"><div><p>' + escapeHtml(digest.day) + '</p><small>' + digest.entries + ' entries · sent ' + when(digest.sent_at) + '</small></div><span></span></article>'
-  ).join('') : '<p class="empty">The first digest goes out the morning after the first entry.</p>';
+    '<article class="row"><div><p>' + escapeHtml(entry.body) + '</p><small>' + when(entry.created_at) + '</small></div><span>'
+      + (entry.digested_at ? 'mailed ' + when(entry.digested_at) : 'in tomorrow\'s email') + '</span></article>'
+  ).join('') : '<p class="empty">No entries yet. Tomorrow at 07:00 UTC you get an email with what you write today.</p>';
 }
 
 async function start() {
@@ -138,7 +121,7 @@ try { await start(); } catch (error) { showError(error); }
 export const digestTemplate: TemplateSource = {
   id: "digest",
   name: "Nightly digest",
-  sentence: "Members write entries; each morning the owner gets one email about the day before.",
+  sentence: "Members write entries; each morning every member gets an email listing what they wrote the day before.",
   model,
   files: {
     "index.html": html,

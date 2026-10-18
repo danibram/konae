@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import initSqlJs, { type SqlJsStatic } from "sql.js";
 import type { CapsuleFiles } from "../../agent/contracts";
 import { createCapsuleValidator } from "../../agent/gate";
-import { parseServerActionSource } from "../../kernel/actions";
+import { notifyReturning, notifyReturningStatement, parseServerActionSource } from "../../kernel/actions";
 import { cloneStarter } from "../starter";
 import { adminCheck } from "./members";
 import { applyTemplate, templateChoices, type TemplateId } from "./index";
@@ -73,27 +73,30 @@ describe("a project born from a template", () => {
     }
   });
 
-  test("the digest runs on its schedule, takes no input and emails the owner", () => {
-    const action = parseServerActionSource(born("digest").files["actions.json"]!).actions["digest.send"] as unknown as Record<string, unknown>;
+  test("the digest runs on its schedule, takes no input and emails each author their own entries", () => {
+    const action = parseServerActionSource(born("digest").files["actions.json"]!).actions["digest.send"];
     expect(action.schedule).toEqual({ daily: "07:00" });
-    expect((action.notify as { to: string }).to).toBe("owner");
+    expect(action.notify?.to).toEqual({ column: "user_id" });
+    expect(action.notify?.changes).toEqual(["body"]);
+    expect(action.notify?.body).toContain("{changes}");
+    expect(action.notify?.body).toContain("{kernel.now}");
     expect(born("digest").files["app.js"]).not.toContain("digest.send");
   });
 
-  test("the digest statement writes one row for yesterday and none when yesterday was empty", async () => {
+  test("the digest statement stamps entries from before today once, with the rows the notice lists", async () => {
     const SQL = await loadSql();
     const db = new SQL.Database();
     db.run(born("digest").files["schema.sql"]!);
-    const statement = (JSON.parse(born("digest").files["actions.json"]!) as { actions: Record<string, { statement: string }> }).actions["digest.send"].statement;
+    const action = parseServerActionSource(born("digest").files["actions.json"]!).actions["digest.send"];
+    const statement = notifyReturningStatement(action.statement, notifyReturning(action.notify));
     const day = 86_400_000;
     const now = 20_000 * day + 7 * 3_600_000;
-    db.run(statement, [now]);
-    expect(db.getRowsModified()).toBe(0);
-    db.run("INSERT INTO entries (user_id, body, created_at) VALUES ('u', 'yesterday', ?), ('u', 'today', ?)", [now - day, now - 60_000]);
-    db.run(statement, [now]);
-    expect(db.exec("SELECT day, entries FROM digests")[0].values).toEqual([["2024-10-03", 1]]);
-    db.run(statement, [now]);
-    expect(db.getRowsModified()).toBe(0);
+    expect(db.exec(statement, [now])).toEqual([]);
+    db.run("INSERT INTO entries (user_id, body, created_at) VALUES ('ana', 'yesterday', ?), ('ben', 'also yesterday', ?), ('ana', 'today', ?)",
+      [now - day, now - day + 1, now - 60_000]);
+    expect(db.exec(statement, [now])[0].values).toEqual([["yesterday", "ana"], ["also yesterday", "ben"]]);
+    expect(db.exec(statement, [now])).toEqual([]);
+    expect(db.exec("SELECT body FROM entries WHERE digested_at IS NULL")[0].values).toEqual([["today"]]);
     db.close();
   });
 });

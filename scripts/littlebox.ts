@@ -85,6 +85,7 @@ login     --dir <folder> --url <Kernel URL> [--manage-users] [--export-data] [--
           a development mailbox on this machine and sets LITTLEBOX_PASSWORD, for loopback Kernels only.
 init      --dir <empty folder> --name <name> --url <Kernel URL>   Registers a project and writes a template.
 dev       --dir <folder> [--port 8796]   Runs the app on a local Development Kernel and republishes on change.
+          Its email, notices included, goes to <folder>/.littlebox/dev-data/mailbox.jsonl.
 build     --dir <folder>                 Writes .littlebox/artifact.json.
 contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its schema and action-contract.md.
 publish   --dir <folder>                 Builds and publishes. Set each signing secret with secret_set first.
@@ -561,7 +562,11 @@ async function main() {
     if (!/^\d+$/.test(port) || Number(port) < 1024 || Number(port) > 65535) throw Error("Choose a local port between 1024 and 65535.");
     const compilation = Bun.spawn(["cargo", "build", "--manifest-path", path.join(toolRoot, "kernel-rs/Cargo.toml")], { stdout: "inherit", stderr: "inherit" });
     if (await compilation.exited !== 0) throw Error("Could not build the Development Kernel.");
-    const env: Record<string, string | undefined> = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_DATA_DIR: path.join(root, ".littlebox/dev-data"), LITTLEBOX_ADMIN_KEY: secret, LITTLEBOX_KERNEL_PORT: port, LITTLEBOX_PUBLIC_ORIGIN: `http://localhost:${port}`, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: toolRoot };
+    const env: Record<string, string | undefined> = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_DATA_DIR: path.join(root, ".littlebox/dev-data"), LITTLEBOX_ADMIN_KEY: secret, LITTLEBOX_KERNEL_PORT: port, LITTLEBOX_PUBLIC_ORIGIN: `http://localhost:${port}`, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: toolRoot,
+      // Account links and notices land in a file on this machine, never a provider.
+      LITTLEBOX_MAIL_TRANSPORT: "development",
+      // Shortens every schedule so a run can be watched; the Kernel takes it only on loopback.
+      ...(process.env.LITTLEBOX_SCHEDULE_MIN_SECONDS ? { LITTLEBOX_SCHEDULE_MIN_SECONDS: process.env.LITTLEBOX_SCHEDULE_MIN_SECONDS } : {}) };
     for (const key of Object.keys(env)) if (key.startsWith("LITTLEBOX_S3_") || ["LITTLEBOX_ARTIFACT_BUCKET", "LITTLEBOX_DATA_BUCKET", "LITTLEBOX_MCP_ORIGIN"].includes(key)) delete env[key];
     const child = Bun.spawn([path.join(toolRoot, "kernel-rs/target/debug/littlebox-kernel")], { env, stdout: "inherit", stderr: "inherit" });
     const stop = () => { child.kill(); };

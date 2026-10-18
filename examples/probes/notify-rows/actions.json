@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "actions": {
+    "chores.assign": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO chores (title, assignee_id, due_at, created_by) VALUES (?1, ?2, ?3, ?4)",
+      "bindings": [
+        { "source": "input", "key": "title", "type": "string", "maxLength": 200 },
+        { "source": "input", "key": "assignee_id", "type": "string", "maxLength": 100 },
+        { "source": "input", "key": "due_at", "type": "number" },
+        { "source": "actor", "field": "id" }
+      ]
+    },
+    "chores.mine": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT id, title, due_at, reminded_at FROM chores WHERE assignee_id = ?1 ORDER BY due_at LIMIT 50",
+      "bindings": [{ "source": "actor", "field": "id" }]
+    },
+    "chores.remind": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "schedule": { "every": "1h" },
+      "statement": "UPDATE chores SET reminded_at = ?1 WHERE reminded_at IS NULL AND due_at <= ?1 + 86400000",
+      "bindings": [{ "source": "kernel", "field": "now" }],
+      "notify": {
+        "to": { "column": "assignee_id" },
+        "changes": ["title"],
+        "subject": "{changes.count} chores due",
+        "body": "Due within a day of {kernel.now}:\n{changes}"
+      }
+    }
+  }
+}

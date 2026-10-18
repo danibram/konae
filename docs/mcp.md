@@ -740,7 +740,19 @@ A mutation may send one email when its statement changes a row. [ADR-0016](./adr
 }
 ```
 
-`to` is `owner`, the email of the Project Owner's active account, or `actor`, the email of the calling app account, only when that account proved it by answering a verification, invitation or recovery link. The Kernel never sends to an address from the input, so an app cannot relay mail to whoever a visitor names. The subject and body are templates. Their only placeholders are `{input.<key>}`, for one of the action's input bindings, and `{actor.id}`, the caller's ID. A value loses its line breaks and keeps 200 characters; a missing or null value fills nothing. The body keeps the template's own line breaks, and the HTML part escapes every value. The Kernel adds one last line naming the app and why the recipient gets it.
+`to` is `owner`, the email of the Project Owner's active account, or `actor`, the email of the calling app account, only when that account proved it by answering a verification, invitation or recovery link. The Kernel never sends to an address from the input, so an app cannot relay mail to whoever a visitor names. The subject and body are templates. Their placeholders are `{input.<key>}`, for one of the action's input bindings, `{actor.id}`, the caller's ID, `{kernel.now}`, the time of the call or scheduled run as `2026-11-08 07:00 UTC`, `{changes.count}`, the rows the statement changed, and, in the body only, `{changes}`. A value loses its line breaks and keeps 200 characters; a missing or null value fills nothing.
+
+`{changes}` lists the changed rows, one line each, with the columns named in `"changes"` joined by ` · `: at most 50 lines, then `- and <n> more`. `"to": { "column": "assignee_id" }` sends one notice to each account whose ID a changed row holds in that column, listing only that account's rows. The Kernel reads the rows back by appending its own `RETURNING` to the statement, so the columns belong to the table the statement changes, and the answer stays `{ changes, lastInsertId }`. A column value is an account ID, never an address: the Kernel looks it up among this Deployment's active accounts that answered a link, and a value that is not one sends nothing and counts as `not-a-verified-account`. One run reads at most 1,000 rows and writes to at most 50 accounts, in account ID order; each account past the 50th counts as `recipient-cap`. See [ADR-0021](./adr/0021-a-notice-lists-its-rows-and-reaches-the-accounts-they-name.md).
+
+```json
+"tasks.remind": {
+  "kind": "mutation", "access": "authenticated", "schedule": { "daily": "07:00" },
+  "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+  "bindings": [{ "source": "kernel", "field": "now" }],
+  "notify": { "to": { "column": "assignee_id" }, "changes": ["title"],
+    "subject": "{changes.count} tasks due today", "body": "Due on {kernel.now}:\n{changes}" }
+}
+``` The body keeps the template's own line breaks, and the HTML part escapes every value. The Kernel adds one last line naming the app and why the recipient gets it.
 
 The notice is recorded only when the statement changed a row, after the answer is decided: a guard's refusal, an `INSERT ... ON CONFLICT DO NOTHING` that stored nothing and a failed statement send nothing. The mutation answers `{ changes, lastInsertId }` whether or not the notice can be sent. Usage counts every notice under `notify`: `bookings.create: queued` when it became a job, and otherwise the reason:
 
@@ -750,6 +762,8 @@ The notice is recorded only when the statement changed a row, after the answer i
 | `owner-has-no-email` | `to` is `owner` and the owner signs in through Clerk, so the Kernel has no address |
 | `no-account` | `to` is `actor` and the caller is a visitor, a signed request or an API key |
 | `unverified-email` | `to` is `actor` and the account has not answered a link, or is not active |
+| `not-a-verified-account` | `to` names a column and a row's value is not the ID of an active account of this Deployment that answered a link |
+| `recipient-cap` | `to` names a column and the run already wrote to 50 accounts |
 | `app-limit`, `creator-limit`, `recipient-limit`, `installation-limit` | A day's budget is used up. Nothing is stored |
 | `sender-not-ready` | The sender preflight was not ready. The job is stored as failed with this kind and never sent |
 | `storage-error` | The queue could not be written. The Kernel logs it |
@@ -760,14 +774,18 @@ A queued notice is a job in the same queue as account email, with purpose `notif
 | --- | --- |
 | `notify` on a query | `Action <name> is a query, so it cannot declare notify. Declare it on a mutation.` |
 | `notify` on a signal action | `Action <name> is a signal action, so it cannot declare notify. Declare it on a mutation.` |
-| Not an object of `to`, `subject` and `body` strings, or another key such as `cc` | `Action <name> has an invalid notify declaration. Give "to", "subject" and "body" and nothing else.` |
-| `to` that is not `owner` or `actor`, such as an address or `{input.email}` | `Action <name> has an invalid notify recipient. Use "owner" or "actor".` |
+| Not an object of `to`, `subject` and `body` strings, or another key such as `cc` | `Action <name> has an invalid notify declaration. Give "to", "subject", "body" and, to list changed rows, "changes", and nothing else.` |
+| `to` that is not `owner`, `actor` or `{ "column": "<name>" }`, such as an address or `{input.email}` | `Action <name> has an invalid notify recipient. Use "owner", "actor" or {"column": "<name>"} for a column of account IDs.` |
+| `changes` that is not a list of 1 to 8 different column names | `Action <name> has an invalid notify changes list. Name 1 to 8 columns of the changed table, each once, in letters, digits and underscores.` |
 | A subject that is blank, over 120 characters or holds a line break | `Action <name> has an invalid notify subject. Use 1 to 120 characters on one line.` |
 | A body that is blank, over 2000 characters or holds a control character other than a line break | `Action <name> has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters.` |
-| A placeholder other than `{actor.id}` and `{input.<key>}` of an input binding, such as `{actor.email}` | `Action <name> names an unknown placeholder {<placeholder>} in its notify <subject or body>. Use {input.<key>} for one of its input bindings, or {actor.id}.` |
+| A placeholder other than `{actor.id}`, `{kernel.now}`, `{changes}`, `{changes.count}` and `{input.<key>}` of an input binding, such as `{actor.email}` | `Action <name> names an unknown placeholder {<placeholder>} in its notify <subject or body>. Use {input.<key>} for one of its input bindings, {actor.id}, {kernel.now}, {changes} or {changes.count}.` |
+| `{changes}` in the subject | `Action <name> puts {changes} in its notify subject. Put {changes} in the body, and {changes.count} in the subject.` |
+| `{changes}` in the body with no `changes` list | `Action <name> uses {changes} in its notify body without a changes list. Name the columns to show in notify "changes".` |
+| A `changes` or `to` column the changed table does not have, checked against the schema | `Action <name> names a notify column its statement cannot return. Name columns of the table the statement changes.` |
 | A `{` with no `}` after it | `Action <name> has an unclosed placeholder in its notify <subject or body>. Close it with "}".` |
 
-The Validation Gate and the Kernel parse the same cases from `kernel-rs/src/notify-cases.json`.
+The Validation Gate and the Kernel parse the same cases from `kernel-rs/src/notify-cases.json`, and check columns against a schema from `kernel-rs/src/notify-column-cases.json`.
 
 ## Build and publish
 
