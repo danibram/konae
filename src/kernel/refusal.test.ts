@@ -30,7 +30,7 @@ describe("refusal codes (ADR-0020)", () => {
   });
 
   test("every code the editor names is in the table", () => {
-    const sources = ["src/kernel/actions.ts", "src/kernel/calls.ts", "src/kernel/route-declaration.ts", "src/kernel/sql-rules.ts", "src/agent/release-check.ts", "src/agent/gate.ts", "src/lib/domain-name.ts"];
+    const sources = ["src/kernel/actions.ts", "src/kernel/calls.ts", "src/kernel/route-declaration.ts", "src/kernel/sql-rules.ts", "src/agent/release-check.ts", "src/agent/gate.ts", "src/lib/domain-name.ts", "src/lib/carry-checks.ts", "src/lib/model-rules.ts"];
     const codes = new Set<string>(refusalCodes());
     let named = 0;
     for (const source of sources) {

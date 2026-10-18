@@ -3,9 +3,10 @@
 // drop, rename). The statements a migration runs carry each CHECK over from the
 // live table's SQL. kernel-rs/src/checks.rs does the same for a Deployment, and
 // kernel-rs/src/check-carry-cases.json holds the cases both test suites run.
+import { refusal as refuse, type RefusalError } from "../kernel/refusal";
 import { sqlTokens, type SqlToken } from "./sql-tokens";
 
-export type CarriedMigration = { statements: string[] } | { error: string };
+export type CarriedMigration = { statements: string[] } | { error: RefusalError };
 
 type Check = { owner: string | null; text: string; names: string[] };
 type Table = { columns: string[]; checks: Check[]; close: SqlToken | null };
@@ -18,7 +19,8 @@ const constraintWords = ["CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN"];
  * as written. A column's own CHECK leaves with the column. Any other CHECK that
  * names a column the plan removes refuses the whole migration. Drizzle's
  * `PRAGMA foreign_keys` lines are left out: inside the transaction a migration
- * runs in, SQLite ignores them.
+ * runs in, SQLite ignores them. A refusal carries
+ * `schema.check-names-removed-column`.
  */
 export function carryChecks(statements: string[], liveTable: (name: string) => string | null): CarriedMigration {
   const renames = new Map<string, string>();
@@ -74,8 +76,8 @@ export function carryChecks(statements: string[], liveTable: (name: string) => s
   return { statements: result };
 }
 
-function refusal(table: string, column: string): string {
-  return `Table ${table} has a CHECK that names column ${column}, which this migration removes. Rebuild ${table} without that CHECK in the SQL console, or keep ${column}, then apply the migration again.`;
+function refusal(table: string, column: string): RefusalError {
+  return refuse("schema.check-names-removed-column", `Table ${table} has a CHECK that names column ${column}, which this migration removes. Rebuild ${table} without that CHECK in the SQL console, or keep ${column}, then apply the migration again.`);
 }
 
 /** The first column of the old table that `check` names and the new table lacks, as the old table writes it. */

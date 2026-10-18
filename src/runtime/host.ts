@@ -324,7 +324,7 @@ export class MiniAppRuntimeHost {
       const sql = current.exec("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE", [name])[0]?.values[0]?.[0];
       return typeof sql === "string" ? sql : null;
     });
-    if ("error" in carried) throw new Error(carried.error);
+    if ("error" in carried) throw carried.error;
     const statements = carried.statements;
     const clone = new SQL.Database(current.export());
     try {

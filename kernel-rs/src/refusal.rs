@@ -63,6 +63,14 @@ pub(crate) fn hint(code: &str) -> Value {
     table().get(code).cloned().unwrap_or(Value::Null)
 }
 
+/// The refusal an HTTP answer carries, `{ error, code }` as `refusal_error`
+/// in main.rs writes it, when the code is in the table. A tool that calls a
+/// Kernel route keeps the code this way.
+pub(crate) fn from_body(body: &Value) -> Option<Refusal> {
+    let (code, _) = table().get_key_value(body["code"].as_str()?)?;
+    Some(Refusal { code: code.as_str(), message: body["error"].as_str()?.to_owned() })
+}
+
 /// The refusal an error carries, when a Capsule rule refused it.
 pub(crate) fn of(error: &anyhow::Error) -> Option<&Refusal> {
     error.downcast_ref::<Refusal>()

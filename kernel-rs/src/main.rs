@@ -45,6 +45,7 @@ mod limits;
 mod mail;
 mod mcp;
 mod migration;
+mod model_rules;
 mod notify;
 mod oauth;
 mod package;
@@ -657,8 +658,8 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         .map(|item| item.url.clone())
         .unwrap_or_else(|| deployment_url(&state.public_origin, &hostname));
     if let Some(model) = input.project.database_model.as_ref() {
-        if model.source != model.accepted_source || model.revision.is_empty() {
-            return error(StatusCode::BAD_REQUEST, "Publish the accepted database model. Apply its migration before publishing.");
+        if let Err(refused) = model_rules::accepted(&model.source, &model.accepted_source, &model.revision) {
+            return refusal_error(&refused);
         }
     }
     let mut manifest = input.project.manifest;
@@ -1852,7 +1853,10 @@ async fn admin_database(
         },
         "apply-migration" => match apply_migration(&state, &deployment.id, &body).await {
             Ok(result) => Json(json!({"result": result})).into_response(),
-            Err(e) => error(StatusCode::BAD_REQUEST, &e.to_string()),
+            Err(e) => match refusal::of(&e) {
+                Some(refused) => refusal_error(refused),
+                None => error(StatusCode::BAD_REQUEST, &e.to_string()),
+            },
         },
         _ => error(StatusCode::BAD_REQUEST, "Unknown database operation."),
     }
@@ -2314,7 +2318,7 @@ async fn apply_migration(state: &AppState, id: &str, body: &Value) -> Result<Val
     let statements = {
         let db = Connection::open(database_path(state, id))?;
         let live = |name: &str| db.query_row("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1 COLLATE NOCASE", [name], |row| row.get::<_, String>(0)).ok();
-        checks::carry_checks(&planned, live).map_err(anyhow::Error::msg)?
+        checks::carry_checks(&planned, live)?
     };
     let backup = create_backup(state, id, "Before migration").await?;
     {
@@ -3615,6 +3619,24 @@ mod tests {
             "statement": "SELECT ?1 = 'owner' AS owner LIMIT 1", "bindings": [{"source": "actor", "field": "role"}]})).unwrap();
         assert_eq!(resolve_bindings(&anonymous, &json!({}), None, None).unwrap(), vec![SqlValue::Null], "a visitor binds NULL instead of failing");
         assert!(resolve_bindings(&anonymous, &json!({"role": "owner"}), None, None).unwrap_err().contains("Unexpected action input: role"), "an input cannot supply it");
+    }
+
+    /// The refusal keeps its code out of apply_migration, so the route answers
+    /// it with `refusal_error`, and it comes before the recovery point.
+    #[tokio::test]
+    async fn a_migration_that_drops_a_checked_column_refuses_with_its_code_and_no_backup() {
+        let root = std::env::temp_dir().join(format!("littlebox-carry-refusal-{}", Uuid::new_v4()));
+        let state = test_state(&root);
+        let path = database_path(&state, "dep");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        Connection::open(&path).unwrap().execute_batch("CREATE TABLE habits(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, note TEXT, CONSTRAINT short_note CHECK (note IS NULL OR length(note) < 20))").unwrap();
+        let body = json!({"statements": ["ALTER TABLE `habits` DROP COLUMN `note`;"]});
+        let error = apply_migration(&state, "dep", &body).await.unwrap_err();
+        let refused = refusal::of(&error).expect("a refusal with a code");
+        assert_eq!(refused.code, "schema.check-names-removed-column");
+        assert_eq!(refused.message, "Table habits has a CHECK that names column note, which this migration removes. Rebuild habits without that CHECK in the SQL console, or keep note, then apply the migration again.");
+        assert!(!backup_dir(&state, "dep").exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

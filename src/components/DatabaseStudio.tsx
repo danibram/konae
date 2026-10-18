@@ -29,6 +29,8 @@ import type {
 } from "../runtime/host";
 import { planDatabaseChange } from "../database-lifecycle/client";
 import { carryChecks } from "../lib/carry-checks";
+import { McpError } from "../mcp/client";
+import { RefusalError } from "../kernel/refusal";
 import type { DatabaseMigrationPlan } from "../database-lifecycle/contracts";
 import type { DrizzleDatabaseModel } from "../lib/types";
 import { Badge, Button, Dialog, EmptyState } from "./ui";
@@ -437,7 +439,7 @@ function QueryHistory({ history, onSelect }: { history: Array<{ sql: string; ela
  * doors apply it with (src/lib/carry-checks.ts). The statements the host
  * receives stay Drizzle's, since the host carries them again from its own tables.
  */
-async function carriedPlan(host: DatabaseAdminHost, plan: DatabaseMigrationPlan): Promise<{ plan: DatabaseMigrationPlan & { shownSql: string; shownCount: number } } | { error: string }> {
+async function carriedPlan(host: DatabaseAdminHost, plan: DatabaseMigrationPlan): Promise<{ plan: DatabaseMigrationPlan & { shownSql: string; shownCount: number } } | { error: RefusalError }> {
   // Unread tables show Drizzle's plan; the host carries the CHECKs at apply all the same.
   const live = await host.runSql("SELECT name, sql FROM sqlite_master WHERE type = 'table' LIMIT 1000").catch(() => null);
   if (!live) return { plan: { ...plan, shownSql: plan.sql, shownCount: plan.statements.length } };
@@ -445,6 +447,17 @@ async function carriedPlan(host: DatabaseAdminHost, plan: DatabaseMigrationPlan)
   const carried = carryChecks(plan.statements, (name) => tables.get(name.toLowerCase()) || null);
   if ("error" in carried) return carried;
   return { plan: { ...plan, shownSql: carried.statements.join("\n--> statement-breakpoint\n"), shownCount: carried.statements.length } };
+}
+
+/**
+ * The remedy beside a refused migration: the preview and the plan refuse with a
+ * RefusalError, the Kernel answers through MCP with the same code (ADR-0020).
+ * Any other failure has no remedy.
+ */
+export function refusalRemedy(cause: unknown): string {
+  if (cause instanceof RefusalError) return cause.hint.remedy;
+  if (cause instanceof McpError) return cause.refusal?.hint?.remedy ?? "";
+  return "";
 }
 
 function SchemaView({ host, tables, databaseModel, onEdit, onApplied }: {
@@ -458,11 +471,18 @@ function SchemaView({ host, tables, databaseModel, onEdit, onApplied }: {
   const [planning, setPlanning] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState("");
+  const [remedy, setRemedy] = useState("");
   const [message, setMessage] = useState("");
+
+  const fail = (cause: unknown) => {
+    setError(cause instanceof Error ? cause.message : String(cause));
+    setRemedy(refusalRemedy(cause));
+  };
 
   useEffect(() => {
     setPlan(null);
     setError("");
+    setRemedy("");
     if (databaseModel.source === databaseModel.acceptedSource) {
       setPlanning(false);
       return;
@@ -477,10 +497,10 @@ function SchemaView({ host, tables, databaseModel, onEdit, onApplied }: {
       }, { signal: controller.signal }).then(async (next) => {
         const reviewed = await carriedPlan(host, next);
         if (controller.signal.aborted) return;
-        if ("error" in reviewed) setError(reviewed.error);
+        if ("error" in reviewed) fail(reviewed.error);
         else setPlan(reviewed.plan);
       }).catch((cause) => {
-        if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
+        if (!controller.signal.aborted) fail(cause);
       }).finally(() => {
         if (!controller.signal.aborted) setPlanning(false);
       });
@@ -495,6 +515,7 @@ function SchemaView({ host, tables, databaseModel, onEdit, onApplied }: {
     if (!plan || !host.applyDatabaseMigration) return;
     setApplying(true);
     setError("");
+    setRemedy("");
     setMessage("");
     try {
       const { shownSql: _shown, shownCount: _count, ...planned } = plan;
@@ -502,7 +523,7 @@ function SchemaView({ host, tables, databaseModel, onEdit, onApplied }: {
       await onApplied(databaseModel.source, plan.toHash);
       setMessage("Migration applied · recovery point created");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      fail(cause);
     } finally {
       setApplying(false);
     }
@@ -532,7 +553,7 @@ function SchemaView({ host, tables, databaseModel, onEdit, onApplied }: {
       </ul>
       <div className="schema-actions"><button onClick={onEdit}><Pencil size={12} /> Edit the columns</button></div>
       <div className={`schema-lifecycle-status ${error || (drifted && !message) ? "is-error" : plan ? "is-ready" : inSync ? "is-synced" : ""}`} role="status">{planning && <RefreshCw className="spin" size={12} />}{!planning && plan && !error && <Check size={12} />}{lifecycleStatus}</div>
-      {error && <div className="backup-error" role="alert">{error}</div>}
+      {error && <div className="backup-error" role="alert">{error}{remedy && <p className="refusal-remedy">{remedy}</p>}</div>}
       {plan ? (
         <section className="migration-plan" aria-label="Migration plan">
           <header><div><p>DRIZZLE KIT PLAN</p><h4>Migration ready</h4><small>{plan.shownCount} statement{plan.shownCount === 1 ? "" : "s"} · {plan.id.slice(0, 8)}</small></div>{plan.destructive && <strong>OWNER APPROVAL REQUIRED</strong>}</header>
