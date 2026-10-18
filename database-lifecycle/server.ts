@@ -4,6 +4,7 @@ import path from "node:path";
 import { accessSync, constants } from "node:fs";
 import { text } from "node:stream/consumers";
 import type { DatabaseMigrationPlan, PlanDatabaseChangeInput } from "../src/database-lifecycle/contracts";
+import { plannedStatements } from "../src/lib/model-rules";
 import { replyMarker } from "./derive-migration";
 import { repoRoot } from "./model-guard";
 
@@ -15,7 +16,8 @@ import { repoRoot } from "./model-guard";
  */
 export async function planDrizzleDatabaseChange(input: PlanDatabaseChangeInput): Promise<DatabaseMigrationPlan> {
   const statements = await deriveStatements(input);
-  if (statements.length === 0) throw new Error("The Drizzle model has no schema changes to migrate.");
+  const empty = plannedStatements(statements);
+  if (empty) throw empty;
 
   const fromHash = hash(input.acceptedSource);
   const toHash = hash(input.candidateSource);

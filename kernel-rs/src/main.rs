@@ -45,6 +45,7 @@ mod limits;
 mod mail;
 mod mcp;
 mod migration;
+mod model_rules;
 mod notify;
 mod oauth;
 mod package;
@@ -657,8 +658,8 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         .map(|item| item.url.clone())
         .unwrap_or_else(|| deployment_url(&state.public_origin, &hostname));
     if let Some(model) = input.project.database_model.as_ref() {
-        if model.source != model.accepted_source || model.revision.is_empty() {
-            return error(StatusCode::BAD_REQUEST, "Publish the accepted database model. Apply its migration before publishing.");
+        if let Err(refused) = model_rules::accepted(&model.source, &model.accepted_source, &model.revision) {
+            return refusal_error(&refused);
         }
     }
     let mut manifest = input.project.manifest;

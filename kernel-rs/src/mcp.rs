@@ -1785,8 +1785,7 @@ fn tool_error(error: &anyhow::Error) -> Value {
 
 pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
     if let Some(model) = &input.project.database_model {
-        anyhow::ensure!(model.source == model.accepted_source && !model.revision.is_empty(),
-            "Publish the accepted database model. Apply its migration before publishing.");
+        super::model_rules::accepted(&model.source, &model.accepted_source, &model.revision)?;
     }
     if let Some(hostname) = &input.initial_domain {
         super::domain::check_hostname(hostname, &super::domain::Rules::of(state))?;
@@ -1873,8 +1872,7 @@ pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> R
     let result = match result {
         Ok(()) => match &input.project.database_model {
             Some(model) => match model_matches_path(&model.accepted_source, &temp).await {
-                Ok(true) => Ok(()),
-                Ok(false) => Err(anyhow::anyhow!("The accepted database model does not match the deployed schema. Apply its migration before publishing.")),
+                Ok(matches) => super::model_rules::deployed(matches).map_err(Into::into),
                 Err(error) => Err(error),
             },
             None => Ok(()),
@@ -2295,10 +2293,7 @@ pub(super) async fn schema_plan(input: Value) -> Result<Value> {
             .unwrap_or("Migration derivation failed.")
     );
     let statements: Vec<String> = serde_json::from_value(reply["statements"].clone())?;
-    anyhow::ensure!(
-        !statements.is_empty(),
-        "The Drizzle model has no schema changes to migrate."
-    );
+    super::model_rules::planned(&statements)?;
     let sql = statements.join("\n--> statement-breakpoint\n");
     let from = digest(input["acceptedSource"].as_str().unwrap().as_bytes());
     let to = digest(input["candidateSource"].as_str().unwrap().as_bytes());
