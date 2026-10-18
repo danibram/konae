@@ -85,3 +85,5 @@ Next wave:
 
 - The migration refusal carries its code through `schema_apply` and the Database Studio, as Capsule refusals do; today only the case file names it.
 - The items under "Not in this wave": `{changes}` and `{kernel.now}` placeholders and `to` naming a column of account IDs for notices; a "What happened" owner view over notices, calls and scheduled runs; splitting CONTEXT.md and the agent prompt into author and maintainer parts.
+
+Fourth wave, notices: `{changes}`, `{kernel.now}` and `to: { column }` landed with ADR-0021; the nightly digest mails each member their own entries, and `examples/probes/notify-rows` proves a scheduled notice to two members on `littlebox dev`.
