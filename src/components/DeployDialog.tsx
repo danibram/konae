@@ -13,6 +13,7 @@ import { listSecrets, readSignupPolicy, type DeploymentReceipt, type SignupMode 
 import { readDomain } from "../deployments/domains";
 import type { DeploymentVisibility } from "../deployments/manifest";
 import { actionSentence, deployReadiness, ownerFixes, type ReleaseFacts } from "./action-readiness";
+import { hintOf, refusalCodes, type RefusalCode } from "../kernel/refusal";
 import type { MiniAppProject } from "../lib/types";
 import type { OwnerSession } from "./owner-session";
 import { defaultSignupMode, firstPublishModes, republishAccessNote, signupModeCopy, visibilityCopy } from "./app-access";
@@ -81,6 +82,11 @@ function useReleaseFacts(projectId: string, deploymentId: string | undefined, si
     return () => { live = false; };
   }, [deploymentId, signedIn]);
   return { secrets, rules };
+}
+
+/** The owner clears this refusal by setting a secret, which Auth > Integrations does. */
+function setsSecret(code: string | undefined): boolean {
+  return code !== undefined && refusalCodes().includes(code as RefusalCode) && hintOf(code as RefusalCode).tool === "secret_set";
 }
 
 export function DeployDialog({ project, deployment, publishing, error, errorCode, session, signInHref, onClose, onDeploy, onEditAuth, current = null, onOpenUsers, onOpenIntegrations, onOpenAppSettings }: Props) {
@@ -196,7 +202,7 @@ export function DeployDialog({ project, deployment, publishing, error, errorCode
                 <strong>Deployment failed</strong>
                 <span>{error}</span>
                 {signedOut && <a href={signInHref}>Sign in to deploy</a>}
-                {onOpenIntegrations && ownerFixes(errorCode) && <button type="button" className="deploy-auth-link" onClick={onOpenIntegrations}>Set it in Auth &gt; Integrations</button>}
+                {onOpenIntegrations && ownerFixes(errorCode) && setsSecret(errorCode) && <button type="button" className="deploy-auth-link" onClick={onOpenIntegrations}>Set it in Auth &gt; Integrations</button>}
               </div>
             )}
 
