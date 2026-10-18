@@ -38,28 +38,42 @@ The publish build, the same one the CLI and the export run, decides what a Deplo
 
 The published browser never receives SQL and never receives database credentials. It only knows action names. Every database read or write goes through a named Server Action declared in actions.json and invoked with miniapp.actions.call.
 
-actions.json format:
+actions.json format, every key an action takes (each kind takes only its own; the SDK section below says what each does):
 
 {
   "version": 1,
   "actions": {
     "<group>.<verb>": {
-      "kind": "query" | "mutation" | "signal" | "call",
+      "kind": "query" | "mutation" | "signal",
       "access": "anonymous" | "authenticated",
       "statement": "<one SQL statement with ? placeholders; a signal action has none>",
       "bindings": [ ... ],
-      "guard": "<optional, a mutation only: the refusal when no row changes>",
-      "notify": { "to": "owner" | "actor", "subject": "<optional, a mutation only>", "body": "<template>" },
-      "schedule": { "every": "<optional, a mutation with no input bindings only: 15m, 6h>" },
-      "signal": { "name": "<optional>", "properties": [] },
-      "http": { "method": "GET", "path": "/api/<optional, an anonymous action only>" }
+      "guard": "<a mutation only: the sentence the person sees when no row changes>",
+      "notify": { "to": "owner" | "actor", "subject": "<template>", "body": "<template>" },
+      "schedule": { "every": "15m" } | { "daily": "02:00" },
+      "signal": { "name": "order.placed", "properties": ["<input key>" | "actor"] },
+      "http": {
+        "method": "GET" | "POST", "path": "/api/<path>",
+        "signature": { "scheme": "littlebox" | "hmac-body" | "timestamped" | "svix", "header": "X-Signature", "secret": "<name>" } | { "provider": "github" | "shopify" | "stripe" | "svix", "secret": "<name>" },
+        "fields": { "<input key>": "$.data.object.id" },
+        "callers": ["signature" | "key" | "session"]
+      }
+    },
+    "<group>.<verb> of kind call": {
+      "kind": "call", "access": "anonymous" | "authenticated", "bindings": [ input bindings only ],
+      "method": "GET" | "POST",
+      "url": "https://inbox-2.apps.example.org/hooks/events",
+      "body": { "<body key>": "<input key>" | { "value": <constant> } },
+      "headers": { "Idempotency-Key": "<input key>" | { "value": <constant> } },
+      "auth": { "secret": "<name>", "header": "X-Inbox-Signature" } | { "key": "<name>" },
+      "then": { "action": "<mutation>", "inputs": { "<input key>": "<JSON pointer into /ok, /status, /error, /body or /input>" } }
     }
   }
 }
 
-Choose the smallest piece that does the job. Rows go through a Server Action. A mutation that must refuse quietly gets guard. Email on a changed row gets notify. Work with no caller gets schedule. An occurrence for the owner gets signal. Another service calling in gets http on an anonymous action. This app calling out gets kind call. Files use miniapp.files. Do not invent a second process or a host rule the Capsule can already declare.
+Choose the smallest piece that does the job. Rows go through a Server Action. A mutation that must refuse quietly gets guard. Email on a changed row gets notify. Work with no caller gets schedule. An occurrence for the owner gets signal. Another service calling in gets http on an anonymous action. This app calling out gets kind call. Files use miniapp.files. Do not invent a second process or a host rule the Capsule can already declare. Each project template under /templates shows one of these in a Capsule that passes.
 
-Rules the Validation Gate checks for you:
+Rules the Validation Gate checks for you. When it refuses, validate_capsule returns the sentence, a code and the remedy; fix what the remedy says:
 - Action names are lowercase dotted, e.g. tasks.list, notes.create. At most 100 actions.
 - "kind": "query" statements must start with SELECT. "kind": "mutation" statements must start with INSERT, UPDATE, DELETE or REPLACE.
 - Exactly one statement per action. No structural SQL (CREATE, ALTER, DROP, PRAGMA) — schema changes belong in schema.sql.
@@ -74,11 +88,11 @@ Rules the Validation Gate checks for you:
 - Inputs are typed and validated. A "string" input must be non-empty; a "number" must be finite.
 - For an optional filter or nullable field, add "nullable": true to its input binding. Omitted values and explicit null bind as SQL NULL; supplied values still follow the declared type. Pass null for an empty search box.
 - Mutations return { changes, lastInsertId }. Read changed rows with a separate query; mutation statements using RETURNING fail validation.
-- When a mutation's WHERE carries a rule, such as "only an organizer" or "the slot is free", add "guard": "<the sentence the person should see>" to it. When the statement changes no row the call is refused with that sentence instead of returning { changes: 0 }.
-- When the owner asks to hear about something, such as a new signup or an alert, or a person should get a confirmation, add "notify": { "to": "owner" or "actor", "subject": "...", "body": "..." } to the mutation that does it. It emails the owner, or the caller once their account has proved its email, when the statement changes a row. It never sends to an address from the input. The subject and body may use {input.<key>} for the action's input bindings and {actor.id}, nothing else. Add it only when the owner asked for email.
-- To let the owner see that something happened, such as a newsletter signup, add "signal": { "name": "newsletter.joined", "properties": ["source"] } to the mutation that does it. Properties are keys of its input bindings, or "actor" for the caller's ID. A mutation records its Signal only when it changed a row. With no table to write, use "kind": "signal" with access and bindings and no statement; it returns { recorded: true }. A query cannot declare a signal. There is no miniapp.track; the app calls the action with miniapp.actions.call, and only the owner reads Signals.
-- For work that must happen when nobody asks, such as releasing a hold that lapsed or closing a day, add "schedule": { "every": "15m" } or { "daily": "02:00" } (UTC) to a mutation with no input bindings. The Kernel's timer runs it once per period with no caller: an actor binding is null and kernel.now is the run's time. Periods run from 5 minutes to 24 hours. Nothing is pushed to a page: to show new rows, poll a query; a "subscribe" key is refused.
-- To tell another app or an outside service that something happened, declare "kind": "call" with "method", "url", input bindings only, "body" mapping body keys to input keys, and an optional "headers", "auth" and "then", as the calls module below describes. On POST, dotted body keys such as line_items.0.price expand into nested JSON; headers may set Idempotency-Key for a Checkout Session. The Kernel sends it from its own process; the page never sees a secret or a key. Put "connects" in the manifest only for a direct browser fetch of a public GET route.
+- A mutation whose WHERE carries a rule, such as "only an organizer" or "the slot is free", gets a guard with the sentence the person should see.
+- Add notify only when the owner asked for email. It never sends to an address from the input.
+- A signal goes on the mutation that does the thing, or on a "kind": "signal" action with no table to write. There is no miniapp.track.
+- A schedule goes on a mutation with no input bindings. Nothing is pushed to a page: to show new rows, poll a query.
+- A call action is sent by the Kernel from its own process; the page never sees a secret or a key. Put "connects" in the manifest only for a direct browser fetch of a public GET route.
 - A query that reads rows needs a top-level LIMIT. The Validation Gate and the Kernel both refuse one that does not, including after the app is exported. A LIMIT inside a string, a comment or a subquery does not count. A query that only returns a total (count, sum, avg, min or max) with no GROUP BY, and a query that does not read a table, are the exceptions. LIMIT does not raise the 1000-row runtime cap.
 - schema.sql must run twice on the same database without failing, because the runtime re-runs it on every database open.
 - schema.sql may only contain CREATE TABLE IF NOT EXISTS and CREATE [UNIQUE] INDEX IF NOT EXISTS. No INSERT, PRAGMA, BEGIN/COMMIT, triggers or views: the Kernel refuses them at deploy. Never reach for DROP TABLE to "reset" it: that is the owner's data. Rows come from server actions, not from schema.sql.

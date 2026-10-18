@@ -18,6 +18,8 @@ await miniapp.files.delete(note.file_id);                        // { id, delete
 
 There is nothing else: no fetch to other origins, no localStorage contract, no miniapp.db and no SQL from the browser, no miniapp.track and no analytics call: a Signal is declared on a Server Action and recorded when miniapp.actions.call runs it.
 
+When the Validation Gate or a release refuses a key declared in actions.json or the manifest, validate_capsule returns its sentence, a code and the remedy. The declarations below list only the refusals a route's caller meets.
+
 ## miniapp.auth
 
 Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.
@@ -49,20 +51,8 @@ A call the Kernel refuses records no Signal and counts in no Usage total, except
 To email someone when something happens, such as a booking or an alert, declare notify on the mutation that does it. It reaches the owner or the person who called the action, nobody else.
 
 Declared with "kind" in actions.json: Each kind takes its own top-level keys. A query takes kind, access, statement, bindings and http. A mutation takes kind, access, statement, bindings, http, signal, guard, notify and schedule. A signal action takes kind, access, bindings, signal and an empty statement. A call takes kind, access, bindings, url, method, body, headers, auth, then and an empty statement. Any other key is refused, so a misspelled or misplaced key cannot pass and do nothing. A key set to null counts as absent. A key with its own refusal, such as a guard on a query, gets that refusal instead. The Validation Gate and the Kernel refuse the same declarations with the same messages.
-Refusals:
-- "Action <name> has a key <key> that a <kind> action does not take." when the action declares a top-level key its kind does not take; with several, the first in sorted order
 
 Declared with "signal" in actions.json: { "name": "order.placed", "properties"?: ["input binding keys", "actor"] } on a mutation, or on an action of "kind": "signal" that has access and bindings but no statement. When the action succeeds, and for a mutation only when it changed at least one row, the Kernel records the Signal with the named inputs as its properties, in the Deployment's Usage store. The property actor records the caller's ID: the user's, the API key's, or null for a visitor or a signed request. A signal action runs no SQL and returns { recorded: true }. The owner reads Signals with signals_read; the app cannot. The Validation Gate and the Kernel refuse the same declarations with the same messages.
-Refusals:
-- "Action <name> is a query, so it cannot declare a signal. Declare it on a mutation or on a "kind": "signal" action." when the action is a query
-- "Action <name> names signal property <key>, which is not one of its input bindings." when a property is not the key of an input binding; actor, kernel and literal bindings have no key
-- "Action <name> names signal property <key> twice." when properties lists a key twice
-- "Action <name> names signal property actor, which records the caller's ID, and also has an input named actor. Rename the input." when properties lists actor and an input binding's key is actor
-- "Action <name> names more than 8 signal properties." when properties lists more than 8 keys
-- "Action <name> names an invalid signal. Use dot-separated lowercase words, such as "order.placed", up to 64 characters." when the name has one word, a capital, a space, an empty part or more than 64 characters
-- "Action <name> has an invalid signal declaration." when signal is not an object, has a key other than name and properties, has no name, or properties is not a list of strings
-- "Action <name> is a signal action, so it must declare a signal." when the kind is signal and there is no signal key
-- "Action <name> is a signal action, so it runs no SQL and cannot declare a statement." when the kind is signal and the action has a statement
 Limits:
 - 8 properties per Signal; a string property keeps its first 128 bytes
 - a signal action counts toward the action limit like any other action
@@ -71,23 +61,10 @@ Limits:
 - the Kernel keeps the newest 50,000 Signals per Deployment and drops the oldest
 
 Declared with "guard" in actions.json: "guard": "<message>" on a mutation. When its statement changes no row, the Kernel refuses the call with that message instead of answering { changes: 0, lastInsertId: 0 }: a tool error for miniapp.actions.call, 403 on an HTTP route. Usage counts the call under refused, and no Signal is recorded. Write the app's rule into the statement's WHERE, such as "the caller is an organizer" or "the slot is free", and the guard is what the person sees when the rule says no. Without a guard a mutation answers { changes: 0 } as before. The Validation Gate and the Kernel refuse the same declarations with the same messages.
-Refusals:
-- "Action <name> is a query, so it cannot declare a guard. Declare it on a mutation." when the action is a query
-- "Action <name> is a signal action, so it cannot declare a guard. Declare it on a mutation." when the action is a signal action
-- "Action <name> has an invalid guard. Use a message of 1 to 200 characters on one line." when guard is not a string, is empty or blank, is longer than 200 characters, or holds a line break or another control character
 Limits:
 - a guard is 1 to 200 characters on one line
 
 Declared with "notify" in actions.json: "notify": { "to": "owner" or "actor", "subject": "<template>", "body": "<template>" } on a mutation. When its statement changes a row, the Kernel queues one email: to the Project Owner's account email, or to the calling account's email when that account proved it by answering a verification, invitation or recovery link. It never sends to an address from the input. The templates may use {input.<key>} for one of the action's input bindings and {actor.id}; a value loses its line breaks, keeps 200 characters and is escaped in the HTML part. The mutation answers as it would without notify, and an email that cannot be sent never fails it: Usage counts every notice under notify as "<action>: queued" or "<action>: <reason>", and the owner reads the queue with mail_status. Scheduled runs and a call's then mutation also process notify when they change rows. They have no caller, so to owner works and to actor records no-account. The editor preview sends no email. The Validation Gate and the Kernel refuse the same declarations with the same messages.
-Refusals:
-- "Action <name> is a query, so it cannot declare notify. Declare it on a mutation." when the action is a query
-- "Action <name> is a signal action, so it cannot declare notify. Declare it on a mutation." when the action is a signal action
-- "Action <name> has an invalid notify declaration. Give "to", "subject" and "body" and nothing else." when notify is not an object, has another key, or subject or body is missing or not a string
-- "Action <name> has an invalid notify recipient. Use "owner" or "actor"." when to is missing or is anything else, such as an address or an input
-- "Action <name> has an invalid notify subject. Use 1 to 120 characters on one line." when the subject is blank, longer than 120 characters, or holds a line break or another control character
-- "Action <name> has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters." when the body is blank, longer than 2000 characters, or holds a control character other than a line break
-- "Action <name> names an unknown placeholder {<key>} in its notify <field>. Use {input.<key>} for one of its input bindings, or {actor.id}." when a placeholder is not {actor.id} or {input.<key>} for one of the action's input bindings, such as {actor.email} or {input.email} with no email input
-- "Action <name> has an unclosed placeholder in its notify <field>. Close it with "}"." when a { has no } after it
 Limits:
 - a subject template is 1 to 120 characters on one line; a body template is 1 to 2000 characters
 - a placeholder's value keeps 200 characters on one line; a rendered subject keeps 200 characters and a body 5,000
@@ -96,15 +73,6 @@ Limits:
 - a notice not sent within a day fails as notice-expired
 
 Declared with "schedule" in actions.json: "schedule": { "every": "15m" } or { "every": "6h" } or { "daily": "02:00" } on a mutation that takes no input. The Kernel's own timer runs it once in each period, or once a day at that UTC time, with no caller: an actor binding is null, kernel.now is the time of the run, and literals bind as written. Use it for work that must happen when nobody asks, such as releasing a hold that lapsed or closing a day. A run that changes no row had nothing to do, so the guard does not apply; a run that changed a row records the action's Signal with actor null. A changed run also processes notify through the notice queue. Use to owner for a scheduled notice; to actor records no-account because the timer has no caller. One changed run queues one notice even when it changes several rows. The owner reads each run, with its outcome and changes, under scheduled with usage_read. Only the timer runs it: a call through miniapp.actions.call or actions_invoke is refused with "Action <name> runs only on its schedule.", unless the action also declares an http route, which answers as its callers say. The Validation Gate and the Kernel refuse the same declarations with the same messages. The editor preview runs no schedule; a Development Kernel and a Deployment do.
-Refusals:
-- "Action <name> is a query, so it cannot declare a schedule. Declare it on a mutation." when the action is a query
-- "Action <name> is a signal action, so it cannot declare a schedule. Declare it on a mutation." when the action is a signal action
-- "Action <name> declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values." when a binding has source input
-- "Action <name> has an invalid schedule. Declare "every" with minutes or hours, such as "15m" or "6h", or "daily" with a UTC time, such as "02:00"." when schedule is not an object with exactly one of every and daily, or every is not a whole number of 1 to 5 digits followed by m or h, such as a cron expression
-- "Action <name> runs every <key>, more often than every 5 minutes. Use "5m" or longer." when every is shorter than 5 minutes
-- "Action <name> runs every <key>, less often than once a day. Use "daily" or a period of 24 hours or less." when every is longer than 24 hours
-- "Action <name> has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59." when daily is not two digits, a colon and two digits naming a time of day
-- "Action <name> declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead." when any action has a subscribe key
 Limits:
 - every runs from 5 minutes to 24 hours; periods count from 00:00 UTC, so every 15m runs at :00, :15, :30 and :45
 - one run per period: a Kernel that was down for several periods runs the action once when it is back, and a restart does not run it again in the same period
@@ -223,37 +191,6 @@ Usage counts each queued call under call, by action. The then mutation counts as
 The editor preview answers { callId, queued: true } and sends nothing. Run calls on a Development Kernel with littlebox dev, or on a Deployment.
 
 Declared with "kind: call" in actions.json: { "kind": "call", "access", "bindings": [input bindings only], "method": "GET" | "POST", "url": "https://inbox-2.apps.example.org/hooks/events", "body"?: { "<body key>": "<input key>" | { "value": <constant> } }, "headers"?: { "Idempotency-Key": "<input key>" | { "value": <constant> } }, "auth"?: { "secret": "<name>", "header"?: "X-Inbox-Signature" } | { "key": "<name>" }, "then"?: { "action": "<mutation>", "inputs": { "<input key>": "<JSON pointer>" } } }. A POST sends the body keys as a JSON object and a GET as query parameters after the URL's own; a null or missing input leaves its key out, and a constant, a string of at most 1000 characters, a number, a boolean or null, is sent as actions.json writes it, so the caller cannot change it. On POST, a body key with dotted segments such as line_items.0.price expands into nested JSON, so a Checkout Session can name line items without a free-form object. headers may set only Idempotency-Key, from an input or a constant, for providers that require it. auth.secret signs the request with Littlebox's route scheme in the header, X-Littlebox-Signature unless header names another; auth.key sends the secret's value, an API key, as Authorization: Bearer. The secret's value stays in the Kernel; it never reaches the browser, the artifact or an export. When the call ends, delivered or failed, the then mutation runs once with no actor, its inputs read by JSON pointers from { ok, status, error, body, input }: ok is true for a 2xx answer, status the HTTP status or null, error the Kernel's error kind or null, body the answer parsed as JSON or null, and input the call's own inputs. A then mutation runs only after its call. A URL whose host is an app of this installation goes through that app's route code in the Kernel's process, with the same callers check, signature check, guard, Usage and Signal. The owner reads every call with calls_read. The Validation Gate and the Kernel refuse the same declarations with the same messages, except the three marked as the Kernel's alone.
-Refusals:
-- "Action <name> is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route." when a call declares a statement, signal, guard or http
-- "Action <name> is a <key>, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of "kind": "call"." when a query, mutation or signal action declares a call's keys
-- "Action <name> is a call, so its bindings may only be inputs." when a call binds the actor, the time or a literal; the Kernel adds no identity or clock to a request that leaves the app
-- "Action <name> must call with "method": "GET" or "POST"." when method is missing, lowercase or another verb
-- "Action <name> has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters." when url is missing, relative, not http or https, carries a user or password, a fragment, a space or a control character, or is longer than 2048 characters
-- "Action <name> calls the IP address <key>. Name a host instead." when the host is an IPv4 or IPv6 address, in any notation
-- "Action <name> calls <key>, which names this machine or a cloud metadata service." when the host is localhost, metadata, instance-data or a name under .internal
-- "Action <name> calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel." when the URL's first path segment is reserved, in any letter case
-- "Action <name> has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with "value", at most 32." when body is not an object, has more than 32 keys, a key that is not a dotted path of letters, digits, _ and -, or a value that is neither a string nor { "value": <string of at most 1000 characters, number, boolean or null> }
-- "Action <name> sends body key <key> with a path. Nested body keys belong on POST." when a GET call names a body key that contains a dot
-- "Action <name> has body keys <key> and <key>, which overlap. Use one path or the other." when one body key is a dotted prefix of another
-- "Action <name> sends body key <key> from <name>, which is not one of its input bindings." when a body value names no input binding of the call
-- "Action <name> has an invalid headers. Map Idempotency-Key to an input or a constant, at most 8." when headers is not an object, is empty, has more than 8 keys, or a value that is neither a string nor a string, number or boolean constant
-- "Action <name> sets header <key>, which is not allowed. Only Idempotency-Key is allowed." when headers names a header other than Idempotency-Key
-- "Action <name> sends header <key> from <name>, which is not one of its input bindings." when a header value names no input binding of the call
-- "Action <name> has an invalid auth. Name a secret with "secret" to sign the request, or with "key" to send the API key it holds." when auth is not an object, names both or neither, or has another key; header goes only with secret
-- "Action <name> names an invalid auth secret. Use lowercase letters, digits and "_", starting with a letter." when the secret is not a secret name
-- "Action <name> has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer." when then is not an object, has no action, has another key, or its inputs are not an object of strings
-- "Action <name> reads <key> for then, which is not a JSON pointer into /ok, /status, /error, /body or /input." when a pointer does not start with one of those, has a ~ not followed by 0 or 1, or is longer than 200 characters
-- "Action <name> reads <key> for then, but <key> is not one of its input bindings." when a pointer under /input names an input the call does not have
-- "Action <name> names <name> as its then, which is not declared." when the then action is not in actions.json
-- "Action <name> names <name> as its then, which is not a mutation." when the then action is a query, a signal action or a call
-- "Action <name> names <name> as its then, which answers on an HTTP route. A then mutation runs only after its call." when the then mutation declares http
-- "Action <name> names <name> as its then, which binds the actor. A then mutation runs with no caller." when the then mutation has an actor binding
-- "Action <name> fills <key>, which is not an input of <name>." when then.inputs names a key the mutation has no input binding for
-- "Action <name> leaves <key> of <name> unfilled. Fill it from the answer or make the input nullable." when a required input of the then mutation has no pointer
-- "Action <name> calls http://<key>, which is not an app of this installation. Use https." when publishing an http URL whose host is not under the installation's host suffix; the Kernel refuses this at publish, and the editor refuses it before Deploy once it has read the installation's hosts
-- "Action <name> calls <key>, the editor's host. A call reaches an app or an outside service, never the editor." when publishing a URL on the installation's own host or its MCP host; the Kernel refuses this at publish, and the editor before Deploy once it has read the installation's hosts
-- "Action <name> calls with the secret <name>, which is not set for this project. Set it with secret_set before publishing." when publishing, and the owner has not set the secret auth names; the Kernel refuses this at publish, and the editor before Deploy from the project's secret names
-- "Action <name> signs its route with the secret <name>, which is set for calls only. Set a route secret with a value of its own." when publishing a route whose signature names a secret set with use call
 Limits:
 - 20 calls queued per app in any 60 seconds, unless the installation sets LITTLEBOX_CALLS_PER_MINUTE
 - 10 seconds per attempt, from connecting to the last byte of the answer
@@ -263,10 +200,6 @@ Limits:
 - the outbox keeps the newest 1000 finished calls per app and the first 1 KiB of each answer
 
 Declared with "connects" in manifest: "connects": ["https://api.example.com"] in the project manifest, or project.manifest.connects in littlebox.json. Each origin is added to the page's connect-src, so the page may fetch it directly: another app's public GET route, which answers with Access-Control-Allow-Origin: *, or an outside API that allows the app's origin. Nothing else is loosened. A key or a secret never goes to the browser: a request that needs one is a call action, which the Kernel sends.
-Refusals:
-- "connects must be a list of at most 10 origins, such as ["https://api.example.com"]." when connects is not a list of strings or lists more than 10
-- "connects lists <key>, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost." when an entry is not exactly an origin: http to a host outside localhost, a path or trailing slash, a wildcard, capitals, or the default port written out
-- "connects lists <key> twice." when an origin appears twice
 Limits:
 - 10 origins
 
@@ -285,38 +218,7 @@ GET /_littlebox/files/<id>, the path miniapp.files.url returns, answers a file t
 The editor preview serves no routes. Run them on a Development Kernel with littlebox dev, or on a Deployment.
 
 Declared with "http" in actions.json: { "method": "GET" | "POST", "path": "/api/items", "signature"?: { "scheme"?: "littlebox" | "hmac-body" | "timestamped" | "svix", "header": "X-Signature", "secret": "items_webhook", ... }, "callers"?: ["signature" | "key" | "session"], "fields"?: { "<input key>": "$.data.object.id" } } on an action declared anonymous. GET binds a query and maps the query string onto its input bindings by type; POST binds a mutation and reads a JSON object body. A signature's scheme is littlebox by default; hmac-body, timestamped and svix verify a provider's own webhook, such as GitHub's, Shopify's, Stripe's or Resend's. fields reads each named input from a JSON path into the body, and with it the route leaves out body keys no input names. callers names who may call the route; without it a signed route takes the signature or an API key, an unsigned route on a private Deployment an API key or a session, and an unsigned route on a public Deployment anyone. An action whose route does not answer anyone answers only on that route, never through miniapp.actions.call. The route answers { result } with the rows or { changes, lastInsertId }, and { error } with a status code. The Validation Gate and the Kernel refuse the same declarations with the same messages.
-Refusals:
-- "Action <name> is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route." when a signal action declares http
-- "Action <name> must bind GET for a query and POST for a mutation." when the method does not match the action's kind, or is neither GET nor POST
-- "Action <name> is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route." when the action's access is authenticated
-- "Action <name> has an invalid http path. Use a leading "/" and segments of letters, digits, ".", "_", "~" or "-", up to 200 characters." when the path is "/", ends with "/", climbs with "..", or carries a query string
-- "Action <name> binds the reserved path <key>. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel." when the first segment is reserved, in any letter case
-- "Actions <name> and <name> both bind <key>." when two actions declare the same method and path
-- "Action <name> has an invalid signature header." when the header is not 1 to 64 letters, digits and -, or is Authorization, Cookie, Host, Content-Type or Content-Length
-- "Action <name> names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter." when the secret is not a secret name
-- "Action <name> has an invalid http binding." when http is not an object, has another key, or its signature has a key other than header and secret
-- "Action <name> names an unknown signature scheme. Use "littlebox", "hmac-body", "timestamped" or "svix"." when the signature's scheme is another word, or not text
-- "Action <name> has an invalid <key> signature. It takes <names>." when the signature has a key its scheme does not take, such as a header on a svix signature or a window on an hmac-body one
-- "Action <name> binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body." when a query's route declares hmac-body, timestamped or svix
-- "Action <name> names an unknown signature provider. Use <names>." when the signature's provider is not text or not a row of the preset table, in that letter case; <names> is the table's rows, "github", "shopify", "stripe" or "svix"
-- "Action <name> names the signature provider "<key>", so its signature takes only "provider" and "secret". Remove <names>." when a preset has a long-form key beside it, such as header or scheme; the refusal names every such key in sorted order
-- "Action <name> has an invalid signature algorithm. Use "sha256" or "sha1"." when an hmac-body signature names no algorithm or another one
-- "Action <name> has an invalid signature encoding. Use "hex" or "base64"." when an hmac-body signature names no encoding or another one
-- "Action <name> has an invalid signature prefix. Use 1 to 32 letters, digits, "=", "-", "_", "." or ":", such as "sha256="." when an hmac-body signature's prefix has another character or is longer
-- "Action <name> has an invalid timestamp prefix. Use the field's name and "=", such as "t="." when a timestamped signature has no prefix, or one that is not a name and =
-- "Action <name> has an invalid signature tag. Use the field's name and "=", such as "v1=", other than the timestamp's." when a timestamped signature has no tag, one that is not a name and =, or the timestamp's
-- "Action <name> has an invalid signature window. Use a whole number of seconds from 1 to 3600." when a timestamped signature has no window, or one that is not a whole number from 1 to 3600
-- "Action <name> binds GET, so it cannot declare fields. Fields read a POST body." when a query's route declares fields
-- "Action <name> has an invalid fields map. Map 1 to 32 input keys to JSON paths, such as "$.data.object.id"." when fields is not an object, is empty or has more than 32 keys
-- "Action <name> maps <key>, which is not one of its input bindings." when fields names a key that no input binding declares; the first such key in sorted order
-- "Action <name> maps <key> to an invalid JSON path. Use "$" and then ".name" or "[index]" steps, such as "$.data.object.id"." when a path is not text, lacks the $, is $ alone, has more than 16 steps or 200 characters, or a step that is not .name or [index]
-- "Action <name> has an invalid callers list. List one or more of "signature", "key" and "session", each once." when callers is not a list, is empty, repeats a caller or names another one
-- "Action <name> lists "signature" among its callers but declares no signature." when callers names signature and the binding has no signature
-- "Action <name> declares a signature, so its callers must include "signature"." when the binding has a signature and callers leaves it out
-- "Action <name> signs with the secret <name>, which is not set for this project. Set it with secret_set before publishing." when publishing, and the owner has not set the secret; the Kernel refuses this at publish, and the editor before Deploy from the project's secret names, never their values
-- "Actions <names> sign with the secret <name>, which is not set for this project. Set it with secret_set before publishing." when publishing, and several actions sign with one secret the owner has not set
-- "Actions <names> sign with the secrets <names>, which are not set for this project. Set each with secret_set before publishing." when publishing, and more than one secret is unset; one refusal names every action and every secret
-- "Action <name> verifies svix signatures with the secret <key>, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_." when publishing a svix route whose secret's value is not whsec_ and base64; the Kernel refuses this at publish, and the editor before Deploy from svixKey in secrets_list, never the value
+A route answers its caller with:
 - "invalid-signature" when a signed route gets no signature, a malformed one, one without its declared prefix, or one whose MAC does not match (401)
 - "stale-timestamp" when a signature's t is more than 300 seconds from the Kernel's clock, or a timestamped one's outside its window; checked before the MAC, so it says nothing about the secret (401)
 - "authentication-required" when a route that takes an API key or a session, and no signature, gets neither (401)

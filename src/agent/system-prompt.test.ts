@@ -73,6 +73,30 @@ describe("what the prompt says a Deployment serves", () => {
   });
 });
 
+describe("what the prompt leaves to the Validation Gate", () => {
+  const prompt = buildSystemPrompt(cloneStarter());
+
+  test("shows the shape of every key an action takes, including daily, callers, signature, fields and a call's keys", () => {
+    for (const key of ['"daily":', '"callers":', '"signature":', '"fields":', '"method":', '"url":', '"body":', '"headers":', '"auth":', '"then":']) {
+      expect(prompt).toContain(key);
+    }
+  });
+
+  test("carries no table of declaration refusals; validate_capsule returns each with its code and remedy", () => {
+    // A Gate refusal of a declared key, which the case files name with a code.
+    expect(prompt).not.toContain("has an invalid notify subject");
+    expect(prompt).not.toContain("has an invalid signature window");
+    expect(prompt).toContain("validate_capsule returns its sentence, a code and the remedy");
+    // A refusal the running app or a route's caller meets stays in the prompt.
+    expect(prompt).toContain('"Server action not declared."');
+    expect(prompt).toContain('"invalid-signature"');
+  });
+
+  test("stays well under the 66,000 characters it had before declaration refusals left it", () => {
+    expect(prompt.length).toBeLessThan(60_000);
+  });
+});
+
 describe("initial user message", () => {
   test("seeds all project files, including nested files, and the request in one turn", () => {
     const project = cloneStarter();

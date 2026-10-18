@@ -34,6 +34,9 @@ function absentSentence(contract: SdkContract) {
   return `There is nothing else: ${contract.absent.join(", ")}.`;
 }
 
+const gateRefuses =
+  "When the Validation Gate or a release refuses a key declared in actions.json or the manifest, validate_capsule returns its sentence, a code and the remedy. The declarations below list only the refusals a route's caller meets.";
+
 /**
  * The SDK section of the build agent's system prompt. It is part of the cached
  * prefix, so it depends on the contract alone.
@@ -45,14 +48,20 @@ export function renderPromptSection(contract: SdkContract = sdkContract): string
     exampleBlock(contract),
     "",
     absentSentence(contract),
+    "",
+    gateRefuses,
   ];
   for (const module of contract.modules) {
     lines.push("", `## ${moduleHeading(module)}`, "", module.summary, ...module.notes);
     for (const declaration of module.declarations) {
       lines.push("", `Declared with "${declaration.key}" in ${declaration.file}: ${declaration.summary}`);
-      if (declaration.errors?.length) {
-        lines.push("Refusals:");
-        for (const error of declaration.errors) lines.push(`- ${quoted(error)} when ${error.when}`);
+      // A wrong declaration is a Gate refusal with a code in a case file, and
+      // validate_capsule returns its remedy, so the prompt keeps only what a
+      // route's caller meets at runtime, which carries an HTTP status.
+      const atRuntime = declaration.errors?.filter((error) => error.status !== undefined) ?? [];
+      if (atRuntime.length) {
+        lines.push("A route answers its caller with:");
+        for (const error of atRuntime) lines.push(`- ${quoted(error)} when ${error.when}`);
       }
       if (declaration.limits?.length) lines.push("Limits:", ...declaration.limits.map((limit) => `- ${limit}`));
     }
