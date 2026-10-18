@@ -1,6 +1,6 @@
 # A mutation may notify the owner or the actor
 
-Status: accepted, 2026-11-07. Builds on [ADR-0012](0012-account-email-goes-through-a-persistent-queue.md), whose queue carries the email, and [ADR-0010](0010-kernel-owns-usage-and-signals.md), whose Usage store counts it. Amends ADR-0012's rule that no text from a creator reaches a message.
+Status: accepted, 2026-11-07. Amended by [ADR-0021](0021-a-notice-lists-its-rows-and-reaches-the-accounts-they-name.md), which adds `{kernel.now}`, `{changes}` and `to: { column }`. Builds on [ADR-0012](0012-account-email-goes-through-a-persistent-queue.md), whose queue carries the email, and [ADR-0010](0010-kernel-owns-usage-and-signals.md), whose Usage store counts it. Amends ADR-0012's rule that no text from a creator reaches a message.
 
 The capability matrix ([docs/research/capability-matrix.md](../research/capability-matrix.md)) found email on an event missing from seven of the ten app shapes people ask for: a waitlist that tells the owner someone joined, a form collector that announces a submission, a booking board that confirms a booking, an alert inbox that pages its owner. The queue could only send account links. The nearest alternative was a program the owner runs that polls a keyed route and sends the mail itself, which a person who does not write code cannot set up, and which does not leave with the app.
 

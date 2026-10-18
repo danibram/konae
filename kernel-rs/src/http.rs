@@ -1127,8 +1127,8 @@ async fn run_verified(
     // A notice below writes mail.sqlite; the app's other calls need not wait for it.
     drop(_guard);
     match result {
-        Ok(value) => {
-            let changed = match super::guard::outcome(name, action, &value) {
+        Ok(ran) => {
+            let changed = match super::guard::outcome(name, action, &ran.answer) {
                 super::guard::Outcome::Refused(message) => {
                     super::usage::execution(&state.data_root, &deployment.id, name, "route", "refused");
                     super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Refused(name.to_owned()));
@@ -1146,9 +1146,9 @@ async fn run_verified(
                     Caller::Key(_) | Caller::Visitor => None,
                 };
                 let notice = super::notify::Caller { account, actor_id: caller.actor_id() };
-                super::notify::record(state, deployment, name, action, &input, notice).await;
+                super::notify::record(state, deployment, name, action, &input, notice, ran.changed(super::now_ms())).await;
             }
-            let mut response = Json(json!({"result": value})).into_response();
+            let mut response = Json(json!({"result": ran.answer})).into_response();
             response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             response
         }

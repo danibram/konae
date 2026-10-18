@@ -968,14 +968,14 @@ async fn invoke_action(
     // A signal action runs no SQL. The Signal is queued for the Usage store and
     // the answer does not wait for the write.
     let result = if action.kind == "signal" {
-        Ok(json!({"recorded": true}))
+        Ok(Ran { answer: json!({"recorded": true}), rows: Vec::new() })
     } else {
         let _guard = database_lock(&state, &deployment.id).await;
         run_action(db_path, action, params).await
     };
     let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
     match result {
-        Ok(value) => match guard::outcome(&name, action, &value) {
+        Ok(ran) => match guard::outcome(&name, action, &ran.answer) {
             guard::Outcome::Refused(message) => {
                 usage::execution(&state.data_root, &deployment.id, &name, "runtime", "refused");
                 usage::count(&state.data_root, &deployment.id, usage::Operation::Refused(name.clone()));
@@ -987,9 +987,9 @@ async fn invoke_action(
                 if matches!(changed, guard::Outcome::Changed) {
                     usage::signal(&state.data_root, &deployment.id, &name, action, &input, actor_id);
                     let caller = notify::Caller { account: actor_id, actor_id };
-                    notify::record(&state, &deployment, &name, action, &input, caller).await;
+                    notify::record(&state, &deployment, &name, action, &input, caller, ran.changed(now_ms())).await;
                 }
-                Json(json!({"result": value})).into_response()
+                Json(json!({"result": ran.answer})).into_response()
             }
         },
         Err(error_value) => {
@@ -2347,11 +2347,26 @@ async fn apply_migration(state: &AppState, id: &str, body: &Value) -> Result<Val
 /// SQLite steps, and one step, such as `instr` or `replace` over two large
 /// values, can run past it. On a blocking thread that delays only this
 /// Deployment, never the async workers every other app shares.
-async fn run_action(path: PathBuf, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Value> {
+/// What a statement did. `answer` is what the caller reads. `rows` are the
+/// changed rows a mutation's notice reads back through the Kernel's own
+/// RETURNING clause (ADR-0021); they never reach the answer.
+struct Ran {
+    answer: Value,
+    rows: Vec<serde_json::Map<String, Value>>,
+}
+
+impl Ran {
+    /// What a notice reads of this run, at `now` in milliseconds.
+    fn changed(&self, now: u64) -> notify::Changed<'_> {
+        notify::Changed { count: self.answer["changes"].as_u64().unwrap_or(0), rows: &self.rows, now }
+    }
+}
+
+async fn run_action(path: PathBuf, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Ran> {
     let action = action.clone();
     tokio::task::spawn_blocking(move || {
         if action.kind == "query" {
-            run_query(&path, &action, params).map(Value::from)
+            run_query(&path, &action, params).map(|rows| Ran { answer: Value::from(rows), rows: Vec::new() })
         } else {
             run_mutation(&path, &action, params)
         }
@@ -2383,14 +2398,37 @@ fn run_query(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -> R
     Ok(rows)
 }
 
-fn run_mutation(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Value> {
+fn run_mutation(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Ran> {
     let mut connection = Connection::open(path)?;
     restrict_database(&connection)?;
     let transaction = connection.transaction()?;
-    let changes = transaction.execute(&action.statement, params_from_iter(params))?;
+    // A notice that lists or addresses rows reads them back with a RETURNING
+    // clause the Kernel appends; the author's statement cannot hold one.
+    let columns = action.notify.as_ref().map(|_| notify::returning("", action)).unwrap_or_default();
+    let mut rows = Vec::new();
+    let changes = if columns.is_empty() {
+        transaction.execute(&action.statement, params_from_iter(params))? as u64
+    } else {
+        let mut statement = transaction.prepare(&notify::with_returning(&action.statement, &columns))?;
+        let mut cursor = statement.query(params_from_iter(params))?;
+        // SQLite makes every change on the first step, so the rows past the
+        // cap are skipped, not left unchanged.
+        while let Some(row) = cursor.next()? {
+            if rows.len() < notify::MAX_RETURNED_ROWS {
+                let mut object = serde_json::Map::new();
+                for (index, column) in columns.iter().enumerate() {
+                    object.insert(column.clone(), sql_json(row.get_ref(index)?));
+                }
+                rows.push(object);
+            }
+        }
+        drop(cursor);
+        drop(statement);
+        transaction.changes()
+    };
     let last_insert_id = transaction.last_insert_rowid();
     transaction.commit()?;
-    Ok(json!({"changes": changes, "lastInsertId": last_insert_id}))
+    Ok(Ran { answer: json!({"changes": changes, "lastInsertId": last_insert_id}), rows })
 }
 
 /// Binds an action's parameters. `actor_id` is the caller's ID: a person's
@@ -2759,6 +2797,8 @@ fn apply_additive_schema(path: &Path, schema: &str, program: &ActionProgram) -> 
         if action.kind == "mutation" && statement.column_count() > 0 {
             anyhow::bail!("Action {name} cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.");
         }
+        drop(statement);
+        notify::check_columns(&transaction, name, action)?;
     }
     transaction.commit()?;
     Ok(())
@@ -4230,6 +4270,35 @@ mod tests {
             .query_row("SELECT label FROM items", [], |row| row.get(0))
             .unwrap();
         assert_eq!(stored, "5");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// ADR-0021: a notice that lists or addresses rows reads them back
+    /// through the Kernel's RETURNING clause; the answer stays changes and
+    /// lastInsertId.
+    #[test]
+    fn a_mutation_reads_back_its_changed_rows_for_the_notice_only() {
+        let program: ActionProgram = serde_json::from_value(json!({"version": 1, "actions": {
+            "tasks.remind": {"kind": "mutation", "access": "authenticated", "schedule": {"every": "1h"},
+                "statement": "UPDATE tasks SET reminded_at = ?1 WHERE reminded_at IS NULL; -- hourly",
+                "bindings": [{"source": "kernel", "field": "now"}],
+                "notify": {"to": {"column": "assignee"}, "changes": ["title"], "subject": "Due", "body": "{changes}"}}
+        }})).unwrap();
+        let definition = &program.actions["tasks.remind"];
+        let root = std::env::temp_dir().join(format!("littlebox-returning-rows-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap().execute_batch(
+            "CREATE TABLE tasks(id INTEGER PRIMARY KEY, title TEXT, assignee TEXT, reminded_at INTEGER);
+             INSERT INTO tasks(title, assignee, reminded_at) VALUES ('a', 'ana', NULL), ('b', 'ben', NULL), ('c', 'ana', 5);",
+        ).unwrap();
+        let ran = run_mutation(&path, definition, vec![SqlValue::Integer(9)]).unwrap();
+        assert_eq!(ran.answer, json!({"changes": 2, "lastInsertId": 0}));
+        let mut rows: Vec<Value> = ran.rows.iter().cloned().map(Value::Object).collect();
+        rows.sort_by_key(|row| row["title"].to_string());
+        assert_eq!(rows, vec![json!({"title": "a", "assignee": "ana"}), json!({"title": "b", "assignee": "ben"})]);
+        let reminded: i64 = Connection::open(&path).unwrap().query_row("SELECT count(*) FROM tasks WHERE reminded_at = 9", [], |row| row.get(0)).unwrap();
+        assert_eq!(reminded, 2);
         let _ = std::fs::remove_dir_all(root);
     }
 

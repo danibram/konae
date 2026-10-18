@@ -103,6 +103,7 @@ await probe("notify", 23060, async (kit) => {
     "the actor's email as a placeholder": variant((actions) => { actions["orders.place"].notify.body = "Sent to {actor.email}"; }),
     "a placeholder for an input the action does not bind": variant((actions) => { actions["orders.place"].notify.subject = "Order for {input.email}"; }),
     "a subject of 121 characters": variant((actions) => { actions["waitlist.join"].notify.subject = "x".repeat(121); }),
+    "a changes column the table does not have": variant((actions) => { Object.assign(actions["waitlist.join"].notify, { changes: ["referrer"], body: "{changes}" }); }),
   };
   const answers: Record<string, string> = {};
   for (const [name, actions] of Object.entries(variants)) {
@@ -112,7 +113,8 @@ await probe("notify", 23060, async (kit) => {
     answers[name] = kernel;
   }
   assert.equal(answers["notify on a query"], "Action prints.list is a query, so it cannot declare notify. Declare it on a mutation.");
-  assert.equal(answers["an address as the recipient"], 'Action waitlist.join has an invalid notify recipient. Use "owner" or "actor".');
-  assert.equal(answers["the actor's email as a placeholder"], "Action orders.place names an unknown placeholder {actor.email} in its notify body. Use {input.<key>} for one of its input bindings, or {actor.id}.");
+  assert.equal(answers["an address as the recipient"], 'Action waitlist.join has an invalid notify recipient. Use "owner", "actor" or {"column": "<name>"} for a column of account IDs.');
+  assert.equal(answers["the actor's email as a placeholder"], "Action orders.place names an unknown placeholder {actor.email} in its notify body. Use {input.<key>} for one of its input bindings, {actor.id}, {kernel.now}, {changes} or {changes.count}.");
+  assert.equal(answers["a changes column the table does not have"], "Action waitlist.join names a notify column its statement cannot return. Name columns of the table the statement changes.");
   kit.pass("Refusals at both doors", `The Validation Gate and release_plan refuse with the same sentence: ${Object.entries(answers).map(([name, text]) => `${name}, "${text}"`).join("; ")}.`);
 });

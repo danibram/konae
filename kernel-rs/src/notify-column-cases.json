@@ -1,0 +1,219 @@
+[
+ {
+  "case": "columns of the updated table",
+  "schema": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, assignee_id TEXT, due_day TEXT NOT NULL, reminded_at INTEGER);\nCREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, email TEXT);\n",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "notify": {
+     "to": {
+      "column": "assignee_id"
+     },
+     "changes": [
+      "title",
+      "due_day"
+     ],
+     "subject": "Due",
+     "body": "{changes}"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a statement that ends with a semicolon and a comment",
+  "schema": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, assignee_id TEXT, due_day TEXT NOT NULL, reminded_at INTEGER);\nCREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, email TEXT);\n",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE reminded_at IS NULL; -- every morning",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "notify": {
+     "to": {
+      "column": "assignee_id"
+     },
+     "changes": [
+      "title"
+     ],
+     "subject": "Due",
+     "body": "{changes}"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "an insert from a select",
+  "schema": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, assignee_id TEXT, due_day TEXT NOT NULL, reminded_at INTEGER);\nCREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, email TEXT);\n",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "INSERT INTO tasks (title, assignee_id, due_day) SELECT 'Say hello', id, date(?1 / 1000, 'unixepoch') FROM people WHERE email IS NOT NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "notify": {
+     "to": {
+      "column": "assignee_id"
+     },
+     "changes": [
+      "title"
+     ],
+     "subject": "Due",
+     "body": "{changes}"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a delete",
+  "schema": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, assignee_id TEXT, due_day TEXT NOT NULL, reminded_at INTEGER);\nCREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, email TEXT);\n",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "DELETE FROM tasks WHERE reminded_at < ?1",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "notify": {
+     "to": "owner",
+     "changes": [
+      "title"
+     ],
+     "subject": "Due",
+     "body": "{changes}"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "an owner notice without columns runs no check",
+  "schema": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, assignee_id TEXT, due_day TEXT NOT NULL, reminded_at INTEGER);\nCREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, email TEXT);\n",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "notify": {
+     "to": "owner",
+     "subject": "Due",
+     "body": "{changes.count} due."
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a changes column the table does not have",
+  "schema": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, assignee_id TEXT, due_day TEXT NOT NULL, reminded_at INTEGER);\nCREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, email TEXT);\n",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "notify": {
+     "to": "owner",
+     "changes": [
+      "email"
+     ],
+     "subject": "Due",
+     "body": "{changes}"
+    }
+   }
+  },
+  "error": "Action tasks.remind names a notify column its statement cannot return. Name columns of the table the statement changes.",
+  "code": "notify.column-unknown"
+ },
+ {
+  "case": "a recipient column the table does not have",
+  "schema": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, assignee_id TEXT, due_day TEXT NOT NULL, reminded_at INTEGER);\nCREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, email TEXT);\n",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "notify": {
+     "to": {
+      "column": "owner_id"
+     },
+     "changes": [
+      "title"
+     ],
+     "subject": "Due",
+     "body": "{changes}"
+    }
+   }
+  },
+  "error": "Action tasks.remind names a notify column its statement cannot return. Name columns of the table the statement changes.",
+  "code": "notify.column-unknown"
+ },
+ {
+  "case": "a column of the other table in an update from",
+  "schema": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, assignee_id TEXT, due_day TEXT NOT NULL, reminded_at INTEGER);\nCREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, email TEXT);\n",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 FROM people WHERE people.id = tasks.assignee_id",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "notify": {
+     "to": "owner",
+     "changes": [
+      "email"
+     ],
+     "subject": "Due",
+     "body": "{changes}"
+    }
+   }
+  },
+  "error": "Action tasks.remind names a notify column its statement cannot return. Name columns of the table the statement changes.",
+  "code": "notify.column-unknown"
+ }
+]

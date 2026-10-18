@@ -33,6 +33,7 @@ import kernelMigrationSource from "../../kernel-rs/src/migration.rs?raw";
 import kernelModelRulesSource from "../../kernel-rs/src/model_rules.rs?raw";
 import kernelNotifySource from "../../kernel-rs/src/notify.rs?raw";
 import kernelNotifyCases from "../../kernel-rs/src/notify-cases.json?raw";
+import kernelNotifyColumnCases from "../../kernel-rs/src/notify-column-cases.json?raw";
 import kernelPackageSource from "../../kernel-rs/src/package.rs?raw";
 import kernelProviderSource from "../../kernel-rs/src/provider.rs?raw";
 import kernelProviderSignatureCases from "../../kernel-rs/src/provider-signature-cases.json?raw";
@@ -89,6 +90,7 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/mail.rs", contents: kernelMailSource },
   { path: "kernel-rs/src/notify.rs", contents: kernelNotifySource },
   { path: "kernel-rs/src/notify-cases.json", contents: kernelNotifyCases },
+  { path: "kernel-rs/src/notify-column-cases.json", contents: kernelNotifyColumnCases },
   { path: "kernel-rs/src/migration.rs", contents: kernelMigrationSource },
   { path: "kernel-rs/src/model_rules.rs", contents: kernelModelRulesSource },
   { path: "kernel-rs/src/package.rs", contents: kernelPackageSource },

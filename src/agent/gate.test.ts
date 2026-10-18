@@ -454,7 +454,20 @@ describe("the gate and the Kernel refuse the same actions.json", () => {
     "CREATE TABLE IF NOT EXISTS checkins (habit_id INTEGER, user_id TEXT, day INTEGER);",
     "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, acknowledged_at INTEGER);",
     "CREATE TABLE IF NOT EXISTS holds (id INTEGER PRIMARY KEY, room TEXT, kind TEXT, until INTEGER, released_at INTEGER);",
+    "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT, assignee_id TEXT, due_day TEXT, reminded_at INTEGER, a, b, c, d, e, f, g, h);",
   ].join("\n");
+
+  // kernel-rs/src/notify.rs runs the same file against a schema in SQLite.
+  test("every case in kernel-rs/src/notify-column-cases.json", async () => {
+    const cases: { case: string; schema: string; actions: Record<string, unknown>; error: string | null; code?: string }[] =
+      await Bun.file(new URL("../../kernel-rs/src/notify-column-cases.json", import.meta.url)).json();
+    expect(cases.length).toBeGreaterThanOrEqual(8);
+    for (const item of cases) {
+      const result = await validator.validate(capsule({ "schema.sql": item.schema, "actions.json": actions({ version: 1, actions: item.actions }) }));
+      expect(result.errors.map((error) => ({ code: error.code, message: error.message })), item.case)
+        .toEqual(item.error === null ? [] : [expectedOutcome(item)]);
+    }
+  });
 
   // signature-cases.json holds HMAC vectors for a route's sender, not
   // declarations, so src/lib/route-signature.test.ts runs it instead.

@@ -2631,7 +2631,8 @@ mod tests {
     async fn notify(fixture: &Fixture, name: &str, input: Value, account: Option<&str>) {
         let program = notice_program();
         let caller = super::super::notify::Caller { account, actor_id: account };
-        super::super::notify::record(&fixture.state, &fixture.app, name, &program.actions[name], &input, caller).await;
+        let changed = super::super::notify::Changed { count: 1, rows: &[], now: 0 };
+        super::super::notify::record(&fixture.state, &fixture.app, name, &program.actions[name], &input, caller, changed).await;
     }
 
     /// The `notify` lines of the app's Usage, by name.
@@ -2668,6 +2669,60 @@ mod tests {
         let status = fixture.queue().status().unwrap();
         assert_eq!(status["queue"]["notices"]["accepted"], 2);
         assert_eq!(notice_usage(&fixture), vec![("alerts.raise: queued".into(), 1), ("bookings.create: queued".into(), 1)]);
+    }
+
+    async fn notify_rows(fixture: &Fixture, rows: &[Value]) {
+        let program: ActionProgram = serde_json::from_value(json!({"version": 1, "actions": {
+            "tasks.remind": {"kind": "mutation", "access": "authenticated", "schedule": {"daily": "07:00"},
+                "statement": "UPDATE tasks SET reminded_at = ?1 WHERE reminded_at IS NULL",
+                "bindings": [{"source": "kernel", "field": "now"}],
+                "notify": {"to": {"column": "assignee"}, "changes": ["title"],
+                    "subject": "{changes.count} due", "body": "Due at {kernel.now}:\n{changes}"}}
+        }}))
+        .unwrap();
+        let rows: Vec<serde_json::Map<String, Value>> = rows.iter().map(|row| row.as_object().unwrap().clone()).collect();
+        let caller = super::super::notify::Caller { account: None, actor_id: None };
+        let changed = super::super::notify::Changed { count: rows.len() as u64, rows: &rows, now: 1_793_948_400_000 };
+        super::super::notify::record(&fixture.state, &fixture.app, "tasks.remind", &program.actions["tasks.remind"], &json!({}), caller, changed).await;
+    }
+
+    /// ADR-0021: a column of account IDs reaches each verified account of
+    /// this Deployment with its own rows, and never an address a row holds.
+    #[tokio::test]
+    async fn a_column_notice_reaches_each_verified_account_with_only_its_rows() {
+        let transport = Scripted::new();
+        let fixture = fixture(transport.clone()).await;
+        notice_accounts(&fixture);
+        notify_rows(&fixture, &[
+            json!({"title": "Water plants", "assignee": "ana"}),
+            json!({"title": "File taxes", "assignee": "ben"}),
+            json!({"title": "Call mum", "assignee": "ana"}),
+            json!({"title": "Fix bike", "assignee": "cy"}),
+            json!({"title": "Pay rent", "assignee": "eve@example.test"}),
+            json!({"title": "Nobody's", "assignee": null}),
+        ]).await;
+        fixture.queue().run_once().await.unwrap();
+        let sent = transport.sent();
+        assert_eq!(sent.iter().map(|email| email.to.as_str()).collect::<Vec<_>>(), vec!["ana@example.test"]);
+        assert_eq!(sent[0].subject, "2 due");
+        assert!(sent[0].text.starts_with("Due at 2026-11-06 07:00 UTC:\n- Water plants\n- Call mum\n"), "{}", sent[0].text);
+        assert!(!sent[0].text.contains("File taxes") && !sent[0].text.contains("Pay rent"));
+        assert_eq!(notice_usage(&fixture), vec![
+            ("tasks.remind: not-a-verified-account".into(), 3),
+            ("tasks.remind: queued".into(), 1),
+        ]);
+    }
+
+    #[tokio::test]
+    async fn a_run_writes_to_at_most_fifty_accounts_and_counts_the_rest() {
+        let fixture = fixture(Scripted::new()).await;
+        notice_accounts(&fixture);
+        let rows: Vec<Value> = (0..52).map(|index| json!({"title": "t", "assignee": format!("member-{index:02}")})).collect();
+        notify_rows(&fixture, &rows).await;
+        assert_eq!(notice_usage(&fixture), vec![
+            ("tasks.remind: not-a-verified-account".into(), 50),
+            ("tasks.remind: recipient-cap".into(), 2),
+        ]);
     }
 
     #[tokio::test]

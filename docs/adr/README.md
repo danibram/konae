@@ -19,11 +19,12 @@ Each record states its status and which earlier record it amends on its first li
 | [0013](0013-an-app-leaves-as-a-chunked-package.md) | An app leaves as a chunked package behind `export_data`; API keys travel revoked | 0008 | 0014 |
 | [0014](0014-an-app-migrates-with-one-writer-at-a-time.md) | A migration keeps one writer through maintenance and a confirmation; a restore applies the revocation record | 0011, 0013 | |
 | [0015](0015-a-deployment-answers-on-one-custom-domain.md) | A Deployment answers on one custom domain proved by a TXT record; a package carries the name without its token | 0008, 0013, 0014 | |
-| [0016](0016-a-mutation-may-notify-the-owner-or-the-actor.md) | A mutation may queue one email to the Project Owner or to the caller's verified email when it changes a row | 0010, 0012 | |
-| [0017](0017-the-kernel-runs-a-declared-schedule.md) | A mutation may declare a schedule that the Kernel's timer runs once a period; `subscribe` is refused | 0010 | |
+| [0016](0016-a-mutation-may-notify-the-owner-or-the-actor.md) | A mutation may queue one email to the Project Owner or to the caller's verified email when it changes a row | 0010, 0012 | 0021 |
+| [0017](0017-the-kernel-runs-a-declared-schedule.md) | A mutation may declare a schedule that the Kernel's timer runs once a period; `subscribe` is refused | 0010 | 0021 |
 | [0018](0018-a-route-verifies-a-providers-own-signature.md) | A route verifies a provider's own signature scheme and reads its nested body through `fields` | 0011 | |
 | [0019](0019-an-app-calls-another-from-the-kernel.md) | An app calls another app or a service through a call action the Kernel queues and sends; `connects` and open GET routes for direct reads | 0011 | |
 | [0020](0020-a-refusal-carries-a-stable-code.md) | Every refusal from the Gate and the Kernel is `{ code, message, hint }` from one shared table | 0009 | |
+| [0021](0021-a-notice-lists-its-rows-and-reaches-the-accounts-they-name.md) | A notice lists the rows its mutation changed, shows the run's time, and may reach each verified account a column of those rows names | 0016, 0017 | |
 
 ## Which record answers a question
 
@@ -38,7 +39,7 @@ Each record states its status and which earlier record it amends on its first li
 | Which permission does a tool need? | 0008, 0011 (`manage_users`), 0013 (`export_data`), 0005 note on Eject (`manage_lifecycle`) |
 | Why do the editor and an exported Kernel refuse the same statement? | 0009 |
 | What is counted, and who reads it? | 0010, 0017 (`scheduled`) |
-| Who may an app email, and when? | 0012, 0016 |
+| Who may an app email, and when? | 0012, 0016, 0021 |
 | What runs when nobody calls the app? | 0017 |
 | How does an account prove its email, and how does a creator get in? | 0011, 0012 |
 | What leaves with an app, and what stays behind? | 0013, 0014 |

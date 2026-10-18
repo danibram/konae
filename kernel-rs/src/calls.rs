@@ -1284,7 +1284,7 @@ async fn run_then(
         run_action(database_path(state, &deployment.id), mutation, params).await
     };
     match result {
-        Ok(value) => match super::guard::outcome(&then.action, mutation, &value) {
+        Ok(ran) => match super::guard::outcome(&then.action, mutation, &ran.answer) {
             super::guard::Outcome::Refused(message) => {
                 super::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "refused");
                 super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Refused(then.action.clone()));
@@ -1298,6 +1298,7 @@ async fn run_then(
                     super::notify::record(
                         state, deployment, &then.action, mutation, &values,
                         super::notify::Caller { account: None, actor_id: None },
+                        ran.changed(super::now_ms()),
                     ).await;
                 }
                 ("done", None)

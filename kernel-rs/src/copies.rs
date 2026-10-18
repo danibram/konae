@@ -752,7 +752,7 @@ fn parse_copy_id(id: &str) -> Option<u64> {
     (copy_id(at) == id).then_some(at)
 }
 
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
+pub(crate) fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = (z - era * 146_097) as u64;

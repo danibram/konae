@@ -307,7 +307,7 @@
     "notify": "owner"
    }
   },
-  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else.",
+  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\", \"body\" and, to list changed rows, \"changes\", and nothing else.",
   "code": "notify.invalid"
  },
  {
@@ -335,7 +335,7 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else.",
+  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\", \"body\" and, to list changed rows, \"changes\", and nothing else.",
   "code": "notify.invalid"
  },
  {
@@ -365,7 +365,7 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else.",
+  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\", \"body\" and, to list changed rows, \"changes\", and nothing else.",
   "code": "notify.invalid"
  },
  {
@@ -394,7 +394,7 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\" and \"body\" and nothing else.",
+  "error": "Action bookings.create has an invalid notify declaration. Give \"to\", \"subject\", \"body\" and, to list changed rows, \"changes\", and nothing else.",
   "code": "notify.invalid"
  },
  {
@@ -423,7 +423,7 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\" or \"actor\".",
+  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\", \"actor\" or {\"column\": \"<name>\"} for a column of account IDs.",
   "code": "notify.recipient-invalid"
  },
  {
@@ -452,7 +452,7 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\" or \"actor\".",
+  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\", \"actor\" or {\"column\": \"<name>\"} for a column of account IDs.",
   "code": "notify.recipient-invalid"
  },
  {
@@ -480,7 +480,7 @@
     }
    }
   },
-  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\" or \"actor\".",
+  "error": "Action bookings.create has an invalid notify recipient. Use \"owner\", \"actor\" or {\"column\": \"<name>\"} for a column of account IDs.",
   "code": "notify.recipient-invalid"
  },
  {
@@ -683,7 +683,7 @@
     }
    }
   },
-  "error": "Action bookings.create names an unknown placeholder {input.email} in its notify body. Use {input.<key>} for one of its input bindings, or {actor.id}.",
+  "error": "Action bookings.create names an unknown placeholder {input.email} in its notify body. Use {input.<key>} for one of its input bindings, {actor.id}, {kernel.now}, {changes} or {changes.count}.",
   "code": "notify.placeholder-unknown"
  },
  {
@@ -712,7 +712,7 @@
     }
    }
   },
-  "error": "Action bookings.create names an unknown placeholder {actor.email} in its notify subject. Use {input.<key>} for one of its input bindings, or {actor.id}.",
+  "error": "Action bookings.create names an unknown placeholder {actor.email} in its notify subject. Use {input.<key>} for one of its input bindings, {actor.id}, {kernel.now}, {changes} or {changes.count}.",
   "code": "notify.placeholder-unknown"
  },
  {
@@ -741,7 +741,7 @@
     }
    }
   },
-  "error": "Action bookings.create names an unknown placeholder {room} in its notify subject. Use {input.<key>} for one of its input bindings, or {actor.id}.",
+  "error": "Action bookings.create names an unknown placeholder {room} in its notify subject. Use {input.<key>} for one of its input bindings, {actor.id}, {kernel.now}, {changes} or {changes.count}.",
   "code": "notify.placeholder-unknown"
  },
  {
@@ -770,7 +770,7 @@
     }
    }
   },
-  "error": "Action bookings.create names an unknown placeholder {} in its notify body. Use {input.<key>} for one of its input bindings, or {actor.id}.",
+  "error": "Action bookings.create names an unknown placeholder {} in its notify body. Use {input.<key>} for one of its input bindings, {actor.id}, {kernel.now}, {changes} or {changes.count}.",
   "code": "notify.placeholder-unknown"
  },
  {
@@ -828,7 +828,528 @@
     }
    }
   },
-  "error": "Action bookings.create names an unknown placeholder {x} in its notify subject. Use {input.<key>} for one of its input bindings, or {actor.id}.",
+  "error": "Action bookings.create names an unknown placeholder {x} in its notify subject. Use {input.<key>} for one of its input bindings, {actor.id}, {kernel.now}, {changes} or {changes.count}.",
+  "code": "notify.placeholder-unknown"
+ },
+ {
+  "case": "notify to a column of account IDs with the changed rows",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": {
+      "column": "assignee_id"
+     },
+     "changes": [
+      "title",
+      "due_day"
+     ],
+     "subject": "{changes.count} tasks due",
+     "body": "Due today, {kernel.now}:\n{changes}"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "notify to the owner with a count and the time",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": "owner",
+     "subject": "{changes.count} reminders at {kernel.now}",
+     "body": "Sent at {kernel.now}."
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a changes list of eight columns",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": "owner",
+     "changes": [
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f",
+      "g",
+      "h"
+     ],
+     "subject": "Due",
+     "body": "{changes}"
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "a changes list without {changes} in the templates",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": {
+      "column": "assignee_id"
+     },
+     "changes": [
+      "title"
+     ],
+     "subject": "Due",
+     "body": "Something is due."
+    }
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "to a column with a space",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": {
+      "column": "assignee id"
+     },
+     "subject": "Due",
+     "body": "Due."
+    }
+   }
+  },
+  "error": "Action tasks.remind has an invalid notify recipient. Use \"owner\", \"actor\" or {\"column\": \"<name>\"} for a column of account IDs.",
+  "code": "notify.recipient-invalid"
+ },
+ {
+  "case": "to a column with another key",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": {
+      "column": "assignee_id",
+      "email": "x@example.test"
+     },
+     "subject": "Due",
+     "body": "Due."
+    }
+   }
+  },
+  "error": "Action tasks.remind has an invalid notify recipient. Use \"owner\", \"actor\" or {\"column\": \"<name>\"} for a column of account IDs.",
+  "code": "notify.recipient-invalid"
+ },
+ {
+  "case": "to an object without a column",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": {
+      "email": "x@example.test"
+     },
+     "subject": "Due",
+     "body": "Due."
+    }
+   }
+  },
+  "error": "Action tasks.remind has an invalid notify recipient. Use \"owner\", \"actor\" or {\"column\": \"<name>\"} for a column of account IDs.",
+  "code": "notify.recipient-invalid"
+ },
+ {
+  "case": "to a column that is not a string",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": {
+      "column": 3
+     },
+     "subject": "Due",
+     "body": "Due."
+    }
+   }
+  },
+  "error": "Action tasks.remind has an invalid notify recipient. Use \"owner\", \"actor\" or {\"column\": \"<name>\"} for a column of account IDs.",
+  "code": "notify.recipient-invalid"
+ },
+ {
+  "case": "an empty changes list",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": "owner",
+     "changes": [],
+     "subject": "Due",
+     "body": "Due."
+    }
+   }
+  },
+  "error": "Action tasks.remind has an invalid notify changes list. Name 1 to 8 columns of the changed table, each once, in letters, digits and underscores.",
+  "code": "notify.changes-invalid"
+ },
+ {
+  "case": "a changes list that is a string",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": "owner",
+     "changes": "title",
+     "subject": "Due",
+     "body": "Due."
+    }
+   }
+  },
+  "error": "Action tasks.remind has an invalid notify changes list. Name 1 to 8 columns of the changed table, each once, in letters, digits and underscores.",
+  "code": "notify.changes-invalid"
+ },
+ {
+  "case": "a column named twice",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": "owner",
+     "changes": [
+      "title",
+      "title"
+     ],
+     "subject": "Due",
+     "body": "Due."
+    }
+   }
+  },
+  "error": "Action tasks.remind has an invalid notify changes list. Name 1 to 8 columns of the changed table, each once, in letters, digits and underscores.",
+  "code": "notify.changes-invalid"
+ },
+ {
+  "case": "a changes list of nine columns",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": "owner",
+     "changes": [
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f",
+      "g",
+      "h",
+      "i"
+     ],
+     "subject": "Due",
+     "body": "Due."
+    }
+   }
+  },
+  "error": "Action tasks.remind has an invalid notify changes list. Name 1 to 8 columns of the changed table, each once, in letters, digits and underscores.",
+  "code": "notify.changes-invalid"
+ },
+ {
+  "case": "a changes column that is an expression",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": "owner",
+     "changes": [
+      "title || email"
+     ],
+     "subject": "Due",
+     "body": "Due."
+    }
+   }
+  },
+  "error": "Action tasks.remind has an invalid notify changes list. Name 1 to 8 columns of the changed table, each once, in letters, digits and underscores.",
+  "code": "notify.changes-invalid"
+ },
+ {
+  "case": "a changes list is checked before the subject",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": "owner",
+     "changes": [],
+     "subject": "",
+     "body": "Due."
+    }
+   }
+  },
+  "error": "Action tasks.remind has an invalid notify changes list. Name 1 to 8 columns of the changed table, each once, in letters, digits and underscores.",
+  "code": "notify.changes-invalid"
+ },
+ {
+  "case": "changes in the subject",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": "owner",
+     "changes": [
+      "title"
+     ],
+     "subject": "Due: {changes}",
+     "body": "{changes}"
+    }
+   }
+  },
+  "error": "Action tasks.remind puts {changes} in its notify subject. Put {changes} in the body, and {changes.count} in the subject.",
+  "code": "notify.changes-in-subject"
+ },
+ {
+  "case": "changes without a changes list",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": "owner",
+     "subject": "Due",
+     "body": "Due:\n{changes}"
+    }
+   }
+  },
+  "error": "Action tasks.remind uses {changes} in its notify body without a changes list. Name the columns to show in notify \"changes\".",
+  "code": "notify.changes-undeclared"
+ },
+ {
+  "case": "a placeholder for one changed column",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": "owner",
+     "changes": [
+      "title"
+     ],
+     "subject": "Due",
+     "body": "{changes.title}"
+    }
+   }
+  },
+  "error": "Action tasks.remind names an unknown placeholder {changes.title} in its notify body. Use {input.<key>} for one of its input bindings, {actor.id}, {kernel.now}, {changes} or {changes.count}.",
+  "code": "notify.placeholder-unknown"
+ },
+ {
+  "case": "a kernel placeholder other than now",
+  "actions": {
+   "tasks.remind": {
+    "kind": "mutation",
+    "access": "authenticated",
+    "statement": "UPDATE tasks SET reminded_at = ?1 WHERE due_day = date(?1 / 1000, 'unixepoch') AND reminded_at IS NULL",
+    "bindings": [
+     {
+      "source": "kernel",
+      "field": "now"
+     }
+    ],
+    "schedule": {
+     "daily": "07:00"
+    },
+    "notify": {
+     "to": "owner",
+     "subject": "Due {kernel.today}",
+     "body": "Due."
+    }
+   }
+  },
+  "error": "Action tasks.remind names an unknown placeholder {kernel.today} in its notify subject. Use {input.<key>} for one of its input bindings, {actor.id}, {kernel.now}, {changes} or {changes.count}.",
   "code": "notify.placeholder-unknown"
  }
 ]

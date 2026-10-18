@@ -1,5 +1,5 @@
 import type { Database, SqlJsStatic } from "sql.js";
-import { parseServerActionSource, resolveServerAction, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
+import { notifyColumnRefusal, notifyReturning, notifyReturningStatement, parseServerActionSource, resolveServerAction, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
 import { sqlStatementTokens, sqlWordsOf, type SqlToken } from "../lib/sql-tokens";
 import { contractFromProgram } from "../lib/action-contract";
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
@@ -295,6 +295,9 @@ function checkActions(db: Database, program: ServerActionProgram, stage: "action
       continue;
     }
 
+    const refused = notifyColumnsRefusal(db, action);
+    if (refused) errors.push({ stage, message: refused.message, detail: refused.message, code: refused.code, hint: hintOf(refused.code) });
+
     if (stage !== "actions") continue;
 
     try {
@@ -313,6 +316,25 @@ function checkActions(db: Database, program: ServerActionProgram, stage: "action
   }
 
   return errors;
+}
+
+/**
+ * A notify column the statement cannot return, checked by preparing the
+ * statement with the Kernel's own RETURNING clause, as kernel-rs/src/notify.rs
+ * `check_columns` does at publish (ADR-0021).
+ */
+export function notifyColumnsRefusal(db: Database, action: ServerActionDefinition) {
+  const columns = action.kind === "mutation" ? notifyReturning(action.notify) : [];
+  if (!columns.length) return undefined;
+  try {
+    const statement = db.prepare(notifyReturningStatement(action.statement, columns));
+    const returned = statement.getColumnNames().length;
+    statement.free();
+    if (returned === columns.length) return undefined;
+  } catch {
+    // Falls through to the refusal.
+  }
+  return notifyColumnRefusal(action.name);
 }
 
 /** Tables and columns the fresh schema declares but the migrated clone does not carry. */

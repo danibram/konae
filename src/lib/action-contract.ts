@@ -170,7 +170,7 @@ export type ContractAction = {
    * The email a mutation queues when it changes a row (ADR-0016). It does not
    * change the answer: the call succeeds whether or not the email can be sent.
    */
-  notify?: { to: "owner" | "actor"; subject: string; body: string };
+  notify?: { to: "owner" | "actor" | { column: string }; changes?: string[]; subject: string; body: string };
   /**
    * When the Kernel's timer runs the mutation, with no caller: `actor` binds
    * null, the guard does not apply, and Usage counts the run under `scheduled`
@@ -877,7 +877,10 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
       lines.push("`{ changes, lastInsertId }`, both integers.", "");
       if (action.guard) lines.push(`When the statement changes no row the call is refused with \`${action.guard}\` instead.`, "");
       if (action.notify) {
-        const to = action.notify.to === "owner" ? "the Project Owner" : "the caller's verified email";
+        const recipient = action.notify.to;
+        const to = recipient === "owner" ? "the Project Owner"
+          : recipient === "actor" ? "the caller's verified email"
+          : `each verified account of this app whose ID a changed row holds in \`${recipient.column}\`, with only its own rows`;
         lines.push(`When the statement changes a row the Kernel queues an email to ${to} with the subject \`${action.notify.subject}\`. The answer does not wait for it or depend on it; Usage counts it under \`notify\`.`, "");
       }
       if (action.schedule) lines.push(`The Kernel's timer runs it ${"every" in action.schedule ? `every ${action.schedule.every}` : `daily at ${action.schedule.daily} UTC`}, with no caller: an \`actor\` binding is null and the guard does not apply. ${action.http ? "Its route answers callers too." : "Only the timer runs it."} The owner reads each run under \`scheduled\` with \`usage_read\`.`, "");

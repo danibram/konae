@@ -1,6 +1,6 @@
 # The Kernel runs a declared schedule
 
-Status: accepted, 2026-11-07. Builds on [ADR-0010](0010-kernel-owns-usage-and-signals.md): a run is recorded in the Usage store, and the store carries the state that keeps a run from repeating.
+Status: accepted, 2026-11-07. Amended by [ADR-0021](0021-a-notice-lists-its-rows-and-reaches-the-accounts-they-name.md): a scheduled notice can list the rows a run changed and reach the accounts they name. Builds on [ADR-0010](0010-kernel-owns-usage-and-signals.md): a run is recorded in the Usage store, and the store carries the state that keeps a run from repeating.
 
 The capability matrix found that nothing in Littlebox runs without a caller (feature F18 in `docs/research/capability-matrix.md`). Work that only has to look done when someone asks can compare a stored time with `kernel.now`, but a hold that lapsed still blocks the hour in every count that does not repeat the comparison, and a personal tracker cannot close a day nobody opened. A `"schedule"` key passed both doors and ran nothing, so an agent could write one and see it accepted.
 
