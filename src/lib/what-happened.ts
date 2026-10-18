@@ -42,23 +42,23 @@ export type Sources = { summary: UsageSummary; calls: Call[]; notices: Notice[];
 
 const DAY_MS = 86_400_000;
 
-const operatorMail = "The person who runs this installation checks the mail transport. mail_status shows its state.";
+const operatorMail = "Check the mail transport. mail_status shows its state.";
 
 /**
  * A notice the Kernel did not queue. Usage counts it under notify as
  * `<action>: <reason>` (docs/mcp.md, Notices). `queued` is not here.
  */
 export const noticeReasons: Record<string, Outcome> = {
-  "no-transport": { tone: "danger", words: "Not sent: this installation has no mail transport.", fix: { who: "operator", what: "The person who runs this installation sets LITTLEBOX_MAIL_TRANSPORT to resend, smtp or development." } },
+  "no-transport": { tone: "danger", words: "Not sent: this installation has no mail transport.", fix: { who: "operator", what: "Set LITTLEBOX_MAIL_TRANSPORT to resend, smtp or development." } },
   "owner-has-no-email": { tone: "danger", words: "Not sent: the owner signs in without an email address the Kernel knows.", fix: { who: "owner", what: "Sign in as an owner with an email address, or send this notice to the actor instead.", where: "capsule" } },
   "no-account": { tone: "warning", words: "Not sent: whoever ran the action had no app account to write to.", fix: { who: "capsule", what: "A visitor, a signed request, an API key, a call's answer and a scheduled run have no account. Send this notice to the owner, or make the action need a signed-in person.", where: "capsule" } },
   "unverified-email": { tone: "warning", words: "Not sent: the person has not confirmed their email, or their account is not active.", fix: { who: "person", what: "The person answers a verification, invitation or recovery link. The owner can resend an invitation.", where: "users" } },
   "app-limit": { tone: "warning", words: "Not sent: this app used its 200 notices for the day.", fix: { who: "wait", what: "Nothing was stored. Notices send again once the day's count falls." } },
   "creator-limit": { tone: "warning", words: "Not sent: the owner's apps used their 500 notices for the day.", fix: { who: "wait", what: "Nothing was stored. Notices send again once the day's count falls." } },
   "recipient-limit": { tone: "warning", words: "Not sent: this address got its 50 notices from this app for the day.", fix: { who: "wait", what: "Nothing was stored. Notices send again once the day's count falls." } },
-  "installation-limit": { tone: "warning", words: "Not sent: the installation used its 1,000 emails for the day.", fix: { who: "operator", what: "Nothing was stored. The person who runs this installation can raise the limit; otherwise sending resumes once the day's count falls." } },
+  "installation-limit": { tone: "warning", words: "Not sent: the installation used its 1,000 emails for the day.", fix: { who: "operator", what: "Nothing was stored. Raise the limit, or sending resumes once the day's count falls." } },
   "sender-not-ready": { tone: "danger", words: "Not sent: the sender address was not verified when the action ran.", fix: { who: "operator", what: operatorMail } },
-  "storage-error": { tone: "danger", words: "Not sent: the mail queue could not be written.", fix: { who: "operator", what: "The person who runs this installation reads the Kernel log for the cause." } },
+  "storage-error": { tone: "danger", words: "Not sent: the mail queue could not be written.", fix: { who: "operator", what: "Read the Kernel log for the cause." } },
 };
 
 /** Why a queued notice failed: the job's failure kind (docs/mcp.md, Account email). */
@@ -68,7 +68,7 @@ export const noticeFailures: Record<string, Outcome> = {
   "sender-refused": { tone: "danger", words: "Not sent: the mail provider refused the sender address. Sending stops until it is verified.", fix: { who: "operator", what: operatorMail } },
   bounced: { tone: "danger", words: "Sent, then bounced: the recipient's mailbox refused it.", fix: { who: "person", what: "The recipient checks their address. An app account can change it through recovery." } },
   "provider-failed": { tone: "danger", words: "Not delivered: the mail provider reported a failure.", fix: { who: "operator", what: operatorMail } },
-  suppressed: { tone: "danger", words: "Not sent: the provider suppresses this address after an earlier bounce or complaint.", fix: { who: "operator", what: "The person who runs this installation removes the address from the provider's suppression list." } },
+  suppressed: { tone: "danger", words: "Not sent: the provider suppresses this address after an earlier bounce or complaint.", fix: { who: "operator", what: "Remove the address from the provider's suppression list." } },
   restored: { tone: "neutral", words: "Not sent: a restore of the installation ended it." },
   "notice-expired": { tone: "danger", words: "Not sent within a day, so the Kernel dropped it.", fix: { who: "operator", what: operatorMail } },
   "sender-not-ready": noticeReasons["sender-not-ready"],
@@ -89,7 +89,7 @@ export const callFailures: Record<string, Outcome> = {
   "app-gone": { tone: "neutral", words: "This app was removed before the call was sent." },
   "action-gone": { tone: "neutral", words: "A later publish removed the call action before it was sent." },
   "secret-unset": { tone: "danger", words: "The call signs with a secret that has no value.", fix: { who: "owner", what: hintOf("call.secret-unset" satisfies RefusalCode).remedy, where: "integrations" } },
-  "secret-unavailable": { tone: "danger", words: "The Kernel could not read the call's secret.", fix: { who: "operator", what: "The person who runs this installation checks the Kernel log. The call retries." } },
+  "secret-unavailable": { tone: "danger", words: "The Kernel could not read the call's secret.", fix: { who: "operator", what: "Check the Kernel log. The call retries." } },
   "answer-too-large": { tone: "danger", words: "The service answered with more than the Kernel reads.", fix: { who: "service", what: "Ask the service for a smaller answer." } },
   "invalid-header": { tone: "danger", words: "A header value could not be sent.", fix: { who: "capsule", what: "Check the Idempotency-Key value the action sends.", where: "capsule" } },
 };
@@ -220,14 +220,19 @@ export function dayOf(entry: Entry) {
   return entry.day ?? new Date(entry.at).toISOString().slice(0, 10);
 }
 
+/** True when someone must act on the entry: it has a fix and the fix is not waiting. */
+export function needsAction(entry: Entry) {
+  return Boolean(entry.outcome.fix && entry.outcome.fix.who !== "wait");
+}
+
 /** The words for who acts, as the view shows them. */
 export const actorWords: Record<Actor, string> = {
-  owner: "You",
-  capsule: "The app's actions",
-  operator: "The installation",
-  service: "The other service",
-  person: "The app account",
-  wait: "Nobody: it waits",
+  owner: "You need to act.",
+  capsule: "The app needs a change.",
+  operator: "The person who runs this installation needs to act.",
+  service: "The other service needs to act.",
+  person: "The person with the app account needs to act.",
+  wait: "Nobody needs to act. It waits.",
 };
 
 export type Read = { sources: Sources; days: number };

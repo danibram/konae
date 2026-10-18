@@ -1,6 +1,6 @@
 import { Activity, Bell, CalendarClock, Mail, RefreshCw, Send, Webhook } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { actorWords, clock, dayOf, readWhatHappened, whatHappened, type Entry, type Kind, type Place, type Read } from "../lib/what-happened";
+import { actorWords, clock, dayOf, needsAction, readWhatHappened, whatHappened, type Entry, type Kind, type Place, type Read } from "../lib/what-happened";
 import { message, signedOut } from "./useConfirm";
 import { Badge, Button, EmptyState, Select } from "./ui";
 import "./what-happened.css";
@@ -70,8 +70,8 @@ export function WhatHappenedView({ deployment, onDeploy, onOpen }: Props) {
   }
 
   const entries = read ? whatHappened(read.sources) : [];
-  const shown = only === "attention" ? entries.filter((entry) => entry.outcome.fix && entry.outcome.fix.who !== "wait") : entries;
-  const attention = entries.filter((entry) => entry.outcome.tone === "danger").length;
+  const shown = only === "attention" ? entries.filter(needsAction) : entries;
+  const attention = entries.filter(needsAction).length;
 
   return (
     <section className="cap-workspace happened" aria-label="What happened">
@@ -146,7 +146,7 @@ function Row({ entry, onOpen }: { entry: Entry; onOpen?: (place: Place) => void 
         <p>{outcome.words}</p>
         {fix && (
           <p className="happened-fix">
-            <span><strong>{fix.who === "wait" ? actorWords.wait : `${actorWords[fix.who]} must act.`}</strong> {fix.what}</span>
+            <span><strong>{actorWords[fix.who]}</strong> {fix.what}</span>
             {fix.where && onOpen && <Button size="sm" variant="ghost" onClick={() => onOpen(fix.where!)}>{places[fix.where]}</Button>}
           </p>
         )}
