@@ -296,7 +296,7 @@ function checkActions(db: Database, program: ServerActionProgram, stage: "action
     }
 
     const refused = notifyColumnsRefusal(db, action);
-    if (refused) errors.push({ stage, message: refused.message, detail: action.statement, code: refused.code, hint: hintOf(refused.code) });
+    if (refused) errors.push({ stage, message: refused.message, detail: refused.message, code: refused.code, hint: hintOf(refused.code) });
 
     if (stage !== "actions") continue;
 
