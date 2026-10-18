@@ -23,6 +23,8 @@ export type Entry = {
   at: number;
   /** True for a row that counts events of one UTC day instead of naming one. */
   daily?: boolean;
+  /** The UTC day a counted row covers. */
+  day?: string;
   title: string;
   detail?: string;
   outcome: Outcome;
@@ -97,8 +99,13 @@ function unknown(kind: string, tone: Tone = "danger"): Outcome {
   return { tone, words: `Ended with ${kind}. This editor has no words for it yet.` };
 }
 
+/** HH:MM UTC, the clock Usage days and daily schedules use. */
+export function clock(ms: number) {
+  return new Date(ms).toISOString().slice(11, 16) + " UTC";
+}
+
 function when(ms: number) {
-  return new Date(ms).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+  return `${new Date(ms).toISOString().slice(0, 10)} ${clock(ms)}`;
 }
 
 export function noticeOutcome(notice: Notice): Outcome {
@@ -117,9 +124,10 @@ export function callOutcome(call: Call): Outcome {
   const then = call.then ? thenWords(call.then) : "";
   if (call.state === "pending") {
     const next = call.nextAttemptAt ? ` Next try ${when(call.nextAttemptAt)}.` : "";
-    return call.attempts > 0
-      ? { tone: "warning", words: `Retrying after ${call.attempts} ${call.attempts === 1 ? "try" : "tries"}${call.error ? ` (${call.error})` : call.status ? ` (answered ${call.status})` : ""}.${next}` }
-      : { tone: "neutral", words: `Waiting to send.${next}` };
+    if (call.attempts === 0) return { tone: "neutral", words: `Waiting to send.${next}` };
+    const reason = call.error ? (callFailures[call.error]?.words ?? call.error) : call.status ? `The service answered ${call.status}.` : "";
+    const fix = call.error ? callFailures[call.error]?.fix : undefined;
+    return { tone: "warning", words: `Retrying after ${call.attempts} ${call.attempts === 1 ? "try" : "tries"}. ${reason}${next}`.replace(/\s+/g, " ").trim(), ...(fix ? { fix } : {}) };
   }
   if (call.state === "delivered") return { tone: "success", words: `Answered ${call.status}.${then}` };
   if (call.error) {
@@ -181,7 +189,7 @@ export function whatHappened({ summary, calls, notices, signals }: Sources, now 
     if (reason === "queued") continue;
     if (reason === "sender-not-ready" && jobsCover.has(`${action}:${row.day}`)) continue;
     const outcome = noticeReasons[reason] ?? unknown(reason || "no reason");
-    entries.push({ id: `notify:${row.day}:${row.name}`, kind: "notice", daily: true, at: endOfDay(row.day, now), title: `Email from ${action}`, detail: `${row.count} on ${row.day}`, outcome });
+    entries.push({ id: `notify:${row.day}:${row.name}`, kind: "notice", daily: true, day: row.day, at: endOfDay(row.day, now), title: `Email from ${action}`, detail: `${row.count} ${row.count === 1 ? "notice" : "notices"} that day`, outcome });
   }
   for (const call of calls) {
     entries.push({ id: `call:${call.callId}`, kind: "call", at: call.createdAt, title: `Call from ${call.action}`, detail: [call.method, call.url].filter(Boolean).join(" ") || undefined, outcome: callOutcome(call) });
@@ -196,15 +204,20 @@ export function whatHappened({ summary, calls, notices, signals }: Sources, now 
     if (metric.feature !== "execution" || metric.origin !== "route") continue;
     const http = routes.get(metric.name);
     entries.push({
-      id: `route:${metric.day}:${metric.name}:${metric.outcome}`, kind: "route", daily: true, at: metric.lastAt || endOfDay(metric.day, now),
-      title: `Route ${http ? `${http.method} ${http.path}` : metric.name}`, detail: `${metric.name} on ${metric.day}`, outcome: routeOutcome(metric.outcome, metric.count),
+      id: `route:${metric.day}:${metric.name}:${metric.outcome}`, kind: "route", daily: true, day: metric.day, at: metric.lastAt || endOfDay(metric.day, now),
+      title: `Route ${http ? `${http.method} ${http.path}` : metric.name}`, detail: `${metric.name}, that day`, outcome: routeOutcome(metric.outcome, metric.count),
     });
   }
   signals.forEach((signal, index) => {
     const props = Object.entries(signal.properties).map(([key, value]) => `${key} ${typeof value === "string" ? value : JSON.stringify(value)}`).join(", ");
     entries.push({ id: `signal:${signal.at}:${signal.name}:${index}`, kind: "signal", at: signal.at, title: `Signal ${signal.name}`, detail: props || undefined, outcome: { tone: "neutral", words: "Recorded." } });
   });
-  return entries.sort((a, b) => b.at - a.at);
+  return entries.sort((a, b) => dayOf(b).localeCompare(dayOf(a)) || Number(a.daily ?? false) - Number(b.daily ?? false) || b.at - a.at);
+}
+
+/** The UTC day an entry belongs to, YYYY-MM-DD. A day count belongs to its day. */
+export function dayOf(entry: Entry) {
+  return entry.day ?? new Date(entry.at).toISOString().slice(0, 10);
 }
 
 /** The words for who acts, as the view shows them. */

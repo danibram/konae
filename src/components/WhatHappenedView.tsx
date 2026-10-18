@@ -1,6 +1,6 @@
 import { Activity, Bell, CalendarClock, Mail, RefreshCw, Send, Webhook } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { actorWords, readWhatHappened, whatHappened, type Entry, type Kind, type Place, type Read } from "../lib/what-happened";
+import { actorWords, clock, dayOf, readWhatHappened, whatHappened, type Entry, type Kind, type Place, type Read } from "../lib/what-happened";
 import { message, signedOut } from "./useConfirm";
 import { Badge, Button, EmptyState, Select } from "./ui";
 import "./what-happened.css";
@@ -105,11 +105,29 @@ export function WhatHappenedView({ deployment, onDeploy, onOpen }: Props) {
             description="An action with notify, a call action, a schedule, an HTTP route or a Signal shows here once it runs on the published app."
           />
         )}
-        {shown.length > 0 && <ol className="happened-list">{shown.map((entry) => <Row key={entry.id} entry={entry} onOpen={onOpen} />)}</ol>}
-        {read && <p className="happened-note">Shows the newest 50 notices, 50 calls, 100 Signals and 500 scheduled runs. Routes and notices the Kernel did not queue are counted per day.</p>}
+        {groups(shown).map(([day, rows]) => (
+          <section key={day} className="happened-day" aria-label={day}>
+            <h3>{dayLabel(day)}</h3>
+            <ol className="happened-list">{rows.map((entry) => <Row key={entry.id} entry={entry} onOpen={onOpen} />)}</ol>
+          </section>
+        ))}
+        {read && <p className="happened-note">Days and times are UTC. Shows the newest 50 notices, 50 calls, 100 Signals and 500 scheduled runs. Routes, and notices the Kernel did not queue, are counted per day at the end of that day.</p>}
       </div>
     </section>
   );
+}
+
+function groups(entries: Entry[]): [string, Entry[]][] {
+  const byDay = new Map<string, Entry[]>();
+  for (const entry of entries) byDay.set(dayOf(entry), [...(byDay.get(dayOf(entry)) ?? []), entry]);
+  return [...byDay];
+}
+
+function dayLabel(day: string) {
+  const today = new Date().toISOString().slice(0, 10);
+  const date = new Date(`${day}T00:00:00Z`);
+  const words = new Intl.DateTimeFormat("en", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }).format(date);
+  return day === today ? `Today, ${words}` : words;
 }
 
 function Row({ entry, onOpen }: { entry: Entry; onOpen?: (place: Place) => void }) {
@@ -122,7 +140,7 @@ function Row({ entry, onOpen }: { entry: Entry; onOpen?: (place: Place) => void 
         <div className="happened-title">
           <strong>{entry.title}</strong>
           <Badge tone={outcome.tone}>{badges[outcome.tone]}</Badge>
-          <time dateTime={new Date(entry.at).toISOString()}>{entry.daily ? entry.detail : new Date(entry.at).toLocaleString()}</time>
+          <time dateTime={entry.daily ? entry.day : new Date(entry.at).toISOString()}>{entry.daily ? entry.detail : clock(entry.at)}</time>
         </div>
         {entry.detail && !entry.daily && <code className="happened-detail">{entry.detail}</code>}
         <p>{outcome.words}</p>

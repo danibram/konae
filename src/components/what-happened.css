@@ -12,6 +12,8 @@
 .happened-error { margin: 0; padding: var(--ds-space-2) var(--ds-space-3); border: 1px solid var(--ds-danger); background: var(--ds-danger-soft); font-size: 12px; line-height: 1.45; }
 .happened-summary { margin: 0; padding: var(--ds-space-2) var(--ds-space-3); border: 1px solid var(--ds-danger); border-radius: var(--ds-radius-sm); background: var(--ds-danger-soft); font: 650 13px/1.4 var(--ds-font); }
 
+.happened-day { display: grid; gap: var(--ds-space-2); }
+.happened-day h3 { margin: var(--ds-space-2) 0 0; color: var(--ds-muted); font: 650 12px/1.3 var(--ds-font); }
 .happened-list { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--ds-border); border-radius: var(--ds-radius); background: var(--ds-surface); }
 .happened-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--ds-space-3); padding: var(--ds-space-3); border-bottom: 1px solid var(--ds-border); }
 .happened-row:last-child { border-bottom: 0; }

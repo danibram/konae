@@ -34,6 +34,7 @@ describe("what happened", () => {
       signals: [{ name: "task.created", at: at("12:00"), properties: { title: "Milk" } }],
     };
     const entries = whatHappened(sources, at("23:00"));
+    // The day's counted rows close its group, after the events.
     expect(entries.map((entry) => entry.title)).toEqual(["Signal task.created", "Scheduled run of days.close", "Call from hooks.send", "Email from tasks.create", "Route POST /hooks"]);
     expect(entries.map((entry) => entry.outcome.words)).toEqual(["Recorded.", "Ran and changed 2 rows.", "Answered 200.", "Handed to the mail provider.", "3 requests answered."]);
     expect(entries[0].detail).toBe("title Milk");
@@ -46,7 +47,7 @@ describe("what happened", () => {
     ];
     const [entry, ...rest] = whatHappened({ summary: summary({ usage: { from: day, to: day, days, totals: [] } }), calls: [], notices: [], signals: [] }, at("23:00"));
     expect(rest).toEqual([]);
-    expect(entry).toMatchObject({ daily: true, title: "Email from tasks.create", detail: `2 on ${day}`, outcome: { tone: "danger", fix: { who: "operator" } } });
+    expect(entry).toMatchObject({ daily: true, day, title: "Email from tasks.create", detail: "2 notices that day", outcome: { tone: "danger", fix: { who: "operator" } } });
     expect(entry.outcome.words).toBe("Not sent: this installation has no mail transport.");
   });
 
@@ -55,6 +56,18 @@ describe("what happened", () => {
     const entries = whatHappened({ summary: summary({ usage: { from: day, to: day, days, totals: [] } }), calls: [], notices: [notice({ state: "failed", errorKind: "sender-not-ready" })], signals: [] });
     expect(entries).toHaveLength(1);
     expect(entries[0].daily).toBeUndefined();
+  });
+
+  test("a day count sits under its own day, below that day's events, and days run newest first", () => {
+    const days = [{ day: "2026-11-07", kind: "notify", name: "tasks.create: no-account", count: 1 }, { day, kind: "notify", name: "tasks.create: no-account", count: 1 }];
+    const entries = whatHappened({ summary: summary({ usage: { from: "2026-11-07", to: day, days, totals: [] } }), calls: [call({ createdAt: at("10:00") })], notices: [], signals: [] }, at("23:00"));
+    expect(entries.map((entry) => `${entry.kind}:${entry.day ?? ""}`)).toEqual(["call:", `notice:${day}`, "notice:2026-11-07"]);
+  });
+
+  test("a call retrying after a known failure already says who acts", () => {
+    const outcome = callOutcome(call({ state: "pending", attempts: 1, status: null, error: "dns-failed", nextAttemptAt: at("10:01") }));
+    expect(outcome.words).toBe("Retrying after 1 try. The address's host name does not resolve. Next try 2026-11-08 10:01 UTC.");
+    expect(outcome.fix?.who).toBe("capsule");
   });
 
   test("a call that needs an unset secret names the owner and Integrations, in the refusal table's words", () => {
