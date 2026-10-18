@@ -112,7 +112,7 @@ await probe("notify", 23060, async (kit) => {
     answers[name] = kernel;
   }
   assert.equal(answers["notify on a query"], "Action prints.list is a query, so it cannot declare notify. Declare it on a mutation.");
-  assert.equal(answers["an address as the recipient"], 'Action waitlist.join has an invalid notify recipient. Use "owner" or "actor".');
-  assert.equal(answers["the actor's email as a placeholder"], "Action orders.place names an unknown placeholder {actor.email} in its notify body. Use {input.<key>} for one of its input bindings, or {actor.id}.");
+  assert.equal(answers["an address as the recipient"], 'Action waitlist.join has an invalid notify recipient. Use "owner", "actor" or {"column": "<name>"} for a column of account IDs.');
+  assert.equal(answers["the actor's email as a placeholder"], "Action orders.place names an unknown placeholder {actor.email} in its notify body. Use {input.<key>} for one of its input bindings, {actor.id}, {kernel.now}, {changes} or {changes.count}.");
   kit.pass("Refusals at both doors", `The Validation Gate and release_plan refuse with the same sentence: ${Object.entries(answers).map(([name, text]) => `${name}, "${text}"`).join("; ")}.`);
 });
