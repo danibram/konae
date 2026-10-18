@@ -4,6 +4,7 @@ import { assertRuntimeSql, validateRuntimeParams } from "../runtime/security";
 import { parseRouteFields, parseRouteSignature, type RouteSignature } from "./route-declaration";
 import { refusal } from "./refusal";
 import { assertActionStatement } from "./sql-rules";
+import { sqlTokens } from "../lib/sql-tokens";
 import { assertCallTargets, assertNoCallKeys, parseCall, type CallDeclaration } from "./calls";
 
 type ActionBinding =
@@ -57,7 +58,13 @@ export type SignalDeclaration = { name: string; properties: string[] };
  * the Project Owner or to the calling account, never to an address from the
  * input. See docs/adr/0016-a-mutation-may-notify-the-owner-or-the-actor.md.
  */
-export type NotifyDeclaration = { to: "owner" | "actor"; subject: string; body: string };
+export type NotifyDeclaration = {
+  to: "owner" | "actor" | { column: string };
+  /** Columns of the changed rows that {changes} lists (ADR-0021). */
+  changes?: string[];
+  subject: string;
+  body: string;
+};
 
 export type ServerActionDefinition = RuntimeActionDeclaration & {
   /** Empty for a `"kind": "signal"` action, which runs no SQL. */
@@ -289,18 +296,26 @@ function parseGuard(name: string, kind: "query" | "mutation" | "signal", value: 
 // the cases both test suites run.
 const MAX_NOTIFY_SUBJECT = 120;
 const MAX_NOTIFY_BODY = 2000;
+const MAX_NOTIFY_CHANGES = 8;
+/** A SQL name the Kernel can quote. */
+const NOTIFY_COLUMN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 function parseNotify(name: string, kind: "query" | "mutation" | "signal", bindings: ActionBinding[], value: unknown): NotifyDeclaration | undefined {
   if (value === undefined) return undefined;
   if (kind !== "mutation") throw refusal("notify.not-mutation", `Action ${name} is a ${kind === "query" ? "query" : "signal action"}, so it cannot declare notify. Declare it on a mutation.`);
   const record = value as Record<string, unknown> | null;
   if (!record || typeof record !== "object" || Array.isArray(record)
-    || Object.keys(record).some((key) => !["to", "subject", "body"].includes(key))
+    || Object.keys(record).some((key) => !["to", "subject", "body", "changes"].includes(key))
     || typeof record.subject !== "string" || typeof record.body !== "string") {
-    throw refusal("notify.invalid", `Action ${name} has an invalid notify declaration. Give "to", "subject" and "body" and nothing else.`);
+    throw refusal("notify.invalid", `Action ${name} has an invalid notify declaration. Give "to", "subject", "body" and, to list changed rows, "changes", and nothing else.`);
   }
-  const to = record.to;
-  if (to !== "owner" && to !== "actor") throw refusal("notify.recipient-invalid", `Action ${name} has an invalid notify recipient. Use "owner" or "actor".`);
+  const to = notifyRecipient(record.to);
+  if (!to) throw refusal("notify.recipient-invalid", `Action ${name} has an invalid notify recipient. Use "owner", "actor" or {"column": "<name>"} for a column of account IDs.`);
+  const changes = record.changes;
+  if (changes !== undefined && (!Array.isArray(changes) || changes.length < 1 || changes.length > MAX_NOTIFY_CHANGES
+    || changes.some((column, index) => typeof column !== "string" || !NOTIFY_COLUMN.test(column) || changes.indexOf(column) !== index))) {
+    throw refusal("notify.changes-invalid", `Action ${name} has an invalid notify changes list. Name 1 to ${MAX_NOTIFY_CHANGES} columns of the changed table, each once, in letters, digits and underscores.`);
+  }
   // Characters, not bytes or UTF-16 units, so both doors count an accented letter once.
   const { subject, body } = record;
   if (!subject.trim() || [...subject].length > MAX_NOTIFY_SUBJECT || /[\u0000-\u001f\u007f]/.test(subject)) {
@@ -310,24 +325,72 @@ function parseNotify(name: string, kind: "query" | "mutation" | "signal", bindin
     throw refusal("notify.body-invalid", `Action ${name} has an invalid notify body. Use 1 to ${MAX_NOTIFY_BODY} characters, with line breaks and no other control characters.`);
   }
   const inputs = new Set(bindings.flatMap((binding) => binding.source === "input" ? [binding.key] : []));
-  assertPlaceholders(name, "subject", subject, inputs);
-  assertPlaceholders(name, "body", body, inputs);
-  return { to, subject, body };
+  const inSubject = assertPlaceholders(name, "subject", subject, inputs);
+  const inBody = assertPlaceholders(name, "body", body, inputs);
+  if (inSubject.has("changes")) {
+    throw refusal("notify.changes-in-subject", `Action ${name} puts {changes} in its notify subject. Put {changes} in the body, and {changes.count} in the subject.`);
+  }
+  if (inBody.has("changes") && changes === undefined) {
+    throw refusal("notify.changes-undeclared", `Action ${name} uses {changes} in its notify body without a changes list. Name the columns to show in notify "changes".`);
+  }
+  return { to, ...(changes ? { changes: changes as string[] } : {}), subject, body };
 }
 
-/** Every "{" opens a placeholder the next "}" closes; a "}" on its own is text. */
-function assertPlaceholders(name: string, field: "subject" | "body", template: string, inputs: Set<string>) {
+function notifyRecipient(value: unknown): NotifyDeclaration["to"] | undefined {
+  if (value === "owner" || value === "actor") return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== 1 || typeof record.column !== "string" || !NOTIFY_COLUMN.test(record.column)) return undefined;
+  return { column: record.column };
+}
+
+/**
+ * The statement with the Kernel's own RETURNING clause, as
+ * kernel-rs/src/notify.rs `with_returning` writes it: a trailing ";" and what
+ * follows are cut, and each column is in brackets, because SQLite reads an
+ * unknown "name" in double quotes as a string.
+ */
+export function notifyReturningStatement(statement: string, columns: readonly string[]): string {
+  const end = sqlTokens(statement).find((token) => token.kind === "symbol" && token.text === ";")?.start ?? statement.length;
+  return `${statement.slice(0, end).trimEnd()}\nRETURNING ${columns.map((column) => `[${column}]`).join(", ")}`;
+}
+
+/** The refusal for a notify column the statement cannot return (kernel-rs/src/notify-column-cases.json). */
+export function notifyColumnRefusal(name: string) {
+  return refusal("notify.column-unknown", `Action ${name} names a notify column its statement cannot return. Name columns of the table the statement changes.`);
+}
+
+/**
+ * The columns the Kernel appends as RETURNING so a notice can list and
+ * address the changed rows: the changes list, then the recipient column.
+ * kernel-rs/src/notify.rs `Declaration::returning` is the twin.
+ */
+export function notifyReturning(notify: NotifyDeclaration | undefined): string[] {
+  if (!notify) return [];
+  const columns = [...(notify.changes ?? [])];
+  if (typeof notify.to === "object" && !columns.includes(notify.to.column)) columns.push(notify.to.column);
+  return columns;
+}
+
+const NOTIFY_PLACEHOLDERS = new Set(["actor.id", "kernel.now", "changes", "changes.count"]);
+
+/** Every "{" opens a placeholder the next "}" closes; a "}" on its own is text. Returns the placeholders it names. */
+function assertPlaceholders(name: string, field: "subject" | "body", template: string, inputs: Set<string>): Set<string> {
+  const named = new Set<string>();
   let rest = template;
   for (let open = rest.indexOf("{"); open >= 0; open = rest.indexOf("{")) {
     const close = rest.indexOf("}", open);
     if (close < 0) throw refusal("notify.placeholder-unclosed", `Action ${name} has an unclosed placeholder in its notify ${field}. Close it with "}".`);
     const token = rest.slice(open + 1, close);
-    const known = token === "actor.id" || (token.startsWith("input.") && inputs.has(token.slice("input.".length)));
+    const known = NOTIFY_PLACEHOLDERS.has(token) || (token.startsWith("input.") && inputs.has(token.slice("input.".length)));
     if (!known) {
-      throw refusal("notify.placeholder-unknown", `Action ${name} names an unknown placeholder {${token}} in its notify ${field}. Use {input.<key>} for one of its input bindings, or {actor.id}.`);
+      throw refusal("notify.placeholder-unknown", `Action ${name} names an unknown placeholder {${token}} in its notify ${field}. Use {input.<key>} for one of its input bindings, {actor.id}, {kernel.now}, {changes} or {changes.count}.`);
     }
+    named.add(token);
     rest = rest.slice(close + 1);
   }
+  return named;
 }
 
 // The same checks, in the same order and with the same messages, as

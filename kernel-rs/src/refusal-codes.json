@@ -62,11 +62,15 @@
   "mutation.start": { "fix": "capsule", "remedy": "Start a mutation with INSERT, UPDATE, DELETE or REPLACE. Tables and indexes belong in schema.sql." },
 
   "notify.body-invalid": { "fix": "capsule", "remedy": "Write a notify body of 1 to 2000 characters." },
-  "notify.invalid": { "fix": "capsule", "remedy": "Give notify \"to\", \"subject\" and \"body\" and nothing else." },
+  "notify.changes-in-subject": { "fix": "capsule", "remedy": "Move {changes} to the body; use {changes.count} in the subject." },
+  "notify.changes-invalid": { "fix": "capsule", "remedy": "List 1 to 8 column names of the changed table under notify \"changes\"." },
+  "notify.changes-undeclared": { "fix": "capsule", "remedy": "Add notify \"changes\" with the columns {changes} shows." },
+  "notify.column-unknown": { "fix": "capsule", "remedy": "Name columns of the table the statement changes, in notify \"changes\" and \"to\"." },
+  "notify.invalid": { "fix": "capsule", "remedy": "Give notify \"to\", \"subject\", \"body\" and an optional \"changes\" list, and nothing else." },
   "notify.not-mutation": { "fix": "capsule", "remedy": "Move notify to a mutation." },
   "notify.placeholder-unclosed": { "fix": "capsule", "remedy": "Close the placeholder with \"}\"." },
-  "notify.placeholder-unknown": { "fix": "capsule", "remedy": "Use {input.<key>} for one of the action's input bindings, or {actor.id}." },
-  "notify.recipient-invalid": { "fix": "capsule", "remedy": "Set notify \"to\" to \"owner\" or \"actor\"." },
+  "notify.placeholder-unknown": { "fix": "capsule", "remedy": "Use {input.<key>} for one of the action's input bindings, {actor.id}, {kernel.now}, {changes} or {changes.count}." },
+  "notify.recipient-invalid": { "fix": "capsule", "remedy": "Set notify \"to\" to \"owner\", \"actor\" or {\"column\": \"<name>\"}." },
   "notify.subject-invalid": { "fix": "capsule", "remedy": "Write a notify subject of 1 to 120 characters on one line." },
 
   "query.limit-missing": { "fix": "capsule", "remedy": "Add a LIMIT to the outer SELECT. A total with no GROUP BY needs none." },

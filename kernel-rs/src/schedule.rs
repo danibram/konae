@@ -269,23 +269,26 @@ async fn run_due(
         }
         let at = now();
         let outcome = super::run_action(folder.join("database.sqlite"), action, parameters(action, at)).await;
-        let (changes, error) = match outcome {
-            Ok(result) => (Some(result["changes"].as_u64().unwrap_or(0)), None),
+        let (ran, error) = match outcome {
+            Ok(ran) => (Some(ran), None),
             Err(error) => {
                 eprintln!("Scheduled run of {name} on deployment {id} failed; the next tick tries again: {error}");
                 (None, Some(error.to_string()))
             }
         };
+        let changes = ran.as_ref().map(|ran| ran.answer["changes"].as_u64().unwrap_or(0));
         let (action_name, run_key) = (name.clone(), key.clone());
         blocking(&folder, move |folder| {
             usage::record_run(folder, &usage::Run { action: &action_name, schedule: &run_key, slot, at, changes, error })
         })
         .await?;
-        if changes.is_some_and(|changes| changes > 0) {
+        if let Some(ran) = ran.filter(|_| changes.is_some_and(|changes| changes > 0)) {
             usage::signal(&state.data_root, id, name, action, &json!({}), None);
+            // The notice shows the run's own time, the one kernel.now bound.
             super::notify::record(
                 state, deployment, name, action, &json!({}),
                 super::notify::Caller { account: None, actor_id: None },
+                ran.changed(at),
             ).await;
         }
     }
