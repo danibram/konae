@@ -87,3 +87,9 @@ Next wave:
 - The items under "Not in this wave": `{changes}` and `{kernel.now}` placeholders and `to` naming a column of account IDs for notices; a "What happened" owner view over notices, calls and scheduled runs; splitting CONTEXT.md and the agent prompt into author and maintainer parts.
 
 Fourth wave, notices: `{changes}`, `{kernel.now}` and `to: { column }` landed with ADR-0021; the nightly digest mails each member their own entries, and `examples/probes/notify-rows` proves a scheduled notice to two members on `littlebox dev`.
+
+## Status after the fourth wave, 2026-11-08
+
+All four landed on `main`: notices with `{changes}`, `{kernel.now}` and `to: { column }` (ADR-0021); a What happened panel over notices (`notices_read`, new), calls, scheduled runs, routes and signals; migration and model refusals that carry their code through `database_execute`, `release_apply` and the Database Studio; CONTEXT.md ordered as author words then installation words, and the build agent's prompt cut from 66k to 49k characters. After the merge: Kernel 288 passed, `bun test src scripts` 786 passed, all six showcase replays and all 11 probe replays pass, and the template-release, check-carry and MCP walkthrough suites pass (29).
+
+Every item this plan opened is closed. A next plan should start from a fresh review of the running editor against AGENTS.md, as the first one did.
