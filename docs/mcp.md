@@ -580,14 +580,14 @@ The editor preview answers a call with `{ callId, queued: true }` and sends noth
 
 ## Usage and Signals
 
-The owner's Usage page at `/usage` reads all accessible projects from the Kernel, including external projects and unpublished drafts. Open one published app for feature activity, execution outcomes, business event totals and retained delivery states. The page offers 7, 30 and 90 days and refreshes every minute while visible.
+The owner's Usage page at `/usage` reads all accessible projects from the Kernel, including external projects and unpublished drafts. Open one published app for feature activity, execution outcomes, business event totals and retained delivery states. The page offers 7, 30 and 90 days and refreshes every minute while visible. A notice the Kernel could not queue shows as not sent, with its reason, on the overview and on the app.
 
 ```text
 usage_summary  { "deploymentId", "from", "to" }
 usage_overview { "from", "to", "cursor"? }
 ```
 
-Both tools accept inclusive UTC dates and the same 400-day range limit as `usage_read`. The overview returns at most 50 projects and `nextCursor`. Its summaries aggregate operation kinds and execution outcomes across the period; per-action daily detail belongs to `usage_summary`. It checks the account owner and token project grants before reading summaries. Unpublished projects have `summary: null`; an unreadable published store also has an `error`, rather than appearing unused.
+Both tools accept inclusive UTC dates and the same 400-day range limit as `usage_read`. The overview returns at most 50 projects and `nextCursor`. Its summaries aggregate operation kinds and execution outcomes across the period; per-action daily detail belongs to `usage_summary`. Totals carry an empty name, except `notify`, which keeps one row per notice outcome named `*: <reason>`, so the overview can tell a queued notice from one that was never sent. It checks the account owner and token project grants before reading summaries. Unpublished projects have `summary: null`; an unreadable published store also has an `error`, rather than appearing unused.
 
 `usage_summary` returns `usage` with the existing counters, `actions` from the published Deployment, `metrics` with daily execution and Signal aggregates, retained `calls` and `mail` state counts, `coverage` and `updatedAt`. Execution origins are `runtime`, `route`, `schedule` and `continuation`; outcomes are `ok`, `refused`, `failed` and `unchanged` for scheduled work without changes. A route retains the action's name and counts once in this execution table. The existing operation table still counts it only under `route`.
 

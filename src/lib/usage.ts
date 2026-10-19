@@ -50,9 +50,41 @@ export function featureRows(summary: UsageSummary) {
       feature.id === "data" ? ["query", "mutation", "signal"].includes(action.kind) :
       feature.id === "routes" ? Boolean(action.http) : feature.id === "scheduled" ? Boolean(action.schedule) :
       feature.id === "calls" ? action.kind === "call" : Boolean(action.notify)) ? "Configured" : "Not configured";
-    return { ...feature, configured, count: totals.reduce((sum, row) => sum + row.count, 0), lastDay: [...recorded, ...executions.map((m) => m.day)].sort().at(-1), totals, failures, refused };
+    const notSent = feature.id === "notify" ? noticeOutcomes(summary).notSent : 0;
+    return { ...feature, configured, count: totals.reduce((sum, row) => sum + row.count, 0), lastDay: [...recorded, ...executions.map((m) => m.day)].sort().at(-1), totals, failures, refused, notSent };
   });
 }
+
+// The Kernel names each notice "<action>: <reason>", where reason is "queued" or why nothing was queued (docs/mcp.md).
+const noticeReasons: Record<string, string> = {
+  "no-transport": "this installation has no email service",
+  "owner-has-no-email": "the owner account has no email address",
+  "no-account": "the caller had no app account",
+  "unverified-email": "the caller's email is not verified",
+  "app-limit": "the app's daily email budget was used up",
+  "creator-limit": "the owner's daily email budget was used up",
+  "recipient-limit": "the recipient's daily email budget was used up",
+  "installation-limit": "the installation's daily email budget was used up",
+  "sender-not-ready": "the email sender was not ready",
+  "storage-error": "the email queue could not be written",
+};
+export function noticeOutcomes(summary: UsageSummary) {
+  let queued = 0;
+  const reasons: { action: string; reason: string; label: string; count: number }[] = [];
+  for (const row of summary.usage.totals) {
+    if (row.kind !== "notify") continue;
+    const split = row.name.lastIndexOf(": ");
+    if (split < 0) continue;
+    const action = row.name.slice(0, split) === "*" ? "All actions" : row.name.slice(0, split);
+    const reason = row.name.slice(split + 2);
+    if (reason === "queued") queued += row.count;
+    else reasons.push({ action, reason, label: noticeReasons[reason] ?? reason, count: row.count });
+  }
+  return { queued, notSent: reasons.reduce((sum, r) => sum + r.count, 0), reasons };
+}
+
+const outcomeLabels: Record<string, string> = { ok: "Correct", refused: "Refused by app rules", failed: "Failed", unchanged: "No changes" };
+export const outcomeLabel = (outcome: string) => outcomeLabels[outcome] ?? outcome;
 export function usageActivity(summary: UsageSummary) {
   // Session checks, Signals and notices can accompany an action, so they are not added to it.
   return summary.usage.totals.filter((r) => ["action", "route", "scheduled", "call"].includes(r.kind)).reduce((sum, r) => sum + r.count, 0);

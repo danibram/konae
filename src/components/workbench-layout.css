@@ -83,13 +83,13 @@
   padding: 0 6px;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--ink);
+  color: var(--ds-text);
   font: 700 11px "JetBrains Mono Variable", monospace;
   white-space: nowrap;
   cursor: pointer;
 }
-.group-actions button:hover { border-color: var(--line); background: #fffdf7; }
-.group-actions button.active { border-color: var(--ink); background: var(--acid); }
+.group-actions button:hover { border-color: var(--line); background: var(--ds-subtle); }
+.group-actions button.active { border-color: var(--ink); background: var(--acid); color: var(--ink); }
 
 /* Every tab of the group has a page; they are stacked in one grid cell and all
    but the active one is `hidden`, so switching tabs hides a panel instead of

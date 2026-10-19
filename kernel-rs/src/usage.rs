@@ -702,11 +702,17 @@ pub(crate) fn compact_overview(mut summary: Value) -> Value {
     let latest = summary["usage"]["days"].as_array().and_then(|days| days.last()).cloned();
     summary["usage"]["days"] = json!(latest.into_iter().collect::<Vec<_>>());
     summary["usage"]["scheduled"] = json!([]);
-    let mut totals: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    // A notice keeps its outcome as "*: <reason>", so the overview can tell a queued notice from one never sent.
+    let mut totals: std::collections::BTreeMap<(String, String), i64> = std::collections::BTreeMap::new();
     for row in summary["usage"]["totals"].as_array().into_iter().flatten() {
-        *totals.entry(row["kind"].as_str().unwrap_or("").to_owned()).or_default() += row["count"].as_i64().unwrap_or(0);
+        let kind = row["kind"].as_str().unwrap_or("").to_owned();
+        let name = match (kind.as_str(), row["name"].as_str().and_then(|name| name.rsplit_once(": "))) {
+            ("notify", Some((_, reason))) => format!("*: {reason}"),
+            _ => String::new(),
+        };
+        *totals.entry((kind, name)).or_default() += row["count"].as_i64().unwrap_or(0);
     }
-    summary["usage"]["totals"] = json!(totals.into_iter().map(|(kind, count)| json!({"kind": kind, "name": "", "count": count})).collect::<Vec<_>>());
+    summary["usage"]["totals"] = json!(totals.into_iter().map(|((kind, name), count)| json!({"kind": kind, "name": name, "count": count})).collect::<Vec<_>>());
     let mut outcomes: std::collections::BTreeMap<(String, String, String), (i64, i64)> = std::collections::BTreeMap::new();
     for row in summary["metrics"].as_array().into_iter().flatten() {
         let key = (row["feature"].as_str().unwrap_or("").to_owned(), row["origin"].as_str().unwrap_or("").to_owned(), row["outcome"].as_str().unwrap_or("").to_owned());
@@ -785,6 +791,21 @@ mod tests {
         let path = std::env::temp_dir().join(format!("littlebox-usage-{label}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn the_overview_keeps_why_a_notice_was_not_sent_and_drops_other_names() {
+        let summary = json!({"usage": {"days": [], "totals": [
+            {"kind": "action", "name": "messages.send", "count": 3},
+            {"kind": "notify", "name": "messages.send: no-transport", "count": 2},
+            {"kind": "notify", "name": "replies.send: no-transport", "count": 1},
+            {"kind": "notify", "name": "messages.send: queued", "count": 4},
+        ]}, "metrics": []});
+        assert_eq!(compact_overview(summary)["usage"]["totals"], json!([
+            {"kind": "action", "name": "", "count": 3},
+            {"kind": "notify", "name": "*: no-transport", "count": 3},
+            {"kind": "notify", "name": "*: queued", "count": 4},
+        ]));
     }
 
     /// The editor runs the same file in src/kernel/actions.test.ts.

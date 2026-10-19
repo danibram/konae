@@ -101,6 +101,7 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   color: var(--ds-text);
   font: 750 12px/1.3 var(--ds-font);
   white-space: nowrap;
+  text-decoration: none;
   cursor: pointer;
   box-shadow: var(--ds-shadow);
   transition: background 120ms ease, color 120ms ease, translate 80ms ease, box-shadow 80ms ease;
@@ -189,8 +190,8 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   text-transform: uppercase;
   white-space: nowrap;
 }
-.ui-badge-accent { color: var(--ds-ink); border-color: var(--ds-ink); background: transparent; box-shadow: inset 0 0 0 1px var(--ds-accent); }
-.ui-badge-success { color: var(--ds-success); border-color: #759b32; background: var(--ds-success-soft); }
+.ui-badge-accent { color: var(--ds-text); border-color: var(--ds-ink); background: transparent; box-shadow: inset 0 0 0 1px var(--ds-accent); }
+.ui-badge-success { color: #45640f; border-color: #759b32; background: var(--ds-success-soft); }
 .ui-badge-warning { color: var(--ds-warning); border-color: #d4a84a; background: var(--ds-warning-soft); }
 .ui-badge-danger { color: var(--ds-danger); border-color: #ad4937; background: var(--ds-danger-soft); }
 
@@ -411,7 +412,7 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   background: var(--ds-orange);
 }
 a.account-person { color: inherit; text-decoration: none; }
-a.account-person:hover { background: #30322c; }
+a.account-person:hover { background: var(--ds-subtle); }
 .account-person.is-signed-in > span { background: var(--ds-accent); color: var(--ds-ink); }
 .account-person strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-sort {
@@ -703,6 +704,9 @@ a.confirm-publish { text-decoration: none; }
 .workshop .topbar .account-chip { display: none; }
 @media (prefers-color-scheme: dark) {
   .ui-button-ghost { color: #f4f2ea; }
+  .ui-badge-accent { border-color: var(--ds-accent); }
+  .ui-badge-success { color: var(--ds-success); }
+  a.account-person:hover { background: #30322c; }
   .ui-select, .ui-input, .ui-textarea { background: #1c1f28; color: #f4f2ea; border-color: #f4f2ea; }
   .ui-button-icon, .ui-button.ui-button-icon { background: #1c1f28; color: #f4f2ea; border-color: #f4f2ea; }
 }
