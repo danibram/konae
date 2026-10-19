@@ -1,6 +1,5 @@
 import { BarChart3, Box, FileCode2, LayoutGrid, Palette, Sparkles, UserRound } from "lucide-react";
 import { useState } from "react";
-import { architectureProjectId } from "../lib/architecture";
 import { ownerInitials, platformAccessHref, type OwnerSession } from "./owner-session";
 import { Dialog } from "./ui";
 
@@ -23,7 +22,7 @@ export function WorkspaceNav({ active, projectCount, ownerSession }: Props) {
           <LayoutGrid size={16} /> Projects {projectCount !== undefined && <span>{projectCount}</span>}
         </a>
         <a href="/usage" className={active === "usage" ? "active" : undefined} aria-current={active === "usage" ? "page" : undefined}><BarChart3 size={16} /> Usage</a>
-        <a className="nav-wide" href={`/app/${architectureProjectId}`}><FileCode2 size={16} /> Architecture</a>
+        <a className="nav-wide" href="/architecture.html"><FileCode2 size={16} /> Architecture</a>
         <a className={active === "design-system" ? "active" : undefined} href="/design-system"><Palette size={16} /> Design system</a>
         <button type="button" className="nav-more-trigger" aria-haspopup="dialog" aria-expanded={moreOpen} onClick={() => setMoreOpen(true)}>
           More
@@ -49,7 +48,7 @@ export function WorkspaceNav({ active, projectCount, ownerSession }: Props) {
       >
         <nav className="nav-more-sheet" aria-label="More workspace links">
           <a href="/" aria-current={active === "projects" ? "page" : undefined} onClick={() => setMoreOpen(false)}>Projects</a>
-          <a href={`/app/${architectureProjectId}`} onClick={() => setMoreOpen(false)}>Architecture</a>
+          <a href="/architecture.html" onClick={() => setMoreOpen(false)}>Architecture</a>
           <a href="/usage" aria-current={active === "usage" ? "page" : undefined} onClick={() => setMoreOpen(false)}>Usage</a>
           <a href={accessHref} onClick={() => setMoreOpen(false)}>Owner sign-in</a>
           <a href="/design-system" aria-current={active === "design-system" ? "page" : undefined} onClick={() => setMoreOpen(false)}>Design system</a>
