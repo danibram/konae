@@ -36,6 +36,9 @@ export function PlatformAccess() {
     setConfig(await response.json());
   }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }, []);
 
+  // A refusal belongs to the form that produced it; carrying it into the other mode tells the owner their new action failed.
+  const switchMode = (creating: boolean) => { setCreatingAccount(creating); setError(""); setNotice(""); };
+
   const backHref = returnTo && !returnTo.startsWith("/oauth/") ? returnTo : "/";
   const backLabel = backHref.startsWith("/app/") ? "Back to project" : "Back to projects";
 
@@ -112,7 +115,7 @@ export function PlatformAccess() {
       </header>
       <main className="platform-main">
         <Card className="platform-card">
-          <h1>{pendingEmail ? "Check your email" : creatingAccount ? "Create the owner account" : "Owner sign-in"}</h1>
+          <h1>{session.state === "signed-in" ? "Owner account" : pendingEmail ? "Check your email" : creatingAccount ? "Create the owner account" : "Owner sign-in"}</h1>
           <p className="platform-lead">Owners deploy apps and manage their data. People who use your apps sign in inside each app instead.</p>
 
           {session.state === "checking" && <p className="platform-note">Checking your session…</p>}
@@ -155,12 +158,12 @@ export function PlatformAccess() {
                 {creatingAccount ? (
                   <>
                     <Button type="submit" variant="primary" value="signup" loading={busy}>Create owner account</Button>
-                    <Button type="button" onClick={() => setCreatingAccount(false)} disabled={busy}>Back to sign in</Button>
+                    <Button type="button" onClick={() => switchMode(false)} disabled={busy}>Back to sign in</Button>
                   </>
                 ) : (
                   <>
                     <Button type="submit" variant="primary" value="login" loading={busy}>Sign in</Button>
-                    <Button type="button" onClick={() => setCreatingAccount(true)} disabled={busy}>Create owner account</Button>
+                    <Button type="button" onClick={() => switchMode(true)} disabled={busy}>Create owner account</Button>
                   </>
                 )}
               </div>
