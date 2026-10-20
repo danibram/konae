@@ -88,7 +88,7 @@ async function load() {
   const entries = await miniapp.actions.call('entries.list');
   $('#entries').innerHTML = entries.length ? entries.map(entry =>
     '<article class="row"><div><p>' + escapeHtml(entry.body) + '</p><small>' + when(entry.created_at) + '</small></div><span>'
-      + (entry.digested_at ? 'mailed ' + when(entry.digested_at) : 'in tomorrow\'s email') + '</span></article>'
+      + (entry.digested_at ? 'mailed ' + when(entry.digested_at) : "in tomorrow's email") + '</span></article>'
   ).join('') : '<p class="empty">No entries yet. Tomorrow at 07:00 UTC you get an email with what you write today.</p>';
 }
 

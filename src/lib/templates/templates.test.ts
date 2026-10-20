@@ -29,6 +29,13 @@ describe("a project born from a template", () => {
   });
 
   for (const { id } of templateChoices) {
+    test(`${id} ships an app.js the browser can parse`, () => {
+      const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (body: string) => unknown;
+      expect(() => new AsyncFunction(born(id).files["app.js"] as string)).not.toThrow();
+    });
+  }
+
+  for (const { id } of templateChoices) {
     test(`${id} passes the Gate, empty and against a database built from its schema`, async () => {
       const project = born(id);
       const files = project.files as CapsuleFiles;
