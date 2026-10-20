@@ -67,7 +67,7 @@ import { cloneStarter } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
 import { createDirectory, createFile, directoriesForFiles, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
 import { actionReadout } from "./components/action-readiness";
-import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, recoveryDrafts, resetWorkspaceProject } from "./lib/workspace";
+import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./lib/workspace";
 import { ManagedSources, type EjectRecord, type ProjectMetadata } from "./lib/managed-sources";
 import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
@@ -155,8 +155,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     try {
       const recovery = JSON.parse(workspaceStorage.getItem("recovery") ?? "[]") as MiniAppProject[];
       if (Array.isArray(recovery)) candidates.push(...recovery);
-      if (workspaceStorage.getItem("littlebox:projects") || workspaceStorage.getItem("littlebox:project")) candidates.push(...loadWorkspaceState(workspaceStorage).projects);
-      if (localStorage.getItem("littlebox:projects") || localStorage.getItem("littlebox:project")) candidates.push(...loadWorkspaceState().projects);
+      candidates.push(...storedLocalProjects(workspaceStorage), ...storedLocalProjects());
     } catch { /* Invalid local drafts remain untouched. */ }
     return recoveryDrafts(candidates, loaded.projects);
   });
