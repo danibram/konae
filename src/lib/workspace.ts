@@ -22,10 +22,10 @@ export function recoveryDrafts(candidates: MiniAppProject[], saved: MiniAppProje
     if (!previous || candidate.updatedAt > previous.updatedAt) latest.set(candidate.id, candidate);
   }
   const current = new Map(saved.map((project) => [project.id, draftSignature(project)]));
-  // An earlier build stored the untouched starter as a draft of every empty browser.
+  // An earlier build stored the untouched starter and the architecture map as drafts of every empty browser.
   const starter = cloneStarter();
   const starterSignature = draftSignature(starter);
-  return [...latest.values()].filter((draft) => current.get(draft.id) !== draftSignature(draft) && !(draft.id === starter.id && draftSignature(draft) === starterSignature));
+  return [...latest.values()].filter((draft) => current.get(draft.id) !== draftSignature(draft) && draft.id !== architectureProjectId && !(draft.id === starter.id && draftSignature(draft) === starterSignature));
 }
 
 function draftSignature(project: MiniAppProject): string {

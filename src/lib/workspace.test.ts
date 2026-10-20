@@ -19,7 +19,7 @@ describe("workspace project registry", () => {
   });
 
   test("an untouched starter stored by an earlier build is not a draft", () => {
-    expect(recoveryDrafts([cloneStarter()], [])).toEqual([]);
+    expect(recoveryDrafts([cloneStarter(), { ...cloneStarter(), id: architectureProjectId }], [])).toEqual([]);
     const edited = { ...cloneStarter(), files: { ...cloneStarter().files, "app.js": "mine" } };
     expect(recoveryDrafts([edited], [])).toEqual([edited]);
   });
