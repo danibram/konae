@@ -551,6 +551,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   useEffect(() => {
     let cancelled = false;
+    // A build failure belongs to the project that failed. Opening another one starts clean.
+    setOperationError("");
     void compileProjectInBrowser(project)
       .then((compiled) => {
         if (!cancelled) setPreviewProject({
