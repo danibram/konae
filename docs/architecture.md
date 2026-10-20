@@ -38,7 +38,7 @@ flowchart LR
   F --> L
 ```
 
-The iframe has `allow-scripts` but not same-origin access. Generated code cannot read the editor's storage or credentials directly. Each preview receives one private MessageChannel and an ephemeral preview credential. The app uses MCP tool calls over that channel. The global message listener only establishes the channel.
+The iframe has `allow-scripts` and `allow-forms` (so a `<form>` submit button works as it does in a published app) but not same-origin access. Generated code cannot read the editor's storage or credentials directly. Each preview receives one private MessageChannel and an ephemeral preview credential. The app uses MCP tool calls over that channel. The global message listener only establishes the channel.
 
 This is a development boundary, not a hardened hostile-code sandbox. The preview applies no Content Security Policy, so code that the published policy blocks, such as an `onclick="..."` attribute, still runs in the preview. The agent prompt states the published policy. A published app gets what the preview lacks, the policy, quotas, the statement rules and the owner audit log, on the Kernel described below. Isolation enforced by infrastructure, beyond one Kernel process and one host per app, is not built.
 
