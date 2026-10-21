@@ -34,7 +34,7 @@ import { mergeProposal } from "./agent/apply";
 import type { AgentProposal, AgentSessionConfig } from "./agent/contracts";
 import type { DomainMutationRequest, LittleboxAgentHandle } from "./agent/harness";
 import { createAgentKeyStore } from "./agent/key-store";
-import { Button, Dialog } from "./components/ui";
+import { Button, Dialog, LoadingBlock } from "./components/ui";
 import { AgentPanel } from "./components/AgentPanel";
 import { AgentSettingsModal } from "./components/AgentSettingsModal";
 import { useAgentThread } from "./components/useAgentThread";
@@ -48,6 +48,8 @@ import { useActionContract } from "./components/useActionContract";
 import { ACTION_CONTRACT_MARKDOWN } from "./lib/action-contract";
 import { isSignedOutError, ownerInitials, platformAccessHref, useOwnerSession, type OwnerSession } from "./components/owner-session";
 import { PlatformAccess } from "./components/PlatformAccess";
+import { BootShell } from "./components/BootShell";
+import { useLoadingHold } from "./components/loading-hold";
 import { filesUnder, renamePath } from "./components/project-tree";
 import { usePreviewProblems } from "./components/usePreviewProblems";
 import { ProjectDashboard } from "./components/ProjectDashboard";
@@ -116,9 +118,9 @@ function PlatformGate() {
   if (session.state === "unavailable") {
     return <main className="platform-page"><div className="platform-main"><CardForPlatformError message={session.message} onRetry={refresh} /></div></main>;
   }
-  if (session.state !== "signed-in") return <div className="capability-loading" role="status">Checking your platform session…</div>;
-  if (window.location.pathname === "/design-system") return <Suspense fallback={<div className="capability-loading">Loading components…</div>}><DesignSystem /></Suspense>;
-  if (window.location.pathname === "/usage") return <Suspense fallback={<div className="capability-loading">Loading usage…</div>}><UsagePage key={session.ownerId} ownerSession={session} /></Suspense>;
+  if (session.state !== "signed-in") return <BootShell ownerSession={session} />;
+  if (window.location.pathname === "/design-system") return <Suspense fallback={<BootShell ownerSession={session} />}><DesignSystem /></Suspense>;
+  if (window.location.pathname === "/usage") return <Suspense fallback={<BootShell ownerSession={session} />}><UsagePage key={session.ownerId} ownerSession={session} /></Suspense>;
   return <WorkspaceGate key={session.ownerId} ownerSession={session} refreshOwnerSession={refresh} />;
 }
 
@@ -131,8 +133,10 @@ function WorkspaceGate({ ownerSession, refreshOwnerSession }: { ownerSession: Ex
     void sources.load().then((value) => { if (active) setLoaded(value); }).catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : String(cause)); });
     return () => { active = false; };
   }, [sources]);
+  // A boot that took long enough to show its skeleton keeps it for a moment, so it never flashes.
+  const booting = useLoadingHold(!loaded, { sinceNavigation: true });
   if (error) return <main className="platform-page"><div className="platform-main"><CardForPlatformError message={error} onRetry={() => window.location.reload()} /></div></main>;
-  if (!loaded) return <div className="capability-loading" role="status">Loading your projects…</div>;
+  if (!loaded || booting) return <BootShell ownerSession={ownerSession} />;
   return <WorkspaceApp ownerSession={ownerSession} refreshOwnerSession={refreshOwnerSession} sources={sources} loaded={loaded} />;
 }
 
@@ -1086,7 +1090,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     title: label,
     icon,
     body: (
-      <Suspense fallback={<div className="capability-loading"><RefreshCw className="spin" size={17} /> Loading…</div>}>
+      <Suspense fallback={<LoadingBlock label="Loading this panel" rows={4} className="panel-loading" />}>
         {id === "data" && activeDeployment && !activeDeployment.databaseModel && <p role="alert">The deployed schema revision is unavailable in this browser. Deployed database editing is paused.</p>}
         <CapabilityWorkspace
           view={id === "data" ? "database" : id}
@@ -1119,7 +1123,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     title: "What happened",
     icon: <Activity size={11} />,
     body: (
-      <Suspense fallback={<div className="capability-loading"><RefreshCw className="spin" size={17} /> Loading…</div>}>
+      <Suspense fallback={<LoadingBlock label="Loading this panel" rows={4} className="panel-loading" />}>
         <WhatHappenedView
           deployment={activeDeployment ? { id: activeDeployment.id, url: activeDeployment.url } : undefined}
           onDeploy={ejectRecord ? undefined : () => { setDeployment(null); setDeployError(""); setDeployOpen(true); refreshOwnerSession(); }}
@@ -1294,7 +1298,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         providers={PROVIDERS}
       />
 
-      {appSettingsOpen && <Suspense fallback={<div role="status">Loading app settings…</div>}><AppSettingsDialog key={`${project.id}-${domainVersion}`} projectName={project.name} deploymentId={activeDeployment?.id} onClose={() => setAppSettingsOpen(false)} onDeploy={() => { setAppSettingsOpen(false); setDeployment(null); setDeployError(""); setDeployOpen(true); }} onSignedOut={refreshOwnerSession} signInHref={signInHref} /></Suspense>}
+      {appSettingsOpen && <Suspense fallback={<Dialog title="App settings" onClose={() => setAppSettingsOpen(false)}><div className="ui-dialog-body"><LoadingBlock label="Loading app settings" rows={3} /></div></Dialog>}><AppSettingsDialog key={`${project.id}-${domainVersion}`} projectName={project.name} deploymentId={activeDeployment?.id} onClose={() => setAppSettingsOpen(false)} onDeploy={() => { setAppSettingsOpen(false); setDeployment(null); setDeployError(""); setDeployOpen(true); }} onSignedOut={refreshOwnerSession} signInHref={signInHref} /></Suspense>}
 
       {domainConfirmation && <Dialog title={domainConfirmation.operation === "clear" ? "Remove this app's domain?" : "Update this app's domain?"} description={project.name} onClose={() => { resolveDomainConfirmation.current?.(false); resolveDomainConfirmation.current = null; setDomainConfirmation(null); }} footer={<>
         <Button onClick={() => { resolveDomainConfirmation.current?.(false); resolveDomainConfirmation.current = null; setDomainConfirmation(null); }}>Cancel</Button>

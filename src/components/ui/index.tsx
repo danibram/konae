@@ -1,6 +1,7 @@
 import { Loader2, X } from "lucide-react";
-import { cloneElement, useId, type ComponentProps, type HTMLAttributes, type ReactElement, type ReactNode, type RefObject } from "react";
+import { cloneElement, useId, type ComponentProps, type CSSProperties, type HTMLAttributes, type ReactElement, type ReactNode, type RefObject } from "react";
 import { useModalDialog } from "../useModalDialog";
+import { LOADING_DELAY_MS } from "../loading-hold";
 
 const classes = (...values: (string | false | undefined)[]) => values.filter(Boolean).join(" ");
 
@@ -73,5 +74,29 @@ export function Dialog({ open = true, title, description, showTitle = true, onCl
       {children}
       {footer && <footer className="ui-dialog-footer">{footer}</footer>}
     </section>
+  </div>;
+}
+
+export type SkeletonProps = { width?: number | string; height?: number | string; radius?: number | string; className?: string };
+
+/** A quiet placeholder shape. Give it the size of the content that replaces it so nothing moves. */
+export function Skeleton({ width = "100%", height = 14, radius, className }: SkeletonProps) {
+  return <span aria-hidden="true" className={classes("ui-skeleton", className)} style={{ width, height, borderRadius: radius }} />;
+}
+
+/**
+ * One loading surface: a single polite status with one label, and skeleton
+ * shapes that hold the layout. The shapes are in the page from the first
+ * paint but fade in after the loading delay, so a fast load shows nothing.
+ * `sinceNavigation` counts that delay from the page load, so a skeleton
+ * remounted by the next boot stage does not blink.
+ */
+export function LoadingBlock({ label, rows = 3, children, className, sinceNavigation = false }: { label: string; rows?: number; children?: ReactNode; className?: string; sinceNavigation?: boolean }) {
+  const delay = sinceNavigation && typeof performance !== "undefined" ? Math.round(LOADING_DELAY_MS - performance.now()) : LOADING_DELAY_MS;
+  return <div role="status" aria-busy="true" className={classes("ui-loading", className)} style={{ "--ui-loading-delay": `${delay}ms` } as CSSProperties}>
+    <span className="sr-only">{label}</span>
+    <div className="ui-loading-shapes" aria-hidden="true">
+      {children ?? Array.from({ length: rows }, (_, index) => <Skeleton key={index} height={16} width={index === rows - 1 && rows > 1 ? "62%" : "100%"} />)}
+    </div>
   </div>;
 }

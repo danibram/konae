@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { platformMcp } from "../mcp/client";
 import { rememberOwnerEmail, useOwnerSession } from "./owner-session";
 import { safeReturnPath } from "./return-path";
-import { Badge, Button, Card, Field, Input, Select, Textarea } from "./ui";
+import { Badge, Button, Card, Field, Input, LoadingBlock, Select, Skeleton, Textarea } from "./ui";
 
 type Credential = { tokenId: string; scopes: string; expiresAt: number };
 type ClerkBrowser = { load: (options: object) => Promise<void>; session: { getToken: () => Promise<string | null> } | null; mountSignIn: (element: HTMLElement) => void; unmountSignIn: (element: HTMLElement) => void; addListener: (listener: () => void) => () => void; signOut: () => Promise<void> };
@@ -115,7 +115,11 @@ export function PlatformAccess() {
           <h1>{pendingEmail ? "Check your email" : creatingAccount ? "Create the owner account" : "Owner sign-in"}</h1>
           <p className="platform-lead">Owners deploy apps and manage their data. People who use your apps sign in inside each app instead.</p>
 
-          {session.state === "checking" && <p className="platform-note">Checking your session…</p>}
+          {(session.state === "checking" || (session.state === "signed-out" && !config && !error)) && <LoadingBlock label="Checking your session" className="platform-form">
+            <Skeleton width={48} height={12} /><Skeleton height={36} />
+            <Skeleton width={64} height={12} /><Skeleton height={36} />
+            <div className="platform-actions"><Skeleton width={96} height={42} /><Skeleton width={160} height={42} /></div>
+          </LoadingBlock>}
           {session.state === "unavailable" && <p className="platform-error" role="alert">Could not reach the platform: {session.message}</p>}
 
           {session.state === "signed-out" && config?.mode === "clerk" && <ClerkSignIn publishableKey={config.publishableKey} returnTo={returnTo} onError={setError} onComplete={refresh} />}

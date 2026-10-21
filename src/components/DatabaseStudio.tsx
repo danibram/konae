@@ -33,7 +33,7 @@ import { McpError } from "../mcp/client";
 import { RefusalError } from "../kernel/refusal";
 import type { DatabaseMigrationPlan } from "../database-lifecycle/contracts";
 import type { DrizzleDatabaseModel } from "../lib/types";
-import { Badge, Button, Dialog, EmptyState } from "./ui";
+import { Badge, Button, Dialog, EmptyState, LoadingBlock } from "./ui";
 import { SqlEditor } from "./SqlEditor";
 import { classifySql, modelTableNames } from "./sql-statements";
 
@@ -165,7 +165,7 @@ function DataBrowser({ host, tables, tablesReady, selectedTable, onSelectTable, 
             onExport={onExport}
           />
         ) : !tablesReady ? (
-          <StudioEmpty title="Reading tables…" detail="Loading the database for this app." loading />
+          <StudioLoading label="Reading tables" />
         ) : (
           <StudioEmpty title={tables.length === 0 ? "No tables yet" : "No rows yet."} detail={tables.length === 0 ? "Open Schema and add the first table. The file updates for people who edit code." : "Pick a table to see its rows."} />
         )}
@@ -312,7 +312,7 @@ function EditableTable({ host, tableName, refreshVersion, onMutated, onExport }:
       )}
 
       <div className="editable-grid-wrap">
-        {loading ? <StudioEmpty title="Reading the table…" detail="Loading rows and columns." loading /> : !data ? <EmptyColumns names={tableName === "tasks" ? ["title", "done", "created_at"] : []} /> : data.rows.length === 0 ? <EmptyColumns names={data.columns.map((column) => column.name).filter((name) => name !== "id")} /> : (
+        {loading ? <StudioLoading label="Reading the table" /> : !data ? <EmptyColumns names={tableName === "tasks" ? ["title", "done", "created_at"] : []} /> : data.rows.length === 0 ? <EmptyColumns names={data.columns.map((column) => column.name).filter((name) => name !== "id")} /> : (
           <table className="editable-grid">
             <thead><tr><th className="grid-row-number">#</th>{data.columns.filter((column) => column.name !== "id").map((column) => (
               <th key={column.name}><button onClick={() => toggleSort(column.name)}><span>{columnLabel(column.name)}</span>{sort?.column === column.name ? sort.direction === "ASC" ? <ChevronUp size={12} /> : <ChevronDown size={12} /> : null}</button></th>
@@ -707,6 +707,10 @@ function EmptyColumns({ names }: { names: string[] }) {
       </div>
     </div>
   );
+}
+
+function StudioLoading({ label }: { label: string }) {
+  return <div className="studio-loading"><LoadingBlock label={label} rows={5} /></div>;
 }
 
 function StudioEmpty({ title, detail, loading = false }: { title: string; detail: string; loading?: boolean }) {

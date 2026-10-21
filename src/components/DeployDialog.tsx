@@ -17,7 +17,7 @@ import { hintOf, refusalCodes, type RefusalCode } from "../kernel/refusal";
 import type { MiniAppProject } from "../lib/types";
 import type { OwnerSession } from "./owner-session";
 import { defaultSignupMode, firstPublishModes, republishAccessNote, signupModeCopy, visibilityCopy } from "./app-access";
-import { Button, Dialog, Field, Select } from "./ui";
+import { Button, Dialog, Field, LoadingBlock, Select } from "./ui";
 import "./app-access.css";
 
 type Props = {
@@ -126,7 +126,7 @@ export function DeployDialog({ project, deployment, publishing, error, errorCode
               <section className="publish-access" aria-label="Access after this publish">
                 <dl>
                   <div><dt>Who can open the app</dt><dd>{visibilityCopy[visibility].label}. {visibilityCopy[visibility].sentence}</dd></div>
-                  <div><dt>Who can create an app account</dt><dd>{publishedPolicy.status === "ready" ? <>{signupModeCopy[publishedPolicy.mode].label}. {signupModeCopy[publishedPolicy.mode].sentence}</> : publishedPolicy.status === "loading" ? "Reading the published policy." : signedOut ? "Sign in as the owner to read it." : `Could not read it: ${publishedPolicy.reason}`}</dd></div>
+                  <div><dt>Who can create an app account</dt><dd>{publishedPolicy.status === "ready" ? <>{signupModeCopy[publishedPolicy.mode].label}. {signupModeCopy[publishedPolicy.mode].sentence}</> : publishedPolicy.status === "loading" ? <LoadingBlock label="Reading the published policy" rows={1} /> : signedOut ? "Sign in as the owner to read it." : `Could not read it: ${publishedPolicy.reason}`}</dd></div>
                 </dl>
                 <p>{republishAccessNote({ visibility: current.manifest.visibility, ...(publishedPolicy.status === "ready" ? { mode: publishedPolicy.mode } : {}) }, visibility)}</p>
                 {onOpenUsers && <button type="button" className="deploy-auth-link" onClick={onOpenUsers}>Open Auth &gt; Users</button>}

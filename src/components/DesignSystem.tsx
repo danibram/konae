@@ -4,7 +4,7 @@ import { readOwnerProjectCount } from "../lib/managed-sources";
 import { templateChoices, type TemplateId } from "../lib/templates";
 import { useOwnerSession } from "./owner-session";
 import { WorkspaceNav } from "./WorkspaceNav";
-import { Badge, Button, Card, Dialog, EmptyState, Field, IconButton, Input, Select, Textarea } from "./ui";
+import { Badge, Button, Card, Dialog, EmptyState, Field, IconButton, Input, LoadingBlock, Select, Skeleton, Textarea } from "./ui";
 
 function Sample({ title, children }: { title: string; children: ReactNode }) {
   return <section className="ds-sample"><h2>{title}</h2>{children}</section>;
@@ -62,6 +62,7 @@ export function DesignSystem() {
             <Sample title="Status"><div className="ds-row"><Badge tone="accent">Public</Badge><Badge tone="warning">Stops at 100</Badge><Badge>Starter</Badge><Badge tone="danger">Not saved</Badge></div></Sample>
             <Sample title="Fields"><div className="ds-fields"><Field label="Project name" help="Choose a name you can recognize later."><Input placeholder="Weekend planner" /></Field><Field label="Visibility"><Select defaultValue="private"><option value="private">Private</option><option value="public">Public</option></Select></Field><Field label="Search"><Input type="search" placeholder="Search projects" /></Field><Field label="Unavailable field"><Input disabled value="Kept with this app" readOnly /></Field><Field label="Validation error" help="A project name is required."><Input aria-invalid="true" placeholder="Project name" /></Field><Field label="Description"><Textarea rows={3} placeholder="What will this app do?" /></Field></div></Sample>
             <Sample title="Surfaces and empty states"><Card><EmptyState icon={<FolderOpen size={24} />} title="No files yet" description="Add one when the app needs it. Export takes it along." action={<Button variant="primary"><Plus size={14} /> Upload file</Button>} /></Card></Sample>
+            <Sample title="Loading"><div className="ds-fields"><Card className="ui-loading-card"><LoadingBlock label="Loading example rows" rows={3} /></Card><Card className="ui-loading-card"><div className="ui-loading-shapes" aria-hidden="true"><Skeleton width={32} height={32} radius="50%" /><Skeleton width="60%" height={14} /><Skeleton height={36} /></div></Card></div><p className="ds-note">A skeleton has the size of what replaces it. It fades in after 200 ms, so a fast load shows nothing, and it stays at least 300 ms once shown. Each surface has one status label for screen readers and no changing sentence. Reduced motion stops the shimmer.</p></Sample>
             <Sample title="Dialogs"><Button onClick={() => setDialogOpen(true)}>Open example dialog</Button><p className="ds-note">Dialogs trap focus, close with Escape and return focus to their trigger.</p></Sample>
           </div>
         </section>

@@ -710,3 +710,27 @@ a.confirm-publish { text-decoration: none; }
   .ui-select, .ui-input, .ui-textarea { background: #1c1f28; color: #f4f2ea; border-color: #f4f2ea; }
   .ui-button-icon, .ui-button.ui-button-icon { background: #1c1f28; color: #f4f2ea; border-color: #f4f2ea; }
 }
+
+/* Loading: skeleton shapes hold the layout and fade in after the loading delay. */
+@keyframes ui-skeleton-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@keyframes ui-loading-in { from { opacity: 0; } to { opacity: 1; } }
+.ui-skeleton {
+  display: block;
+  max-width: 100%;
+  border-radius: var(--ds-radius-sm);
+  background: linear-gradient(90deg, var(--ds-subtle) 0%, var(--ds-border) 50%, var(--ds-subtle) 100%);
+  background-size: 200% 100%;
+  animation: ui-skeleton-shimmer 1.6s ease-in-out infinite;
+}
+.ui-loading { opacity: 0; animation: ui-loading-in .15s ease-out var(--ui-loading-delay, 200ms) forwards; }
+.ui-loading-shapes { display: grid; gap: var(--ds-space-3); }
+.ui-loading-card { padding: var(--ds-space-4); border: 1px solid var(--ds-border); border-radius: var(--ds-radius); background: var(--ds-surface); }
+.boot-gap { margin-top: var(--ds-space-2); }
+.boot-editor-body { padding: var(--ds-space-6); display: grid; align-content: start; }
+.account-person.is-checking { cursor: default; }
+.account-person.is-checking > div { display: grid; gap: var(--ds-space-2); }
+.platform-form.ui-loading .ui-loading-shapes { gap: 16px; }
+.panel-loading, .studio-loading { padding: var(--ds-space-6); }
+.studio-loading { flex: 1 1 auto; width: 100%; align-self: stretch; }
+.account-content { scrollbar-gutter: stable; }
+.boot-card-body { min-height: 166px; }
