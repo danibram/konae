@@ -1553,7 +1553,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .dashboard-app-group > h2 small { font-size: 13px; color: var(--ds-muted); }
 .dashboard-app-group > p, .dashboard-recovery > p { font-size: 13px; line-height: 1.5; color: var(--ds-muted); margin: 0 0 16px; }
 .dashboard-recovery { margin: 28px 0; border-top: 1px solid var(--ds-border); padding-top: 16px; }
-.dashboard-recovery > summary { cursor: pointer; min-height: 44px; font-size: 14px; }
 @media (prefers-color-scheme: dark) {
   .project-card footer a { color: #f4f2ea; border-color: #9298a7; }
   .project-card footer a:hover { color: #171910; background: #f4f2ea; }
