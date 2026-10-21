@@ -623,7 +623,7 @@ a.confirm-publish { text-decoration: none; }
   background: var(--ds-canvas);
 }
 .platform-account strong, .platform-account small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.platform-account small { color: var(--ds-muted); font-size: 12px; }
+.platform-account small { color: var(--ds-muted); font-size: 12px; overflow: visible; text-overflow: clip; white-space: normal; }
 .platform-avatar {
   display: grid;
   place-items: center;
