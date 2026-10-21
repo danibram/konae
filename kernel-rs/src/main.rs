@@ -1520,6 +1520,10 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
             return artifact_response(bytes, &candidate);
         }
     }
+    // Browsers ask for /favicon.ico on every page. An app without one answers "no icon", not an error.
+    if path == "favicon.ico" {
+        return StatusCode::NO_CONTENT.into_response();
+    }
     match routing {
         artifact::Routing::Spa => match read_artifact(&state, &deployment, "index.html").await {
             Ok(bytes) => artifact_response(bytes, "index.html"),
