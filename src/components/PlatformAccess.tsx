@@ -111,7 +111,8 @@ export function PlatformAccess() {
     <div className="platform-page">
       <header className="platform-header">
         <a className="platform-brand" href="/"><span><Box size={16} /></span>littlebox</a>
-        <a className="ui-button ui-button-sm platform-back" href={backHref}><ArrowLeft size={14} /> {backLabel}</a>
+        {/* Signed out, every address redirects back here, so a link out would only loop. */}
+        {session.state === "signed-in" && <a className="ui-button ui-button-sm platform-back" href={backHref}><ArrowLeft size={14} /> {backLabel}</a>}
       </header>
       <main className="platform-main">
         <Card className="platform-card">
