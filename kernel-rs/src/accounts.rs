@@ -1235,6 +1235,13 @@ mod tests {
         assert_eq!(verified.status(), StatusCode::OK);
         let cookie = cookie_of(&verified).unwrap();
         let session = mcp::authenticate_owner(&fixture.state, &owner_headers(Some(&cookie), None)).unwrap().unwrap();
+        // The editor's first check answers 200 either way, so a signed-out visit logs no error.
+        let signed_out = mcp::owner_session(State(fixture.state.clone()), owner_headers(None, None)).await;
+        assert_eq!(signed_out.status(), StatusCode::OK);
+        assert_eq!(rpc_json(signed_out).await, json!({"signedIn": false}));
+        let signed_in = mcp::owner_session(State(fixture.state.clone()), owner_headers(Some(&cookie), None)).await;
+        assert_eq!(signed_in.status(), StatusCode::OK);
+        assert_eq!(rpc_json(signed_in).await, json!({"signedIn": true, "ownerId": session.id, "displayName": "creator@example.test"}));
         assert_eq!(owner(&fixture, "/_littlebox/owner/login", login.clone()).await.status(), StatusCode::OK);
 
         // A delegated MCP credential for this creator.

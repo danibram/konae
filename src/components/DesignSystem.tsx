@@ -2,7 +2,7 @@ import { FolderOpen, Plus, Settings2 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { readOwnerProjectCount } from "../lib/managed-sources";
 import { templateChoices, type TemplateId } from "../lib/templates";
-import { useOwnerSession } from "./owner-session";
+import type { OwnerSession } from "./owner-session";
 import { WorkspaceNav } from "./WorkspaceNav";
 import { Badge, Button, Card, Dialog, EmptyState, Field, IconButton, Input, LoadingBlock, Select, Skeleton, Textarea } from "./ui";
 
@@ -10,11 +10,10 @@ function Sample({ title, children }: { title: string; children: ReactNode }) {
   return <section className="ds-sample"><h2>{title}</h2>{children}</section>;
 }
 
-export function DesignSystem() {
+export function DesignSystem({ ownerSession }: { ownerSession: OwnerSession }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [sampleTemplate, setSampleTemplate] = useState<TemplateId>("tasks");
   const nameRef = useRef<HTMLInputElement>(null);
-  const [ownerSession] = useOwnerSession();
   const [projectCount, setProjectCount] = useState<number | undefined>();
 
   useEffect(() => {

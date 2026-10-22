@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 /** A loader that would show for less than this stays hidden. */
 export const LOADING_DELAY_MS = 200;
@@ -24,7 +24,8 @@ export function useLoadingHold(pending: boolean, { sinceNavigation = false }: { 
   const startedAt = useRef<number | null>(null);
   if (pending && startedAt.current === null) startedAt.current = sinceNavigation ? 0 : performance.now();
   const [holding, setHolding] = useState(false);
-  useEffect(() => {
+  // A layout effect, so the hold starts before the first paint that would have dropped the skeleton.
+  useLayoutEffect(() => {
     if (pending) {
       setHolding(false);
       return;

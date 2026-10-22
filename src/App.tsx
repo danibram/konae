@@ -119,7 +119,7 @@ function PlatformGate() {
     return <main className="platform-page"><div className="platform-main"><CardForPlatformError message={session.message} onRetry={refresh} /></div></main>;
   }
   if (session.state !== "signed-in") return <BootShell ownerSession={session} />;
-  if (window.location.pathname === "/design-system") return <Suspense fallback={<BootShell ownerSession={session} />}><DesignSystem /></Suspense>;
+  if (window.location.pathname === "/design-system") return <Suspense fallback={<BootShell ownerSession={session} />}><DesignSystem ownerSession={session} /></Suspense>;
   if (window.location.pathname === "/usage") return <Suspense fallback={<BootShell ownerSession={session} />}><UsagePage key={session.ownerId} ownerSession={session} /></Suspense>;
   return <WorkspaceGate key={session.ownerId} ownerSession={session} refreshOwnerSession={refresh} />;
 }

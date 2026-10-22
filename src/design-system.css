@@ -537,6 +537,7 @@ a.confirm-publish { text-decoration: none; }
   height: 100vh;
   height: 100dvh;
   overflow: auto;
+  scrollbar-gutter: stable;
   background: var(--ds-canvas);
   color: var(--ds-text);
   font-family: var(--ds-font);
@@ -573,9 +574,10 @@ a.confirm-publish { text-decoration: none; }
 .platform-main {
   min-height: calc(100dvh - 57px);
   display: grid;
-  align-content: center;
+  /* Top-aligned, so the card does not move when its content grows from a skeleton to the form or the signed-in tools. */
+  align-content: start;
   justify-items: center;
-  padding: 24px 16px;
+  padding: clamp(24px, 12vh, 96px) 16px 24px;
 }
 .platform-card {
   width: min(480px, 100%);
