@@ -169,6 +169,18 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     return requested.screen === "editor" && !loaded.projects.some((item) => item.id === requested.projectId) ? { screen: "projects" as const } : requested;
   });
   const screen = route.screen;
+  // A link to a project this account cannot open says so, and the address bar stops naming it.
+  const [routeNotice, setRouteNotice] = useState("");
+  const explainMissingRoute = (projectId: string) => {
+    window.history.replaceState({}, "", "/");
+    setRouteNotice(loaded.missing.some((item) => item.id === projectId)
+      ? "That app has no editor files in this account. See "Apps without editor files" below."
+      : "That project is not in this account.");
+  };
+  useEffect(() => {
+    const requested = parseRoute(window.location.pathname);
+    if (requested.screen === "editor" && !loaded.projects.some((item) => item.id === requested.projectId)) explainMissingRoute(requested.projectId);
+  }, []);
   const [activeFile, setActiveFile] = useState<EditorFile>("app.js");
   const [selectedPath, setSelectedPath] = useState("app.js");
   const [newEntry, setNewEntry] = useState<"file" | "folder" | null>(null);
@@ -642,6 +654,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     // A link to a project this browser does not have falls back to the list.
     if (!target) {
       setRoute({ screen: "projects" });
+      explainMissingRoute(route.projectId);
       return;
     }
     setProject(target);
@@ -790,6 +803,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   };
 
   const openEditorRoute = (projectId: string) => {
+    setRouteNotice("");
     const next = { screen: "editor" as const, projectId };
     setRoute(next);
     pushRoute(next);
@@ -885,7 +899,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   };
 
   if (screen === "projects") {
-    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} external={loaded.external} missing={loaded.missing} drafts={drafts} onImportDraft={importDraft} onOpenProject={openProject} onCreateProject={createProject}
+    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} external={loaded.external} missing={loaded.missing} notice={routeNotice} drafts={drafts} onImportDraft={importDraft} onOpenProject={openProject} onCreateProject={createProject}
       ejected={ejected}
       eject={{
         prepare: (projectId, slug) => sources.prepareEject(projectId, slug),

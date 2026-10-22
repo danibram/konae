@@ -24,6 +24,7 @@ type Props = {
   ownerSession: OwnerSession;
   external: ProjectMetadata[];
   missing: ProjectMetadata[];
+  notice?: string;
   drafts: MiniAppProject[];
   onImportDraft: (index: number) => void;
   onOpenProject: (projectId: string, entry?: "preview" | "agent" | "code") => void;
@@ -36,7 +37,7 @@ type Props = {
   };
 };
 
-export function ProjectDashboard({ projects, deployments, ownerSession, external, missing, drafts, onImportDraft, onOpenProject, onCreateProject, ejected, eject }: Props) {
+export function ProjectDashboard({ projects, deployments, ownerSession, external, missing, notice, drafts, onImportDraft, onOpenProject, onCreateProject, ejected, eject }: Props) {
   const interrupted = missing.filter((item) => !projects.some((project) => project.id === item.id));
   const projectCount = projects.length + interrupted.length + external.length;
   const [ejecting, setEjecting] = useState<MiniAppProject | null>(null);
@@ -71,6 +72,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
             <Button variant="primary" className="new-project-button" onClick={() => setCreating(true)}><Plus size={15} /> New project</Button>
             <h1>Your apps</h1>
             <p className="hero-note">Drafts open in the editor. Publish an app to give it a live address.</p>
+            {notice && <p className="hero-note" role="status">{notice}</p>}
           </div>
           {external.length > 0 && <section><h2>External projects</h2><p>These projects keep their sources on their owner's computer.</p><ul>{external.map((item) => <li key={item.id}>{item.name}</li>)}</ul></section>}
           {drafts.some((draft) => !missing.some((item) => item.id === draft.id)) && <details><summary>Import apps from this browser</summary><p>Choose a local copy to add to this account.</p><ul>{drafts.map((draft, index) => !missing.some((item) => item.id === draft.id) && <li key={`${draft.id}-${index}`}>{draft.name} <Button onClick={() => onImportDraft(index)}>Import as new</Button></li>)}</ul></details>}
