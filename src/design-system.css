@@ -735,4 +735,7 @@ a.confirm-publish { text-decoration: none; }
 .panel-loading, .studio-loading { padding: var(--ds-space-6); }
 .studio-loading { flex: 1 1 auto; width: 100%; align-self: stretch; }
 .account-content { scrollbar-gutter: stable; }
-.boot-card-body { min-height: 166px; }
+.boot-preview { display: block; background: none; cursor: default; }
+.boot-preview::after { content: none; }
+@media (min-width: 761px) { .boot-card-body { min-height: 165px; } }
+@media (max-width: 760px) { .boot-wide { display: none; } }

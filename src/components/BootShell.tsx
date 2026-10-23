@@ -46,10 +46,14 @@ function ProjectsBoot({ label }: { label: string }) {
       <Skeleton width={110} height={30} />
       <Skeleton width="60%" height={22} />
       <div className="project-grid">
-        {[0, 1].map((index) => <Card key={index} className="project-card">
-          <Skeleton height={170} radius={0} />
-          <div className="project-card-body boot-card-body"><Skeleton width="55%" height={20} /><Skeleton width="80%" height={12} className="boot-gap" /></div>
-        </Card>)}
+        <Card className="project-card">
+          <div className="project-card-preview boot-preview"><Skeleton height="100%" radius={0} /></div>
+          <div className="project-card-body boot-card-body">
+            <Skeleton width="55%" height={38} />
+            <Skeleton width="85%" height={14} className="boot-gap" />
+            <footer><Skeleton width={96} height={36} /><Skeleton width={96} height={36} /><Skeleton width={96} height={36} /></footer>
+          </div>
+        </Card>
       </div>
     </LoadingBlock>
   </section>;
@@ -102,7 +106,7 @@ function EditorBoot({ label }: { label: string }): ReactNode {
         <span>littlebox</span>
       </span>
       <div className="project-switcher"><Skeleton width={107} height={17} /></div>
-      <div className="top-actions"><Skeleton width={100} height={31} radius={0} /><Skeleton width={100} height={31} radius={0} /><Skeleton width={32} height={31} radius={0} /></div>
+      <div className="top-actions"><Skeleton width={100} height={31} radius={0} className="boot-wide" /><Skeleton width={100} height={31} radius={0} className="boot-wide" /><Skeleton width={32} height={31} radius={0} /></div>
     </header>
     <nav className="section-nav" aria-hidden="true" />
     <div className="boot-editor-body">
