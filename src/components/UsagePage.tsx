@@ -106,7 +106,7 @@ function AccountUsage({ apps }: { apps: UsageApp[] }) {
         return <tr key={app.projectId}><th scope="row">{app.name}<small><a href={value.url} target="_blank" rel="noopener">{new URL(value.url).hostname}</a></small></th>
           <td data-label="Operations">{value.usage.days.length || hasOutcomes ? number.format(usageActivity(value)) : "No data yet"}</td>
           <td data-label="Results">{hasOutcomes ? <span className="usage-overview-results"><span>{number.format(outcomes.ok ?? 0)} correct</span><span>{number.format(outcomes.refused ?? 0)} refused</span><span className={(outcomes.failed ?? 0) > 0 ? "usage-failure" : undefined}>{number.format(outcomes.failed ?? 0)} failed</span>{(outcomes.unchanged ?? 0) > 0 && <span>{number.format(outcomes.unchanged)} no changes</span>}</span> : "No outcomes yet"}</td>
-          <td data-label="Active features">{features.length ? features.flatMap((f, i) => i ? [", ", f] : [f]) : "No recorded activity"}</td>
+          <td data-label="Active features"><span>{features.length ? features.flatMap((f, i) => i ? [", ", f] : [f]) : "No recorded activity"}</span></td>
           <td data-label="Latest day">{latest ?? "No data"}</td><td data-label="Detail"><a href={`/usage?deployment=${encodeURIComponent(value.deploymentId)}`} aria-label={`View usage for ${app.name}`}>View usage <ArrowUpRight size={13} /></a></td></tr>;
       })}</tbody></table></div>
     <p className="usage-note">Recorded operations count successful action calls, HTTP requests, scheduled attempts and queued service calls. Results cover instrumented executions only and may cover less history than operations. Authentication and file activity appear in the feature detail.</p>

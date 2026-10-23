@@ -22,7 +22,10 @@ export function recoveryDrafts(candidates: MiniAppProject[], saved: MiniAppProje
     if (!previous || candidate.updatedAt > previous.updatedAt) latest.set(candidate.id, candidate);
   }
   const current = new Map(saved.map((project) => [project.id, draftSignature(project)]));
-  return [...latest.values()].filter((draft) => current.get(draft.id) !== draftSignature(draft));
+  // An earlier build stored the untouched starter and the architecture map as drafts of every empty browser.
+  const starter = cloneStarter();
+  const starterSignature = draftSignature(starter);
+  return [...latest.values()].filter((draft) => current.get(draft.id) !== draftSignature(draft) && draft.id !== architectureProjectId && !(draft.id === starter.id && draftSignature(draft) === starterSignature));
 }
 
 function draftSignature(project: MiniAppProject): string {
@@ -59,6 +62,18 @@ export function loadWorkspaceState(storage: Pick<Storage, "getItem"> = localStor
   }
 
   return { projects, activeProjectId, deployments };
+}
+
+/**
+ * The projects a browser actually stored, for the "Import apps from this
+ * browser" list. loadWorkspaceState invents a starter and the architecture map
+ * for an empty store, and offering those would list apps the owner never made.
+ */
+export function storedLocalProjects(storage: Pick<Storage, "getItem"> = localStorage): MiniAppProject[] {
+  const legacyProject = readJson<MiniAppProject>(storage.getItem("littlebox:project"));
+  const storedProjects = readJson<MiniAppProject[]>(storage.getItem(projectsKey));
+  const stored = Array.isArray(storedProjects) && storedProjects.length > 0 ? storedProjects : legacyProject ? [legacyProject] : [];
+  return normalizeProjects(stored).filter((project) => project.id !== architectureProjectId);
 }
 
 export function createWorkspaceProject(name: string, existing: readonly MiniAppProject[]): MiniAppProject {

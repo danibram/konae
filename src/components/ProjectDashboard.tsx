@@ -72,7 +72,25 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
             <h1>Your apps</h1>
             <p className="hero-note">Drafts open in the editor. Publish an app to give it a live address.</p>
           </div>
-          {external.length > 0 && <section><h2>External projects</h2><p>These projects keep their sources on their owner's computer.</p><ul>{external.map((item) => <li key={item.id}>{item.name}</li>)}</ul></section>}
+          {external.length > 0 && <section className="dashboard-app-group" aria-label="External projects">
+            <h2>External projects <small>{external.length}</small></h2>
+            <p>These projects keep their sources on their owner's computer. Publish them with the Littlebox command line.</p>
+            <div className="project-grid">
+              {external.map((item) => {
+                const deployment = deployments[item.id];
+                return <Card key={item.id} className="project-card">
+                  <div className="project-card-body">
+                    <div className="project-card-title"><h2>{item.name}</h2><Badge>External</Badge></div>
+                    <p>{deployment ? "Published. Its sources are edited outside Littlebox." : "Not published yet."}</p>
+                    {deployment && <footer>
+                      <a href={deployment.url} target="_blank" rel="noopener"><ExternalLink size={13} /> Open published app</a>
+                      <a href={`/usage?deployment=${encodeURIComponent(deployment.id)}`}>Usage</a>
+                    </footer>}
+                  </div>
+                </Card>;
+              })}
+            </div>
+          </section>}
           {drafts.some((draft) => !missing.some((item) => item.id === draft.id)) && <details><summary>Import apps from this browser</summary><p>Choose a local copy to add to this account.</p><ul>{drafts.map((draft, index) => !missing.some((item) => item.id === draft.id) && <li key={`${draft.id}-${index}`}>{draft.name} <Button onClick={() => onImportDraft(index)}>Import as new</Button></li>)}</ul></details>}
 
           <div className="project-list-heading">

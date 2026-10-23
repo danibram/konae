@@ -51,6 +51,7 @@ import { PlatformAccess } from "./components/PlatformAccess";
 import { filesUnder, renamePath } from "./components/project-tree";
 import { usePreviewProblems } from "./components/usePreviewProblems";
 import { ProjectDashboard } from "./components/ProjectDashboard";
+import { NotFound } from "./components/NotFound";
 import { EjectedNotice } from "./components/EjectDialog";
 import { deployProject, HostedDatabaseClient, type DeploymentReceipt, type SignupMode } from "./deployments/client";
 import { McpError } from "./mcp/client";
@@ -66,7 +67,7 @@ import { cloneStarter } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
 import { createDirectory, createFile, directoriesForFiles, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
 import { actionReadout } from "./components/action-readiness";
-import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, recoveryDrafts, resetWorkspaceProject } from "./lib/workspace";
+import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./lib/workspace";
 import { ManagedSources, type EjectRecord, type ProjectMetadata } from "./lib/managed-sources";
 import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
@@ -154,8 +155,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     try {
       const recovery = JSON.parse(workspaceStorage.getItem("recovery") ?? "[]") as MiniAppProject[];
       if (Array.isArray(recovery)) candidates.push(...recovery);
-      if (workspaceStorage.getItem("littlebox:projects") || workspaceStorage.getItem("littlebox:project")) candidates.push(...loadWorkspaceState(workspaceStorage).projects);
-      if (localStorage.getItem("littlebox:projects") || localStorage.getItem("littlebox:project")) candidates.push(...loadWorkspaceState().projects);
+      candidates.push(...storedLocalProjects(workspaceStorage), ...storedLocalProjects());
     } catch { /* Invalid local drafts remain untouched. */ }
     return recoveryDrafts(candidates, loaded.projects);
   });
@@ -166,7 +166,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [previewEpoch, setPreviewEpoch] = useState(0);
   const [route, setRoute] = useState(() => {
     const requested = parseRoute(window.location.pathname);
-    return requested.screen === "editor" && !loaded.projects.some((item) => item.id === requested.projectId) ? { screen: "projects" as const } : requested;
+    return requested.screen === "editor" && !loaded.projects.some((item) => item.id === requested.projectId) ? { screen: "not-found" as const, what: "project" as const, path: window.location.pathname } : requested;
   });
   const screen = route.screen;
   const [activeFile, setActiveFile] = useState<EditorFile>("app.js");
@@ -637,9 +637,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   useEffect(() => {
     if (route.screen !== "editor" || route.projectId === project.id) return;
     const target = projects.find((item) => item.id === route.projectId);
-    // A link to a project this browser does not have falls back to the list.
+    // A link to a project this workspace does not have says so; the list would hide the wrong address.
     if (!target) {
-      setRoute({ screen: "projects" });
+      setRoute({ screen: "not-found", what: "project", path: window.location.pathname });
       return;
     }
     setProject(target);
@@ -881,6 +881,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setProject(next);
     setPreviewProject(next);
   };
+
+  if (route.screen === "not-found") return <NotFound what={route.what} path={route.path} />;
 
   if (screen === "projects") {
     return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} external={loaded.external} missing={loaded.missing} drafts={drafts} onImportDraft={importDraft} onOpenProject={openProject} onCreateProject={createProject}

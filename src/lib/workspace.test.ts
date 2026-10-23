@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { architectureProjectId } from "./architecture";
 import { cloneStarter } from "./starter";
-import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, recoveryDrafts, resetWorkspaceProject } from "./workspace";
+import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./workspace";
 
 function memoryStorage(seed: Record<string, string> = {}) {
   const values = new Map(Object.entries(seed));
@@ -13,6 +13,23 @@ function memoryStorage(seed: Record<string, string> = {}) {
 }
 
 describe("workspace project registry", () => {
+  test("an empty store offers nothing to import, not a starter or the architecture map", () => {
+    expect(storedLocalProjects(memoryStorage())).toEqual([]);
+    expect(storedLocalProjects(memoryStorage({ "littlebox:projects": "[]" }))).toEqual([]);
+  });
+
+  test("an untouched starter stored by an earlier build is not a draft", () => {
+    expect(recoveryDrafts([cloneStarter(), { ...cloneStarter(), id: architectureProjectId }], [])).toEqual([]);
+    const edited = { ...cloneStarter(), files: { ...cloneStarter().files, "app.js": "mine" } };
+    expect(recoveryDrafts([edited], [])).toEqual([edited]);
+  });
+
+  test("a stored project is offered once and the architecture map never", () => {
+    const mine = { ...cloneStarter(), id: "app_mine", name: "Mine" };
+    const found = storedLocalProjects(memoryStorage({ "littlebox:projects": JSON.stringify([mine, { ...cloneStarter(), id: architectureProjectId }]) }));
+    expect(found.map((project) => project.id)).toEqual(["app_mine"]);
+  });
+
   test("local copies with another timestamp or deployed revision are not extra projects", () => {
     const saved = cloneStarter();
     const cached = { ...saved, updatedAt: saved.updatedAt - 100, databaseModel: { ...saved.databaseModel, revision: "old-browser-revision" } };

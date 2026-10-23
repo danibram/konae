@@ -1520,6 +1520,11 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
             return artifact_response(bytes, &candidate);
         }
     }
+    // A browser asks for /favicon.ico on every first visit. An app without one answers
+    // with nothing instead of a 404 that every visitor's console reports as an error.
+    if path == "favicon.ico" {
+        return StatusCode::NO_CONTENT.into_response();
+    }
     match routing {
         artifact::Routing::Spa => match read_artifact(&state, &deployment, "index.html").await {
             Ok(bytes) => artifact_response(bytes, "index.html"),
@@ -1590,7 +1595,7 @@ fn private_login_page(policy: &SignupPolicy, verification: auth::Verification) -
         ),
     };
     let body = [
-        r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f5f7;color:#20232a;font:16px system-ui,sans-serif}main{width:min(100%,380px);padding:32px;background:white;border:1px solid #e1e4e8;border-radius:12px;box-shadow:0 12px 36px #1f293714}h1{margin:0 0 8px;font-size:24px}p{color:#586174;line-height:1.5}form,label{display:grid;gap:8px}form{gap:16px;margin-top:24px}input,button{font:inherit;border-radius:8px;padding:11px 12px}input{width:100%;border:1px solid #c9ced6}button{border:0;background:#273449;color:white;cursor:pointer}button+button{background:#edf0f4;color:#252a33}#error{min-height:1.5em;margin:0;color:#a32727}</style><main><h1>Sign in to this app</h1><p>"#,
+        r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f5f7;color:#20232a;font:16px system-ui,sans-serif}main{width:min(100%,380px);padding:32px;background:white;border:1px solid #e1e4e8;border-radius:12px;box-shadow:0 12px 36px #1f293714}h1{margin:0 0 8px;font-size:24px}p{color:#586174;line-height:1.5}form,label{display:grid;gap:8px}form{gap:16px;margin-top:24px}input,button{font:inherit;border-radius:8px;padding:11px 12px}input{width:100%;border:1px solid #c9ced6}button{border:0;background:#273449;color:white;cursor:pointer}button+button{background:#edf0f4;color:#252a33}#error{min-height:1.5em;margin:0;color:#a32727}@media (prefers-color-scheme:dark){body{background:#14161a;color:#e8eaed}main{background:#1d2026;border-color:#2e333b;box-shadow:none}p{color:#a9b0bc}input{background:#14161a;color:#e8eaed;border-color:#3a404a}input[readonly]{background:#23272e;color:#e8eaed}button{background:#e8eaed;color:#14161a}button+button{background:#2a2f37;color:#e8eaed}#error{color:#ff8a8a}a{color:#8ab4ff}}</style><link rel="icon" href="data:,"><main><h1>Sign in to this app</h1><p>"#,
         note,
         r#"</p><form id="auth"><label>Email <input name="email" type="email" required autocomplete="email"></label><label>Password <input name="password" type="password" minlength="8" required autocomplete="current-password"></label><button formaction="/_littlebox/auth/login">Sign in</button>"#,
         if create && verified {
