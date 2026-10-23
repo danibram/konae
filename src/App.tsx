@@ -174,7 +174,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const explainMissingRoute = (projectId: string) => {
     window.history.replaceState({}, "", "/");
     setRouteNotice(loaded.missing.some((item) => item.id === projectId)
-      ? "That app has no editor files in this account. See "Apps without editor files" below."
+      ? "That app has no editor files in this account. See Apps without editor files below."
       : "That project is not in this account.");
   };
   useEffect(() => {
