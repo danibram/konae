@@ -24,6 +24,7 @@ type Props = {
   ownerSession: OwnerSession;
   external: ProjectMetadata[];
   missing: ProjectMetadata[];
+  notice?: string;
   drafts: MiniAppProject[];
   onImportDraft: (index: number) => void;
   onOpenProject: (projectId: string, entry?: "preview" | "agent" | "code") => void;
@@ -36,7 +37,7 @@ type Props = {
   };
 };
 
-export function ProjectDashboard({ projects, deployments, ownerSession, external, missing, drafts, onImportDraft, onOpenProject, onCreateProject, ejected, eject }: Props) {
+export function ProjectDashboard({ projects, deployments, ownerSession, external, missing, notice, drafts, onImportDraft, onOpenProject, onCreateProject, ejected, eject }: Props) {
   const interrupted = missing.filter((item) => !projects.some((project) => project.id === item.id));
   const projectCount = projects.length + interrupted.length + external.length;
   const [ejecting, setEjecting] = useState<MiniAppProject | null>(null);
@@ -71,6 +72,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
             <Button variant="primary" className="new-project-button" onClick={() => setCreating(true)}><Plus size={15} /> New project</Button>
             <h1>Your apps</h1>
             <p className="hero-note">Drafts open in the editor. Publish an app to give it a live address.</p>
+            {notice && <p className="hero-note" role="status">{notice}</p>}
           </div>
           {external.length > 0 && <section className="dashboard-app-group" aria-label="External projects">
             <h2>External projects <small>{external.length}</small></h2>
@@ -94,7 +96,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
           {drafts.some((draft) => !missing.some((item) => item.id === draft.id)) && <details><summary>Import apps from this browser</summary><p>Choose a local copy to add to this account.</p><ul>{drafts.map((draft, index) => !missing.some((item) => item.id === draft.id) && <li key={`${draft.id}-${index}`}>{draft.name} <Button onClick={() => onImportDraft(index)}>Import as new</Button></li>)}</ul></details>}
 
           <div className="project-list-heading">
-            <div><p>All projects</p><strong>{projectCount} project{projectCount === 1 ? "" : "s"}</strong>{interrupted.length > 0 && <p>{projects.length} editable · {interrupted.length} needing recovery{external.length > 0 ? ` · ${external.length} external` : ""}</p>}</div>
+            <div><p>All projects</p><strong>{projectCount} project{projectCount === 1 ? "" : "s"}</strong>{interrupted.length > 0 && <p>{projects.length} editable · {interrupted.length} without editor files{external.length > 0 ? ` · ${external.length} external` : ""}</p>}</div>
             <button
               className="project-sort"
               aria-label={`Sort by last updated, ${newestFirst ? "newest" : "oldest"} first`}
@@ -124,22 +126,28 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
               </div>
             </section>;
           })}
-          {interrupted.length > 0 && <details className="dashboard-recovery"><summary>Older projects needing recovery · {interrupted.length}</summary><p>These records have no files for the editor. They are separate from your editable apps.</p><div className="project-grid">
+          {interrupted.length > 0 && <section className="dashboard-app-group dashboard-recovery" aria-label="Apps without editor files">
+            <h2>Apps without editor files <small>{interrupted.length}</small></h2>
+            <p>Your account has these apps, but the files the editor needs were never saved with them, so they cannot open here. A published app keeps running and keeps its data. An older version of Littlebox could leave an app like this when a save was cut off.</p>
+            <div className="project-grid">
             {interrupted.map((item) => {
               const draftIndex = drafts.findIndex((draft) => draft.id === item.id);
               const deployment = deployments[item.id];
               return <Card key={item.id} className="project-card">
                 <div className="project-card-body">
-                  <div className="project-card-title"><h2>{item.name}</h2><Badge tone="warning">Can't open editor</Badge></div>
-                  <p>The files needed to edit this app aren't saved in this account.{draftIndex >= 0 ? " A copy is available in this browser." : " Try recovering it from a browser where you edited it."}</p>
+                  <div className="project-card-title"><h2>{item.name}</h2><Badge tone="warning">No editor files</Badge></div>
+                  {draftIndex >= 0
+                    ? <p>This browser holds a copy of its files. Restore it to edit the app here.</p>
+                    : <p>This browser holds no copy. If you edited it in another browser, open Littlebox there. Otherwise start a new project and publish it again.</p>}
                   {(draftIndex >= 0 || deployment) && <footer>
-                    {draftIndex >= 0 && <Button size="sm" onClick={() => onImportDraft(draftIndex)}>Recover app</Button>}
+                    {draftIndex >= 0 && <Button size="sm" onClick={() => onImportDraft(draftIndex)}>Restore editor files</Button>}
                     {deployment && <a href={deployment.url} target="_blank" rel="noopener"><ExternalLink size={13} /> Open published app</a>}
                   </footer>}
                 </div>
               </Card>;
             })}
-          </div></details>}
+            </div>
+          </section>}
           {projectCount === 0 && <div className="projects-empty"><strong>No projects yet</strong><p>Create one and describe what it should do.</p></div>}
           <section className="take-it-group" aria-labelledby="take-it-heading">
             <h2 id="take-it-heading">Take it with you</h2>

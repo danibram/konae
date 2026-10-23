@@ -166,9 +166,21 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [previewEpoch, setPreviewEpoch] = useState(0);
   const [route, setRoute] = useState(() => {
     const requested = parseRoute(window.location.pathname);
-    return requested.screen === "editor" && !loaded.projects.some((item) => item.id === requested.projectId) ? { screen: "not-found" as const, what: "project" as const, path: window.location.pathname } : requested;
+    if (requested.screen !== "editor" || loaded.projects.some((item) => item.id === requested.projectId)) return requested;
+    // An app with no editor files in this account is on the list below; any other id has no page.
+    return loaded.missing.some((item) => item.id === requested.projectId) ? { screen: "projects" as const } : { screen: "not-found" as const, what: "project" as const, path: window.location.pathname };
   });
   const screen = route.screen;
+  // A link to an app this account holds without editor files says so, and the address bar stops naming it.
+  const [routeNotice, setRouteNotice] = useState("");
+  const explainMissingRoute = () => {
+    window.history.replaceState({}, "", "/");
+    setRouteNotice("That app has no editor files in this account. See Apps without editor files below.");
+  };
+  useEffect(() => {
+    const requested = parseRoute(window.location.pathname);
+    if (requested.screen === "editor" && loaded.missing.some((item) => item.id === requested.projectId)) explainMissingRoute();
+  }, []);
   const [activeFile, setActiveFile] = useState<EditorFile>("app.js");
   const [selectedPath, setSelectedPath] = useState("app.js");
   const [newEntry, setNewEntry] = useState<"file" | "folder" | null>(null);
@@ -551,6 +563,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   useEffect(() => {
     let cancelled = false;
+    // A build failure belongs to the project that failed. Opening another one starts clean.
+    setOperationError("");
     void compileProjectInBrowser(project)
       .then((compiled) => {
         if (!cancelled) setPreviewProject({
@@ -639,7 +653,12 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const target = projects.find((item) => item.id === route.projectId);
     // A link to a project this workspace does not have says so; the list would hide the wrong address.
     if (!target) {
-      setRoute({ screen: "not-found", what: "project", path: window.location.pathname });
+      if (loaded.missing.some((item) => item.id === route.projectId)) {
+        setRoute({ screen: "projects" });
+        explainMissingRoute();
+      } else {
+        setRoute({ screen: "not-found", what: "project", path: window.location.pathname });
+      }
       return;
     }
     setProject(target);
@@ -788,6 +807,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   };
 
   const openEditorRoute = (projectId: string) => {
+    setRouteNotice("");
     const next = { screen: "editor" as const, projectId };
     setRoute(next);
     pushRoute(next);
@@ -885,7 +905,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   if (route.screen === "not-found") return <NotFound what={route.what} path={route.path} />;
 
   if (screen === "projects") {
-    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} external={loaded.external} missing={loaded.missing} drafts={drafts} onImportDraft={importDraft} onOpenProject={openProject} onCreateProject={createProject}
+    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} external={loaded.external} missing={loaded.missing} notice={routeNotice} drafts={drafts} onImportDraft={importDraft} onOpenProject={openProject} onCreateProject={createProject}
       ejected={ejected}
       eject={{
         prepare: (projectId, slug) => sources.prepareEject(projectId, slug),
@@ -1168,7 +1188,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           </section>
         )}
         <div className={`preview-canvas ${viewport}`}>
-          <iframe key={`${project.id}:${previewEpoch}:${previewDocumentKey}`} ref={setPreviewFrame} title="Mini-app preview" sandbox="allow-scripts" srcDoc={previewDocument} />
+          <iframe key={`${project.id}:${previewEpoch}:${previewDocumentKey}`} ref={setPreviewFrame} title="Mini-app preview" sandbox="allow-scripts allow-forms" srcDoc={previewDocument} />
         </div>
       </div>
     ),

@@ -43,6 +43,14 @@ describe("workspace project registry", () => {
     expect(recoveryDrafts([first, last, first], [saved])).toEqual([last]);
     expect(first.files["app.js"]).toBe("first unsaved change");
   });
+  test("the seeded starter and architecture map are not offered as drafts to import", () => {
+    const seeded = loadWorkspaceState(memoryStorage()).projects;
+    expect(seeded.map((project) => project.id).sort()).toEqual(["app_littlebox_architecture", "app_tiny_tasks"]);
+    expect(recoveryDrafts(seeded, [])).toEqual([]);
+    const edited = { ...seeded[0], files: { ...seeded[0].files, "app.js": "an owner edit" } };
+    expect(recoveryDrafts([edited], [])).toEqual([edited]);
+  });
+
   test("migrates the original single-project draft and deployment", () => {
     const project = cloneStarter();
     const deployment = { id: "deploy_1", projectId: project.id, projectName: project.name, url: "http://tiny.localhost", createdAt: 1, manifest: project.manifest, accessCode: "secret" };

@@ -13,7 +13,7 @@ export type WorkspaceState = {
   deployments: DeploymentIndex;
 };
 
-/** Keep the newest local draft per project and omit copies of the saved sources. */
+/** Keep the newest local draft per project and omit copies of the saved sources and of the seeded starter projects. */
 export function recoveryDrafts(candidates: MiniAppProject[], saved: MiniAppProject[]): MiniAppProject[] {
   const latest = new Map<string, MiniAppProject>();
   for (const candidate of candidates) {
@@ -22,7 +22,7 @@ export function recoveryDrafts(candidates: MiniAppProject[], saved: MiniAppProje
     if (!previous || candidate.updatedAt > previous.updatedAt) latest.set(candidate.id, candidate);
   }
   const current = new Map(saved.map((project) => [project.id, draftSignature(project)]));
-  // An earlier build stored the untouched starter and the architecture map as drafts of every empty browser.
+  // The browser used to seed the starter and the architecture map into every empty store. The map is no longer a project the editor opens, so no copy of it is a draft; an unedited starter is not something the owner made.
   const starter = cloneStarter();
   const starterSignature = draftSignature(starter);
   return [...latest.values()].filter((draft) => current.get(draft.id) !== draftSignature(draft) && draft.id !== architectureProjectId && !(draft.id === starter.id && draftSignature(draft) === starterSignature));
