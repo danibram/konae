@@ -61,6 +61,7 @@ const actions = {
 };
 
 const html = `
+<title>What happened</title>
 <main class="app-shell" data-purpose="A daily log. Each member writes entries; every morning at 07:00 UTC each member who wrote gets one email listing their entries.">
   <header>
     <div>

@@ -53,6 +53,7 @@ const actions = {
 };
 
 const html = `
+<title>Issue feed</title>
 <main class="app-shell" data-purpose="A webhook receiver. GitHub sends signed issue events to /hooks/github; the owner reads them here.">
   <header>
     <div>

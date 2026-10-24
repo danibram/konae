@@ -25,6 +25,7 @@ export const starterProject: MiniAppProject = {
   directories: [],
   files: {
     "index.html": `
+<title>Tiny Tasks</title>
 <main class="app-shell" data-purpose="A shared list. Anyone with the link can add to it.">
   <header>
     <div>

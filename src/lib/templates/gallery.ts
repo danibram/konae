@@ -72,6 +72,7 @@ const styles = `${templateStyles}
 `;
 
 const html = `
+<title>Pictures</title>
 <main class="app-shell" data-purpose="A public gallery. Signed-in people add images; every visitor sees them.">
   <header>
     <div>

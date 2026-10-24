@@ -106,6 +106,7 @@ const actions = {
 };
 
 const html = `
+<title>The clubhouse</title>
 <main class="app-shell" data-purpose="A members area. Members post, admins moderate, the owner names the admins.">
   <header>
     <div>

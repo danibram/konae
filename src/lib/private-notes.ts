@@ -56,6 +56,7 @@ const privateNotesDeclarations: RuntimeActionDeclaration[] = [
 ];
 
 const privateNotesIndex = `
+<title>Private notes</title>
 <main class="notes-shell">
   <section id="landing" class="landing" aria-labelledby="landing-title">
     <p class="eyebrow">A QUIET PLACE TO KEEP THINGS</p>

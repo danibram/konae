@@ -51,6 +51,7 @@ const actions = {
 };
 
 const html = `
+<title>Write to us</title>
 <main class="app-shell" data-purpose="A public form. Anyone can send a message; the owner gets an email and reads them here.">
   <header>
     <div>
