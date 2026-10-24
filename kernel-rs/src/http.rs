@@ -1122,7 +1122,7 @@ async fn run_verified(
         Err(message) => return refusal(StatusCode::BAD_REQUEST, &message),
     };
     let db_path = database_path(state, &deployment.id);
-    let _guard = database_lock(state, &deployment.id).await;
+    let _guard = action_lock(state, &deployment.id, &action.kind).await;
     let result = run_action(db_path, action, params).await;
     // A notice below writes mail.sqlite; the app's other calls need not wait for it.
     drop(_guard);

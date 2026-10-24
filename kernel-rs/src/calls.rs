@@ -1280,7 +1280,7 @@ async fn run_then(
         Err(message) => return ("failed", Some(message)),
     };
     let result = {
-        let _guard = database_lock(state, &deployment.id).await;
+        let _guard = action_lock(state, &deployment.id, &mutation.kind).await;
         run_action(database_path(state, &deployment.id), mutation, params).await
     };
     match result {

@@ -130,7 +130,9 @@ describe("CHECK constraints from schema.sql", () => {
     try {
       movedSql = (moved.query("SELECT sql FROM sqlite_master WHERE name = 'habits'").get() as { sql: string }).sql;
     } finally { moved.close(); }
-    const origin = new Database(path.join(kernel.data, "deployments", app.id, "database.sqlite"), { readonly: true });
+    // The live file is in WAL mode, and bun's SQLite opens such a file read-only
+    // only while its -shm exists, which the Kernel removes with its last connection.
+    const origin = new Database(path.join(kernel.data, "deployments", app.id, "database.sqlite"));
     try {
       expect(movedSql).toBe((origin.query("SELECT sql FROM sqlite_master WHERE name = 'habits'").get() as { sql: string }).sql);
     } finally { origin.close(); }

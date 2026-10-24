@@ -21,12 +21,13 @@ use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::{Connection, OptionalExtension, params_from_iter, types::Value as SqlValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 use uuid::Uuid;
 
 mod accounts;
 mod action_shape;
 mod admission;
+mod app_db;
 mod app_owner;
 mod artifact;
 mod auth;
@@ -55,6 +56,8 @@ mod refusal;
 mod schedule;
 mod security;
 mod sql_rules;
+#[cfg(test)]
+mod sqlite_bench;
 mod usage;
 use auth::{AuthError, AuthService, AuthUser};
 use limits::{Guards, trusted_proxies};
@@ -970,7 +973,7 @@ async fn invoke_action(
     let result = if action.kind == "signal" {
         Ok(Ran { answer: json!({"recorded": true}), rows: Vec::new() })
     } else {
-        let _guard = database_lock(&state, &deployment.id).await;
+        let _guard = action_lock(&state, &deployment.id, &action.kind).await;
         run_action(db_path, action, params).await
     };
     let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
@@ -1875,16 +1878,25 @@ fn database_path(state: &AppState, id: &str) -> PathBuf {
         .join("database.sqlite")
 }
 
-/// Named locks that serialize work on one database or transfer. An entry
-/// lives only while someone holds or waits for it, so callers that pass many
-/// distinct names cannot grow the map.
-type LockMap = Arc<std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>>;
+/// Named locks on one database or transfer. Each is a read-write lock: a
+/// Server Action shares its Database's lock, and work that reads or replaces
+/// the whole file (a copy, a restore, a migration, the owner's console) holds
+/// it alone. An entry lives only while someone holds or waits for it, so
+/// callers that pass many distinct names cannot grow the map.
+type LockMap = Arc<std::sync::Mutex<HashMap<String, Arc<RwLock<()>>>>>;
+
+/// The guard is kept only so that dropping it releases the lock.
+#[allow(dead_code)]
+enum Held {
+    Shared(OwnedRwLockReadGuard<()>),
+    Alone(OwnedRwLockWriteGuard<()>),
+}
 
 /// Holds one named lock. Dropping it releases the lock and removes the map
 /// entry when no other task holds or waits for the same name.
 struct NamedLockGuard {
-    guard: Option<OwnedMutexGuard<()>>,
-    entry: Option<Arc<Mutex<()>>>,
+    guard: Option<Held>,
+    entry: Option<Arc<RwLock<()>>>,
     name: String,
     locks: LockMap,
 }
@@ -1893,7 +1905,7 @@ impl Drop for NamedLockGuard {
     fn drop(&mut self) {
         let mut locks = self.locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         // Release while holding the map lock, so no caller can insert a fresh
-        // mutex for this name while the old one is still held.
+        // lock for this name while the old one is still held.
         self.guard.take();
         let entry = self.entry.take();
         // The map and this guard's handle are the only owners left when
@@ -1904,12 +1916,12 @@ impl Drop for NamedLockGuard {
     }
 }
 
-async fn database_lock(state: &AppState, id: &str) -> NamedLockGuard {
+async fn named_lock(state: &AppState, name: &str, alone: bool) -> NamedLockGuard {
     let entry = {
         let mut locks = state.db_locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         locks
-            .entry(id.to_owned())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .entry(name.to_owned())
+            .or_insert_with(|| Arc::new(RwLock::new(())))
             .clone()
     };
     // Built before waiting, so a caller cancelled while waiting still removes
@@ -1917,11 +1929,41 @@ async fn database_lock(state: &AppState, id: &str) -> NamedLockGuard {
     let mut held = NamedLockGuard {
         guard: None,
         entry: Some(entry.clone()),
-        name: id.to_owned(),
+        name: name.to_owned(),
         locks: state.db_locks.clone(),
     };
-    held.guard = Some(entry.lock_owned().await);
+    held.guard = Some(if alone {
+        Held::Alone(entry.write_owned().await)
+    } else {
+        Held::Shared(entry.read_owned().await)
+    });
     held
+}
+
+/// Holds the named lock alone: no Server Action runs on that Database, and
+/// no one else holds the name, until the guard drops.
+async fn database_lock(state: &AppState, id: &str) -> NamedLockGuard {
+    let held = named_lock(state, id, true).await;
+    // What runs under this lock may copy, replace or remove the file, so
+    // no connection kept for a Server Action outlives it.
+    app_db::forget(&database_path(state, id));
+    held
+}
+
+/// What one Server Action holds on its Database while it runs. Queries share
+/// the Database's lock, so they run side by side and beside a write: the
+/// Database is in WAL mode, where a reader sees the last commit and never
+/// waits for the writer. Mutations also take the Database's write lock, so
+/// they reach SQLite one at a time instead of meeting `SQLITE_BUSY`.
+struct ActionLock {
+    _write: Option<NamedLockGuard>,
+    _database: NamedLockGuard,
+}
+
+async fn action_lock(state: &AppState, id: &str, kind: &str) -> ActionLock {
+    let database = named_lock(state, id, false).await;
+    let write = if kind == "query" { None } else { Some(named_lock(state, &format!("write:{id}"), true).await) };
+    ActionLock { _write: write, _database: database }
 }
 
 fn inspect_database(path: &Path) -> Result<Vec<Value>> {
@@ -2267,7 +2309,7 @@ async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Result<V
         let _ = tokio::fs::remove_file(&temp_path).await;
         anyhow::bail!("The backup failed SQLite's integrity check.");
     }
-    tokio::fs::rename(&temp_path, database_path(state, id)).await?;
+    replace_database_file(&temp_path, &database_path(state, id))?;
     let model = metadata.database_model_source.as_ref().zip(metadata.schema_revision.as_ref()).map(|(source, revision)| DatabaseModel {
         source: source.clone(), accepted_source: source.clone(), revision: revision.clone(),
     });
@@ -2381,9 +2423,8 @@ async fn run_action(path: PathBuf, action: &ActionDefinition, params: Vec<SqlVal
 }
 
 fn run_query(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Vec<Value>> {
-    let connection = Connection::open(path)?;
-    restrict_database(&connection)?;
-    let mut statement = connection.prepare(&action.statement)?;
+    let connection = app_db::open(path)?;
+    let mut statement = connection.prepare_cached(&action.statement)?;
     let names = statement
         .column_names()
         .into_iter()
@@ -2404,17 +2445,16 @@ fn run_query(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -> R
 }
 
 fn run_mutation(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Ran> {
-    let mut connection = Connection::open(path)?;
-    restrict_database(&connection)?;
+    let mut connection = app_db::open(path)?;
     let transaction = connection.transaction()?;
     // A notice that lists or addresses rows reads them back with a RETURNING
     // clause the Kernel appends; the author's statement cannot hold one.
     let columns = action.notify.as_ref().map(|_| notify::returning("", action)).unwrap_or_default();
     let mut rows = Vec::new();
     let changes = if columns.is_empty() {
-        transaction.execute(&action.statement, params_from_iter(params))? as u64
+        transaction.prepare_cached(&action.statement)?.execute(params_from_iter(params))? as u64
     } else {
-        let mut statement = transaction.prepare(&notify::with_returning(&action.statement, &columns))?;
+        let mut statement = transaction.prepare_cached(&notify::with_returning(&action.statement, &columns))?;
         let mut cursor = statement.query(params_from_iter(params))?;
         // SQLite makes every change on the first step, so the rows past the
         // cap are skipped, not left unchanged.
@@ -2749,8 +2789,35 @@ fn is_sql_word_cont(char: char) -> bool {
 
 fn initialize_database(path: &Path) -> Result<()> {
     let connection = Connection::open(path)?;
-    connection.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=ON;")?;
+    connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
     Ok(())
+}
+
+/// Moves a Database written before WAL mode, or arrived from a snapshot or a
+/// backup, into it. The mode is stored in the file, so this runs once. A
+/// switch that meets another connection is left for the next one: the
+/// Database still answers in its old mode meanwhile.
+fn use_wal(db: &Connection) {
+    let mode = db.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0));
+    if !mode.is_ok_and(|mode| mode.eq_ignore_ascii_case("wal")) {
+        let _ = db.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()));
+    }
+}
+
+/// Puts `replacement` where the Database at `path` was. The old file's WAL
+/// and shared-memory index go first: left beside the new file, SQLite would
+/// read the old file's pages into it. The caller holds the Database's lock
+/// alone, so no connection has them open.
+fn replace_database_file(replacement: &Path, path: &Path) -> std::io::Result<()> {
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = path.as_os_str().to_owned();
+        sidecar.push(suffix);
+        match std::fs::remove_file(&sidecar) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+    }
+    std::fs::rename(replacement, path)
 }
 
 fn apply_additive_schema(path: &Path, schema: &str, program: &ActionProgram) -> Result<()> {
@@ -2828,7 +2895,7 @@ fn initialize_database_from_base64(path: &Path, encoded: &str, maximum_bytes: us
         let _ = std::fs::remove_file(&temp);
         anyhow::bail!(refusal);
     }
-    std::fs::rename(temp, path)?;
+    replace_database_file(&temp, path)?;
     Ok(())
 }
 
@@ -3237,6 +3304,15 @@ fn denied_function(name: &str) -> bool {
 }
 
 fn restrict_database(db: &Connection) -> Result<()> {
+    // Readers share a Database with its one writer (`action_lock`), so a
+    // connection waits for a lock instead of failing on the first try.
+    db.busy_timeout(std::time::Duration::from_secs(5))?;
+    // In WAL mode a reader never waits for the writer, and a commit appends
+    // to the log instead of rewriting a journal. NORMAL syncs at checkpoints,
+    // not at every commit: a Kernel that crashes loses nothing, and a host
+    // that loses power can lose the last commits but never corrupts the file.
+    db.pragma_update(None, "synchronous", "NORMAL")?;
+    use_wal(db);
     // Runs before the authorizer below, which refuses this pragma.
     limit_database_size(db, MAX_APP_DATABASE_BYTES)?;
     db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 2 * 1024 * 1024)?;
@@ -3246,8 +3322,7 @@ fn restrict_database(db: &Connection) -> Result<()> {
     // the deadline below cannot stop them; a short pattern keeps that step
     // short. SQLite's default is 50,000 bytes.
     db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LIKE_PATTERN_LENGTH, MAX_LIKE_PATTERN_BYTES)?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    db.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
+    arm_deadline(db);
     db.authorizer(Some(|context: AuthContext<'_>| match context.action {
         AuthAction::Attach { .. } | AuthAction::Detach { .. } => Authorization::Deny,
         // Littlebox runs no triggers or views, and Studio and migrations use
@@ -3259,6 +3334,12 @@ fn restrict_database(db: &Connection) -> Result<()> {
         _ => Authorization::Allow,
     }));
     Ok(())
+}
+
+/// Interrupts any statement on `db` that runs past 2 seconds from now.
+fn arm_deadline(db: &Connection) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    db.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
 }
 
 fn bounded_rows(rows: impl Iterator<Item = rusqlite::Result<Value>>) -> Result<Vec<Value>> {

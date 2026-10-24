@@ -262,7 +262,7 @@ async fn run_due(
                 continue;
             }
         }
-        let _lock = super::database_lock(state, id).await;
+        let _lock = super::action_lock(state, id, &action.kind).await;
         // Maintenance may have begun while an earlier action ran.
         if super::migration::pause(&state.data_root, id).is_some() || !folder.is_dir() {
             return Ok(());

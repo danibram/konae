@@ -1,6 +1,6 @@
 # Architecture decisions
 
-Each record states its status and which earlier record it amends on its first line, and keeps its later changes as dated notes at the end, oldest first. The next free number is 0021. Before taking it, check `main`, because another branch may have taken it.
+Each record states its status and which earlier record it amends on its first line, and keeps its later changes as dated notes at the end, oldest first. The next free number is 0024. Before taking it, check `main`, because another branch may have taken it.
 
 | ADR | Decides | Amends | Amended by |
 | --- | --- | --- | --- |
@@ -25,6 +25,7 @@ Each record states its status and which earlier record it amends on its first li
 | [0019](0019-an-app-calls-another-from-the-kernel.md) | An app calls another app or a service through a call action the Kernel queues and sends; `connects` and open GET routes for direct reads | 0011 | |
 | [0020](0020-a-refusal-carries-a-stable-code.md) | Every refusal from the Gate and the Kernel is `{ code, message, hint }` from one shared table | 0009 | |
 | [0021](0021-a-notice-lists-its-rows-and-reaches-the-accounts-they-name.md) | A notice lists the rows its mutation changed, shows the run's time, and may reach each verified account a column of those rows names | 0016, 0017 | |
+| [0023](0023-an-app-database-runs-in-wal-mode-with-kept-connections.md) | An app Database runs in WAL mode with `synchronous=NORMAL`; Server Actions borrow kept connections, queries run side by side, mutations one at a time | | |
 
 ## Which record answers a question
 
