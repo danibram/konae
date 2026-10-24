@@ -63,4 +63,4 @@ These are not bugs to paper over. Say them when they matter.
 
 ## Critic
 
-Judge the running editor at `http://localhost:4173` against the sentence at the top and the five jobs. The home is `/`. A project opens at `/app/<id>`. A fresh owner has no projects and lands on the project list; projects live on the Kernel, not in the browser. `/design-system` is the component gallery and `/platform-access` is owner sign-in. The theme follows the system. Do not clear storage.
+Judge the running editor at `http://localhost:4173` against the sentence at the top and the five jobs. The home is `/`. A project opens at `/app/<id>`. A fresh owner has no projects and lands on the project list; projects live on the Kernel, not in the browser. `/design-system` is the component gallery and `/platform-access` is owner sign-in. The architecture map and the docs are Littlebox apps whose sources live in `prototype/`; `prototype/README.md` says how to publish them on a Kernel. The theme follows the system. Do not clear storage.

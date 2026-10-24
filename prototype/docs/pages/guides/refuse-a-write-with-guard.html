@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Refuse a write with guard · Littlebox docs</title>
+  <meta name="description" content="Documentation for Littlebox, for people and for agents.">
+  <link rel="icon" href="data:,">
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <button class="menu" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">Menu</button>
+    <a class="brand" href="/">Littlebox <span>docs</span></a>
+    <span class="proto" title="This site is a prototype">Prototype</span>
+    <div class="search" role="search">
+      <input id="search" type="search" placeholder="Search the docs" aria-label="Search the docs" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">/</kbd>
+      <div id="results" class="results" hidden></div>
+    </div>
+    <a class="llms" href="/llms.txt">llms.txt</a>
+  </header>
+  <div class="layout">
+    <nav id="sidebar" class="sidebar" aria-label="Documentation">
+      <h2>Start</h2>
+      <ul><li><a href="/">Overview</a></li><li><a href="/concepts">Concepts</a></li></ul>
+      <h2>Build</h2>
+      <ul><li><a href="/capsule">The Capsule</a></li><li><a href="/server-actions">Server Actions</a></li><li><a href="/gate-and-kernel">The Gate and the Kernel</a></li><li><a href="/accounts-and-access">Accounts and access</a></li></ul>
+      <h2>Guides</h2>
+      <ul><li><a href="/guides/first-app-from-the-editor">First app from the editor</a></li><li><a href="/guides/edit-files-with-the-cli">Edit files with the CLI</a></li><li><a href="/guides/add-a-server-action">Add a Server Action</a></li><li><a href="/guides/refuse-a-write-with-guard" aria-current="page">Refuse a write with guard</a></li><li><a href="/guides/email-when-a-row-changes">Email when a row changes</a></li><li><a href="/guides/run-work-on-a-schedule">Run work on a schedule</a></li><li><a href="/guides/receive-a-webhook">Receive a webhook</a></li><li><a href="/guides/call-another-service">Call another service</a></li><li><a href="/guides/upload-files">Upload files</a></li><li><a href="/guides/invite-people">Invite people</a></li><li><a href="/guides/take-the-app-elsewhere">Take the app elsewhere</a></li><li><a href="/guides/eject">Eject</a></li></ul>
+      <h2>Reference</h2>
+      <ul><li><a href="/cli">CLI</a></li><li><a href="/mcp-tools">MCP tools and guide topics</a></li><li><a href="/pieces">Pick the smallest piece</a></li><li><a href="/limits">Limits</a></li><li><a href="/divergences">Named divergences</a></li></ul>
+      <h2>Examples</h2>
+      <ul><li><a href="/examples">Example apps</a></li></ul>
+    </nav>
+    <main id="main" class="main" tabindex="-1">
+      <div id="content" class="content">
+<article>
+<h1>Refuse a write with guard</h1>
+<p>Put the app's rule in a mutation's <code>WHERE</code>, add a <code>guard</code> sentence, and the caller gets that sentence when the rule says no.</p>
+
+<h2 id="how-it-works">How it works</h2>
+<p>When a mutation's statement changes no row, the Kernel normally answers <code>{ changes: 0, lastInsertId: 0 }</code>, the same answer as a call that had nothing to do. A <code>guard</code> turns that answer into a refusal. It is a tool error for <code>miniapp.actions.call</code> and a 403 on the action's HTTP route. Usage counts it under <code>refused</code> and no Signal is recorded.</p>
+<p>A guard is 1 to 200 characters on one line. It goes on a mutation only. A query or a signal action that declares one is refused. A scheduled run has no caller, so a guard does not apply to it.</p>
+
+<h2 id="steps">Steps</h2>
+<ol>
+<li>Write the rule into the statement, so the statement changes no row when the rule fails. This example changes a row only for the member who owns it, and only when the name is free.</li>
+<li>Add <code>guard</code> next to <code>kind</code> and <code>access</code>. The sentence is what the person sees, so write it for them.
+<pre><code class="language-json">"me.rename": {
+  "kind": "mutation",
+  "access": "authenticated",
+  "guard": "Another member already uses that display name, or it is yours already.",
+  "statement": "UPDATE profiles SET display_name = ?2 WHERE user_id = ?1 AND display_name IS NOT ?2 AND NOT EXISTS (SELECT 1 FROM profiles other WHERE lower(other.display_name) = lower(?2) AND other.user_id &lt;&gt; ?1)",
+  "bindings": [
+    { "source": "actor", "field": "id" },
+    { "source": "input", "key": "displayName", "type": "string", "maxLength": 40 }
+  ]
+}</code></pre></li>
+<li>For an owner-only action, bind the actor's role and test it in the <code>WHERE</code>. The role is <code>owner</code> for the Project Owner's own app account and <code>member</code> for everyone else.
+<pre><code class="language-json">"members.promote": {
+  "kind": "mutation",
+  "access": "authenticated",
+  "guard": "Only the app's owner can make a member a team admin.",
+  "statement": "UPDATE profiles SET role = 'admin' WHERE user_id = ?1 AND role = 'member' AND ?2 = 'owner'",
+  "bindings": [
+    { "source": "input", "key": "userId", "type": "string", "maxLength": 64 },
+    { "source": "actor", "field": "role" }
+  ]
+}</code></pre></li>
+<li>Show the refusal in the page. <code>miniapp.actions.call</code> rejects with the guard sentence as <code>error.message</code>.
+<pre><code class="language-js">try {
+  await miniapp.actions.call("me.rename", { displayName });
+} catch (error) {
+  status.textContent = error.message;
+}</code></pre></li>
+<li>Do not add a second check statement. The statement has already run and changed nothing, so nothing rolls back.</li>
+</ol>
+
+<h2 id="check-it-worked">Check it worked</h2>
+<ul>
+<li>Call the action twice through the same door the page uses, once with input the rule accepts and once with input it refuses. The first answers <code>{ changes, lastInsertId }</code>. The second answers your sentence. <code>actions_invoke</code> is its own read-back.</li>
+<li>Read Usage with <code>usage_read</code> and find the call under <code>refused</code>.</li>
+<li>After a release, the read-back for <code>release_apply</code> is <code>project_inspect</code>.</li>
+</ul>
+<p>The editor preview refuses with the guard the same way a Deployment does, so you can try it there. It has no Usage store, so read <code>usage_read</code> on <code>littlebox dev</code> or a Deployment.</p>
+
+<h2 id="read-next">Read next</h2>
+<ul>
+<li><a href="/guides/add-a-server-action">Add a Server Action</a></li>
+<li><a href="/guides/email-when-a-row-changes">Email when a row changes</a></li>
+<li><a href="/accounts-and-access">Accounts and access</a></li>
+<li><a href="/server-actions">Server Actions</a></li>
+</ul>
+</article>
+      </div>
+    </main>
+    <aside class="toc" aria-label="On this page"><div id="toc"></div></aside>
+  </div>
+  <div id="scrim" class="scrim" hidden></div>
+  <script src="/runtime.js"></script>
+  <script type="module" src="/shell.js"></script>
+</body>
+</html>

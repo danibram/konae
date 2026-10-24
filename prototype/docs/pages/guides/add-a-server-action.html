@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Add a Server Action · Littlebox docs</title>
+  <meta name="description" content="Documentation for Littlebox, for people and for agents.">
+  <link rel="icon" href="data:,">
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <button class="menu" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">Menu</button>
+    <a class="brand" href="/">Littlebox <span>docs</span></a>
+    <span class="proto" title="This site is a prototype">Prototype</span>
+    <div class="search" role="search">
+      <input id="search" type="search" placeholder="Search the docs" aria-label="Search the docs" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">/</kbd>
+      <div id="results" class="results" hidden></div>
+    </div>
+    <a class="llms" href="/llms.txt">llms.txt</a>
+  </header>
+  <div class="layout">
+    <nav id="sidebar" class="sidebar" aria-label="Documentation">
+      <h2>Start</h2>
+      <ul><li><a href="/">Overview</a></li><li><a href="/concepts">Concepts</a></li></ul>
+      <h2>Build</h2>
+      <ul><li><a href="/capsule">The Capsule</a></li><li><a href="/server-actions">Server Actions</a></li><li><a href="/gate-and-kernel">The Gate and the Kernel</a></li><li><a href="/accounts-and-access">Accounts and access</a></li></ul>
+      <h2>Guides</h2>
+      <ul><li><a href="/guides/first-app-from-the-editor">First app from the editor</a></li><li><a href="/guides/edit-files-with-the-cli">Edit files with the CLI</a></li><li><a href="/guides/add-a-server-action" aria-current="page">Add a Server Action</a></li><li><a href="/guides/refuse-a-write-with-guard">Refuse a write with guard</a></li><li><a href="/guides/email-when-a-row-changes">Email when a row changes</a></li><li><a href="/guides/run-work-on-a-schedule">Run work on a schedule</a></li><li><a href="/guides/receive-a-webhook">Receive a webhook</a></li><li><a href="/guides/call-another-service">Call another service</a></li><li><a href="/guides/upload-files">Upload files</a></li><li><a href="/guides/invite-people">Invite people</a></li><li><a href="/guides/take-the-app-elsewhere">Take the app elsewhere</a></li><li><a href="/guides/eject">Eject</a></li></ul>
+      <h2>Reference</h2>
+      <ul><li><a href="/cli">CLI</a></li><li><a href="/mcp-tools">MCP tools and guide topics</a></li><li><a href="/pieces">Pick the smallest piece</a></li><li><a href="/limits">Limits</a></li><li><a href="/divergences">Named divergences</a></li></ul>
+      <h2>Examples</h2>
+      <ul><li><a href="/examples">Example apps</a></li></ul>
+    </nav>
+    <main id="main" class="main" tabindex="-1">
+      <div id="content" class="content">
+<article>
+<h1>Add a Server Action</h1>
+<p>Declare a named query or mutation in <code>actions.json</code>, call it from the page with <code>miniapp.actions.call</code>, and keep SQL on the Kernel.</p>
+
+<h2 id="how-it-works">How it works</h2>
+<p>A Server Action is the deployed app's only database interface. It runs one SQL statement. A query starts with <code>SELECT</code> and a mutation starts with <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code> or <code>REPLACE</code>. The browser sends only the action name and its input. The SQL and the typed bindings stay in <code>actions.json</code> on the server.</p>
+
+<h2 id="steps">Steps</h2>
+<ol>
+<li>Declare the table in <code>schema.sql</code>. This is from the starter app.
+<pre><code class="language-sql">CREATE TABLE IF NOT EXISTS notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  title TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 120),
+  body TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);</code></pre></li>
+<li>Add a mutation to <code>actions.json</code>. Each <code>?n</code> in the statement takes the binding at position n. A binding comes from the caller's <code>input</code>, the <code>actor</code> (its <code>id</code> or <code>role</code>) or the <code>kernel</code> (<code>now</code>). Mark an input <code>nullable</code> to bind a missing value as SQL NULL.
+<pre><code class="language-json">"notes.add": {
+  "kind": "mutation",
+  "access": "authenticated",
+  "statement": "INSERT INTO notes (user_id, title, body, created_at) VALUES (?1, ?2, COALESCE(?3, ''), ?4)",
+  "bindings": [
+    { "source": "actor", "field": "id" },
+    { "source": "input", "key": "title", "type": "string", "maxLength": 120 },
+    { "source": "input", "key": "body", "type": "string", "maxLength": 4000, "nullable": true },
+    { "source": "kernel", "field": "now" }
+  ]
+}</code></pre></li>
+<li>Add a query that reads the rows back. A query that reads rows names a top-level <code>LIMIT</code>. A total with <code>count</code>, <code>sum</code>, <code>avg</code>, <code>min</code> or <code>max</code> and no <code>GROUP BY</code> does not need one.
+<pre><code class="language-json">"attachments.list": {
+  "kind": "query",
+  "access": "authenticated",
+  "statement": "SELECT id, file_id, name, size, public, created_at FROM attachments WHERE user_id = ?1 ORDER BY id DESC LIMIT 50",
+  "bindings": [
+    { "source": "actor", "field": "id" }
+  ]
+}</code></pre></li>
+<li>Choose the <code>access</code>. <code>authenticated</code> needs an app session. <code>anonymous</code> also runs for a signed-out visitor on a public Deployment, and the row it touches is still the app's decision.</li>
+<li>Call it from the page. A mutation answers <code>{ changes, lastInsertId }</code>. Read the changed rows with a separate query, because publication rejects mutation <code>RETURNING</code>.
+<pre><code class="language-js">await miniapp.actions.call("notes.add", { title: "Buy milk" });
+const rows = await miniapp.actions.call("notes.list");</code></pre></li>
+<li>Apply the change in the editor, or save the files and run <code>littlebox dev</code>. The Validation Gate and the Kernel refuse a bad statement, name, access, kind or binding with the same words. A project declares at most 100 actions.</li>
+</ol>
+
+<h2 id="check-it-worked">Check it worked</h2>
+<ul>
+<li>After a save over MCP, the read-back for <code>project_sources_save</code> is <code>project_sources_read</code>. After a release, the read-back for <code>release_apply</code> is <code>project_inspect</code>.</li>
+<li>Call the action through the door the page uses. On the runtime endpoint that is <code>actions_invoke</code>, and it is its own read-back, so call the query after the mutation and look for the row.</li>
+<li>Write the Action Contract and read what the Kernel took.
+<pre><code class="language-sh">bun run littlebox -- contract --dir /tmp/my-app</code></pre>
+It writes <code>action-contract.json</code>, its schema and <code>action-contract.md</code> from <code>actions.json</code> and <code>schema.sql</code>.</li>
+</ul>
+<p>The editor preview runs actions against its own local database, not the Deployment's. It has no Usage store and no owner app account, so check those on <code>littlebox dev</code> or a Deployment.</p>
+
+<h2 id="read-next">Read next</h2>
+<ul>
+<li><a href="/guides/refuse-a-write-with-guard">Refuse a write with guard</a></li>
+<li><a href="/guides/receive-a-webhook">Receive a webhook</a></li>
+<li><a href="/server-actions">Server Actions</a></li>
+<li><a href="/limits">Limits</a></li>
+</ul>
+</article>
+      </div>
+    </main>
+    <aside class="toc" aria-label="On this page"><div id="toc"></div></aside>
+  </div>
+  <div id="scrim" class="scrim" hidden></div>
+  <script src="/runtime.js"></script>
+  <script type="module" src="/shell.js"></script>
+</body>
+</html>

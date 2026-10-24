@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Server Actions · Littlebox docs</title>
+  <meta name="description" content="Documentation for Littlebox, for people and for agents.">
+  <link rel="icon" href="data:,">
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <button class="menu" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">Menu</button>
+    <a class="brand" href="/">Littlebox <span>docs</span></a>
+    <span class="proto" title="This site is a prototype">Prototype</span>
+    <div class="search" role="search">
+      <input id="search" type="search" placeholder="Search the docs" aria-label="Search the docs" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">/</kbd>
+      <div id="results" class="results" hidden></div>
+    </div>
+    <a class="llms" href="/llms.txt">llms.txt</a>
+  </header>
+  <div class="layout">
+    <nav id="sidebar" class="sidebar" aria-label="Documentation">
+      <h2>Start</h2>
+      <ul><li><a href="/">Overview</a></li><li><a href="/concepts">Concepts</a></li></ul>
+      <h2>Build</h2>
+      <ul><li><a href="/capsule">The Capsule</a></li><li><a href="/server-actions" aria-current="page">Server Actions</a></li><li><a href="/gate-and-kernel">The Gate and the Kernel</a></li><li><a href="/accounts-and-access">Accounts and access</a></li></ul>
+      <h2>Guides</h2>
+      <ul><li><a href="/guides/first-app-from-the-editor">First app from the editor</a></li><li><a href="/guides/edit-files-with-the-cli">Edit files with the CLI</a></li><li><a href="/guides/add-a-server-action">Add a Server Action</a></li><li><a href="/guides/refuse-a-write-with-guard">Refuse a write with guard</a></li><li><a href="/guides/email-when-a-row-changes">Email when a row changes</a></li><li><a href="/guides/run-work-on-a-schedule">Run work on a schedule</a></li><li><a href="/guides/receive-a-webhook">Receive a webhook</a></li><li><a href="/guides/call-another-service">Call another service</a></li><li><a href="/guides/upload-files">Upload files</a></li><li><a href="/guides/invite-people">Invite people</a></li><li><a href="/guides/take-the-app-elsewhere">Take the app elsewhere</a></li><li><a href="/guides/eject">Eject</a></li></ul>
+      <h2>Reference</h2>
+      <ul><li><a href="/cli">CLI</a></li><li><a href="/mcp-tools">MCP tools and guide topics</a></li><li><a href="/pieces">Pick the smallest piece</a></li><li><a href="/limits">Limits</a></li><li><a href="/divergences">Named divergences</a></li></ul>
+      <h2>Examples</h2>
+      <ul><li><a href="/examples">Example apps</a></li></ul>
+    </nav>
+    <main id="main" class="main" tabindex="-1">
+      <div id="content" class="content">
+<article>
+  <h1>Server Actions</h1>
+  <p class="lead">A Server Action is a named operation declared in <code>actions.json</code>. It is the deployed app's only database interface. The browser sends the action name and its input. The SQL and the typed bindings stay on the Kernel.</p>
+
+  <h2 id="shape">Shape</h2>
+  <p>This is the <code>actions</code> topic of <code>platform_guide</code>, as a file.</p>
+  <pre><code>{
+  "version": 1,
+  "actions": {
+    "items.list": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT id,title FROM items WHERE user_id=?1 LIMIT 50",
+      "bindings": [{ "source": "actor", "field": "id" }]
+    },
+    "items.create": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO items(title,user_id) VALUES(?1,?2)",
+      "bindings": [
+        { "source": "input", "key": "title", "type": "string", "maxLength": 200 },
+        { "source": "actor", "field": "id" }
+      ]
+    }
+  }
+}</code></pre>
+  <p>Bindings fill <code>?1</code>, <code>?2</code> and so on, in order. A binding takes its value from one of three sources.</p>
+  <table>
+    <thead><tr><th>Source</th><th>Fields</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td><code>input</code></td><td><code>key</code>, <code>type</code>, <code>maxLength</code>, <code>nullable</code></td><td>What the caller sent. <code>nullable: true</code> binds an omitted value or an explicit null as SQL NULL.</td></tr>
+      <tr><td><code>actor</code></td><td><code>field</code> of <code>id</code> or <code>role</code></td><td>The caller's ID, or the app user's role. See <a href="/accounts-and-access">Accounts and access</a>.</td></tr>
+      <tr><td><code>kernel</code></td><td><code>field</code> of <code>now</code></td><td>The time of the call.</td></tr>
+    </tbody>
+  </table>
+  <p>A fourth form, <code>{ "source": "literal", "value": ... }</code>, binds a constant string, number or null (see <code>src/kernel/actions.ts</code>).</p>
+
+  <h2 id="kinds">Kinds</h2>
+  <table>
+    <thead><tr><th>Kind</th><th>Runs</th><th>Keys it takes</th></tr></thead>
+    <tbody>
+      <tr><td><code>query</code></td><td>One <code>SELECT</code></td><td><code>kind</code>, <code>access</code>, <code>statement</code>, <code>bindings</code>, <code>http</code></td></tr>
+      <tr><td><code>mutation</code></td><td>One <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code> or <code>REPLACE</code></td><td>The query keys, plus <code>signal</code>, <code>guard</code>, <code>notify</code> and <code>schedule</code></td></tr>
+      <tr><td><code>signal</code></td><td>No SQL. It records a Signal.</td><td><code>kind</code>, <code>access</code>, <code>bindings</code>, <code>signal</code></td></tr>
+      <tr><td><code>call</code></td><td>No SQL. The Kernel sends an HTTP request.</td><td><code>kind</code>, <code>access</code>, <code>bindings</code>, <code>url</code>, <code>method</code>, <code>body</code>, <code>headers</code>, <code>auth</code>, <code>then</code></td></tr>
+    </tbody>
+  </table>
+  <p>A key the kind does not take is refused. A misspelled <code>notfy</code> does not pass and do nothing.</p>
+
+  <h2 id="statement-rules">Statement rules</h2>
+  <ul>
+    <li>An action runs one statement. A <code>WITH</code> clause sits inside the statement, never in front of it.</li>
+    <li>A mutation has no <code>RETURNING</code>. It answers <code>{ changes, lastInsertId }</code>. Read rows with a query.</li>
+    <li>A query that reads rows names a top-level <code>LIMIT</code>. See <a href="/gate-and-kernel">The Gate and the Kernel</a>.</li>
+    <li><code>CREATE</code>, <code>ALTER</code> and <code>DROP</code> are refused. Tables and indexes belong in <code>schema.sql</code>, and Littlebox runs no triggers or views.</li>
+  </ul>
+
+  <h2 id="access">Access</h2>
+  <p><code>access</code> is <code>anonymous</code> or <code>authenticated</code>. An <code>anonymous</code> action is open to a signed-out visitor on a Public Deployment. <code>granted</code> is refused. On a Private Deployment nothing loads or runs without a signed-in Runtime Actor, apart from an HTTP route that answers its callers.</p>
+
+  <h2 id="guard">guard</h2>
+  <p>A mutation writes its rules into its <code>WHERE</code>. When the rule says no, the statement changes no row. A <code>guard</code> turns that into a refusal with the app's own sentence.</p>
+  <pre><code>"waitlist.join": {
+  "kind": "mutation",
+  "access": "anonymous",
+  "guard": "That address is already on the list.",
+  "statement": "INSERT INTO waitlist(email,name,source,created_at) VALUES(lower(trim(?1)),?2,?3,?4) ON CONFLICT(email) DO NOTHING",
+  "bindings": [
+    { "source": "input", "key": "email", "type": "string", "maxLength": 254 },
+    { "source": "input", "key": "name", "type": "string", "maxLength": 80 },
+    { "source": "input", "key": "source", "type": "string", "maxLength": 80 },
+    { "source": "kernel", "field": "now" }
+  ]
+}</code></pre>
+  <p>The guard is a string of 1 to 200 characters on one line. A refusal is a tool error on the runtime endpoint and a 403 on a route. It counts under <code>refused</code> in Usage and records no Signal.</p>
+
+  <h2 id="notify">notify</h2>
+  <p>A mutation may queue one email when its statement changes a row.</p>
+  <pre><code>"waitlist.join": {
+  "kind": "mutation",
+  "access": "anonymous",
+  "statement": "INSERT INTO waitlist (email, source, joined_at) VALUES (?1, ?2, ?3) ON CONFLICT (email) DO NOTHING",
+  "bindings": [
+    { "source": "input", "key": "email", "type": "string", "maxLength": 254 },
+    { "source": "input", "key": "source", "type": "string", "maxLength": 40 },
+    { "source": "kernel", "field": "now" }
+  ],
+  "notify": {
+    "to": "owner",
+    "subject": "New on the waitlist from {input.source}",
+    "body": "{input.email} joined the waitlist.\nThey came from {input.source}."
+  }
+}</code></pre>
+  <p><code>to</code> is <code>owner</code>, <code>actor</code> or <code>{ "column": "&lt;name&gt;" }</code>. The Kernel never sends to an address from the input. Templates take <code>{input.&lt;key&gt;}</code>, <code>{actor.id}</code>, <code>{kernel.now}</code>, <code>{changes.count}</code> and, in the body, <code>{changes}</code>. The mutation's answer never depends on the notice.</p>
+  <div class="note"><p><code>CONTEXT.md</code> describes a notice as going to the Project Owner or to the calling account. <code>guide.rs</code> and <code>docs/mcp.md</code> add the <code>{ "column" }</code> form, which sends to each proven account of the app whose ID a changed row holds in that column. This page follows the guide.</p></div>
+
+  <h2 id="schedule">schedule</h2>
+  <p>A mutation that takes no input may declare that the Kernel's timer runs it.</p>
+  <pre><code>"notes.surface": {
+  "kind": "mutation",
+  "access": "authenticated",
+  "schedule": { "every": "5m" },
+  "statement": "UPDATE notes SET surfaced_at = ?1 WHERE surfaced_at IS NULL AND remind_at &lt;= ?1",
+  "bindings": [{ "source": "kernel", "field": "now" }],
+  "signal": { "name": "notes.surfaced" }
+}</code></pre>
+  <p><code>every</code> takes <code>5m</code> to <code>24h</code>. <code>daily</code> takes a UTC time such as <code>02:00</code>. A run has no caller, so an <code>actor</code> binding is null and the guard does not apply. Publishing does not run it, and the editor preview has no timer. Nothing is pushed to a page, so a page polls a query.</p>
+
+  <h2 id="signal">signal</h2>
+  <p>A mutation may record a named occurrence for the owner when it changes a row. An action of kind <code>signal</code> records one and runs no SQL.</p>
+  <pre><code>"downloads.opened": {
+  "kind": "signal",
+  "access": "anonymous",
+  "bindings": [{ "source": "input", "key": "fileId", "type": "string", "maxLength": 64 }],
+  "signal": { "name": "download.opened", "properties": ["fileId", "actor"] }
+}</code></pre>
+  <p>Properties are input keys or <code>actor</code>. Only the Project Owner reads Signals, with <code>signals_read</code>.</p>
+
+  <h2 id="http">http</h2>
+  <p>An action declared <code>anonymous</code> may answer one method and path on its Deployment host. A query binds <code>GET</code> and a mutation binds <code>POST</code>.</p>
+  <pre><code>"status.report": {
+  "kind": "mutation",
+  "access": "anonymous",
+  "http": {
+    "method": "POST",
+    "path": "/hooks/status",
+    "signature": { "header": "X-Starter-Signature", "secret": "status_webhook" }
+  },
+  "statement": "INSERT INTO status (component, state, detail, updated_at) VALUES (?1, ?2, COALESCE(?3, ''), ?4) ON CONFLICT (component) DO UPDATE SET state = excluded.state, detail = excluded.detail, updated_at = excluded.updated_at WHERE status.state IS NOT excluded.state OR status.detail IS NOT excluded.detail",
+  "bindings": [
+    { "source": "input", "key": "component", "type": "string", "maxLength": 40 },
+    { "source": "input", "key": "state", "type": "string", "maxLength": 12 },
+    { "source": "input", "key": "detail", "type": "string", "maxLength": 200, "nullable": true },
+    { "source": "kernel", "field": "now" }
+  ]
+}</code></pre>
+  <p><code>callers</code> lists which proofs the route takes, from <code>signature</code>, <code>key</code> and <code>session</code>. Without it, a signed route takes a signature or a key. An unsigned route on a Private Deployment takes a key or a session. An unsigned route on a Public Deployment answers anyone. A provider's scheme (<code>hmac-body</code>, <code>timestamped</code>, <code>svix</code>) and <code>fields</code>, a JSON path per input, take a webhook as GitHub, Shopify, Stripe or Resend send it. An action whose route does not answer anyone answers only there, never through <code>miniapp.actions.call</code>.</p>
+
+  <h2 id="call">kind: call</h2>
+  <p>A call action queues one HTTP request that the Kernel sends from its own process, never from the browser. It answers <code>{ callId, queued: true }</code>.</p>
+  <pre><code>"status.escalate": {
+  "kind": "call",
+  "access": "authenticated",
+  "method": "POST",
+  "url": "http://inbox.localhost/hooks/events",
+  "bindings": [
+    { "source": "input", "key": "eventId", "type": "string", "maxLength": 100 },
+    { "source": "input", "key": "severity", "type": "string", "maxLength": 10 },
+    { "source": "input", "key": "title", "type": "string", "maxLength": 200 }
+  ],
+  "body": { "source": { "value": "starter" }, "id": "eventId", "severity": "severity", "title": "title" },
+  "auth": { "secret": "inbox_events", "header": "X-Inbox-Signature" },
+  "then": {
+    "action": "status.escalated",
+    "inputs": { "status": "/status", "error": "/body/error" }
+  }
+}</code></pre>
+  <p>This is an excerpt of <code>examples/showcase/starter/actions.json</code>. Each <code>body</code> entry is the name of an input or <code>{ "value": constant }</code>. <code>auth</code> is <code>{ secret, header? }</code> or <code>{ key }</code>. <code>then</code> names a mutation that runs with the answer. A URL is https, or http to an app of this installation, and never a private address. The owner reads the outbox with <code>calls_read</code>.</p>
+
+  <h2 id="limits-in-short">Limits in short</h2>
+  <p>A project declares at most 100 actions. A statement is at most 20,000 bytes with at most 100 bindings. The <a href="/limits">limits page</a> has the rest.</p>
+
+  <h2 id="read-next">Read next</h2>
+  <ul>
+    <li><a href="/gate-and-kernel">The Gate and the Kernel</a></li>
+    <li><a href="/guides/add-a-server-action">Add a Server Action</a></li>
+    <li><a href="/guides/refuse-a-write-with-guard">Refuse a write with guard</a></li>
+    <li><a href="/guides/receive-a-webhook">Receive a webhook</a></li>
+    <li><a href="/pieces">Pick the smallest piece</a></li>
+  </ul>
+</article>
+      </div>
+    </main>
+    <aside class="toc" aria-label="On this page"><div id="toc"></div></aside>
+  </div>
+  <div id="scrim" class="scrim" hidden></div>
+  <script src="/runtime.js"></script>
+  <script type="module" src="/shell.js"></script>
+</body>
+</html>

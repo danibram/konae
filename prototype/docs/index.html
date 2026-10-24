@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Littlebox overview · Littlebox docs</title>
+  <meta name="description" content="Documentation for Littlebox, for people and for agents.">
+  <link rel="icon" href="data:,">
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <button class="menu" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">Menu</button>
+    <a class="brand" href="/">Littlebox <span>docs</span></a>
+    <span class="proto" title="This site is a prototype">Prototype</span>
+    <div class="search" role="search">
+      <input id="search" type="search" placeholder="Search the docs" aria-label="Search the docs" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">/</kbd>
+      <div id="results" class="results" hidden></div>
+    </div>
+    <a class="llms" href="/llms.txt">llms.txt</a>
+  </header>
+  <div class="layout">
+    <nav id="sidebar" class="sidebar" aria-label="Documentation">
+      <h2>Start</h2>
+      <ul><li><a href="/" aria-current="page">Overview</a></li><li><a href="/concepts">Concepts</a></li></ul>
+      <h2>Build</h2>
+      <ul><li><a href="/capsule">The Capsule</a></li><li><a href="/server-actions">Server Actions</a></li><li><a href="/gate-and-kernel">The Gate and the Kernel</a></li><li><a href="/accounts-and-access">Accounts and access</a></li></ul>
+      <h2>Guides</h2>
+      <ul><li><a href="/guides/first-app-from-the-editor">First app from the editor</a></li><li><a href="/guides/edit-files-with-the-cli">Edit files with the CLI</a></li><li><a href="/guides/add-a-server-action">Add a Server Action</a></li><li><a href="/guides/refuse-a-write-with-guard">Refuse a write with guard</a></li><li><a href="/guides/email-when-a-row-changes">Email when a row changes</a></li><li><a href="/guides/run-work-on-a-schedule">Run work on a schedule</a></li><li><a href="/guides/receive-a-webhook">Receive a webhook</a></li><li><a href="/guides/call-another-service">Call another service</a></li><li><a href="/guides/upload-files">Upload files</a></li><li><a href="/guides/invite-people">Invite people</a></li><li><a href="/guides/take-the-app-elsewhere">Take the app elsewhere</a></li><li><a href="/guides/eject">Eject</a></li></ul>
+      <h2>Reference</h2>
+      <ul><li><a href="/cli">CLI</a></li><li><a href="/mcp-tools">MCP tools and guide topics</a></li><li><a href="/pieces">Pick the smallest piece</a></li><li><a href="/limits">Limits</a></li><li><a href="/divergences">Named divergences</a></li></ul>
+      <h2>Examples</h2>
+      <ul><li><a href="/examples">Example apps</a></li></ul>
+    </nav>
+    <main id="main" class="main" tabindex="-1">
+      <div id="content" class="content">
+<article>
+  <h1>Littlebox overview</h1>
+  <p class="lead">Littlebox lets a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.</p>
+  <p>The code, who may open a Deployment, and who may read a row stay separate. The Validation Gate in the editor and the Kernel that serves the app refuse the same Capsule with the same words. A check that passes in the editor still passes on the machine the app leaves on.</p>
+
+  <h2 id="jobs">The five jobs</h2>
+  <ol>
+    <li>A person who does not write code describes an app and gets one that runs.</li>
+    <li>A person who writes code edits the same app's files.</li>
+    <li>Both of them hit the same checks. A query that reads rows names a LIMIT, in the editor and on the Kernel that leaves with the app.</li>
+    <li>Either person can take the app to another machine with its accounts, its data and its rules.</li>
+    <li>Who may open the app, and who may read a row, stay decisions of the app. The host does not replace them.</li>
+  </ol>
+
+  <h2 id="how-to-decide">How to decide what belongs</h2>
+  <p>A new capability belongs in the product only when the Validation Gate and the Kernel refuse it with the same words, and a package can carry the app's accounts, data and rules. Anything else is operator work on the installation, not an App feature.</p>
+  <p>After any write through MCP or the editor, observe the effect through the same door before retrying or telling the owner it worked. The <code>rules</code> topic of <code>platform_guide</code> lists the read-back for each write tool. Decide what a credential may do from the <code>can</code> map of <code>session_inspect</code>, not from memory of login flags.</p>
+
+  <h2 id="start-here">Start here</h2>
+  <p>These are the three steps of a first run. Run the commands from the Littlebox repository root.</p>
+  <h3>1. Get a credential</h3>
+  <pre><code>bun run littlebox -- login --dir ./my-app --url http://localhost:4173</code></pre>
+  <p><code>login</code> reads <code>LITTLEBOX_EMAIL</code> and <code>LITTLEBOX_PASSWORD</code> from the environment and saves a 24-hour token with <code>read</code>, <code>write</code> and <code>publish</code> in <code>./my-app/.littlebox/credentials.json</code>. The <a href="/cli">CLI reference</a> lists the other variables and flags.</p>
+  <h3>2. Get an app that runs</h3>
+  <pre><code>bun run littlebox -- init --dir ./my-app --name 'My app' --url http://localhost:4173
+bun run littlebox -- dev --dir ./my-app</code></pre>
+  <p><code>init</code> registers the project and writes a template. <code>dev</code> runs the app on a local Development Kernel and republishes when the files change. To publish to the Kernel the credential names, run <code>bun run littlebox -- publish --dir ./my-app</code>.</p>
+  <p>In the editor, the same step is an apply through the Validation Gate. The <a href="/guides/first-app-from-the-editor">first app guide</a> walks through it.</p>
+  <h3>3. Prove it</h3>
+  <ul>
+    <li>Open the Deployment URL.</li>
+    <li>Call one Server Action from the page.</li>
+    <li>Read the project back with <code>project_inspect</code> over MCP.</li>
+    <li>When you are checking a contract, run <code>conform</code> against <code>action-contract.json</code>.</li>
+  </ul>
+  <p>If this path grows, the product got harder. The fix is to shorten the path, not to add a page.</p>
+
+  <h2 id="for-agents">For agents</h2>
+  <p>An agent that connects over MCP calls <code>platform_describe</code> and <code>projects_list</code> first. It then reads the <code>rules</code> and <code>pieces</code> topics of <code>platform_guide</code>. The <a href="/mcp-tools">MCP reference</a> lists every topic. This site publishes <a href="./llms.txt">llms.txt</a> with a link to each page's source fragment.</p>
+
+  <h2 id="read-next">Read next</h2>
+  <ul>
+    <li><a href="/concepts">Concepts</a>, the words the rest of the docs use</li>
+    <li><a href="/capsule">The Capsule</a>, the files of an app</li>
+    <li><a href="/pieces">Pick the smallest piece</a>, which declaration fits a need</li>
+    <li><a href="/examples">Example apps</a></li>
+  </ul>
+</article>
+      </div>
+    </main>
+    <aside class="toc" aria-label="On this page"><div id="toc"></div></aside>
+  </div>
+  <div id="scrim" class="scrim" hidden></div>
+  <script src="/runtime.js"></script>
+  <script type="module" src="/shell.js"></script>
+</body>
+</html>

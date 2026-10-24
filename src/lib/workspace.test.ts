@@ -43,9 +43,9 @@ describe("workspace project registry", () => {
     expect(recoveryDrafts([first, last, first], [saved])).toEqual([last]);
     expect(first.files["app.js"]).toBe("first unsaved change");
   });
-  test("the seeded starter and architecture map are not offered as drafts to import", () => {
+  test("the seeded starter is not offered as drafts to import", () => {
     const seeded = loadWorkspaceState(memoryStorage()).projects;
-    expect(seeded.map((project) => project.id).sort()).toEqual(["app_littlebox_architecture", "app_tiny_tasks"]);
+    expect(seeded.map((project) => project.id).sort()).toEqual(["app_tiny_tasks"]);
     expect(recoveryDrafts(seeded, [])).toEqual([]);
     const edited = { ...seeded[0], files: { ...seeded[0].files, "app.js": "an owner edit" } };
     expect(recoveryDrafts([edited], [])).toEqual([edited]);
@@ -60,8 +60,8 @@ describe("workspace project registry", () => {
     });
     const workspace = loadWorkspaceState(storage);
 
-    expect(workspace.projects).toHaveLength(2);
-    expect(workspace.projects.some((item) => item.id === architectureProjectId)).toBe(true);
+    expect(workspace.projects).toHaveLength(1);
+    expect(workspace.projects.some((item) => item.id === architectureProjectId)).toBe(false);
     expect(workspace.activeProjectId).toBe(project.id);
     expect(workspace.deployments[project.id]?.url).toBe(deployment.url);
     expect(workspace.deployments[project.id]?.accessCode).toBeUndefined();
@@ -75,16 +75,10 @@ describe("workspace project registry", () => {
     expect(second.slug).toBe("weekend-planner-2");
   });
 
-  test("seeds architecture as a data-free mini-app without duplicating it", () => {
-    const first = loadWorkspaceState(memoryStorage());
-    const storage = memoryStorage({ "littlebox:projects": JSON.stringify(first.projects) });
-    const second = loadWorkspaceState(storage);
-    const architecture = second.projects.find((project) => project.id === architectureProjectId);
-
-    expect(second.projects.filter((project) => project.id === architectureProjectId)).toHaveLength(1);
-    expect(architecture?.files["schema.sql"]).toBe("");
-    expect(JSON.parse(architecture?.files["actions.json"] ?? "").actions).toEqual({});
-    expect(architecture?.manifest.runtime.database.actions).toEqual([]);
+  test("drops a stored copy of the architecture map", () => {
+    const mine = cloneStarter();
+    const storage = memoryStorage({ "littlebox:projects": JSON.stringify([mine, { ...cloneStarter(), id: architectureProjectId }]) });
+    expect(loadWorkspaceState(storage).projects.map((project) => project.id)).toEqual([mine.id]);
   });
 
   test("refreshes an unedited starter when its copy still hides the guest and stays light", () => {
@@ -98,14 +92,6 @@ describe("workspace project registry", () => {
     expect(loaded?.files["index.html"]).toContain(">Guest<");
     expect(loaded?.files["styles.css"]).toContain("prefers-color-scheme");
     expect(loaded?.files["app.js"]).toContain("Guest");
-  });
-
-  test("resets architecture to its own source instead of the starter app", () => {
-    const architecture = loadWorkspaceState(memoryStorage()).projects.find((project) => project.id === architectureProjectId);
-    expect(architecture).toBeDefined();
-    const reset = resetWorkspaceProject({ ...architecture!, files: { ...architecture!.files, "index.html": "changed" } });
-    expect(reset.files["index.html"]).toContain("system map");
-    expect(reset.files["index.html"]).not.toContain("task-form");
   });
 
   test("persists the project index without private access codes", () => {

@@ -1,0 +1,37 @@
+# Littlebox docs
+
+> Littlebox lets a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged. These docs cover the Capsule's files, Server Actions, the Validation Gate and Kernel, accounts, the CLI and MCP tools, with task guides. Start with the overview, then the rules and pieces topics of the MCP tool platform_guide.
+
+## Start
+- [Overview](/): what Littlebox is, the five jobs, first run commands
+- [Concepts](/concepts): the vocabulary
+
+## Build
+- [The Capsule](/capsule): the files of an app
+- [Server Actions](/server-actions): actions.json, guard, notify, schedule, signal, http, call
+- [The Gate and the Kernel](/gate-and-kernel): the two doors, shared refusals, the LIMIT rule
+- [Accounts and access](/accounts-and-access): owner, app accounts, signup policy, invitations
+
+## Guides
+- [First app from the editor](/guides/first-app-from-the-editor)
+- [Edit files with the CLI](/guides/edit-files-with-the-cli)
+- [Add a Server Action](/guides/add-a-server-action)
+- [Refuse a write with guard](/guides/refuse-a-write-with-guard)
+- [Email when a row changes](/guides/email-when-a-row-changes)
+- [Run work on a schedule](/guides/run-work-on-a-schedule)
+- [Receive a webhook](/guides/receive-a-webhook)
+- [Call another service](/guides/call-another-service)
+- [Upload files](/guides/upload-files)
+- [Invite people](/guides/invite-people)
+- [Take the app elsewhere](/guides/take-the-app-elsewhere)
+- [Eject](/guides/eject)
+
+## Reference
+- [CLI](/cli): littlebox commands
+- [MCP tools and guide topics](/mcp-tools): tools, permissions, platform_guide topics, read-back
+- [Pick the smallest piece](/pieces): which declaration fits a need
+- [Limits](/limits)
+- [Named divergences](/divergences): preview versus published app
+
+## Examples
+- [Example apps](/examples): showcase, product-fit and probe apps with folder paths

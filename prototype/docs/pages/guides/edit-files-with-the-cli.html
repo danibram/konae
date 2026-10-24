@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Edit the app's files with the CLI · Littlebox docs</title>
+  <meta name="description" content="Documentation for Littlebox, for people and for agents.">
+  <link rel="icon" href="data:,">
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <button class="menu" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">Menu</button>
+    <a class="brand" href="/">Littlebox <span>docs</span></a>
+    <span class="proto" title="This site is a prototype">Prototype</span>
+    <div class="search" role="search">
+      <input id="search" type="search" placeholder="Search the docs" aria-label="Search the docs" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">/</kbd>
+      <div id="results" class="results" hidden></div>
+    </div>
+    <a class="llms" href="/llms.txt">llms.txt</a>
+  </header>
+  <div class="layout">
+    <nav id="sidebar" class="sidebar" aria-label="Documentation">
+      <h2>Start</h2>
+      <ul><li><a href="/">Overview</a></li><li><a href="/concepts">Concepts</a></li></ul>
+      <h2>Build</h2>
+      <ul><li><a href="/capsule">The Capsule</a></li><li><a href="/server-actions">Server Actions</a></li><li><a href="/gate-and-kernel">The Gate and the Kernel</a></li><li><a href="/accounts-and-access">Accounts and access</a></li></ul>
+      <h2>Guides</h2>
+      <ul><li><a href="/guides/first-app-from-the-editor">First app from the editor</a></li><li><a href="/guides/edit-files-with-the-cli" aria-current="page">Edit files with the CLI</a></li><li><a href="/guides/add-a-server-action">Add a Server Action</a></li><li><a href="/guides/refuse-a-write-with-guard">Refuse a write with guard</a></li><li><a href="/guides/email-when-a-row-changes">Email when a row changes</a></li><li><a href="/guides/run-work-on-a-schedule">Run work on a schedule</a></li><li><a href="/guides/receive-a-webhook">Receive a webhook</a></li><li><a href="/guides/call-another-service">Call another service</a></li><li><a href="/guides/upload-files">Upload files</a></li><li><a href="/guides/invite-people">Invite people</a></li><li><a href="/guides/take-the-app-elsewhere">Take the app elsewhere</a></li><li><a href="/guides/eject">Eject</a></li></ul>
+      <h2>Reference</h2>
+      <ul><li><a href="/cli">CLI</a></li><li><a href="/mcp-tools">MCP tools and guide topics</a></li><li><a href="/pieces">Pick the smallest piece</a></li><li><a href="/limits">Limits</a></li><li><a href="/divergences">Named divergences</a></li></ul>
+      <h2>Examples</h2>
+      <ul><li><a href="/examples">Example apps</a></li></ul>
+    </nav>
+    <main id="main" class="main" tabindex="-1">
+      <div id="content" class="content">
+<article>
+<h1>Edit the app's files with the CLI</h1>
+<p>Log in, create a folder with <code>init</code>, run it locally with <code>dev</code>, and send it to the Kernel with <code>publish</code>.</p>
+
+<h2 id="before-you-start">Before you start</h2>
+<p>You need a Littlebox installation to talk to, and an account on it. <code>login</code> reads <code>LITTLEBOX_EMAIL</code> and <code>LITTLEBOX_PASSWORD</code>. To create the account in the same step, also set <code>LITTLEBOX_INVITATION_CODE</code>, the code the operator issued, or <code>LITTLEBOX_SETUP_KEY</code> for the installation's first owner. The commands below run from a checkout of the repository.</p>
+
+<h2 id="steps">Steps</h2>
+<ol>
+<li>Log in. This saves a 24-hour token with <code>read</code>, <code>write</code> and <code>publish</code> in <code>&lt;folder&gt;/.littlebox/credentials.json</code>. Keep <code>.littlebox</code> out of Git. <code>LITTLEBOX_MCP_TOKEN</code> overrides the file.
+<pre><code class="language-sh">LITTLEBOX_EMAIL=you@example.com LITTLEBOX_PASSWORD=... \
+bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173</code></pre></li>
+<li>Create the project. <code>init</code> needs an empty folder. It registers the project on the Kernel and writes the template and a <code>littlebox.json</code>. It writes the app private, with signup policy Invitation only.
+<pre><code class="language-sh">bun run littlebox -- init --dir /tmp/my-app --name 'My app' --url http://localhost:4173</code></pre></li>
+<li>Run it locally. <code>dev</code> starts a Development Kernel with its own identities, data and files under <code>.littlebox/dev-data</code>, and republishes each time you save a file. It publishes locally as Open so test accounts can sign up, and it never proxies production. The default port is 8796.
+<pre><code class="language-sh">bun run littlebox -- dev --dir /tmp/my-app</code></pre></li>
+<li>Edit the Capsule files in the folder. Open the URL <code>dev</code> prints and reload after each change. Email, notices included, goes to <code>.littlebox/dev-data/mailbox.jsonl</code>.</li>
+<li>Optional. Write the Action Contract and, against a test Deployment, check every action's answers.
+<pre><code class="language-sh">bun run littlebox -- contract --dir /tmp/my-app
+bun run littlebox -- conform --url &lt;app URL&gt; --contract /tmp/my-app/action-contract.json</code></pre>
+<code>conform</code> runs each mutation once, so point it at a test Deployment.</li>
+<li>Publish. This builds the folder and publishes it with the credential from <code>login</code>. It prints the Deployment URL.
+<pre><code class="language-sh">bun run littlebox -- publish --dir /tmp/my-app</code></pre></li>
+<li>Open the Deployment URL and call one Server Action.</li>
+</ol>
+
+<h2 id="visibility-and-signup">Visibility and signup</h2>
+<p><code>publish</code> deploys the app as private unless <code>littlebox.json</code> sets <code>project.manifest.visibility</code> to <code>"public"</code>. <code>project.manifest.signupPolicy</code> names who may create an app account on the first release. A later publish that names another policy warns and changes nothing. Change it in the editor's Auth &gt; Users view or with <code>signup_policy_set</code>.</p>
+
+<h2 id="check-it-worked">Check it worked</h2>
+<p>Do not treat the URL <code>publish</code> printed as proof. Read the Deployment back through MCP, the same door the CLI wrote through.</p>
+<ul>
+<li>The read-back for <code>release_apply</code> is <code>project_inspect</code>. It shows the live Deployment and its URL.</li>
+<li>The read-back for <code>project_create</code> is <code>project_inspect</code> as well.</li>
+<li>Open the Deployment URL, then call one Server Action. <code>actions_invoke</code> is its own read-back, so call a query to see a row you wrote.</li>
+<li>Decide what your credential may do from <code>session_inspect</code>'s <code>can</code> map, not from memory of which flag <code>login</code> took.</li>
+</ul>
+
+<h2 id="what-dev-cannot-show">What differs from the editor preview</h2>
+<p><code>dev</code> runs the same Rust Kernel as a Deployment, so HTTP routes, the schedule timer, notice email, Usage and the call outbox all work there. The editor preview has none of them. The Validation Gate checks the schema and <code>actions.json</code> only, so a page that names a missing file fails at build or publish.</p>
+
+<h2 id="read-next">Read next</h2>
+<ul>
+<li><a href="/guides/add-a-server-action">Add a Server Action</a></li>
+<li><a href="/guides/take-the-app-elsewhere">Take the app elsewhere</a></li>
+<li><a href="/guides/eject">Eject a managed project</a></li>
+<li><a href="/cli">CLI reference</a></li>
+<li><a href="/capsule">The Capsule</a></li>
+</ul>
+</article>
+      </div>
+    </main>
+    <aside class="toc" aria-label="On this page"><div id="toc"></div></aside>
+  </div>
+  <div id="scrim" class="scrim" hidden></div>
+  <script src="/runtime.js"></script>
+  <script type="module" src="/shell.js"></script>
+</body>
+</html>

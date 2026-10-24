@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Take the app elsewhere · Littlebox docs</title>
+  <meta name="description" content="Documentation for Littlebox, for people and for agents.">
+  <link rel="icon" href="data:,">
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <button class="menu" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">Menu</button>
+    <a class="brand" href="/">Littlebox <span>docs</span></a>
+    <span class="proto" title="This site is a prototype">Prototype</span>
+    <div class="search" role="search">
+      <input id="search" type="search" placeholder="Search the docs" aria-label="Search the docs" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">/</kbd>
+      <div id="results" class="results" hidden></div>
+    </div>
+    <a class="llms" href="/llms.txt">llms.txt</a>
+  </header>
+  <div class="layout">
+    <nav id="sidebar" class="sidebar" aria-label="Documentation">
+      <h2>Start</h2>
+      <ul><li><a href="/">Overview</a></li><li><a href="/concepts">Concepts</a></li></ul>
+      <h2>Build</h2>
+      <ul><li><a href="/capsule">The Capsule</a></li><li><a href="/server-actions">Server Actions</a></li><li><a href="/gate-and-kernel">The Gate and the Kernel</a></li><li><a href="/accounts-and-access">Accounts and access</a></li></ul>
+      <h2>Guides</h2>
+      <ul><li><a href="/guides/first-app-from-the-editor">First app from the editor</a></li><li><a href="/guides/edit-files-with-the-cli">Edit files with the CLI</a></li><li><a href="/guides/add-a-server-action">Add a Server Action</a></li><li><a href="/guides/refuse-a-write-with-guard">Refuse a write with guard</a></li><li><a href="/guides/email-when-a-row-changes">Email when a row changes</a></li><li><a href="/guides/run-work-on-a-schedule">Run work on a schedule</a></li><li><a href="/guides/receive-a-webhook">Receive a webhook</a></li><li><a href="/guides/call-another-service">Call another service</a></li><li><a href="/guides/upload-files">Upload files</a></li><li><a href="/guides/invite-people">Invite people</a></li><li><a href="/guides/take-the-app-elsewhere" aria-current="page">Take the app elsewhere</a></li><li><a href="/guides/eject">Eject</a></li></ul>
+      <h2>Reference</h2>
+      <ul><li><a href="/cli">CLI</a></li><li><a href="/mcp-tools">MCP tools and guide topics</a></li><li><a href="/pieces">Pick the smallest piece</a></li><li><a href="/limits">Limits</a></li><li><a href="/divergences">Named divergences</a></li></ul>
+      <h2>Examples</h2>
+      <ul><li><a href="/examples">Example apps</a></li></ul>
+    </nav>
+    <main id="main" class="main" tabindex="-1">
+      <div id="content" class="content">
+<article>
+<h1>Take the app elsewhere</h1>
+<p>Export a package to move one app's accounts, data and rules to another machine, or run a migration when exactly one installation must take the writes.</p>
+
+<h2 id="pick-the-right-move">Pick the right move</h2>
+<table>
+<thead><tr><th>You want</th><th>Use</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>A copy of one app on another machine</td><td>Package export and import</td><td>It moves one Deployment's database, accounts, files and, when present, Usage and Signals.</td></tr>
+<tr><td>The app to leave and the old one to stop</td><td>Migration</td><td>It pauses the origin, then retires it when you confirm, so one installation takes the writes.</td></tr>
+<tr><td>To move a whole installation</td><td>Copy</td><td>A copy moves an installation, not one app. It is operator work, not an app feature.</td></tr>
+<tr><td>To edit the code outside Littlebox</td><td><a href="/guides/eject">Eject</a></td><td>A package moves data, not source authority.</td></tr>
+</tbody>
+</table>
+<p>A package never moves sessions, email links or live API keys. People sign in again with their passwords, and each API key arrives revoked, so you issue new ones. Signing secrets do not travel either, so set them again on the destination.</p>
+
+<h2 id="export-a-package">Export a package</h2>
+<ol>
+<li>Log in with <code>export_data</code>.
+<pre><code class="language-sh">LITTLEBOX_EMAIL=you@example.com LITTLEBOX_PASSWORD=... \
+bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173 --export-data</code></pre></li>
+<li>For a self-hosted kit that includes the live data, run <code>export</code> with <code>--with-data</code>. It refuses to overwrite an archive. Exports with live state hold password hashes and uploaded files, so keep them private.
+<pre><code class="language-sh">bun run littlebox -- export --dir /tmp/my-app --out /tmp/my-app-with-data.tar --with-data</code></pre></li>
+<li>Or over MCP, call <code>package_export</code> with the <code>deploymentId</code>. It returns a manifest and one download per component, <code>database</code>, <code>identity</code>, <code>files</code> and, when the app recorded any, <code>usage</code>.</li>
+<li>Read each download with <code>transfer_read</code> and its <code>transferId</code> and <code>offset</code> until <code>nextOffset</code> equals <code>size</code>. Check its SHA-256, then call <code>transfer_cancel</code>.</li>
+</ol>
+
+<h2 id="import-on-the-destination">Import on the destination</h2>
+<ol>
+<li>Run <code>project_create</code> with the same <code>projectId</code>. Then run <code>secret_set</code> for every secret the app's routes sign with. A release that signs with an unset secret is refused.</li>
+<li>For each component, call <code>transfer_begin</code> with <code>size</code>, <code>sha256</code>, <code>projectId</code> and the component's name. Call <code>transfer_write</code> for each block, then <code>transfer_complete</code>.</li>
+<li>Build the folder and upload the release JSON, with <code>initialPackage</code> holding the <code>manifest</code> and a <code>components</code> map of component name to <code>transferId</code>. Then call <code>release_plan</code> and <code>release_apply</code>. An import installs only into a project that has no Deployment yet. The same package imported again returns the first import.</li>
+<li>Issue new API keys. <code>api_keys_list</code> shows each key revoked at import.</li>
+</ol>
+
+<h2 id="migrate-with-one-writer">Migrate with one writer at a time</h2>
+<p>A migration needs <code>manage_lifecycle</code> and <code>export_data</code> on the origin and <code>manage_lifecycle</code> on the destination. Log in with both flags.</p>
+<pre><code class="language-sh">bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173 --export-data --manage-lifecycle</code></pre>
+<ol>
+<li>Call <code>migration_begin</code> with the origin's <code>deploymentId</code>. The app pauses at once and shows a maintenance page. It takes no writes, signups, sign-ins, invitations or HTTP routes. The answer holds the package downloads and the next steps.</li>
+<li>Import on the destination as above, adding the release download as the release payload. The imported app stays in maintenance. Check it with read tools.</li>
+<li>Call <code>migration_confirm</code> on the origin with <code>operationId</code> and, if the address changed, <code>newUrl</code>. The origin stays retired and shows a link to the new address for seven days. Keep the <code>confirmation</code> it returns.</li>
+<li>Call <code>migration_activate</code> on the destination with <code>deploymentId</code> and the <code>confirmation</code>. Add <code>resendInvitations</code> to send pending invitations again from the new host.</li>
+<li>To stop, call <code>migration_cancel</code> with <code>operationId</code> before <code>migration_confirm</code>. It resumes the origin. After a confirm, cancel is refused.</li>
+</ol>
+
+<h2 id="check-it-worked">Check it worked</h2>
+<ul>
+<li>After <code>package_export</code>, <code>project_export</code> or <code>database_export</code>, the read-back is <code>transfer_read</code>. Verify the size and SHA-256 of every component.</li>
+<li>After <code>transfer_begin</code>, <code>transfer_write</code> or <code>transfer_complete</code>, the read-back is <code>transfer_status</code>. Bytes in an open transfer are not a Deployment.</li>
+<li>After <code>release_apply</code> on the destination, the read-back is <code>project_inspect</code>.</li>
+<li>After any <code>migration_*</code> call, the read-back is <code>migration_status</code>. A <code>service_timeout</code> or interrupted call must be verified the same way before you retry.</li>
+<li>On the destination, sign in with an existing password and open one row the app owned.</li>
+</ul>
+<p>The editor preview is not a Deployment, so it has no database to package. Test the whole move on two <code>littlebox dev</code> Kernels or two real installations. The repository's migration rehearsal runs the procedure on two local Kernels with <code>bun run tests/smoke/migration.ts --port 19460</code>.</p>
+
+<h2 id="read-next">Read next</h2>
+<ul>
+<li><a href="/guides/eject">Eject</a></li>
+<li><a href="/guides/invite-people">Invite people</a></li>
+<li><a href="/pieces">Pick the smallest piece</a></li>
+<li><a href="/concepts">Concepts</a></li>
+</ul>
+</article>
+      </div>
+    </main>
+    <aside class="toc" aria-label="On this page"><div id="toc"></div></aside>
+  </div>
+  <div id="scrim" class="scrim" hidden></div>
+  <script src="/runtime.js"></script>
+  <script type="module" src="/shell.js"></script>
+</body>
+</html>

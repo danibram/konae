@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Limits · Littlebox docs</title>
+  <meta name="description" content="Documentation for Littlebox, for people and for agents.">
+  <link rel="icon" href="data:,">
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <button class="menu" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">Menu</button>
+    <a class="brand" href="/">Littlebox <span>docs</span></a>
+    <span class="proto" title="This site is a prototype">Prototype</span>
+    <div class="search" role="search">
+      <input id="search" type="search" placeholder="Search the docs" aria-label="Search the docs" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">/</kbd>
+      <div id="results" class="results" hidden></div>
+    </div>
+    <a class="llms" href="/llms.txt">llms.txt</a>
+  </header>
+  <div class="layout">
+    <nav id="sidebar" class="sidebar" aria-label="Documentation">
+      <h2>Start</h2>
+      <ul><li><a href="/">Overview</a></li><li><a href="/concepts">Concepts</a></li></ul>
+      <h2>Build</h2>
+      <ul><li><a href="/capsule">The Capsule</a></li><li><a href="/server-actions">Server Actions</a></li><li><a href="/gate-and-kernel">The Gate and the Kernel</a></li><li><a href="/accounts-and-access">Accounts and access</a></li></ul>
+      <h2>Guides</h2>
+      <ul><li><a href="/guides/first-app-from-the-editor">First app from the editor</a></li><li><a href="/guides/edit-files-with-the-cli">Edit files with the CLI</a></li><li><a href="/guides/add-a-server-action">Add a Server Action</a></li><li><a href="/guides/refuse-a-write-with-guard">Refuse a write with guard</a></li><li><a href="/guides/email-when-a-row-changes">Email when a row changes</a></li><li><a href="/guides/run-work-on-a-schedule">Run work on a schedule</a></li><li><a href="/guides/receive-a-webhook">Receive a webhook</a></li><li><a href="/guides/call-another-service">Call another service</a></li><li><a href="/guides/upload-files">Upload files</a></li><li><a href="/guides/invite-people">Invite people</a></li><li><a href="/guides/take-the-app-elsewhere">Take the app elsewhere</a></li><li><a href="/guides/eject">Eject</a></li></ul>
+      <h2>Reference</h2>
+      <ul><li><a href="/cli">CLI</a></li><li><a href="/mcp-tools">MCP tools and guide topics</a></li><li><a href="/pieces">Pick the smallest piece</a></li><li><a href="/limits" aria-current="page">Limits</a></li><li><a href="/divergences">Named divergences</a></li></ul>
+      <h2>Examples</h2>
+      <ul><li><a href="/examples">Example apps</a></li></ul>
+    </nav>
+    <main id="main" class="main" tabindex="-1">
+      <div id="content" class="content">
+<article>
+  <h1>Limits</h1>
+  <p class="lead">The numbers a Capsule and a Deployment run into. Both the Gate and the Kernel enforce the declaration limits. The Kernel alone enforces the runtime ones.</p>
+  <p>These figures come from <code>docs/mcp.md</code> and <code>CONTEXT.md</code>. When a number matters to a decision, read the section there.</p>
+
+  <h2 id="declarations">Declarations</h2>
+  <table>
+    <thead><tr><th>Limit</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>Actions per project</td><td>100</td></tr>
+      <tr><td>Action name</td><td>Lowercase dotted words, at most 100 characters</td></tr>
+      <tr><td>Statement</td><td>One statement, at most 20,000 bytes</td></tr>
+      <tr><td>Bindings per action</td><td>At most 100</td></tr>
+      <tr><td>String input <code>maxLength</code></td><td>1 to 100,000</td></tr>
+      <tr><td>Guard message</td><td>1 to 200 characters on one line</td></tr>
+      <tr><td>Schedule <code>every</code></td><td><code>5m</code> to <code>24h</code></td></tr>
+      <tr><td>Schedule <code>daily</code></td><td>A UTC time, <code>00:00</code> to <code>23:59</code></td></tr>
+      <tr><td>HTTP route path</td><td>At most 200 characters</td></tr>
+      <tr><td>Allowlist entries</td><td>At most 100</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="queries">Queries</h2>
+  <table>
+    <thead><tr><th>Limit</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>Rows</td><td>A top-level <code>LIMIT</code>, or one row, and a 1000-row cap</td></tr>
+      <tr><td>Response size</td><td>2 MiB</td></tr>
+      <tr><td>Statement time</td><td>2 seconds, checked between SQLite steps</td></tr>
+      <tr><td><code>LIKE</code> or <code>GLOB</code> pattern</td><td>500 bytes</td></tr>
+      <tr><td>App database</td><td>256 MiB</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="requests">Requests and rates</h2>
+  <table>
+    <thead><tr><th>Limit</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>Route request body</td><td>64 KiB</td></tr>
+      <tr><td>Route calls without a key or session</td><td>30 per 10 seconds per client address</td></tr>
+      <tr><td>Route calls with a user or key</td><td>120 per 10 seconds per user or key, shared with <code>actions_invoke</code></td></tr>
+      <tr><td>Signature clock window</td><td>300 seconds</td></tr>
+      <tr><td>Replay window for one signature</td><td>600 seconds</td></tr>
+      <tr><td>App login and signup</td><td>10 attempts per minute per client address, 5 per minute for one email from one client address</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="files">Files</h2>
+  <table>
+    <thead><tr><th>Limit</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>One file</td><td>2 MiB</td></tr>
+      <tr><td>Deployment file quota</td><td>20 MiB, the sum of the files it holds</td></tr>
+      <tr><td>Files per Deployment</td><td>10,000</td></tr>
+      <tr><td>File name</td><td>First 180 characters kept</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="invitations-and-credentials">Invitations and credentials</h2>
+  <table>
+    <thead><tr><th>Limit</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>Emails per <code>app_invitations_create</code></td><td>1 to 50</td></tr>
+      <tr><td>Invitation link</td><td>Seven days</td></tr>
+      <tr><td><code>littlebox login</code> token</td><td>24 hours</td></tr>
+      <tr><td>OAuth token</td><td>One hour, no refresh token</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="transfers">Transfers and publishing</h2>
+  <table>
+    <thead><tr><th>Limit</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>Transfer chunk</td><td>At most 64 KiB, base64</td></tr>
+      <tr><td>Owner transfers</td><td>Expire after one hour, eight at a time per owner</td></tr>
+      <tr><td>App user transfers</td><td>Expire after 10 minutes, two at a time per app user</td></tr>
+      <tr><td>Administrative transfer</td><td>Up to 32 MiB, or a package component's limit</td></tr>
+      <tr><td>Publishing payload</td><td>Must fit in 26 MB, with its artifact in 16 MiB</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="usage-store">Usage store</h2>
+  <p>The store keeps 400 days and at most 100,000 rows of totals, the newest 50,000 Signals and the newest 10,000 scheduled runs. A string property keeps its first 128 bytes.</p>
+
+  <h2 id="read-next">Read next</h2>
+  <ul>
+    <li><a href="/gate-and-kernel">The Gate and the Kernel</a></li>
+    <li><a href="/server-actions">Server Actions</a></li>
+    <li><a href="/divergences">Named divergences</a></li>
+  </ul>
+</article>
+      </div>
+    </main>
+    <aside class="toc" aria-label="On this page"><div id="toc"></div></aside>
+  </div>
+  <div id="scrim" class="scrim" hidden></div>
+  <script src="/runtime.js"></script>
+  <script type="module" src="/shell.js"></script>
+</body>
+</html>

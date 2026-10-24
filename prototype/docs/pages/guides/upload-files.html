@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Upload files · Littlebox docs</title>
+  <meta name="description" content="Documentation for Littlebox, for people and for agents.">
+  <link rel="icon" href="data:,">
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <button class="menu" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">Menu</button>
+    <a class="brand" href="/">Littlebox <span>docs</span></a>
+    <span class="proto" title="This site is a prototype">Prototype</span>
+    <div class="search" role="search">
+      <input id="search" type="search" placeholder="Search the docs" aria-label="Search the docs" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">/</kbd>
+      <div id="results" class="results" hidden></div>
+    </div>
+    <a class="llms" href="/llms.txt">llms.txt</a>
+  </header>
+  <div class="layout">
+    <nav id="sidebar" class="sidebar" aria-label="Documentation">
+      <h2>Start</h2>
+      <ul><li><a href="/">Overview</a></li><li><a href="/concepts">Concepts</a></li></ul>
+      <h2>Build</h2>
+      <ul><li><a href="/capsule">The Capsule</a></li><li><a href="/server-actions">Server Actions</a></li><li><a href="/gate-and-kernel">The Gate and the Kernel</a></li><li><a href="/accounts-and-access">Accounts and access</a></li></ul>
+      <h2>Guides</h2>
+      <ul><li><a href="/guides/first-app-from-the-editor">First app from the editor</a></li><li><a href="/guides/edit-files-with-the-cli">Edit files with the CLI</a></li><li><a href="/guides/add-a-server-action">Add a Server Action</a></li><li><a href="/guides/refuse-a-write-with-guard">Refuse a write with guard</a></li><li><a href="/guides/email-when-a-row-changes">Email when a row changes</a></li><li><a href="/guides/run-work-on-a-schedule">Run work on a schedule</a></li><li><a href="/guides/receive-a-webhook">Receive a webhook</a></li><li><a href="/guides/call-another-service">Call another service</a></li><li><a href="/guides/upload-files" aria-current="page">Upload files</a></li><li><a href="/guides/invite-people">Invite people</a></li><li><a href="/guides/take-the-app-elsewhere">Take the app elsewhere</a></li><li><a href="/guides/eject">Eject</a></li></ul>
+      <h2>Reference</h2>
+      <ul><li><a href="/cli">CLI</a></li><li><a href="/mcp-tools">MCP tools and guide topics</a></li><li><a href="/pieces">Pick the smallest piece</a></li><li><a href="/limits">Limits</a></li><li><a href="/divergences">Named divergences</a></li></ul>
+      <h2>Examples</h2>
+      <ul><li><a href="/examples">Example apps</a></li></ul>
+    </nav>
+    <main id="main" class="main" tabindex="-1">
+      <div id="content" class="content">
+<article>
+<h1>Upload files</h1>
+<p>Use <code>miniapp.files</code> for the bytes and a mutation for the row that remembers the file's ID.</p>
+
+<h2 id="how-it-works">How it works</h2>
+<p>The Kernel stores small files for one Deployment. A file is private to the person who uploaded it unless the upload asks for <code>"public"</code>. Large bytes do not belong in a SQLite column. Keep the file's ID in a row and let the Kernel keep the bytes.</p>
+<ul>
+<li>1 byte to 2 MiB per file, and 20 MiB of files per Deployment.</li>
+<li>An upload needs an app session. A signed-out visitor on a public Deployment can list and read public files only.</li>
+<li>Only the uploader changes a file's visibility or deletes it. A deleted file stops counting against the quota.</li>
+</ul>
+
+<h2 id="steps">Steps</h2>
+<ol>
+<li>Add a table that holds the file's ID. This is from the starter app.
+<pre><code class="language-sql">CREATE TABLE IF NOT EXISTS attachments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  file_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  size INTEGER NOT NULL CHECK (size &gt;= 0),
+  public INTEGER NOT NULL DEFAULT 0 CHECK (public IN (0, 1)),
+  created_at INTEGER NOT NULL
+);</code></pre></li>
+<li>Add a mutation that stores the ID next to the actor.
+<pre><code class="language-json">"attachments.add": {
+  "kind": "mutation",
+  "access": "authenticated",
+  "statement": "INSERT INTO attachments (user_id, file_id, name, size, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+  "bindings": [
+    { "source": "actor", "field": "id" },
+    { "source": "input", "key": "fileId", "type": "string", "maxLength": 64 },
+    { "source": "input", "key": "name", "type": "string", "maxLength": 180 },
+    { "source": "input", "key": "size", "type": "number" },
+    { "source": "kernel", "field": "now" }
+  ]
+}</code></pre></li>
+<li>Upload from the page, then record the file. Attach the listener in JavaScript, because a published app refuses inline handler attributes.
+<pre><code class="language-js">const stored = await miniapp.files.upload(file);   // private to the signed-in user
+await miniapp.actions.call("attachments.add", { fileId: stored.id, name: stored.name, size: stored.size });</code></pre>
+Pass <code>{ visibility: "public" }</code> only when every visitor of a public app may read the bytes.</li>
+<li>Show a file with <code>files.url</code>. It returns the path <code>/_littlebox/files/&lt;id&gt;</code> on the app's own origin, which <code>img</code>, <code>fetch</code> and a link all reach. A Blob URL from <code>files.list</code> or <code>files.upload</code> cannot be fetched again under the page's policy.
+<pre><code class="language-js">image.src = await miniapp.files.url(photo.file_id);</code></pre></li>
+<li>Publish or remove a file later with the uploader's session. The ID and the <code>files.url</code> path stay the same.
+<pre><code class="language-js">await miniapp.files.update(draft.id, { visibility: "public" });
+await miniapp.files.delete(note.file_id);   // { id, deleted: true }</code></pre></li>
+<li>If the row's mutation fails after the upload, delete the file so it does not keep counting against the quota.
+<pre><code class="language-js">try {
+  await miniapp.actions.call("attachments.add", { fileId: stored.id, name: stored.name, size: stored.size });
+} catch (error) {
+  await miniapp.files.delete(stored.id).catch(() => {});
+  throw error;
+}</code></pre></li>
+</ol>
+
+<h2 id="refusals">Refusals you may meet</h2>
+<ul>
+<li><code>authentication-required</code> when nobody is signed in.</li>
+<li><code>Transfer size is outside the limit.</code> when the file is empty or over 2 MiB.</li>
+<li><code>This deployment has reached its 20 MiB file quota.</code></li>
+<li><code>Only the person who uploaded this file may change or delete it.</code></li>
+</ul>
+
+<h2 id="check-it-worked">Check it worked</h2>
+<ul>
+<li>After an upload, the read-back for <code>files_upload</code> is <code>files_list</code>. After <code>files_update</code> or <code>files_delete</code>, it is <code>files_list</code> too. In the page, that is <code>miniapp.files.list()</code>.</li>
+<li>Open the <code>files.url</code> path in the app and check the file loads. A visitor without a session on a private Deployment gets 401 <code>authentication-required</code>. Anyone else who may not read the file gets 404 <code>File not found.</code></li>
+<li>Query the row from step 2 to confirm the ID was stored.</li>
+</ul>
+<p>The editor preview keeps files in browser storage and never reaches the 20 MiB quota. Published apps send them to the Kernel in chunked, checksummed transfers, so try a real upload on <code>littlebox dev</code> or a Deployment. A package carries the files when the app moves.</p>
+
+<h2 id="read-next">Read next</h2>
+<ul>
+<li><a href="/guides/add-a-server-action">Add a Server Action</a></li>
+<li><a href="/guides/take-the-app-elsewhere">Take the app elsewhere</a></li>
+<li><a href="/limits">Limits</a></li>
+<li><a href="/examples">Examples</a></li>
+</ul>
+</article>
+      </div>
+    </main>
+    <aside class="toc" aria-label="On this page"><div id="toc"></div></aside>
+  </div>
+  <div id="scrim" class="scrim" hidden></div>
+  <script src="/runtime.js"></script>
+  <script type="module" src="/shell.js"></script>
+</body>
+</html>

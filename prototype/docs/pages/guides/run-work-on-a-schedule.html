@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Run work on a schedule · Littlebox docs</title>
+  <meta name="description" content="Documentation for Littlebox, for people and for agents.">
+  <link rel="icon" href="data:,">
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <button class="menu" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">Menu</button>
+    <a class="brand" href="/">Littlebox <span>docs</span></a>
+    <span class="proto" title="This site is a prototype">Prototype</span>
+    <div class="search" role="search">
+      <input id="search" type="search" placeholder="Search the docs" aria-label="Search the docs" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">/</kbd>
+      <div id="results" class="results" hidden></div>
+    </div>
+    <a class="llms" href="/llms.txt">llms.txt</a>
+  </header>
+  <div class="layout">
+    <nav id="sidebar" class="sidebar" aria-label="Documentation">
+      <h2>Start</h2>
+      <ul><li><a href="/">Overview</a></li><li><a href="/concepts">Concepts</a></li></ul>
+      <h2>Build</h2>
+      <ul><li><a href="/capsule">The Capsule</a></li><li><a href="/server-actions">Server Actions</a></li><li><a href="/gate-and-kernel">The Gate and the Kernel</a></li><li><a href="/accounts-and-access">Accounts and access</a></li></ul>
+      <h2>Guides</h2>
+      <ul><li><a href="/guides/first-app-from-the-editor">First app from the editor</a></li><li><a href="/guides/edit-files-with-the-cli">Edit files with the CLI</a></li><li><a href="/guides/add-a-server-action">Add a Server Action</a></li><li><a href="/guides/refuse-a-write-with-guard">Refuse a write with guard</a></li><li><a href="/guides/email-when-a-row-changes">Email when a row changes</a></li><li><a href="/guides/run-work-on-a-schedule" aria-current="page">Run work on a schedule</a></li><li><a href="/guides/receive-a-webhook">Receive a webhook</a></li><li><a href="/guides/call-another-service">Call another service</a></li><li><a href="/guides/upload-files">Upload files</a></li><li><a href="/guides/invite-people">Invite people</a></li><li><a href="/guides/take-the-app-elsewhere">Take the app elsewhere</a></li><li><a href="/guides/eject">Eject</a></li></ul>
+      <h2>Reference</h2>
+      <ul><li><a href="/cli">CLI</a></li><li><a href="/mcp-tools">MCP tools and guide topics</a></li><li><a href="/pieces">Pick the smallest piece</a></li><li><a href="/limits">Limits</a></li><li><a href="/divergences">Named divergences</a></li></ul>
+      <h2>Examples</h2>
+      <ul><li><a href="/examples">Example apps</a></li></ul>
+    </nav>
+    <main id="main" class="main" tabindex="-1">
+      <div id="content" class="content">
+<article>
+<h1>Run work on a schedule</h1>
+<p>Declare <code>schedule</code> on a mutation that takes no input, and the Kernel's own timer runs it when nobody is looking.</p>
+
+<h2 id="how-it-works">How it works</h2>
+<p>A schedule fits work such as releasing a hold that lapsed or closing a day. The Kernel looks once a minute and runs the action at the first look after its period opens. A run has no caller, so an <code>actor</code> binding is null and the guard does not apply. A run takes the Deployment's data lock and has a 2-second statement budget.</p>
+
+<h2 id="steps">Steps</h2>
+<ol>
+<li>Pick the timing. <code>{ "every": "15m" }</code> runs on a period from <code>5m</code> to <code>24h</code>, counted from 00:00 UTC, so <code>15m</code> runs at :00, :15, :30 and :45. <code>{ "daily": "02:00" }</code> runs once a day at that UTC time. A cron string such as <code>"0 8 * * *"</code> is refused.</li>
+<li>Write a mutation that binds only <code>kernel</code>, <code>actor</code> or literal values. An input binding is refused, because no caller can supply it. This one closes each day at 00:05 UTC.
+<pre><code class="language-json">"days.close": {
+  "kind": "mutation",
+  "access": "authenticated",
+  "schedule": { "daily": "00:05" },
+  "statement": "INSERT INTO days(user_id, day, habits, done, closed_at) SELECT h.user_id, date(?1 / 1000, 'unixepoch', '-1 day'), count(*), count(c.id), ?1 FROM habits h LEFT JOIN checkins c ON c.habit_id = h.id AND c.day = date(?1 / 1000, 'unixepoch', '-1 day') WHERE h.archived_at IS NULL AND h.created_at &lt; (?1 / 86400000) * 86400000 GROUP BY h.user_id ON CONFLICT(user_id, day) DO NOTHING",
+  "bindings": [
+    { "source": "kernel", "field": "now" }
+  ]
+}</code></pre></li>
+<li>Make the statement safe to repeat. A run that changes no row had nothing to do and is recorded with <code>changes: 0</code>. A Kernel that was down for several periods runs the action once when it is back.</li>
+<li>Read the results with a normal query. Nothing is pushed to a page. A <code>subscribe</code> key is refused, so the page polls a query.
+<pre><code class="language-json">"days.recent": {
+  "kind": "query",
+  "access": "authenticated",
+  "statement": "SELECT day, habits, done FROM days WHERE user_id = ?1 ORDER BY day DESC LIMIT 30",
+  "bindings": [{ "source": "actor", "field": "id" }]
+}</code></pre></li>
+<li>Optional. To watch a run without waiting, start the Development Kernel with <code>LITTLEBOX_SCHEDULE_MIN_SECONDS</code> set. Every schedule then runs once every that many seconds. The Kernel takes it only on a loopback address.
+<pre><code class="language-sh">LITTLEBOX_SCHEDULE_MIN_SECONDS=10 bun run littlebox -- dev --dir /tmp/my-app</code></pre></li>
+<li>Publish. Publishing never runs the action. The first period it is seen in counts as done, and a republish that changes the schedule starts again from the next period.</li>
+</ol>
+
+<h2 id="rules-worth-knowing">Rules worth knowing</h2>
+<ul>
+<li>Only the timer runs it. <code>miniapp.actions.call</code>, <code>actions_invoke</code> and the editor preview refuse it with <code>Action &lt;name&gt; runs only on its schedule.</code> It can also declare an <code>http</code> route, which then runs it.</li>
+<li>A Deployment in maintenance runs nothing and runs each due action once when it leaves maintenance.</li>
+<li>A run that changes a row can <code>notify</code> the owner once. A notice to <code>actor</code> records <code>no-account</code> because the timer has no caller.</li>
+<li>The last period run is kept with Usage, so a restart, a copy or a migration does not run it twice.</li>
+</ul>
+
+<h2 id="check-it-worked">Check it worked</h2>
+<ul>
+<li>Read the runs with <code>usage_read</code> and the Deployment's <code>deploymentId</code>, plus <code>from</code> and <code>to</code> dates. It returns the newest 500 scheduled runs in the range with <code>action</code>, <code>at</code>, <code>outcome</code>, <code>changes</code> and, for a failed run, <code>error</code>.</li>
+<li>Call the query that reads the rows the run wrote, through the page.</li>
+<li>After a release, the read-back for <code>release_apply</code> is <code>project_inspect</code>.</li>
+</ul>
+<p>The editor preview has no schedule timer and no Usage store. Try schedules on <code>littlebox dev</code> or on a published Deployment.</p>
+
+<h2 id="read-next">Read next</h2>
+<ul>
+<li><a href="/guides/email-when-a-row-changes">Email when a row changes</a></li>
+<li><a href="/guides/refuse-a-write-with-guard">Refuse a write with guard</a></li>
+<li><a href="/server-actions">Server Actions</a></li>
+<li><a href="/divergences">Preview and Deployment differences</a></li>
+</ul>
+</article>
+      </div>
+    </main>
+    <aside class="toc" aria-label="On this page"><div id="toc"></div></aside>
+  </div>
+  <div id="scrim" class="scrim" hidden></div>
+  <script src="/runtime.js"></script>
+  <script type="module" src="/shell.js"></script>
+</body>
+</html>

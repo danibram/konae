@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<title>Littlebox, how an app leaves</title>
+<meta name="description" content="Arquitectura visual del Kernel de Littlebox y acceso a una mini-app standalone.">
+<link rel="stylesheet" href="styles.css">
+<script type="module" src="app.js"></script>
+</head>
+<body id="top">
+<header class="masthead shell">
+    <nav class="nav">
+      <a class="brand" href="#top"><span class="brand-mark">⌁</span> littlebox</a>
+      <div class="nav-meta"><span>How an app leaves</span><a class="nav-back" href="http://localhost:4173/">Back to projects</a></div>
+    </nav>
+    <div class="hero">
+      <div class="hero-copy reveal">
+        <p class="eyebrow"><span class="index">00 /</span> system map</p>
+        <h1 data-purpose="How an app leaves with its accounts, its rows and its rules.">Small apps.<br><em>Serious limits.</em></h1>
+        <p class="hero-lead">An editor and one capsule per app. The app names who can open it and who can read a row. Littlebox stores those rules.</p>
+      </div>
+        <aside class="hero-aside paths" data-map="leaves">
+        <div class="path"><p class="eyebrow">PATH 1</p><strong>The editor</strong><br><span>Describe a change, or edit the files. Both meet the same check.</span></div>
+        <div class="path"><p class="eyebrow">PATH 2</p><strong>The published app</strong><br><span>Visitors open it. They never share the owner's permissions.</span></div>
+        <div class="path" data-lead="same-app"><p class="eyebrow">WHAT LEAVES</p><strong>The same app.</strong><br><span>Export writes a folder. Deploy serves that folder. Accounts, rows, and rules leave together.</span></div>
+      </aside>
+    </div>
+    <div class="hero-footer">
+      <div><strong>One shared runtime</strong><span>each app stays in its own capsule</span></div>
+      <div><strong>One database per release</strong><span>it leaves with Export</span></div>
+      <div><strong>Two doors</strong><span>the visitor's app, and the owner's tools</span></div>
+    </div>
+  </header>
+
+  <main>
+    <section class="chapter shell" id="system">
+      <div class="chapter-heading reveal">
+        <p class="eyebrow index">01</p>
+        <h2>Two paths.<br>One way out.</h2>
+        <p>Describe a change, or edit the files. Both meet the same check. Export and Deploy take the accounts, the rows, and the rules.</p>
+      </div>
+
+      <details class="editor-lanes reveal" data-lead="edit-files">
+        <summary>If you edit the files</summary>
+      <div class="system-map">
+        <div class="map-bar"><span></span><span></span><span></span><code>IF YOU EDIT THE FILES</code></div>
+        <div class="lane">
+          <div class="lane-label"><p class="eyebrow">OWNER LANE</p><strong>Build</strong><small>the owner's trust</small></div>
+          <div class="flow">
+            <div class="node"><span class="tag">EDITOR</span><strong>Code and describe</strong><small>schema, actions, files</small></div>
+            <div class="arrow"></div>
+            <div class="node blue"><span class="tag">ADMIN INTERFACE</span><strong>Owner gate</strong><small>SQL Studio, export, deploy</small></div>
+            <div class="arrow"></div>
+            <div class="node dark"><span class="tag">AUTHORITY</span><strong>Littlebox Kernel</strong><small>identity, grants, policy</small></div>
+            <div class="arrow"></div>
+            <div class="node acid"><span class="tag">CAPSULE</span><strong>The database and the files</strong><small>one database per deployment</small></div>
+          </div>
+        </div>
+        <div class="lane">
+          <div class="lane-label"><p class="eyebrow">RUNTIME LANE</p><strong>Use</strong><small>the visitor's trust</small></div>
+          <div class="flow">
+            <div class="node"><span class="tag">BROWSER</span><strong>The static app</strong><small>public HTML, CSS and JS</small></div>
+            <div class="arrow"></div>
+            <div class="node"><span class="tag">RUNTIME INTERFACE</span><strong>A named action</strong><small>no SQL and no credentials</small></div>
+            <div class="arrow"></div>
+            <div class="node dark"><span class="tag">AUTHORITY</span><strong>Littlebox Kernel</strong><small>actor · visibility · action</small></div>
+            <div class="arrow"></div>
+            <div class="node acid"><span class="tag">RESULT</span><strong>Only the fields</strong><small>the action returns</small></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="kernel-detail reveal">
+        <article><span class="number">K / 01</span><h3>Identity</h3><p>Sessions stay opaque. Disk keeps the token hash and the current grants.</p></article>
+        <article><span class="number">K / 02</span><h3>Visibility</h3><p>A public app is open to anyone. A private app asks for a grant before the HTML.</p></article>
+        <article><span class="number">K / 03</span><h3>Actions</h3><p>Typed inputs, parameterized SQL, and a list that stops at 100 rows. The browser does not pick a database.</p></article>
+        <article><span class="number">K / 04</span><h3>Storage</h3><p>The database and the files live on a volume of their own, one deployment at a time.</p></article>
+      </div>
+      </details>
+    </section>
+
+    <section class="chapter" id="deploy">
+      <div class="shell chapter-heading reveal">
+        <p class="eyebrow index">02</p>
+        <h2>From files to a URL.</h2>
+        <p>Deploy does not build a new machine. It freezes the project into one capsule you can take with you.</p>
+      </div>
+      <div class="sequence reveal">
+        <article class="step"><span class="step-id">01 / EDIT</span><h3>Project</h3><p>Five readable files: the page, the style, the behavior, the schema, and the actions.</p><code>actions.json</code></article>
+        <article class="step"><span class="step-id">02 / CHECK</span><h3>Contract</h3><p>Littlebox checks the actions, the bindings, the 100-row limit, and who can open the app.</p><code>manifest v1</code></article>
+        <article class="step"><span class="step-id">03 / KEEP</span><h3>Capsule</h3><p>One deployment gets its own database and its own files.</p><code>one database</code></article>
+        <article class="step"><span class="step-id">04 / LEAVE</span><h3>Export</h3><p>Export writes the same bundle: accounts, rows, and rules.</p><code>a folder</code></article>
+        <article class="step"><span class="step-id">05 / OPEN</span><h3>Deploy</h3><p>Deploy serves that bundle on another machine. The checks travel with it.</p><code>same rules</code></article>
+      </div>
+    </section>
+
+    <section class="chapter shell" id="policy">
+      <div class="chapter-heading reveal">
+        <p class="eyebrow index">03</p>
+        <h2>Publishing the page<br>is not publishing the database.</h2>
+        <p>Who can open the app and who can read a row are different decisions. Switch the mode to see what stays closed.</p>
+      </div>
+      <div class="policy-wrap reveal">
+        <aside class="policy-control">
+          <p class="eyebrow">Who can open it</p>
+          <h3 id="policy-title">Public deployment</h3>
+          <div class="switch" role="group" aria-label="Who can open the app">
+            <button type="button" class="active" data-mode="public">PUBLIC</button>
+            <button type="button" data-mode="private">PRIVATE</button>
+          </div>
+          <p class="policy-note" id="policy-note"><strong>The page can open.</strong><br>The database stays behind the rules and answers only declared actions.</p>
+        </aside>
+        <div class="matrix">
+          <div class="matrix-row"><span>CAPABILITY</span><span>APP</span><span>OWNER</span></div>
+          <div class="matrix-row"><strong>Open the page</strong><span class="yes" id="shell-access">allowed</span><span class="yes">allowed</span></div>
+          <div class="matrix-row"><strong>Run a declared action</strong><span class="yes">by its rule</span><span class="yes">allowed</span></div>
+          <div class="matrix-row"><strong>Send arbitrary SQL</strong><span class="no">blocked</span><span class="yes">owner only</span></div>
+          <div class="matrix-row"><strong>Download the database</strong><span class="no">blocked</span><span class="yes">export</span></div>
+          <div class="matrix-row"><strong>Read another app</strong><span class="no">isolated</span><span class="no">another project</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="standalone" id="standalone">
+      <div class="shell">
+        <div class="chapter-heading reveal">
+          <p class="eyebrow index">04</p>
+          <h2>Export and Deploy<br>take the same bundle.</h2>
+          <p>Accounts, rows, and rules leave together. A list still stops at 100 rows on the next machine.</p>
+        </div>
+        <div class="runtime-card reveal">
+          <div class="runtime-copy">
+            <div>
+              <p class="eyebrow">WHAT LEAVES</p>
+              <h3>The same app.</h3>
+              <p>Export writes a folder. Deploy serves that folder. Neither one leaves the checks behind.</p>
+            </div>
+            <p class="mono">accounts, rows, rules<br>a list stops at 100</p>
+          </div>
+          <div class="runtime-visual" aria-hidden="true">
+            <div class="mini-window">
+              <header><i></i><i></i><i></i><code>tiny-tasks.local</code></header>
+              <div class="mini-body">
+                <small>SHARED LIST</small>
+                <h4>Tiny Tasks</h4>
+                <div class="fake-input">Add one small thing…</div>
+                <div class="fake-task"><i></i><span>Ship the standalone app</span></div>
+                <div class="fake-task"><i></i><span>The database stays behind the rules</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,6 +1,6 @@
 import type { DeploymentReceipt } from "../deployments/client";
 import { normalizeManifest } from "../deployments/manifest";
-import { architectureProjectId, cloneArchitectureProject } from "./architecture";
+import { architectureProjectId } from "./architecture";
 import { cloneStarter, repairDroppedPreviewUpload, starterDatabaseModelSource } from "./starter";
 import type { MiniAppProject } from "./types";
 import { directoriesForFiles } from "./project-files";
@@ -22,7 +22,7 @@ export function recoveryDrafts(candidates: MiniAppProject[], saved: MiniAppProje
     if (!previous || candidate.updatedAt > previous.updatedAt) latest.set(candidate.id, candidate);
   }
   const current = new Map(saved.map((project) => [project.id, draftSignature(project)]));
-  // The browser used to seed the starter and the architecture map into every empty store. The map is no longer a project the editor opens, so no copy of it is a draft; an unedited starter is not something the owner made.
+  // The browser used to seed the starter and the architecture map into every empty store. The map is now a dev-server prototype, so no copy of it is a draft; an unedited starter is not something the owner made.
   const starter = cloneStarter();
   const starterSignature = draftSignature(starter);
   return [...latest.values()].filter((draft) => current.get(draft.id) !== draftSignature(draft) && draft.id !== architectureProjectId && !(draft.id === starter.id && draftSignature(draft) === starterSignature));
@@ -47,7 +47,7 @@ export function loadWorkspaceState(storage: Pick<Storage, "getItem"> = localStor
   // whose last save predates `littlebox:projects`, and is never written again.
   const legacyProject = readJson<MiniAppProject>(storage.getItem("littlebox:project"));
   const storedProjects = readJson<MiniAppProject[]>(storage.getItem(projectsKey));
-  const projects = includeSeedProjects(normalizeProjects(Array.isArray(storedProjects) && storedProjects.length > 0
+  const projects = withoutArchitecture(normalizeProjects(Array.isArray(storedProjects) && storedProjects.length > 0
     ? storedProjects
     : legacyProject ? [legacyProject] : [cloneStarter()]));
   const requestedProjectId = storage.getItem(activeProjectKey);
@@ -66,7 +66,7 @@ export function loadWorkspaceState(storage: Pick<Storage, "getItem"> = localStor
 
 /**
  * The projects a browser actually stored, for the "Import apps from this
- * browser" list. loadWorkspaceState invents a starter and the architecture map
+ * browser" list. loadWorkspaceState invents a starter
  * for an empty store, and offering those would list apps the owner never made.
  */
 export function storedLocalProjects(storage: Pick<Storage, "getItem"> = localStorage): MiniAppProject[] {
@@ -94,7 +94,7 @@ export function createWorkspaceProject(name: string, existing: readonly MiniAppP
 }
 
 export function resetWorkspaceProject(project: MiniAppProject): MiniAppProject {
-  const seed = project.id === architectureProjectId ? cloneArchitectureProject() : cloneStarter();
+  const seed = cloneStarter();
   return {
     ...seed,
     id: project.id,
@@ -144,13 +144,6 @@ function legacyDatabaseModel(schema: string) {
 }
 
 function refreshUneditedSeed(project: MiniAppProject): MiniAppProject {
-  const architectureHtml = project.files["index.html"] ?? "";
-  const architectureStyle = project.files["styles.css"] ?? "";
-  const architectureScript = project.files["app.js"] ?? "";
-  if (project.id === architectureProjectId && (architectureHtml.includes("mapa del sistema") || architectureHtml.includes("REGLA BASE") || architectureHtml.includes("KERNEL ONLINE") || architectureHtml.includes("kernel that decides") || architectureHtml.includes("Dos caminos") || architectureHtml.includes("declared-actions") || architectureHtml.includes("De código") || architectureHtml.includes("Sólo los campos") || architectureHtml.includes("runtime no disponible") || architectureHtml.includes("frame-ancestors") || !architectureHtml.includes('data-map="leaves"') || architectureStyle.includes("opacity: 0") || architectureScript.includes("localhost:8080") || architectureHtml.includes("database stays on the server") || architectureHtml.includes("SIMULADOR") || architectureHtml.includes("Keep SQLite") || architectureHtml.includes("SQLite and files") || !architectureHtml.includes('data-lead="same-app"') || !architectureHtml.includes('data-lead="edit-files"'))) {
-    const seed = cloneArchitectureProject().files;
-    return { ...project, files: { ...project.files, "index.html": seed["index.html"], "styles.css": seed["styles.css"], "app.js": seed["app.js"] } };
-  }
   const html = project.files["index.html"] ?? "";
   const css = project.files["styles.css"] ?? "";
   const script = project.files["app.js"] ?? "";
@@ -240,10 +233,10 @@ function refreshUneditedSeed(project: MiniAppProject): MiniAppProject {
   };
 }
 
-function includeSeedProjects(projects: MiniAppProject[]) {
-  return projects.some((project) => project.id === architectureProjectId)
-    ? projects
-    : [...projects, cloneArchitectureProject()];
+/** The architecture map moved to a dev-server prototype. A browser that stored the old copy must not list it as an app. */
+function withoutArchitecture(projects: MiniAppProject[]) {
+  const kept = projects.filter((project) => project.id !== architectureProjectId);
+  return kept.length > 0 ? kept : [cloneStarter()];
 }
 
 function withoutAccessCode(deployment: DeploymentReceipt): DeploymentReceipt {
