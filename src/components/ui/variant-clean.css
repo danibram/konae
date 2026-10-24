@@ -33,6 +33,7 @@
   --ds-radius: 6px;
   --ds-radius-lg: 10px;
   --ds-bw: 1px;
+  --ds-tick-radius: 50%;
   --ds-bar: 3px;
   --ds-press: 0px;
   --ds-label-case: none;
@@ -188,3 +189,17 @@
 [data-ds="clean"] .ds-index a:hover { background: var(--ds-subtle); color: var(--ds-text); }
 [data-ds="clean"] .ds-index { background: var(--ds-canvas); }
 [data-ds="clean"] .ds-frame .ds-frame-home { box-shadow: var(--ds-shadow); border-radius: var(--ds-radius-lg); }
+
+/* App patterns */
+[data-ds="clean"] .ui-title { font-weight: 650; letter-spacing: -.035em; font-size: clamp(26px, 5vw, 34px); line-height: 1.1; }
+[data-ds="clean"] .ui-eyebrow, [data-ds="clean"] .ui-section-head { font-family: var(--ds-font); letter-spacing: 0; }
+[data-ds="clean"] .ui-eyebrow { font-size: 13px; font-weight: 520; }
+[data-ds="clean"] .ui-section-head { font-size: 13px; font-weight: 620; }
+[data-ds="clean"] .ui-section-head > :last-child { letter-spacing: 0; font-weight: 450; }
+[data-ds="clean"] .ui-composer { border-radius: var(--ds-radius); overflow: hidden; }
+[data-ds="clean"] .ui-composer:focus-within { background: var(--ds-field); border-color: var(--ds-text); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ds-blue) 28%, transparent); }
+[data-ds="clean"] .ui-composer .ui-button { border-radius: 0; }
+[data-ds="clean"] .ui-lede code, [data-ds="clean"] .ui-code { border-radius: var(--ds-radius-sm); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+[data-ds="clean"] .ui-list-item { padding: 14px 4px; }
+[data-ds="clean"] .ui-tile { box-shadow: var(--ds-shadow-sm); border-radius: var(--ds-radius); }
+[data-ds="clean"] .ui-form { padding: 20px; }

@@ -107,30 +107,30 @@ const actions = {
 
 const html = `
 <title>The clubhouse</title>
-<main class="app-shell" data-purpose="A members area. Members post, admins moderate, the owner names the admins.">
-  <header>
+<main class="ui-page" data-purpose="A members area. Members post, admins moderate, the owner names the admins.">
+  <header class="ui-page-header">
     <div>
-      <p class="eyebrow">Members</p>
-      <h1>The clubhouse</h1>
+      <p class="ui-eyebrow">Members</p>
+      <h1 class="ui-title">The clubhouse</h1>
     </div>
-    <div class="identity"><span id="identity"></span><button id="sign-in" class="quiet" hidden>Sign in</button><button id="sign-out" class="quiet" hidden>Sign out</button></div>
+    <div class="ui-identity"><span id="identity"></span><button id="sign-in" class="ui-button ui-button-sm" hidden>Sign in</button><button id="sign-out" class="ui-button ui-button-sm" hidden>Sign out</button></div>
   </header>
 
-  <p id="landing" class="intro" hidden>Sign in to read and write posts. The owner decides who is an admin.</p>
-  <p id="status" class="status" role="status" aria-live="polite"></p>
+  <p id="landing" class="ui-lede" hidden>Sign in to read and write posts. The owner decides who is an admin.</p>
+  <p id="status" class="ui-status" role="status" aria-live="polite"></p>
 
   <section id="member-area" hidden>
-    <form id="post-form" class="card">
-      <label>New post<textarea id="post-body" maxlength="2000" required></textarea></label>
-      <button class="primary" type="submit">Post</button>
+    <form id="post-form" class="ui-card ui-form">
+      <label class="ui-field">New post<textarea class="ui-textarea" id="post-body" maxlength="2000" required></textarea></label>
+      <button class="ui-button ui-button-primary" type="submit">Post</button>
     </form>
-    <div class="section-label"><span>Posts</span><span id="role"></span></div>
-    <div id="posts" class="rows"></div>
+    <div class="ui-section-head"><span>Posts</span><span id="role"></span></div>
+    <div id="posts" class="ui-list"></div>
   </section>
 
   <section id="staff-area" hidden>
-    <div class="section-label"><span>Members</span><span>Only the owner changes roles</span></div>
-    <div id="members" class="rows"></div>
+    <div class="ui-section-head"><span>Members</span><span>Only the owner changes roles</span></div>
+    <div id="members" class="ui-list"></div>
   </section>
 </main>`;
 
@@ -141,19 +141,19 @@ async function loadPosts() {
   const posts = await miniapp.actions.call('posts.list');
   const staff = me.role !== 'member';
   $('#posts').innerHTML = posts.length ? posts.map(post =>
-    '<article class="row"><div><p>' + escapeHtml(post.body) + '</p><small>' + escapeHtml(post.author ?? 'Someone') + ' · ' + when(post.created_at) + '</small></div>' +
-    (staff || post.author_id === me.user_id ? '<button data-remove="' + post.id + '">Remove</button>' : '<span></span>') +
+    '<article class="ui-list-item"><div class="ui-list-main"><p>' + escapeHtml(post.body) + '</p><small>' + escapeHtml(post.author ?? 'Someone') + ' · ' + when(post.created_at) + '</small></div>' +
+    (staff || post.author_id === me.user_id ? '<button class="ui-button ui-button-danger ui-button-sm" data-remove="' + post.id + '">Remove</button>' : '') +
     '</article>'
-  ).join('') : '<p class="empty">No posts yet.</p>';
+  ).join('') : '<p class="ui-list-empty">No posts yet.</p>';
 }
 
 async function loadMembers() {
   const members = await miniapp.actions.call('members.list');
   const owner = me.role === 'owner';
   $('#members').innerHTML = members.map(member =>
-    '<article class="row"><div><p>' + escapeHtml(member.display_name) + '</p><small>' + member.role + '</small></div>' +
-    (owner && member.role === 'member' ? '<button data-promote="' + escapeHtml(member.user_id) + '">Make admin</button>'
-      : owner && member.role === 'admin' ? '<button data-demote="' + escapeHtml(member.user_id) + '">Make member</button>' : '<span></span>') +
+    '<article class="ui-list-item"><div class="ui-list-main"><p>' + escapeHtml(member.display_name) + '</p><small>' + member.role + '</small></div>' +
+    (owner && member.role === 'member' ? '<button class="ui-button ui-button-sm" data-promote="' + escapeHtml(member.user_id) + '">Make admin</button>'
+      : owner && member.role === 'admin' ? '<button class="ui-button ui-button-sm" data-demote="' + escapeHtml(member.user_id) + '">Make member</button>' : '') +
     '</article>'
   ).join('');
 }
@@ -183,7 +183,7 @@ $('#post-form').addEventListener('submit', async (event) => {
   const body = $('#post-body').value.trim();
   if (!body) return;
   try {
-    statusLine.textContent = '';
+    say('');
     await miniapp.actions.call('posts.add', { body });
     $('#post-body').value = '';
     await loadPosts();
@@ -194,7 +194,7 @@ document.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-remove], button[data-promote], button[data-demote]');
   if (!button) return;
   try {
-    statusLine.textContent = '';
+    say('');
     if (button.dataset.remove) await miniapp.actions.call('posts.remove', { id: Number(button.dataset.remove) });
     if (button.dataset.promote) await miniapp.actions.call('members.promote', { userId: button.dataset.promote });
     if (button.dataset.demote) await miniapp.actions.call('members.demote', { userId: button.dataset.demote });

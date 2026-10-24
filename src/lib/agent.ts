@@ -15,9 +15,7 @@ export function applyLocalAgentEdit(project: MiniAppProject, prompt: string): Ag
   };
 
   if (normalized.includes("azul") || normalized.includes("blue")) {
-    next.files["styles.css"] = project.files["styles.css"]
-      .replaceAll("#e65337", "#3157d5")
-      .replaceAll("#d7e6b7", "#b9d7ef");
+    next.files["styles.css"] = `${project.files["styles.css"]}\n/* Agent edit: ink blue accent */\n:root { --ds-accent: #3157d5; --ds-accent-hover: #2745b0; --ds-accent-soft: #dfe6fb; --ds-on-accent: #ffffff; }\n`;
     return {
       project: next,
       message: "Proposed change to styles.css: the accent becomes ink blue. Nothing is saved until you apply it.",
@@ -26,7 +24,7 @@ export function applyLocalAgentEdit(project: MiniAppProject, prompt: string): Ag
   }
 
   if (normalized.includes("oscuro") || normalized.includes("dark")) {
-    next.files["styles.css"] += `\n\n/* Agent edit: dark workshop */\n:root { background: #191a17; color: #eeeade; }\nbody { background: radial-gradient(circle at 90% 8%, #33402c 0 18%, transparent 38%), #191a17; }\n.composer { background: #252620; box-shadow: 6px 6px 0 #e8e4d8; }\n.composer input { color: #eeeade; }\n.identity, .task button { border-color: #eeeade; }`;
+    next.files["styles.css"] += "\n/* Agent edit: dark workshop */\n:root { color-scheme: dark; --ds-canvas: #191a17; --ds-surface: #252620; --ds-subtle: #2e2f28; --ds-border: #44463b; --ds-line: #44463b; --ds-stroke: #8a8c7e; --ds-text: #eeeade; --ds-muted: #b7b3a6; --ds-field: #1f201b; }\n";
     return {
       project: next,
       message: "Proposed change to styles.css: a dark theme. Nothing is saved until you apply it.",
@@ -39,7 +37,7 @@ export function applyLocalAgentEdit(project: MiniAppProject, prompt: string): Ag
       '<input id="task-input" placeholder="Add one small thing…" autocomplete="off" required>',
       '<input id="task-input" placeholder="Add one small thing…" autocomplete="off" required><input id="due-input" type="date" aria-label="Due date">',
     );
-    next.files["styles.css"] += "\n.composer { grid-template-columns: 1fr 150px 52px; } .composer input[type=date] { border-left: 1px solid #c9c5b9; }";
+    next.files["styles.css"] += "\n.ui-composer { grid-template-columns: minmax(0, 1fr) 150px auto; } .ui-composer input[type=date] { border-left: 1px solid var(--ds-border); }";
     return {
       project: next,
       message: "Proposed change to index.html and styles.css: a due date field. Nothing is saved until you apply it. Storing the date needs a due_at column.",

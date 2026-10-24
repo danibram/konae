@@ -92,7 +92,7 @@ describe("workspace project registry", () => {
 
   test("refreshes an unedited starter when its copy still hides the guest and stays light", () => {
     const stale = cloneStarter();
-    stale.files["index.html"] = stale.files["index.html"].replace('class="identity">Guest', 'class="identity">guest');
+    stale.files["index.html"] = stale.files["index.html"].replace('class="ui-identity">Guest', 'class="identity">guest').replace('class="ui-page"', 'class="app-shell"');
     stale.files["styles.css"] = ":root { color-scheme: light; }";
     stale.files["app.js"] = stale.files["app.js"].replace("identity.textContent = session.role === 'anonymous' ? 'Guest' : session.name;", "identity.textContent = session.name;");
     const storage = memoryStorage({ "littlebox:projects": JSON.stringify([stale]) });

@@ -62,25 +62,25 @@ const actions = {
 
 const html = `
 <title>What happened</title>
-<main class="app-shell" data-purpose="A daily log. Each member writes entries; every morning at 07:00 UTC each member who wrote gets one email listing their entries.">
-  <header>
+<main class="ui-page" data-purpose="A daily log. Each member writes entries; every morning at 07:00 UTC each member who wrote gets one email listing their entries.">
+  <header class="ui-page-header">
     <div>
-      <p class="eyebrow">Daily log</p>
-      <h1>What happened</h1>
+      <p class="ui-eyebrow">Daily log</p>
+      <h1 class="ui-title">What happened</h1>
     </div>
-    <div class="identity"><span id="identity"></span><button id="sign-in" class="quiet" hidden>Sign in</button></div>
+    <div class="ui-identity"><span id="identity"></span><button id="sign-in" class="ui-button ui-button-sm" hidden>Sign in</button></div>
   </header>
 
-  <p class="intro">Every morning at 07:00 UTC the app emails each member the entries they wrote the day before. Nobody presses a button for it.</p>
-  <p id="status" class="status" role="status" aria-live="polite"></p>
+  <p class="ui-lede">Every morning at 07:00 UTC the app emails each member the entries they wrote the day before. Nobody presses a button for it.</p>
+  <p id="status" class="ui-status" role="status" aria-live="polite"></p>
 
   <section id="log" hidden>
-    <form id="entry-form" class="card">
-      <label>New entry<input id="entry-body" maxlength="500" autocomplete="off" required></label>
-      <button class="primary" type="submit">Add</button>
+    <form id="entry-form" class="ui-card ui-form">
+      <label class="ui-field">New entry<input class="ui-input" id="entry-body" maxlength="500" autocomplete="off" required></label>
+      <button class="ui-button ui-button-primary" type="submit">Add</button>
     </form>
-    <div class="section-label"><span>Your entries</span></div>
-    <div id="entries" class="rows"></div>
+    <div class="ui-section-head"><span>Your entries</span></div>
+    <div id="entries" class="ui-list"></div>
   </section>
 </main>`;
 
@@ -88,9 +88,9 @@ const script = `${templateHelpers}
 async function load() {
   const entries = await miniapp.actions.call('entries.list');
   $('#entries').innerHTML = entries.length ? entries.map(entry =>
-    '<article class="row"><div><p>' + escapeHtml(entry.body) + '</p><small>' + when(entry.created_at) + '</small></div><span>'
+    '<article class="ui-list-item"><div class="ui-list-main"><p>' + escapeHtml(entry.body) + '</p><small>' + when(entry.created_at) + '</small></div><span class="ui-list-end">'
       + (entry.digested_at ? 'mailed ' + when(entry.digested_at) : "in tomorrow's email") + '</span></article>'
-  ).join('') : '<p class="empty">No entries yet. Tomorrow at 07:00 UTC you get an email with what you write today.</p>';
+  ).join('') : '<p class="ui-list-empty">No entries yet. Tomorrow at 07:00 UTC you get an email with what you write today.</p>';
 }
 
 async function start() {
@@ -109,7 +109,7 @@ $('#entry-form').addEventListener('submit', async (event) => {
   const body = $('#entry-body').value.trim();
   if (!body) return;
   try {
-    statusLine.textContent = '';
+    say('');
     await miniapp.actions.call('entries.add', { body });
     $('#entry-body').value = '';
     await load();

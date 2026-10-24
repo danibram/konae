@@ -159,7 +159,7 @@ function stubValidator(result: ValidationResult) {
 
 const cssEdit = {
   name: "edit",
-  arguments: { path: "/workspace/styles.css", old_string: "h1 em { color: #e65337; }", new_string: "h1 em { color: #3157d5; }" },
+  arguments: { path: "/workspace/styles.css", old_string: "--ds-orange: #f45d35;", new_string: "--ds-orange: #3157d5;" },
 };
 
 describe("littlebox agent", () => {
@@ -206,7 +206,7 @@ describe("littlebox agent", () => {
     const proposal = agent.proposal();
     expect(proposal?.files["styles.css"]).toContain("#3157d5");
     expect(proposal?.validation?.ok).toBe(true);
-    expect(starterProject.files["styles.css"]).toContain("#e65337");
+    expect(starterProject.files["styles.css"]).toContain("#f45d35");
   });
 
   test("a failing gate blocks apply", async () => {
@@ -262,7 +262,7 @@ describe("littlebox agent", () => {
   test("both edits of a two-edit message reach the validated proposal", async () => {
     const second = {
       name: "edit",
-      arguments: { path: "/workspace/styles.css", old_string: "font-weight: 600;", new_string: "font-weight: 700;" },
+      arguments: { path: "/workspace/styles.css", old_string: "--ds-bar: 3px;", new_string: "--ds-bar: 4px;" },
     };
     const { agent } = agentFor([call(cssEdit, second), say("Hecho.")]);
 
@@ -270,7 +270,7 @@ describe("littlebox agent", () => {
 
     const proposal = agent.proposal();
     expect(proposal?.files["styles.css"]).toContain("#3157d5");
-    expect(proposal?.files["styles.css"]).toContain("font-weight: 700;");
+    expect(proposal?.files["styles.css"]).toContain("--ds-bar: 4px;");
     expect(agent.applyGateStatus().state).toBe("ready");
   });
 
@@ -451,7 +451,7 @@ describe("littlebox agent", () => {
     // The capsule the model is seeded with is the applied one, not the original.
     const seeded = harness.requests[harness.requests.length - 1].lastMessage;
     expect(seeded).toContain("/* v2 applied */");
-    expect(seeded).not.toContain("h1 em { color: #e65337; }");
+    expect(seeded).not.toContain("--ds-orange: #f45d35;");
   });
 
   /**

@@ -252,3 +252,61 @@ export function Menu({ label, trigger, items, align = "end" }: { label: string; 
     </div>}
   </div>;
 }
+
+/* ---- App patterns ------------------------------------------------------- */
+
+/** The column a small app lives in. */
+export function Page({ children, className }: { children: ReactNode; className?: string }) {
+  return <main className={classes("ui-page", className)}>{children}</main>;
+}
+
+export function PageHeader({ eyebrow, title, actions }: { eyebrow?: string; title: string; actions?: ReactNode }) {
+  return <header className="ui-page-header"><div>{eyebrow && <p className="ui-eyebrow">{eyebrow}</p>}<h1 className="ui-title">{title}</h1></div>{actions}</header>;
+}
+
+export function Lede({ children }: { children: ReactNode }) {
+  return <p className="ui-lede">{children}</p>;
+}
+
+/** Who is using the app, with the one button that changes it. */
+export function Identity({ name, children }: { name?: string; children?: ReactNode }) {
+  return <div className="ui-identity">{name && <><Avatar name={name} size={26} /><span>{name}</span></>}{children}</div>;
+}
+
+export function SectionHead({ label, meta }: { label: string; meta?: ReactNode }) {
+  return <div className="ui-section-head"><span>{label}</span>{meta !== undefined && <span>{meta}</span>}</div>;
+}
+
+export function List({ children }: { children: ReactNode }) {
+  return <div className="ui-list" role="list">{children}</div>;
+}
+
+/** One row: an optional leading control, a title with a quiet line under it, and what can be done to it. */
+export function ListItem({ title, detail, lead, end, done }: { title: ReactNode; detail?: ReactNode; lead?: ReactNode; end?: ReactNode; done?: boolean }) {
+  return <article className="ui-list-item" role="listitem" data-done={done || undefined}>
+    {lead && <span className="ui-list-lead">{lead}</span>}
+    <div className="ui-list-main"><p>{title}</p>{detail && <small>{detail}</small>}</div>
+    {end && <div className="ui-list-end">{end}</div>}
+  </article>;
+}
+
+/** One line that adds a row: a field and its button, joined. */
+export function Composer({ label, placeholder, action, value, onChange, onSubmit }: { label: string; placeholder?: string; action: ReactNode; value: string; onChange: (value: string) => void; onSubmit: () => void }) {
+  return <form className="ui-composer" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
+    <input aria-label={label} placeholder={placeholder} value={value} autoComplete="off" onChange={(event) => onChange(event.target.value)} />
+    <Button type="submit" variant="primary">{action}</Button>
+  </form>;
+}
+
+export function Tiles({ children, small }: { children: ReactNode; small?: boolean }) {
+  return <div className={classes("ui-tiles", small && "ui-tiles-small")}>{children}</div>;
+}
+
+export function Tile({ src, alt, caption, end, children }: { src?: string; alt?: string; caption?: ReactNode; end?: ReactNode; children?: ReactNode }) {
+  return <figure className="ui-tile">{src ? <img src={src} alt={alt ?? ""} /> : <div className="ui-tile-media">{children}</div>}{(caption || end) && <figcaption><span>{caption}</span>{end}</figcaption>}</figure>;
+}
+
+/** Marks one row done or not done. The label names the row for a screen reader. */
+export function Tick({ pressed, onToggle, label = "Toggle task" }: { pressed: boolean; onToggle: () => void; label?: string }) {
+  return <button type="button" className="ui-tick" aria-pressed={pressed} aria-label={label} onClick={onToggle} />;
+}

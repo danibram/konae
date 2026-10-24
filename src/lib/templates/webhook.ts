@@ -54,21 +54,21 @@ const actions = {
 
 const html = `
 <title>Issue feed</title>
-<main class="app-shell" data-purpose="A webhook receiver. GitHub sends signed issue events to /hooks/github; the owner reads them here.">
-  <header>
+<main class="ui-page" data-purpose="A webhook receiver. GitHub sends signed issue events to /hooks/github; the owner reads them here.">
+  <header class="ui-page-header">
     <div>
-      <p class="eyebrow">Webhook</p>
-      <h1>Issue feed</h1>
+      <p class="ui-eyebrow">Webhook</p>
+      <h1 class="ui-title">Issue feed</h1>
     </div>
-    <div class="identity"><span id="identity"></span><button id="sign-in" class="quiet">Owner sign in</button></div>
+    <div class="ui-identity"><span id="identity"></span><button id="sign-in" class="ui-button ui-button-sm">Owner sign in</button></div>
   </header>
 
-  <p class="intro">Point a GitHub webhook for issue events at <code>/hooks/github</code> on this app, with the secret you save as <code>github_webhook</code> under Integrations. The Kernel checks every signature and drops a redelivery.</p>
-  <p id="status" class="status" role="status" aria-live="polite"></p>
+  <p class="ui-lede">Point a GitHub webhook for issue events at <code>/hooks/github</code> on this app, with the secret you save as <code>github_webhook</code> under Integrations. The Kernel checks every signature and drops a redelivery.</p>
+  <p id="status" class="ui-status" role="status" aria-live="polite"></p>
 
   <section id="feed" hidden>
-    <div class="section-label"><span>Events</span><span>Only the owner sees these</span></div>
-    <div id="events" class="rows"></div>
+    <div class="ui-section-head"><span>Events</span><span>Only the owner sees these</span></div>
+    <div id="events" class="ui-list"></div>
   </section>
 </main>`;
 
@@ -81,8 +81,8 @@ async function start() {
   if (session.role !== 'owner') return;
   const events = await miniapp.actions.call('events.list');
   $('#events').innerHTML = events.length ? events.map(event =>
-    '<article class="row"><div><p>' + escapeHtml(event.title) + '</p><small>' + escapeHtml(event.repo || 'GitHub') + ' · ' + when(event.received_at) + '</small></div><span></span></article>'
-  ).join('') : '<p class="empty">No events yet. They arrive once the webhook is set up.</p>';
+    '<article class="ui-list-item"><div class="ui-list-main"><p>' + escapeHtml(event.title) + '</p><small>' + escapeHtml(event.repo || 'GitHub') + ' · ' + when(event.received_at) + '</small></div></article>'
+  ).join('') : '<p class="ui-list-empty">No events yet. They arrive once the webhook is set up.</p>';
 }
 
 $('#sign-in').addEventListener('click', async () => { await miniapp.auth.signIn(); await start(); });

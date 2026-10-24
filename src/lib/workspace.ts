@@ -162,6 +162,8 @@ function refreshUneditedSeed(project: MiniAppProject): MiniAppProject {
   const html = project.files["index.html"] ?? "";
   const css = project.files["styles.css"] ?? "";
   const script = project.files["app.js"] ?? "";
+  // A starter built on the design system is current. The rules below repair older copies only.
+  if (project.id === "app_tiny_tasks" && html.includes('class="ui-page"')) return project;
   const previousStarter = project.id === "app_tiny_tasks"
     && html.includes('class="identity">guest')
     && !css.includes("prefers-color-scheme")

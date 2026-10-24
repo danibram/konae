@@ -1,5 +1,9 @@
 import type { MiniAppProject } from "./types";
 import { createDefaultManifest } from "../deployments/manifest";
+import { appStyles } from "./templates/shared";
+
+/** The design system, then nothing: the starter needs no rules of its own. */
+const starterStyles = appStyles();
 
 export const starterDatabaseModelSource = `import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
@@ -26,73 +30,33 @@ export const starterProject: MiniAppProject = {
   files: {
     "index.html": `
 <title>Tiny Tasks</title>
-<main class="app-shell" data-purpose="A shared list. Anyone with the link can add to it.">
-  <header>
+<main class="ui-page" data-purpose="A shared list. Anyone with the link can add to it.">
+  <header class="ui-page-header">
     <div>
-      <p class="eyebrow">Shared list</p>
-      <h1>Tiny Tasks</h1>
+      <p class="ui-eyebrow">Shared list</p>
+      <h1 class="ui-title">Tiny Tasks</h1>
     </div>
-    <div id="identity" class="identity">Guest</div>
+    <div id="identity" class="ui-identity">Guest</div>
   </header>
 
-  <form id="task-form" class="composer">
+  <form id="task-form" class="ui-composer">
     <input id="task-input" placeholder="Add one small thing…" autocomplete="off" required>
-    <button id="add-task" type="button" aria-label="Add task">↗</button>
+    <button id="add-task" type="button" class="ui-button ui-button-primary" aria-label="Add task">Add</button>
   </form>
 
   <section>
-    <div class="section-label"><span>TODAY</span><span id="count"></span></div>
-    <div id="tasks" class="tasks"><div class="empty">Nothing here yet. Anyone with this link sees the same list.</div></div>
-    <p class="list-limit">The list stops at 100 rows.</p>
+    <div class="ui-section-head"><span>Today</span><span id="count"></span></div>
+    <div id="tasks" class="ui-list"><p class="ui-list-empty">Nothing here yet. Anyone with this link sees the same list.</p></div>
+    <p class="ui-list-note">The list stops at 100 rows.</p>
   </section>
 
-  <section class="file-shelf">
-    <div class="section-label"><span>PINBOARD</span><label for="file-input">+ ADD FILE</label></div>
+  <section>
+    <div class="ui-section-head"><span>Pinboard</span><label for="file-input" class="ui-button ui-button-sm">Add file</label></div>
     <input id="file-input" type="file" accept="image/*,.pdf,.txt" hidden>
-    <div id="files" class="files"></div>
+    <div id="files" class="ui-tiles ui-tiles-small"></div>
   </section>
 </main>`,
-    "styles.css": `
-@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Manrope:wght@500;600;700&display=swap');
-
-:root { color-scheme: light dark; font-family: Manrope, sans-serif; background: #f3efe5; color: #24251f; }
-* { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 90% 8%, #d7e6b7 0 18%, transparent 38%), #f3efe5; }
-.app-shell { width: min(680px, calc(100% - 40px)); margin: 0 auto; padding: 28px 0 48px; }
-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
-.eyebrow, .section-label { font-size: 11px; letter-spacing: .18em; font-weight: 700; }
-h1 { font-family: 'DM Serif Display', serif; font-size: clamp(32px, 7vw, 56px); line-height: .9; letter-spacing: -.045em; margin: 8px 0 20px; font-weight: 400; }
-h1 em { color: #e65337; }
-.identity { border: 1px solid #24251f; border-radius: 999px; padding: 8px 12px; font-size: 11px; font-weight: 700; }
-.composer { background: #fffdf8; border: 1px solid #24251f; display: grid; grid-template-columns: 1fr 52px; padding: 6px; box-shadow: 6px 6px 0 #24251f; margin-bottom: 52px; }
-.composer input { border: 0; background: transparent; padding: 14px 16px; font: inherit; outline: none; }
-.composer button { border: 0; background: #c8f34a; color: #171910; font-size: 25px; cursor: pointer; }
-.list-limit { margin: 8px 0 0; font-size: 13px; line-height: 1.4; }
-.section-label { display: flex; justify-content: space-between; border-bottom: 1px solid #969487; padding-bottom: 10px; }
-.tasks { display: grid; }
-.task { display: grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items: center; padding: 18px 4px; border-bottom: 1px solid #c9c5b9; }
-.task button { width: 20px; height: 20px; border: 1px solid #24251f; border-radius: 50%; background: transparent; cursor: pointer; }
-.task.done span { text-decoration: line-through; opacity: .42; }
-.task small { color: #77756c; }
-.empty { font-family: Manrope, sans-serif; font-size: 16px; line-height: 1.5; color: #77756c; padding: 20px 4px; }
-.file-shelf { margin-top: 54px; }
-.section-label label { color: #171910; background: #c8f34a; cursor: pointer; padding: 2px 6px; }
-.files { display: flex; gap: 10px; flex-wrap: wrap; padding-top: 15px; }
-.file { width: 82px; height: 82px; display: grid; place-items: center; overflow: hidden; border: 1px solid #24251f; background: #fffdf8; font-size: 10px; text-align: center; }
-.file img { width: 100%; height: 100%; object-fit: cover; }
-@media (prefers-color-scheme: dark) {
-  :root { background: #1c1b17; color: #f3efe5; }
-  body { background: #1c1b17; }
-  .composer, .file { background: #2a2822; color: inherit; border-color: #f3efe5; }
-      .composer { border-color: #f3efe5; box-shadow: 4px 4px 0 #0a0c10; }
-  .composer input { color: #f3efe5; }
-  .composer input::placeholder { color: #d9d4c8; }
-  .identity, .task button { border-color: #f3efe5; }
-  .section-label, .task { border-color: #5c594f; }
-  .empty, .task small, .section-label { color: #f3efe5; }
-}
-@media (max-width: 520px) { .app-shell { padding-top: 20px; } }
-`,
+    "styles.css": starterStyles,
     "app.js": `
 const form = document.querySelector('#task-form');
 const input = document.querySelector('#task-input');
@@ -106,23 +70,23 @@ const fileShelf = document.querySelector('#files');
 async function loadTasks() {
   const tasks = await miniapp.actions.call('tasks.list');
   count.textContent = tasks.length + (tasks.length === 1 ? ' item' : ' items');
-  list.innerHTML = tasks.length ? tasks.map(task => \
-    '<article class="task ' + (task.done ? 'done' : '') + '">' +
-      '<button data-id="' + task.id + '" aria-label="Toggle task"></button>' +
-      '<span>' + escapeHtml(task.title) + '</span>' +
-      '<small>#' + task.id + '</small>' +
+  list.innerHTML = tasks.length ? tasks.map(task =>
+    '<article class="ui-list-item task ' + (task.done ? 'done' : '') + '"' + (task.done ? ' data-done' : '') + '>' +
+      '<span class="ui-list-lead"><button class="ui-tick" data-id="' + task.id + '" aria-label="Toggle task" aria-pressed="' + (task.done ? 'true' : 'false') + '"></button></span>' +
+      '<div class="ui-list-main"><p>' + escapeHtml(task.title) + '</p></div>' +
+      '<div class="ui-list-end">#' + task.id + '</div>' +
     '</article>'
-  ).join('') : '<div class="empty">Nothing here yet. Anyone with this link sees the same list.</div>';
+  ).join('') : '<p class="ui-list-empty">Nothing here yet. Anyone with this link sees the same list.</p>';
 }
 
 async function loadFiles() {
   const files = await miniapp.files.list();
   fileShelf.innerHTML = files.map(file =>
-    '<div class="file" title="' + escapeHtml(file.name) + '">' +
+    '<figure class="ui-tile" title="' + escapeHtml(file.name) + '">' +
     (file.type.startsWith('image/')
       ? '<img src="' + file.url + '" alt="' + escapeHtml(file.name) + '">'
-      : escapeHtml(file.name)) +
-    '</div>'
+      : '<div class="ui-tile-media">' + escapeHtml(file.name) + '</div>') +
+    '</figure>'
   ).join('');
 }
 

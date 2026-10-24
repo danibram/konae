@@ -1,5 +1,6 @@
 import type { RuntimeActionDeclaration } from "../deployments/manifest";
 import type { MiniAppProject } from "./types";
+import { appStyles } from "./templates/shared";
 
 export const privateNotesDatabaseModelSource = `import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
@@ -57,75 +58,40 @@ const privateNotesDeclarations: RuntimeActionDeclaration[] = [
 
 const privateNotesIndex = `
 <title>Private notes</title>
-<main class="notes-shell">
+<main class="ui-page">
   <section id="landing" class="landing" aria-labelledby="landing-title">
-    <p class="eyebrow">A QUIET PLACE TO KEEP THINGS</p>
-    <h1 id="landing-title">Your notes,<br><em>your space.</em></h1>
-    <p class="intro">Sign in to keep a private list that belongs to you.</p>
-    <p id="landing-status" class="status" role="status" aria-live="polite"></p>
-    <button id="sign-in" class="primary" disabled>Sign in</button>
+    <p class="ui-eyebrow">A quiet place to keep things</p>
+    <h1 id="landing-title" class="ui-title">Your notes,<br><em>your space.</em></h1>
+    <p class="ui-lede">Sign in to keep a private list that belongs to you.</p>
+    <p id="landing-status" class="ui-status" role="status" aria-live="polite"></p>
+    <button id="sign-in" class="ui-button ui-button-primary" disabled>Sign in</button>
   </section>
 
-  <section id="notes-app" class="notes-app" hidden aria-labelledby="notes-title">
-    <header>
+  <section id="notes-app" hidden aria-labelledby="notes-title">
+    <header class="ui-page-header">
       <div>
-        <p class="eyebrow">PRIVATE NOTES</p>
-        <h1 id="notes-title">A place to<br><em>remember.</em></h1>
+        <p class="ui-eyebrow">Private notes</p>
+        <h1 id="notes-title" class="ui-title">A place to<br><em>remember.</em></h1>
       </div>
-      <div class="account">
+      <div class="ui-identity">
         <span id="identity"></span>
-        <button id="sign-out" class="quiet">Sign out</button>
+        <button id="sign-out" class="ui-button ui-button-sm">Sign out</button>
       </div>
     </header>
 
-    <div class="composer">
+    <div class="ui-composer">
       <input id="note-title" name="title" maxlength="500" placeholder="Keep a thought…" autocomplete="off" required>
-      <button id="add-note" class="primary" type="button">Save</button>
+      <button id="add-note" class="ui-button ui-button-primary" type="button">Save</button>
     </div>
-    <p id="status" class="status" role="status" aria-live="polite"></p>
-    <div class="section-label"><span>YOUR NOTES</span><span id="count">0 notes</span></div>
-    <div id="notes" class="notes-list"></div>
+    <p id="status" class="ui-status" role="status" aria-live="polite"></p>
+    <div class="ui-section-head"><span>Your notes</span><span id="count">0 notes</span></div>
+    <div id="notes" class="ui-list"></div>
   </section>
 </main>
 `;
 
-const privateNotesStyles = `
-@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Manrope:wght@500;600;700&display=swap');
-:root { color-scheme: light dark; font-family: Manrope, sans-serif; background: #f3efe5; color: #24251f; }
-* { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 90% 8%, #d7e6b7 0 18%, transparent 38%), #f3efe5; }
-.notes-shell { width: min(680px, calc(100% - 40px)); margin: 0 auto; padding: 64px 0; }
-.landing { min-height: 72vh; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
-.eyebrow, .section-label { font-size: 11px; letter-spacing: .18em; font-weight: 700; }
-h1 { font-family: 'DM Serif Display', serif; font-size: clamp(32px, 7vw, 56px); line-height: .9; letter-spacing: -.045em; margin: 8px 0 16px; font-weight: 400; }
-h1 em { color: #e65337; }
-.intro { max-width: 350px; color: #77756c; line-height: 1.7; margin: 0 0 24px; }
-.primary { min-height: 46px; border: 1px solid #24251f; padding: 10px 18px; background: #e65337; color: white; font: inherit; font-weight: 700; cursor: pointer; box-shadow: 4px 4px 0 #24251f; }
-.primary:disabled { opacity: .55; cursor: progress; }
-.notes-app header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
-.account { display: flex; align-items: center; gap: 10px; font-size: 12px; font-weight: 700; }
-.quiet { border: 1px solid #24251f; padding: 8px 11px; background: #fffdf8; font: inherit; font-size: 11px; cursor: pointer; }
-.composer { background: #fffdf8; border: 1px solid #24251f; display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 8px; box-shadow: 6px 6px 0 #24251f; margin: 0 0 20px; }
-.composer input { min-width: 0; border: 0; background: transparent; padding: 12px; font: inherit; outline: none; }
-.status { min-height: 20px; color: #9d3929; font-size: 12px; }
-.section-label { display: flex; justify-content: space-between; border-bottom: 1px solid #969487; padding: 18px 0 10px; }
-.notes-list { display: grid; }
-.note { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 18px 4px; border-bottom: 1px solid #c9c5b9; }
-.note p { margin: 0; overflow-wrap: anywhere; line-height: 1.5; }
-.note small { display: block; margin-top: 5px; color: #77756c; }
-.note button { flex: 0 0 auto; border: 0; background: transparent; color: #9d3929; font: inherit; font-size: 12px; text-decoration: underline; cursor: pointer; }
-.empty { font-family: 'DM Serif Display', serif; font-size: 28px; color: #77756c; padding: 48px 4px; }
-[hidden] { display: none !important; }
-@media (max-width: 520px) { .notes-shell { padding-top: 36px; } .notes-app header { display: block; } .account { justify-content: space-between; margin: -10px 0 30px; } }
-@media (prefers-color-scheme: dark) {
-  :root { background: #1c1b17; color: #f3efe5; }
-  body { background: #1c1b17; }
-  .composer, .quiet { background: #2a2822; color: inherit; border-color: #f3efe5; }
-  .composer { box-shadow: 6px 6px 0 #000; }
-  .note, .section-label { border-color: #5c594f; }
-  .intro, .note small, .empty { color: #b7b3a6; }
-}
-`;
+const privateNotesStyles = appStyles(`.landing { min-height: 72vh; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
+.landing .ui-title { margin-bottom: 16px; }`);
 
 const privateNotesApp = `
 const landing = document.querySelector('#landing');
@@ -145,18 +111,20 @@ function escapeHtml(value) {
 
 function showError(error) {
   const message = error && error.message ? error.message : 'Could not complete that request.';
-  (app.hidden ? landingStatus : status).textContent = message;
+  const line = app.hidden ? landingStatus : status;
+  line.textContent = message;
+  line.dataset.tone = 'danger';
 }
 
 async function loadNotes() {
   const notes = await miniapp.actions.call('notes.list');
   count.textContent = notes.length + (notes.length === 1 ? ' note' : ' notes');
   list.innerHTML = notes.length ? notes.map(note =>
-    '<article class="note">' +
-      '<div><p>' + escapeHtml(note.title) + '</p><small>' + new Date(note.created_at).toLocaleString() + '</small></div>' +
-      '<button type="button" data-id="' + Number(note.id) + '">Remove</button>' +
+    '<article class="ui-list-item note">' +
+      '<div class="ui-list-main"><p>' + escapeHtml(note.title) + '</p><small>' + new Date(note.created_at).toLocaleString() + '</small></div>' +
+      '<button type="button" class="ui-button ui-button-danger ui-button-sm" data-id="' + Number(note.id) + '">Remove</button>' +
     '</article>'
-  ).join('') : '<div class="empty">No notes yet. Start with one thought.</div>';
+  ).join('') : '<p class="ui-list-empty">No notes yet. Start with one thought.</p>';
 }
 
 async function showCurrentSession() {

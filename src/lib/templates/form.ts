@@ -52,26 +52,26 @@ const actions = {
 
 const html = `
 <title>Write to us</title>
-<main class="app-shell" data-purpose="A public form. Anyone can send a message; the owner gets an email and reads them here.">
-  <header>
+<main class="ui-page" data-purpose="A public form. Anyone can send a message; the owner gets an email and reads them here.">
+  <header class="ui-page-header">
     <div>
-      <p class="eyebrow">Get in touch</p>
-      <h1>Write to us</h1>
+      <p class="ui-eyebrow">Get in touch</p>
+      <h1 class="ui-title">Write to us</h1>
     </div>
-    <div class="identity"><span id="identity"></span><button id="sign-in" class="quiet">Owner sign in</button></div>
+    <div class="ui-identity"><span id="identity"></span><button id="sign-in" class="ui-button ui-button-sm">Owner sign in</button></div>
   </header>
 
-  <form id="message-form" class="card">
-    <label>Your name<input id="name" maxlength="120" autocomplete="name" required></label>
-    <label>Your email<input id="email" type="email" maxlength="254" autocomplete="email" required></label>
-    <label>Message<textarea id="message" maxlength="4000" required></textarea></label>
-    <button class="primary" type="submit">Send</button>
+  <form id="message-form" class="ui-card ui-form">
+    <label class="ui-field">Your name<input class="ui-input" id="name" maxlength="120" autocomplete="name" required></label>
+    <label class="ui-field">Your email<input class="ui-input" id="email" type="email" maxlength="254" autocomplete="email" required></label>
+    <label class="ui-field">Message<textarea class="ui-textarea" id="message" maxlength="4000" required></textarea></label>
+    <button class="ui-button ui-button-primary" type="submit">Send</button>
   </form>
-  <p id="status" class="status" role="status" aria-live="polite"></p>
+  <p id="status" class="ui-status" role="status" aria-live="polite"></p>
 
   <section id="inbox" hidden>
-    <div class="section-label"><span>Messages</span><span>Only the owner sees these</span></div>
-    <div id="messages" class="rows"></div>
+    <div class="ui-section-head"><span>Messages</span><span>Only the owner sees these</span></div>
+    <div id="messages" class="ui-list"></div>
   </section>
 </main>`;
 
@@ -84,8 +84,8 @@ async function start() {
   if (session.role !== 'owner') return;
   const messages = await miniapp.actions.call('messages.list');
   $('#messages').innerHTML = messages.length ? messages.map(message =>
-    '<article class="row"><div><p>' + escapeHtml(message.body) + '</p><small>' + escapeHtml(message.name) + ' · ' + escapeHtml(message.email) + ' · ' + when(message.received_at) + '</small></div><span></span></article>'
-  ).join('') : '<p class="empty">No messages yet.</p>';
+    '<article class="ui-list-item"><div class="ui-list-main"><p>' + escapeHtml(message.body) + '</p><small>' + escapeHtml(message.name) + ' · ' + escapeHtml(message.email) + ' · ' + when(message.received_at) + '</small></div></article>'
+  ).join('') : '<p class="ui-list-empty">No messages yet.</p>';
 }
 
 $('#sign-in').addEventListener('click', async () => { await miniapp.auth.signIn(); await start(); });
@@ -93,10 +93,10 @@ $('#sign-in').addEventListener('click', async () => { await miniapp.auth.signIn(
 $('#message-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
-    statusLine.textContent = '';
+    say('');
     await miniapp.actions.call('messages.send', { name: $('#name').value.trim(), email: $('#email').value.trim(), message: $('#message').value.trim() });
     event.target.reset();
-    statusLine.textContent = 'Sent. Thank you.';
+    say('Sent. Thank you.', 'success');
     await start();
   } catch (error) { showError(error); }
 });

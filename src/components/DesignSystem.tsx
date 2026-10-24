@@ -4,13 +4,13 @@ import { readOwnerProjectCount } from "../lib/managed-sources";
 import { templateChoices, type TemplateId } from "../lib/templates";
 import type { OwnerSession } from "./owner-session";
 import { WorkspaceNav } from "./WorkspaceNav";
-import { Alert, Avatar, Badge, BarChart, Breadcrumb, Button, Card, Checkbox, ChartLegend, Dialog, DonutChart, EmptyState, Field, IconButton, Input, Kbd, LineChart, LoadingBlock, Menu, Progress, Radio, Segmented, Select, Skeleton, Sparkline, StatStrip, Switch, Table, Tabs, Textarea, Tooltip, ToastRegion, type ToastItem } from "./ui";
+import { Alert, Avatar, Composer, Identity, Lede, List, ListItem, Page, PageHeader, SectionHead, Tick, Tile, Tiles, Badge, BarChart, Breadcrumb, Button, Card, Checkbox, ChartLegend, Dialog, DonutChart, EmptyState, Field, IconButton, Input, Kbd, LineChart, LoadingBlock, Menu, Progress, Radio, Segmented, Select, Skeleton, Sparkline, StatStrip, Switch, Table, Tabs, Textarea, Tooltip, ToastRegion, type ToastItem } from "./ui";
 
 function Sample({ id, title, note, children }: { id: string; title: string; note?: string; children: ReactNode }) {
   return <section className="ds-sample" id={id} aria-labelledby={`${id}-title`}><h2 id={`${id}-title`}>{title}</h2>{note && <p className="ds-note">{note}</p>}{children}</section>;
 }
 
-const sections = [["foundations", "Foundations"], ["actions", "Actions"], ["fields", "Fields"], ["navigation", "Navigation"], ["feedback", "Feedback"], ["data", "Data"], ["charts", "Charts"], ["surfaces", "Surfaces"], ["loading", "Loading"], ["dialogs", "Dialogs"]];
+const sections = [["foundations", "Foundations"], ["actions", "Actions"], ["fields", "Fields"], ["navigation", "Navigation"], ["feedback", "Feedback"], ["data", "Data"], ["charts", "Charts"], ["patterns", "App patterns"], ["surfaces", "Surfaces"], ["loading", "Loading"], ["dialogs", "Dialogs"]];
 
 /** Thirty days of fixed numbers, so the gallery looks the same on every visit. */
 const days = Array.from({ length: 30 }, (_, index) => {
@@ -34,6 +34,23 @@ function SwitchDemo() {
   const [on, setOn] = useState(true);
   const [mail, setMail] = useState(false);
   return <><Switch label="Published" checked={on} onChange={setOn} /><Switch label="Email me about refusals" checked={mail} onChange={setMail} /><Switch label="Unavailable" checked={false} onChange={() => undefined} disabled /></>;
+}
+
+function TinyTasksDemo() {
+  const [draft, setDraft] = useState("");
+  const [rows, setRows] = useState([{ id: 3, title: "Book the venue", done: true }, { id: 2, title: "Send the invitations", done: false }, { id: 1, title: "Ask Ana about the playlist", done: false }]);
+  const add = () => { const title = draft.trim(); if (!title) return; setRows((list) => [{ id: Math.max(0, ...list.map((row) => row.id)) + 1, title, done: false }, ...list]); setDraft(""); };
+  return <Page className="ds-pattern-page">
+    <PageHeader eyebrow="Shared list" title="Tiny Tasks" actions={<Identity name="Ada Lovelace"><Button size="sm" variant="ghost">Sign out</Button></Identity>} />
+    <Lede>Anyone with the link sees the same list.</Lede>
+    <Composer label="New task" placeholder="Add one small thing" action="Add" value={draft} onChange={setDraft} onSubmit={add} />
+    <SectionHead label="Today" meta={`${rows.length} items`} />
+    <List>{rows.map((row) => <ListItem key={row.id} done={row.done} lead={<Tick pressed={row.done} label={`Toggle ${row.title}`} onToggle={() => setRows((list) => list.map((item) => item.id === row.id ? { ...item, done: !item.done } : item))} />} title={row.title} detail={`#${row.id}`} end={<Button size="sm" variant="ghost" onClick={() => setRows((list) => list.filter((item) => item.id !== row.id))}>Remove</Button>} />)}</List>
+    <SectionHead label="Pinboard" meta="Add file" />
+    <Tiles small><Tile>notes.pdf</Tile><Tile>menu.txt</Tile><Tile>photo.png</Tile></Tiles>
+    <SectionHead label="Images" meta="3 of 12" />
+    <Tiles><Tile caption="Studio" end={<Button size="sm" variant="ghost">Remove</Button>}>Image</Tile><Tile caption="Garden">Image</Tile><Tile caption="Kitchen">Image</Tile></Tiles>
+  </Page>;
 }
 
 function SegmentedDemo() {
@@ -170,6 +187,9 @@ export function DesignSystem({ ownerSession }: { ownerSession: OwnerSession }) {
                 <Card className="ds-chart-card"><DonutChart title="Where views come from" unit="views" slices={[{ id: "home", label: "Home", value: 5120 }, { id: "list", label: "List", value: 3304 }, { id: "about", label: "About", value: 1450 }, { id: "other", label: "Other", value: 640 }]} empty="Nothing recorded." /></Card>
               </div>
               <Card className="ds-chart-card ds-gap"><BarChart title="A quiet period" unit="views" points={days.slice(0, 7).map((d) => ({ key: d.key, label: d.label, value: 0 }))} empty="No page views recorded in this period." /></Card>
+            </Sample>
+            <Sample id="patterns" title="App patterns" note="What a small app screen is made of. Published apps get the same classes in their styles.css, in whichever variant the app picked.">
+              <Card className="ds-pattern-frame"><TinyTasksDemo /></Card>
             </Sample>
             <Sample id="surfaces" title="Surfaces and empty states"><Card><EmptyState icon={<FolderOpen size={24} />} title="No files yet" description="Add one when the app needs it. Export takes it along." action={<Button variant="primary"><Plus size={14} /> Upload file</Button>} /></Card></Sample>
             <Sample id="loading" title="Loading"><div className="ds-fields"><Card className="ui-loading-card"><LoadingBlock label="Loading example rows" rows={3} /></Card><Card className="ui-loading-card"><div className="ui-loading-shapes" aria-hidden="true"><Skeleton width={32} height={32} radius="50%" /><Skeleton width="60%" height={14} /><Skeleton height={36} /></div></Card></div><p className="ds-note">A skeleton has the size of what replaces it. It fades in after 200 ms, so a fast load shows nothing, and it stays at least 300 ms once shown. Each surface has one status label for screen readers and no changing sentence. Reduced motion stops the shimmer.</p></Sample>

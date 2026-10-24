@@ -798,3 +798,5 @@ a.confirm-publish { text-decoration: none; }
 .ds-variant small { flex-basis: 100%; opacity: .75; font-size: 12px; }
 .ds-variant code { font: 11px var(--ds-mono); }
 .ds-hero .ui-segmented { background: var(--ds-surface); color: var(--ds-text); }
+.ds-pattern-frame { overflow: visible; }
+.ds-pattern-page { padding: 24px 0 32px; width: min(680px, calc(100% - 32px)); }
