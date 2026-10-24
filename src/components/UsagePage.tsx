@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowUpRight, BarChart3, RefreshCw } from "lucide-react";
 import { WorkspaceNav } from "./WorkspaceNav";
-import { Badge, Button, EmptyState, Select } from "./ui";
+import { Badge, Button, EmptyState, LoadingBlock, Select } from "./ui";
+import { UsageLoadingShapes } from "./BootShell";
+import { useLoadingHold } from "./loading-hold";
 import type { OwnerSession } from "./owner-session";
 import { readOwnerProjectCount } from "../lib/managed-sources";
 import { executionTotals, featureRows, noticeOutcomes, outcomeLabel, readUsageOverview, readUsageSummary, usageActivity, usageRange, type Metric, type UsageApp, type UsageSummary } from "../lib/usage";
@@ -67,6 +69,8 @@ export function UsagePage({ ownerSession }: { ownerSession: OwnerSession }) {
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void load(); }, 60_000);
     return () => { window.clearInterval(timer); controller.current?.abort(); };
   }, [load]);
+  // The first read keeps its skeleton long enough that it never flashes.
+  const reading = useLoadingHold(!updatedAt && !error, { sinceNavigation: true });
   const range = usageRange(period);
   return <div className="account-home">
     <WorkspaceNav active="usage" projectCount={projectCount} ownerSession={ownerSession} />
@@ -80,10 +84,10 @@ export function UsagePage({ ownerSession }: { ownerSession: OwnerSession }) {
       </header>
       <div className="usage-range"><span>{range.from} to {range.to} · UTC</span><span>{updatedAt ? `Updated ${formatTime(updatedAt)}` : "Waiting for Kernel data"}</span></div>
       {error && <div className="usage-error" role="alert"><p>Usage could not be refreshed. {updatedAt ? "The figures below are from the last successful read. " : ""}{error}</p><Button onClick={() => void load()}>Try again</Button></div>}
-      {pending && !updatedAt && <p role="status">Reading usage from the Kernel…</p>}
-      {!selected && updatedAt && <AccountUsage apps={apps} />}
+      {reading && <LoadingBlock label="Loading Littlebox" sinceNavigation><UsageLoadingShapes /></LoadingBlock>}
+      {!selected && updatedAt && !reading && <AccountUsage apps={apps} />}
       {!selected && nextCursor && <Button disabled={pending} onClick={() => void load(nextCursor)}>Load more apps</Button>}
-      {selected && summary && <AppUsage summary={summary} />}
+      {selected && summary && !reading && <AppUsage summary={summary} />}
       <p className="usage-footnote">Counts are approximate and belong to each app's Kernel. Editor previews are excluded. Session checks are not visits or unique users. The page refreshes every minute while it is open.</p>
     </section></main>
   </div>;

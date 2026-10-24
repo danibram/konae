@@ -1,9 +1,10 @@
 import { ArrowLeft, Box, KeyRound, LogOut } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { platformMcp } from "../mcp/client";
-import { rememberOwnerEmail, useOwnerSession } from "./owner-session";
+import { rememberOwnerEmail, useOwnerSession, type OwnerSession } from "./owner-session";
+import { useLoadingHold } from "./loading-hold";
 import { safeReturnPath } from "./return-path";
-import { Badge, Button, Card, Field, Input, Select, Textarea } from "./ui";
+import { Badge, Button, Card, Field, Input, LoadingBlock, Select, Skeleton, Textarea } from "./ui";
 
 type Credential = { tokenId: string; scopes: string; expiresAt: number };
 type ClerkBrowser = { load: (options: object) => Promise<void>; session: { getToken: () => Promise<string | null> } | null; mountSignIn: (element: HTMLElement) => void; unmountSignIn: (element: HTMLElement) => void; addListener: (listener: () => void) => () => void; signOut: () => Promise<void> };
@@ -16,7 +17,7 @@ declare global { interface Window { Clerk?: ClerkBrowser; __internal_ClerkUICtor
  */
 export function PlatformAccess() {
   const returnTo = useMemo(() => safeReturnPath(new URLSearchParams(window.location.search).get("returnTo")), []);
-  const [session, refresh] = useOwnerSession();
+  const [liveSession, refresh] = useOwnerSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [setupKey, setSetupKey] = useState("local-development-key");
@@ -31,6 +32,9 @@ export function PlatformAccess() {
   // account needs an invitation code, so the form asks for one unless the
   // Kernel says the key still applies.
   const usesSetupKey = config?.admission === "setup-key";
+  // A check that took long enough to show its skeleton keeps it for a moment, so the card never flashes.
+  const waiting = useLoadingHold(liveSession.state === "checking" || (liveSession.state === "signed-out" && !config && !error), { sinceNavigation: true });
+  const session: OwnerSession = waiting && liveSession.state !== "checking" ? { state: "checking" } : liveSession;
   useEffect(() => { void fetch("/_littlebox/owner/config").then(async (response) => {
     if (!response.ok) throw new Error("Could not load sign-in settings.");
     setConfig(await response.json());
@@ -119,7 +123,11 @@ export function PlatformAccess() {
           <h1>{session.state === "signed-in" ? "Owner account" : pendingEmail ? "Check your email" : creatingAccount ? "Create the owner account" : "Owner sign-in"}</h1>
           <p className="platform-lead">Owners deploy apps and manage their data. People who use your apps sign in inside each app instead.</p>
 
-          {session.state === "checking" && <p className="platform-note">Checking your session…</p>}
+          {(session.state === "checking" || (session.state === "signed-out" && !config && !error)) && <LoadingBlock label="Checking your session" className="platform-form" sinceNavigation>
+            <Skeleton width={48} height={12} /><Skeleton height={36} />
+            <Skeleton width={64} height={12} /><Skeleton height={36} />
+            <div className="platform-actions"><Skeleton width={96} height={42} /><Skeleton width={160} height={42} /></div>
+          </LoadingBlock>}
           {session.state === "unavailable" && <p className="platform-error" role="alert">Could not reach the platform: {session.message}</p>}
 
           {session.state === "signed-out" && config?.mode === "clerk" && <ClerkSignIn publishableKey={config.publishableKey} returnTo={returnTo} onError={setError} onComplete={refresh} />}

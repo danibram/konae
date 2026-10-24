@@ -6,7 +6,8 @@ import {
 } from "../deployments/client";
 import { namedSecrets } from "./action-readiness";
 import { apiKeyProblem, fileCurl, revokedKeyNotes, routeActions, routeCurl, secretProblem, type RouteAction } from "./app-access";
-import { Badge, Button, Card, Dialog, EmptyState, Field, Input } from "./ui";
+import { Badge, Button, Card, Dialog, EmptyState, Field, Input, LoadingBlock } from "./ui";
+import { useLoadingHold } from "./loading-hold";
 import { message, signedOut, useConfirm } from "./useConfirm";
 import "./app-access.css";
 
@@ -39,6 +40,7 @@ export function IntegrationsView({ projectId, deploymentId, deploymentUrl, actio
 
 function SecretsCard({ projectId, actionsSource, onSignedOut }: { projectId: string; actionsSource?: string; onSignedOut: () => void }) {
   const [secrets, setSecrets] = useState<ProjectSecret[] | null>(null);
+  const secretsPending = useLoadingHold(!secrets);
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
   const [name, setName] = useState("");
@@ -86,7 +88,7 @@ function SecretsCard({ projectId, actionsSource, onSignedOut }: { projectId: str
 
   let list: ReactNode;
   if (error) list = <div className="access-error" role="alert">{error}</div>;
-  else if (!secrets) list = <p className="access-note">Loading secrets.</p>;
+  else if (!secrets || secretsPending) list = <LoadingBlock label="Loading secrets" rows={2} />;
   else if (secrets.length === 0 && missing.length === 0) list = <p className="access-note">No signing secrets. A route that declares a signature names one in actions.json.</p>;
   else list = (
     <ul className="access-list" aria-label="Signing secrets">
@@ -149,6 +151,7 @@ function usedBy(actions: string[]): string {
 
 function ApiKeysCard({ deploymentId, deploymentUrl, routes, onSignedOut }: { deploymentId: string; deploymentUrl: string; routes: RouteAction[]; onSignedOut: () => void }) {
   const [keys, setKeys] = useState<ApiKey[] | null>(null);
+  const keysPending = useLoadingHold(!keys);
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
   const [name, setName] = useState("");
@@ -199,7 +202,7 @@ function ApiKeysCard({ deploymentId, deploymentUrl, routes, onSignedOut }: { dep
       <h3>API keys</h3>
       <p className="access-note">Send the key as <code>Authorization: Bearer lbk_…</code> to this app's address. It works on the routes and file visibilities it names, replaces a route's signature, and opens no editor or owner tool.</p>
       {error && <div className="access-error" role="alert">{error}</div>}
-      {!keys ? !error && <p className="access-note">Loading API keys.</p> : live.length === 0 ? <p className="access-note">No live keys.</p> : (
+      {!keys || keysPending ? !error && <LoadingBlock label="Loading API keys" rows={2} /> : live.length === 0 ? <p className="access-note">No live keys.</p> : (
         <ul className="access-keys" aria-label="Live API keys">
           {live.map((key) => (
             <li key={key.keyId}>

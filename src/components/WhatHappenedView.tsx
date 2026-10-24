@@ -2,7 +2,7 @@ import { Activity, Bell, CalendarClock, Mail, RefreshCw, Send, Webhook } from "l
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { actorWords, clock, dayOf, needsAction, readWhatHappened, whatHappened, type Entry, type Kind, type Place, type Read } from "../lib/what-happened";
 import { message, signedOut } from "./useConfirm";
-import { Badge, Button, EmptyState, Select } from "./ui";
+import { Badge, Button, EmptyState, LoadingBlock, Select } from "./ui";
 import "./what-happened.css";
 
 type Props = {
@@ -96,6 +96,7 @@ export function WhatHappenedView({ deployment, onDeploy, onOpen }: Props) {
         </header>
         {!owner ? <p className="happened-note">Sign in with <a href="/_littlebox/owner/login">owner sign-in</a> to read what this app sent and ran.</p>
           : error ? <p className="happened-error" role="alert">{error}</p> : null}
+        {!read && !error && owner && loading && <LoadingBlock label="Reading what happened" rows={4} />}
         {read && attention > 0 && <p className="happened-summary" role="status">{attention} {attention === 1 ? "thing needs" : "things need"} someone to act.</p>}
         {read && shown.length === 0 && (
           <EmptyState

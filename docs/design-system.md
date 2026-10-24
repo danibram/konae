@@ -41,6 +41,8 @@ Import shared controls from `src/components/ui`.
 | `Badge` | `neutral`, `accent`, `success`, `warning`, `danger`. |
 | `Card` | Shared border, background and corner radius. Accepts normal div props. |
 | `EmptyState` | Icon, title, description and optional action. |
+| `Skeleton` | A quiet placeholder shape. Give it the width and height of the content that replaces it. Hidden from assistive technology. |
+| `LoadingBlock` | One loading surface. `role="status"` with one label for screen readers and skeleton shapes (`rows`, or your own children) that hold the layout. Fades in after 200 ms; `sinceNavigation` counts that from the page load for boot stages. |
 | `Dialog` | Title, optional description and footer, `open`, `onClose`, optional `initialFocus`. Traps focus, handles Escape and restores focus when closed. |
 
 ```tsx
@@ -67,6 +69,10 @@ Use links for navigation and buttons for actions. Set `type="submit"` explicitly
 The dashboard uses shared buttons, inputs, selects, badges and cards. Agent settings and publishing use the same dialog component. Agent messages use the shared textarea and connection button. Files and database tables use the shared empty state. Auth > Users and Auth > Integrations use cards, fields, selects, badges, buttons and confirmation dialogs from the same set; their layout rules live in `src/components/app-access.css` and use only `--ds-*` tokens, so the system theme carries light and dark.
 
 Existing domain panels retain their layout selectors and use token-based compatibility rules in `src/design-system.css`. New controls should use the shared components. Keep SQL editing, table state and runtime permissions in their existing modules.
+
+## Loading
+
+A screen renders its chrome (navigation, header, title) on the first paint and keeps it. Whatever is still loading sits inside that frame as skeleton shapes with the size of the content that replaces them, so nothing moves. Use `LoadingBlock` for a surface and `Skeleton` for a single shape. Never swap one sentence for another, and never show a loader for work that ends in under 200 ms. `useLoadingHold` in `src/components/loading-hold.ts` keeps a skeleton that did show on screen for at least 300 ms. `BootShell` draws the page and editor chrome while the session check, the code chunk and the project load run.
 
 ## Gallery and verification
 

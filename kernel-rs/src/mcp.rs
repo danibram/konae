@@ -39,6 +39,7 @@ pub fn routes() -> Router<AppState> {
         .route("/_littlebox/owner/signup", post(owner_signup))
         .route("/_littlebox/owner/logout", post(owner_logout))
         .route("/_littlebox/owner/config", get(owner_config))
+        .route("/_littlebox/owner/session", get(owner_session))
         .route("/_littlebox/owner/clerk", post(owner_clerk))
 }
 
@@ -2318,6 +2319,24 @@ async fn owner_config(State(state): State<AppState>, headers: HeaderMap) -> Resp
         Ok(None) => Json(json!({"mode":"local","admission":super::admission::mode(&state).as_str()})).into_response(),
         Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "Owner identity is not configured."),
     }
+}
+
+/// Who the browser is signed in as. A signed-out visit answers 200 with
+/// `signedIn: false`, so the editor's first check is not a 401 in the console.
+/// `session_inspect` stays the tool that lists scopes.
+pub(super) async fn owner_session(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !super::oauth::valid_owner_host(&state, &headers).await { return StatusCode::FORBIDDEN.into_response(); }
+    let owner = match authenticate_owner(&state, &headers) {
+        Ok(owner) => owner,
+        Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "Owner identity is not available."),
+    };
+    let body = match owner {
+        Some(owner) => json!({"signedIn": true, "ownerId": owner.id, "displayName": owner.display}),
+        None => json!({"signedIn": false}),
+    };
+    let mut response = Json(body).into_response();
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn owner_clerk(State(state): State<AppState>, request: Request) -> Response {

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { clearDomain, domainTrafficTarget, readDomain, setDomain, type DomainView } from "../deployments/domains";
 import { checkHostname } from "../lib/domain-name";
 import { isSignedOutError } from "./owner-session";
-import { Badge, Button, Dialog, Field, Input } from "./ui";
+import { Badge, Button, Dialog, Field, Input, LoadingBlock } from "./ui";
 import "./app-settings.css";
 
 type Props = {
@@ -108,7 +108,7 @@ export function AppSettingsDialog({ projectName, deploymentId, onClose, onDeploy
         <p>Publish this app first. Then connect a domain you own.</p>
         <Button variant="primary" onClick={onDeploy}>Deploy app</Button>
       </> : <>
-        {loading && <p role="status">Reading domain settings…</p>}
+        {loading && <LoadingBlock label="Reading domain settings" rows={2} />}
         {error && <p className="domain-error" role="alert" tabIndex={-1} ref={errorRef}>{error}</p>}
         {error && view && reloadOffered && !signedOut && <Button disabled={busy} onClick={() => { setConfirmation(null); setReload((value) => value + 1); }}>Reload domain settings</Button>}
         {signedOut && <a href={signInHref}>Sign in again to manage this app</a>}

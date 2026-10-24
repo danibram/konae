@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { McpError, platformMcp } from "../mcp/client";
+import { McpError } from "../mcp/client";
 
 export type OwnerSession =
   | { state: "checking" }
@@ -25,12 +25,22 @@ export function isSignedOutError(error: unknown): boolean {
   return error instanceof Error && /sign in to use/i.test(error.message);
 }
 
+/**
+ * Asks the Kernel who this browser is. A signed-out visit is a normal 200
+ * answer there, not a 401, so the first paint of a logged-out browser
+ * logs nothing to the console.
+ */
 export async function checkOwnerSession(): Promise<OwnerSession> {
   try {
-    const result = await platformMcp.call<{ ownerId: string; displayName?: string | null }>("session_inspect");
-    return { state: "signed-in", ownerId: result.ownerId, email: result.displayName ?? null };
+    const response = await fetch("/_littlebox/owner/session", { cache: "no-store", headers: { accept: "application/json" } });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as { error?: string };
+      return { state: "unavailable", message: body.error ?? `The platform answered ${response.status}.` };
+    }
+    const body = await response.json() as { signedIn?: boolean; ownerId?: string; displayName?: string | null };
+    if (!body.signedIn || !body.ownerId) return { state: "signed-out" };
+    return { state: "signed-in", ownerId: body.ownerId, email: body.displayName ?? null };
   } catch (error) {
-    if (isSignedOutError(error)) return { state: "signed-out" };
     return { state: "unavailable", message: error instanceof Error ? error.message : String(error) };
   }
 }

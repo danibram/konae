@@ -1,7 +1,7 @@
 import { BarChart3, Box, FileCode2, LayoutGrid, Palette, Sparkles, UserRound } from "lucide-react";
 import { useState } from "react";
 import { ownerInitials, platformAccessHref, type OwnerSession } from "./owner-session";
-import { Dialog } from "./ui";
+import { Dialog, Skeleton } from "./ui";
 
 type Props = {
   active: "projects" | "design-system" | "usage";
@@ -32,13 +32,18 @@ export function WorkspaceNav({ active, projectCount, ownerSession }: Props) {
         <Sparkles size={16} />
         <div><strong>Take it with you</strong><small>Open a project, then Export or Deploy.</small></div>
       </div>
-      <a className={`account-person is-${ownerSession.state}`} href={accessHref}>
-        <span aria-hidden="true">{initials ?? <UserRound size={15} />}</span>
-        <div>
-          <strong>{ownerSession.state === "signed-in" ? ownerSession.email ?? "Owner signed in" : "Owner sign-in"}</strong>
-          {ownerSession.state === "signed-in" && <small>Can deploy from this browser</small>}
+      {ownerSession.state === "checking"
+        ? <div className="account-person is-checking" aria-hidden="true">
+          <Skeleton width={32} height={32} radius="50%" />
+          <div><Skeleton width="70%" height={12} /><Skeleton width="85%" height={10} /></div>
         </div>
-      </a>
+        : <a className={`account-person is-${ownerSession.state}`} href={accessHref}>
+          <span aria-hidden="true">{initials ?? <UserRound size={15} />}</span>
+          <div>
+            <strong>{ownerSession.state === "signed-in" ? ownerSession.email ?? "Owner signed in" : "Owner sign-in"}</strong>
+            {ownerSession.state === "signed-in" && <small>Can deploy from this browser</small>}
+          </div>
+        </a>}
       <Dialog
         open={moreOpen}
         title="More"

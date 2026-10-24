@@ -10,7 +10,8 @@ import {
   batchKey, expiryText, formatDate, invitationResultMessage, invitationView, mailReadiness, parseEmailBatch, signupModeCopy,
   userStateView, visibilityCopy, MAX_INVITATION_BATCH, type PendingBatch,
 } from "./app-access";
-import { Badge, Button, Card, EmptyState, Field, Select, Textarea } from "./ui";
+import { Badge, Button, Card, EmptyState, Field, LoadingBlock, Select, Textarea } from "./ui";
+import { useLoadingHold } from "./loading-hold";
 import { message, signedOut, useConfirm } from "./useConfirm";
 import "./app-access.css";
 
@@ -80,6 +81,7 @@ export function AppUsersView({ deploymentId, visibility, onSetVisibility }: Prop
 
 function SignupPolicyControl({ deploymentId, onSignedOut, onSaved }: { deploymentId: string; onSignedOut: () => void; onSaved: () => void }) {
   const [policy, setPolicy] = useState<SignupPolicy | null>(null);
+  const policyPending = useLoadingHold(!policy);
   const [mode, setMode] = useState<SignupMode>("invitation");
   const [entries, setEntries] = useState("");
   const [loadError, setLoadError] = useState("");
@@ -104,7 +106,7 @@ function SignupPolicyControl({ deploymentId, onSignedOut, onSaved }: { deploymen
   }, [deploymentId, onSignedOut]);
 
   if (loadError) return <div className="access-error" role="alert">{loadError}</div>;
-  if (!policy) return <p className="access-note">Loading the signup policy.</p>;
+  if (!policy || policyPending) return <LoadingBlock label="Loading the signup policy" rows={2} />;
 
   const list = entries.split(/[\n,]/).map((entry) => entry.trim()).filter(Boolean);
   const unchanged = mode === policy.mode && (mode !== "allowlist" || list.join("\n") === policy.allowlist.join("\n"));
@@ -210,6 +212,7 @@ function InviteForm({ deploymentId, mailReady, mailReason, onInvited, onSignedOu
 
 function InvitationList({ deploymentId, mailReady, mailReason, changed, onChanged, onSignedOut }: { deploymentId: string; mailReady: boolean; mailReason: string; changed: number; onChanged: () => void; onSignedOut: () => void }) {
   const [rows, setRows] = useState<AppInvitation[] | null>(null);
+  const invitationsPending = useLoadingHold(!rows);
   const [next, setNext] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
@@ -267,7 +270,7 @@ function InvitationList({ deploymentId, mailReady, mailReason, changed, onChange
 
   let body: ReactNode;
   if (error && !rows) body = <div className="access-error" role="alert">{error}</div>;
-  else if (!rows) body = <p className="access-note">Loading invitations.</p>;
+  else if (!rows || invitationsPending) body = <LoadingBlock label="Loading invitations" />;
   else if (rows.length === 0) body = <p className="access-note">No invitations yet. Invite someone above and they appear here with their state.</p>;
   else body = (
     <div className="access-table-wrap">
@@ -375,6 +378,7 @@ function AccountList({ deploymentId, changed, onSignedOut }: { deploymentId: str
   // Each entry is the cursor that opens a page; the first page has none.
   const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
   const [rows, setRows] = useState<AppUser[] | null>(null);
+  const accountsPending = useLoadingHold(!rows);
   const [next, setNext] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
@@ -416,7 +420,7 @@ function AccountList({ deploymentId, changed, onSignedOut }: { deploymentId: str
       </header>
       <p className="access-note">People who use this app. An app account cannot open this editor; the one marked Owner is your own.</p>
       {error && <div className="access-error" role="alert">{error}</div>}
-      {!rows ? <p className="access-note">Loading app accounts.</p> : rows.length === 0 ? (
+      {!rows || accountsPending ? <LoadingBlock label="Loading app accounts" rows={4} /> : rows.length === 0 ? (
         <p className="access-note">{filter ? `No ${userStateView[filter].label.toLowerCase()} app accounts.` : "No app accounts yet. People appear here once they sign up or you invite them."}</p>
       ) : (
         <div className="access-table-wrap">
