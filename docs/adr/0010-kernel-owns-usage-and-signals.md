@@ -76,3 +76,13 @@ Signals increment a daily total in the transaction that stores the detailed even
 The monitor also reads counts of current states from retained calls and notice jobs, scoped to the Deployment and their creation dates. Those are partial job histories, not lifetime delivery totals. A queued call is not a delivered call, and an accepted email is not a confirmed delivery. Session checks never become unique visitors. Actions, Signals and notices are not summed as completed business tasks.
 
 The queue still drops entries under pressure. The summary exposes installation-wide dropped-entry and write-error counts since restart, without attributing them to an individual app. Counts remain approximate. Daily aggregates travel inside the existing Usage package component and scheduled copies. The export of code alone contains no runtime history.
+
+## Note, 2026-11-09: page views
+
+An owner asked to see how often people open the app. Usage counted actions and sessions but no page loads. The Kernel already serves every page of the Build Artifact, so it counts the view where it serves the file. There is still no `miniapp.track` and nothing new in the SDK or the bundle.
+
+A new kind, `page_view`, counts a request that a browser sent as a navigation, `Sec-Fetch-Dest: document`, when the Kernel answers it with one of the artifact's `.html` files and 200. A prefetch (`Sec-Purpose` or `Purpose` containing `prefetch`) counts nothing. Neither does an asset, a script's fetch, a HEAD request, a request without the header such as curl or most crawlers, the private-app login page or a 404. The name is the file served, never the address asked for: the artifact bounds the names, so a visitor cannot grow the store by inventing paths. A single-page app serves `index.html` for every address, so it counts its first load and none of the screens it shows after that. The count goes through the same queue as every other kind and lands in `usage_daily`, so packages and scheduled copies carry it unchanged.
+
+A page view is a load, not a person. We considered counting distinct visitors with a cookie or a hashed address and kept the earlier rule that Usage never turns sessions into unique visitors: the Kernel would have to keep a per-visitor key it has no other use for. The referring site is also left out for now.
+
+The editor's `/usage?deployment=<id>` shows a Traffic section with page views, sessions opened, signups and sign-ins over the period, a daily chart of page views and a table by page, and a daily chart of executions under the execution summary. `/usage` adds a page-view total per app. Each chart has the same numbers in a table under it.

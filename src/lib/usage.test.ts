@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { featureRows, noticeOutcomes, outcomeLabel, usageRange, type UsageSummary } from "./usage";
+import { dailyExecutions, dailyUsage, featureRows, noticeOutcomes, outcomeLabel, pageViews, usageRange, type UsageSummary } from "./usage";
 
 test("usage periods include today and use UTC across month and year boundaries", () => {
   expect(usageRange(7, new Date("2026-01-03T00:30:00Z"))).toEqual({ from: "2025-12-28", to: "2026-01-03" });
@@ -45,4 +45,26 @@ test("the overview's compacted notices keep their reason, and a nameless notice 
     { kind: "notify", name: "", count: 5 },
   ]));
   expect(notices).toEqual({ queued: 0, notSent: 3, reasons: [{ action: "All actions", reason: "no-transport", label: "this installation has no email service", count: 3 }] });
+});
+
+test("a daily series has one point per day of the range, zero on a day with nothing recorded", () => {
+  const value = summary([{ kind: "page_view", name: "index.html", count: 3 }, { kind: "page_view", name: "about.html", count: 1 }, { kind: "action", name: "notes.add", count: 9 }]);
+  value.usage.days.push({ kind: "page_view", name: "index.html", count: 2, day: "2026-11-02" });
+  const series = dailyUsage(value, "page_view");
+  expect(series.map((p) => p.day)).toEqual(["2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08"]);
+  expect(series.map((p) => p.value)).toEqual([0, 2, 0, 0, 0, 0, 0, 4]);
+  expect(series.at(-1)?.parts).toEqual({ "index.html": 3, "about.html": 1 });
+  expect(pageViews(value)).toEqual([{ page: "index.html", count: 3 }, { page: "about.html", count: 1 }]);
+  expect(featureRows(value).find((f) => f.id === "pages")?.count).toBe(4);
+});
+
+test("daily executions keep each result as a part of the day", () => {
+  const value = summary([]);
+  value.metrics = [
+    { day: "2026-11-03", feature: "execution", name: "a", origin: "runtime", outcome: "ok", count: 5, lastAt: 0 },
+    { day: "2026-11-03", feature: "execution", name: "b", origin: "route", outcome: "failed", count: 1, lastAt: 0 },
+    { day: "2026-11-03", feature: "signal", name: "x.y", origin: "kernel", outcome: "recorded", count: 7, lastAt: 0 },
+  ];
+  const day = dailyExecutions(value).find((p) => p.day === "2026-11-03");
+  expect(day).toEqual({ day: "2026-11-03", value: 6, parts: { ok: 5, failed: 1 } });
 });

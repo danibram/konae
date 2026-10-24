@@ -29,6 +29,7 @@ export function readUsageSummary(deploymentId: string, days: number, signal?: Ab
 }
 
 export const featureKinds = [
+  { id: "pages", name: "Page views", kinds: ["page_view"], description: "Browser loads of the app's pages. A view is a load, not a person, and a single-page app counts only its first load." },
   { id: "data", name: "Data actions", kinds: ["action"], description: "Action calls. HTTP routes and scheduled runs appear separately." },
   { id: "auth", name: "Authentication", kinds: ["signup", "login"], description: "Successful signups and sign-ins. These are operations, not unique people." },
   { id: "files", name: "Files", kinds: ["upload", "file_read"], description: "Files uploaded and read." },
@@ -46,7 +47,7 @@ export function featureRows(summary: UsageSummary) {
     const failures = executions.filter((m) => m.outcome === "failed").reduce((sum, m) => sum + m.count, 0);
     const refused = executions.filter((m) => m.outcome === "refused").reduce((sum, m) => sum + m.count, 0);
     const recorded = summary.usage.days.filter((row) => kinds.includes(row.kind)).map((row) => row.day).sort();
-    const configured = feature.id === "auth" || feature.id === "files" ? "Available" : summary.actions.some((action) =>
+    const configured = feature.id === "auth" || feature.id === "files" || feature.id === "pages" ? "Available" : summary.actions.some((action) =>
       feature.id === "data" ? ["query", "mutation", "signal"].includes(action.kind) :
       feature.id === "routes" ? Boolean(action.http) : feature.id === "scheduled" ? Boolean(action.schedule) :
       feature.id === "calls" ? action.kind === "call" : Boolean(action.notify)) ? "Configured" : "Not configured";
@@ -94,4 +95,52 @@ export function executionTotals(metrics: Metric[]) {
     sum[m.outcome] = (sum[m.outcome] ?? 0) + m.count;
     return sum;
   }, {} as Record<string, number>);
+}
+
+/** Every UTC day from `from` to `to`, both included. */
+export function rangeDays(from: string, to: string) {
+  const days: string[] = [];
+  const day = new Date(`${from}T00:00:00Z`);
+  const end = Date.parse(`${to}T00:00:00Z`);
+  while (day.getTime() <= end) {
+    days.push(day.toISOString().slice(0, 10));
+    day.setUTCDate(day.getUTCDate() + 1);
+  }
+  return days;
+}
+export type DailyPoint = { day: string; value: number; parts: Record<string, number> };
+/** One point per day of the range, zero where the Kernel recorded nothing, so a quiet day reads as a gap rather than disappearing. */
+export function dailyUsage(summary: UsageSummary, kind: string): DailyPoint[] {
+  const byDay = new Map<string, Record<string, number>>();
+  for (const row of summary.usage.days) {
+    if (row.kind !== kind) continue;
+    const parts = byDay.get(row.day) ?? {};
+    parts[row.name] = (parts[row.name] ?? 0) + row.count;
+    byDay.set(row.day, parts);
+  }
+  return rangeDays(summary.usage.from, summary.usage.to).map((day) => {
+    const parts = byDay.get(day) ?? {};
+    return { day, value: Object.values(parts).reduce((sum, n) => sum + n, 0), parts };
+  });
+}
+/** Executions per day, with each result as a part, over the summary's range. */
+export function dailyExecutions(summary: UsageSummary): DailyPoint[] {
+  const byDay = new Map<string, Record<string, number>>();
+  for (const metric of summary.metrics) {
+    if (metric.feature !== "execution") continue;
+    const parts = byDay.get(metric.day) ?? {};
+    parts[metric.outcome] = (parts[metric.outcome] ?? 0) + metric.count;
+    byDay.set(metric.day, parts);
+  }
+  return rangeDays(summary.usage.from, summary.usage.to).map((day) => {
+    const parts = byDay.get(day) ?? {};
+    return { day, value: Object.values(parts).reduce((sum, n) => sum + n, 0), parts };
+  });
+}
+export function kindTotal(summary: UsageSummary, kind: string) {
+  return summary.usage.totals.filter((row) => row.kind === kind).reduce((sum, row) => sum + row.count, 0);
+}
+/** Page views by the file the Kernel served, most viewed first. */
+export function pageViews(summary: UsageSummary) {
+  return summary.usage.totals.filter((row) => row.kind === "page_view").map((row) => ({ page: row.name, count: row.count })).sort((a, b) => b.count - a.count || a.page.localeCompare(b.page));
 }

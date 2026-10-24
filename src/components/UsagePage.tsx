@@ -6,7 +6,8 @@ import { UsageLoadingShapes } from "./BootShell";
 import { useLoadingHold } from "./loading-hold";
 import type { OwnerSession } from "./owner-session";
 import { readOwnerProjectCount } from "../lib/managed-sources";
-import { executionTotals, featureRows, noticeOutcomes, outcomeLabel, readUsageOverview, readUsageSummary, usageActivity, usageRange, type Metric, type UsageApp, type UsageSummary } from "../lib/usage";
+import { dailyExecutions, dailyUsage, executionTotals, featureRows, kindTotal, noticeOutcomes, outcomeLabel, pageViews, readUsageOverview, readUsageSummary, usageActivity, usageRange, type UsageApp, type UsageSummary } from "../lib/usage";
+import { DailyChart } from "./UsageChart";
 import "./usage.css";
 
 const number = new Intl.NumberFormat("en");
@@ -88,7 +89,7 @@ export function UsagePage({ ownerSession }: { ownerSession: OwnerSession }) {
       {!selected && updatedAt && !reading && <AccountUsage apps={apps} />}
       {!selected && nextCursor && <Button disabled={pending} onClick={() => void load(nextCursor)}>Load more apps</Button>}
       {selected && summary && !reading && <AppUsage summary={summary} />}
-      <p className="usage-footnote">Counts are approximate and belong to each app's Kernel. Editor previews are excluded. Session checks are not visits or unique users. The page refreshes every minute while it is open.</p>
+      <p className="usage-footnote">Counts are approximate and belong to each app's Kernel. Editor previews are excluded. Page views are browser loads of the app's pages, not people. Session checks are not visits or unique users. The page refreshes every minute while it is open.</p>
     </section></main>
   </div>;
 }
@@ -96,11 +97,11 @@ export function UsagePage({ ownerSession }: { ownerSession: OwnerSession }) {
 function AccountUsage({ apps }: { apps: UsageApp[] }) {
   if (!apps.length) return <EmptyState className="usage-empty" icon={<BarChart3 size={22} />} title="No apps yet" description="Create a project and publish it. Its usage appears here." action={<a className="ui-button ui-button-primary" href="/">Go to projects</a>} />;
   return <section aria-labelledby="usage-apps-heading"><h2 id="usage-apps-heading">Apps</h2>
-    <div className="usage-table-scroll"><table className="usage-table"><caption>Activity in the selected period. Open an app for feature details.</caption><thead><tr><th scope="col">App</th><th scope="col">Recorded operations</th><th scope="col">Execution results</th><th scope="col">Features with activity</th><th scope="col">Latest recorded day</th><th scope="col">Usage</th></tr></thead>
+    <div className="usage-table-scroll"><table className="usage-table"><caption>Activity in the selected period. Open an app for feature details.</caption><thead><tr><th scope="col">App</th><th scope="col">Page views</th><th scope="col">Recorded operations</th><th scope="col">Execution results</th><th scope="col">Features with activity</th><th scope="col">Latest recorded day</th><th scope="col">Usage</th></tr></thead>
       <tbody>{apps.map((app) => {
         const value = app.summary;
         if (!value) return <tr key={app.projectId}><th scope="row">{app.name}<small>{app.error ? "Read failed" : "Draft"}</small></th>
-          <td colSpan={4} data-label="Usage">{app.error ?? "Not published, so nothing is recorded. Publish it to collect usage."}</td>
+          <td colSpan={5} data-label="Usage">{app.error ?? "Not published, so nothing is recorded. Publish it to collect usage."}</td>
           <td data-label="Project"><a href={projectHref(app.projectId)}>Open project</a></td></tr>;
         const features = featureRows(value).filter((f) => f.count > 0 || f.failures > 0 || f.refused > 0)
           .map((f) => f.id === "notify" && f.notSent ? <span key={f.id} className="usage-failure">{f.notSent === f.count ? `${f.name} (none sent)` : `${f.name} (${number.format(f.notSent)} not sent)`}</span> : <span key={f.id}>{f.name}</span>);
@@ -108,6 +109,7 @@ function AccountUsage({ apps }: { apps: UsageApp[] }) {
         const outcomes = executionTotals(value.metrics);
         const hasOutcomes = value.metrics.some((m) => m.feature === "execution");
         return <tr key={app.projectId}><th scope="row">{app.name}<small><a href={value.url} target="_blank" rel="noopener">{new URL(value.url).hostname}</a></small></th>
+          <td data-label="Page views">{number.format(kindTotal(value, "page_view"))}</td>
           <td data-label="Operations">{value.usage.days.length || hasOutcomes ? number.format(usageActivity(value)) : "No data yet"}</td>
           <td data-label="Results">{hasOutcomes ? <span className="usage-overview-results"><span>{number.format(outcomes.ok ?? 0)} correct</span><span>{number.format(outcomes.refused ?? 0)} refused</span><span className={(outcomes.failed ?? 0) > 0 ? "usage-failure" : undefined}>{number.format(outcomes.failed ?? 0)} failed</span>{(outcomes.unchanged ?? 0) > 0 && <span>{number.format(outcomes.unchanged)} no changes</span>}</span> : "No outcomes yet"}</td>
           <td data-label="Active features"><span>{features.length ? features.flatMap((f, i) => i ? [", ", f] : [f]) : "No recorded activity"}</span></td>
@@ -135,15 +137,16 @@ function AppUsage({ summary }: { summary: UsageSummary }) {
       {coverage.queueFlushed === false && <p role="status">The capture queue did not finish writing before this read. Recent activity may be missing. Refresh to try again.</p>}
       {(coverage.installationDroppedSinceRestart > 0 || coverage.installationWriteErrorsSinceRestart > 0) && <p role="status">This Kernel has dropped {number.format(coverage.installationDroppedSinceRestart)} entries and encountered {number.format(coverage.installationWriteErrorsSinceRestart)} write errors since restart. These totals cover the whole installation and cannot be attributed to this app.</p>}
     </section>
+    <Traffic summary={summary} />
     <section aria-labelledby="usage-results-heading"><h2 id="usage-results-heading">Execution summary</h2>
       {summary.metrics.some((m) => m.feature === "execution") ? <dl className="usage-outcome-strip">{strip.map(([key, label]) => <div key={key} className={key === "failed" && (outcomes.failed ?? 0) > 0 ? "usage-failure" : undefined}><dt>{label}</dt><dd>{number.format(outcomes[key] ?? 0)}</dd></div>)}</dl> : <p>No execution outcomes recorded in this period.</p>}
+      <DailyChart title="Executions per day" unit="executions" points={dailyExecutions(summary)} partLabel={outcomeLabel} empty="No execution outcomes recorded in this period." />
       <a className="usage-jump" href="#execution-detail">See results by action</a>
     </section>
     <section aria-labelledby="usage-features-heading"><h2 id="usage-features-heading">Features</h2><div className="usage-table-scroll"><table className="usage-table"><caption>Current published configuration and recorded activity in this period.</caption><thead><tr><th scope="col">Feature</th><th scope="col">Published state</th><th scope="col">Recorded activity</th><th scope="col">Latest recorded day</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><th scope="row">{row.name}<small>{row.description}</small></th><td data-label="Published state">{row.configured}</td><td data-label="Activity">{row.count ? <><strong>{number.format(row.count)}</strong>{row.id === "notify"
       ? <>{notices.queued > 0 && <small>{number.format(notices.queued)} queued for sending</small>}{notices.reasons.map((r) => <small key={`${r.action}/${r.reason}`} className="usage-failure">{r.action} · {number.format(r.count)} not sent: {r.label}</small>)}</>
       : <small>{row.totals.map((t) => `${t.name || t.kind} · ${number.format(t.count)}`).join("; ")}</small>}</> : "No recorded operations"}{row.failures > 0 && <small className="usage-failure">{number.format(row.failures)} execution failures</small>}{row.refused > 0 && <small>{number.format(row.refused)} refused by app rules</small>}</td><td data-label="Latest day">{row.lastDay ?? "No data"}</td></tr>)}</tbody></table></div></section>
     <section id="execution-detail" aria-labelledby="usage-actions-heading"><h2 id="usage-actions-heading">Results by action</h2><p className="usage-note">These counts cover the instrumented history only.</p>
-      <DailyActivity metrics={summary.metrics} />
       <div className="usage-table-scroll"><table className="usage-table"><caption>One execution per origin. Platform access refusals and invalid inputs are excluded.</caption><thead><tr><th scope="col">Action</th><th scope="col">Origin</th><th scope="col">Result</th><th scope="col">Count</th><th scope="col">Last activity</th></tr></thead><tbody>{actionNames.flatMap((name) => {
         const groups = new Map<string, { origin: string; outcome: string; count: number; lastAt: number }>();
         summary.metrics.filter((m) => m.feature === "execution" && m.name === name).forEach((m) => { const key = `${m.origin}/${m.outcome}`; const current = groups.get(key); groups.set(key, { ...m, count: (current?.count ?? 0) + m.count, lastAt: Math.max(current?.lastAt ?? 0, m.lastAt) }); });
@@ -160,11 +163,14 @@ function AppUsage({ summary }: { summary: UsageSummary }) {
   </>;
 }
 
-function DailyActivity({ metrics }: { metrics: Metric[] }) {
-  const byDay = new Map<string, number>();
-  for (const metric of metrics) if (metric.feature === "execution") byDay.set(metric.day, (byDay.get(metric.day) ?? 0) + metric.count);
-  const values = [...byDay].sort(([a], [b]) => a.localeCompare(b));
-  const max = Math.max(1, ...values.map(([, count]) => count));
-  if (!values.length) return <p className="usage-note">No execution outcomes recorded in this period.</p>;
-  return <details className="usage-daily"><summary>Daily execution activity</summary><ul>{values.map(([day, count]) => <li key={day}><span>{day}</span><span className="usage-volume-track" role="img" aria-label={`${day}, ${number.format(count)} total executions across all results`}><span style={{ width: `${count / max * 100}%` }} /></span><strong>{number.format(count)}</strong></li>)}</ul></details>;
+function Traffic({ summary }: { summary: UsageSummary }) {
+  const pages = pageViews(summary);
+  const tiles = [["Page views", kindTotal(summary, "page_view")], ["Sessions opened", kindTotal(summary, "session")], ["Signups", kindTotal(summary, "signup")], ["Sign-ins", kindTotal(summary, "login")]] as const;
+  return <section aria-labelledby="usage-traffic-heading"><h2 id="usage-traffic-heading">Traffic</h2>
+    <p className="usage-note">The Kernel counts a page view when a browser opens one of the app's pages, by the file it served. Scripts, crawlers and prefetches are not counted. A single-page app counts its first load, not the screens it shows after that.</p>
+    <dl className="usage-outcome-strip">{tiles.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{number.format(value)}</dd></div>)}</dl>
+    <DailyChart title="Page views per day" unit="page views" points={dailyUsage(summary, "page_view")} empty="No page views recorded in this period. Views count from the first browser visit after this Kernel was updated." />
+    {pages.length > 1 && <div className="usage-table-scroll"><table className="usage-table"><caption>Page views by page in this period.</caption><thead><tr><th scope="col">Page</th><th scope="col">Views</th></tr></thead>
+      <tbody>{pages.map((row) => <tr key={row.page}><th scope="row">{row.page}</th><td data-label="Views">{number.format(row.count)}</td></tr>)}</tbody></table></div>}
+  </section>;
 }

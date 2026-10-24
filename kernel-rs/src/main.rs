@@ -1513,6 +1513,7 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
     let routing = artifact::routing(&deployment.manifest);
     for candidate in artifact::candidates(&path, routing) {
         if let Ok(bytes) = read_artifact(&state, &deployment, &candidate).await {
+            count_page_view(&state, &deployment, &headers, &candidate);
             return artifact_response(bytes, &candidate);
         }
     }
@@ -1523,7 +1524,10 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
     }
     match routing {
         artifact::Routing::Spa => match read_artifact(&state, &deployment, "index.html").await {
-            Ok(bytes) => artifact_response(bytes, "index.html"),
+            Ok(bytes) => {
+                count_page_view(&state, &deployment, &headers, "index.html");
+                artifact_response(bytes, "index.html")
+            }
             Err(_) => error(StatusCode::NOT_FOUND, "Artifact not found."),
         },
         artifact::Routing::Pages => match read_artifact(&state, &deployment, "404.html").await {
@@ -1535,6 +1539,28 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
             Err(_) => artifact::not_found_page(),
         },
     }
+}
+
+/// Counts a page view when a browser navigates to one of the artifact's HTML
+/// pages. Only a navigation carries `Sec-Fetch-Dest: document`, so assets, a
+/// script's fetch, a HEAD request, curl and most crawlers count nothing, and a
+/// prefetch is skipped. The name is the file served, never the address asked
+/// for: the artifact bounds the names, so no visitor can grow the store by
+/// inventing paths. A single-page app's client-side navigation is invisible
+/// here, and a view is a load, not a person (ADR-0010, page views).
+fn count_page_view(state: &AppState, deployment: &Deployment, headers: &HeaderMap, file: &str) {
+    let lower = file.to_ascii_lowercase();
+    if !(lower.ends_with(".html") || lower.ends_with(".htm")) {
+        return;
+    }
+    let header = |name: &str| headers.get(name).and_then(|value| value.to_str().ok()).unwrap_or("");
+    if !header("sec-fetch-dest").eq_ignore_ascii_case("document") {
+        return;
+    }
+    if header("sec-purpose").contains("prefetch") || header("purpose").contains("prefetch") {
+        return;
+    }
+    usage::count(&state.data_root, &deployment.id, usage::Operation::PageView(file.to_owned()));
 }
 
 async fn read_artifact(state: &AppState, deployment: &Deployment, path: &str) -> Result<Vec<u8>> {
@@ -3127,6 +3153,8 @@ async fn deployment_for(state: &AppState, headers: &HeaderMap) -> Option<Deploym
     deployments.values().find(|deployment| deployment.id == id).cloned()
 }
 
+/// Fails closed: a Deployment is public only when its manifest says "public",
+/// so a record with no visibility or an unknown one needs a login.
 fn is_private(deployment: &Deployment) -> bool {
     deployment
         .manifest
@@ -3153,8 +3181,6 @@ fn authenticate_deployment(
     state: &AppState,
     deployment: &Deployment,
     headers: &HeaderMap,
-/// Fails closed: a Deployment is public only when its manifest says "public",
-/// so a record with no visibility or an unknown one needs a login.
 ) -> std::result::Result<Option<AuthUser>, Response> {
     let auth = open_auth(state, deployment)
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -3853,32 +3879,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_scheduled_mutation_without_a_route_runs_only_on_its_schedule() {
-        let root = std::env::temp_dir().join(format!("littlebox-scheduled-action-{}", Uuid::new_v4()));
-        let (state, headers) = login_test_state(&root, "public").await;
-        let program = json!({"version": 1, "actions": {"holds.release": {
-            "kind": "mutation", "access": "anonymous", "schedule": {"every": "15m"},
-            "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL", "bindings": [{"source": "kernel", "field": "now"}]
-        }}});
-        for deployment in state.deployments.write().await.values_mut() {
-            deployment.actions = program.to_string();
-            deployment.manifest = json!({"visibility": "public"});
-        }
-        let response = invoke_action(State(state), AxumPath("holds.release".into()), headers, Json(json!({}))).await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
-        assert!(String::from_utf8_lossy(&bytes).contains("Action holds.release runs only on its schedule."));
-        let _ = tokio::fs::remove_dir_all(root).await;
-    }
-
-    #[test]
-    fn redeploy_adds_tables_without_losing_rows_and_rejects_destructive_schema() {
-        let root = std::env::temp_dir().join(format!("littlebox-schema-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        let path = root.join("database.sqlite");
-        initialize_database(&path).unwrap();
-
-    #[tokio::test]
     async fn a_deployment_that_does_not_say_public_serves_no_asset_without_a_login() {
         let root = std::env::temp_dir().join(format!("littlebox-fail-closed-{}", Uuid::new_v4()));
         let (state, headers) = login_test_state(&root, "public").await;
@@ -3906,6 +3906,32 @@ mod tests {
         }
         let _ = tokio::fs::remove_dir_all(root).await;
     }
+
+    #[tokio::test]
+    async fn a_scheduled_mutation_without_a_route_runs_only_on_its_schedule() {
+        let root = std::env::temp_dir().join(format!("littlebox-scheduled-action-{}", Uuid::new_v4()));
+        let (state, headers) = login_test_state(&root, "public").await;
+        let program = json!({"version": 1, "actions": {"holds.release": {
+            "kind": "mutation", "access": "anonymous", "schedule": {"every": "15m"},
+            "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL", "bindings": [{"source": "kernel", "field": "now"}]
+        }}});
+        for deployment in state.deployments.write().await.values_mut() {
+            deployment.actions = program.to_string();
+            deployment.manifest = json!({"visibility": "public"});
+        }
+        let response = invoke_action(State(state), AxumPath("holds.release".into()), headers, Json(json!({}))).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("Action holds.release runs only on its schedule."));
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[test]
+    fn redeploy_adds_tables_without_losing_rows_and_rejects_destructive_schema() {
+        let root = std::env::temp_dir().join(format!("littlebox-schema-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        initialize_database(&path).unwrap();
 
         let initial = "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL); CREATE INDEX IF NOT EXISTS tasks_title ON tasks(title);";
         let original_action = action_program(&[("tasks.list", "SELECT id, title FROM tasks")]);
@@ -4368,6 +4394,53 @@ mod tests {
         let bytes = axum::body::to_bytes(response.into_body(), 1_000_000).await.unwrap();
         assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&bytes));
         serde_json::from_slice::<Value>(&bytes).unwrap()["result"].clone()
+    }
+
+    #[tokio::test]
+    async fn a_browser_navigation_to_a_page_counts_one_page_view_by_the_file_served() {
+        let root = std::env::temp_dir().join(format!("littlebox-page-views-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        let state = test_state(&root);
+        deploy_files(&state, json!({"index.html": "<p>home</p>", "about.html": "<p>about</p>", "app.js": "1"})).await;
+        let (host, deployment) = state.deployments.read().await.iter().next().map(|(h, d)| (h.clone(), d.clone())).unwrap();
+        let get = |path: &str, extra: &[(&'static str, &'static str)]| {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::HOST, HeaderValue::from_str(&host).unwrap());
+            for (name, value) in extra {
+                headers.insert(*name, HeaderValue::from_static(value));
+            }
+            serve_key(state.clone(), headers, path.into())
+        };
+        let navigation = [("sec-fetch-dest", "document")];
+        assert_eq!(get("index.html", &navigation).await.status(), StatusCode::OK);
+        assert_eq!(get("about", &navigation).await.status(), StatusCode::OK);
+        assert_eq!(get("about", &navigation).await.status(), StatusCode::OK);
+        // None of these is a person opening a page.
+        get("index.html", &[]).await;
+        get("index.html", &[("sec-fetch-dest", "script")]).await;
+        get("app.js", &navigation).await;
+        get("index.html", &[("sec-fetch-dest", "document"), ("sec-purpose", "prefetch;prerender")]).await;
+        assert_eq!(get("missing", &navigation).await.status(), StatusCode::NOT_FOUND);
+        usage::flush();
+        let today = usage::day(now_ms());
+        let usage = usage::read_usage(&root.join("deployments").join(&deployment.id).join(usage::USAGE_DATABASE), &today, &today).unwrap();
+        let views: Vec<_> = usage["totals"].as_array().unwrap().iter().filter(|row| row["kind"] == "page_view").cloned().collect();
+        assert_eq!(views, vec![
+            json!({"kind": "page_view", "name": "about.html", "count": 2}),
+            json!({"kind": "page_view", "name": "index.html", "count": 1}),
+        ]);
+        // A single-page app answers every address with index.html. A deep link
+        // counts as its first load; a missing chunk the page asks for does not.
+        for deployment in state.deployments.write().await.values_mut() {
+            deployment.manifest["routing"] = json!("spa");
+        }
+        assert_eq!(get("items/3", &navigation).await.status(), StatusCode::OK);
+        assert_eq!(get("missing-chunk.js", &[("sec-fetch-dest", "script")]).await.status(), StatusCode::OK);
+        usage::flush();
+        let usage = usage::read_usage(&root.join("deployments").join(&deployment.id).join(usage::USAGE_DATABASE), &today, &today).unwrap();
+        let index = usage["totals"].as_array().unwrap().iter().find(|row| row["kind"] == "page_view" && row["name"] == "index.html").cloned();
+        assert_eq!(index, Some(json!({"kind": "page_view", "name": "index.html", "count": 2})));
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]

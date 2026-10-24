@@ -37,7 +37,8 @@ pub(crate) const MAX_USAGE_DATABASE_BYTES: u64 = 128 * 1024 * 1024;
 /// Days of totals kept. Older days are dropped as new ones arrive.
 pub(crate) const USAGE_DAYS: i64 = 400;
 /// Rows of totals kept, oldest days dropped first. A Deployment has at most
-/// 100 actions and 100 routes, so a day holds at most about 205 rows.
+/// 100 actions and 100 routes, so a day holds at most about 205 rows plus one
+/// `page_view` row per HTML file the artifact serves.
 pub(crate) const MAX_USAGE_ROWS: i64 = 100_000;
 /// Signals kept, oldest dropped first.
 pub(crate) const MAX_SIGNALS: i64 = 50_000;
@@ -75,6 +76,9 @@ pub(crate) enum Operation {
     Notify(String),
     /// A call queued by an action of `"kind": "call"`, by action name (`calls.rs`).
     Call(String),
+    /// A browser navigation to one of the artifact's HTML pages, by the file
+    /// served (`count_page_view` in `main.rs`).
+    PageView(String),
 }
 
 impl Operation {
@@ -90,6 +94,7 @@ impl Operation {
             Operation::Refused(name) => ("refused", name),
             Operation::Notify(name) => ("notify", name),
             Operation::Call(name) => ("call", name),
+            Operation::PageView(file) => ("page_view", file),
         }
     }
 }
@@ -420,7 +425,7 @@ fn prune_daily(db: &Connection, table: &str, limit: i64, cutoff: &str) -> Result
 }
 
 /// The UTC calendar day of a time in milliseconds, written `YYYY-MM-DD`.
-fn day(ms: u64) -> String {
+pub(crate) fn day(ms: u64) -> String {
     let (year, month, date) = civil((ms / 86_400_000) as i64);
     format!("{year:04}-{month:02}-{date:02}")
 }

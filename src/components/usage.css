@@ -26,14 +26,10 @@
 .usage-table td:last-child { min-width: 125px; }
 .usage-error { margin: 18px 0; padding: 12px 16px; border: 1px solid currentColor; background: var(--ds-danger-soft); }
 .usage-error p { margin: 0 0 10px; }
-.usage-signals, .usage-daily ul { list-style: none; padding: 0; }
+.usage-signals { list-style: none; padding: 0; }
 .usage-signals li { display: flex; gap: 18px; align-items: baseline; padding: 12px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .usage-signals li span:last-child { color: var(--muted); font-size: 12px; }
 .usage-signals strong { margin-left: auto; font-variant-numeric: tabular-nums; }
-.usage-daily { margin: 18px 0; }
-.usage-daily summary { cursor: pointer; font-size: 13px; }
-.usage-daily li { display: grid; grid-template-columns: 100px minmax(80px, 1fr) 70px; align-items: center; gap: 12px; font-size: 12px; padding: 5px 0; }
-.usage-daily strong { text-align: right; }
 .usage-delivery { border-top: 1px solid var(--line); }
 .usage-delivery > div { display: grid; grid-template-columns: 150px 1fr; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); }
 .usage-delivery dd { margin: 0; }
@@ -58,8 +54,6 @@
 .usage-outcome-strip dd { margin: 3px 0 0; font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .usage-main .usage-failure, .usage-error { color: var(--ds-danger); }
 .usage-jump { color: inherit; font-size: 13px; text-underline-offset: 3px; }
-.usage-volume-track { height: 8px; background: var(--ds-subtle); display: block; }
-.usage-volume-track > span { height: 100%; background: var(--ds-muted); display: block; }
 @media (max-width: 760px) {
   .usage-table, .usage-table tbody, .usage-table tr { display: block; width: 100%; }
   .usage-table caption { display: block; }
@@ -76,3 +70,32 @@
   .usage-outcome-strip { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
   .usage-app-link > a { max-width: 100%; overflow-wrap: anywhere; }
 }
+
+/* Daily charts. One series per chart, so the title names it and no legend is drawn. */
+.usage-chart { --usage-series: #2a78d6; margin: 18px 0 24px; }
+@media (prefers-color-scheme: dark) { .usage-chart { --usage-series: #3987e5; } }
+.usage-chart figcaption { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; font-size: 13px; color: var(--ds-muted); }
+.usage-chart figcaption strong { color: var(--ds-text); font-size: 15px; font-variant-numeric: tabular-nums; }
+.usage-chart-plot { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 168px auto; column-gap: 10px; row-gap: 6px; }
+.usage-chart-axis { position: relative; min-width: 24px; font-size: 11px; color: var(--ds-muted); font-variant-numeric: tabular-nums; text-align: right; }
+.usage-chart-axis span { position: absolute; right: 0; transform: translateY(50%); line-height: 1; }
+.usage-chart-bars { position: relative; display: grid; align-items: end; }
+.usage-chart-grid { position: absolute; left: 0; right: 0; border-top: 1px solid var(--line); pointer-events: none; }
+.usage-chart-grid[data-baseline] { border-top-color: var(--ds-muted); }
+.usage-chart-column { position: relative; display: flex; align-items: end; justify-content: center; height: 100%; padding: 0 1px; border: 0; background: transparent; cursor: default; }
+.usage-chart-column:focus-visible { outline: 2px solid var(--ds-text); outline-offset: -2px; }
+.usage-chart-column[data-active] { background: color-mix(in srgb, var(--ds-text) 6%, transparent); }
+.usage-chart-bar { display: block; width: 100%; max-width: 18px; min-height: 2px; border-radius: 4px 4px 0 0; background: var(--usage-series); }
+.usage-chart-column[data-active] .usage-chart-bar { filter: brightness(1.12); }
+.usage-chart-tooltip { position: absolute; top: 0; z-index: 2; transform: translateX(-50%); min-width: 132px; max-width: 240px; padding: 8px 10px; border: 1px solid var(--ds-border); border-radius: var(--ds-radius-sm); background: var(--ds-surface); box-shadow: var(--ds-shadow-sm); font-size: 12px; pointer-events: none; }
+.usage-chart-tooltip[data-edge="start"] { transform: none; }
+.usage-chart-tooltip[data-edge="end"] { transform: translateX(-100%); }
+.usage-chart-tooltip > strong { font-size: 15px; font-variant-numeric: tabular-nums; }
+.usage-chart-tooltip > span, .usage-chart-tooltip small { color: var(--ds-muted); }
+.usage-chart-tooltip small { display: block; }
+.usage-chart-tooltip ul { list-style: none; margin: 6px 0 0; padding: 6px 0 0; border-top: 1px solid var(--line); }
+.usage-chart-tooltip li { overflow-wrap: anywhere; }
+.usage-chart-tooltip li span { color: var(--ds-muted); }
+.usage-chart-x { grid-column: 2; display: flex; justify-content: space-between; font-size: 11px; color: var(--ds-muted); }
+.usage-chart-table { margin-top: 10px; }
+.usage-chart-table summary { cursor: pointer; font-size: 13px; }

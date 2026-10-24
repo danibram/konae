@@ -622,6 +622,7 @@ signals_read { "deploymentId", "name"?: "order.placed", "cursor"? }
 | `notify` | `<action>: queued`, or `<action>: <reason>` | a mutation with [`notify`](#notices) changed a row; the name says whether its email was queued or why it was not |
 | `scheduled` | the action | the Kernel's timer ran a [scheduled](#scheduled-work) mutation, whether it succeeded or failed |
 | `call` | the action | a [call action](#calls-between-apps) queued a call; the target app counts the request as its own `route` |
+| `page_view` | the HTML file served, as `index.html` | a browser navigation (`Sec-Fetch-Dest: document`, not a prefetch) received one of the artifact's HTML pages with 200. A single-page app counts its first load under `index.html` |
 
 Nothing else the Kernel refuses is counted: a call without the session it needs, an input the bindings reject, a statement SQLite refuses, a bad signature or a wrong password. A guard's refusal is the app's own rule saying no, which the owner wants to see next to the calls that ran. A scheduled run is the other exception: it counts under `scheduled` whether it succeeded or SQLite refused it, because nobody called it and the owner is the only one who can see that it failed. The Kernel writes Usage off the request path. A response never waits for it, and when more than 16,384 entries are waiting the newest are dropped and logged. The two read tools wait up to five seconds for the queue to drain, so they include every call that finished before them.
 

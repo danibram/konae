@@ -87,7 +87,7 @@ A named occurrence the Capsule declares on a Server Action, with properties take
 _Avoid_: event, track, custom metric
 
 **Usage**:
-The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations: sessions opened, actions by name, HTTP routes by method and path, uploads, file reads, signups and logins, and the runs of each schedule under `scheduled` with their outcome and changes. Operation totals exclude refused calls except a guard's refusal. Execution outcomes separately distinguish correct calls, app-rule refusals and execution failures, while platform authentication refusals and invalid inputs remain excluded. Usage belongs to the Deployment, distinct from application rows, and only the Project Owner reads it. The account overview includes only projects that owner may read.
+The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations: sessions opened, browser page views by the HTML file served, actions by name, HTTP routes by method and path, uploads, file reads, signups and logins, and the runs of each schedule under `scheduled` with their outcome and changes. Operation totals exclude refused calls except a guard's refusal. Execution outcomes separately distinguish correct calls, app-rule refusals and execution failures, while platform authentication refusals and invalid inputs remain excluded. Usage belongs to the Deployment, distinct from application rows, and only the Project Owner reads it. The account overview includes only projects that owner may read.
 _Avoid_: analytics, telemetry, audit, metric
 
 **Invitation**:
