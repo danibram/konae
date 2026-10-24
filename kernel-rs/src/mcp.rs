@@ -1602,7 +1602,7 @@ async fn admin_call(
 }
 
 fn signup_policy_value(deployment: &Deployment) -> Value {
-    json!({"deploymentId":deployment.id,"visibility":deployment.manifest.get("visibility").cloned().unwrap_or(json!("public")),"mode":deployment.signup_policy.mode,"allowlist":deployment.signup_policy.allowlist})
+    json!({"deploymentId":deployment.id,"visibility":if is_private(deployment) { "private" } else { "public" },"mode":deployment.signup_policy.mode,"allowlist":deployment.signup_policy.allowlist})
 }
 
 fn starter_files() -> Value {

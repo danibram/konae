@@ -31,7 +31,8 @@ describe("system prompt", () => {
     ]) {
       expect(prompt).toContain(fragment);
     }
-    expect(prompt).toContain("public deployment");
+    // A new project is private until its owner or its template makes it public.
+    expect(prompt).toContain("private deployment");
     // The Kernel refuses to deploy "granted", so the prompt must not offer it.
     expect(prompt).not.toContain('"granted"');
   });

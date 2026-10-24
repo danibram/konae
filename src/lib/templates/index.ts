@@ -1,3 +1,4 @@
+import { withVisibility } from "../../deployments/manifest";
 import { parseServerActionSource } from "../../kernel/actions";
 import { withPrivateNotes } from "../private-notes";
 import type { MiniAppProject } from "../types";
@@ -34,8 +35,12 @@ export function templateSource(id: TemplateId): TemplateSource | undefined {
  * parser both doors share, so the preview admits exactly the template's actions.
  */
 export function applyTemplate(base: MiniAppProject, id: TemplateId): MiniAppProject {
-  if (id === "tasks") return base;
-  if (id === "notes") return withPrivateNotes(base);
+  // The shared list is for anyone with the link, so it is born public; private notes are not.
+  if (id === "tasks") return { ...base, manifest: withVisibility(base.manifest, "public") };
+  if (id === "notes") {
+    const notes = withPrivateNotes(base);
+    return { ...notes, manifest: withVisibility(notes.manifest, "private") };
+  }
   const source = templateSource(id);
   if (!source) return base;
   const program = parseServerActionSource(source.files["actions.json"]);
@@ -45,14 +50,10 @@ export function applyTemplate(base: MiniAppProject, id: TemplateId): MiniAppProj
     directories: [],
     files: { ...source.files },
     databaseModel: { source: source.model, acceptedSource: source.model, revision: "baseline" },
-    manifest: {
+    manifest: withVisibility({
       ...base.manifest,
-      runtime: {
-        ...base.manifest.runtime,
-        database: { ...base.manifest.runtime.database, actions: declarations },
-        auth: { mode: "optional" },
-      },
-    },
+      runtime: { ...base.manifest.runtime, database: { ...base.manifest.runtime.database, actions: declarations } },
+    }, source.visibility),
     updatedAt: Date.now(),
   };
 }

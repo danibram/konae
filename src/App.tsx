@@ -842,7 +842,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const createProject = (name: string, template: TemplateId | "scratch" = "tasks") => {
     arrival.current = template === "scratch" ? "agent" : "preview";
     const base = createWorkspaceProject(name, projects);
-    const next = applyTemplate(base, template === "scratch" ? "tasks" : template);
+    // A project described from scratch keeps the private default; only a template made for visitors starts public.
+    const next = template === "scratch" ? base : applyTemplate(base, template);
     setProjects((current) => [...current, next]);
     setProject(next);
     setPreviewProject(next);

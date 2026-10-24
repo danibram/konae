@@ -4,13 +4,14 @@ import {
   createDeployment,
   editorCapabilities,
   normalizeManifest,
+  withVisibility,
 } from "./manifest";
 
 describe("deployment manifest", () => {
   test("migrates projects created before manifest v1", () => {
     const manifest = normalizeManifest(undefined);
     expect(manifest.version).toBe(1);
-    expect(manifest.visibility).toBe("public");
+    expect(manifest.visibility).toBe("private");
     expect(manifest.runtime.database.mode).toBe("declared-actions");
     expect(manifest.runtime.database.actions.map((action) => action.name)).toEqual([
       "tasks.list",
@@ -24,7 +25,7 @@ describe("deployment manifest", () => {
       id: "project_1",
       name: "Sensitive notes",
       slug: "sensitive-notes",
-      manifest: createDefaultManifest(),
+      manifest: withVisibility(createDefaultManifest(), "public"),
     };
     const deployment = createDeployment(project, "private", { id: "abcd-1234", now: 42 });
 
@@ -34,6 +35,17 @@ describe("deployment manifest", () => {
     expect(deployment.manifest.runtime.auth.mode).toBe("required");
     expect(project.manifest.visibility).toBe("public");
     expect(project.manifest.runtime.auth.mode).toBe("optional");
+  });
+
+  test("a new project is private and only a manifest that says public is public", () => {
+    expect(createDefaultManifest().visibility).toBe("private");
+    expect(createDefaultManifest().runtime.auth.mode).toBe("required");
+    for (const visibility of [undefined, "", "Public", "open", 1]) {
+      const manifest = normalizeManifest({ ...createDefaultManifest(), visibility });
+      expect(manifest.visibility).toBe("private");
+      expect(manifest.runtime.auth.mode).toBe("required");
+    }
+    expect(normalizeManifest({ ...createDefaultManifest(), visibility: "public" }).visibility).toBe("public");
   });
 
   test("keeps editor powers outside the runtime manifest", () => {

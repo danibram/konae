@@ -209,6 +209,7 @@ export const membersTemplate: TemplateSource = {
   id: "members",
   name: "Members with roles",
   sentence: "People sign in and post; the owner makes some of them admins who can moderate.",
+  visibility: "private",
   model,
   files: {
     "index.html": html,

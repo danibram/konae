@@ -108,6 +108,7 @@ export const formTemplate: TemplateSource = {
   id: "form",
   name: "Public form",
   sentence: "Anyone can send a message; the owner gets an email and reads them all here.",
+  visibility: "public",
   model,
   files: {
     "index.html": html,

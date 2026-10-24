@@ -502,12 +502,12 @@ describe("littlebox agent", () => {
 
     await agent.send("hola");
     const deployed = cloneStarter();
-    deployed.manifest = { ...deployed.manifest, visibility: "private" };
+    deployed.manifest = { ...deployed.manifest, visibility: "public" };
     agent.retarget({ ...deployed, id: starterProject.id, files: starterProject.files });
 
     await agent.send("otra vez");
-    expect(harness.requests[0].systemPrompt).toContain("public deployment");
-    expect(harness.requests[harness.requests.length - 1].systemPrompt).toContain("private deployment");
+    expect(harness.requests[0].systemPrompt).toContain("private deployment");
+    expect(harness.requests[harness.requests.length - 1].systemPrompt).toContain("public deployment");
   });
 
   test("reseed clears the proposal after apply while keeping the conversation", async () => {

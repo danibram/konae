@@ -58,22 +58,33 @@ const starterActions: RuntimeActionDeclaration[] = [
   { name: "tasks.toggle", kind: "mutation", access: "anonymous" },
 ];
 
+/** A new project is private until its owner, or the template it was born as, makes it public. */
 export function createDefaultManifest(): CapsuleManifest {
   return {
     version: 1,
-    visibility: "public",
+    visibility: "private",
     runtime: {
       database: { mode: "declared-actions", actions: starterActions.map((action) => ({ ...action })) },
-      auth: { mode: "optional" },
+      auth: { mode: "required" },
       files: { access: "deployment" },
     },
+  };
+}
+
+/** The manifest with this visibility, for a project being born: a private app requires a signed-in app account and a public one leaves it optional. */
+export function withVisibility(manifest: CapsuleManifest, visibility: DeploymentVisibility): CapsuleManifest {
+  return {
+    ...manifest,
+    visibility,
+    runtime: { ...manifest.runtime, auth: { mode: visibility === "private" ? "required" : "optional" } },
   };
 }
 
 export function normalizeManifest(value: unknown): CapsuleManifest {
   if (!value || typeof value !== "object") return createDefaultManifest();
   const candidate = value as Partial<CapsuleManifest>;
-  const visibility = candidate.visibility === "private" ? "private" : "public";
+  // Fail closed, as the Kernel does: only a manifest that says public is public.
+  const visibility = candidate.visibility === "public" ? "public" : "private";
   const actions = candidate.runtime?.database?.actions;
   const normalizedActions = Array.isArray(actions)
     ? actions.flatMap(normalizeAction)

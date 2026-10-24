@@ -125,7 +125,7 @@ impl From<DeploymentRecord> for Deployment {
                     .manifest
                     .get("visibility")
                     .and_then(Value::as_str)
-                    .unwrap_or("public"),
+                    .unwrap_or("private"),
             )
         });
         Self {
@@ -170,12 +170,13 @@ const SIGNUP_REFUSED: &str = "This app is not accepting new accounts for this em
 impl SignupPolicy {
     /// Public apps start open. Private apps start closed until the owner
     /// chooses who may join.
+    /// Open only for a Deployment that says it is public; any other value is closed.
     fn initial(visibility: &str) -> Self {
         Self {
-            mode: if visibility == "private" {
-                SignupMode::Closed
-            } else {
+            mode: if visibility == "public" {
                 SignupMode::Open
+            } else {
+                SignupMode::Closed
             },
             allowlist: Vec::new(),
         }
@@ -1499,12 +1500,7 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
         Some(value) => value,
         None => return error(StatusCode::NOT_FOUND, "Littlebox deployment not found."),
     };
-    if deployment
-        .manifest
-        .get("visibility")
-        .and_then(Value::as_str)
-        == Some("private")
-    {
+    if is_private(&deployment) {
         match authenticate_deployment(&state, &deployment, &headers) {
             Ok(Some(_)) => {}
             Ok(None) => return private_login_page(&deployment.signup_policy, state.accounts.verification),
@@ -3136,7 +3132,7 @@ fn is_private(deployment: &Deployment) -> bool {
         .manifest
         .get("visibility")
         .and_then(Value::as_str)
-        == Some("private")
+        != Some("public")
 }
 
 fn is_admin(state: &AppState, headers: &HeaderMap) -> bool {
@@ -3157,6 +3153,8 @@ fn authenticate_deployment(
     state: &AppState,
     deployment: &Deployment,
     headers: &HeaderMap,
+/// Fails closed: a Deployment is public only when its manifest says "public",
+/// so a record with no visibility or an unknown one needs a login.
 ) -> std::result::Result<Option<AuthUser>, Response> {
     let auth = open_auth(state, deployment)
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -3766,7 +3764,8 @@ mod tests {
         let saved = serde_json::to_value(&private).unwrap();
         assert_eq!(saved["signupPolicy"], json!({"mode": "closed", "allowlist": []}));
         assert_eq!(legacy(json!({"visibility": "public"})).signup_policy.mode, SignupMode::Open);
-        assert_eq!(legacy(json!({})).signup_policy.mode, SignupMode::Open);
+        assert_eq!(legacy(json!({})).signup_policy.mode, SignupMode::Closed);
+        assert_eq!(legacy(json!({"visibility": "Public"})).signup_policy.mode, SignupMode::Closed);
 
         // A stored policy always wins over the visibility default.
         let stored: Deployment = serde_json::from_value(json!({
@@ -3878,6 +3877,35 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("database.sqlite");
         initialize_database(&path).unwrap();
+
+    #[tokio::test]
+    async fn a_deployment_that_does_not_say_public_serves_no_asset_without_a_login() {
+        let root = std::env::temp_dir().join(format!("littlebox-fail-closed-{}", Uuid::new_v4()));
+        let (state, headers) = login_test_state(&root, "public").await;
+        let id = state.deployments.read().await.values().next().unwrap().id.clone();
+        let artifact = artifact_root(&state, &id);
+        tokio::fs::create_dir_all(&artifact).await.unwrap();
+        tokio::fs::write(artifact.join("report.txt"), "secret").await.unwrap();
+        let read = |manifest: Value| {
+            let (state, headers) = (state.clone(), headers.clone());
+            async move {
+                for deployment in state.deployments.write().await.values_mut() {
+                    deployment.manifest = manifest.clone();
+                }
+                let response = serve_key(state, headers, "report.txt".into()).await;
+                let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+                String::from_utf8_lossy(&bytes).into_owned()
+            }
+        };
+        assert_eq!(read(json!({"visibility": "public"})).await, "secret");
+        for manifest in [json!({}), json!({"visibility": null}), json!({"visibility": "Public"}), json!({"visibility": "open"})] {
+            let deployment = Deployment { manifest: manifest.clone(), ..state.deployments.read().await.values().next().unwrap().clone() };
+            assert!(is_private(&deployment), "{manifest}");
+            let body = read(manifest.clone()).await;
+            assert!(!body.contains("secret") && body.contains("<form"), "{manifest}");
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
 
         let initial = "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL); CREATE INDEX IF NOT EXISTS tasks_title ON tasks(title);";
         let original_action = action_program(&[("tasks.list", "SELECT id, title FROM tasks")]);

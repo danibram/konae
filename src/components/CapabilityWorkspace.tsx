@@ -129,14 +129,14 @@ function AuthPanel(props: Props) {
         <button type="button" className={view === "users" ? "active" : ""} aria-current={view === "users" || undefined} onClick={() => show("users")}><Users size={13} /> Users</button>
         <button type="button" className={view === "integrations" ? "active" : ""} aria-current={view === "integrations" || undefined} onClick={() => show("integrations")}><Plug size={13} /> Integrations</button>
       </nav>
-      {view === "users" && <AppUsersView deploymentId={props.deployment?.id} visibility={props.visibility ?? "public"} onSetVisibility={props.onSetVisibility} />}
+      {view === "users" && <AppUsersView deploymentId={props.deployment?.id} visibility={props.visibility ?? "private"} onSetVisibility={props.onSetVisibility} />}
       {view === "integrations" && props.projectId && <IntegrationsView projectId={props.projectId} deploymentId={props.deployment?.id} deploymentUrl={props.deployment?.url} actionsSource={props.actionsSource} />}
       {view === "rules" && <RulesView {...props} />}
     </section>
   );
 }
 
-function RulesView({ host, onFilesChanged, actionsSource, onSetAccess, visibility = "public" }: Props) {
+function RulesView({ host, onFilesChanged, actionsSource, onSetAccess, visibility = "private" }: Props) {
   const [actor, setActor] = useState(host.getPreviewActor());
   const refusal = actionsSource ? deployReadiness({ files: { "actions.json": actionsSource }, manifest: { runtime: { database: { actions: [] } } } }).refusal : null;
   const previewName = actor === "alice" ? "a signed-in person" : actor === "bob" ? "another signed-in person" : "someone who has not signed in";

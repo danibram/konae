@@ -123,6 +123,7 @@ export const digestTemplate: TemplateSource = {
   id: "digest",
   name: "Nightly digest",
   sentence: "Members write entries; each morning every member gets an email listing what they wrote the day before.",
+  visibility: "private",
   model,
   files: {
     "index.html": html,

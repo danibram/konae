@@ -94,6 +94,7 @@ export const webhookTemplate: TemplateSource = {
   id: "webhook",
   name: "Webhook receiver",
   sentence: "Another service sends signed events to the app; the owner reads them here.",
+  visibility: "private",
   model,
   files: {
     "index.html": html,

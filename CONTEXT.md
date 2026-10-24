@@ -41,11 +41,11 @@ The published, addressable instance of a Project with its own hostname, an optio
 _Avoid_: Project, preview
 
 **Public Deployment**:
-A Deployment whose application shell may be opened without signing in. A signed-out visitor may call Server Actions declared `anonymous`, and may list and read files marked public. Uploads, and changing a file's visibility or deleting it, require a Runtime Actor session and only the uploader may do the last two; private files need a session or an API key that names them. Public visibility of the Deployment grants no database access and no access to private files.
+A Deployment whose application shell may be opened without signing in. A signed-out visitor may call Server Actions declared `anonymous`, and may list and read files marked public. Uploads, and changing a file's visibility or deleting it, require a Runtime Actor session and only the uploader may do the last two; private files need a session or an API key that names them. Public visibility of the Deployment grants no database access and no access to private files. A Deployment is public only when it says so; a Project is born private unless its template is made for visitors without an app account.
 _Avoid_: Public database
 
 **Private Deployment**:
-A Deployment whose application shell and runtime require a signed-in Runtime Actor before anything loads or runs. An HTTP route of an action declared `anonymous` answers to its callers. A signed route takes its signature or an API key, and an unsigned one takes an API key or a session unless it declares other `callers`. Its Signup Policy decides who may create that account.
+A Deployment whose application shell and runtime require a signed-in Runtime Actor before anything loads or runs. An HTTP route of an action declared `anonymous` answers to its callers. A signed route takes its signature or an API key, and an unsigned one takes an API key or a session unless it declares other `callers`. Its Signup Policy decides who may create that account. A Deployment that names no visibility, or one the Kernel does not know, is private.
 _Avoid_: Password-protected app
 
 **Project Owner**:

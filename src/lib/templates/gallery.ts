@@ -153,6 +153,7 @@ export const galleryTemplate: TemplateSource = {
   id: "gallery",
   name: "File gallery",
   sentence: "Signed-in people add images and every visitor sees them.",
+  visibility: "public",
   model,
   files: {
     "index.html": html,

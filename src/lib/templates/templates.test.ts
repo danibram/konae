@@ -28,6 +28,20 @@ describe("a project born from a template", () => {
     for (const choice of templateChoices) expect(choice.sentence).toMatch(/^[^.]+\.$/);
   });
 
+  test("only the templates made for visitors without an app account are born public", () => {
+    const visibility = Object.fromEntries(templateChoices.map(({ id }) => [id, born(id).manifest.visibility]));
+    expect(visibility).toEqual({ tasks: "public", notes: "private", members: "private", form: "public", webhook: "private", digest: "private", gallery: "public" });
+    for (const { id } of templateChoices) {
+      const { visibility: chosen, runtime } = born(id).manifest;
+      expect(runtime.auth.mode).toBe(chosen === "private" ? "required" : "optional");
+    }
+  });
+
+  test("a project described from scratch starts private", () => {
+    expect(cloneStarter().manifest.visibility).toBe("private");
+    expect(cloneStarter().manifest.runtime.auth.mode).toBe("required");
+  });
+
   for (const { id } of templateChoices) {
     test(`${id} ships an app.js the browser can parse`, () => {
       const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (body: string) => unknown;
