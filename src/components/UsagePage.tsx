@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowUpRight, BarChart3, RefreshCw } from "lucide-react";
 import { WorkspaceNav } from "./WorkspaceNav";
-import { Badge, Button, EmptyState, LoadingBlock, Select } from "./ui";
+import { Alert, Badge, Breadcrumb, Button, EmptyState, LoadingBlock, Select } from "./ui";
 import { UsageLoadingShapes } from "./BootShell";
 import { useLoadingHold } from "./loading-hold";
 import type { OwnerSession } from "./owner-session";
@@ -15,6 +15,7 @@ const dateTime = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle:
 const formatTime = (at: number) => dateTime.format(at);
 const deploymentId = () => new URLSearchParams(window.location.search).get("deployment");
 const projectHref = (projectId: string) => `/app/${encodeURIComponent(projectId)}`;
+const outcomeColor = (outcome: string) => outcome === "ok" ? "var(--ds-s1)" : outcome === "failed" ? "var(--ds-danger)" : outcome === "refused" ? "var(--ds-warning)" : undefined;
 const outcomeTone = (outcome: string) => outcome === "ok" ? "success" : outcome === "failed" ? "danger" : outcome === "refused" ? "warning" : "neutral";
 
 export function UsagePage({ ownerSession }: { ownerSession: OwnerSession }) {
@@ -76,7 +77,7 @@ export function UsagePage({ ownerSession }: { ownerSession: OwnerSession }) {
   return <div className="account-home">
     <WorkspaceNav active="usage" projectCount={projectCount} ownerSession={ownerSession} />
     <main className="account-main"><section className="account-content usage-main">
-      {selected && <nav className="usage-breadcrumb" aria-label="Breadcrumb"><a href="/usage">Usage</a><span aria-hidden="true">/</span><span aria-current="page">{summary?.projectName ?? "App"}</span></nav>}
+      {selected && <Breadcrumb items={[{ label: "Usage", href: "/usage" }, { label: summary?.projectName ?? "App" }]} />}
       <header className="account-hero usage-heading">
         <div><h1>{selected ? summary?.projectName ?? "App usage" : "Usage"}</h1>
           <p>{selected ? "What this published app did in the period, and what it could not do." : "What your published apps did in the period. Drafts are listed without figures until you publish them."}</p></div>
@@ -84,7 +85,7 @@ export function UsagePage({ ownerSession }: { ownerSession: OwnerSession }) {
           <Button disabled={pending} onClick={() => void load()}><RefreshCw size={14} /> Refresh</Button></div>
       </header>
       <div className="usage-range"><span>{range.from} to {range.to} · UTC</span><span>{updatedAt ? `Updated ${formatTime(updatedAt)}` : "Waiting for Kernel data"}</span></div>
-      {error && <div className="usage-error" role="alert"><p>Usage could not be refreshed. {updatedAt ? "The figures below are from the last successful read. " : ""}{error}</p><Button onClick={() => void load()}>Try again</Button></div>}
+      {error && <Alert tone="danger" className="usage-error" title="Usage could not be refreshed" action={<Button onClick={() => void load()}>Try again</Button>}>{updatedAt ? "The figures below are from the last successful read. " : ""}{error}</Alert>}
       {reading && <LoadingBlock label="Loading Littlebox" sinceNavigation><UsageLoadingShapes /></LoadingBlock>}
       {!selected && updatedAt && !reading && <AccountUsage apps={apps} />}
       {!selected && nextCursor && <Button disabled={pending} onClick={() => void load(nextCursor)}>Load more apps</Button>}
@@ -97,7 +98,7 @@ export function UsagePage({ ownerSession }: { ownerSession: OwnerSession }) {
 function AccountUsage({ apps }: { apps: UsageApp[] }) {
   if (!apps.length) return <EmptyState className="usage-empty" icon={<BarChart3 size={22} />} title="No apps yet" description="Create a project and publish it. Its usage appears here." action={<a className="ui-button ui-button-primary" href="/">Go to projects</a>} />;
   return <section aria-labelledby="usage-apps-heading"><h2 id="usage-apps-heading">Apps</h2>
-    <div className="usage-table-scroll"><table className="usage-table"><caption>Activity in the selected period. Open an app for feature details.</caption><thead><tr><th scope="col">App</th><th scope="col">Page views</th><th scope="col">Recorded operations</th><th scope="col">Execution results</th><th scope="col">Features with activity</th><th scope="col">Latest recorded day</th><th scope="col">Usage</th></tr></thead>
+    <div className="ui-table-scroll"><table className="ui-table"><caption>Activity in the selected period. Open an app for feature details.</caption><thead><tr><th scope="col">App</th><th scope="col">Page views</th><th scope="col">Recorded operations</th><th scope="col">Execution results</th><th scope="col">Features with activity</th><th scope="col">Latest recorded day</th><th scope="col">Usage</th></tr></thead>
       <tbody>{apps.map((app) => {
         const value = app.summary;
         if (!value) return <tr key={app.projectId}><th scope="row">{app.name}<small>{app.error ? "Read failed" : "Draft"}</small></th>
@@ -130,7 +131,7 @@ function AppUsage({ summary }: { summary: UsageSummary }) {
   const actionNames = [...new Set([...summary.actions.filter((a) => a.kind !== "call").map((a) => a.name), ...summary.metrics.filter((m) => m.feature === "execution").map((m) => m.name)])].sort();
   return <>
     <div className="usage-app-link"><a href={summary.url} target="_blank" rel="noopener">{new URL(summary.url).hostname} <ArrowUpRight size={14} /></a>{summary.sourceAuthority === "managed" ? <a href={projectHref(summary.projectId)}>Open project</a> : <span className="usage-note">External project · Files are managed outside Littlebox</span>}</div>
-    {notices.notSent > 0 && <div className="usage-error" role="status"><p><strong>{number.format(notices.notSent)} email {notices.notSent === 1 ? "notice was" : "notices were"} not sent.</strong> {[...new Set(notices.reasons.map((r) => r.label))].map((label) => label[0].toUpperCase() + label.slice(1)).join(". ")}. The actions themselves completed; only the email is missing.{notices.reasons.some((r) => r.reason === "no-transport") && " Whoever runs this installation can connect an email service."}</p></div>}
+    {notices.notSent > 0 && <Alert tone="warning" className="usage-error" title={`${number.format(notices.notSent)} email ${notices.notSent === 1 ? "notice was" : "notices were"} not sent`}>{[...new Set(notices.reasons.map((r) => r.label))].map((label) => label[0].toUpperCase() + label.slice(1)).join(". ")}. The actions themselves completed; only the email is missing.{notices.reasons.some((r) => r.reason === "no-transport") && " Whoever runs this installation can connect an email service."}</Alert>}
     <section className="usage-coverage" aria-label="Data coverage"><p>{coverage.startedAt ? `Execution outcomes and business event totals have been collected since ${formatTime(coverage.startedAt)}.` : "No execution outcome history yet. It starts when this Kernel records the next operation."} Earlier operation counts may still appear below.</p>
       <p>Up to {coverage.retentionDays} days are retained, subject to storage limits. Blank history does not prove a feature was never used.</p>
       {coverage.prunedThrough !== null && coverage.prunedThrough !== undefined && coverage.prunedThrough >= Date.parse(`${summary.usage.from}T00:00:00Z`) && <p>Retention has removed some records through {new Date(coverage.prunedThrough).toISOString().slice(0, 10)}. This period is incomplete.</p>}
@@ -139,15 +140,15 @@ function AppUsage({ summary }: { summary: UsageSummary }) {
     </section>
     <Traffic summary={summary} />
     <section aria-labelledby="usage-results-heading"><h2 id="usage-results-heading">Execution summary</h2>
-      {summary.metrics.some((m) => m.feature === "execution") ? <dl className="usage-outcome-strip">{strip.map(([key, label]) => <div key={key} className={key === "failed" && (outcomes.failed ?? 0) > 0 ? "usage-failure" : undefined}><dt>{label}</dt><dd>{number.format(outcomes[key] ?? 0)}</dd></div>)}</dl> : <p>No execution outcomes recorded in this period.</p>}
-      <DailyChart title="Executions per day" unit="executions" points={dailyExecutions(summary)} partLabel={outcomeLabel} empty="No execution outcomes recorded in this period." />
+      {summary.metrics.some((m) => m.feature === "execution") ? <dl className="ui-stats">{strip.map(([key, label]) => <div key={key} className={key === "failed" && (outcomes.failed ?? 0) > 0 ? "usage-failure" : undefined}><dt>{label}</dt><dd>{number.format(outcomes[key] ?? 0)}</dd></div>)}</dl> : <p>No execution outcomes recorded in this period.</p>}
+      <DailyChart title="Executions per day" unit="executions" points={dailyExecutions(summary)} partLabel={outcomeLabel} partColor={outcomeColor} stacked empty="No execution outcomes recorded in this period." />
       <a className="usage-jump" href="#execution-detail">See results by action</a>
     </section>
-    <section aria-labelledby="usage-features-heading"><h2 id="usage-features-heading">Features</h2><div className="usage-table-scroll"><table className="usage-table"><caption>Current published configuration and recorded activity in this period.</caption><thead><tr><th scope="col">Feature</th><th scope="col">Published state</th><th scope="col">Recorded activity</th><th scope="col">Latest recorded day</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><th scope="row">{row.name}<small>{row.description}</small></th><td data-label="Published state">{row.configured}</td><td data-label="Activity">{row.count ? <><strong>{number.format(row.count)}</strong>{row.id === "notify"
+    <section aria-labelledby="usage-features-heading"><h2 id="usage-features-heading">Features</h2><div className="ui-table-scroll"><table className="ui-table"><caption>Current published configuration and recorded activity in this period.</caption><thead><tr><th scope="col">Feature</th><th scope="col">Published state</th><th scope="col">Recorded activity</th><th scope="col">Latest recorded day</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><th scope="row">{row.name}<small>{row.description}</small></th><td data-label="Published state">{row.configured}</td><td data-label="Activity">{row.count ? <><strong>{number.format(row.count)}</strong>{row.id === "notify"
       ? <>{notices.queued > 0 && <small>{number.format(notices.queued)} queued for sending</small>}{notices.reasons.map((r) => <small key={`${r.action}/${r.reason}`} className="usage-failure">{r.action} · {number.format(r.count)} not sent: {r.label}</small>)}</>
       : <small>{row.totals.map((t) => `${t.name || t.kind} · ${number.format(t.count)}`).join("; ")}</small>}</> : "No recorded operations"}{row.failures > 0 && <small className="usage-failure">{number.format(row.failures)} execution failures</small>}{row.refused > 0 && <small>{number.format(row.refused)} refused by app rules</small>}</td><td data-label="Latest day">{row.lastDay ?? "No data"}</td></tr>)}</tbody></table></div></section>
     <section id="execution-detail" aria-labelledby="usage-actions-heading"><h2 id="usage-actions-heading">Results by action</h2><p className="usage-note">These counts cover the instrumented history only.</p>
-      <div className="usage-table-scroll"><table className="usage-table"><caption>One execution per origin. Platform access refusals and invalid inputs are excluded.</caption><thead><tr><th scope="col">Action</th><th scope="col">Origin</th><th scope="col">Result</th><th scope="col">Count</th><th scope="col">Last activity</th></tr></thead><tbody>{actionNames.flatMap((name) => {
+      <div className="ui-table-scroll"><table className="ui-table"><caption>One execution per origin. Platform access refusals and invalid inputs are excluded.</caption><thead><tr><th scope="col">Action</th><th scope="col">Origin</th><th scope="col">Result</th><th scope="col">Count</th><th scope="col">Last activity</th></tr></thead><tbody>{actionNames.flatMap((name) => {
         const groups = new Map<string, { origin: string; outcome: string; count: number; lastAt: number }>();
         summary.metrics.filter((m) => m.feature === "execution" && m.name === name).forEach((m) => { const key = `${m.origin}/${m.outcome}`; const current = groups.get(key); groups.set(key, { ...m, count: (current?.count ?? 0) + m.count, lastAt: Math.max(current?.lastAt ?? 0, m.lastAt) }); });
         if (!groups.size) return [<tr key={name}><th scope="row">{name}</th><td colSpan={4} data-label="Result">No recorded executions in this period</td></tr>];
@@ -168,9 +169,9 @@ function Traffic({ summary }: { summary: UsageSummary }) {
   const tiles = [["Page views", kindTotal(summary, "page_view")], ["Sessions opened", kindTotal(summary, "session")], ["Signups", kindTotal(summary, "signup")], ["Sign-ins", kindTotal(summary, "login")]] as const;
   return <section aria-labelledby="usage-traffic-heading"><h2 id="usage-traffic-heading">Traffic</h2>
     <p className="usage-note">The Kernel counts a page view when a browser opens one of the app's pages, by the file it served. Scripts, crawlers and prefetches are not counted. A single-page app counts its first load, not the screens it shows after that.</p>
-    <dl className="usage-outcome-strip">{tiles.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{number.format(value)}</dd></div>)}</dl>
+    <dl className="ui-stats">{tiles.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{number.format(value)}</dd></div>)}</dl>
     <DailyChart title="Page views per day" unit="page views" points={dailyUsage(summary, "page_view")} empty="No page views recorded in this period. Views count from the first browser visit after this Kernel was updated." />
-    {pages.length > 1 && <div className="usage-table-scroll"><table className="usage-table"><caption>Page views by page in this period.</caption><thead><tr><th scope="col">Page</th><th scope="col">Views</th></tr></thead>
+    {pages.length > 1 && <div className="ui-table-scroll"><table className="ui-table"><caption>Page views by page in this period.</caption><thead><tr><th scope="col">Page</th><th scope="col">Views</th></tr></thead>
       <tbody>{pages.map((row) => <tr key={row.page}><th scope="row">{row.page}</th><td data-label="Views">{number.format(row.count)}</td></tr>)}</tbody></table></div>}
   </section>;
 }
