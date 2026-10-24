@@ -3,6 +3,7 @@ import { cloneElement, useEffect, useId, useRef, useState, type ComponentProps, 
 import { useModalDialog } from "../useModalDialog";
 import { LOADING_DELAY_MS } from "../loading-hold";
 import "./ui.css";
+import "./variant-clean.css";
 
 export * from "./charts";
 

@@ -57,6 +57,11 @@ export function DesignSystem({ ownerSession }: { ownerSession: OwnerSession }) {
   const [sampleTemplate, setSampleTemplate] = useState<TemplateId>("tasks");
   const nameRef = useRef<HTMLInputElement>(null);
   const [projectCount, setProjectCount] = useState<number | undefined>();
+  const [variant, setVariant] = useState<"brutal" | "clean">(() => {
+    const asked = new URLSearchParams(window.location.search).get("variant") ?? localStorage.getItem("littlebox:ds-variant");
+    return asked === "clean" ? "clean" : "brutal";
+  });
+  const chooseVariant = (next: "brutal" | "clean") => { setVariant(next); try { localStorage.setItem("littlebox:ds-variant", next); } catch { /* the choice lasts until reload */ } };
 
   useEffect(() => {
     if (ownerSession.state !== "signed-in") {
@@ -71,7 +76,7 @@ export function DesignSystem({ ownerSession }: { ownerSession: OwnerSession }) {
   }, [ownerSession]);
 
   return (
-    <div className="account-home">
+    <div className="account-home" data-ds={variant === "clean" ? "clean" : undefined}>
       <WorkspaceNav active="design-system" projectCount={projectCount} ownerSession={ownerSession} />
       <main className="account-main">
         <section className="account-content ds-workspace">
@@ -79,18 +84,19 @@ export function DesignSystem({ ownerSession }: { ownerSession: OwnerSession }) {
             <p className="account-kicker"><span>◆</span> Littlebox UI</p>
             <h1>Design system</h1>
             <p>Component examples. These controls do not change projects or upload files. Open a project to work with its files.</p>
+            <div className="ds-variant"><span id="ds-variant-label">Variant</span><Segmented label="Design system variant" value={variant} onChange={chooseVariant} options={[{ value: "brutal", label: "Brutal" }, { value: "clean", label: "Clean" }]} /><small>Same components, different tokens. Clean sets <code>data-ds="clean"</code> on any element.</small></div>
           </header>
           <div className="ds-page-inner">
             <nav className="ds-index" aria-label="On this page">{sections.map(([id, label]) => <a key={id} href={`#${id}`}>{label}</a>)}</nav>
             <Sample id="foundations" title="Foundations" note="Every colour is a token. Light and dark come from the same names, so nothing in a component picks a hex. The theme follows the system.">
-              <div className="ds-swatches">{[["canvas", "Page background"], ["surface", "Cards and dialogs"], ["subtle", "Quiet fill"], ["border", "Hairlines"], ["stroke", "Strokes"], ["text", "Writing"], ["muted", "Secondary writing"], ["accent", "Primary (acid)"], ["orange", "Emphasis"], ["success", "Saved"], ["warning", "Careful"], ["danger", "Destructive"], ["info", "Information"]].map(([token, job]) => <div key={token}><i style={{ background: `var(--ds-${token})` }} /><span>{job}</span><code>--ds-{token}</code></div>)}</div>
+              <div className="ds-swatches">{[["canvas", "Page background"], ["surface", "Cards and dialogs"], ["subtle", "Quiet fill"], ["border", "Hairlines"], ["stroke", "Strokes"], ["text", "Writing"], ["muted", "Secondary writing"], ["accent", "Primary"], ["orange", "Emphasis"], ["success", "Saved"], ["warning", "Careful"], ["danger", "Destructive"], ["info", "Information"]].map(([token, job]) => <div key={token}><i style={{ background: `var(--ds-${token})` }} /><span>{job}</span><code>--ds-{token}</code></div>)}</div>
               <h3 className="ds-sub">Chart series</h3>
               <p className="ds-note">Five hues in a fixed order, validated for colour-blind readers in both themes. A series keeps its colour when others are filtered out.</p>
               <ChartLegend items={[1, 2, 3, 4, 5].map((n) => ({ label: `Series ${n}`, color: `var(--ds-s${n})` }))} />
               <div className="ds-shadows">
-                <div className="ds-shadow-chip ds-shadow-sm"><span>Shadow sm</span><code>2px 2px 0</code></div>
-                <div className="ds-shadow-chip ds-shadow-md"><span>Shadow</span><code>3px 3px 0</code></div>
-                <div className="ds-shadow-chip ds-shadow-lg"><span>Shadow lg</span><code>5px 5px 0</code></div>
+                <div className="ds-shadow-chip ds-shadow-sm"><span>Shadow sm</span><code>--ds-shadow-sm</code></div>
+                <div className="ds-shadow-chip ds-shadow-md"><span>Shadow</span><code>--ds-shadow</code></div>
+                <div className="ds-shadow-chip ds-shadow-lg"><span>Shadow lg</span><code>--ds-shadow-lg</code></div>
               </div>
               <div className="ds-panels">
                 <div><i style={{ background: "var(--ds-panel-yellow)" }} /><span>Panel yellow</span></div>
@@ -101,7 +107,7 @@ export function DesignSystem({ ownerSession }: { ownerSession: OwnerSession }) {
                 <div className="ds-type-display">Tiny Tasks</div>
                 <h2>A shared list</h2>
                 <p>Anyone with the link can add a row. The list stops at 100.</p>
-                <small>Bricolage Grotesque for writing, JetBrains Mono for labels and figures.</small>
+                <small>Brutal sets Bricolage Grotesque with JetBrains Mono labels. Clean uses the system sans for both.</small>
               </div>
             </Sample>
             <Sample id="actions" title="Actions"><div className="ds-row"><Button variant="primary"><Plus size={15} /> Create project</Button><Button>Cancel</Button><Button>View details</Button><Button variant="ghost">Skip for now</Button><Button variant="danger">Delete project</Button><Button disabled>Unavailable</Button><Button variant="primary" loading>Saving</Button><IconButton label="Settings"><Settings2 size={16} /></IconButton></div>
@@ -158,7 +164,7 @@ export function DesignSystem({ ownerSession }: { ownerSession: OwnerSession }) {
               </div>
             </Sample>
             <Sample id="charts" title="Charts" note="The same charts Usage draws. Hover or tab to a mark for its numbers; every chart has a table behind it.">
-              <Card className="ds-chart-card"><BarChart title="Executions per day" unit="executions" points={barPoints} partLabel={(part) => outcomeNames[part] ?? part} partColor={(part) => part === "failed" ? "var(--ds-danger)" : part === "refused" ? "var(--ds-warning)" : undefined} stacked empty="Nothing recorded." keyHeading="Day (UTC)" /></Card>
+              <Card className="ds-chart-card"><BarChart title="Executions per day" unit="executions" points={barPoints} partLabel={(part) => outcomeNames[part] ?? part} partColor={(part) => part === "failed" ? "var(--ds-danger)" : part === "refused" ? "var(--ds-warning-fill)" : undefined} stacked empty="Nothing recorded." keyHeading="Day (UTC)" /></Card>
               <div className="ds-fields ds-gap">
                 <Card className="ds-chart-card"><LineChart title="Visits" unit="visits" labels={days.map((d) => d.label)} series={viewSeries} area empty="Nothing recorded." /></Card>
                 <Card className="ds-chart-card"><DonutChart title="Where views come from" unit="views" slices={[{ id: "home", label: "Home", value: 5120 }, { id: "list", label: "List", value: 3304 }, { id: "about", label: "About", value: 1450 }, { id: "other", label: "Other", value: 640 }]} empty="Nothing recorded." /></Card>
