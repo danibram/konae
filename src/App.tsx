@@ -68,7 +68,7 @@ import { cloneStarter } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
 import { createDirectory, createFile, directoriesForFiles, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
 import { actionReadout } from "./components/action-readiness";
-import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./lib/workspace";
+import { createWorkspaceProject, dismissDrafts, loadWorkspaceState, persistWorkspace, readDismissedDrafts, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./lib/workspace";
 import { ManagedSources, type EjectRecord, type ProjectMetadata } from "./lib/managed-sources";
 import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
@@ -160,8 +160,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       if (Array.isArray(recovery)) candidates.push(...recovery);
       candidates.push(...storedLocalProjects(workspaceStorage), ...storedLocalProjects());
     } catch { /* Invalid local drafts remain untouched. */ }
-    return recoveryDrafts(candidates, loaded.projects);
+    return recoveryDrafts(candidates, loaded.projects, readDismissedDrafts(workspaceStorage));
   });
+  const [missing, setMissing] = useState(loaded.missing);
   const [projects, setProjects] = useState(initialWorkspace.projects);
   const [deployments, setDeployments] = useState(initialWorkspace.deployments);
   const [project, setProject] = useState(() => initialWorkspace.projects.find((item) => item.id === initialWorkspace.activeProjectId) ?? initialWorkspace.projects[0] ?? cloneStarter());
@@ -673,7 +674,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const target = projects.find((item) => item.id === route.projectId);
     // A link to a project this workspace does not have says so; the list would hide the wrong address.
     if (!target) {
-      if (loaded.missing.some((item) => item.id === route.projectId)) {
+      if (missing.some((item) => item.id === route.projectId)) {
         setRoute({ screen: "projects" });
         explainMissingRoute();
       } else {
@@ -878,10 +879,32 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const importDraft = (index: number) => {
     const draft = drafts[index];
     if (!draft) return;
-    const restore = loaded.missing.some((item) => item.id === draft.id);
+    const restore = missing.some((item) => item.id === draft.id);
     const copy = { ...draft, id: restore ? draft.id : `app_${crypto.randomUUID()}`, updatedAt: Date.now() };
     setProjects((current) => [...current, copy]);
     setDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const dismissDraft = (index: number) => {
+    const draft = drafts[index];
+    if (!draft) return;
+    dismissDrafts(workspaceStorage, [draft]);
+    setDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const deleteMissingProject = async (item: ProjectMetadata, name: string) => {
+    await sources.deleteProject(item.id, name);
+    setMissing((current) => current.filter((entry) => entry.id !== item.id));
+    setDeployments((current) => {
+      const { [item.id]: _removed, ...rest } = current;
+      return rest;
+    });
+    // A local copy of a deleted app would otherwise come back as an import.
+    const copies = drafts.filter((draft) => draft.id === item.id);
+    if (copies.length) {
+      dismissDrafts(workspaceStorage, copies);
+      setDrafts((current) => current.filter((draft) => draft.id !== item.id));
+    }
   };
 
   const setActionAccess = (name: string, access: RuntimeActionAccess) => {
@@ -928,7 +951,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   if (route.screen === "not-found") return <NotFound what={route.what} path={route.path} />;
 
   if (screen === "projects") {
-    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} external={loaded.external} missing={loaded.missing} notice={routeNotice} drafts={drafts} onImportDraft={importDraft} onOpenProject={openProject} onCreateProject={createProject}
+    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} external={loaded.external} missing={missing} notice={routeNotice} drafts={drafts} onImportDraft={importDraft} onDismissDraft={dismissDraft} onDeleteMissing={deleteMissingProject} onOpenProject={openProject} onCreateProject={createProject}
       ejected={ejected}
       eject={{
         prepare: (projectId, slug) => sources.prepareEject(projectId, slug),

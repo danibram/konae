@@ -14,7 +14,22 @@ export type WorkspaceState = {
 };
 
 /** Keep the newest local draft per project and omit copies of the saved sources and of the seeded starter projects. */
-export function recoveryDrafts(candidates: MiniAppProject[], saved: MiniAppProject[]): MiniAppProject[] {
+/** Local copies the owner dismissed, by id, with the updatedAt they had. A copy edited later shows again. */
+export type DismissedDrafts = Record<string, number>;
+const dismissedKey = "dismissed-drafts";
+
+export function readDismissedDrafts(storage: Pick<Storage, "getItem">): DismissedDrafts {
+  const value = readJson<DismissedDrafts>(storage.getItem(dismissedKey));
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+export function dismissDrafts(storage: Pick<Storage, "getItem" | "setItem">, drafts: readonly MiniAppProject[]) {
+  const dismissed = readDismissedDrafts(storage);
+  for (const draft of drafts) dismissed[draft.id] = Math.max(dismissed[draft.id] ?? 0, draft.updatedAt ?? 0);
+  storage.setItem(dismissedKey, JSON.stringify(dismissed));
+}
+
+export function recoveryDrafts(candidates: MiniAppProject[], saved: MiniAppProject[], dismissed: DismissedDrafts = {}): MiniAppProject[] {
   const latest = new Map<string, MiniAppProject>();
   for (const candidate of candidates) {
     if (!candidate || typeof candidate.id !== "string" || !candidate.files || typeof candidate.files !== "object") continue;
@@ -25,7 +40,7 @@ export function recoveryDrafts(candidates: MiniAppProject[], saved: MiniAppProje
   // The browser used to seed the starter and the architecture map into every empty store. The map is now a dev-server prototype, so no copy of it is a draft; an unedited starter is not something the owner made.
   const starter = cloneStarter();
   const starterSignature = draftSignature(starter);
-  return [...latest.values()].filter((draft) => current.get(draft.id) !== draftSignature(draft) && draft.id !== architectureProjectId && !(draft.id === starter.id && draftSignature(draft) === starterSignature));
+  return [...latest.values()].filter((draft) => current.get(draft.id) !== draftSignature(draft) && draft.id !== architectureProjectId && !(draft.id in dismissed && (draft.updatedAt ?? 0) <= dismissed[draft.id]) && !(draft.id === starter.id && draftSignature(draft) === starterSignature));
 }
 
 function draftSignature(project: MiniAppProject): string {
@@ -65,7 +80,7 @@ export function loadWorkspaceState(storage: Pick<Storage, "getItem"> = localStor
 }
 
 /**
- * The projects a browser actually stored, for the "Import apps from this
+ * The projects a browser actually stored, for the "Copies saved in this
  * browser" list. loadWorkspaceState invents a starter
  * for an empty store, and offering those would list apps the owner never made.
  */

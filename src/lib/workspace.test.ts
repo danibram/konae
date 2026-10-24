@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { architectureProjectId } from "./architecture";
 import { cloneStarter } from "./starter";
-import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./workspace";
+import { createWorkspaceProject, dismissDrafts, loadWorkspaceState, persistWorkspace, readDismissedDrafts, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./workspace";
 
 function memoryStorage(seed: Record<string, string> = {}) {
   const values = new Map(Object.entries(seed));
@@ -22,6 +22,15 @@ describe("workspace project registry", () => {
     expect(recoveryDrafts([cloneStarter(), { ...cloneStarter(), id: architectureProjectId }], [])).toEqual([]);
     const edited = { ...cloneStarter(), files: { ...cloneStarter().files, "app.js": "mine" } };
     expect(recoveryDrafts([edited], [])).toEqual([edited]);
+  });
+
+  test("a removed copy stays removed until it is edited again", () => {
+    const storage = memoryStorage();
+    const copy = { ...cloneStarter(), id: "app_copy", name: "Copy", updatedAt: 10 };
+    dismissDrafts(storage, [copy]);
+    expect(recoveryDrafts([copy], [], readDismissedDrafts(storage))).toEqual([]);
+    const edited = { ...copy, updatedAt: 11 };
+    expect(recoveryDrafts([edited], [], readDismissedDrafts(storage))).toEqual([edited]);
   });
 
   test("a stored project is offered once and the architecture map never", () => {

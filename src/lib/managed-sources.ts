@@ -102,6 +102,19 @@ export class ManagedSources {
     return receipt;
   }
 
+  /**
+   * Deletes a project on the Kernel, with its Deployment and data when it has
+   * one, then reads the project list back and only resolves once it is gone.
+   */
+  async deleteProject(projectId: string, name: string): Promise<void> {
+    await this.tails.get(projectId)?.catch(() => {});
+    await this.client.call("project_delete", { projectId, name });
+    const listed = await this.client.call<{ projects: { project: ProjectMetadata }[] }>("projects_list");
+    if (listed.projects.some(({ project }) => project.id === projectId)) throw new Error("The Kernel still lists this project. Reload and try again.");
+    this.revisions.delete(projectId);
+    this.tails.delete(projectId);
+  }
+
   retry(projectId: string) {
     this.tails.delete(projectId);
   }

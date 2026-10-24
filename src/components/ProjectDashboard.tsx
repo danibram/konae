@@ -27,6 +27,8 @@ type Props = {
   notice?: string;
   drafts: MiniAppProject[];
   onImportDraft: (index: number) => void;
+  onDismissDraft: (index: number) => void;
+  onDeleteMissing: (project: ProjectMetadata, name: string) => Promise<void>;
   onOpenProject: (projectId: string, entry?: "preview" | "agent" | "code") => void;
   onCreateProject: (name: string, template: TemplateId | "scratch") => void;
   ejected: Record<string, EjectRecord>;
@@ -37,10 +39,11 @@ type Props = {
   };
 };
 
-export function ProjectDashboard({ projects, deployments, ownerSession, external, missing, notice, drafts, onImportDraft, onOpenProject, onCreateProject, ejected, eject }: Props) {
+export function ProjectDashboard({ projects, deployments, ownerSession, external, missing, notice, drafts, onImportDraft, onDismissDraft, onDeleteMissing, onOpenProject, onCreateProject, ejected, eject }: Props) {
   const interrupted = missing.filter((item) => !projects.some((project) => project.id === item.id));
   const projectCount = projects.length + interrupted.length + external.length;
   const [ejecting, setEjecting] = useState<MiniAppProject | null>(null);
+  const [deleting, setDeleting] = useState<ProjectMetadata | null>(null);
   const managed = projects.filter((project) => !ejected[project.id]);
   const [newestFirst, setNewestFirst] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -93,7 +96,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
               })}
             </div>
           </section>}
-          {drafts.some((draft) => !missing.some((item) => item.id === draft.id)) && <details><summary>Import apps from this browser</summary><p>Choose a local copy to add to this account.</p><ul>{drafts.map((draft, index) => !missing.some((item) => item.id === draft.id) && <li key={`${draft.id}-${index}`}>{draft.name} <Button onClick={() => onImportDraft(index)}>Import as new</Button></li>)}</ul></details>}
+          {drafts.some((draft) => !missing.some((item) => item.id === draft.id)) && <details className="local-copies"><summary>Copies saved in this browser</summary><p>Earlier versions of Littlebox kept apps in the browser. These copies are not in your account. Import one to edit it here, or remove it from this browser.</p><ul>{drafts.map((draft, index) => !missing.some((item) => item.id === draft.id) && <li key={`${draft.id}-${index}`}><span>{draft.name}</span> <Button size="sm" onClick={() => onImportDraft(index)}>Import as new</Button> <Button size="sm" variant="ghost" onClick={() => onDismissDraft(index)}>Remove from this browser</Button></li>)}</ul></details>}
 
           <div className="project-list-heading">
             <div><p>All projects</p><strong>{projectCount} project{projectCount === 1 ? "" : "s"}</strong>{interrupted.length > 0 && <p>{projects.length} editable · {interrupted.length} without editor files{external.length > 0 ? ` · ${external.length} external` : ""}</p>}</div>
@@ -138,11 +141,12 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
                   <div className="project-card-title"><h2>{item.name}</h2><Badge tone="warning">No editor files</Badge></div>
                   {draftIndex >= 0
                     ? <p>This browser holds a copy of its files. Restore it to edit the app here.</p>
-                    : <p>This browser holds no copy. If you edited it in another browser, open Littlebox there. Otherwise start a new project and publish it again.</p>}
-                  {(draftIndex >= 0 || deployment) && <footer>
+                    : <p>This browser holds no copy. If you edited it in another browser, open Littlebox there. If you do not need it, delete it.</p>}
+                  <footer>
                     {draftIndex >= 0 && <Button size="sm" onClick={() => onImportDraft(draftIndex)}>Restore editor files</Button>}
                     {deployment && <a href={deployment.url} target="_blank" rel="noopener"><ExternalLink size={13} /> Open published app</a>}
-                  </footer>}
+                    <Button size="sm" variant="ghost" onClick={() => setDeleting(item)}>Delete app…</Button>
+                  </footer>
                 </div>
               </Card>;
             })}
@@ -156,6 +160,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
           </section>
         </section>
       </main>
+      <DeleteProjectDialog project={deleting} published={Boolean(deleting && deployments[deleting.id])} onClose={() => setDeleting(null)} onDelete={onDeleteMissing} />
       <EjectDialog project={ejecting} onClose={() => setEjecting(null)} prepare={eject.prepare} apply={eject.apply} onEjected={eject.onEjected} />
       <Dialog
         open={creating}
@@ -197,6 +202,53 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
       </Dialog>
     </div>
   );
+}
+
+function DeleteProjectDialog({ project, published, onClose, onDelete }: {
+  project: ProjectMetadata | null;
+  published: boolean;
+  onClose: () => void;
+  onDelete: (project: ProjectMetadata, name: string) => Promise<void>;
+}) {
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState("");
+  if (!project) return null;
+  const close = () => { if (busy) return; setTyped(""); setFailure(""); onClose(); };
+  const matches = typed === project.name;
+  const submit = async () => {
+    if (!matches) return;
+    setBusy(true);
+    setFailure("");
+    try {
+      await onDelete(project, typed);
+      setTyped("");
+      onClose();
+    } catch (error) {
+      setFailure(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <Dialog
+    open
+    title={`Delete ${project.name}`}
+    description={published
+      ? "This app is published. Deleting it stops its address, and deletes its database, app accounts, uploaded files and backups on this Kernel. This cannot be undone. Export a package first if you want to keep the data."
+      : "This removes the app from your account. This cannot be undone."}
+    onClose={close}
+    footer={<>
+      <Button onClick={close} disabled={busy}>Cancel</Button>
+      <Button variant="danger" type="submit" form="delete-project" disabled={!matches} loading={busy}>Delete app</Button>
+    </>}
+  >
+    <form id="delete-project" className="ui-dialog-body" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+      <Field label={`Type ${project.name} to confirm`}>
+        <Input autoFocus value={typed} onChange={(event) => setTyped(event.target.value)} aria-invalid={failure ? true : undefined} maxLength={80} />
+      </Field>
+      {failure && <p role="alert">{failure}</p>}
+    </form>
+  </Dialog>;
 }
 
 function ProjectCard({ project, deployment, external, index, onOpen }: {
