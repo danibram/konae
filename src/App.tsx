@@ -102,7 +102,14 @@ const modKey = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(naviga
 
 export function App() {
   if (window.location.pathname === "/platform-access") return <PlatformAccess />;
+  // Public: outside PlatformGate, so a signed-out visitor is not sent to sign-in.
+  if (window.location.pathname === "/design-system") return <PublicDesignSystem />;
   return <PlatformGate />;
+}
+
+function PublicDesignSystem() {
+  const [session] = useOwnerSession();
+  return <Suspense fallback={<BootShell ownerSession={session} />}><DesignSystem ownerSession={session} /></Suspense>;
 }
 
 function PlatformGate() {
@@ -119,7 +126,6 @@ function PlatformGate() {
     return <main className="platform-page"><div className="platform-main"><CardForPlatformError message={session.message} onRetry={refresh} /></div></main>;
   }
   if (session.state !== "signed-in") return <BootShell ownerSession={session} />;
-  if (window.location.pathname === "/design-system") return <Suspense fallback={<BootShell ownerSession={session} />}><DesignSystem ownerSession={session} /></Suspense>;
   if (window.location.pathname === "/usage") return <Suspense fallback={<BootShell ownerSession={session} />}><UsagePage key={session.ownerId} ownerSession={session} /></Suspense>;
   return <WorkspaceGate key={session.ownerId} ownerSession={session} refreshOwnerSession={refresh} />;
 }
@@ -1291,7 +1297,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             <summary>More</summary>
             <div>
               <button onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); setAppSettingsOpen(true); }}>App settings</button>
-              <a href="/design-system">Design system</a>
               <button onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); updateLayout(resetLayout()); }}>Reset layout</button>
               <button className="is-danger" onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); setResetOpen(true); }}><RotateCcw size={15} /> Reset project data…</button>
             </div>

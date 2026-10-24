@@ -13,6 +13,8 @@ export function WorkspaceNav({ active, projectCount, ownerSession }: Props) {
   const accessHref = platformAccessHref(window.location.pathname);
   const initials = ownerInitials(ownerSession);
   const [moreOpen, setMoreOpen] = useState(false);
+  // The component gallery is public. Signed-in owners reach it by address, not from the nav.
+  const showDesignSystemLink = ownerSession.state !== "signed-in" && ownerSession.state !== "checking";
 
   return (
     <aside className="account-sidebar">
@@ -22,7 +24,7 @@ export function WorkspaceNav({ active, projectCount, ownerSession }: Props) {
           <LayoutGrid size={16} /> Projects {projectCount !== undefined && <span>{projectCount}</span>}
         </a>
         <a href="/usage" className={active === "usage" ? "active" : undefined} aria-current={active === "usage" ? "page" : undefined}><BarChart3 size={16} /> Usage</a>
-        <a className={active === "design-system" ? "active" : undefined} href="/design-system"><Palette size={16} /> Design system</a>
+        {showDesignSystemLink && <a className={active === "design-system" ? "active" : undefined} href="/design-system"><Palette size={16} /> Design system</a>}
         <button type="button" className="nav-more-trigger" aria-haspopup="dialog" aria-expanded={moreOpen} onClick={() => setMoreOpen(true)}>
           More
         </button>
@@ -54,7 +56,7 @@ export function WorkspaceNav({ active, projectCount, ownerSession }: Props) {
           <a href="/" aria-current={active === "projects" ? "page" : undefined} onClick={() => setMoreOpen(false)}>Projects</a>
           <a href="/usage" aria-current={active === "usage" ? "page" : undefined} onClick={() => setMoreOpen(false)}>Usage</a>
           <a href={accessHref} onClick={() => setMoreOpen(false)}>Owner sign-in</a>
-          <a href="/design-system" aria-current={active === "design-system" ? "page" : undefined} onClick={() => setMoreOpen(false)}>Design system</a>
+          {showDesignSystemLink && <a href="/design-system" aria-current={active === "design-system" ? "page" : undefined} onClick={() => setMoreOpen(false)}>Design system</a>}
         </nav>
       </Dialog>
     </aside>

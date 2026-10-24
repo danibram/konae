@@ -1069,7 +1069,8 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 }
 .start-cards input { position: absolute; opacity: 0; }
 .sidebar-new { display: none; }
-.nav-more-trigger {
+/* Scoped under the sidebar nav so it outranks `.account-sidebar nav button`, which sets display on every breakpoint. */
+.account-sidebar nav .nav-more-trigger {
   display: none;
   align-items: center;
   height: 38px;
