@@ -194,6 +194,69 @@ pub(super) fn owned_project(state: &AppState, owner: &Owner, id: &str, scope: &s
     Ok((serde_json::from_str(&body)?, revision))
 }
 
+pub(super) const DELETE_NAME_MISMATCH: &str = "The name does not match this project. Type the project's name exactly to delete it.";
+
+/// Removes a project and every Deployment of it. Each Deployment leaves the
+/// routing map first, so its address stops answering, and its folder is
+/// renamed out of `deployments/` before anything is deleted: a Kernel that
+/// stops halfway never reloads half a Deployment. The registry rows go last,
+/// so a failure leaves a project the owner can see and delete again.
+async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
+    let removed: Vec<Deployment> = {
+        let mut deployments = state.deployments.write().await;
+        let hosts: Vec<String> = deployments.iter().filter(|(_, d)| d.project_id == id).map(|(host, _)| host.clone()).collect();
+        hosts.into_iter().filter_map(|host| deployments.remove(&host)).collect()
+    };
+    // A Deployment the map never loaded still owns a folder with its project ID.
+    let mut ids: Vec<String> = removed.iter().map(|d| d.id.clone()).collect();
+    if let Ok(mut entries) = tokio::fs::read_dir(state.data_root.join("deployments")).await {
+        while let Some(entry) = entries.next_entry().await? {
+            let Ok(bytes) = tokio::fs::read(entry.path().join("deployment.json")).await else { continue };
+            let Ok(record) = serde_json::from_slice::<Value>(&bytes) else { continue };
+            if record["projectId"] == id {
+                if let Some(name) = entry.file_name().to_str() {
+                    if !ids.iter().any(|known| known == name) { ids.push(name.to_owned()); }
+                }
+            }
+        }
+    }
+    let trash = state.data_root.join("deleted");
+    tokio::fs::create_dir_all(&trash).await?;
+    for deployment in &ids {
+        let _data = database_lock(state, deployment).await;
+        let _identity = database_lock(state, &format!("identity:{deployment}")).await;
+        super::domain::forget(state, deployment).await?;
+        let folder = deployment_dir(state, deployment);
+        let parked = trash.join(format!("{deployment}-{}", Uuid::new_v4().simple()));
+        match tokio::fs::rename(&folder, &parked).await {
+            Ok(()) => {
+                if let Err(error_value) = tokio::fs::remove_dir_all(&parked).await {
+                    eprintln!("Could not remove deleted Deployment {}: {error_value}", parked.display());
+                }
+            }
+            Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error_value) => return Err(error_value.into()),
+        }
+        if let Some(s3) = state.s3.as_ref() {
+            let keys = list_s3_keys(s3, &state.artifact_bucket, &format!("deployments/{deployment}/")).await?;
+            for key in keys {
+                s3.delete_object().bucket(&state.artifact_bucket).key(key).send().await?;
+            }
+        }
+    }
+    let mut db = store(state)?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    for (table, column) in [("managed_sources", "project"), ("plans", "project"), ("eject_plans", "project"), ("package_imports", "project"), ("project_secrets", "project")] {
+        let present: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)", [table], |r| r.get(0))?;
+        if present {
+            tx.execute(&format!("DELETE FROM {table} WHERE {column}=?1"), [id])?;
+        }
+    }
+    tx.execute("DELETE FROM projects WHERE id=?1", [id])?;
+    tx.commit()?;
+    Ok(ids)
+}
+
 fn validate_managed_sources(source: &Value, id: &str) -> Result<()> {
     let string = |value: &Value, max: usize| value.as_str().is_some_and(|s| s.len() <= max);
     let path = |value: &str| value.len() <= 240 && value.trim() == value
@@ -324,6 +387,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         tools.extend([
             tool("project_create", "Register a project. For an editor project, upload its JSON without a projectId and pass sourcesTransferId to create the project and its files atomically. Repeating the same initial files is safe; existing saved files cannot be replaced here.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourceAuthority":{"type":"string","enum":["managed","external"]},"sourcesTransferId":text}), &["name"], false),
             tool("project_sources_save", "Save Managed project sources if the expected source revision still matches. Upload the project JSON first: { id, name, slug, files: { path: text }, directories, databaseModel: { source, acceptedSource, revision }, manifest, updatedAt }, the format the editor saves and docs/mcp.md describes under Eject.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
+            tool("project_delete", "Delete a project for good: its registry entry, saved editor files and secrets, and, when it is published, its Deployment with the database, app accounts, uploaded files, backups and custom domain. The address stops answering at once. name must equal the project's name. Read back with projects_list.", json!({"projectId":text,"name":text}), &["projectId","name"], false),
             tool("schema_plan", "Derive and validate SQL from two Drizzle models in an isolated subprocess.", json!({"acceptedSource":text,"candidateSource":text,"projectId":text}), &["acceptedSource","candidateSource"], false),
         ]);
     }
@@ -1313,6 +1377,14 @@ async fn admin_call(
             tx.execute("INSERT INTO managed_sources(project,body,revision) VALUES(?1,?2,?3) ON CONFLICT(project) DO UPDATE SET body=excluded.body,revision=excluded.revision", params![id,bytes,revision])?;
             tx.commit()?;
             Ok(json!({"revision":revision}))
+        }
+        "project_delete" => {
+            let id = a["projectId"].as_str().unwrap();
+            let _guard = database_lock(state, &format!("project:{id}")).await;
+            let (project, _) = owned_project(state, owner, id, "write")?;
+            anyhow::ensure!(project["name"] == a["name"], "{}", DELETE_NAME_MISMATCH);
+            let deleted = delete_project(state, id).await?;
+            Ok(json!({"deleted":true,"projectId":id,"deployments":deleted}))
         }
         "tokens_list" => {
             anyhow::ensure!(
@@ -2626,6 +2698,44 @@ mod tests {
             }
         }
         assert!(begin("runtime:d1:user-extra".into()).await.is_err());
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn deleting_a_project_takes_its_deployment_files_and_address_with_it() {
+        let root = std::env::temp_dir().join(format!("littlebox-delete-{}", Uuid::new_v4()));
+        let (state, _) = crate::tests::login_test_state(&root, "public").await;
+        let deployment = state.deployments.read().await.values().next().unwrap().clone();
+        persist_deployment(&state, &deployment).await.unwrap();
+        tokio::fs::write(deployment_dir(&state, &deployment.id).join("database.sqlite"), b"rows").await.unwrap();
+        let owner = Owner { id: "o".into(), display: None, scopes: vec!["read".into(), "write".into()], projects: vec![], session: false };
+        let published = deployment.project_id.clone();
+        let draft = "app_draft";
+        {
+            let db = store(&state).unwrap();
+            for (id, name) in [(published.as_str(), "Notes"), (draft, "Draft")] {
+                db.execute("INSERT INTO projects(id,owner,body) VALUES(?1,'o',?2)", params![id, json!({"id": id, "name": name}).to_string()]).unwrap();
+            }
+            db.execute("INSERT INTO managed_sources(project,body,revision) VALUES(?1,x'7b7d',1)", [draft]).unwrap();
+        }
+        let call = |name: &'static str, a: Value| { let (state, owner) = (state.clone(), owner.clone()); async move { admin_call(&state, &owner, "owner:o", name, a).await } };
+
+        let refused = call("project_delete", json!({"projectId": published, "name": "notes"})).await.unwrap_err();
+        assert_eq!(refused.to_string(), DELETE_NAME_MISMATCH);
+        assert_eq!(state.deployments.read().await.len(), 1, "a refused delete keeps the app");
+
+        let deleted = call("project_delete", json!({"projectId": published, "name": "Notes"})).await.unwrap();
+        assert_eq!(deleted["deployments"], json!([deployment.id]));
+        assert!(state.deployments.read().await.is_empty(), "the address stops answering");
+        assert!(!deployment_dir(&state, &deployment.id).exists(), "its data is gone");
+
+        call("project_delete", json!({"projectId": draft, "name": "Draft"})).await.unwrap();
+        let listed = call("projects_list", json!({})).await.unwrap();
+        assert_eq!(listed["projects"], json!([]));
+        let sources: i64 = store(&state).unwrap().query_row("SELECT COUNT(*) FROM managed_sources", [], |r| r.get(0)).unwrap();
+        assert_eq!(sources, 0);
+        let again = call("project_delete", json!({"projectId": draft, "name": "Draft"})).await.unwrap_err();
+        assert_eq!(again.to_string(), "Project not found or access denied.");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

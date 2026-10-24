@@ -138,6 +138,12 @@ fn load_index(root: &Path) -> Index {
     index
 }
 
+/// Drops a deleted Deployment's custom domain, so the name answers nothing.
+pub(super) async fn forget(state: &AppState, id: &str) -> Result<()> {
+    let _domains = database_lock(state, "domains").await;
+    write_record(state, id, None).await
+}
+
 pub(super) fn read_record(state: &AppState, id: &str) -> Option<Record> {
     let bytes = std::fs::read(deployment_dir(state, id).join(RECORD_FILE)).ok()?;
     serde_json::from_slice(&bytes).ok()
