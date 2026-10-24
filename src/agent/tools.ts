@@ -1,7 +1,6 @@
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import type { FileError } from "@earendil-works/pi-agent-core";
 import type { ProjectFile } from "../lib/types";
-import { createDomainTools, type DomainToolContext } from "./domain-tools";
 import { capsuleFileFor, capsulePathFor, isTemplatePath, readTemplateFile } from "./capsule-env";
 import type {
   AgentTool,
@@ -24,7 +23,6 @@ export type PreviewFailureReport = {
 };
 
 export type CapsuleToolHooks = {
-  domains?: DomainToolContext;
   /** Called with the exact files a `validate_capsule` run saw, so the gate can trust the verdict. */
   onValidated?: (files: CapsuleFiles, result: ValidationResult) => void;
   /** The live database, so the model's own validation runs the same stages the gate does. */
@@ -57,7 +55,6 @@ export function createCapsuleTools(
     writeTool(workspace, queue),
     validateTool(workspace, validator, queue, hooks),
     previewErrorsTool(hooks),
-    ...(hooks.domains ? createDomainTools(hooks.domains) : []),
   ];
 }
 

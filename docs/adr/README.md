@@ -1,12 +1,12 @@
 # Architecture decisions
 
-Each record states its status and which earlier record it amends on its first line, and keeps its later changes as dated notes at the end, oldest first. The next free number is 0021. Before taking it, check `main`, because another branch may have taken it.
+Each record states its status and which earlier record it amends on its first line, and keeps its later changes as dated notes at the end, oldest first. The next free number is 0023. Before taking it, check `main`, because another branch may have taken it.
 
 | ADR | Decides | Amends | Amended by |
 | --- | --- | --- | --- |
 | [0001](0001-separate-runtime-and-admin-data-access.md) | Browsers reach data only through named Server Actions; owner tools use a separate Admin Interface | | 0008, 0011 |
 | [0002](0002-kernel-owns-identity-and-visibility.md) | The Kernel, not a provider, owns sessions, grants, visibility and signup policy | | 0011 |
-| [0003](0003-in-browser-agent-on-pi-agent-core.md) | The build agent runs in the browser on pi-agent-core and edits a scratch copy behind the Validation Gate | | 0004 |
+| [0003](0003-in-browser-agent-on-pi-agent-core.md) | The build agent runs in the browser on pi-agent-core and edits a scratch copy behind the Validation Gate | | 0004, 0022 |
 | [0004](0004-use-drizzle-schema-as-the-managed-database-model.md) | `schema.ts` in Drizzle is a Managed Project's Database Model; migrations derive from it | 0003 | |
 | [0005](0005-build-artifacts-separate-managed-and-external-projects.md) | The Build Artifact is the publishing contract; Eject moves source authority; one folder per Deployment; the static publishing rules | | 0007 |
 | [0006](0006-external-projects-use-a-local-development-kernel.md) | External Projects develop against a local Development Kernel | | |
@@ -25,6 +25,7 @@ Each record states its status and which earlier record it amends on its first li
 | [0019](0019-an-app-calls-another-from-the-kernel.md) | An app calls another app or a service through a call action the Kernel queues and sends; `connects` and open GET routes for direct reads | 0011 | |
 | [0020](0020-a-refusal-carries-a-stable-code.md) | Every refusal from the Gate and the Kernel is `{ code, message, hint }` from one shared table | 0009 | |
 | [0021](0021-a-notice-lists-its-rows-and-reaches-the-accounts-they-name.md) | A notice lists the rows its mutation changed, shows the run's time, and may reach each verified account a column of those rows names | 0016, 0017 | |
+| [0022](0022-the-build-agent-operates-the-platform-through-the-owners-mcp.md) | The editor's build agent reaches the Kernel through the owner's own MCP session, pinned to the open project, and still edits files only behind the Gate | 0003 | |
 
 ## Which record answers a question
 
@@ -33,7 +34,7 @@ Each record states its status and which earlier record it amends on its first li
 | Who may open an app, and who may read a row? | 0001, 0002, 0011 |
 | Who may call an HTTP route, and how is a request signed? | 0011, update "a route binds its action" |
 | How does an app call another app or a service? | 0019 |
-| What does the agent run, and where? | 0003 |
+| What does the agent run, and where? | 0003, 0022 |
 | Where does a build run, and what does the Kernel accept from it? | 0005, 0007 |
 | How does a schema change reach the database? | 0004, 0007 |
 | Which permission does a tool need? | 0008, 0011 (`manage_users`), 0013 (`export_data`), 0005 note on Eject (`manage_lifecycle`) |

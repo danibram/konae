@@ -39,3 +39,7 @@ Metrics to hold ourselves to: time-to-first-token, model turns per accepted edit
 Two external runtime dependencies (`pi-agent-core`, `pi-ai`), pinned; both are small tree-shakeable ESM and forkable if abandoned. A loop spends more tokens than a single call. We accept that, bounded by levers 1 to 3. The scratch-workspace + gate design means agent capability can grow (more tools, bigger capsules, stronger models) without ever widening its authority over user data.
 
 Build order: (1) `CapsuleEnv` + harness + edit tools with caching, proved by a CSS edit in one turn; (2) Validation Gate + `validate_capsule` before the agent may touch `schema.sql`; (3) measured latency tuning against the metrics above.
+
+## Note, 2026-11-09: ADR-0022 amends this ADR
+
+[ADR-0022](0022-the-build-agent-operates-the-platform-through-the-owners-mcp.md) gives the agent the owner's own MCP tools, pinned to the open project, in place of tools of its own for domains. Its file editing is unchanged: a scratch copy, the Validation Gate and Apply.

@@ -36,6 +36,13 @@ export class McpClient {
     return result.structuredContent.result as T;
   }
 
+  /** The tools this credential may call, as the Kernel lists them for it. */
+  async listTools(signal?: AbortSignal): Promise<{ name: string; description?: string; inputSchema?: Record<string, unknown> }[]> {
+    await this.connect();
+    const result = await this.request("tools/list", {}, false, signal);
+    return Array.isArray(result?.tools) ? result.tools : [];
+  }
+
   /**
    * Uploads bytes as one owner transfer. `component` names a Package
    * component (`database`, `identity`, `files` or `usage`), which lets the

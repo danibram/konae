@@ -89,7 +89,7 @@ function fail(message: string): Turn {
 
 type Harness = {
   models: Models;
-  requests: { systemPrompt: string; messageCount: number; lastMessage: string; reasoning: unknown; apiKey?: string }[];
+  requests: { tools: string[]; systemPrompt: string; messageCount: number; lastMessage: string; reasoning: unknown; apiKey?: string }[];
 };
 
 /** The text of the message that carries this turn's request, to see whether the capsule was seeded. */
@@ -106,8 +106,9 @@ function stubModels(turns: Turn[]): Harness {
   const models = {
     getModel: (provider: string, id: string) => (provider === "anthropic" ? { ...fakeModel, id } : undefined),
     getModels: () => [fakeModel],
-    streamSimple: (_model: Model<never>, context: { systemPrompt?: string; messages: unknown[] }, options?: Record<string, unknown>) => {
+    streamSimple: (_model: Model<never>, context: { systemPrompt?: string; messages: unknown[]; tools?: { name: string }[] }, options?: Record<string, unknown>) => {
       requests.push({
+        tools: (context.tools ?? []).map((tool) => tool.name),
         systemPrompt: context.systemPrompt ?? "",
         messageCount: context.messages.length,
         lastMessage: messageText(context.messages[context.messages.length - 1]),
@@ -568,42 +569,50 @@ describe("littlebox agent", () => {
   });
 });
 
-describe("agent domain binding", () => {
+describe("agent platform binding", () => {
+  const domainTools = [
+    { name: "domain_read", description: "Read a domain.", inputSchema: { type: "object", properties: { deploymentId: { type: "string" } }, required: ["deploymentId"] } },
+    { name: "domain_clear", description: "Clear a domain.", inputSchema: { type: "object", properties: { deploymentId: { type: "string" } }, required: ["deploymentId"] } },
+  ];
+
   test("retarget resolves the new project's deployment on the next turn", async () => {
     const seen: string[] = [];
-    const domains = {
+    const calls: unknown[] = [];
+    const platform = {
+      listTools: async () => domainTools,
+      call: async (name: string, args: Record<string, unknown>) => { calls.push({ name, args }); return { deploymentId: args.deploymentId, hostname: null }; },
       deploymentForProject: (projectId: string) => { seen.push(projectId); return `deployment-${projectId}`; },
-      readDomain: async (deploymentId: string) => ({ deploymentId, hostname: null, status: "none" as const, generatedUrl: "https://generated.example.org" }),
-      setDomain: async () => { throw new Error("Unexpected mutation"); },
-      clearDomain: async () => { throw new Error("Unexpected mutation"); },
+      confirm: async () => { throw new Error("Unexpected confirmation"); },
     };
     const { agent, events } = agentFor([
       call({ name: "domain_read", arguments: {} }), say("Read the domain."),
       call({ name: "domain_read", arguments: {} }), say("Read the other domain."),
-    ], { domains });
+    ], { platform });
     await agent.send("Read my domain");
     agent.retarget({ ...starterProject, id: "other-project" });
     await agent.send("Read this domain");
-    expect(seen).toContain(starterProject.id);
-    expect(seen).toContain("other-project");
+    expect(seen).toEqual([starterProject.id, "other-project"]);
+    expect(calls).toEqual([
+      { name: "domain_read", args: { deploymentId: `deployment-${starterProject.id}` } },
+      { name: "domain_read", args: { deploymentId: "deployment-other-project" } },
+    ]);
     expect(events.filter((event) => event.type === "tool-end" && event.name === "domain_read").every((event) => event.type === "tool-end" && event.ok)).toBe(true);
     expect(agent.proposal()).toBeNull();
     expect(agent.applyGateStatus().state).toBe("empty");
     agent.dispose();
   });
 
-  test("retarget during owner confirmation prevents the old run from mutating either app", async () => {
+  test("retarget during owner confirmation prevents the old run from changing either app", async () => {
     let confirm!: (approved: boolean) => void;
     let entered!: () => void;
     const waiting = new Promise<void>((resolve) => { entered = resolve; });
-    const mutations: string[] = [];
+    const calls: string[] = [];
     const { agent } = agentFor([call({ name: "domain_clear", arguments: {} }), say("Done")], {
-      domains: {
+      platform: {
+        listTools: async () => domainTools,
+        call: async (name) => { calls.push(name); return {}; },
         deploymentForProject: (projectId) => `deployment-${projectId}`,
-        readDomain: async (deploymentId) => ({ deploymentId, hostname: "old.example.org", status: "active", generatedUrl: "https://generated.example.org" }),
-        setDomain: async () => { throw new Error("Unexpected set"); },
-        clearDomain: async (id) => { mutations.push(id); return { deploymentId: id, cleared: "old.example.org", status: "none", generatedUrl: "https://generated.example.org" }; },
-        confirmMutation: () => { entered(); return new Promise<boolean>((resolve) => { confirm = resolve; }); },
+        confirm: () => { entered(); return new Promise<boolean>((resolve) => { confirm = resolve; }); },
       },
     });
     const run = agent.send("Remove my custom domain");
@@ -611,8 +620,22 @@ describe("agent domain binding", () => {
     agent.retarget({ ...starterProject, id: "other-project" });
     confirm(true);
     await run;
-    expect(mutations).toEqual([]);
+    expect(calls).toEqual([]);
     expect(agent.proposal()).toBeNull();
+    agent.dispose();
+  });
+
+  test("a session that cannot list the owner's tools still edits files", async () => {
+    const { agent, harness } = agentFor([say("Only files here.")], {
+      platform: {
+        listTools: async () => { throw Object.assign(new Error("Unauthorized"), { status: 401 }); },
+        call: async () => { throw new Error("Unexpected call"); },
+        deploymentForProject: () => null,
+        confirm: async () => false,
+      },
+    });
+    await agent.send("hola");
+    expect(harness.requests[0].tools).toEqual(["read", "edit", "write", "validate_capsule", "preview_errors"]);
     agent.dispose();
   });
 });

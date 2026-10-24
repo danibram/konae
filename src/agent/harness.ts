@@ -18,8 +18,8 @@ import type {
   LiveDatabaseExport,
   ValidationResult,
 } from "./contracts";
-import type { AgentDomainBinding } from "./domain-tools";
-export type { AgentDomainBinding, DomainMutationRequest } from "./domain-tools";
+import { createPlatformTools, type AgentPlatformBinding } from "./platform-tools";
+export type { AgentPlatformBinding, PlatformConfirmation, PublishOutcome } from "./platform-tools";
 import { createCapsuleValidator, type ReleaseFacts, type SqlJsLoader } from "./gate";
 import { buildAuth, buildModel, createStreamFn } from "./providers";
 import { buildInitialUserMessage, buildSystemPrompt } from "./system-prompt";
@@ -47,7 +47,8 @@ export type LittleboxAgentHandle = LittleboxAgent & {
 };
 
 export type LittleboxAgentOptions = {
-  domains?: AgentDomainBinding;
+  /** The owner's MCP session (ADR-0022). Without it the agent edits files and nothing else. */
+  platform?: AgentPlatformBinding;
   /** Injected sql.js loader for the Validation Gate; defaults to the browser one. */
   loadSql?: SqlJsLoader;
   models?: Models;
@@ -129,7 +130,7 @@ class LittleboxAgentSession implements LittleboxAgentHandle {
         systemPrompt: systemPromptFor(project, sessionConfig),
         model,
         thinkingLevel: clampThinkingLevel(model, this.thinkingLevel) as ThinkingLevel,
-        tools: this.toolsForRun(this.runToken),
+        tools: this.capsuleTools(),
       },
       // Lever 6: escalate only once the change reaches the data contract.
       prepareNextTurn: () => (this.risky ? { thinkingLevel: this.escalated() } : undefined),
@@ -154,7 +155,9 @@ class LittleboxAgentSession implements LittleboxAgentHandle {
     this.reported = "";
     if (!this.applyConfig()) return;
     const token = ++this.runToken;
-    this.agent.state.tools = this.toolsForRun(token);
+    const tools = await this.toolsForRun(token);
+    if (token !== this.runToken) return;
+    this.agent.state.tools = tools;
     try {
       await this.agent.prompt(this.seeded ? text : this.seedMessage(text));
     } catch (error) {
@@ -254,19 +257,34 @@ class LittleboxAgentSession implements LittleboxAgentHandle {
 
   // --- internals ---------------------------------------------------------------
 
-  private toolsForRun(token: number) {
-    const projectId = this.project.id;
+  private capsuleTools() {
     return createCapsuleTools(this.workspace, this.validator, {
       onValidated: (files, result) => this.recordValidation(files, result),
       liveDatabase: this.options.liveDatabase,
       previewErrors: this.options.previewErrors,
       releaseFacts: this.options.releaseFacts,
-      domains: this.options.domains ? {
+    });
+  }
+
+  /**
+   * The workspace tools, then the owner's MCP tools as the session lists them
+   * now. A session that cannot list them (signed out, Kernel down) leaves the
+   * agent its files; the owner signs in and the next turn gets them back.
+   */
+  private async toolsForRun(token: number) {
+    const tools = this.capsuleTools();
+    const binding = this.options.platform;
+    if (!binding) return tools;
+    const projectId = this.project.id;
+    try {
+      return [...tools, ...await createPlatformTools({
         projectId,
         isCurrent: () => this.project.id === projectId && this.runToken === token,
-        binding: this.options.domains,
-      } : undefined,
-    });
+        binding,
+      })];
+    } catch {
+      return tools;
+    }
   }
 
   private clearTranscriptWhenIdle() {

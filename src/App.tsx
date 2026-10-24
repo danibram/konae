@@ -32,7 +32,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEven
 import { PROVIDERS, defaultSessionConfig } from "./agent/catalog";
 import { mergeProposal } from "./agent/apply";
 import type { AgentProposal, AgentSessionConfig } from "./agent/contracts";
-import type { DomainMutationRequest, LittleboxAgentHandle } from "./agent/harness";
+import type { LittleboxAgentHandle, PlatformConfirmation, PublishOutcome } from "./agent/harness";
 import { createAgentKeyStore } from "./agent/key-store";
 import { Button, Dialog, LoadingBlock } from "./components/ui";
 import { AgentPanel } from "./components/AgentPanel";
@@ -56,8 +56,7 @@ import { ProjectDashboard } from "./components/ProjectDashboard";
 import { NotFound } from "./components/NotFound";
 import { EjectedNotice } from "./components/EjectDialog";
 import { deployProject, HostedDatabaseClient, type DeploymentReceipt, type SignupMode } from "./deployments/client";
-import { McpError } from "./mcp/client";
-import { clearDomain, readDomain, setDomain } from "./deployments/domains";
+import { McpError, platformMcp } from "./mcp/client";
 import { readReleaseFacts } from "./deployments/release-facts";
 import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/manifest";
 import { createSchemaSnapshot } from "./database-lifecycle/schema-snapshot";
@@ -209,8 +208,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [domainVersion, setDomainVersion] = useState(0);
-  const [domainConfirmation, setDomainConfirmation] = useState<DomainMutationRequest | null>(null);
-  const resolveDomainConfirmation = useRef<((approved: boolean) => void) | null>(null);
+  // A platform tool the agent wants to run that waits for the owner (ADR-0022).
+  const [platformConfirmation, setPlatformConfirmation] = useState<PlatformConfirmation | null>(null);
+  const resolvePlatformConfirmation = useRef<((approved: boolean) => void) | null>(null);
+  // The agent's publish tool waits on the Deploy dialog the owner drives.
+  const resolveAgentPublish = useRef<((outcome: PublishOutcome) => void) | null>(null);
   const deploymentsRef = useRef(deployments);
   deploymentsRef.current = deployments;
   const [agent, setAgent] = useState<LittleboxAgentHandle | null>(null);
@@ -293,18 +295,20 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   }, []);
 
   useEffect(() => {
-    if (deployOpen || resetOpen || settingsOpen || appSettingsOpen || domainConfirmation) {
+    if (deployOpen || resetOpen || settingsOpen || appSettingsOpen || platformConfirmation) {
       projectMenu.current?.removeAttribute("open");
       switcherRef.current?.removeAttribute("open");
     }
-  }, [deployOpen, resetOpen, settingsOpen, appSettingsOpen, domainConfirmation]);
+  }, [deployOpen, resetOpen, settingsOpen, appSettingsOpen, platformConfirmation]);
 
   useEffect(() => {
     setAppSettingsOpen(false);
-    setDomainConfirmation(null);
+    setPlatformConfirmation(null);
     return () => {
-      resolveDomainConfirmation.current?.(false);
-      resolveDomainConfirmation.current = null;
+      resolvePlatformConfirmation.current?.(false);
+      resolvePlatformConfirmation.current = null;
+      resolveAgentPublish.current?.({ status: "declined" });
+      resolveAgentPublish.current = null;
     };
   }, [project.id]);
 
@@ -600,19 +604,31 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             previewErrors: () => hostRef.current.previewErrors(),
             // What release_plan reads, as the Deploy dialog reads it: secret names and the installation's hosts.
             releaseFacts: () => readReleaseFacts(projectRef.current.id, deploymentsRef.current[projectRef.current.id]?.id),
-            domains: {
+            // ADR-0022: the owner's own MCP session, pinned to the open project.
+            platform: {
+              listTools: (signal) => platformMcp.listTools(signal),
+              call: (name, args, signal) => platformMcp.call(name, args, signal),
               deploymentForProject: (projectId) => deploymentsRef.current[projectId]?.id ?? null,
-              readDomain,
-              setDomain,
-              clearDomain,
-              confirmMutation: (request) => new Promise<boolean>((resolve) => {
+              confirm: (request) => new Promise<boolean>((resolve) => {
                 if (request.projectId !== projectRef.current.id) { resolve(false); return; }
-                resolveDomainConfirmation.current?.(false);
-                resolveDomainConfirmation.current = resolve;
+                resolvePlatformConfirmation.current?.(false);
+                resolvePlatformConfirmation.current = resolve;
                 setDeployOpen(false);
                 setSettingsOpen(false);
                 setAppSettingsOpen(false);
-                setDomainConfirmation(request);
+                setPlatformConfirmation(request);
+              }),
+              publish: (projectId) => new Promise<PublishOutcome>((resolve) => {
+                if (projectId !== projectRef.current.id) { resolve({ status: "declined" }); return; }
+                resolveAgentPublish.current?.({ status: "declined" });
+                resolveAgentPublish.current = resolve;
+                resolvePlatformConfirmation.current?.(false);
+                resolvePlatformConfirmation.current = null;
+                setPlatformConfirmation(null);
+                setDeployment(null);
+                setDeployError("");
+                setDeployOpen(true);
+                refreshOwnerSession();
               }),
               onChanged: () => setDomainVersion((version) => version + 1),
             },
@@ -801,6 +817,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       setProject((current) => ({ ...current, manifest: record.manifest, updatedAt: Date.now() }));
       setDeployment(record);
       setDeployments((current) => ({ ...current, [project.id]: record }));
+      resolveAgentPublish.current?.({ status: "published", url: record.url, visibility: record.manifest.visibility });
+      resolveAgentPublish.current = null;
     } catch (error) {
       if (isSignedOutError(error)) refreshOwnerSession();
       setDeployError(error instanceof Error ? error.message : String(error));
@@ -1323,12 +1341,12 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
       {appSettingsOpen && <Suspense fallback={<Dialog title="App settings" onClose={() => setAppSettingsOpen(false)}><div className="ui-dialog-body"><LoadingBlock label="Loading app settings" rows={3} /></div></Dialog>}><AppSettingsDialog key={`${project.id}-${domainVersion}`} projectName={project.name} deploymentId={activeDeployment?.id} onClose={() => setAppSettingsOpen(false)} onDeploy={() => { setAppSettingsOpen(false); setDeployment(null); setDeployError(""); setDeployOpen(true); }} onSignedOut={refreshOwnerSession} signInHref={signInHref} /></Suspense>}
 
-      {domainConfirmation && <Dialog title={domainConfirmation.operation === "clear" ? "Remove this app's domain?" : "Update this app's domain?"} description={project.name} onClose={() => { resolveDomainConfirmation.current?.(false); resolveDomainConfirmation.current = null; setDomainConfirmation(null); }} footer={<>
-        <Button onClick={() => { resolveDomainConfirmation.current?.(false); resolveDomainConfirmation.current = null; setDomainConfirmation(null); }}>Cancel</Button>
-        <Button variant="primary" onClick={() => { resolveDomainConfirmation.current?.(true); resolveDomainConfirmation.current = null; setDomainConfirmation(null); }}>Confirm domain change</Button>
-      </>}><div className="ui-dialog-body"><p style={{ overflowWrap: "anywhere" }}>{domainConfirmation.operation === "clear" ? `The agent will remove ${domainConfirmation.previousHostname ?? "the custom domain"}.` : `The agent will set ${domainConfirmation.hostname} and check its TXT record.`} {domainConfirmation.previousHostname && domainConfirmation.previousHostname !== domainConfirmation.hostname ? `${domainConfirmation.previousHostname} will stop serving this app.` : ""} The generated address keeps working. This does not configure traffic routing or HTTPS.</p></div></Dialog>}
+      {platformConfirmation && <Dialog title="Allow the agent to do this?" description={project.name} onClose={() => { resolvePlatformConfirmation.current?.(false); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }} footer={<>
+        <Button onClick={() => { resolvePlatformConfirmation.current?.(false); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }}>Cancel</Button>
+        <Button variant="primary" onClick={() => { resolvePlatformConfirmation.current?.(true); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }}>Allow</Button>
+      </>}><div className="ui-dialog-body"><p style={{ overflowWrap: "anywhere" }}>{platformConfirmation.summary}</p><p>It runs as you, on this app only, through <code>{platformConfirmation.tool}</code>.</p></div></Dialog>}
 
-      {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => setDeployOpen(false)} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
+      {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
 
       <Dialog
         open={resetOpen}
