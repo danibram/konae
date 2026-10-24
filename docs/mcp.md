@@ -34,7 +34,7 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | Group | Tools |
 | --- | --- |
 | Discovery | `platform_describe`, `platform_guide`, `session_inspect`, `mail_status`, `projects_list`, `project_inspect` |
-| Projects | `project_create`, `project_sources_read`, `project_sources_save` |
+| Projects | `project_create`, `project_sources_read`, `project_sources_save`, `project_delete` |
 | Eject, with `manage_lifecycle` | `eject_plan`, `eject_apply` |
 | Migration, with `manage_lifecycle` | `migration_begin`, `migration_confirm`, `migration_cancel`, `migration_activate`; `migration_status` with `read` |
 | Owner schema and data | `schema_plan`, `database_execute`, `storage_test` |
@@ -62,6 +62,8 @@ Listing signing secrets and API keys needs the `read` scope; setting, creating a
 `project_create` returns a template and an External identity by default. Later sources stay in the user's folder; `project_inspect` returns metadata and the Deployment, without claiming to synchronize that code with the editor.
 
 The editor uploads a new app's JSON without a `projectId`, then calls `project_create` with `sourceAuthority: "managed"` and `sourcesTransferId`. The Kernel validates the files and saves the project registry entry and files in one transaction, returning `sourcesRevision: 1`. A failed upload or validation leaves no project entry. Repeating the same initial files returns the saved revision; different files cannot overwrite an existing save through `project_create`. Subsequent edits use `project_sources_save` with that revision.
+
+`project_delete { projectId, name }` needs `write` and deletes a project for good. `name` must equal the project's name; any other value is refused with `The name does not match this project. Type the project's name exactly to delete it.` The Kernel removes the project's Deployments from routing first, so their addresses stop answering, then deletes each Deployment folder (database, app accounts, uploaded files, backups, custom domain) and its stored artifacts, then the registry entry, saved editor files, plans and signing secrets. The answer lists the deleted Deployment IDs. Read back with `projects_list`. A paused app refuses it like any other change. Export a package first to keep the data. The build agent does not get this tool.
 
 ## Signup policy
 
