@@ -79,7 +79,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 └── deployments/<id>/
     ├── deployment.json     # record, visibility, signup policy
     ├── artifact/           # the Build Artifact it serves
-    ├── database.sqlite     # the app's rows
+    ├── database.sqlite     # the app's rows, in WAL mode (ADR-0023)
     ├── identity.sqlite     # app accounts, sessions, challenges, invitations, API keys, accepted route signatures
     ├── usage.sqlite        # Usage and Signals, ADR-0010
     ├── files/              # uploads and their index.json
