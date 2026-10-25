@@ -632,8 +632,14 @@ fn transfer_tools(runtime: bool) -> Vec<Value> {
         ),
         tool(
             "transfer_begin",
-            "Start a size-bounded upload with an expected SHA-256 checksum. An upload is at most 32 MiB unless it names a package component, which may be as large as that component's quota.",
-            json!({"size":{"type":"integer","minimum":1,"maximum":if runtime {2*1024*1024} else {super::package::MAX_COMPONENT_BYTES as usize}},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"projectId":{"type":"string"},"component":{"type":"string","enum":super::package::COMPONENT_NAMES}}),
+            if runtime {
+                "Start a size-bounded upload with an expected SHA-256 checksum. A file is at most the installation's per-file limit, which a refusal names."
+            } else {
+                "Start a size-bounded upload with an expected SHA-256 checksum. An upload is at most 32 MiB unless it names a package component, which may be as large as that component's quota."
+            },
+            // The bound depends on the installation's file limits, so the
+            // handler checks it and names the number.
+            json!({"size":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"projectId":{"type":"string"},"component":{"type":"string","enum":super::package::COMPONENT_NAMES}}),
             &["size", "sha256"],
             false,
         ),
@@ -2745,6 +2751,25 @@ mod tests {
             }
         }
         assert!(begin("runtime:d1:user-extra".into()).await.is_err());
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    /// The runtime schema leaves the size bound to the handler, which knows
+    /// the installation's per-file limit and names it.
+    #[tokio::test]
+    async fn a_runtime_upload_is_bounded_by_the_configured_per_file_limit() {
+        let root = std::env::temp_dir().join(format!("littlebox-runtime-limit-{}", Uuid::new_v4()));
+        let (mut state, _) = crate::tests::login_test_state(&root, "public").await;
+        state.files.limits = crate::file_store::FileLimits::parse(Some("10485760"), Some("5242880")).unwrap();
+        let schema = transfer_tools(true).into_iter().find(|tool| tool["name"] == "transfer_begin").unwrap()["inputSchema"].clone();
+        let sha = "0".repeat(64);
+        let three_mib = json!({"size": 3 * 1024 * 1024, "sha256": sha});
+        validate_arguments(&three_mib, &schema).unwrap();
+        assert!(transfer_call(&state, "runtime:d1:user-a", "transfer_begin", &three_mib, true).await.is_ok());
+        let six_mib = json!({"size": 6 * 1024 * 1024, "sha256": sha});
+        validate_arguments(&six_mib, &schema).unwrap();
+        let refused = transfer_call(&state, "runtime:d1:user-a", "transfer_begin", &six_mib, true).await.unwrap_err().to_string();
+        assert_eq!(refused, "Files must be between 1 byte and 5 MiB.");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
