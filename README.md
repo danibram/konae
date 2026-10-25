@@ -111,6 +111,11 @@ The Kernel reads these at startup. Defaults are the values in `kernel-rs/src` un
 | `LITTLEBOX_CALLS_PER_MINUTE` | `20` | Calls one app's call actions may queue in any 60 seconds, from 1 to 10000. The Kernel sends them from `calls.sqlite`; see [docs/mcp.md](./docs/mcp.md#calls-between-apps). |
 | `LITTLEBOX_FILES_QUOTA_BYTES` | `20971520` (20 MiB) | Bytes the files of one Deployment may hold together. An upload past it is refused with the configured number, and so is a package whose files exceed it. |
 | `LITTLEBOX_FILE_MAX_BYTES` | `2097152` (2 MiB) | Bytes one file may hold. It must not exceed `LITTLEBOX_FILES_QUOTA_BYTES`; the Kernel refuses to start otherwise. Uploads and reads still move in 64 KiB MCP blocks, so a larger file takes more calls. |
+| `LITTLEBOX_FILES_S3_BUCKET` | unset | Bucket that holds the bytes of app files, as `<prefix><deployment id>/<file id>`. Unset keeps them in each Deployment's `files/` folder. The index stays in the folder either way. See [File bytes in a bucket](#file-bytes-in-a-bucket). |
+| `LITTLEBOX_FILES_S3_ENDPOINT`, `LITTLEBOX_FILES_S3_ACCESS_KEY`, `LITTLEBOX_FILES_S3_SECRET_KEY` | unset | Required with `LITTLEBOX_FILES_S3_BUCKET`. They are separate from `LITTLEBOX_S3_*`, so the private file bytes can use another bucket and key than the artifacts. |
+| `LITTLEBOX_FILES_S3_REGION` | `us-east-1` | Region of the file bucket. R2 uses `auto`. |
+| `LITTLEBOX_FILES_S3_PREFIX` | empty | Prefix inside the file bucket, such as `files/`. |
+| `LITTLEBOX_FILES_S3_PATH_STYLE` | `1` | `1` addresses the bucket as `<endpoint>/<bucket>`, `0` as `<bucket>.<endpoint host>`. |
 | `LITTLEBOX_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses whose `X-Forwarded-For` header the Kernel trusts for rate limiting. CIDR ranges are rejected. |
 | `LITTLEBOX_DATA_DIR` | `/data` (`data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory: one folder per Deployment under `deployments/<id>/`, plus `owners.sqlite`, `mcp.sqlite`, `mail.sqlite` and `calls.sqlite`. |
 | `LITTLEBOX_PUBLIC_ORIGIN` | `http://localhost:8080` (`http://localhost:<kernel port>` under `dev:local`) | Origin used to build app URLs. Its scheme and port are copied onto each app hostname, and an `https://` origin makes OAuth metadata use HTTPS. |
@@ -169,7 +174,7 @@ data/
     ├── database.sqlite     # the app's rows
     ├── identity.sqlite     # its accounts, sessions, invitations and API keys
     ├── usage.sqlite        # Usage and Signals
-    ├── files/              # uploads
+    ├── files/              # the file index, and the uploads unless a bucket holds them
     └── backups/            # snapshots made from the Data panel
 ```
 
@@ -180,6 +185,21 @@ A Kernel that finds the older layout, with `artifacts/<id>/` and `backups/<id>/`
 Set `LITTLEBOX_COPY_DIR`, `LITTLEBOX_COPY_S3_PREFIX` or both to copy the data directory off the volume, by default every hour. Each copy takes every Deployment's data and identity locks in turn, snapshots its SQLite files with `VACUUM INTO`, copies its folder, then writes `manifest.json` with the size and SHA-256 of every file. A directory copy appears under its final name only when complete; an S3 copy is complete once its manifest is uploaded. The Kernel keeps the 24 newest copies and the newest copy of each day for 30 days on each target. The copy is staged under `.copy-staging/` in the data directory, so the volume needs room for one more copy.
 
 A failed copy never stops the Kernel from serving. It is logged, and `/_littlebox/health` reports it under `copies`: each target's `lastAttemptAt`, `lastSuccessAt`, `lastCopyId` and `lastError`, and an `alert` message while any target's last attempt failed. `copies.targets` is empty when no target is set.
+
+### File bytes in a bucket
+
+With `LITTLEBOX_FILES_S3_BUCKET` set, the bytes of app files live in that bucket and each Deployment's `files/index.json` stays in its folder, which still decides which files exist and who may read them ([ADR-0024](./docs/adr/0024-a-deployments-file-bytes-may-live-outside-its-folder.md)). The Kernel sends only `PutObject`, `GetObject` with a range, `DeleteObject` and `ListObjectsV2`, and every byte still passes through it; the browser never gets a bucket URL. It has been tested against SeaweedFS, not yet against R2, Scaleway or Hetzner.
+
+`files-store.json` in the data directory records which store holds the bytes, and a Kernel whose settings name another store refuses to start. To move the bytes, stop the Kernel and run, with the `LITTLEBOX_FILES_S3_` settings set in both directions:
+
+```sh
+LITTLEBOX_DATA_DIR=/data littlebox-kernel files-migrate --to s3
+LITTLEBOX_DATA_DIR=/data littlebox-kernel files-migrate --to local
+```
+
+It copies every indexed file, reads each back and compares its SHA-256, records the new store, and only then removes the old copies. A missing file or a mismatch stops it before anything switches. An upload writes its bytes before its index entry and a delete removes the entry first, so a crash can leave bytes no index names. `littlebox-kernel files-reconcile` removes those once they are an hour old, and `--dry-run` only counts them.
+
+A copy carries the file bytes, read from the bucket after the Deployment's locks are released, so a restore needs no bucket and lands the bytes in each folder. Run `files-migrate --to s3` after a restore to put them back in the bucket.
 
 To move to a new volume or machine, restore into an empty data directory, then start the Kernel:
 

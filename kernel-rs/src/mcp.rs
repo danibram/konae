@@ -237,6 +237,9 @@ async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
             Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => {}
             Err(error_value) => return Err(error_value.into()),
         }
+        // The folder held the index, so no file of this Deployment is readable
+        // any more; a failure here leaves objects for files-reconcile.
+        super::file_store::forget_deployment(state.files.store.as_ref(), deployment).await;
         if let Some(s3) = state.s3.as_ref() {
             let keys = list_s3_keys(s3, &state.artifact_bucket, &format!("deployments/{deployment}/")).await?;
             for key in keys {

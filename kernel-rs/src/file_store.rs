@@ -19,6 +19,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
+use aws_sdk_s3::Client as S3Client;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
 
 const MIB: u64 = 1024 * 1024;
@@ -48,8 +49,23 @@ pub(crate) trait FileStore: Send + Sync {
     /// Removes the file. Removing a file that is not there succeeds.
     fn delete<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<()>>;
     /// The file IDs the store holds for the Deployment, whether or not its
-    /// index names them.
-    fn list<'a>(&'a self, deployment: &'a str) -> BoxFuture<'a, Result<Vec<String>>>;
+    /// index names them, sorted.
+    fn list<'a>(&'a self, deployment: &'a str) -> BoxFuture<'a, Result<Vec<String>>> {
+        Box::pin(async move { Ok(self.objects(deployment).await?.into_iter().map(|object| object.id).collect()) })
+    }
+    /// The same files with the time each was written.
+    fn objects<'a>(&'a self, deployment: &'a str) -> BoxFuture<'a, Result<Vec<StoredObject>>>;
+    /// Every Deployment ID the store holds any file for. A bucket may also
+    /// name one whose files are all gone, as SeaweedFS does.
+    fn deployments(&self) -> BoxFuture<'_, Result<Vec<String>>>;
+}
+
+/// One file a store holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StoredObject {
+    pub(crate) id: String,
+    /// Milliseconds since the epoch when the bytes were written, when the store says.
+    pub(crate) modified_ms: Option<u64>,
 }
 
 /// Today's layout: the bytes sit beside the index in the Deployment's folder.
@@ -116,21 +132,247 @@ impl FileStore for LocalFolder {
         })
     }
 
-    fn list<'a>(&'a self, deployment: &'a str) -> BoxFuture<'a, Result<Vec<String>>> {
+    fn objects<'a>(&'a self, deployment: &'a str) -> BoxFuture<'a, Result<Vec<StoredObject>>> {
         Box::pin(async move {
-            let mut ids = Vec::new();
+            let mut objects = Vec::new();
             let mut entries = match tokio::fs::read_dir(self.deployments.join(deployment).join("files")).await {
                 Ok(entries) => entries,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(ids),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(objects),
                 Err(error) => return Err(error.into()),
             };
             while let Some(entry) = entries.next_entry().await? {
                 if let Some(id) = entry.file_name().to_str().and_then(|name| name.strip_suffix(".blob")) {
                     if crate::valid_file_id(id) {
-                        ids.push(id.to_owned());
+                        let modified_ms = entry
+                            .metadata()
+                            .await?
+                            .modified()
+                            .ok()
+                            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|elapsed| elapsed.as_millis() as u64);
+                        objects.push(StoredObject { id: id.to_owned(), modified_ms });
                     }
                 }
             }
+            objects.sort_by(|a, b| a.id.cmp(&b.id));
+            Ok(objects)
+        })
+    }
+
+    fn deployments(&self) -> BoxFuture<'_, Result<Vec<String>>> {
+        Box::pin(async move {
+            let mut ids = Vec::new();
+            let mut entries = match tokio::fs::read_dir(&self.deployments).await {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(ids),
+                Err(error) => return Err(error.into()),
+            };
+            while let Some(entry) = entries.next_entry().await? {
+                if entry.file_type().await?.is_dir() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        ids.push(name.to_owned());
+                    }
+                }
+            }
+            ids.sort();
+            Ok(ids)
+        })
+    }
+}
+
+/// An S3-compatible bucket. Each file is the object
+/// `<prefix><deployment id>/<file id>`. It sends only `PutObject`,
+/// `GetObject` with a `Range`, `DeleteObject` and `ListObjectsV2`, the
+/// operations R2, Scaleway and Hetzner all document (ADR-0024).
+pub(crate) struct S3Store {
+    client: S3Client,
+    pub(crate) settings: S3Settings,
+}
+
+/// `LITTLEBOX_FILES_S3_*`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct S3Settings {
+    pub(crate) endpoint: String,
+    pub(crate) region: String,
+    pub(crate) bucket: String,
+    /// Empty, or ending in `/`.
+    pub(crate) prefix: String,
+    pub(crate) access_key: String,
+    pub(crate) secret_key: String,
+    pub(crate) path_style: bool,
+}
+
+impl S3Settings {
+    /// `None` when `LITTLEBOX_FILES_S3_BUCKET` is unset: the files stay in the folder.
+    pub(crate) fn from_env() -> Result<Option<Self>> {
+        let get = |name: &str| std::env::var(name).ok().map(|value| value.trim().to_owned()).filter(|value| !value.is_empty());
+        let Some(bucket) = get("LITTLEBOX_FILES_S3_BUCKET") else {
+            for name in ["LITTLEBOX_FILES_S3_ENDPOINT", "LITTLEBOX_FILES_S3_ACCESS_KEY", "LITTLEBOX_FILES_S3_SECRET_KEY", "LITTLEBOX_FILES_S3_PREFIX"] {
+                ensure!(get(name).is_none(), "{name} is set but LITTLEBOX_FILES_S3_BUCKET is not. Set the bucket, or unset the other LITTLEBOX_FILES_S3_ settings to keep files in the data directory.");
+            }
+            return Ok(None);
+        };
+        let required = |name: &str| get(name).with_context(|| format!("LITTLEBOX_FILES_S3_BUCKET is set, so {name} is required."));
+        let path_style = match get("LITTLEBOX_FILES_S3_PATH_STYLE").as_deref() {
+            None | Some("1") | Some("true") => true,
+            Some("0") | Some("false") => false,
+            Some(other) => bail!("LITTLEBOX_FILES_S3_PATH_STYLE must be 1 or 0, not {other:?}."),
+        };
+        Ok(Some(Self {
+            endpoint: required("LITTLEBOX_FILES_S3_ENDPOINT")?,
+            region: get("LITTLEBOX_FILES_S3_REGION").unwrap_or_else(|| "us-east-1".into()),
+            bucket,
+            prefix: normalize_prefix(&get("LITTLEBOX_FILES_S3_PREFIX").unwrap_or_default()),
+            access_key: required("LITTLEBOX_FILES_S3_ACCESS_KEY")?,
+            secret_key: required("LITTLEBOX_FILES_S3_SECRET_KEY")?,
+            path_style,
+        }))
+    }
+}
+
+fn normalize_prefix(prefix: &str) -> String {
+    let trimmed = prefix.trim_matches('/');
+    if trimmed.is_empty() { String::new() } else { format!("{trimmed}/") }
+}
+
+impl S3Store {
+    pub(crate) fn new(settings: S3Settings) -> Self {
+        let credentials = aws_credential_types::Credentials::new(&settings.access_key, &settings.secret_key, None, None, "littlebox-files");
+        let config = aws_sdk_s3::config::Builder::new()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+            .region(aws_sdk_s3::config::Region::new(settings.region.clone()))
+            .credentials_provider(credentials)
+            .endpoint_url(&settings.endpoint)
+            .force_path_style(settings.path_style)
+            // A checksum header on every request is an SDK default that not
+            // every S3-compatible store accepts; the Kernel checks SHA-256 itself.
+            .request_checksum_calculation(aws_sdk_s3::config::RequestChecksumCalculation::WhenRequired)
+            .response_checksum_validation(aws_sdk_s3::config::ResponseChecksumValidation::WhenRequired)
+            .build();
+        Self { client: S3Client::from_conf(config), settings }
+    }
+
+    fn key(&self, deployment: &str, file: &str) -> String {
+        format!("{}{deployment}/{file}", self.settings.prefix)
+    }
+
+    /// Every key under `prefix`, with its modification time, page by page.
+    async fn keys(&self, prefix: &str, delimiter: bool) -> Result<(Vec<(String, Option<u64>)>, Vec<String>)> {
+        let mut keys = Vec::new();
+        let mut folders = Vec::new();
+        let mut continuation: Option<String> = None;
+        loop {
+            let mut request = self.client.list_objects_v2().bucket(&self.settings.bucket).prefix(prefix);
+            if delimiter {
+                request = request.delimiter("/");
+            }
+            let page = request
+                .set_continuation_token(continuation.take())
+                .send()
+                .await
+                .with_context(|| format!("Listing s3://{}/{prefix} failed", self.settings.bucket))?;
+            for object in page.contents() {
+                if let Some(key) = object.key() {
+                    let modified = object.last_modified().and_then(|time| u64::try_from(time.to_millis().ok()?).ok());
+                    keys.push((key.to_owned(), modified));
+                }
+            }
+            folders.extend(page.common_prefixes().iter().filter_map(|folder| folder.prefix().map(str::to_owned)));
+            match page.next_continuation_token() {
+                Some(token) if page.is_truncated() == Some(true) => continuation = Some(token.to_owned()),
+                _ => break,
+            }
+        }
+        Ok((keys, folders))
+    }
+}
+
+fn not_found<E>(error: &aws_sdk_s3::error::SdkError<E>) -> bool {
+    error.raw_response().is_some_and(|response| response.status().as_u16() == 404)
+}
+
+impl FileStore for S3Store {
+    fn kind(&self) -> &'static str {
+        "s3"
+    }
+
+    fn put<'a>(&'a self, deployment: &'a str, file: &'a str, source: &'a Path) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let length = tokio::fs::metadata(source).await?.len();
+            let body = aws_sdk_s3::primitives::ByteStream::from_path(source).await?;
+            self.client
+                .put_object()
+                .bucket(&self.settings.bucket)
+                .key(self.key(deployment, file))
+                .content_length(length as i64)
+                .body(body)
+                .send()
+                .await
+                .with_context(|| format!("Storing file {file} in s3://{} failed", self.settings.bucket))?;
+            Ok(())
+        })
+    }
+
+    fn get<'a>(&'a self, deployment: &'a str, file: &'a str, range: Option<Range<u64>>) -> BoxFuture<'a, Result<Option<Blob>>> {
+        Box::pin(async move {
+            if let Some(range) = &range {
+                ensure!(range.start <= range.end, "The range lies outside the file.");
+                if range.start == range.end {
+                    return Ok(Some(Blob { length: 0, reader: Box::pin(tokio::io::empty()) }));
+                }
+            }
+            let mut request = self.client.get_object().bucket(&self.settings.bucket).key(self.key(deployment, file));
+            if let Some(range) = &range {
+                request = request.range(format!("bytes={}-{}", range.start, range.end - 1));
+            }
+            let object = match request.send().await {
+                Ok(object) => object,
+                Err(error) if not_found(&error) => return Ok(None),
+                Err(error) => return Err(anyhow::Error::new(error).context(format!("Reading file {file} from s3://{} failed", self.settings.bucket))),
+            };
+            let length = object.content_length().and_then(|length| u64::try_from(length).ok()).context("The store did not say how long the file is.")?;
+            if let Some(range) = &range {
+                ensure!(length == range.end - range.start, "The store answered a different range than the one asked for.");
+            }
+            Ok(Some(Blob { length, reader: Box::pin(object.body.into_async_read()) }))
+        })
+    }
+
+    fn delete<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            match self.client.delete_object().bucket(&self.settings.bucket).key(self.key(deployment, file)).send().await {
+                Ok(_) => Ok(()),
+                Err(error) if not_found(&error) => Ok(()),
+                Err(error) => Err(anyhow::Error::new(error).context(format!("Removing file {file} from s3://{} failed", self.settings.bucket))),
+            }
+        })
+    }
+
+    fn objects<'a>(&'a self, deployment: &'a str) -> BoxFuture<'a, Result<Vec<StoredObject>>> {
+        Box::pin(async move {
+            let folder = format!("{}{deployment}/", self.settings.prefix);
+            let (keys, _) = self.keys(&folder, false).await?;
+            let mut objects: Vec<StoredObject> = keys
+                .into_iter()
+                .filter_map(|(key, modified_ms)| {
+                    let id = key.strip_prefix(&folder)?;
+                    crate::valid_file_id(id).then(|| StoredObject { id: id.to_owned(), modified_ms })
+                })
+                .collect();
+            objects.sort_by(|a, b| a.id.cmp(&b.id));
+            Ok(objects)
+        })
+    }
+
+    fn deployments(&self) -> BoxFuture<'_, Result<Vec<String>>> {
+        Box::pin(async move {
+            let (_, folders) = self.keys(&self.settings.prefix, true).await?;
+            let mut ids: Vec<String> = folders
+                .iter()
+                .filter_map(|folder| folder.strip_prefix(&self.settings.prefix)?.strip_suffix('/'))
+                .filter(|id| !id.is_empty() && !id.contains('/'))
+                .map(str::to_owned)
+                .collect();
             ids.sort();
             Ok(ids)
         })
@@ -225,8 +467,8 @@ pub(crate) struct Files {
 }
 
 impl Files {
-    /// The local folder with the default limits, as tests and a Kernel without
-    /// file settings use.
+    /// The local folder with the default limits, for tests.
+    #[cfg(test)]
     pub(crate) fn local(data_root: impl AsRef<Path>) -> Self {
         Self::new(Arc::new(LocalFolder::new(data_root.as_ref())), FileLimits::default())
     }
@@ -235,9 +477,348 @@ impl Files {
         Self { store, limits }
     }
 
+    #[cfg(test)]
     pub(crate) fn with_limits(mut self, limits: FileLimits) -> Self {
         self.limits = limits;
         self
+    }
+}
+
+/// One Deployment's files for code that runs on a blocking thread, such as
+/// the package capture and import, which read and write archives with
+/// `std::io`. Calls from inside `spawn_blocking` only.
+pub(crate) struct BlockingFiles {
+    store: Arc<dyn FileStore>,
+    deployment: String,
+    handle: tokio::runtime::Handle,
+}
+
+impl BlockingFiles {
+    /// Takes the current runtime, so call it before `spawn_blocking`.
+    pub(crate) fn new(store: Arc<dyn FileStore>, deployment: &str) -> Self {
+        Self { store, deployment: deployment.to_owned(), handle: tokio::runtime::Handle::current() }
+    }
+
+    /// The file's length and a reader over its bytes, or `None`.
+    pub(crate) fn open(&self, file: &str) -> Result<Option<(u64, impl std::io::Read + use<>)>> {
+        let blob = self.handle.block_on(self.store.get(&self.deployment, file, None))?;
+        Ok(blob.map(|blob| (blob.length, tokio_util::io::SyncIoBridge::new_with_handle(blob.reader, self.handle.clone()))))
+    }
+
+    pub(crate) fn put(&self, file: &str, source: &Path) -> Result<()> {
+        self.handle.block_on(self.store.put(&self.deployment, file, source))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Which store holds the bytes
+
+/// The file in the data directory that says which store holds the bytes.
+pub(crate) const MARKER_FILE: &str = "files-store.json";
+const ORPHAN_GRACE_MS: u64 = 60 * 60 * 1000;
+
+/// What `files-store.json` records: `{"store":"local"}`, or the bucket and
+/// prefix of an S3 store. Keys and region stay in the environment.
+fn describe(settings: Option<&S3Settings>) -> serde_json::Value {
+    match settings {
+        None => serde_json::json!({"store": "local"}),
+        Some(s3) => serde_json::json!({"store": "s3", "endpoint": s3.endpoint, "bucket": s3.bucket, "prefix": s3.prefix}),
+    }
+}
+
+fn spoken(recorded: &serde_json::Value) -> String {
+    match recorded["store"].as_str() {
+        Some("s3") => format!(
+            "s3://{}/{} at {}",
+            recorded["bucket"].as_str().unwrap_or("?"),
+            recorded["prefix"].as_str().unwrap_or(""),
+            recorded["endpoint"].as_str().unwrap_or("?")
+        ),
+        _ => "the data directory".into(),
+    }
+}
+
+async fn read_marker(data_root: &Path) -> Result<Option<serde_json::Value>> {
+    match tokio::fs::read(data_root.join(MARKER_FILE)).await {
+        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).with_context(|| format!("{MARKER_FILE} is not valid JSON."))?)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn write_marker(data_root: &Path, value: &serde_json::Value) -> Result<()> {
+    crate::write_atomic(&data_root.join(MARKER_FILE), &serde_json::to_vec_pretty(value)?).await?;
+    Ok(())
+}
+
+/// Whether any Deployment folder still holds a `.blob`.
+async fn local_bytes_remain(data_root: &Path) -> Result<bool> {
+    let local = LocalFolder::new(data_root);
+    for deployment in local.deployments().await? {
+        if !local.list(&deployment).await?.is_empty() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+impl Files {
+    /// The store and limits the environment names, checked against the store
+    /// `files-store.json` records. A Kernel never starts on a store that does
+    /// not hold its files.
+    pub(crate) async fn from_env(data_root: &Path) -> Result<Self> {
+        Self::open(data_root, FileLimits::from_env()?, S3Settings::from_env()?).await
+    }
+
+    pub(crate) async fn open(data_root: &Path, limits: FileLimits, settings: Option<S3Settings>) -> Result<Self> {
+        let wanted = describe(settings.as_ref());
+        match read_marker(data_root).await? {
+            Some(recorded) if recorded == wanted => {}
+            Some(recorded) => {
+                let command = match (recorded["store"].as_str(), settings.is_some()) {
+                    (Some("s3"), false) => "Set the LITTLEBOX_FILES_S3_ settings it was started with again, or run littlebox-kernel files-migrate --to local with them set.".to_owned(),
+                    (Some("s3"), true) => "Set the LITTLEBOX_FILES_S3_ settings it was started with again; files-migrate moves files between the data directory and one bucket only.".to_owned(),
+                    _ => "Stop the Kernel and run littlebox-kernel files-migrate --to s3 with these settings first.".to_owned(),
+                };
+                bail!("The files of this installation are in {}, but the settings name {}. {command}", spoken(&recorded), spoken(&wanted));
+            }
+            None => {
+                if settings.is_some() && local_bytes_remain(data_root).await? {
+                    bail!("The settings name {}, but the files of this installation are in the data directory. Stop the Kernel and run littlebox-kernel files-migrate --to s3 first.", spoken(&wanted));
+                }
+                write_marker(data_root, &wanted).await?;
+            }
+        }
+        let store: Arc<dyn FileStore> = match settings {
+            Some(settings) => Arc::new(S3Store::new(settings)),
+            None => Arc::new(LocalFolder::new(data_root)),
+        };
+        Ok(Self::new(store, limits))
+    }
+}
+
+/// The IDs and sizes a Deployment's index names, or none without an index.
+pub(crate) async fn indexed_files(data_root: &Path, deployment: &str) -> Result<Option<Vec<(String, u64)>>> {
+    let path = data_root.join("deployments").join(deployment).join("files").join("index.json");
+    let bytes = match tokio::fs::read(&path).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let index: Vec<serde_json::Value> = serde_json::from_slice(&bytes).with_context(|| format!("{} is not valid JSON.", path.display()))?;
+    index
+        .iter()
+        .map(|file| {
+            let id = file["id"].as_str().filter(|id| crate::valid_file_id(id)).with_context(|| format!("{} names an invalid file id.", path.display()))?;
+            Ok((id.to_owned(), file["size"].as_u64().unwrap_or(0)))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
+}
+
+/// Removes every file the store holds for a Deployment whose folder is gone.
+pub(crate) async fn forget_deployment(store: &dyn FileStore, deployment: &str) {
+    match store.list(deployment).await {
+        Ok(ids) => {
+            for id in ids {
+                if let Err(error) = store.delete(deployment, &id).await {
+                    eprintln!("littlebox: could not remove file {id} of Deployment {deployment}: {error:#}");
+                }
+            }
+        }
+        Err(error) => eprintln!("littlebox: could not list the files of Deployment {deployment}: {error:#}"),
+    }
+}
+
+/// Copies `blob` into `target`, returning its length and SHA-256.
+pub(crate) async fn save_blob(mut blob: Blob, target: &Path) -> Result<(u64, String)> {
+    use tokio::io::AsyncWriteExt;
+    let mut output = tokio::fs::File::create(target).await?;
+    let mut hasher = sha2::Sha256::default();
+    let mut buffer = vec![0u8; 64 * 1024];
+    let mut length = 0u64;
+    loop {
+        let read = blob.reader.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        sha2::Digest::update(&mut hasher, &buffer[..read]);
+        output.write_all(&buffer[..read]).await?;
+        length += read as u64;
+    }
+    output.sync_all().await?;
+    Ok((length, hex::encode(sha2::Digest::finalize(hasher))))
+}
+
+async fn blob_digest(mut blob: Blob) -> Result<(u64, String)> {
+    let mut hasher = sha2::Sha256::default();
+    let mut buffer = vec![0u8; 64 * 1024];
+    let mut length = 0u64;
+    loop {
+        let read = blob.reader.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        sha2::Digest::update(&mut hasher, &buffer[..read]);
+        length += read as u64;
+    }
+    Ok((length, hex::encode(sha2::Digest::finalize(hasher))))
+}
+
+/// What `files-migrate` did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Migrated {
+    pub(crate) deployments: usize,
+    pub(crate) files: usize,
+    pub(crate) bytes: u64,
+}
+
+/// Copies every indexed file from `source` to `target`, reads each back from
+/// `target` and compares its SHA-256 with the source's, records `target` in
+/// `files-store.json`, and only then removes the files from `source`. Any
+/// mismatch or missing file stops it before the record changes.
+pub(crate) async fn migrate(data_root: &Path, source: &dyn FileStore, target: &dyn FileStore, target_marker: &serde_json::Value) -> Result<Migrated> {
+    let scratch = data_root.join("transfers");
+    tokio::fs::create_dir_all(&scratch).await?;
+    let mut summary = Migrated::default();
+    let mut moved: Vec<(String, String)> = Vec::new();
+    for deployment in LocalFolder::new(data_root).deployments().await? {
+        let Some(files) = indexed_files(data_root, &deployment).await? else { continue };
+        summary.deployments += 1;
+        for (id, size) in files {
+            let blob = source
+                .get(&deployment, &id, None)
+                .await?
+                .with_context(|| format!("File {id} of Deployment {deployment} is in the index but not in {}. Nothing was switched.", source.kind()))?;
+            let temp = scratch.join(format!(".files-migrate-{}", uuid::Uuid::new_v4()));
+            let copied = async {
+                let (length, sha256) = save_blob(blob, &temp).await?;
+                ensure!(length == size, "File {id} of Deployment {deployment} holds {length} bytes, but its index says {size}. Nothing was switched.");
+                target.put(&deployment, &id, &temp).await?;
+                let stored = target.get(&deployment, &id, None).await?.with_context(|| format!("File {id} did not arrive in {}.", target.kind()))?;
+                let (stored_length, stored_sha256) = blob_digest(stored).await?;
+                ensure!(
+                    stored_length == length && stored_sha256 == sha256,
+                    "File {id} of Deployment {deployment} reads back from {} with another SHA-256. Nothing was switched.",
+                    target.kind()
+                );
+                Ok::<_, anyhow::Error>(length)
+            }
+            .await;
+            let _ = tokio::fs::remove_file(&temp).await;
+            summary.bytes += copied?;
+            summary.files += 1;
+            moved.push((deployment.clone(), id));
+        }
+    }
+    write_marker(data_root, target_marker).await?;
+    for (deployment, id) in moved {
+        if let Err(error) = source.delete(&deployment, &id).await {
+            eprintln!("littlebox: file {id} of Deployment {deployment} is in {} now; removing the old copy failed: {error:#}", target.kind());
+        }
+    }
+    Ok(summary)
+}
+
+/// What `files-reconcile` found.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Reconciled {
+    pub(crate) removed: usize,
+    pub(crate) kept_recent: usize,
+}
+
+/// Removes the files a store holds that no index names, once they are older
+/// than an hour; a younger one may be an upload whose index change has not
+/// committed yet. A Deployment without a folder has no index, so all its
+/// files go.
+pub(crate) async fn reconcile(data_root: &Path, store: &dyn FileStore, now_ms: u64, dry_run: bool) -> Result<Reconciled> {
+    let mut summary = Reconciled::default();
+    for deployment in store.deployments().await? {
+        let indexed: std::collections::HashSet<String> = indexed_files(data_root, &deployment)
+            .await?
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        for object in store.objects(&deployment).await? {
+            if indexed.contains(&object.id) {
+                continue;
+            }
+            if object.modified_ms.is_none_or(|at| now_ms.saturating_sub(at) < ORPHAN_GRACE_MS) {
+                summary.kept_recent += 1;
+                continue;
+            }
+            if !dry_run {
+                store.delete(&deployment, &object.id).await?;
+            }
+            summary.removed += 1;
+        }
+    }
+    Ok(summary)
+}
+
+const MIGRATE_USAGE: &str = "Usage: littlebox-kernel files-migrate --to s3|local";
+const RECONCILE_USAGE: &str = "Usage: littlebox-kernel files-reconcile [--dry-run]";
+
+/// `files-migrate` and `files-reconcile`. Both read `LITTLEBOX_DATA_DIR`
+/// and the `LITTLEBOX_FILES_S3_` settings.
+pub(crate) async fn operator_command() -> Result<bool> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let data_root = PathBuf::from(std::env::var("LITTLEBOX_DATA_DIR").unwrap_or_else(|_| "/data".into()));
+    match args.first().map(String::as_str) {
+        Some("files-migrate") => {
+            let to = match args.get(1..).unwrap_or_default() {
+                [flag, to] if flag == "--to" && (to == "s3" || to == "local") => to.as_str(),
+                _ => bail!("{MIGRATE_USAGE}"),
+            };
+            let settings = S3Settings::from_env()?.context("files-migrate needs the LITTLEBOX_FILES_S3_ settings of the bucket, in both directions.")?;
+            let recorded = read_marker(&data_root).await?.unwrap_or_else(|| describe(None));
+            let bucket = describe(Some(&settings));
+            let local = LocalFolder::new(&data_root);
+            let s3 = S3Store::new(settings);
+            let (source, target, marker): (&dyn FileStore, &dyn FileStore, serde_json::Value) = match to {
+                "s3" if recorded == bucket => {
+                    println!("The files are already in {}.", spoken(&bucket));
+                    return Ok(true);
+                }
+                "s3" if recorded["store"] == "local" => (&local, &s3, bucket),
+                "local" if recorded["store"] == "local" => {
+                    println!("The files are already in the data directory.");
+                    return Ok(true);
+                }
+                "local" if recorded == bucket => (&s3, &local, describe(None)),
+                _ => bail!("The files are in {}, which is not {}. files-migrate moves files between the data directory and the bucket the settings name.", spoken(&recorded), spoken(&bucket)),
+            };
+            let summary = migrate(&data_root, source, target, &marker).await?;
+            println!(
+                "Moved {} files ({} bytes) of {} Deployments to {}, each read back with the same SHA-256. Start the Kernel with {}.",
+                summary.files,
+                summary.bytes,
+                summary.deployments,
+                spoken(&marker),
+                if to == "s3" { "the same LITTLEBOX_FILES_S3_ settings" } else { "LITTLEBOX_FILES_S3_BUCKET unset" }
+            );
+            Ok(true)
+        }
+        Some("files-reconcile") => {
+            let dry_run = match args.get(1..).unwrap_or_default() {
+                [] => false,
+                [flag] if flag == "--dry-run" => true,
+                _ => bail!("{RECONCILE_USAGE}"),
+            };
+            let files = Files::from_env(&data_root).await?;
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64;
+            let summary = reconcile(&data_root, files.store.as_ref(), now, dry_run).await?;
+            println!(
+                "{} {} files no index names from {}; kept {} younger than an hour.",
+                if dry_run { "Would remove" } else { "Removed" },
+                summary.removed,
+                files.store.kind(),
+                summary.kept_recent
+            );
+            Ok(true)
+        }
+        _ => Ok(false),
     }
 }
 
@@ -302,6 +883,233 @@ pub(crate) mod tests {
         assert!(store.get(&deployment, &a, None).await.unwrap().is_none());
         assert_eq!(store.list(&deployment).await.unwrap(), vec![b.clone()]);
         store.delete(&deployment, &b).await.unwrap();
+    }
+
+    /// An in-process S3 server for tests: path-style PutObject, GetObject with
+    /// one range, DeleteObject and ListObjectsV2 with prefix, delimiter and
+    /// two keys per page, so paging runs. It checks no signature. Set
+    /// `LITTLEBOX_TEST_S3_ENDPOINT` (and `LITTLEBOX_TEST_S3_BUCKET`) to run the
+    /// same tests against a real S3-compatible server instead.
+    pub(crate) async fn fake_s3() -> String {
+        use axum::{
+            Router,
+            body::{Body, Bytes},
+            extract::{Path as UrlPath, Query, State},
+            http::{HeaderMap, StatusCode, header},
+            response::{IntoResponse, Response},
+            routing::get,
+        };
+        use std::collections::{BTreeMap, HashMap};
+        type Objects = Arc<std::sync::Mutex<BTreeMap<String, (Vec<u8>, u64)>>>;
+        fn xml(text: &str) -> String {
+            text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+        }
+        fn missing() -> Response {
+            (StatusCode::NOT_FOUND, "<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>").into_response()
+        }
+        async fn put(State(objects): State<Objects>, UrlPath((bucket, key)): UrlPath<(String, String)>, body: Bytes) -> Response {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+            objects.lock().unwrap().insert(format!("{bucket}/{key}"), (body.to_vec(), now));
+            (StatusCode::OK, [(header::ETAG, "\"fake\"")]).into_response()
+        }
+        async fn read(State(objects): State<Objects>, UrlPath((bucket, key)): UrlPath<(String, String)>, headers: HeaderMap) -> Response {
+            let Some((bytes, _)) = objects.lock().unwrap().get(&format!("{bucket}/{key}")).cloned() else { return missing() };
+            let range = headers.get(header::RANGE).and_then(|value| value.to_str().ok()).and_then(|value| {
+                let (start, end) = value.strip_prefix("bytes=")?.split_once('-')?;
+                Some((start.parse::<usize>().ok()?, end.parse::<usize>().ok()?))
+            });
+            match range {
+                Some((start, end)) => {
+                    let end = end.min(bytes.len() - 1);
+                    let part = bytes[start..=end].to_vec();
+                    let content_range = format!("bytes {start}-{end}/{}", bytes.len());
+                    (StatusCode::PARTIAL_CONTENT, [(header::CONTENT_RANGE, content_range)], part).into_response()
+                }
+                None => (StatusCode::OK, bytes).into_response(),
+            }
+        }
+        async fn remove(State(objects): State<Objects>, UrlPath((bucket, key)): UrlPath<(String, String)>) -> Response {
+            objects.lock().unwrap().remove(&format!("{bucket}/{key}"));
+            StatusCode::NO_CONTENT.into_response()
+        }
+        async fn list(State(objects): State<Objects>, UrlPath(bucket): UrlPath<String>, Query(query): Query<HashMap<String, String>>) -> Response {
+            let prefix = query.get("prefix").cloned().unwrap_or_default();
+            let delimiter = query.get("delimiter").cloned();
+            let after = query.get("continuation-token").cloned().unwrap_or_default();
+            let mut entries: Vec<(String, Option<u64>)> = Vec::new();
+            for (stored, (_, modified)) in objects.lock().unwrap().iter() {
+                let Some(key) = stored.strip_prefix(&format!("{bucket}/")) else { continue };
+                let Some(rest) = key.strip_prefix(&prefix) else { continue };
+                match delimiter.as_deref().and_then(|delimiter| rest.find(delimiter)) {
+                    Some(end) => {
+                        let folder = format!("{prefix}{}/", &rest[..end]);
+                        if !entries.iter().any(|(name, kind)| name == &folder && kind.is_none()) {
+                            entries.push((folder, None));
+                        }
+                    }
+                    None => entries.push((key.to_owned(), Some(*modified))),
+                }
+            }
+            let page: Vec<_> = entries.into_iter().filter(|(name, _)| name.as_str() > after.as_str()).collect();
+            let truncated = page.len() > 2;
+            let page = &page[..page.len().min(2)];
+            let mut body = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult><Name>{bucket}</Name><Prefix>{}</Prefix><KeyCount>{}</KeyCount><IsTruncated>{truncated}</IsTruncated>", xml(&prefix), page.len());
+            if truncated {
+                body.push_str(&format!("<NextContinuationToken>{}</NextContinuationToken>", xml(&page[page.len() - 1].0)));
+            }
+            for (name, modified) in page {
+                match modified {
+                    Some(modified) => {
+                        let seconds = modified / 1000;
+                        let (year, month, day) = crate::copies::civil_from_days((seconds / 86_400) as i64);
+                        let time = seconds % 86_400;
+                        body.push_str(&format!(
+                            "<Contents><Key>{}</Key><LastModified>{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.000Z</LastModified><Size>0</Size></Contents>",
+                            xml(name), time / 3600, time / 60 % 60, time % 60
+                        ));
+                    }
+                    None => body.push_str(&format!("<CommonPrefixes><Prefix>{}</Prefix></CommonPrefixes>", xml(name))),
+                }
+            }
+            body.push_str("</ListBucketResult>");
+            ([(header::CONTENT_TYPE, "application/xml")], Body::from(body)).into_response()
+        }
+        let objects: Objects = Arc::default();
+        let app = Router::new()
+            .route("/{bucket}", get(list))
+            .route("/{bucket}/", get(list))
+            .route("/{bucket}/{*key}", get(read).put(put).delete(remove))
+            .layer(axum::extract::DefaultBodyLimit::disable())
+            .with_state(objects);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{address}")
+    }
+
+    /// An `S3Store` on `LITTLEBOX_TEST_S3_ENDPOINT` when it is set, on the
+    /// in-process fake otherwise, under a fresh prefix.
+    pub(crate) async fn test_s3_store() -> S3Store {
+        let endpoint = match std::env::var("LITTLEBOX_TEST_S3_ENDPOINT") {
+            Ok(endpoint) if !endpoint.is_empty() => endpoint,
+            _ => fake_s3().await,
+        };
+        S3Store::new(S3Settings {
+            endpoint,
+            region: "us-east-1".into(),
+            bucket: std::env::var("LITTLEBOX_TEST_S3_BUCKET").unwrap_or_else(|_| "littlebox-files".into()),
+            prefix: format!("test-{}/", uuid::Uuid::new_v4().simple()),
+            access_key: "littlebox".into(),
+            secret_key: "littlebox-secret".into(),
+            path_style: true,
+        })
+    }
+
+    #[tokio::test]
+    async fn the_s3_store_keeps_the_store_contract() {
+        let root = std::env::temp_dir().join(format!("littlebox-s3-store-{}", uuid::Uuid::new_v4()));
+        let store = test_s3_store().await;
+        store_contract(&store, &root).await;
+        // Five Deployments list across pages of two.
+        let source = root.join("one");
+        std::fs::write(&source, b"x").unwrap();
+        let mut expected = Vec::new();
+        for _ in 0..5 {
+            let deployment = uuid::Uuid::new_v4().to_string();
+            store.put(&deployment, &uuid::Uuid::new_v4().to_string(), &source).await.unwrap();
+            expected.push(deployment);
+        }
+        let listed = store.deployments().await.unwrap();
+        assert!(expected.iter().all(|deployment| listed.contains(deployment)), "{listed:?}");
+        expected.sort();
+        let objects = store.objects(&expected[0]).await.unwrap();
+        assert_eq!(objects.len(), 1);
+        assert!(objects[0].modified_ms.is_some_and(|at| at > 1_700_000_000_000));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn s3_prefixes_end_in_one_slash() {
+        assert_eq!(normalize_prefix("/files//"), "files/");
+        assert_eq!(normalize_prefix(""), "");
+    }
+
+    fn index(root: &Path, deployment: &str, files: &[(&str, u64)]) {
+        let directory = root.join("deployments").join(deployment).join("files");
+        std::fs::create_dir_all(&directory).unwrap();
+        let entries: Vec<_> = files.iter().map(|(id, size)| serde_json::json!({"id": id, "size": size, "visibility": "private"})).collect();
+        std::fs::write(directory.join("index.json"), serde_json::to_vec(&entries).unwrap()).unwrap();
+    }
+
+    async fn put_bytes(store: &dyn FileStore, root: &Path, deployment: &str, id: &str, bytes: &[u8]) {
+        std::fs::create_dir_all(root).unwrap();
+        let temp = root.join(format!("put-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&temp, bytes).unwrap();
+        store.put(deployment, id, &temp).await.unwrap();
+        std::fs::remove_file(temp).unwrap();
+    }
+
+    /// `files-migrate` moves every indexed file to the bucket and back with the
+    /// same bytes, records the store, and leaves no copy in the old one.
+    #[tokio::test]
+    async fn files_migrate_moves_every_indexed_file_and_switches_the_record() {
+        let root = std::env::temp_dir().join(format!("littlebox-files-migrate-{}", uuid::Uuid::new_v4()));
+        let local = LocalFolder::new(&root);
+        let s3 = test_s3_store().await;
+        let bucket = describe(Some(&s3.settings));
+        let (deployment, a, b) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+        put_bytes(&local, &root, &deployment, &a, b"alpha").await;
+        put_bytes(&local, &root, &deployment, &b, &vec![3u8; 150_000]).await;
+        index(&root, &deployment, &[(&a, 5), (&b, 150_000)]);
+
+        // A Kernel started with the bucket while the bytes are in the folder refuses.
+        let refused = Files::open(&root, FileLimits::default(), Some(s3.settings.clone())).await.err().unwrap().to_string();
+        assert!(refused.contains("run littlebox-kernel files-migrate --to s3 first"), "{refused}");
+
+        let moved = migrate(&root, &local, &s3, &bucket).await.unwrap();
+        assert_eq!(moved, Migrated { deployments: 1, files: 2, bytes: 150_005 });
+        assert_eq!(read_all(&s3, &deployment, &a).await.unwrap().unwrap(), b"alpha");
+        assert!(local.list(&deployment).await.unwrap().is_empty());
+        assert_eq!(read_marker(&root).await.unwrap().unwrap(), bucket);
+        assert_eq!(Files::open(&root, FileLimits::default(), Some(s3.settings.clone())).await.unwrap().store.kind(), "s3");
+        let local_refused = Files::open(&root, FileLimits::default(), None).await.err().unwrap().to_string();
+        assert!(local_refused.contains("Set the LITTLEBOX_FILES_S3_ settings it was started with again"), "{local_refused}");
+
+        migrate(&root, &s3, &local, &describe(None)).await.unwrap();
+        assert_eq!(read_all(&local, &deployment, &b).await.unwrap().unwrap(), vec![3u8; 150_000]);
+        assert!(s3.list(&deployment).await.unwrap().is_empty());
+        assert_eq!(Files::open(&root, FileLimits::default(), None).await.unwrap().store.kind(), "local");
+
+        // A file the index names but the source lacks stops the move before the record changes.
+        index(&root, &deployment, &[(&a, 5), (&b, 150_000), (&uuid::Uuid::new_v4().to_string(), 1)]);
+        let missing = migrate(&root, &local, &s3, &bucket).await.unwrap_err().to_string();
+        assert!(missing.contains("is in the index but not in local. Nothing was switched."), "{missing}");
+        assert_eq!(read_marker(&root).await.unwrap().unwrap(), describe(None));
+        assert_eq!(local.list(&deployment).await.unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// `files-reconcile` removes what no index names once it is an hour old,
+    /// and everything of a Deployment whose folder is gone.
+    #[tokio::test]
+    async fn files_reconcile_removes_old_objects_no_index_names() {
+        let root = std::env::temp_dir().join(format!("littlebox-files-reconcile-{}", uuid::Uuid::new_v4()));
+        let s3 = test_s3_store().await;
+        let (live, gone) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+        let (kept, orphan, stray) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+        put_bytes(&s3, &root, &live, &kept, b"kept").await;
+        put_bytes(&s3, &root, &live, &orphan, b"orphan").await;
+        put_bytes(&s3, &root, &gone, &stray, b"stray").await;
+        index(&root, &live, &[(&kept, 4)]);
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        assert_eq!(reconcile(&root, &s3, now, false).await.unwrap(), Reconciled { removed: 0, kept_recent: 2 });
+        let later = now + ORPHAN_GRACE_MS + 60_000;
+        assert_eq!(reconcile(&root, &s3, later, true).await.unwrap(), Reconciled { removed: 2, kept_recent: 0 });
+        assert_eq!(s3.list(&live).await.unwrap().len(), 2, "a dry run removes nothing");
+        assert_eq!(reconcile(&root, &s3, later, false).await.unwrap(), Reconciled { removed: 2, kept_recent: 0 });
+        assert_eq!(s3.list(&live).await.unwrap(), vec![kept]);
+        assert!(s3.list(&gone).await.unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

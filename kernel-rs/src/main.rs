@@ -384,6 +384,7 @@ struct ActionBinding {
 async fn main() -> Result<()> {
     if clerk::operator_command()? { return Ok(()); }
     if copies::operator_command().await? { return Ok(()); }
+    if file_store::operator_command().await? { return Ok(()); }
     if recovery::operator_command().await? { return Ok(()); }
     if accounts::operator_command()? { return Ok(()); }
     if admission::operator_command()? { return Ok(()); }
@@ -409,7 +410,7 @@ async fn main() -> Result<()> {
     let copy_config = copies::CopyConfig::from_env(&data_root, s3.is_some())?;
     let schedule_clock = schedule::Clock::from_env(&bind)?;
     let deployments = load_deployments(&data_root, &public_origin).await?;
-    let files = file_store::Files::local(&data_root).with_limits(file_store::FileLimits::from_env()?);
+    let files = file_store::Files::from_env(&data_root).await?;
     let state = AppState {
         deployments: Arc::new(RwLock::new(deployments)),
         db_locks: LockMap::default(),
@@ -706,6 +707,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             .and_then(|()| migration::imported(&state.data_root, &id, &deployment.project_id, &package.manifest))
         {
             let _ = tokio::fs::remove_dir_all(&directory).await;
+            file_store::forget_deployment(state.files.store.as_ref(), &id).await;
             return error(StatusCode::BAD_REQUEST, &format!("Package import failed: {error_value:#}"));
         }
     }

@@ -134,6 +134,31 @@ mod tests {
     use super::*;
     use crate::tests::{login_test_state, response_json, signed_in};
 
+    /// Runs one test over the local folder and over an S3 store, the
+    /// in-process fake unless `LITTLEBOX_TEST_S3_ENDPOINT` names a server.
+    macro_rules! on_both_stores {
+        ($name:ident) => {
+            mod $name {
+                #[tokio::test]
+                async fn local_folder() {
+                    super::$name(false).await
+                }
+                #[tokio::test]
+                async fn s3() {
+                    super::$name(true).await
+                }
+            }
+        };
+    }
+
+    async fn login_on(root: &std::path::Path, visibility: &str, s3: bool) -> (AppState, HeaderMap) {
+        let (mut state, visitor) = login_test_state(root, visibility).await;
+        if s3 {
+            state.files.store = Arc::new(file_store::tests::test_s3_store().await);
+        }
+        (state, visitor)
+    }
+
     #[test]
     fn a_type_that_can_run_script_is_served_as_bytes() {
         for stored in ["text/javascript", "TEXT/JavaScript", "application/javascript", "application/x-javascript",
@@ -164,10 +189,10 @@ mod tests {
         (status, response_json(response).await["error"].clone())
     }
 
-    #[tokio::test]
-    async fn the_uploader_publishes_a_private_file_and_takes_it_back() {
+    on_both_stores!(the_uploader_publishes_a_private_file_and_takes_it_back);
+    async fn the_uploader_publishes_a_private_file_and_takes_it_back(s3: bool) {
         let root = std::env::temp_dir().join(format!("littlebox-file-update-{}", Uuid::new_v4()));
-        let (state, visitor) = login_test_state(&root, "public").await;
+        let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, alice_id) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
         let (bob, _) = signed_in(&state, &deployment.id, &visitor, "bob@example.test");
@@ -226,10 +251,10 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    #[tokio::test]
-    async fn a_deployment_holds_a_bounded_number_of_files_with_bounded_names() {
+    on_both_stores!(a_deployment_holds_a_bounded_number_of_files_with_bounded_names);
+    async fn a_deployment_holds_a_bounded_number_of_files_with_bounded_names(s3: bool) {
         let root = std::env::temp_dir().join(format!("littlebox-file-count-{}", Uuid::new_v4()));
-        let (state, visitor) = login_test_state(&root, "public").await;
+        let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
         // Control characters, which JSON writes six bytes each, are dropped.
@@ -244,10 +269,10 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    #[tokio::test]
-    async fn a_deleted_file_frees_its_quota_and_reads_as_missing() {
+    on_both_stores!(a_deleted_file_frees_its_quota_and_reads_as_missing);
+    async fn a_deleted_file_frees_its_quota_and_reads_as_missing(s3: bool) {
         let root = std::env::temp_dir().join(format!("littlebox-file-delete-{}", Uuid::new_v4()));
-        let (state, visitor) = login_test_state(&root, "public").await;
+        let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
         let directory = root.join("deployments").join(&deployment.id).join("files");
@@ -264,7 +289,7 @@ mod tests {
         let gone = ids.pop().unwrap();
         let deleted = response_json(delete_file(&state, &alice, &gone).await).await;
         assert_eq!(deleted["result"], json!({"id": gone, "deleted": true}));
-        assert!(!directory.join(format!("{gone}.blob")).exists());
+        assert!(!directory.join(format!("{gone}.blob")).exists() || s3);
         assert!(!state.files.store.list(&deployment.id).await.unwrap().contains(&gone));
         assert_eq!(serve_file(State(state.clone()), AxumPath(gone.clone()), alice.clone()).await.status(), StatusCode::NOT_FOUND);
         assert_eq!(serve_file(State(state.clone()), AxumPath(gone.clone()), visitor.clone()).await.status(), StatusCode::NOT_FOUND);
@@ -280,12 +305,12 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
+    on_both_stores!(raised_limits_admit_a_file_the_defaults_refuse);
     /// The operator's limits replace the defaults: a file the default per-file
     /// cap refuses is stored, and every refusal names the configured numbers.
-    #[tokio::test]
-    async fn raised_limits_admit_a_file_the_defaults_refuse() {
+    async fn raised_limits_admit_a_file_the_defaults_refuse(s3: bool) {
         let root = std::env::temp_dir().join(format!("littlebox-file-limits-{}", Uuid::new_v4()));
-        let (state, visitor) = login_test_state(&root, "public").await;
+        let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
         let three_mib = 3 * 1024 * 1024;
@@ -308,11 +333,11 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
+    on_both_stores!(the_file_path_serves_one_byte_range);
     /// A range of a file answers 206 with that part, and a range past the end 416.
-    #[tokio::test]
-    async fn the_file_path_serves_one_byte_range() {
+    async fn the_file_path_serves_one_byte_range(s3: bool) {
         let root = std::env::temp_dir().join(format!("littlebox-file-range-{}", Uuid::new_v4()));
-        let (state, visitor) = login_test_state(&root, "public").await;
+        let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
         let id = upload(&state, &alice, 1000, Some("public")).await;
@@ -334,10 +359,10 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    #[tokio::test]
-    async fn a_file_without_an_uploader_cannot_be_changed_from_the_app() {
+    on_both_stores!(a_file_without_an_uploader_cannot_be_changed_from_the_app);
+    async fn a_file_without_an_uploader_cannot_be_changed_from_the_app(s3: bool) {
         let root = std::env::temp_dir().join(format!("littlebox-file-legacy-{}", Uuid::new_v4()));
-        let (state, visitor) = login_test_state(&root, "public").await;
+        let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
         let directory = root.join("deployments").join(&deployment.id).join("files");
@@ -360,14 +385,14 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
+    on_both_stores!(a_visitor_is_asked_to_sign_in_on_a_private_app_and_told_not_found_on_a_public_one);
     /// A visitor of a private Deployment is asked to sign in before any file is
     /// looked up; on a public Deployment a file the visitor may not read
     /// answers as a missing one. The same public file shows both.
-    #[tokio::test]
-    async fn a_visitor_is_asked_to_sign_in_on_a_private_app_and_told_not_found_on_a_public_one() {
+    async fn a_visitor_is_asked_to_sign_in_on_a_private_app_and_told_not_found_on_a_public_one(s3: bool) {
         let root = std::env::temp_dir().join(format!("littlebox-file-visitor-{}", Uuid::new_v4()));
         for (visibility, public_status) in [("private", StatusCode::UNAUTHORIZED), ("public", StatusCode::OK)] {
-            let (state, visitor) = login_test_state(&root.join(visibility), visibility).await;
+            let (state, visitor) = login_on(&root.join(visibility), visibility, s3).await;
             let deployment = state.deployments.read().await.values().next().cloned().unwrap();
             let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
             let public_file = upload(&state, &alice, 2, Some("public")).await;

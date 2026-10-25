@@ -82,7 +82,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
     ├── database.sqlite     # the app's rows, in WAL mode (ADR-0023)
     ├── identity.sqlite     # app accounts, sessions, challenges, invitations, API keys, accepted route signatures
     ├── usage.sqlite        # Usage and Signals, ADR-0010
-    ├── files/              # uploads and their index.json
+    ├── files/              # index.json, and the uploads unless a bucket holds them (ADR-0024)
     ├── backups/            # Data panel snapshots and the recovery point before a schema migration
     ├── domain.json         # the custom domain and its proof, ADR-0015
     ├── migration.json      # only while a migration pauses or has retired it, ADR-0014
@@ -110,6 +110,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 | `guard.rs` | A mutation's guard |
 | `sql_rules.rs` | The statement rules both doors share |
 | `usage.rs` | Usage and Signals |
+| `file_store.rs` | Where file bytes live (`LocalFolder`, `S3Store`), the file quotas, `files-migrate` and `files-reconcile` |
 | `files.rs` | Changing a file's visibility and deleting it |
 | `artifact.rs` | Which artifact file answers a path, and binary files in an artifact |
 | `security.rs` | The response headers of every host |
