@@ -165,11 +165,6 @@ pub enum AuthError {
     VerificationRequired,
     /// Creator signup without a valid invitation code or installation key.
     AdmissionRefused(&'static str),
-    /// A first sign-in with an outside identity whose email already has an
-    /// account. Accounts are never joined by matching email.
-    EmailHasAccount,
-    /// The outside identity is linked to another account of this app.
-    IdentityTaken,
     /// An invitation answered with an identity for another email.
     InvitedEmailDiffers,
     Storage(rusqlite::Error),
@@ -205,13 +200,6 @@ impl fmt::Display for AuthError {
                 write!(f, "New accounts on this installation must confirm their email.")
             }
             Self::AdmissionRefused(message) => write!(f, "{message}"),
-            Self::EmailHasAccount => write!(
-                f,
-                "An account with this email exists. Sign in with your password, then connect Google."
-            ),
-            Self::IdentityTaken => {
-                write!(f, "This Google account is connected to another account on this app.")
-            }
             Self::InvitedEmailDiffers => write!(
                 f,
                 "This invitation is for another email. Continue with the Google account of the invited email."
@@ -753,15 +741,15 @@ impl AuthService {
         Ok((user_id, state))
     }
 
-    /// Signs in, connects or creates an account with an identity an outside
-    /// issuer vouched for, in one write transaction.
+    /// Signs in or creates an account for an email an outside issuer
+    /// vouched for, in one write transaction.
     ///
-    /// A linked identity signs its account in. An identity that is not linked
-    /// never joins an account by matching email: `Connect` links it to the
-    /// signed-in account, `Invitation` answers that invitation when the
-    /// identity's email is the invited one, and `SignIn` creates an account
-    /// only for an email no account holds and only when `admits_new(email)`
-    /// holds. `admits_invited(email)` is the policy an invitation answers to.
+    /// The account is the one that holds the email, matched without regard
+    /// to case as `app_users.email` is. `SignIn` signs an active account in
+    /// and creates one for an email no account holds only when
+    /// `admits_new(email)` holds; a pending account keeps waiting for its
+    /// email link. `Invitation` answers that invitation when the email is the
+    /// invited one, under `admits_invited(email)`.
     /// `on_invitation(transaction, user_id, token_hash)` runs before the
     /// commit, as in `complete_challenge_with`. Any refusal rolls back.
     pub(crate) fn sign_in_with_identity(
@@ -776,45 +764,8 @@ impl AuthService {
         let now = now_seconds();
         let mut connection = self.connection()?;
         let transaction = immediate(&mut connection)?;
-        let linked: Option<(String, String, String, String)> = transaction
-            .query_row(
-                "SELECT u.id, u.email, u.role, u.state FROM app_user_identities i
-                 JOIN app_users u ON u.id = i.user_id WHERE i.issuer = ?1 AND i.subject = ?2",
-                params![identity.issuer, identity.subject],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()
-            .map_err(AuthError::Storage)?;
-        let link = |transaction: &Connection, user_id: &str| {
-            transaction
-                .execute(
-                    "INSERT INTO app_user_identities (user_id, issuer, subject, email, linked_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![user_id, identity.issuer, identity.subject, email, now],
-                )
-                .map(|_| ())
-                .map_err(AuthError::Storage)
-        };
         let outcome = match intent {
-            IdentityIntent::Connect { user_id } => {
-                let state: Option<String> = transaction
-                    .query_row("SELECT state FROM app_users WHERE id = ?1", [user_id], |row| row.get(0))
-                    .optional()
-                    .map_err(AuthError::Storage)?;
-                if state.as_deref() != Some("active") {
-                    return Err(AuthError::InvalidCredentials);
-                }
-                match &linked {
-                    Some((linked_id, ..)) if linked_id == user_id => {}
-                    Some(_) => return Err(AuthError::IdentityTaken),
-                    None => link(&transaction, user_id)?,
-                }
-                IdentitySignIn { session: None, outcome: IdentityOutcome::Connected }
-            }
             IdentityIntent::Invitation { token_hash } => {
-                if linked.is_some() {
-                    return Err(AuthError::IdentityTaken);
-                }
                 let record: Option<(String, String, String, String)> = transaction
                     .query_row(
                         "SELECT u.id, u.email, u.state, u.role FROM account_challenges c JOIN app_users u ON u.id = c.user_id
@@ -854,7 +805,7 @@ impl AuthService {
                         "UPDATE app_users SET password_hash = CASE WHEN password_hash = ?1 THEN ?2 ELSE password_hash END,
                            state = 'active', verified_at = COALESCE(verified_at, ?3)
                          WHERE id = ?4",
-                        params![NO_PASSWORD, unusable_password_hash(&user_id)?, now, user_id],
+                        params![NO_PASSWORD, unusable_password_hash()?, now, user_id],
                     )
                     .map_err(AuthError::Storage)?;
                 transaction
@@ -863,77 +814,52 @@ impl AuthService {
                 transaction
                     .execute("DELETE FROM app_sessions WHERE user_id = ?1", [&user_id])
                     .map_err(AuthError::Storage)?;
-                link(&transaction, &user_id)?;
                 let session = issue_session(&transaction, AuthUser { user_id, name: invited, role })?;
-                IdentitySignIn { session: Some(session), outcome: IdentityOutcome::Created }
+                IdentitySignIn { session, outcome: IdentityOutcome::Created }
             }
-            IdentityIntent::SignIn => match linked {
-                Some((user_id, account_email, role, state)) => {
-                    match state.as_str() {
-                        "active" => {}
-                        "suspended" => return Err(AuthError::AccountSuspended),
-                        _ => return Err(AuthError::AccountPending),
+            IdentityIntent::SignIn => {
+                let existing: Option<(String, String, String, String)> = transaction
+                    .query_row(
+                        "SELECT id, email, role, state FROM app_users WHERE email = ?1 COLLATE NOCASE",
+                        [&email],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    )
+                    .optional()
+                    .map_err(AuthError::Storage)?;
+                match existing {
+                    Some((user_id, account_email, role, state)) => {
+                        match state.as_str() {
+                            "active" => {}
+                            "suspended" => return Err(AuthError::AccountSuspended),
+                            _ => return Err(AuthError::AccountPending),
+                        }
+                        // The issuer proved the email, as a confirmation link would.
+                        transaction
+                            .execute("UPDATE app_users SET verified_at = COALESCE(verified_at, ?1) WHERE id = ?2", params![now, user_id])
+                            .map_err(AuthError::Storage)?;
+                        let session = issue_session(&transaction, AuthUser { user_id, name: account_email, role })?;
+                        IdentitySignIn { session, outcome: IdentityOutcome::SignedIn }
                     }
-                    transaction
-                        .execute(
-                            "UPDATE app_user_identities SET email = ?1 WHERE issuer = ?2 AND subject = ?3",
-                            params![email, identity.issuer, identity.subject],
-                        )
-                        .map_err(AuthError::Storage)?;
-                    let session = issue_session(&transaction, AuthUser { user_id, name: account_email, role })?;
-                    IdentitySignIn { session: Some(session), outcome: IdentityOutcome::SignedIn }
+                    None => {
+                        if !admits_new(&email) {
+                            return Err(AuthError::SignupClosed);
+                        }
+                        let user_id = Uuid::new_v4().to_string();
+                        transaction
+                            .execute(
+                                "INSERT INTO app_users (id, email, password_hash, role, created_at, state, verified_at)
+                                 VALUES (?1, ?2, ?3, 'member', ?4, 'active', ?4)",
+                                params![user_id, email, unusable_password_hash()?, now],
+                            )
+                            .map_err(AuthError::Storage)?;
+                        let session = issue_session(&transaction, AuthUser { user_id, name: email.clone(), role: "member".into() })?;
+                        IdentitySignIn { session, outcome: IdentityOutcome::Created }
+                    }
                 }
-                None => {
-                    let existing: Option<String> = transaction
-                        .query_row("SELECT state FROM app_users WHERE email = ?1 COLLATE NOCASE", [&email], |row| row.get(0))
-                        .optional()
-                        .map_err(AuthError::Storage)?;
-                    match existing.as_deref() {
-                        Some("active") => return Err(AuthError::EmailHasAccount),
-                        Some("suspended") => return Err(AuthError::AccountSuspended),
-                        Some(_) => return Err(AuthError::AccountPending),
-                        None => {}
-                    }
-                    if !admits_new(&email) {
-                        return Err(AuthError::SignupClosed);
-                    }
-                    let user_id = Uuid::new_v4().to_string();
-                    transaction
-                        .execute(
-                            "INSERT INTO app_users (id, email, password_hash, role, created_at, state, verified_at)
-                             VALUES (?1, ?2, ?3, 'member', ?4, 'active', ?4)",
-                            params![user_id, email, unusable_password_hash(&user_id)?, now],
-                        )
-                        .map_err(AuthError::Storage)?;
-                    link(&transaction, &user_id)?;
-                    let session = issue_session(&transaction, AuthUser { user_id, name: email.clone(), role: "member".into() })?;
-                    IdentitySignIn { session: Some(session), outcome: IdentityOutcome::Created }
-                }
-            },
+            }
         };
         transaction.commit().map_err(AuthError::Storage)?;
         Ok(outcome)
-    }
-
-    /// How an account can sign in: `password` when it has a password a
-    /// person chose, and the name of each linked issuer's method.
-    pub fn methods(&self, user_id: &str) -> Result<Vec<&'static str>, AuthError> {
-        let connection = self.connection()?;
-        let hash: Option<String> = connection
-            .query_row("SELECT password_hash FROM app_users WHERE id = ?1", [user_id], |row| row.get(0))
-            .optional()
-            .map_err(AuthError::Storage)?;
-        let mut methods = Vec::new();
-        if hash.is_some_and(|hash| password_chosen(user_id, &hash)) {
-            methods.push("password");
-        }
-        let linked: bool = connection
-            .query_row("SELECT EXISTS(SELECT 1 FROM app_user_identities WHERE user_id = ?1)", [user_id], |row| row.get(0))
-            .map_err(AuthError::Storage)?;
-        if linked {
-            methods.push("google");
-        }
-        Ok(methods)
     }
 
     /// Runs `work` in one write transaction on this store that takes the
@@ -1030,11 +956,10 @@ impl AuthService {
     }
 }
 
-/// An identity an outside issuer vouched for: its ID token passed every check.
+/// An email an outside issuer vouched for: its ID token passed every check,
+/// including that the issuer is the authority for the address.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifiedIdentity {
-    pub issuer: String,
-    pub subject: String,
     pub email: String,
 }
 
@@ -1042,8 +967,6 @@ pub struct VerifiedIdentity {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IdentityIntent {
     SignIn,
-    /// Link the identity to this signed-in account.
-    Connect { user_id: String },
     /// Answer the invitation whose challenge has this token hash.
     Invitation { token_hash: String },
 }
@@ -1052,42 +975,25 @@ pub enum IdentityIntent {
 pub enum IdentityOutcome {
     SignedIn,
     Created,
-    Connected,
 }
 
 #[derive(Debug)]
 pub struct IdentitySignIn {
-    /// None after `Connect`, which keeps the session the person has.
-    pub session: Option<AuthSession>,
+    pub session: AuthSession,
     pub outcome: IdentityOutcome,
 }
 
 /// The password hash of an account no person chose a password for, such as
 /// one created by a Google sign-in. It is a well-formed hash of 32 random
-/// bytes, so a password check runs the full KDF and fails, and a Kernel
-/// that knows nothing of linked identities treats the account as a password
-/// account whose owner recovers it by email. Its salt is derived from the
-/// account ID, which is how `methods` tells it from a chosen password.
-fn unusable_password_hash(user_id: &str) -> Result<String, AuthError> {
+/// bytes with a random salt, so a password check runs the full KDF and
+/// fails, and the person sets a password through recovery by email.
+fn unusable_password_hash() -> Result<String, AuthError> {
     let mut hash = [0_u8; PASSWORD_HASH_BYTES];
-    SystemRandom::new().fill(&mut hash).map_err(|_| AuthError::PasswordHash)?;
-    Ok(format!(
-        "pbkdf2-sha256${PASSWORD_HASH_ITERATIONS}${}${}",
-        hex::encode(unusable_salt(user_id)),
-        hex::encode(hash)
-    ))
-}
-
-fn unusable_salt(user_id: &str) -> [u8; PASSWORD_SALT_BYTES] {
-    let digest = Sha256::digest(format!("littlebox unusable password\n{user_id}").as_bytes());
     let mut salt = [0_u8; PASSWORD_SALT_BYTES];
-    salt.copy_from_slice(&digest[..PASSWORD_SALT_BYTES]);
-    salt
-}
-
-/// Whether a person chose this account's password.
-fn password_chosen(user_id: &str, hash: &str) -> bool {
-    hash != NO_PASSWORD && hash.split('$').nth(2) != Some(hex::encode(unusable_salt(user_id)).as_str())
+    let random = SystemRandom::new();
+    random.fill(&mut hash).map_err(|_| AuthError::PasswordHash)?;
+    random.fill(&mut salt).map_err(|_| AuthError::PasswordHash)?;
+    Ok(format!("pbkdf2-sha256${PASSWORD_HASH_ITERATIONS}${}${}", hex::encode(salt), hex::encode(hash)))
 }
 
 /// A signup whose input passed validation and whose password is hashed.
@@ -1186,7 +1092,6 @@ fn migrate(connection: &mut Connection, verification: Option<Verification>) -> R
         .query_row(
             "SELECT (SELECT COUNT(*) FROM pragma_table_info('app_users') WHERE name IN ('state', 'verified_at')) = 2
                AND EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'account_meta')
-               AND EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'app_user_identities')
                AND (?1 IS NULL OR EXISTS(SELECT 1 FROM account_meta WHERE key = 'verification' AND value = ?1))",
             [verification.map(Verification::as_str)],
             |row| row.get(0),
@@ -1236,16 +1141,7 @@ fn migrate(connection: &mut Connection, verification: Option<Verification>) -> R
              );
              CREATE INDEX IF NOT EXISTS account_challenges_user ON account_challenges(user_id, purpose);
              CREATE INDEX IF NOT EXISTS account_challenges_expiry ON account_challenges(expires_at);
-             CREATE TABLE IF NOT EXISTS account_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS app_user_identities (
-               user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
-               issuer TEXT NOT NULL,
-               subject TEXT NOT NULL,
-               email TEXT NOT NULL COLLATE NOCASE,
-               linked_at INTEGER NOT NULL,
-               UNIQUE (issuer, subject)
-             );
-             CREATE INDEX IF NOT EXISTS app_user_identities_user ON app_user_identities(user_id);",
+             CREATE TABLE IF NOT EXISTS account_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )
         .map_err(AuthError::Storage)?;
     let Some(verification) = verification else {
@@ -1757,8 +1653,8 @@ mod tests {
         assert!(sign_in(&auth, "person@example.test", "a new password").is_ok());
     }
 
-    fn google(subject: &str, email: &str) -> VerifiedIdentity {
-        VerifiedIdentity { issuer: "https://accounts.google.com".into(), subject: subject.into(), email: email.into() }
+    fn google(email: &str) -> VerifiedIdentity {
+        VerifiedIdentity { email: email.into() }
     }
 
     #[test]
@@ -1766,65 +1662,43 @@ mod tests {
         let app = TempDb::new();
         let auth = app.required();
         let signed = auth
-            .sign_in_with_identity(&google("g-1", "Person@Example.test"), &IdentityIntent::SignIn, |_| true, |_| true, |_, _, _| Ok(()))
+            .sign_in_with_identity(&google("Person@Example.test"), &IdentityIntent::SignIn, |_| true, |_| true, |_, _, _| Ok(()))
             .unwrap();
         assert_eq!(signed.outcome, IdentityOutcome::Created);
-        let user = signed.session.unwrap().user;
+        let user = signed.session.user;
         assert_eq!(user.name, "person@example.test");
-        assert_eq!(auth.methods(&user.user_id).unwrap(), vec!["google"]);
         // No password opens it, and the check runs the full KDF like any other.
         assert!(matches!(sign_in(&auth, "person@example.test", "any password at all"), Err(AuthError::InvalidCredentials)));
-        // A mode switch keeps it active: Google proved the email.
-        let reopened = app.scoped(&deployment_scope("app-one"), Verification::Local);
-        drop(reopened);
         assert!(app.required().is_active(&user.user_id).unwrap());
-        // Recovery by email, as an older Kernel would offer, gives it a password.
+        // Recovery by email gives it a password, and Google still reaches it.
         let recovery = auth.request_recovery("person@example.test").unwrap().unwrap();
         auth.complete_challenge(Purpose::Recovery, &recovery.token, password(PASSWORD), |_| true).unwrap();
-        assert_eq!(auth.methods(&user.user_id).unwrap(), vec!["password", "google"]);
         assert!(sign_in(&auth, "person@example.test", PASSWORD).is_ok());
+        let again = auth.sign_in_with_identity(&google("person@example.test"), &IdentityIntent::SignIn, |_| false, |_| false, |_, _, _| Ok(())).unwrap();
+        assert_eq!(again.session.user.user_id, user.user_id);
     }
 
     #[test]
-    fn an_identity_database_from_before_linked_identities_gains_the_table_and_keeps_its_rows() {
+    fn a_verified_email_signs_in_the_account_that_holds_it() {
         let app = TempDb::new();
         let auth = app.required();
         let verification = auth.request_signup("person@example.test").unwrap().unwrap();
         let session = auth.complete_challenge(Purpose::Verification, &verification.token, password(PASSWORD), |_| true).unwrap();
-        // A file written by a Kernel before this table existed.
-        Connection::open(&app.0).unwrap().execute_batch("DROP TABLE app_user_identities;").unwrap();
-        let reopened = app.required();
-        let tables: i64 = Connection::open(&app.0)
-            .unwrap()
-            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'app_user_identities'", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(tables, 1);
-        assert_eq!(reopened.authenticate(Some(&session.token)).unwrap().unwrap().user_id, session.user.user_id);
-        assert_eq!(reopened.methods(&session.user.user_id).unwrap(), vec!["password"]);
-    }
-
-    #[test]
-    fn an_identity_never_joins_an_account_by_email_and_links_to_one_account() {
-        let app = TempDb::new();
-        let auth = app.required();
-        let verification = auth.request_signup("person@example.test").unwrap().unwrap();
-        let session = auth.complete_challenge(Purpose::Verification, &verification.token, password(PASSWORD), |_| true).unwrap();
-        let identity = google("g-1", "person@example.test");
-        let refused = auth.sign_in_with_identity(&identity, &IdentityIntent::SignIn, |_| true, |_| true, |_, _, _| Ok(()));
-        assert!(matches!(refused, Err(AuthError::EmailHasAccount)));
-        let connect = IdentityIntent::Connect { user_id: session.user.user_id.clone() };
-        let connected = auth.sign_in_with_identity(&identity, &connect, |_| true, |_| true, |_, _, _| Ok(())).unwrap();
-        assert_eq!((connected.outcome, connected.session.is_none()), (IdentityOutcome::Connected, true));
-        let signed = auth.sign_in_with_identity(&identity, &IdentityIntent::SignIn, |_| false, |_| false, |_, _, _| Ok(())).unwrap();
-        assert_eq!(signed.session.unwrap().user.user_id, session.user.user_id, "a linked account needs no admission");
+        // The same email, in another case, reaches the password account without asking the policy.
+        let signed = auth.sign_in_with_identity(&google("PERSON@example.test"), &IdentityIntent::SignIn, |_| false, |_| false, |_, _, _| Ok(())).unwrap();
+        assert_eq!((signed.outcome, signed.session.user.user_id.as_str()), (IdentityOutcome::SignedIn, session.user.user_id.as_str()));
+        assert!(sign_in(&auth, "person@example.test", PASSWORD).is_ok(), "the password keeps working");
         // A refused admission creates nothing.
-        let stranger = google("g-2", "stranger@example.test");
-        let closed = auth.sign_in_with_identity(&stranger, &IdentityIntent::SignIn, |_| false, |_| true, |_, _, _| Ok(()));
+        let closed = auth.sign_in_with_identity(&google("stranger@example.test"), &IdentityIntent::SignIn, |_| false, |_| true, |_, _, _| Ok(()));
         assert!(matches!(closed, Err(AuthError::SignupClosed)));
         assert!(auth.find_login("stranger@example.test", PASSWORD).unwrap().is_none());
+        // A pending signup keeps waiting for its email link.
+        auth.request_signup("waiting@example.test").unwrap().unwrap();
+        let pending = auth.sign_in_with_identity(&google("waiting@example.test"), &IdentityIntent::SignIn, |_| true, |_| true, |_, _, _| Ok(()));
+        assert!(matches!(pending, Err(AuthError::AccountPending)));
         // Suspension ends Google sign-in too.
         auth.suspend("person@example.test").unwrap();
-        let suspended = auth.sign_in_with_identity(&identity, &IdentityIntent::SignIn, |_| true, |_| true, |_, _, _| Ok(()));
+        let suspended = auth.sign_in_with_identity(&google("person@example.test"), &IdentityIntent::SignIn, |_| true, |_| true, |_, _, _| Ok(()));
         assert!(matches!(suspended, Err(AuthError::AccountSuspended)));
     }
 

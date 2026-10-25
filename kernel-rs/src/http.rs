@@ -241,11 +241,31 @@ fn secret_for_calls_only(db: &Connection, project: &str, name: &str) -> Result<b
         .unwrap_or(false))
 }
 
+/// A secret a route or a call may use. The app's Google client is never one.
 fn secret_value(db: &Connection, project: &str, name: &str) -> Result<Option<String>> {
     secrets_table(db)?;
     Ok(db
-        .query_row("SELECT value FROM project_secrets WHERE project=?1 AND name=?2", params_from_iter([project, name]), |row| row.get(0))
+        .query_row(
+            "SELECT value FROM project_secrets WHERE project=?1 AND name=?2 AND use <> 'google'",
+            params_from_iter([project, name]),
+            |row| row.get(0),
+        )
         .optional()?)
+}
+
+/// The app's Google OAuth client ID and secret, each when the owner set it.
+pub(super) fn google_client(db: &Connection, project: &str) -> Result<(Option<String>, Option<String>)> {
+    secrets_table(db)?;
+    let read = |name: &str| -> Result<Option<String>> {
+        Ok(db
+            .query_row(
+                "SELECT value FROM project_secrets WHERE project=?1 AND name=?2 AND use = 'google'",
+                params_from_iter([project, name]),
+                |row| row.get(0),
+            )
+            .optional()?)
+    };
+    Ok((read(super::google::CLIENT_ID)?, read(super::google::CLIENT_SECRET)?))
 }
 
 /// Refuses a release whose signed bindings name a secret the project does not have.
@@ -342,11 +362,18 @@ pub(super) fn secrets_call(db: &Connection, project: &str, deployment: Option<&D
                 (16..=512).contains(&value.len()) && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte)),
                 "A secret value is 16 to 512 printable ASCII characters without spaces."
             );
-            let usage = match a.get("use").and_then(Value::as_str) {
-                None | Some("route") => "route",
-                Some("call") => "call",
-                Some(_) => anyhow::bail!(r#"A secret's use is "route" or "call"."#),
+            let google_name = [super::google::CLIENT_ID, super::google::CLIENT_SECRET].contains(&secret);
+            let usage = match (a.get("use").and_then(Value::as_str), google_name) {
+                (None | Some("google"), true) => "google",
+                (Some(_), true) => anyhow::bail!(super::google::NAMES_RESERVED),
+                (Some("google"), false) => anyhow::bail!(super::google::NAMES_ONLY),
+                (None | Some("route"), false) => "route",
+                (Some("call"), false) => "call",
+                (Some(_), false) => anyhow::bail!(r#"A secret's use is "route", "call" or "google"."#),
             };
+            if secret == super::google::CLIENT_ID {
+                anyhow::ensure!(!value.starts_with("GOCSPX-"), super::google::ID_LOOKS_LIKE_SECRET);
+            }
             // A signature names no app, so a request signed for one project
             // would be accepted by another that holds the same value. A
             // secret for calls only verifies nothing, so it may hold the value
@@ -371,6 +398,12 @@ pub(super) fn secrets_call(db: &Connection, project: &str, deployment: Option<&D
         "secret_delete" => {
             let secret = a["name"].as_str().unwrap_or("");
             if let Some(deployment) = deployment {
+                // Turning Google off is the owner's decision, so a delete does not make it.
+                anyhow::ensure!(
+                    !([super::google::CLIENT_ID, super::google::CLIENT_SECRET].contains(&secret)
+                        && deployment.sign_in_methods.contains(&super::SignInMethod::Google)),
+                    super::google::still_on(secret)
+                );
                 let program: ActionProgram = serde_json::from_str(&deployment.actions)?;
                 let mut users = program
                     .actions
@@ -1484,6 +1517,35 @@ mod tests {
         assert!(!key_reads(&key(&["public"]), "private", true));
         assert!(key_reads(&key(&["private"]), "private", true));
         assert!(!key_reads(&key(&["private"]), "public", true));
+    }
+
+    #[test]
+    fn the_apps_google_client_has_fixed_names_and_no_route_or_call_reads_it() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL);
+            INSERT INTO projects VALUES ('project_a', 'ana', '{}'), ('project_b', 'ana', '{}');").unwrap();
+        let set = |project: &str, name: &str, value: &str, usage: Option<&str>| {
+            let mut input = json!({"name": name, "value": value});
+            if let Some(usage) = usage {
+                input["use"] = json!(usage);
+            }
+            secrets_call(&db, project, None, "secret_set", &input).map_err(|error| error.to_string())
+        };
+        let id = "1001-practice.apps.googleusercontent.com";
+        assert_eq!(set("project_a", "google_client_id", id, Some("route")).unwrap_err(), super::super::google::NAMES_RESERVED);
+        assert_eq!(set("project_a", "client_id", id, Some("google")).unwrap_err(), super::super::google::NAMES_ONLY);
+        assert_eq!(set("project_a", "google_client_id", "GOCSPX-pasted-in-the-wrong-field", None).unwrap_err(), super::super::google::ID_LOOKS_LIKE_SECRET);
+        // The name implies the use; two apps of one owner may share a client.
+        assert_eq!(set("project_a", "google_client_id", id, None).unwrap()["use"], "google");
+        set("project_a", "google_client_secret", "GOCSPX-shared-secret-value", Some("google")).unwrap();
+        set("project_b", "google_client_secret", "GOCSPX-shared-secret-value", Some("google")).unwrap();
+        assert_eq!(google_client(&db, "project_a").unwrap(), (Some(id.to_owned()), Some("GOCSPX-shared-secret-value".to_owned())));
+        assert_eq!(google_client(&db, "project_b").unwrap(), (None, Some("GOCSPX-shared-secret-value".to_owned())));
+        // secrets_list answers each one's use; a route or a call never reads its value.
+        let listed = secrets_call(&db, "project_a", None, "secrets_list", &json!({})).unwrap();
+        assert_eq!(listed["secrets"].as_array().unwrap().iter().map(|row| row["use"].clone()).collect::<Vec<_>>(), vec![json!("google"), json!("google")]);
+        assert!(!listed.to_string().contains("GOCSPX"));
+        assert_eq!(project_secret(&db, "project_a", "google_client_secret").unwrap(), None);
     }
 
     #[test]

@@ -1828,7 +1828,7 @@ mod tests {
                 verification: auth::Verification::Required,
                 mail: None,
                 queue: Some(queue),
-                google: None,
+                google: Arc::new(crate::google::Google::real()),
             },
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),

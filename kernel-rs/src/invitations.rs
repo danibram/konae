@@ -874,7 +874,7 @@ mod tests {
                 verification: Verification::Required,
                 mail: Some(mailbox.clone() as Arc<dyn AccountMail>),
                 queue: None,
-                google: None,
+                google: Arc::new(crate::google::Google::real()),
             },
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),
@@ -1002,7 +1002,7 @@ mod tests {
             .unwrap(),
         );
         queue.run_preflight().await;
-        fixture.state.accounts = AccountSettings { verification: Verification::Required, mail: None, queue: Some(queue.clone()), google: None };
+        fixture.state.accounts = AccountSettings { verification: Verification::Required, mail: None, queue: Some(queue.clone()), google: Arc::new(crate::google::Google::real()) };
         // The owner record as the creator store keeps it.
         Connection::open(fixture.root.join("owners.sqlite"))
             .unwrap()

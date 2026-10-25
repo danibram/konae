@@ -22,8 +22,8 @@ pub(crate) struct AccountSettings {
     /// The persistent queue in `mail.sqlite` (`mail.rs`). When set, every
     /// account email goes through it.
     pub(crate) queue: Option<Arc<mail::MailQueue>>,
-    /// The installation's Google OAuth client, when the operator set one.
-    pub(crate) google: Option<Arc<google::GoogleConfig>>,
+    /// Where the Kernel reaches Google. Each app sets its own client.
+    pub(crate) google: Arc<google::Google>,
 }
 
 impl AccountSettings {
@@ -34,17 +34,17 @@ impl AccountSettings {
             verification: Verification::Local,
             mail: None,
             queue: None,
-            google: None,
+            google: Arc::new(google::Google::real()),
         }
     }
 
     /// Reads `LITTLEBOX_ACCOUNT_VERIFICATION` and the mail transport
     /// (`mail::MailQueue::from_env`). Every transport, including
     /// `development`, sends through the queue.
-    pub(crate) fn from_env(data_root: &Path, admin_key: &str) -> Result<Self> {
+    pub(crate) fn from_env(data_root: &Path, admin_key: &str, public_origin: &str) -> Result<Self> {
         let verification = Verification::from_env().map_err(anyhow::Error::msg)?;
         let queue = mail::MailQueue::from_env(data_root, admin_key)?;
-        let google = google::GoogleConfig::from_env()?.map(Arc::new);
+        let google = Arc::new(google::Google::from_env(public_origin)?);
         Ok(Self { verification, mail: None, queue, google })
     }
 }
@@ -617,33 +617,10 @@ async fn signup_app_unverified(
 }
 
 async fn app_account_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let Some(deployment) = deployment_for(&state, &headers).await else {
+    if deployment_for(&state, &headers).await.is_none() {
         return error(StatusCode::NOT_FOUND, "Littlebox deployment not found.");
-    };
-    // A signed-in person on an app that offers Google connects it here, and
-    // only then is the Google account linked (no join by matching email).
-    let signed_in = match google::offered(&state, &deployment) {
-        true => authenticate_deployment(&state, &deployment, &headers).ok().flatten(),
-        false => None,
-    };
-    let Some(user) = signed_in else {
-        return html_page(APP_ACCOUNT_PAGE);
-    };
-    let connected = app_store(&state, &deployment)
-        .and_then(|auth| auth.methods(&user.user_id))
-        .is_ok_and(|methods| methods.contains(&"google"));
-    let section = if connected {
-        "<p>Google is connected to this account. You can continue with Google on the sign-in page.</p>"
-    } else {
-        concat!(
-            "<p>Connect a Google account to sign in to this app with Google as well as your password.</p>",
-            r#"<a class="google" href="/_littlebox/auth/google/start?intent=connect">Connect Google</a>"#
-        )
-    };
-    let page = APP_ACCOUNT_PAGE
-        .replacen("</style>", &format!("{}</style>", google::BUTTON_STYLE), 1)
-        .replacen(r#"<p id="error""#, &format!(r#"{section}<p id="error""#), 1);
-    html_page(page)
+    }
+    html_page(APP_ACCOUNT_PAGE)
 }
 
 async fn app_verify(State(state): State<AppState>, request: Request) -> Response {
@@ -882,7 +859,7 @@ mod tests {
                 verification,
                 mail: with_mail.then(|| mailbox.clone() as Arc<dyn AccountMail>),
                 queue: None,
-                google: None,
+                google: Arc::new(google::Google::real()),
             },
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),
@@ -1159,7 +1136,7 @@ mod tests {
         assert_eq!(session.status(), StatusCode::OK, "local mode keeps unverified signup");
         let app = local.app(APP_HOST).await;
         let mut state = local.state.clone();
-        state.accounts = AccountSettings { verification: Verification::Required, mail: None, queue: None, google: None };
+        state.accounts = AccountSettings { verification: Verification::Required, mail: None, queue: None, google: Arc::new(google::Google::real()) };
         let required = Fixture { state, mailbox: local.mailbox.clone(), root: std::env::temp_dir().join("littlebox-accounts-unused") };
         assert_eq!(app_signup(&required, APP_HOST, "new@example.test").await.status(), StatusCode::SERVICE_UNAVAILABLE);
         let recover = app_recover(State(required.state.clone()), request("POST", APP_HOST, "/_littlebox/auth/recover", json!({"email": "person@example.test"}))).await;

@@ -485,7 +485,7 @@ mod tests {
                 verification,
                 mail: Some(mailbox.clone() as Arc<dyn AccountMail>),
                 queue: None,
-                google: None,
+                google: Arc::new(crate::google::Google::real()),
             },
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),

@@ -436,7 +436,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     ));
     tools.push(tool(
         "sign_in_methods_read",
-        "Read how people sign in to a deployment: password, and google when the owner turned it on. available says whether this installation has a Google client.",
+        "Read how people sign in to a deployment: password, and google when the owner turned it on. googleClient says whether the app's google_client_id and google_client_secret are set, without their values, and redirectUris lists the callbacks to register in the app's Google OAuth client.",
         json!({"deploymentId":text}),
         &["deploymentId"],
         true,
@@ -444,7 +444,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     if owner.scopes.iter().any(|s| s == "manage_users") {
         tools.push(tool(
             "sign_in_methods_set",
-            "Choose how people sign in to a deployment: [\"password\"] or [\"password\",\"google\"]. Password cannot be turned off. Google needs an installation with a Google client; sign_in_methods_read says whether it has one.",
+            "Choose how people sign in to a deployment: [\"password\"] or [\"password\",\"google\"]. Password cannot be turned off. Google needs the app's own Google client: set google_client_id and google_client_secret with secret_set use google first. Read back with sign_in_methods_read.",
             json!({"deploymentId":text,"methods":{"type":"array","items":{"type":"string","enum":["password","google"]},"minItems":1,"maxItems":2}}),
             &["deploymentId", "methods"],
             false,
@@ -463,8 +463,8 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     }
     if owner.scopes.iter().any(|s| s == "publish") {
         tools.extend([
-            tool("secret_set", "Set a signing secret an action's http signature names, or, with use call, one a call action signs with or an API key it sends. The value is never returned.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64},"value":{"type":"string","minLength":16,"maxLength":512},"use":{"type":"string","enum":["route","call"]}}), &["projectId","name","value"], false),
-            tool("secret_delete", "Delete a signing secret no published action uses.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64}}), &["projectId","name"], false),
+            tool("secret_set", "Set a signing secret an action's http signature names, or, with use call, one a call action signs with or an API key it sends, or, with use google, the app's Google OAuth client as google_client_id and google_client_secret. The value is never returned. Read back with secrets_list, and the Google client with sign_in_methods_read.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64},"value":{"type":"string","minLength":16,"maxLength":512},"use":{"type":"string","enum":["route","call","google"]}}), &["projectId","name","value"], false),
+            tool("secret_delete", "Delete a signing secret no published action uses. A Google client secret is refused while Google sign-in is on.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64}}), &["projectId","name"], false),
             tool("api_keys_create", "Issue an API key for one deployment, scoped to named actions with an HTTP route and to file visibilities. The key appears only in this answer.", json!({"deploymentId":text,"name":{"type":"string","minLength":1,"maxLength":80},"actions":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"files":{"type":"array","items":{"type":"string","enum":["public","private"]}}}), &["deploymentId","name"], false),
             tool("api_keys_revoke", "Revoke a deployment's API key by its ID.", json!({"deploymentId":text,"keyId":text}), &["deploymentId","keyId"], false),
             tool(
@@ -1224,7 +1224,7 @@ async fn admin_call(
                     "platform_guide topic pieces",
                     "a credential: platform_guide topic credentials",
                     "project_create",
-                    "secret_set for each secret a route signs with",
+                    "secret_set for each secret a route signs with, and google_client_id and google_client_secret when the app offers Google sign-in",
                     "build locally",
                     "transfer_begin/write/complete",
                     "release_plan",
@@ -1528,10 +1528,11 @@ async fn admin_call(
         "sign_in_methods_set" => {
             let id = a["deploymentId"].as_str().unwrap();
             let found = owned_deployment(state, owner, id, "manage_users").await?;
-            let methods = requested_sign_in_methods(state, &a["methods"])?;
-            // Releases hold the same lock, so a publish cannot overwrite this change.
+            // Releases and secret_delete hold the same lock, so neither a
+            // publish nor a deleted Google secret can pass this check.
             let _guard = database_lock(state, &format!("project:{}", found.project_id)).await;
             let mut updated = owned_deployment(state, owner, id, "manage_users").await?;
+            let methods = requested_sign_in_methods(state, &updated, &a["methods"])?;
             let previous = updated.sign_in_methods.clone();
             updated.sign_in_methods = methods;
             persist_deployment(state, &updated).await?;
@@ -1718,32 +1719,41 @@ async fn admin_call(
 }
 
 /// The methods `sign_in_methods_set` may store: password always, and
-/// google only on an installation with a Google client.
-fn requested_sign_in_methods(state: &AppState, requested: &Value) -> Result<Vec<SignInMethod>> {
+/// google only once the app's Google client ID and secret are both set.
+fn requested_sign_in_methods(state: &AppState, deployment: &Deployment, requested: &Value) -> Result<Vec<SignInMethod>> {
     let requested: Vec<SignInMethod> = serde_json::from_value(requested.clone())
         .map_err(|_| anyhow::anyhow!("Name the methods as password and google."))?;
     let methods = sign_in_methods_from_input(&requested).map_err(anyhow::Error::msg)?;
-    if methods.contains(&SignInMethod::Google) && state.accounts.google.is_none() {
-        anyhow::bail!(super::google::UNAVAILABLE);
+    if methods.contains(&SignInMethod::Google) && super::google::client_set(state, deployment) != (true, true) {
+        anyhow::bail!(super::google::NEEDS_CLIENT);
     }
     Ok(methods)
 }
 
-/// The methods and whether the sign-in page offers each. A Deployment that
-/// asks for Google on an installation without a client keeps the setting and
-/// offers only the password; `notice` says so to the owner.
+/// The methods, what the sign-in page offers, whether each half of the app's
+/// Google client is set (never its value) and the callbacks to register. A
+/// Deployment that asks for Google without its client here, as after an
+/// import, keeps the setting and offers only the password; `notice` says so.
 fn sign_in_methods_value(state: &AppState, deployment: &Deployment) -> Value {
-    let available = state.accounts.google.is_some();
+    let (client_id, client_secret) = super::google::client_set(state, deployment);
     let mut offered = vec![SignInMethod::Password];
-    if available && deployment.sign_in_methods.contains(&SignInMethod::Google) {
+    if super::google::offered(state, deployment) {
         offered.push(SignInMethod::Google);
     }
-    let mut value = json!({"deploymentId": deployment.id, "methods": deployment.sign_in_methods, "offered": offered, "googleAvailable": available});
-    if !available && deployment.sign_in_methods.contains(&SignInMethod::Google) {
-        value["notice"] = json!("This app asks for Google sign-in, but this installation has no Google client, so its sign-in page offers only email and password. People whose account came from Google set a password with Forgot your password.");
+    let mut value = json!({
+        "deploymentId": deployment.id,
+        "methods": deployment.sign_in_methods,
+        "offered": offered,
+        "googleClient": {"clientIdSet": client_id, "clientSecretSet": client_secret},
+        "redirectUris": super::google::redirect_uris(state, deployment),
+    });
+    if deployment.sign_in_methods.contains(&SignInMethod::Google) && !(client_id && client_secret) {
+        value["notice"] = json!(GOOGLE_CLIENT_MISSING);
     }
     value
 }
+
+const GOOGLE_CLIENT_MISSING: &str = "This app asks for Google sign-in, but its Google client ID and client secret are not set on this installation, so its sign-in page offers only email and password. Set both, and add this app's redirect URIs to the Google client. Until then, people who signed in with Google sign in with a password, or set one with Forgot your password.";
 
 fn signup_policy_value(deployment: &Deployment) -> Value {
     json!({"deploymentId":deployment.id,"visibility":if is_private(deployment) { "private" } else { "public" },"mode":deployment.signup_policy.mode,"allowlist":deployment.signup_policy.allowlist})
@@ -2947,32 +2957,59 @@ mod tests {
     }
 
     #[test]
-    fn sign_in_methods_set_keeps_password_and_refuses_google_without_a_client() {
-        let mut state = AppState {
+    fn sign_in_methods_set_keeps_password_and_refuses_google_without_the_apps_client() {
+        let root = std::env::temp_dir().join(format!("littlebox-methods-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = AppState {
             deployments: Arc::new(RwLock::new(HashMap::new())),
             db_locks: LockMap::default(),
             s3: None,
             artifact_bucket: "artifacts".into(),
             data_bucket: "data".into(),
-            data_root: std::env::temp_dir(),
-            files: crate::file_store::Files::local(std::env::temp_dir()),
+            data_root: root.clone(),
+            files: crate::file_store::Files::local(&root),
             copies: Default::default(),
             admin_key: "test-admin".into(),
             accounts: super::accounts::AccountSettings::local(),
-            public_origin: "http://localhost".into(),
+            public_origin: "http://localhost:8790".into(),
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };
-        let refused = |state: &AppState, methods: Value| requested_sign_in_methods(state, &methods).unwrap_err().to_string();
-        assert_eq!(refused(&state, json!(["password", "google"])), "This installation has no Google sign-in.");
-        assert_eq!(refused(&state, json!(["google"])), PASSWORD_REQUIRED);
-        assert_eq!(refused(&state, json!(["password", "facebook"])), "Name the methods as password and google.");
-        assert_eq!(requested_sign_in_methods(&state, &json!(["password"])).unwrap(), vec![SignInMethod::Password]);
-        state.accounts.google = Some(Arc::new(super::super::google::GoogleConfig::for_test("http://127.0.0.1:9", "http://localhost:8790")));
+        let mut deployment: Deployment = serde_json::from_value(json!({
+            "id": "d1", "projectId": "p1", "projectName": "Practice", "url": "http://practice.localhost:8790", "createdAt": 0,
+            "manifest": {"visibility": "private"}, "hostname": "practice.localhost", "actions": "{}"
+        }))
+        .unwrap();
+        let refused = |state: &AppState, deployment: &Deployment, methods: Value| requested_sign_in_methods(state, deployment, &methods).unwrap_err().to_string();
+        assert_eq!(refused(&state, &deployment, json!(["password", "google"])), "Set this app's Google client ID and client secret before turning Google on.");
+        assert_eq!(refused(&state, &deployment, json!(["google"])), PASSWORD_REQUIRED);
+        assert_eq!(refused(&state, &deployment, json!(["password", "facebook"])), "Name the methods as password and google.");
+        assert_eq!(requested_sign_in_methods(&state, &deployment, &json!(["password"])).unwrap(), vec![SignInMethod::Password]);
+        let db = store(&state).unwrap();
+        let set = |name: &str, value: &str| super::super::http::secrets_call(&db, "p1", None, "secret_set", &json!({"name": name, "value": value, "use": "google"}));
+        set("google_client_id", "1001-practice.apps.googleusercontent.com").unwrap();
+        assert_eq!(refused(&state, &deployment, json!(["password", "google"])), "Set this app's Google client ID and client secret before turning Google on.");
+        set("google_client_secret", "GOCSPX-test-secret-value").unwrap();
         assert_eq!(
-            requested_sign_in_methods(&state, &json!(["google", "password", "google"])).unwrap(),
+            requested_sign_in_methods(&state, &deployment, &json!(["google", "password", "google"])).unwrap(),
             vec![SignInMethod::Password, SignInMethod::Google]
         );
+        // The read-back names each half without its value, and the callback to register.
+        deployment.sign_in_methods = vec![SignInMethod::Password, SignInMethod::Google];
+        let value = sign_in_methods_value(&state, &deployment);
+        assert_eq!(value["googleClient"], json!({"clientIdSet": true, "clientSecretSet": true}));
+        assert_eq!(value["offered"], json!(["password", "google"]));
+        assert_eq!(value["redirectUris"], json!(["http://practice.localhost:8790/_littlebox/auth/google/callback"]));
+        assert!(!value.to_string().contains("GOCSPX"));
+        // Deleting a Google secret while Google is on is refused.
+        let deleted = super::super::http::secrets_call(&db, "p1", Some(&deployment), "secret_delete", &json!({"name": "google_client_secret"}));
+        assert_eq!(deleted.unwrap_err().to_string(), "Google sign-in is on for this app and needs google_client_secret. Turn Google off before deleting it.");
+        // Without its client, as after an import, the app keeps the setting and says why.
+        db.execute("DELETE FROM project_secrets WHERE project = 'p1'", []).unwrap();
+        let value = sign_in_methods_value(&state, &deployment);
+        assert_eq!((value["methods"].clone(), value["offered"].clone()), (json!(["password", "google"]), json!(["password"])));
+        assert_eq!(value["notice"], GOOGLE_CLIENT_MISSING);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

@@ -884,8 +884,6 @@ mod tests {
         // The keys table as a Kernel from before `revoked_reason` wrote it.
         db.execute_batch(
             "CREATE TABLE app_users(id TEXT PRIMARY KEY); INSERT INTO app_users VALUES('u1');
-             CREATE TABLE app_user_identities(user_id TEXT, issuer TEXT, subject TEXT, email TEXT, linked_at INTEGER);
-             INSERT INTO app_user_identities VALUES('u1', 'https://accounts.google.com', 'g-1', 'a@example.test', 1);
              CREATE TABLE app_sessions(token_hash TEXT); INSERT INTO app_sessions VALUES('secret-session-hash');
              CREATE TABLE account_challenges(token_hash TEXT); INSERT INTO account_challenges VALUES('secret-link-hash');
              CREATE TABLE api_keys(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
@@ -903,8 +901,6 @@ mod tests {
         let db = Connection::open(&path).unwrap();
         let users: i64 = db.query_row("SELECT COUNT(*) FROM app_users", [], |r| r.get(0)).unwrap();
         assert_eq!(users, 1);
-        let links: i64 = db.query_row("SELECT COUNT(*) FROM app_user_identities", [], |r| r.get(0)).unwrap();
-        assert_eq!(links, 1, "a package carries the Google links");
         let keys: Vec<(String, Option<i64>, Option<String>)> = db
             .prepare("SELECT id, revoked_at, revoked_reason FROM api_keys ORDER BY id")
             .unwrap()

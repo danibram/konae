@@ -441,7 +441,7 @@ async fn main() -> Result<()> {
     for line in copies::migrate_layout(&data_root)? {
         println!("Layout migration: moved {line}");
     }
-    let account_settings = accounts::AccountSettings::from_env(&data_root, &admin_key)?;
+    let account_settings = accounts::AccountSettings::from_env(&data_root, &admin_key, &public_origin)?;
     let s3 = s3_client_from_env().await;
     let artifact_bucket = env("LITTLEBOX_ARTIFACT_BUCKET", "littlebox-apps");
     let data_bucket = env("LITTLEBOX_DATA_BUCKET", "littlebox-data");
@@ -1072,15 +1072,7 @@ async fn session(State(state): State<AppState>, headers: HeaderMap) -> Response 
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
     match authenticate_deployment(&state, &deployment, &headers) {
-        Ok(Some(user)) => {
-            // How this account can sign in, so the app can offer "Connect Google".
-            let methods = accounts::app_store(&state, &deployment)
-                .and_then(|auth| auth.methods(&user.user_id))
-                .unwrap_or_default();
-            let mut value = json!(user);
-            value["methods"] = json!(methods);
-            Json(json!({"result": value})).into_response()
-        }
+        Ok(Some(user)) => Json(json!({"result": user})).into_response(),
         Ok(None) => Json(
             json!({"result": {"userId": "anonymous", "name": "Anonymous", "role": "anonymous"}}),
         )
@@ -3667,7 +3659,7 @@ fn bounded_rows(rows: impl Iterator<Item = rusqlite::Result<Value>>) -> Result<V
 fn auth_error(error_value: AuthError) -> Response {
     let status = match error_value {
         AuthError::InvalidEmail | AuthError::WeakPassword => StatusCode::BAD_REQUEST,
-        AuthError::EmailTaken | AuthError::AccountExists | AuthError::EmailHasAccount | AuthError::IdentityTaken => StatusCode::CONFLICT,
+        AuthError::EmailTaken | AuthError::AccountExists => StatusCode::CONFLICT,
         AuthError::InvitedEmailDiffers => StatusCode::FORBIDDEN,
         AuthError::InvalidCredentials => StatusCode::UNAUTHORIZED,
         AuthError::AccountPending
