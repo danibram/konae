@@ -40,9 +40,6 @@ pub(super) const COMPONENT_NAMES: [&str; 4] = ["database", "identity", "files", 
 const MIB: u64 = 1024 * 1024;
 /// The largest component a transfer may carry, a database at its quota.
 pub(super) const MAX_COMPONENT_BYTES: u64 = MAX_APP_DATABASE_BYTES;
-/// File data a Deployment may hold, and the most one file may hold.
-const MAX_FILES_BYTES: u64 = 20 * MIB;
-const MAX_FILE_BYTES: u64 = 2 * MIB;
 /// `index.json` inside the files component.
 const MAX_FILE_INDEX_BYTES: u64 = 32 * MIB;
 /// Free space kept on the volume after a capture or an import.
@@ -119,20 +116,24 @@ pub(super) struct InitialPackage {
 }
 
 /// The size an upload for this component may declare.
-pub(super) fn component_limit(name: &str) -> Result<u64> {
+pub(super) fn component_limit(name: &str, files: &file_store::FileLimits) -> Result<u64> {
     match name {
         "database" => Ok(MAX_APP_DATABASE_BYTES),
         "identity" => Ok(auth::MAX_IDENTITY_DATABASE_BYTES),
-        // File data is capped at 20 MiB by the files check; the tar headers
-        // and the index add to it, so the archive itself gets the largest cap.
-        "files" => Ok(MAX_COMPONENT_BYTES),
+        // The files check caps the file data at this installation's quota.
+        // Each file adds a header and padding of at most 1 KiB to the
+        // archive, and the index adds its own size, so the archive gets that
+        // much room, and never less than the largest component.
+        "files" => Ok(MAX_COMPONENT_BYTES.max(
+            files.quota_bytes + MAX_FILE_INDEX_BYTES + (files::MAX_FILES as u64 + 2) * 1024,
+        )),
         "usage" => Ok(usage::MAX_USAGE_DATABASE_BYTES),
         other => bail!("Unknown package component {other}."),
     }
 }
 
 /// Checks what the manifest itself says, before any component is read.
-pub(super) fn check_manifest(manifest: &Manifest) -> Result<()> {
+pub(super) fn check_manifest(manifest: &Manifest, files: &file_store::FileLimits) -> Result<()> {
     ensure!(manifest.format == PACKAGE_FORMAT, "This is not a Littlebox package manifest.");
     ensure!(
         manifest.version == PACKAGE_VERSION || manifest.version == MIGRATION_PACKAGE_VERSION,
@@ -151,7 +152,7 @@ pub(super) fn check_manifest(manifest: &Manifest) -> Result<()> {
     );
     let mut seen = HashSet::new();
     for content in &manifest.contents {
-        let limit = component_limit(&content.name)?;
+        let limit = component_limit(&content.name, files)?;
         ensure!(seen.insert(content.name.as_str()), "The manifest lists the {} component twice.", content.name);
         ensure!(
             content.size > 0 && content.size <= limit,
@@ -514,7 +515,7 @@ fn parse_octal(field: &[u8]) -> Result<u64> {
 /// Reads the files component, checks it and, with a destination, writes the
 /// blobs and a normalized `index.json` there. A file owner must be an
 /// account in `accounts`.
-fn unpack_files(archive: &Path, accounts: Option<&Connection>, destination: Option<&Path>) -> Result<usize> {
+fn unpack_files(archive: &Path, accounts: Option<&Connection>, destination: Option<&Path>, limits: &file_store::FileLimits) -> Result<usize> {
     let mut input = std::io::BufReader::new(std::fs::File::open(archive)?);
     let (name, size) = read_tar_header(&mut input)?.context("The files component is empty.")?;
     ensure!(name == "index.json", "The files component must start with index.json.");
@@ -531,9 +532,9 @@ fn unpack_files(archive: &Path, accounts: Option<&Connection>, destination: Opti
     for file in &index {
         let id = file["id"].as_str().filter(|id| valid_file_id(id)).context("The file index has an invalid file id.")?;
         let declared = file["size"].as_u64().context("The file index has a file without a size.")?;
-        ensure!(declared <= MAX_FILE_BYTES, "File {id} exceeds the 2 MiB limit.");
+        ensure!(declared <= limits.max_file_bytes, "File {id} exceeds this installation's {} limit per file.", limits.max_file());
         total += declared;
-        ensure!(total <= MAX_FILES_BYTES, "The files exceed the Deployment's 20 MiB quota.");
+        ensure!(total <= limits.quota_bytes, "The files exceed this installation's {} file quota.", limits.quota());
         ensure!(expected.insert(id.to_owned(), declared).is_none(), "The file index lists file {id} twice.");
         order.push(id.to_owned());
         let mut restored = json!({
@@ -595,7 +596,7 @@ fn skip(input: &mut impl Read, bytes: u64) -> Result<()> {
 /// The uploads named by the payload, checked against the manifest. With a
 /// principal the transfers must belong to that caller and project.
 fn component_uploads(state: &AppState, principal: Option<&str>, project_id: &str, package: &InitialPackage) -> Result<Vec<(Content, PathBuf)>> {
-    check_manifest(&package.manifest)?;
+    check_manifest(&package.manifest, &state.files.limits)?;
     for name in package.components.keys() {
         ensure!(
             package.manifest.contents.iter().any(|content| &content.name == name),
@@ -636,6 +637,7 @@ pub(super) async fn verify(state: &AppState, principal: &str, project_id: &str, 
     let total: u64 = uploads.iter().map(|(c, _)| c.size).sum();
     // The release check copies the database once more to try the schema.
     ensure_space(free_bytes(&state.data_root)?, total + database + SPACE_MARGIN, "import this app")?;
+    let file_limits = state.files.limits;
     tokio::task::spawn_blocking(move || {
         let path = |name: &str| uploads.iter().find(|(c, _)| c.name == name).map(|(_, p)| p.clone());
         for (content, path) in &uploads {
@@ -668,7 +670,7 @@ pub(super) async fn verify(state: &AppState, principal: &str, project_id: &str, 
             None => None,
         };
         if let Some(files) = path("files") {
-            unpack_files(&files, accounts.as_ref(), None)?;
+            unpack_files(&files, accounts.as_ref(), None, &file_limits)?;
         }
         if let Some(usage) = path("usage") {
             integrity(&usage, "usage")?;
@@ -704,6 +706,7 @@ pub(super) async fn install(state: &AppState, package: &InitialPackage, project_
     let uploads = component_uploads(state, None, project_id, package)?;
     let folder = directory.to_owned();
     let directory = directory.to_owned();
+    let file_limits = state.files.limits;
     tokio::task::spawn_blocking(move || {
         let find = |name: &str| uploads.iter().find(|(c, _)| c.name == name);
         if let Some((content, source)) = find("database") {
@@ -719,7 +722,7 @@ pub(super) async fn install(state: &AppState, package: &InitialPackage, project_
             let (size, sha256) = copies::checksum_file(source)?;
             ensure!(size == content.size && sha256 == content.sha256, "The files component does not match the SHA-256 in the manifest.");
             let accounts = identity.exists().then(|| Connection::open(&identity)).transpose()?;
-            unpack_files(source, accounts.as_ref(), Some(&directory.join("files")))?;
+            unpack_files(source, accounts.as_ref(), Some(&directory.join("files")), &file_limits)?;
         }
         if let Some((content, source)) = find("usage") {
             copy_verified(source, &directory.join(usage::USAGE_DATABASE), content)?;
@@ -781,41 +784,41 @@ mod tests {
 
     #[test]
     fn manifests_name_their_version_components_and_limits() {
-        assert!(check_manifest(&manifest()).is_ok());
+        assert!(check_manifest(&manifest(), &Default::default()).is_ok());
         let mut next = manifest();
         next.version = 3;
-        assert!(check_manifest(&next).unwrap_err().to_string().contains("Package version 3 is not supported"));
+        assert!(check_manifest(&next, &Default::default()).unwrap_err().to_string().contains("Package version 3 is not supported"));
         let mut unstamped = manifest();
         unstamped.version = MIGRATION_PACKAGE_VERSION;
-        assert!(check_manifest(&unstamped).unwrap_err().to_string().contains("must name its migration"));
+        assert!(check_manifest(&unstamped, &Default::default()).unwrap_err().to_string().contains("must name its migration"));
         let mut stamped = manifest();
         stamped.migration = Some(json!({"operationId": "op", "confirmationHash": "c".repeat(64)}));
-        assert!(check_manifest(&stamped).unwrap_err().to_string().contains("Only a version 2 package"));
+        assert!(check_manifest(&stamped, &Default::default()).unwrap_err().to_string().contains("Only a version 2 package"));
         stamped.version = MIGRATION_PACKAGE_VERSION;
-        assert!(check_manifest(&stamped).is_ok());
+        assert!(check_manifest(&stamped, &Default::default()).is_ok());
         stamped.migration = Some(json!({"operationId": "op", "confirmationHash": "not a hash"}));
-        assert!(check_manifest(&stamped).is_err());
+        assert!(check_manifest(&stamped, &Default::default()).is_err());
         let mut foreign = manifest();
         foreign.format = "zip".into();
-        assert!(check_manifest(&foreign).is_err());
+        assert!(check_manifest(&foreign, &Default::default()).is_err());
         let mut unknown = manifest();
         unknown.contents.push(Content { name: "secrets".into(), size: 1, sha256: "a".repeat(64) });
-        assert!(check_manifest(&unknown).unwrap_err().to_string().contains("Unknown package component secrets"));
+        assert!(check_manifest(&unknown, &Default::default()).unwrap_err().to_string().contains("Unknown package component secrets"));
         let mut twice = manifest();
         twice.contents.push(twice.contents[0].clone());
-        assert!(check_manifest(&twice).unwrap_err().to_string().contains("twice"));
+        assert!(check_manifest(&twice, &Default::default()).unwrap_err().to_string().contains("twice"));
         let mut large = manifest();
         large.contents[0].size = MAX_APP_DATABASE_BYTES + 1;
-        assert!(check_manifest(&large).unwrap_err().to_string().contains("its limit is"));
+        assert!(check_manifest(&large, &Default::default()).unwrap_err().to_string().contains("its limit is"));
         let mut identity = manifest();
         identity.contents.push(Content { name: "identity".into(), size: auth::MAX_IDENTITY_DATABASE_BYTES + 1, sha256: "b".repeat(64) });
-        assert!(check_manifest(&identity).is_err());
+        assert!(check_manifest(&identity, &Default::default()).is_err());
         let mut empty = manifest();
         empty.contents.clear();
-        assert!(check_manifest(&empty).unwrap_err().to_string().contains("no database"));
+        assert!(check_manifest(&empty, &Default::default()).unwrap_err().to_string().contains("no database"));
         let mut checksum = manifest();
         checksum.contents[0].sha256 = "A".repeat(64);
-        assert!(check_manifest(&checksum).is_err());
+        assert!(check_manifest(&checksum, &Default::default()).is_err());
     }
 
     #[test]
@@ -883,7 +886,7 @@ mod tests {
         let accounts = Connection::open_in_memory().unwrap();
         accounts.execute_batch("CREATE TABLE app_users(id TEXT PRIMARY KEY); INSERT INTO app_users VALUES('u1');").unwrap();
         let target = root.join("target");
-        assert_eq!(unpack_files(&archive, Some(&accounts), Some(&target)).unwrap(), 2);
+        assert_eq!(unpack_files(&archive, Some(&accounts), Some(&target), &Default::default()).unwrap(), 2);
         assert_eq!(std::fs::read(target.join(format!("{a}.blob"))).unwrap(), b"first file");
         let restored: Vec<Value> = serde_json::from_slice(&std::fs::read(target.join("index.json")).unwrap()).unwrap();
         assert_eq!(restored[0]["ownerId"], "u1");
@@ -891,8 +894,8 @@ mod tests {
 
         let strangers = Connection::open_in_memory().unwrap();
         strangers.execute_batch("CREATE TABLE app_users(id TEXT PRIMARY KEY);").unwrap();
-        assert!(unpack_files(&archive, Some(&strangers), None).unwrap_err().to_string().contains("does not contain"));
-        assert!(unpack_files(&archive, None, None).is_err());
+        assert!(unpack_files(&archive, Some(&strangers), None, &Default::default()).unwrap_err().to_string().contains("does not contain"));
+        assert!(unpack_files(&archive, None, None, &Default::default()).is_err());
 
         // An archive with data the index does not list.
         let mut bytes = std::fs::read(&archive).unwrap();
@@ -902,7 +905,7 @@ mod tests {
         bytes.extend_from_slice(&[0; 1024]);
         let extra = root.join("extra.tar");
         std::fs::write(&extra, bytes).unwrap();
-        assert!(unpack_files(&extra, Some(&accounts), None).unwrap_err().to_string().contains("does not list"));
+        assert!(unpack_files(&extra, Some(&accounts), None, &Default::default()).unwrap_err().to_string().contains("does not list"));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

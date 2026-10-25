@@ -13,6 +13,7 @@ fn state(root: &Path) -> AppState {
         s3: None,
         artifact_bucket: "artifacts".into(),
         data_bucket: "data".into(),
+        files: crate::file_store::Files::local(&root),
         data_root: root.into(),
         copies: Arc::new(copies::CopyStatus::default()),
         admin_key: "bench".into(),

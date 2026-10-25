@@ -93,13 +93,16 @@ describe("every documented message is one the code returns", () => {
 
   /**
    * Matches a message in source: <key>, <name>, <names>, <field> or <kind> stand for a Rust {key}, a JS ${...}
-   * or the same word written out, a number may be a JS ${...}, and a brace may be doubled, as Rust's
+   * or the same word written out, <limit> stands for a configured size that Rust formats with {}, a number
+   * may be a JS ${...}, and a brace may be doubled, as Rust's
    * format! escapes it.
    */
   function inSource(message: string, source: string) {
     const pattern = message
-      .split(/(<key>|<names>|<name>|<field>|<kind>|\d+)/)
+      .split(/(<key>|<names>|<name>|<field>|<kind>|<limit>|\d+)/)
       .map((part) => {
+        // A configured size, which Rust writes with a `{}` argument.
+        if (part === "<limit>") return String.raw`(?:\{\w*\}|\$\{[^}]+\})`;
         if (part === "<key>" || part === "<name>" || part === "<names>" || part === "<field>" || part === "<kind>") return String.raw`(?:\{\w+\}|\$\{[^}]+\}|${part})`;
         if (/^\d+$/.test(part)) return String.raw`(?:${part}|\$\{[^}]+\})`;
         return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\([{}])/g, "\\$1\\$1?");
@@ -122,6 +125,8 @@ describe("every documented message is one the code returns", () => {
   test("a message the code does not return is caught", () => {
     expect(inSource("Server action not declared.", kernel)).toBe(true);
     expect(inSource("Server action is missing.", kernel)).toBe(false);
+    expect(inSource("Files must be between 1 byte and <limit>.", kernel)).toBe(true);
+    expect(inSource("Files must be between 2 bytes and <limit>.", kernel)).toBe(false);
   });
 });
 

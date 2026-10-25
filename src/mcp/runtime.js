@@ -51,7 +51,7 @@
   async function download(file) {
     const transfer = await call('files_read', { fileId: file.id });
     try {
-      if (!Number.isSafeInteger(transfer.size) || transfer.size < 0 || transfer.size > 2 * 1024 * 1024) throw Error('Invalid file size.');
+      if (!Number.isSafeInteger(transfer.size) || transfer.size < 0 || (Number.isSafeInteger(file.size) && transfer.size !== file.size)) throw Error('Invalid file size.');
       const bytes = new Uint8Array(transfer.size);
       let offset = 0;
       while (offset < bytes.length) {
