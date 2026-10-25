@@ -1209,6 +1209,7 @@ mod tests {
             actions: "{}".into(),
             artifact_version: Some("v1".into()),
             signup_policy: SignupPolicy::default(),
+            sign_in_methods: crate::default_sign_in_methods(),
         };
         let folder = root.join("deployments").join(&deployment.id);
         std::fs::create_dir_all(folder.join("artifact/v1")).unwrap();

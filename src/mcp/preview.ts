@@ -4,6 +4,7 @@ const methods: Record<string, string> = {
   actions_invoke: "actions.invoke",
   auth_session: "auth.session",
   preview_sign_in: "auth.signIn",
+  preview_sign_in_with_google: "auth.signInWithGoogle",
   auth_logout: "auth.signOut",
   files_list: "files.list",
   preview_files_upload: "files.upload",

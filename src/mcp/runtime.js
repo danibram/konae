@@ -105,6 +105,7 @@
         catch (error) { if (error.status === 401) return { userId: 'anonymous', name: 'Anonymous', role: 'anonymous' }; throw error; }
       },
       signIn: () => { location.assign('/_littlebox/login'); },
+      signInWithGoogle: () => { location.assign('/_littlebox/auth/google/start'); },
       signOut: async () => {
         const result = await call('auth_logout');
         connected = undefined;

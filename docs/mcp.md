@@ -41,6 +41,7 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | App export, with `export_data` | `package_export`, `project_export`, `database_export` |
 | Publishing | `release_plan`, `release_apply` |
 | Signup policy | `signup_policy_read`, `signup_policy_set` |
+| Sign-in methods | `sign_in_methods_read`; `sign_in_methods_set` with `manage_users` |
 | Signing secrets | `secrets_list`, `secret_set`, `secret_delete` |
 | API keys | `api_keys_list`, `api_keys_create`, `api_keys_revoke` |
 | Custom domain | `domain_read`; `domain_set`, `domain_clear` with `publish` |
@@ -75,6 +76,16 @@ Each Deployment has a signup policy that decides who may create an app account. 
 - `allowlist`: only exact emails or `@domain` entries can create an account, up to 100 entries. A domain entry matches that exact domain, not its subdomains. Entering an address sends no invitation.
 
 Public Deployments start Open. Private Deployments start Closed, so the owner decides who may join before anyone can sign in. A Deployment record written before signup policies existed gets the same default from its visibility, and one that names no visibility is private and starts Closed. A first release may set any mode in `initialSignupPolicy`, with the `publish` permission, and the Kernel installs it before serving the first request; an agent publishing an app whose access the request leaves open proposes private and `invitation`. Republishing keeps the current policy, except that republishing a public app as private turns Open into Closed; `initialSignupPolicy` on a republish answers "Portable state can only be imported on the first deployment." Changing an existing app's policy needs `manage_users`, through `signup_policy_set`, so no publish credential changes who may join. The owner changes it in the editor's Auth > Users view or with the admin MCP tools above. The editor's publish dialog sends `initialSignupPolicy` on a first publish, proposing Invitation only for a private app, and on a republish shows the current policy read-only.
+
+## Sign-in methods
+
+Each Deployment lists how its app accounts sign in. `sign_in_methods_set { deploymentId, methods }` takes `["password"]` or `["password", "google"]` and needs `manage_users`; `sign_in_methods_read` reads it back with `read`. Password cannot be turned off, so every account keeps a way back in.
+
+Google needs the installation's Google client: the operator sets `LITTLEBOX_GOOGLE_CLIENT_ID` and `LITTLEBOX_GOOGLE_CLIENT_SECRET` and registers `<LITTLEBOX_PUBLIC_ORIGIN>/_littlebox/auth/google/callback` as the client's one redirect URI. Google accepts only an exact redirect URI, so every Deployment shares that callback on the Kernel's host: `/_littlebox/auth/google/start` on the app host sends the browser to Google, the callback checks the ID token (issuer, this client as audience, expiry, the flow's nonce, a verified email, a key from Google's fixed JWKS URL) and hands the app host a single-use code that lives 60 seconds, and `/_littlebox/auth/google/finish` on the app host opens the app's own session. Without a client, `sign_in_methods_read` answers `googleAvailable: false` and `sign_in_methods_set` refuses `google` with "This installation has no Google sign-in."
+
+A Google sign-in reaches an app account only through a linked identity. The Signup Policy decides as it does for a password, in the same transaction and with the same words: Open creates the account, Allowlist checks the Google email, Invitation only and Closed create nobody, and an invitation accepted with Google needs the invited email. A Google email that already has an account is refused with "An account with this email exists. Sign in with your password, then connect Google." That person signs in with the password and connects Google from `/_littlebox/account`. An account created through Google has no password a person chose; recovery by email sets one.
+
+A package carries the methods in its manifest as `signInMethods` and the links in its accounts. Imported onto an installation without a Google client, the Deployment keeps the setting, its sign-in page offers only email and password, and `sign_in_methods_read` returns a `notice` that says so.
 
 ## Users and invitations
 

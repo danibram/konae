@@ -91,7 +91,7 @@ pub(crate) fn forget_tokens(connection: &Connection) -> rusqlite::Result<()> {
 }
 
 /// Opens the Deployment's account store with the invitation tables installed.
-fn store(state: &AppState, deployment: &Deployment) -> Result<AuthService, AuthError> {
+pub(crate) fn store(state: &AppState, deployment: &Deployment) -> Result<AuthService, AuthError> {
     let auth = app_store(state, deployment)?;
     auth.read(|connection| install(connection).map_err(AuthError::Storage))?;
     Ok(auth)
@@ -173,16 +173,20 @@ fn accept_in(
     chosen: NewPassword,
     admits: impl FnOnce(&str) -> bool,
 ) -> Result<AuthSession, AuthError> {
-    auth.complete_challenge_with(Purpose::Invitation, token, chosen, admits, |transaction, user_id, token_hash| {
-        let marked = transaction
-            .execute(
-                "UPDATE app_invitations SET state = 'accepted', accepted_at = ?1, user_id = ?2, token_hash = NULL
-                 WHERE token_hash = ?3 AND state = 'pending'",
-                params![auth::now_seconds(), user_id, token_hash],
-            )
-            .map_err(storage)?;
-        if marked == 1 { Ok(()) } else { Err(AuthError::InvalidChallenge) }
-    })
+    auth.complete_challenge_with(Purpose::Invitation, token, chosen, admits, mark_accepted)
+}
+
+/// Marks the pending invitation of a consumed challenge accepted, inside the
+/// transaction that consumed it. Used by the password and the Google answer.
+pub(crate) fn mark_accepted(transaction: &Connection, user_id: &str, token_hash: &str) -> Result<(), AuthError> {
+    let marked = transaction
+        .execute(
+            "UPDATE app_invitations SET state = 'accepted', accepted_at = ?1, user_id = ?2, token_hash = NULL
+             WHERE token_hash = ?3 AND state = 'pending'",
+            params![auth::now_seconds(), user_id, token_hash],
+        )
+        .map_err(storage)?;
+    if marked == 1 { Ok(()) } else { Err(AuthError::InvalidChallenge) }
 }
 
 #[derive(Deserialize)]
@@ -229,16 +233,27 @@ async fn accept_route(State(state): State<AppState>, request: Request) -> Respon
 }
 
 async fn invitation_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if deployment_for(&state, &headers).await.is_none() {
+    let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Littlebox deployment not found.");
-    }
+    };
+    // With Google offered, the page can accept with the Google account of the
+    // invited email instead of a password.
+    let page = if google::offered(&state, &deployment) {
+        INVITATION_PAGE.replacen(
+            "<button>Accept and enter</button></form>",
+            r#"<button>Accept and enter</button><button id="google" type="button">Accept with Google</button></form>"#,
+            1,
+        )
+    } else {
+        INVITATION_PAGE.to_owned()
+    };
     (
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
             (header::REFERRER_POLICY, "no-referrer"),
         ],
-        INVITATION_PAGE,
+        page,
     )
         .into_response()
 }
@@ -254,6 +269,7 @@ const INVITATION_PAGE: &str = r#"<!doctype html><html lang="en"><meta charset="u
 const token=new URLSearchParams(location.hash.slice(1)).get('invitation');const $=s=>document.querySelector(s);
 async function post(path,body){const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const b=await r.json().catch(()=>({}));if(!r.ok)throw Error(b.error||'Request failed.');return b.result;}
 if(!token){$('#note').textContent='This page needs the link from your invitation email.';}else{history.replaceState(null,'',location.pathname);post('/_littlebox/auth/invitation',{token}).then(r=>{$('#title').textContent='Join '+r.app;$('#email').value=r.email;if(r.status==='existing-account'){$('#note').textContent='This email already has an account here. Sign in with its password.';return}if(r.status==='signup-closed'){$('#note').textContent='This app is not accepting new accounts right now. Ask whoever invited you.';return}$('#note').textContent='Choose the password for your account. Accepting activates it and signs you in.';$('#accept').hidden=false;},x=>{$('#note').textContent='';$('#error').textContent=x.message});}
+$('#google')?.addEventListener('click',async()=>{try{const r=await post('/_littlebox/auth/google/start',{invitation:token});location.assign(r.location);}catch(x){$('#error').textContent=x.message}});
 $('#accept').addEventListener('submit',async e=>{e.preventDefault();try{await post('/_littlebox/auth/accept',{token,password:new FormData(e.currentTarget).get('password')});location.replace('/');}catch(x){$('#error').textContent=x.message}});
 </script></html>"#;
 
@@ -838,6 +854,7 @@ mod tests {
                 artifact_version: None,
                 database_model: None,
                 signup_policy: SignupPolicy::from_input(mode, &[]).unwrap(),
+                sign_in_methods: default_sign_in_methods(),
             };
             std::fs::create_dir_all(root.join("deployments").join(&item.id)).unwrap();
             deployments.insert(host.to_owned(), item);
@@ -857,6 +874,7 @@ mod tests {
                 verification: Verification::Required,
                 mail: Some(mailbox.clone() as Arc<dyn AccountMail>),
                 queue: None,
+                google: None,
             },
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),
@@ -984,7 +1002,7 @@ mod tests {
             .unwrap(),
         );
         queue.run_preflight().await;
-        fixture.state.accounts = AccountSettings { verification: Verification::Required, mail: None, queue: Some(queue.clone()) };
+        fixture.state.accounts = AccountSettings { verification: Verification::Required, mail: None, queue: Some(queue.clone()), google: None };
         // The owner record as the creator store keeps it.
         Connection::open(fixture.root.join("owners.sqlite"))
             .unwrap()

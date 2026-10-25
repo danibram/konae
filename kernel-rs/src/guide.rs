@@ -40,6 +40,7 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("release_plan", "release_plan"),
     ("release_apply", "project_inspect"),
     ("signup_policy_set", "signup_policy_read"),
+    ("sign_in_methods_set", "sign_in_methods_read"),
     ("app_invitations_create", "app_invitations_list"),
     ("app_invitation_resend", "app_invitations_list"),
     ("app_invitation_revoke", "app_invitations_list"),
@@ -107,6 +108,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "divergences": [
                 {"where": "editor preview vs published Deployment", "fact": "The preview applies no Content Security Policy. Inline event handlers and other-origin fetches can still run there; a published app refuses them. Attach listeners in JavaScript and keep scripts and fetches on the app's own origin."},
                 {"where": "editor preview vs Deployment", "fact": "The preview has no HTTP routes, no schedule timer, no notice email, no Usage store, no call outbox, and no owner app account. Try those on bun run littlebox -- dev or on a published Deployment."},
+                {"where": "editor preview vs Deployment", "fact": "The editor preview has no Google sign-in. miniapp.auth.signInWithGoogle() refuses there; try it on a published Deployment of an installation with a Google client."},
                 {"where": "Validation Gate vs publish builders", "fact": "The Gate checks schema and actions.json. A page that names a missing file fails at build or release, not at validate_capsule. Check every path you write."}
             ]
         }),
@@ -133,10 +135,10 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "flags": {"--manage-users": "adds manage_users", "--export-data": "adds export_data", "--manage-lifecycle": "adds manage_lifecycle"},
             "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data or manage_lifecycle.",
             "permissions": {
-                "read": "projects_list, project_inspect, signup_policy_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read, migration_status",
+                "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read, migration_status",
                 "write": "project_create, project_sources_save, project_delete, schema_plan, and database_execute changes",
                 "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, and initialSignupPolicy on a first release",
-                "manage_users": "signup_policy_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
+                "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
                 "export_data": "package_export, project_export, database_export, and migration_begin together with manage_lifecycle",
                 "manage_lifecycle": "eject_plan, eject_apply and the migration tools"
             },
@@ -176,8 +178,9 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "domain": "domain_set { deploymentId, hostname } adds a custom domain next to the generated hostname and needs publish. Its first answer names a TXT record, _littlebox.<hostname>, and the token it must hold. Once the record is at the DNS provider and the hostname points at the installation's proxy, which terminates TLS and forwards Host unchanged, call domain_set again: the Kernel looks the record up and the alias serves. domain_read shows the state and domain_clear removes it. bun run littlebox -- domain runs the same steps."
         }),
         "users" => json!({
-            "permission": "manage_users, which login adds with --manage-users. signup_policy_read needs only read.",
+            "permission": "manage_users, which login adds with --manage-users. signup_policy_read and sign_in_methods_read need only read.",
             "policy": "signup_policy_set { deploymentId, mode } with open, invitation, closed or allowlist and allowlist entries. A publish never changes it after the first release.",
+            "google": "sign_in_methods_set { deploymentId, methods: [\"password\", \"google\"] } adds Continue with Google to the sign-in page; [\"password\"] removes it. Password cannot be turned off. It needs an installation with a Google client, which sign_in_methods_read reports as googleAvailable; without one it refuses with \"This installation has no Google sign-in.\" Signup Policy still decides who gets an account: a Google email that already has an account is refused until that person signs in with the password and connects Google from /_littlebox/account. A package carries the setting and the links; on an installation without a client the app keeps the setting, offers only email and password, and sign_in_methods_read returns a notice.",
             "invite": [
                 "Call mail_status: inviting needs sending true.",
                 "app_invitations_create { deploymentId, emails, idempotencyKey } emails each address a seven-day link to /_littlebox/invitation#invitation=<token> on the app's host. Call it only when the owner asked for those invitations.",
@@ -338,7 +341,7 @@ mod tests {
             .chain(runtime_tools())
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
-        let prefixes = ["platform_", "project_", "projects_", "schema_", "database_", "storage_", "release_", "signup_policy_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "notices_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "eject_", "migration_", "package_", "mail_", "session_", "domain_"];
+        let prefixes = ["platform_", "project_", "projects_", "schema_", "database_", "storage_", "release_", "signup_policy_", "sign_in_methods_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "notices_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "eject_", "migration_", "package_", "mail_", "session_", "domain_"];
         for name in TOPICS {
             let text = topic(name).unwrap().to_string();
             for word in text.split(|c: char| !(c.is_ascii_lowercase() || c == '_')) {

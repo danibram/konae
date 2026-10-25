@@ -39,6 +39,7 @@ mod domain;
 mod eject;
 mod file_store;
 mod files;
+mod google;
 mod guard;
 mod guide;
 mod http;
@@ -99,6 +100,8 @@ struct Deployment {
     /// Who may create an account. Records written before this field existed
     /// get the default for their visibility when they load.
     signup_policy: SignupPolicy,
+    /// How people sign in. Password always; Google when the owner turned it on.
+    sign_in_methods: Vec<SignInMethod>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     database_model: Option<DatabaseModel>,
 }
@@ -119,6 +122,8 @@ struct DeploymentRecord {
     artifact_version: Option<String>,
     #[serde(default)]
     signup_policy: Option<SignupPolicy>,
+    #[serde(default)]
+    sign_in_methods: Option<Vec<SignInMethod>>,
     #[serde(default)]
     database_model: Option<DatabaseModel>,
 }
@@ -145,9 +150,40 @@ impl From<DeploymentRecord> for Deployment {
             actions: record.actions,
             artifact_version: record.artifact_version,
             signup_policy,
+            sign_in_methods: record
+                .sign_in_methods
+                .and_then(|methods| sign_in_methods_from_input(&methods).ok())
+                .unwrap_or_else(default_sign_in_methods),
             database_model: record.database_model,
         }
     }
+}
+
+/// A way a person signs in to a Deployment's app accounts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SignInMethod {
+    Password,
+    Google,
+}
+
+fn default_sign_in_methods() -> Vec<SignInMethod> {
+    vec![SignInMethod::Password]
+}
+
+const PASSWORD_REQUIRED: &str = "Password sign-in cannot be turned off, so every account keeps a way back in.";
+
+/// Builds the methods from owner input: password first, each method once.
+/// Password cannot be turned off in this version.
+fn sign_in_methods_from_input(methods: &[SignInMethod]) -> std::result::Result<Vec<SignInMethod>, String> {
+    if !methods.contains(&SignInMethod::Password) {
+        return Err(PASSWORD_REQUIRED.into());
+    }
+    let mut result = vec![SignInMethod::Password];
+    if methods.contains(&SignInMethod::Google) {
+        result.push(SignInMethod::Google);
+    }
+    Ok(result)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -273,6 +309,8 @@ struct DeployInput {
     initial_files: Option<String>,
     #[serde(default)]
     initial_signup_policy: Option<SignupPolicy>,
+    #[serde(default)]
+    initial_sign_in_methods: Option<Vec<SignInMethod>>,
     /// A chunked package whose components were uploaded as transfers.
     #[serde(default)]
     initial_package: Option<package::InitialPackage>,
@@ -447,6 +485,7 @@ async fn main() -> Result<()> {
         .route("/_littlebox/login", get(login_page))
         .merge(mcp::routes())
         .merge(oauth::routes())
+        .merge(google::routes())
         .merge(accounts::routes())
         .merge(http::routes())
         .merge(invitations::routes())
@@ -608,6 +647,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             || input.initial_identity.is_some()
             || input.initial_files.is_some()
             || input.initial_signup_policy.is_some()
+            || input.initial_sign_in_methods.is_some()
             || input.initial_package.is_some()
             || input.initial_domain.is_some())
     {
@@ -620,6 +660,17 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
     let initial_signup_policy = match input.initial_signup_policy.as_ref().or(package_policy) {
         Some(policy) => match SignupPolicy::from_input(policy.mode, &policy.allowlist) {
             Ok(policy) => Some(policy),
+            Err(message) => return error(StatusCode::BAD_REQUEST, &message),
+        },
+        None => None,
+    };
+    // A package keeps the methods it carries even on an installation without
+    // a Google client: the sign-in page then offers only the password and the
+    // owner is told why (sign_in_methods_read).
+    let package_methods = input.initial_package.as_ref().and_then(|package| package.manifest.sign_in_methods.as_ref());
+    let initial_sign_in_methods = match input.initial_sign_in_methods.as_ref().or(package_methods) {
+        Some(methods) => match sign_in_methods_from_input(methods) {
+            Ok(methods) => Some(methods),
             Err(message) => return error(StatusCode::BAD_REQUEST, &message),
         },
         None => None,
@@ -694,6 +745,10 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         signup_policy: match existing.as_ref() {
             Some(item) => item.signup_policy.for_republish(is_private(item), &input.visibility),
             None => initial_signup_policy.unwrap_or_else(|| SignupPolicy::initial(&input.visibility)),
+        },
+        sign_in_methods: match existing.as_ref() {
+            Some(item) => item.sign_in_methods.clone(),
+            None => initial_sign_in_methods.unwrap_or_else(default_sign_in_methods),
         },
     };
     let directory = state.data_root.join("deployments").join(&id);
@@ -1017,7 +1072,15 @@ async fn session(State(state): State<AppState>, headers: HeaderMap) -> Response 
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
     match authenticate_deployment(&state, &deployment, &headers) {
-        Ok(Some(user)) => Json(json!({"result": user})).into_response(),
+        Ok(Some(user)) => {
+            // How this account can sign in, so the app can offer "Connect Google".
+            let methods = accounts::app_store(&state, &deployment)
+                .and_then(|auth| auth.methods(&user.user_id))
+                .unwrap_or_default();
+            let mut value = json!(user);
+            value["methods"] = json!(methods);
+            Json(json!({"result": value})).into_response()
+        }
         Ok(None) => Json(
             json!({"result": {"userId": "anonymous", "name": "Anonymous", "role": "anonymous"}}),
         )
@@ -1610,7 +1673,7 @@ async fn login_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
     };
     match authenticate_deployment(&state, &deployment, &headers) {
         Ok(Some(_)) => (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response(),
-        Ok(None) => private_login_page(&deployment.signup_policy, state.accounts.verification),
+        Ok(None) => private_login_page(&deployment.signup_policy, state.accounts.verification, google::offered(&state, &deployment)),
         Err(response) => response,
     }
 }
@@ -1640,7 +1703,7 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
     if is_private(&deployment) {
         match authenticate_deployment(&state, &deployment, &headers) {
             Ok(Some(_)) => {}
-            Ok(None) => return private_login_page(&deployment.signup_policy, state.accounts.verification),
+            Ok(None) => return private_login_page(&deployment.signup_policy, state.accounts.verification, google::offered(&state, &deployment)),
             Err(response) => return response,
         }
     }
@@ -1739,7 +1802,7 @@ async fn read_artifact(state: &AppState, deployment: &Deployment, path: &str) ->
     }
 }
 
-fn private_login_page(policy: &SignupPolicy, verification: auth::Verification) -> Response {
+fn private_login_page(policy: &SignupPolicy, verification: auth::Verification, google: bool) -> Response {
     // With verification required, signup takes only the email: the password
     // is chosen on the page the emailed link opens.
     let verified = verification == auth::Verification::Required;
@@ -1766,9 +1829,13 @@ fn private_login_page(policy: &SignupPolicy, verification: auth::Verification) -
         ),
     };
     let body = [
-        r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f5f7;color:#20232a;font:16px system-ui,sans-serif}main{width:min(100%,380px);padding:32px;background:white;border:1px solid #e1e4e8;border-radius:12px;box-shadow:0 12px 36px #1f293714}h1{margin:0 0 8px;font-size:24px}p{color:#586174;line-height:1.5}form,label{display:grid;gap:8px}form{gap:16px;margin-top:24px}input,button{font:inherit;border-radius:8px;padding:11px 12px}input{width:100%;border:1px solid #c9ced6}button{border:0;background:#273449;color:white;cursor:pointer}button+button{background:#edf0f4;color:#252a33}#error{min-height:1.5em;margin:0;color:#a32727}@media (prefers-color-scheme:dark){body{background:#14161a;color:#e8eaed}main{background:#1d2026;border-color:#2e333b;box-shadow:none}p{color:#a9b0bc}input{background:#14161a;color:#e8eaed;border-color:#3a404a}input[readonly]{background:#23272e;color:#e8eaed}button{background:#e8eaed;color:#14161a}button+button{background:#2a2f37;color:#e8eaed}#error{color:#ff8a8a}a{color:#8ab4ff}}</style><link rel="icon" href="data:,"><main><h1>Sign in to this app</h1><p>"#,
+        r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f5f7;color:#20232a;font:16px system-ui,sans-serif}main{width:min(100%,380px);padding:32px;background:white;border:1px solid #e1e4e8;border-radius:12px;box-shadow:0 12px 36px #1f293714}h1{margin:0 0 8px;font-size:24px}p{color:#586174;line-height:1.5}form,label{display:grid;gap:8px}form{gap:16px;margin-top:24px}input,button{font:inherit;border-radius:8px;padding:11px 12px}input{width:100%;border:1px solid #c9ced6}button{border:0;background:#273449;color:white;cursor:pointer}button+button{background:#edf0f4;color:#252a33}#error{min-height:1.5em;margin:0;color:#a32727}@media (prefers-color-scheme:dark){body{background:#14161a;color:#e8eaed}main{background:#1d2026;border-color:#2e333b;box-shadow:none}p{color:#a9b0bc}input{background:#14161a;color:#e8eaed;border-color:#3a404a}input[readonly]{background:#23272e;color:#e8eaed}button{background:#e8eaed;color:#14161a}button+button{background:#2a2f37;color:#e8eaed}#error{color:#ff8a8a}a{color:#8ab4ff}}"#,
+        if google { google::BUTTON_STYLE } else { "" },
+        r#"</style><link rel="icon" href="data:,"><main><h1>Sign in to this app</h1><p>"#,
         note,
-        r#"</p><form id="auth"><label>Email <input name="email" type="email" required autocomplete="email"></label><label>Password <input name="password" type="password" minlength="8" required autocomplete="current-password"></label><button formaction="/_littlebox/auth/login">Sign in</button>"#,
+        "</p>",
+        if google { google::BUTTON } else { "" },
+        r#"<form id="auth"><label>Email <input name="email" type="email" required autocomplete="email"></label><label>Password <input name="password" type="password" minlength="8" required autocomplete="current-password"></label><button formaction="/_littlebox/auth/login">Sign in</button>"#,
         if create && verified {
             r#"<button formaction="/_littlebox/auth/signup" formnovalidate>Create account</button>"#
         } else if create {
@@ -1992,6 +2059,7 @@ async fn portable_state(state: &AppState, deployment: &Deployment) -> Result<Val
         "initialIdentity": encode_base64(&identity),
         "initialFiles": encode_base64(&file_bundle),
         "initialSignupPolicy": deployment.signup_policy,
+        "initialSignInMethods": deployment.sign_in_methods,
         "visibility": if is_private(deployment) { "private" } else { "public" },
         "sizeBytes": total
     }))
@@ -3599,7 +3667,8 @@ fn bounded_rows(rows: impl Iterator<Item = rusqlite::Result<Value>>) -> Result<V
 fn auth_error(error_value: AuthError) -> Response {
     let status = match error_value {
         AuthError::InvalidEmail | AuthError::WeakPassword => StatusCode::BAD_REQUEST,
-        AuthError::EmailTaken | AuthError::AccountExists => StatusCode::CONFLICT,
+        AuthError::EmailTaken | AuthError::AccountExists | AuthError::EmailHasAccount | AuthError::IdentityTaken => StatusCode::CONFLICT,
+        AuthError::InvitedEmailDiffers => StatusCode::FORBIDDEN,
         AuthError::InvalidCredentials => StatusCode::UNAUTHORIZED,
         AuthError::AccountPending
         | AuthError::AccountSuspended
@@ -3840,6 +3909,7 @@ mod tests {
             artifact_version: None,
             database_model: None,
             signup_policy: SignupPolicy::default(),
+            sign_in_methods: default_sign_in_methods(),
         };
         tokio::fs::create_dir_all(root.join("deployments").join(&deployment.id))
             .await
@@ -4092,6 +4162,11 @@ mod tests {
         assert_eq!(legacy(json!({"visibility": "public"})).signup_policy.mode, SignupMode::Open);
         assert_eq!(legacy(json!({})).signup_policy.mode, SignupMode::Closed);
         assert_eq!(legacy(json!({"visibility": "Public"})).signup_policy.mode, SignupMode::Closed);
+        assert_eq!(legacy(json!({})).sign_in_methods, vec![SignInMethod::Password], "older records sign in with a password");
+        let mut stored = serde_json::to_value(legacy(json!({}))).unwrap();
+        stored["signInMethods"] = json!(["password", "google"]);
+        let with_google: Deployment = serde_json::from_value(stored).unwrap();
+        assert_eq!(with_google.sign_in_methods, vec![SignInMethod::Password, SignInMethod::Google]);
 
         // A stored policy always wins over the visibility default.
         let stored: Deployment = serde_json::from_value(json!({

@@ -52,6 +52,7 @@ These are not bugs to paper over. Say them when they matter.
 - The editor preview applies no Content Security Policy. Inline handlers and other-origin fetches can still run there; a published app refuses them.
 - The preview has no HTTP routes, schedule timer, notice email, Usage store, call outbox or owner app account. Try those on `littlebox dev` or a published Deployment.
 - The editor preview refuses a file over 2 MiB. A Kernel refuses at its own `LITTLEBOX_FILE_MAX_BYTES`, 2 MiB unless the operator raised it, and names the number.
+- The editor preview has no Google sign-in. `miniapp.auth.signInWithGoogle()` refuses there; try it on a published Deployment of an installation with a Google client.
 - The Validation Gate checks schema and `actions.json`. A page that names a missing file fails at build or release, not at `validate_capsule`.
 
 ## Where the work lives

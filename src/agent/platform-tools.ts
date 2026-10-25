@@ -61,9 +61,11 @@ export const platformToolPolicy: Readonly<Record<string, Policy>> = {
   usage_summary: "read",
   notices_read: "read",
   signup_policy_read: "read",
+  sign_in_methods_read: "read",
   app_users_list: "read",
   domain_read: "read",
   signup_policy_set: "confirm",
+  sign_in_methods_set: "confirm",
   app_invitations_create: "confirm",
   domain_set: "confirm",
   domain_clear: "confirm",
@@ -90,6 +92,7 @@ function needsConfirmation(name: string, args: Record<string, unknown>): boolean
 export function describeCall(name: string, args: Record<string, unknown>): string {
   switch (name) {
     case "signup_policy_set": return `The agent will change who may create an account on this app to ${String(args.mode)}.`;
+    case "sign_in_methods_set": return `The agent will set how people sign in to this app to ${Array.isArray(args.methods) ? args.methods.join(" and ") : String(args.methods)}.`;
     case "app_invitations_create": {
       const emails = Array.isArray(args.emails) ? args.emails.map(String) : [];
       return `The agent will email an invitation to ${emails.join(", ") || "nobody"}.`;

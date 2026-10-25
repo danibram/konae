@@ -22,6 +22,8 @@ pub(crate) struct AccountSettings {
     /// The persistent queue in `mail.sqlite` (`mail.rs`). When set, every
     /// account email goes through it.
     pub(crate) queue: Option<Arc<mail::MailQueue>>,
+    /// The installation's Google OAuth client, when the operator set one.
+    pub(crate) google: Option<Arc<google::GoogleConfig>>,
 }
 
 impl AccountSettings {
@@ -32,6 +34,7 @@ impl AccountSettings {
             verification: Verification::Local,
             mail: None,
             queue: None,
+            google: None,
         }
     }
 
@@ -41,7 +44,8 @@ impl AccountSettings {
     pub(crate) fn from_env(data_root: &Path, admin_key: &str) -> Result<Self> {
         let verification = Verification::from_env().map_err(anyhow::Error::msg)?;
         let queue = mail::MailQueue::from_env(data_root, admin_key)?;
-        Ok(Self { verification, mail: None, queue })
+        let google = google::GoogleConfig::from_env()?.map(Arc::new);
+        Ok(Self { verification, mail: None, queue, google })
     }
 }
 
@@ -523,7 +527,7 @@ pub(crate) fn link_sent() -> Response {
 }
 
 /// The `Set-Cookie` value that carries an app session to the browser.
-fn app_session_cookie(state: &AppState, session: &AuthSession) -> HeaderValue {
+pub(crate) fn app_session_cookie(state: &AppState, session: &AuthSession) -> HeaderValue {
     let cookie_name = app_cookie_name(state);
     let secure = if cookie_name.starts_with("__Host-") { "; Secure" } else { "" };
     HeaderValue::from_str(&format!(
@@ -613,10 +617,33 @@ async fn signup_app_unverified(
 }
 
 async fn app_account_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if deployment_for(&state, &headers).await.is_none() {
+    let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Littlebox deployment not found.");
-    }
-    html_page(APP_ACCOUNT_PAGE)
+    };
+    // A signed-in person on an app that offers Google connects it here, and
+    // only then is the Google account linked (no join by matching email).
+    let signed_in = match google::offered(&state, &deployment) {
+        true => authenticate_deployment(&state, &deployment, &headers).ok().flatten(),
+        false => None,
+    };
+    let Some(user) = signed_in else {
+        return html_page(APP_ACCOUNT_PAGE);
+    };
+    let connected = app_store(&state, &deployment)
+        .and_then(|auth| auth.methods(&user.user_id))
+        .is_ok_and(|methods| methods.contains(&"google"));
+    let section = if connected {
+        "<p>Google is connected to this account. You can continue with Google on the sign-in page.</p>"
+    } else {
+        concat!(
+            "<p>Connect a Google account to sign in to this app with Google as well as your password.</p>",
+            r#"<a class="google" href="/_littlebox/auth/google/start?intent=connect">Connect Google</a>"#
+        )
+    };
+    let page = APP_ACCOUNT_PAGE
+        .replacen("</style>", &format!("{}</style>", google::BUTTON_STYLE), 1)
+        .replacen(r#"<p id="error""#, &format!(r#"{section}<p id="error""#), 1);
+    html_page(page)
 }
 
 async fn app_verify(State(state): State<AppState>, request: Request) -> Response {
@@ -710,14 +737,14 @@ async fn creator_host(state: &AppState, headers: &HeaderMap) -> bool {
     oauth::valid_owner_host(state, headers).await && matches!(clerk::ClerkConfig::from_env(), Ok(None))
 }
 
-fn html_page(body: &'static str) -> Response {
+fn html_page(body: impl Into<Body>) -> Response {
     (
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
             (header::REFERRER_POLICY, "no-referrer"),
         ],
-        body,
+        Into::<Body>::into(body),
     )
         .into_response()
 }
@@ -816,6 +843,7 @@ mod tests {
             artifact_version: None,
             database_model: None,
             signup_policy: SignupPolicy::default(),
+            sign_in_methods: default_sign_in_methods(),
         }
     }
 
@@ -854,6 +882,7 @@ mod tests {
                 verification,
                 mail: with_mail.then(|| mailbox.clone() as Arc<dyn AccountMail>),
                 queue: None,
+                google: None,
             },
             public_origin: "http://localhost".into(),
             host_suffix: "localhost".into(),
@@ -1130,7 +1159,7 @@ mod tests {
         assert_eq!(session.status(), StatusCode::OK, "local mode keeps unverified signup");
         let app = local.app(APP_HOST).await;
         let mut state = local.state.clone();
-        state.accounts = AccountSettings { verification: Verification::Required, mail: None, queue: None };
+        state.accounts = AccountSettings { verification: Verification::Required, mail: None, queue: None, google: None };
         let required = Fixture { state, mailbox: local.mailbox.clone(), root: std::env::temp_dir().join("littlebox-accounts-unused") };
         assert_eq!(app_signup(&required, APP_HOST, "new@example.test").await.status(), StatusCode::SERVICE_UNAVAILABLE);
         let recover = app_recover(State(required.state.clone()), request("POST", APP_HOST, "/_littlebox/auth/recover", json!({"email": "person@example.test"}))).await;

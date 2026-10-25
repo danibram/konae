@@ -159,9 +159,9 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
     "permissions": {
       "export_data": "package_export, project_export, database_export, and migration_begin together with manage_lifecycle",
       "manage_lifecycle": "eject_plan, eject_apply and the migration tools",
-      "manage_users": "signup_policy_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
+      "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
       "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, and initialSignupPolicy on a first release",
-      "read": "projects_list, project_inspect, signup_policy_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read, migration_status",
+      "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read, migration_status",
       "write": "project_create, project_sources_save, project_delete, schema_plan, and database_execute changes"
     },
     "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds."
@@ -752,6 +752,9 @@ The member's calls go to the app's runtime endpoint, `/_littlebox/mcp` on the ap
 ```json
 {
   "result": {
+    "methods": [
+      "password"
+    ],
     "name": "member@walkthrough.test",
     "role": "member",
     "userId": "<member id>"
@@ -1263,7 +1266,7 @@ Exporting needs `export_data`, which OAuth does not grant:
         "chunkBytes": 65536,
         "expiresAt": <time ms>,
         "sha256": "<sha256>",
-        "size": 110592,
+        "size": 122880,
         "transferId": "<identity download>"
       },
       "usage": {
@@ -1285,7 +1288,7 @@ Exporting needs `export_data`, which OAuth does not grant:
         {
           "name": "identity",
           "sha256": "<sha256>",
-          "size": 110592
+          "size": 122880
         },
         {
           "name": "files",
@@ -1311,6 +1314,9 @@ Exporting needs `export_data`, which OAuth does not grant:
       "packageId": "<package id>",
       "projectId": "<project id>",
       "publishedRevision": 1,
+      "signInMethods": [
+        "password"
+      ],
       "signupPolicy": {
         "allowlist": [],
         "mode": "invitation"
@@ -1341,7 +1347,7 @@ Exporting needs `export_data`, which OAuth does not grant:
     "nextOffset": 65536,
     "offset": 0,
     "sha256": "<sha256>",
-    "size": 110592
+    "size": 122880
   }
 }
 ```

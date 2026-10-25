@@ -7,6 +7,7 @@ window.miniapp is the only host surface a Capsule has, in the editor preview and
 ```js
 const session = await miniapp.auth.session();                    // { userId, name, role }; role is "anonymous" when signed out
 await miniapp.auth.signIn();                                     // published login page, preview selects Alice
+miniapp.auth.signInWithGoogle();                                 // Continue with Google
 await miniapp.auth.signOut();                                    // revoke this app session
 const rows = await miniapp.actions.call("tasks.list");           // array of row objects
 await miniapp.actions.call("tasks.create", { title });           // { changes, lastInsertId }
@@ -41,6 +42,7 @@ Who is using the app. The Kernel owns accounts and sessions; the app only reads 
 - Visibility decides who may open the app shell. It never grants data access on its own.
 - The Project Owner's own account on an app has the role "owner". The owner opens it with Open as owner in the editor's Users view, or app_owner_enter with the owner's browser session, or by accepting an invitation they sent to their own email. No signup, recovery or input gives the role. An action checks it with the binding { "source": "actor", "field": "role" } and a guard, so the app needs no key-only route to recognise its owner.
 - The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_littlebox/invitation.
+- The owner may add Continue with Google to the sign-in page with sign_in_methods_set or in the editor's Users view, on an installation that has a Google client. A Google sign-in reaches the same app account, actor.id and role as the password, and the Signup Policy decides who may have an account. An email that already has an account is never joined by matching: that person signs in with the password and connects Google from /_littlebox/account. Password sign-in stays on.
 
 ### miniapp.auth.session()
 
@@ -50,9 +52,9 @@ Signed-out visitors on a public Deployment: allowed.
 
 Runtime MCP tools: `auth_session`.
 
-Returns { userId, name, role }. Signed in, name is the account email and role is "owner" for the Project Owner's own account on this app and "member" for everyone else. Signed out, { userId: "anonymous", name: "Anonymous", role: "anonymous" }.
+Returns { userId, name, role, methods }. Signed in, name is the account email, role is "owner" for the Project Owner's own account on this app and "member" for everyone else, and methods lists how the account can sign in: "password" once a password was chosen and "google" once a Google account is connected. Signed out, { userId: "anonymous", name: "Anonymous", role: "anonymous" }.
 
-Editor preview: Returns Alice or Bob, the preview's test accounts, with role "member", or the anonymous state. The preview has no owner account; publish to try what only the owner may do.
+Editor preview: Returns Alice or Bob, the preview's test accounts, with role "member" and no methods, or the anonymous state. The preview has no owner account; publish to try what only the owner may do.
 
 ### miniapp.auth.signIn()
 
@@ -65,6 +67,29 @@ Runtime MCP tools: none.
 Returns nothing; the page navigates away.
 
 Editor preview: Signs in as Alice without leaving the page and returns her session.
+
+### miniapp.auth.signInWithGoogle()
+
+Send the visitor to Google through /_littlebox/auth/google/start. It is a navigation, so connect-src does not apply; Google returns the person to the app signed in, or to a page that says why not.
+
+Signed-out visitors on a public Deployment: allowed.
+
+Runtime MCP tools: none.
+
+Returns nothing; the page navigates away.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `This installation has no Google sign-in.` | the operator set no Google client; the start page says so | Kernel | `The editor preview has no Google sign-in.` |
+| `Google sign-in is not turned on for this app.` | the owner has not added google to the Deployment's sign-in methods; the start page says so | Kernel | `The editor preview has no Google sign-in.` |
+| `This app is not accepting new accounts for this email address.` | the Google email has no account here and the Signup Policy does not admit it | Kernel | Never refuses |
+| `An account with this email exists. Sign in with your password, then connect Google.` | the Google email belongs to an account that has not connected Google | Kernel | Never refuses |
+
+Limits:
+
+- Shares the sign-in rate limit of the Deployment.
+
+Editor preview: Refuses with "The editor preview has no Google sign-in." Try it on a published Deployment.
 
 ### miniapp.auth.signOut()
 

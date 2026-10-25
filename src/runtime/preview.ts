@@ -10,7 +10,7 @@ export const runtimeClient = String.raw`
   const runtimeReady = new Promise((resolve) => { connectRuntime = resolve; });
 
   let capability;
-  const methods = { 'actions.invoke': 'actions_invoke', 'auth.session': 'auth_session', 'auth.signIn': 'preview_sign_in', 'auth.signOut': 'auth_logout', 'files.list': 'files_list', 'files.upload': 'preview_files_upload', 'files.url': 'preview_files_url', 'files.update': 'files_update', 'files.delete': 'files_delete', 'runtime.ready': 'preview_ready', 'preview.error': 'preview_error' };
+  const methods = { 'actions.invoke': 'actions_invoke', 'auth.session': 'auth_session', 'auth.signIn': 'preview_sign_in', 'auth.signInWithGoogle': 'preview_sign_in_with_google', 'auth.signOut': 'auth_logout', 'files.list': 'files_list', 'files.upload': 'preview_files_upload', 'files.url': 'preview_files_url', 'files.update': 'files_update', 'files.delete': 'files_delete', 'runtime.ready': 'preview_ready', 'preview.error': 'preview_error' };
   function rpc(method, params = {}) {
     return new Promise((resolve, reject) => {
       const id = 'req_' + (++sequence);
@@ -95,6 +95,7 @@ export const runtimeClient = String.raw`
     auth: {
       session: () => request('auth.session'),
       signIn: () => request('auth.signIn'),
+      signInWithGoogle: () => request('auth.signInWithGoogle'),
       signOut: () => request('auth.signOut')
     },
     files: {

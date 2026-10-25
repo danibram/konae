@@ -75,6 +75,10 @@ pub(super) struct Manifest {
     pub(super) visibility: String,
     #[serde(default)]
     pub(super) signup_policy: Option<SignupPolicy>,
+    /// How people sign in. Absent in packages written before Google sign-in,
+    /// which import with password only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) sign_in_methods: Option<Vec<SignInMethod>>,
     /// Releases applied to the project when the package was captured.
     #[serde(default)]
     pub(super) published_revision: u64,
@@ -169,6 +173,9 @@ pub(super) fn check_manifest(manifest: &Manifest, files: &file_store::FileLimits
     ensure!(seen.contains("database"), "The package manifest lists no database.");
     if let Some(policy) = &manifest.signup_policy {
         SignupPolicy::from_input(policy.mode, &policy.allowlist).map_err(anyhow::Error::msg)?;
+    }
+    if let Some(methods) = &manifest.sign_in_methods {
+        sign_in_methods_from_input(methods).map_err(anyhow::Error::msg)?;
     }
     Ok(())
 }
@@ -281,6 +288,7 @@ pub(super) async fn export_with(state: &AppState, owner: &Owner, principal: &str
         project_id: deployment.project_id.clone(),
         visibility: if is_private(&deployment) { "private" } else { "public" }.into(),
         signup_policy: Some(deployment.signup_policy.clone()),
+        sign_in_methods: Some(deployment.sign_in_methods.clone()),
         published_revision,
         artifact_version: deployment.artifact_version.clone(),
         source_authority: project["sourceAuthority"].as_str().map(str::to_owned),
@@ -794,6 +802,7 @@ mod tests {
             project_id: "app".into(),
             visibility: "private".into(),
             signup_policy: None,
+            sign_in_methods: None,
             published_revision: 1,
             artifact_version: None,
             source_authority: None,
@@ -845,6 +854,20 @@ mod tests {
     }
 
     #[test]
+    fn sign_in_methods_travel_in_the_manifest_and_older_manifests_mean_password() {
+        let mut manifest = manifest();
+        let older: Manifest = serde_json::from_value(serde_json::to_value(&manifest).unwrap()).unwrap();
+        assert!(older.sign_in_methods.is_none());
+        assert!(serde_json::to_value(&manifest).unwrap().get("signInMethods").is_none());
+        manifest.sign_in_methods = Some(vec![SignInMethod::Password, SignInMethod::Google]);
+        let written = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(written["signInMethods"], serde_json::json!(["password", "google"]));
+        assert!(check_manifest(&manifest).is_ok());
+        manifest.sign_in_methods = Some(vec![SignInMethod::Google]);
+        assert_eq!(check_manifest(&manifest).unwrap_err().to_string(), PASSWORD_REQUIRED);
+    }
+
+    #[test]
     fn space_checks_refuse_with_both_numbers() {
         assert!(ensure_space(300 * MIB, 200 * MIB, "import this app").is_ok());
         let refused = ensure_space(100 * MIB, 200 * MIB, "import this app").unwrap_err().to_string();
@@ -861,6 +884,8 @@ mod tests {
         // The keys table as a Kernel from before `revoked_reason` wrote it.
         db.execute_batch(
             "CREATE TABLE app_users(id TEXT PRIMARY KEY); INSERT INTO app_users VALUES('u1');
+             CREATE TABLE app_user_identities(user_id TEXT, issuer TEXT, subject TEXT, email TEXT, linked_at INTEGER);
+             INSERT INTO app_user_identities VALUES('u1', 'https://accounts.google.com', 'g-1', 'a@example.test', 1);
              CREATE TABLE app_sessions(token_hash TEXT); INSERT INTO app_sessions VALUES('secret-session-hash');
              CREATE TABLE account_challenges(token_hash TEXT); INSERT INTO account_challenges VALUES('secret-link-hash');
              CREATE TABLE api_keys(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
@@ -878,6 +903,8 @@ mod tests {
         let db = Connection::open(&path).unwrap();
         let users: i64 = db.query_row("SELECT COUNT(*) FROM app_users", [], |r| r.get(0)).unwrap();
         assert_eq!(users, 1);
+        let links: i64 = db.query_row("SELECT COUNT(*) FROM app_user_identities", [], |r| r.get(0)).unwrap();
+        assert_eq!(links, 1, "a package carries the Google links");
         let keys: Vec<(String, Option<i64>, Option<String>)> = db
             .prepare("SELECT id, revoked_at, revoked_reason FROM api_keys ORDER BY id")
             .unwrap()
