@@ -47,7 +47,7 @@ describe("the SDK contract", () => {
   test("lists each module and call once, with a signature and an example that name it", () => {
     const calls = contractCalls();
     expect(new Set(calls).size).toBe(calls.length);
-    expect(calls).toEqual(["auth.session", "auth.signIn", "auth.signOut", "actions.call", "files.list", "files.upload", "files.url", "files.update", "files.delete"]);
+    expect(calls).toEqual(["auth.session", "auth.signIn", "auth.signInWithGoogle", "auth.signOut", "actions.call", "files.list", "files.upload", "files.url", "files.update", "files.delete"]);
     for (const module of sdkContract.modules) {
       for (const call of module.calls) {
         const name = `miniapp.${module.name}.${call.name}`;

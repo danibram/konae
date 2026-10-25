@@ -10,6 +10,7 @@ import kernelAppOwnerSource from "../../kernel-rs/src/app_owner.rs?raw";
 import kernelArtifactSource from "../../kernel-rs/src/artifact.rs?raw";
 import kernelInvitationsSource from "../../kernel-rs/src/invitations.rs?raw";
 import kernelClerkSource from "../../kernel-rs/src/clerk.rs?raw";
+import kernelGoogleSource from "../../kernel-rs/src/google.rs?raw";
 import kernelCopiesSource from "../../kernel-rs/src/copies.rs?raw";
 import kernelDomainSource from "../../kernel-rs/src/domain.rs?raw";
 import kernelDomainCases from "../../kernel-rs/src/domain-cases.json?raw";
@@ -69,6 +70,7 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/artifact.rs", contents: kernelArtifactSource },
   { path: "kernel-rs/src/invitations.rs", contents: kernelInvitationsSource },
   { path: "kernel-rs/src/clerk.rs", contents: kernelClerkSource },
+  { path: "kernel-rs/src/google.rs", contents: kernelGoogleSource },
   { path: "kernel-rs/src/copies.rs", contents: kernelCopiesSource },
   { path: "kernel-rs/src/domain.rs", contents: kernelDomainSource },
   { path: "kernel-rs/src/domain-cases.json", contents: kernelDomainCases },

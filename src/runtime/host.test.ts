@@ -109,6 +109,12 @@ describe("runtime host", () => {
     expect(await host.handle("auth.signIn", {})).toEqual({ userId: "alice_session", name: "Alice", role: "member" });
   });
 
+  test("the preview has no Google sign-in and says so", async () => {
+    const host = new MiniAppRuntimeHost("google", schema, actions);
+    await expect(host.handle("auth.signInWithGoogle", {})).rejects.toThrow("The editor preview has no Google sign-in.");
+    expect(await host.handle("auth.session", {})).toMatchObject({ role: "anonymous" });
+  });
+
   test("a signed-out preview runs anonymous actions and refuses the rest, like a public deployment", async () => {
     const accessActions = JSON.stringify({
       version: 1,

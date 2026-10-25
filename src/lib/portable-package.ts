@@ -47,6 +47,8 @@ export type PackageManifest = {
   projectId: string;
   visibility: "public" | "private";
   signupPolicy?: { mode: "open" | "allowlist" | "closed"; allowlist: string[] };
+  /** How people sign in. Absent in packages written before Google sign-in, which mean password only. */
+  signInMethods?: ("password" | "google")[];
   publishedRevision: number;
   artifactVersion?: string | null;
   sourceAuthority?: string | null;

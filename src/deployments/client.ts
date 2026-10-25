@@ -51,6 +51,24 @@ export function saveSignupPolicy(deploymentId: string, mode: SignupMode, allowli
   return platformMcp.call<SignupPolicy>("signup_policy_set", { deploymentId, mode, allowlist });
 }
 
+/**
+ * How people sign in to a deployed app. Password is always on. `offered` is
+ * what the sign-in page shows: google only when the installation has a
+ * Google client (`googleAvailable`). `notice` explains a Deployment that asks
+ * for Google on an installation without one, such as after an import.
+ */
+export type SignInMethod = "password" | "google";
+export type SignInMethods = { deploymentId: string; methods: SignInMethod[]; offered: SignInMethod[]; googleAvailable: boolean; notice?: string };
+
+export function readSignInMethods(deploymentId: string) {
+  return platformMcp.call<SignInMethods>("sign_in_methods_read", { deploymentId });
+}
+
+export function saveSignInMethods(deploymentId: string, google: boolean) {
+  const methods: SignInMethod[] = google ? ["password", "google"] : ["password"];
+  return platformMcp.call<SignInMethods>("sign_in_methods_set", { deploymentId, methods });
+}
+
 // App accounts and invitations. Every tool needs the manage_users permission,
 // which the owner's browser session holds. docs/mcp.md, "Users and invitations".
 

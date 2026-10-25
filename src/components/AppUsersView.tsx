@@ -1,16 +1,16 @@
 import { MailWarning, RefreshCw, Send, Users } from "lucide-react";
 import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import {
-  createAppInvitations, listAppInvitations, listAppUsers, openAppAsOwner, readMailStatus, readSignupPolicy, resendAppInvitation, resumeAppUser,
-  revokeAppInvitation, saveSignupPolicy, signupModes, suspendAppUser,
-  type AppInvitation, type AppUser, type AppUserState, type InvitationResult, type MailStatus, type SignupMode, type SignupPolicy,
+  createAppInvitations, listAppInvitations, listAppUsers, openAppAsOwner, readMailStatus, readSignInMethods, readSignupPolicy, resendAppInvitation, resumeAppUser,
+  revokeAppInvitation, saveSignInMethods, saveSignupPolicy, signupModes, suspendAppUser,
+  type AppInvitation, type AppUser, type AppUserState, type InvitationResult, type MailStatus, type SignInMethods, type SignupMode, type SignupPolicy,
 } from "../deployments/client";
 import type { DeploymentVisibility } from "../deployments/manifest";
 import {
   batchKey, expiryText, formatDate, invitationResultMessage, invitationView, mailReadiness, parseEmailBatch, signupModeCopy,
   userStateView, visibilityCopy, MAX_INVITATION_BATCH, type PendingBatch,
 } from "./app-access";
-import { Badge, Button, Card, EmptyState, Field, LoadingBlock, Select, Textarea } from "./ui";
+import { Badge, Button, Card, EmptyState, Field, LoadingBlock, Select, Switch, Textarea } from "./ui";
 import { useLoadingHold } from "./loading-hold";
 import { message, signedOut, useConfirm } from "./useConfirm";
 import "./app-access.css";
@@ -59,7 +59,10 @@ export function AppUsersView({ deploymentId, visibility, onSetVisibility }: Prop
           </Select>
         </Field>
         {deploymentId
-          ? ownerSignedOut ? SIGNED_OUT : <SignupPolicyControl deploymentId={deploymentId} onSignedOut={onSignedOut} onSaved={onChanged} />
+          ? ownerSignedOut ? SIGNED_OUT : <>
+            <SignupPolicyControl deploymentId={deploymentId} onSignedOut={onSignedOut} onSaved={onChanged} />
+            <SignInMethodsControl deploymentId={deploymentId} onSignedOut={onSignedOut} />
+          </>
           : <p className="access-note">You choose who can create an app account when you deploy. Invitation only is the choice for a private app.</p>}
       </Card>
       {!deploymentId ? (
@@ -146,6 +149,57 @@ function SignupPolicyControl({ deploymentId, onSignedOut, onSaved }: { deploymen
       <Button variant="primary" size="sm" loading={saving} disabled={unchanged} onClick={() => void save()}>Save signup policy</Button>
       <span role="status">{saved ? "Saved. The published app uses it now." : ""}</span>
     </div>
+  </>;
+}
+
+/**
+ * Continue with Google on the sign-in page. Hidden on an installation
+ * without a Google client, unless this app already asks for Google, as an
+ * imported one may: then it says why the sign-in page shows only the password.
+ */
+function SignInMethodsControl({ deploymentId, onSignedOut }: { deploymentId: string; onSignedOut: () => void }) {
+  const [methods, setMethods] = useState<SignInMethods | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    let current = true;
+    setMethods(null);
+    readSignInMethods(deploymentId).then((value) => { if (current) setMethods(value); }, (cause) => {
+      if (!current) return;
+      if (signedOut(cause)) onSignedOut();
+      else setError(message(cause));
+    });
+    return () => { current = false; };
+  }, [deploymentId, onSignedOut]);
+
+  if (!methods) return error ? <div className="access-error" role="alert">{error}</div> : null;
+  if (methods.notice) return <p className="access-note" role="status">{methods.notice}</p>;
+  if (!methods.googleAvailable) return null;
+
+  const google = methods.methods.includes("google");
+  const save = async (next: boolean) => {
+    setSaving(true);
+    setError("");
+    setSaved(false);
+    try {
+      setMethods(await saveSignInMethods(deploymentId, next));
+      setSaved(true);
+    } catch (cause) {
+      if (signedOut(cause)) onSignedOut();
+      setError(message(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <>
+    <Field label="Sign-in methods" help="Email and password always stay on. With Google on, the sign-in page also shows Continue with Google. The signup policy above still decides who may have an account, and an email that already has an account connects Google from its account page.">
+      <Switch checked={google} disabled={saving} label="Continue with Google" onChange={(next) => void save(next)} />
+    </Field>
+    {error && <div className="access-error" role="alert">{error}</div>}
+    <div className="access-actions"><span role="status">{saved ? "Saved. The published app uses it now." : ""}</span></div>
   </>;
 }
 

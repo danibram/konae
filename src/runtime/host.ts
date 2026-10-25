@@ -246,6 +246,9 @@ export class MiniAppRuntimeHost {
       case "auth.signIn":
         this.setPreviewActor("alice");
         return this.getRuntimeSession();
+      case "auth.signInWithGoogle":
+        // A named divergence: Google sign-in needs a published Deployment.
+        throw new Error("The editor preview has no Google sign-in.");
       case "auth.signOut":
         this.setPreviewActor("guest");
         return this.getRuntimeSession();
