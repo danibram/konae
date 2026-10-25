@@ -117,7 +117,8 @@ Small files stored by the Kernel for one Deployment. A file is private to the us
 Only the uploader can list or read a private file.
 On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.
 files.list and files.upload download over MCP, check the SHA-256 and return a Blob URL. The page's policy allows connect-src 'self' only, so fetch cannot read a Blob URL again. To fetch a file, or to show one without downloading every file, use files.url. It returns the file's path GET /_littlebox/files/<id> on the app's own origin, which img, fetch and a link all reach.
-The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the 20 MiB quota and its ID answers File not found from then on, through every door.
+The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the Deployment's file quota and its ID answers File not found from then on, through every door.
+The operator of the installation sets the per-file limit and the Deployment's file quota. The defaults are 2 MiB per file and 20 MiB per Deployment, and a refusal names the limits in force. Do not promise the defaults in an app's text.
 A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.
 
 miniapp.files.list(): List and download every file the current actor may read. Returns an array of { id, name, type, size, visibility, createdAt, ownerId, url }. ownerId is present only on files the caller uploaded. url is a Blob URL; it keeps the type for image/png, image/jpeg, image/gif, image/webp and image/avif and is application/octet-stream otherwise.
@@ -125,12 +126,12 @@ Refusals:
 - "File not found." when the file was removed or the actor may not read it
 - "Too many active transfers. Cancel completed transfers before starting another." when the actor already holds 2 transfers, or the Deployment holds 32
 - "Transfer not found or expired." when a transfer outlived its 10 minutes
-- "Invalid file size." when the Kernel announced a size outside 0 to 2 MiB
+- "Invalid file size." when the Kernel announced a size other than the size files.list gave for the file
 - "Invalid file block." when a downloaded block does not continue at the expected offset or exceeds 64 KiB
 - "File checksum mismatch." when the downloaded bytes do not match the SHA-256 the Kernel announced
 Limits:
 - every listed file is downloaded, one at a time, on each call
-- 2 MiB per file
+- each file up to the installation's per-file limit
 Editor preview: Reads files from browser storage and returns data URLs.
 
 miniapp.files.upload(file, options): Store a File or Blob for the signed-in user and return it as files.list would. Returns { id, name, type, size, visibility, createdAt, ownerId, url }. ownerId is present only on files the caller uploaded. url is a Blob URL; it keeps the type for image/png, image/jpeg, image/gif, image/webp and image/avif and is application/octet-stream otherwise.
@@ -138,17 +139,17 @@ Needs a signed-in user.
 Refusals:
 - "authentication-required" when no one is signed in
 - "File visibility must be private or public." when visibility is anything other than "private" or "public"; the SDK refuses before it sends anything
-- "Transfer size is outside the limit." when the file is empty or larger than 2 MiB
-- "This deployment has reached its 20 MiB file quota." when the Deployment's files would exceed 20 MiB together
+- "Files must be between 1 byte and <limit>." when the file is empty or larger than the installation's per-file limit, which the message names
+- "This deployment has reached its <limit> file quota." when the Deployment's files would exceed the installation's file quota together, which the message names
 - "File not found." when the file was removed or the actor may not read it
 - "Too many active transfers. Cancel completed transfers before starting another." when the actor already holds 2 transfers, or the Deployment holds 32
 - "Transfer not found or expired." when a transfer outlived its 10 minutes
-- "Invalid file size." when the Kernel announced a size outside 0 to 2 MiB
+- "Invalid file size." when the Kernel announced a size other than the size files.list gave for the file
 - "Invalid file block." when a downloaded block does not continue at the expected offset or exceeds 64 KiB
 - "File checksum mismatch." when the downloaded bytes do not match the SHA-256 the Kernel announced
 Limits:
-- 1 byte to 2 MiB per file
-- 20 MiB of files per Deployment
+- 1 byte up to the installation's per-file limit
+- the installation's file quota for all files of the Deployment together
 - 2 transfers at a time per user and 32 per Deployment; each expires after 10 minutes
 - the name is cut to 180 characters with / and \\ replaced by -; a type of 128 characters or more, or with a character other than a letter, a digit or one of !#$&^_.+-/, becomes application/octet-stream
 Editor preview: Stores the file in browser storage as a data URL.

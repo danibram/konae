@@ -460,6 +460,10 @@ async fn stage_copy(state: &AppState, staging: &Path, id: &str, created_at: u64)
         tokio::task::spawn_blocking(move || copy_deployment(&source, &target))
             .await?
             .with_context(|| format!("Deployment {deployment}"))?;
+        drop((_data, _identity));
+        copy_file_bytes(state, &deployment, &staging.join("deployments").join(&deployment).join("files"))
+            .await
+            .with_context(|| format!("The files of Deployment {deployment}"))?;
     }
     let (root, id) = (staging.to_owned(), id.to_owned());
     tokio::task::spawn_blocking(move || {
@@ -468,6 +472,29 @@ async fn stage_copy(state: &AppState, staging: &Path, id: &str, created_at: u64)
         Ok(manifest)
     })
     .await?
+}
+
+/// Reads every file the copied index names from the installation's store into
+/// the copy, as `<id>.blob`, so a copy restores without the store (ADR-0024).
+/// The bytes under a file ID never change, so reading them after the locks is
+/// safe; a file deleted since the index was taken is left out of the copy.
+async fn copy_file_bytes(state: &AppState, deployment: &str, files: &Path) -> Result<()> {
+    let index_path = files.join("index.json");
+    let index: Vec<serde_json::Value> = match tokio::fs::read(&index_path).await {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error_value) => return Err(error_value.into()),
+    };
+    let mut kept = Vec::with_capacity(index.len());
+    for file in index {
+        let id = file["id"].as_str().filter(|id| crate::valid_file_id(id)).context("A stored file has an invalid id.")?.to_owned();
+        if let Some(blob) = state.files.store.get(deployment, &id, None).await? {
+            crate::file_store::save_blob(blob, &files.join(format!("{id}.blob"))).await?;
+            kept.push(file);
+        }
+    }
+    tokio::fs::write(&index_path, serde_json::to_vec_pretty(&kept)?).await?;
+    Ok(())
 }
 
 fn copy_deployment(source: &Path, target: &Path) -> Result<()> {
@@ -486,7 +513,15 @@ fn copy_deployment(source: &Path, target: &Path) -> Result<()> {
                 std::fs::copy(&from, &to)?;
             }
             database if kind.is_file() && DEPLOYMENT_DATABASES.contains(&database) => vacuum_into(&from, &to)?,
-            "artifact" | "files" if kind.is_dir() => copy_tree(&from, &to)?,
+            "artifact" if kind.is_dir() => copy_tree(&from, &to)?,
+            // Only the index is taken under the locks; `copy_file_bytes`
+            // reads the bytes from the store once they are released.
+            "files" if kind.is_dir() => {
+                std::fs::create_dir_all(&to)?;
+                if from.join("index.json").is_file() {
+                    std::fs::copy(from.join("index.json"), to.join("index.json"))?;
+                }
+            }
             "backups" if kind.is_dir() => {
                 std::fs::create_dir_all(&to)?;
                 for backup in std::fs::read_dir(&from)? {
@@ -1148,6 +1183,7 @@ mod tests {
             s3: None,
             artifact_bucket: "artifacts".into(),
             data_bucket: "data".into(),
+            files: crate::file_store::Files::local(&root),
             data_root: root.into(),
             copies: Arc::new(CopyStatus::default()),
             accounts: crate::accounts::AccountSettings::local(),
@@ -1282,6 +1318,36 @@ mod tests {
         assert!(refuse(None, Some("deployments/x"), None, true).contains("must not start with deployments/"));
         assert!(refuse(None, Some("copies"), None, false).contains("LITTLEBOX_S3_ENDPOINT"));
         assert!(refuse(Some("/mnt/second"), None, Some("0"), false).contains("above zero"));
+    }
+
+    /// With the bytes in a bucket, the copy carries them, so the restored data
+    /// directory holds them in its folder and needs no bucket. A file whose
+    /// bytes are gone by the time the copy reads them is left out.
+    #[tokio::test]
+    async fn a_copy_of_an_s3_installation_carries_the_file_bytes() {
+        let (source, copies, restored) = (scratch("copy-s3-source"), scratch("copy-s3-target"), scratch("copy-s3-restored"));
+        let (deployment, _) = seed(&source);
+        let mut state = state(&source);
+        let s3: Arc<dyn crate::file_store::FileStore> = Arc::new(crate::file_store::tests::test_s3_store().await);
+        state.files.store = s3.clone();
+        let files = source.join("deployments").join(&deployment.id).join("files");
+        let seeded: Value = serde_json::from_slice(&std::fs::read(files.join("index.json")).unwrap()).unwrap();
+        let kept = seeded[0]["id"].as_str().unwrap().to_owned();
+        let vanished = uuid::Uuid::new_v4().to_string();
+        s3.put(&deployment.id, &kept, &files.join(format!("{kept}.blob"))).await.unwrap();
+        std::fs::remove_file(files.join(format!("{kept}.blob"))).unwrap();
+        std::fs::write(files.join("index.json"), json!([{"id": kept}, {"id": vanished}]).to_string()).unwrap();
+
+        run_copy(&state, &[Target::Directory(copies.clone())]).await.unwrap();
+        restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
+        let folder = restored.join("deployments").join(&deployment.id).join("files");
+        assert_eq!(std::fs::read(folder.join(format!("{kept}.blob"))).unwrap(), b"attachment");
+        let index: Value = serde_json::from_slice(&std::fs::read(folder.join("index.json")).unwrap()).unwrap();
+        assert_eq!(index, json!([{"id": kept}]));
+        assert!(!restored.join(crate::file_store::MARKER_FILE).exists(), "a restore starts on its folder");
+        for path in [source, copies, restored] {
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 
     #[tokio::test]

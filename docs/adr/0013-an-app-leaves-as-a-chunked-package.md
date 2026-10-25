@@ -1,6 +1,6 @@
 # An app leaves as a chunked package
 
-Status: accepted, 2026-11-06. Amends [ADR-0008](0008-authenticated-mcp-is-the-platform-operation-protocol.md). [ADR-0014](0014-an-app-migrates-with-one-writer-at-a-time.md) adds the version 2 manifest.
+Status: accepted, 2026-11-06. Amends [ADR-0008](0008-authenticated-mcp-is-the-platform-operation-protocol.md). [ADR-0014](0014-an-app-migrates-with-one-writer-at-a-time.md) adds the version 2 manifest. [ADR-0024](0024-a-deployments-file-bytes-may-live-outside-its-folder.md) reads file bytes from the installation's file store.
 
 `project_export` put an app's database, accounts and files in one JSON document as base64, capped at 16 MiB, while the quotas let a database reach 256 MiB, accounts 64 MiB and files 20 MiB. An app the host accepted could stop being exportable, and both ends held the whole document in memory. The same tool handed password hashes to any credential with the `read` scope.
 

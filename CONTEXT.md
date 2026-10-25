@@ -37,7 +37,7 @@ The validated, immutable static output of a Project revision that a Deployment s
 _Avoid_: Project source, build cache
 
 **Deployment**:
-The published, addressable instance of a Project with its own hostname, an optional custom domain, visibility, signup policy and database. Everything it is lives in one folder on the Kernel volume: its record, Build Artifact, databases, files and backups. Republishing replaces its Build Artifact and keeps its hostname and data; immutable release history does not exist yet.
+The published, addressable instance of a Project with its own hostname, an optional custom domain, visibility, signup policy and database. Everything it is lives in one folder on the Kernel volume: its record, Build Artifact, databases, file index and backups. The bytes of its files live in the installation's file store, which is that folder unless the operator points the Kernel at an S3 bucket; the index in the folder decides which files exist and who may read them, and a package carries the bytes either way (ADR-0024). Republishing replaces its Build Artifact and keeps its hostname and data; immutable release history does not exist yet.
 _Avoid_: Project, preview
 
 **Public Deployment**:

@@ -237,6 +237,9 @@ async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
             Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => {}
             Err(error_value) => return Err(error_value.into()),
         }
+        // The folder held the index, so no file of this Deployment is readable
+        // any more; a failure here leaves objects for files-reconcile.
+        super::file_store::forget_deployment(state.files.store.as_ref(), deployment).await;
         if let Some(s3) = state.s3.as_ref() {
             let keys = list_s3_keys(s3, &state.artifact_bucket, &format!("deployments/{deployment}/")).await?;
             for key in keys {
@@ -629,8 +632,14 @@ fn transfer_tools(runtime: bool) -> Vec<Value> {
         ),
         tool(
             "transfer_begin",
-            "Start a size-bounded upload with an expected SHA-256 checksum. An upload is at most 32 MiB unless it names a package component, which may be as large as that component's quota.",
-            json!({"size":{"type":"integer","minimum":1,"maximum":if runtime {2*1024*1024} else {super::package::MAX_COMPONENT_BYTES as usize}},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"projectId":{"type":"string"},"component":{"type":"string","enum":super::package::COMPONENT_NAMES}}),
+            if runtime {
+                "Start a size-bounded upload with an expected SHA-256 checksum. A file is at most the installation's per-file limit, which a refusal names."
+            } else {
+                "Start a size-bounded upload with an expected SHA-256 checksum. An upload is at most 32 MiB unless it names a package component, which may be as large as that component's quota."
+            },
+            // The bound depends on the installation's file limits, so the
+            // handler checks it and names the number.
+            json!({"size":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"projectId":{"type":"string"},"component":{"type":"string","enum":super::package::COMPONENT_NAMES}}),
             &["size", "sha256"],
             false,
         ),
@@ -1193,6 +1202,7 @@ async fn admin_call(
                 "runtimeEndpoint":"/_littlebox/mcp",
                 "chunkBytes":CHUNK,
                 "maxTransferBytes":MAX_TRANSFER,
+                "files":{"quotaBytes":state.files.limits.quota_bytes,"maxFileBytes":state.files.limits.max_file_bytes},
                 "yardstick":"A person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.",
                 "firstRun":"platform_guide topic rules, then pieces, then credentials. Publish with the publishing topic or bun run littlebox -- publish, then project_inspect and one actions_invoke.",
                 "workflow":[
@@ -2001,15 +2011,17 @@ async fn runtime_call(
             Ok(files)
         }
         "files_read" => {
+            // The whole file goes into the transfer, whatever range the request named.
+            let mut whole = headers.clone();
+            whole.remove(header::RANGE);
             let response = serve_file(
                 State(state.clone()),
                 AxumPath(a["fileId"].as_str().unwrap().to_owned()),
-                headers.clone(),
+                whole,
             )
             .await;
             anyhow::ensure!(response.status().is_success(), "File not found.");
-            let bytes = axum::body::to_bytes(response.into_body(), 2 * 1024 * 1024).await?;
-            let result = download(state, principal, &bytes, None).await;
+            let result = download_body(state, principal, response.into_body()).await;
             if let (Ok(_), Some(id)) = (&result, app) {
                 super::usage::count(&state.data_root, id, super::usage::Operation::FileRead);
             }
@@ -2036,12 +2048,14 @@ async fn runtime_call(
                 t["complete"] == true && t["direction"] == "upload",
                 "File upload is incomplete."
             );
-            let bytes =
-                tokio::fs::read(transfer_path(state, a["transferId"].as_str().unwrap())?).await?;
-            let body = json!({"name":a["name"],"type":a.get("type").cloned().unwrap_or(json!("application/octet-stream")),"dataUrl":encode_base64(&bytes),"visibility":visibility});
-            let request = Request::builder().body(Body::from(body.to_string()))?;
+            let upload = super::Upload {
+                name: a["name"].as_str(),
+                content_type: a.get("type").and_then(Value::as_str),
+                visibility: Some(visibility),
+            };
+            let source = transfer_path(state, id)?;
             let mut result =
-                response_value(upload_file(State(state.clone()), headers.clone(), request).await)
+                response_value(super::upload_from_path(state, headers, upload, &source).await)
                     .await?;
             result.as_object_mut().unwrap().remove("url");
             store(state)?.execute("INSERT INTO file_receipts(transfer_id,principal,request_hash,body) VALUES(?1,?2,?3,?4)",params![id,principal,request_hash,result.to_string()])?;
@@ -2179,6 +2193,44 @@ pub(super) async fn download(
     Ok(result)
 }
 
+/// Streams a response body into a new download transfer, hashing it on the
+/// way, so a file is never held in memory whole.
+async fn download_body(state: &AppState, principal: &str, body: Body) -> Result<Value> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+    let directory = state.data_root.join("transfers");
+    tokio::fs::create_dir_all(&directory).await?;
+    let scratch = directory.join(format!(".download-{}", Uuid::new_v4()));
+    let written = async {
+        let mut output = tokio::fs::File::create(&scratch).await?;
+        let mut hasher = sha2::Sha256::default();
+        let mut size = 0u64;
+        let mut stream = body.into_data_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            sha2::Digest::update(&mut hasher, &chunk);
+            output.write_all(&chunk).await?;
+            size += chunk.len() as u64;
+        }
+        output.flush().await?;
+        Ok::<_, anyhow::Error>((size, hex::encode(sha2::Digest::finalize(hasher))))
+    }
+    .await;
+    let created = match written {
+        Ok((size, sha256)) => new_transfer(state, principal, json!({"direction":"download","size":size,"sha256":sha256,"complete":true,"projectId":null})).await,
+        Err(error_value) => Err(error_value),
+    };
+    let moved = match created {
+        Ok(created) => match tokio::fs::rename(&scratch, transfer_path(state, created["transferId"].as_str().unwrap_or_default())?).await {
+            Ok(()) => return Ok(created),
+            Err(error_value) => Err(error_value.into()),
+        },
+        Err(error_value) => Err(error_value),
+    };
+    let _ = tokio::fs::remove_file(&scratch).await;
+    moved
+}
+
 async fn transfer_call(
     state: &AppState,
     principal: &str,
@@ -2191,8 +2243,8 @@ async fn transfer_call(
         let hash = a["sha256"].as_str().unwrap_or("");
         let component = a["component"].as_str().filter(|_| !runtime);
         let limit = match component {
-            _ if runtime => 2 * 1024 * 1024,
-            Some(component) => super::package::component_limit(component)?,
+            _ if runtime => state.files.limits.max_file_bytes,
+            Some(component) => super::package::component_limit(component, &state.files.limits)?,
             None => MAX_TRANSFER as u64,
         };
         match component {
@@ -2200,6 +2252,7 @@ async fn transfer_call(
                 size > 0 && size <= limit,
                 "Transfer size is outside the limit of {limit} bytes for the {component} component."
             ),
+            None if runtime => anyhow::ensure!(size > 0 && size <= limit, "{}", state.files.limits.file_size_refused()),
             None => anyhow::ensure!(size > 0 && size <= limit, "Transfer size is outside the limit."),
         }
         anyhow::ensure!(
@@ -2701,6 +2754,25 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
+    /// The runtime schema leaves the size bound to the handler, which knows
+    /// the installation's per-file limit and names it.
+    #[tokio::test]
+    async fn a_runtime_upload_is_bounded_by_the_configured_per_file_limit() {
+        let root = std::env::temp_dir().join(format!("littlebox-runtime-limit-{}", Uuid::new_v4()));
+        let (mut state, _) = crate::tests::login_test_state(&root, "public").await;
+        state.files.limits = crate::file_store::FileLimits::parse(Some("10485760"), Some("5242880")).unwrap();
+        let schema = transfer_tools(true).into_iter().find(|tool| tool["name"] == "transfer_begin").unwrap()["inputSchema"].clone();
+        let sha = "0".repeat(64);
+        let three_mib = json!({"size": 3 * 1024 * 1024, "sha256": sha});
+        validate_arguments(&three_mib, &schema).unwrap();
+        assert!(transfer_call(&state, "runtime:d1:user-a", "transfer_begin", &three_mib, true).await.is_ok());
+        let six_mib = json!({"size": 6 * 1024 * 1024, "sha256": sha});
+        validate_arguments(&six_mib, &schema).unwrap();
+        let refused = transfer_call(&state, "runtime:d1:user-a", "transfer_begin", &six_mib, true).await.unwrap_err().to_string();
+        assert_eq!(refused, "Files must be between 1 byte and 5 MiB.");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
     #[tokio::test]
     async fn deleting_a_project_takes_its_deployment_files_and_address_with_it() {
         let root = std::env::temp_dir().join(format!("littlebox-delete-{}", Uuid::new_v4()));
@@ -2820,6 +2892,7 @@ mod tests {
             s3: None,
             artifact_bucket: "artifacts".into(),
             data_bucket: "data".into(),
+            files: crate::file_store::Files::local(&root),
             data_root: root.clone(),
             copies: Default::default(),
             admin_key: "test-admin".into(),
@@ -2881,6 +2954,7 @@ mod tests {
             s3: None,
             artifact_bucket: "artifacts".into(),
             data_bucket: "data".into(),
+            files: crate::file_store::Files::local(&root),
             data_root: root.clone(),
             copies: Default::default(),
             accounts: super::accounts::AccountSettings::local(),

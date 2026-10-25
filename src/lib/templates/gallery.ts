@@ -75,7 +75,7 @@ const html = `
 
   <form id="upload-form" class="ui-card ui-form" hidden>
     <label class="ui-field">Title<input class="ui-input" id="title" maxlength="120" required></label>
-    <label class="ui-field">Image, up to 2 MiB<input class="ui-input" id="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif" required></label>
+    <label class="ui-field">Image<input class="ui-input" id="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif" required></label>
     <button class="ui-button ui-button-primary" type="submit">Add to the gallery</button>
   </form>
   <p id="status" class="ui-status" role="status" aria-live="polite"></p>

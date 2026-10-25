@@ -37,6 +37,7 @@ mod clerk;
 mod copies;
 mod domain;
 mod eject;
+mod file_store;
 mod files;
 mod guard;
 mod guide;
@@ -70,6 +71,8 @@ struct AppState {
     artifact_bucket: String,
     data_bucket: String,
     data_root: PathBuf,
+    /// Where file bytes live and how many a Deployment may hold.
+    files: file_store::Files,
     copies: Arc<copies::CopyStatus>,
     admin_key: String,
     public_origin: String,
@@ -381,6 +384,7 @@ struct ActionBinding {
 async fn main() -> Result<()> {
     if clerk::operator_command()? { return Ok(()); }
     if copies::operator_command().await? { return Ok(()); }
+    if file_store::operator_command().await? { return Ok(()); }
     if recovery::operator_command().await? { return Ok(()); }
     if accounts::operator_command()? { return Ok(()); }
     if admission::operator_command()? { return Ok(()); }
@@ -406,6 +410,7 @@ async fn main() -> Result<()> {
     let copy_config = copies::CopyConfig::from_env(&data_root, s3.is_some())?;
     let schedule_clock = schedule::Clock::from_env(&bind)?;
     let deployments = load_deployments(&data_root, &public_origin).await?;
+    let files = file_store::Files::from_env(&data_root).await?;
     let state = AppState {
         deployments: Arc::new(RwLock::new(deployments)),
         db_locks: LockMap::default(),
@@ -413,6 +418,7 @@ async fn main() -> Result<()> {
         artifact_bucket,
         data_bucket,
         data_root,
+        files,
         copies: Arc::new(copies::CopyStatus::new(copy_config.as_ref())),
         admin_key,
         public_origin,
@@ -466,6 +472,8 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({"ok": true, "kernel": "littlebox-rust", "version": 1,
         "artifactStore": if state.s3.is_some() { "filesystem+s3" } else { "filesystem" },
         "copies": state.copies.health(),
+        "files": {"store": state.files.store.kind(), "quotaBytes": state.files.limits.quota_bytes,
+            "maxFileBytes": state.files.limits.max_file_bytes},
         "mail": state.accounts.queue.as_ref().map(|queue| queue.health())}))
 }
 
@@ -699,6 +707,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             .and_then(|()| migration::imported(&state.data_root, &id, &deployment.project_id, &package.manifest))
         {
             let _ = tokio::fs::remove_dir_all(&directory).await;
+            file_store::forget_deployment(state.files.store.as_ref(), &id).await;
             return error(StatusCode::BAD_REQUEST, &format!("Package import failed: {error_value:#}"));
         }
     }
@@ -757,7 +766,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
     }
     if let Some(files) = input.initial_files.as_ref() {
         let files_dir = directory.join("files");
-        if let Err(error_value) = restore_initial_files(&files_dir, files, 16 * 1024 * 1024).await {
+        if let Err(error_value) = restore_initial_files(&state.files, &id, &files_dir, files, 16 * 1024 * 1024).await {
             return error(
                 StatusCode::BAD_REQUEST,
                 &format!("File import failed: {error_value}"),
@@ -1253,6 +1262,9 @@ async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Respon
     }
 }
 
+/// The JSON upload, `{ name, type, dataUrl, visibility }`, that tests use.
+/// Runtime MCP uploads arrive as transfers and go to [`upload_from_path`].
+#[cfg(test)]
 async fn upload_file(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1261,17 +1273,18 @@ async fn upload_file(
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
-    let actor = match authenticate_deployment(&state, &deployment, &headers) {
-        Ok(Some(actor)) => actor,
-        Ok(None) => return error(StatusCode::UNAUTHORIZED, "authentication-required"),
-        Err(response) => return response,
-    };
-    let bytes = match axum::body::to_bytes(request.into_body(), 3_000_000).await {
+    if let Err(response) = upload_actor(&state, &deployment, &headers) {
+        return response;
+    }
+    let limits = state.files.limits;
+    // Base64 takes four bytes for every three, and the JSON around it a little more.
+    let body_limit = (limits.max_file_bytes / 3 * 4 + 64 * 1024).min(usize::MAX as u64) as usize;
+    let bytes = match axum::body::to_bytes(request.into_body(), body_limit).await {
         Ok(bytes) => bytes,
         Err(_) => {
             return error(
                 StatusCode::PAYLOAD_TOO_LARGE,
-                "File upload exceeds the 2 MiB limit.",
+                &format!("File upload exceeds the {} limit.", limits.max_file()),
             );
         }
     };
@@ -1284,7 +1297,94 @@ async fn upload_file(
             );
         }
     };
-    let visibility = match input.get("visibility").and_then(Value::as_str) {
+    let data = match input
+        .get("dataUrl")
+        .and_then(Value::as_str)
+        .map(decode_base64)
+        .transpose()
+    {
+        Ok(Some(value)) => value,
+        _ => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "File upload dataUrl must contain base64 data.",
+            );
+        }
+    };
+    let scratch = state.data_root.join("transfers");
+    let source = scratch.join(format!(".upload-{}", Uuid::new_v4()));
+    let written = async {
+        tokio::fs::create_dir_all(&scratch).await?;
+        tokio::fs::write(&source, &data).await
+    }
+    .await;
+    if let Err(e) = written {
+        let _ = tokio::fs::remove_file(&source).await;
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+    }
+    let upload = Upload {
+        name: input.get("name").and_then(Value::as_str),
+        content_type: input.get("type").and_then(Value::as_str),
+        visibility: input.get("visibility").and_then(Value::as_str),
+    };
+    let response = upload_from_path(&state, &headers, upload, &source).await;
+    let _ = tokio::fs::remove_file(&source).await;
+    response
+}
+
+/// What the uploader says about a file besides its bytes.
+struct Upload<'a> {
+    name: Option<&'a str>,
+    content_type: Option<&'a str>,
+    visibility: Option<&'a str>,
+}
+
+fn upload_actor(state: &AppState, deployment: &Deployment, headers: &HeaderMap) -> Result<AuthUser, Response> {
+    match authenticate_deployment(state, deployment, headers) {
+        Ok(Some(actor)) => Ok(actor),
+        Ok(None) => Err(error(StatusCode::UNAUTHORIZED, "authentication-required")),
+        Err(response) => Err(response),
+    }
+}
+
+/// Reads the index under the Deployment's lock. A missing index is an empty one.
+async fn read_file_index(directory: &Path) -> Result<Vec<Value>, Response> {
+    match tokio::fs::read(directory.join("index.json")).await {
+        Ok(bytes) => serde_json::from_slice::<Vec<Value>>(&bytes)
+            .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "File index is invalid.")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())),
+    }
+}
+
+/// The refusal when one more file of `size` bytes would not fit.
+fn file_room(state: &AppState, files: &[Value], size: u64) -> Option<Response> {
+    let used = files
+        .iter()
+        .filter_map(|file| file["size"].as_u64())
+        .sum::<u64>();
+    if used.saturating_add(size) > state.files.limits.quota_bytes {
+        return Some(error(StatusCode::PAYLOAD_TOO_LARGE, &state.files.limits.quota_reached()));
+    }
+    if files.len() >= files::MAX_FILES {
+        return Some(error(StatusCode::PAYLOAD_TOO_LARGE, files::TOO_MANY_FILES));
+    }
+    None
+}
+
+/// Stores the bytes of `source` as a new file of the signed-in user. The
+/// bytes go to the store before the index names them, outside the
+/// Deployment's lock, so a slow store holds up no action; the quota is
+/// checked before and again when the index changes.
+async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upload<'_>, source: &Path) -> Response {
+    let Some(deployment) = deployment_for(state, headers).await else {
+        return error(StatusCode::NOT_FOUND, "Deployment not found.");
+    };
+    let actor = match upload_actor(state, &deployment, headers) {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    let visibility = match upload.visibility {
         None | Some("private") => "private",
         Some("public") => "public",
         Some(_) => {
@@ -1294,18 +1394,16 @@ async fn upload_file(
             );
         }
     };
-    let name = input
-        .get("name")
-        .and_then(Value::as_str)
+    let name = upload
+        .name
         .unwrap_or("file")
         .replace(['/', '\\'], "-")
         .chars()
         .filter(|character| !character.is_control())
         .take(180)
         .collect::<String>();
-    let content_type = input
-        .get("type")
-        .and_then(Value::as_str)
+    let content_type = upload
+        .content_type
         .filter(|v| {
             v.len() < 128
                 && v.bytes()
@@ -1313,78 +1411,65 @@ async fn upload_file(
         })
         .unwrap_or("application/octet-stream")
         .to_owned();
-    let data = match input
-        .get("dataUrl")
-        .and_then(Value::as_str)
-        .map(decode_base64)
-        .transpose()
-    {
-        Ok(Some(value)) if !value.is_empty() && value.len() <= 2 * 1024 * 1024 => value,
-        Ok(Some(_)) => {
-            return error(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "Files must be between 1 byte and 2 MiB.",
-            );
-        }
-        _ => {
-            return error(
-                StatusCode::BAD_REQUEST,
-                "File upload dataUrl must contain base64 data.",
-            );
-        }
-    };
-    let _guard = database_lock(&state, &deployment.id).await;
-    let directory = state
-        .data_root
-        .join("deployments")
-        .join(&deployment.id)
-        .join("files");
-    if let Err(e) = tokio::fs::create_dir_all(&directory).await {
-        return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
-    }
-    let mut files = match tokio::fs::read(directory.join("index.json")).await {
-        Ok(bytes) => match serde_json::from_slice::<Vec<Value>>(&bytes) {
-            Ok(files) => files,
-            Err(_) => return error(StatusCode::INTERNAL_SERVER_ERROR, "File index is invalid."),
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+    let size = match tokio::fs::metadata(source).await {
+        Ok(metadata) => metadata.len(),
         Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
-    let used = files
-        .iter()
-        .filter_map(|file| file["size"].as_u64())
-        .sum::<u64>();
-    if used + data.len() as u64 > 20 * 1024 * 1024 {
-        return error(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "This deployment has reached its 20 MiB file quota.",
-        );
+    if size == 0 || size > state.files.limits.max_file_bytes {
+        return error(StatusCode::PAYLOAD_TOO_LARGE, &state.files.limits.file_size_refused());
     }
-    if files.len() >= files::MAX_FILES {
-        return error(StatusCode::PAYLOAD_TOO_LARGE, files::TOO_MANY_FILES);
+    let directory = deployment_dir(state, &deployment.id).join("files");
+    {
+        let _guard = database_lock(state, &deployment.id).await;
+        match read_file_index(&directory).await {
+            Ok(files) => {
+                if let Some(refused) = file_room(state, &files, size) {
+                    return refused;
+                }
+            }
+            Err(response) => return response,
+        }
     }
     let id = Uuid::new_v4().to_string();
+    if let Err(e) = state.files.store.put(&deployment.id, &id, source).await {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The file could not be stored: {e:#}"));
+    }
     let metadata = json!({
         "id": id,
         "name": name,
         "type": content_type,
-        "size": data.len(),
+        "size": size,
         "visibility": visibility,
         "ownerId": actor.user_id,
         "createdAt": now_ms(),
     });
-    if let Err(e) = tokio::fs::write(directory.join(format!("{id}.blob")), &data).await {
-        return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+    let indexed = async {
+        let _guard = database_lock(state, &deployment.id).await;
+        tokio::fs::create_dir_all(&directory)
+            .await
+            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        let mut files = read_file_index(&directory).await?;
+        if let Some(refused) = file_room(state, &files, size) {
+            return Err(refused);
+        }
+        files.insert(0, metadata.clone());
+        let index = serde_json::to_vec_pretty(&files)
+            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        write_atomic(&directory.join("index.json"), &index)
+            .await
+            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
     }
-    files.insert(0, metadata.clone());
-    let index = match serde_json::to_vec_pretty(&files) {
-        Ok(bytes) => bytes,
-        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-    if let Err(e) = write_atomic(&directory.join("index.json"), &index).await {
-        return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+    .await;
+    match indexed {
+        Ok(()) => Json(json!({"result": metadata})).into_response(),
+        Err(response) => {
+            // No index names the bytes, so nothing can read them.
+            if let Err(e) = state.files.store.delete(&deployment.id, &id).await {
+                eprintln!("littlebox: could not remove the bytes of refused file {id}: {e:#}");
+            }
+            response
+        }
     }
-    Json(json!({"result": metadata})).into_response()
 }
 
 async fn serve_file(
@@ -1404,14 +1489,10 @@ async fn serve_file(
         return error(StatusCode::UNAUTHORIZED, "authentication-required");
     }
     let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
-    if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+    if !valid_file_id(&id) {
         return error(StatusCode::NOT_FOUND, "File not found.");
     }
-    let directory = state
-        .data_root
-        .join("deployments")
-        .join(&deployment.id)
-        .join("files");
+    let directory = deployment_dir(&state, &deployment.id).join("files");
     let index = match tokio::fs::read(directory.join("index.json")).await {
         Ok(bytes) => serde_json::from_slice::<Vec<Value>>(&bytes).unwrap_or_default(),
         Err(_) => return error(StatusCode::NOT_FOUND, "File not found."),
@@ -1425,15 +1506,57 @@ async fn serve_file(
     if !file_readable(metadata, actor_id, private_deployment) {
         return error(StatusCode::NOT_FOUND, "File not found.");
     }
-    match tokio::fs::read(directory.join(format!("{id}.blob"))).await {
-        Ok(bytes) => file_response(metadata, bytes),
-        Err(_) => error(StatusCode::NOT_FOUND, "File not found."),
-    }
+    file_response(&state, &deployment.id, metadata, &headers).await
 }
 
-/// A stored file's bytes with its own type. Raster images display inline;
-/// everything else downloads, and nothing in it may run.
-fn file_response(metadata: &Value, bytes: Vec<u8>) -> Response {
+/// The one byte range a `Range` header asks for, as `start..end`. `None`
+/// for no header or one this path does not serve, which then gets the whole
+/// file; `Err` for a range that starts past the end.
+fn requested_range(headers: &HeaderMap, size: u64) -> Result<Option<std::ops::Range<u64>>, ()> {
+    let Some(value) = headers.get(header::RANGE).and_then(|value| value.to_str().ok()) else {
+        return Ok(None);
+    };
+    let Some(spec) = value.trim().strip_prefix("bytes=") else { return Ok(None) };
+    if spec.contains(',') {
+        return Ok(None);
+    }
+    let Some((first, last)) = spec.split_once('-') else { return Ok(None) };
+    let (first, last) = (first.trim(), last.trim());
+    let range = match (first.parse::<u64>().ok(), last.parse::<u64>().ok()) {
+        (Some(start), _) if start >= size => return Err(()),
+        (Some(start), Some(end)) if end >= start => start..end.saturating_add(1).min(size),
+        (Some(start), None) if last.is_empty() => start..size,
+        (None, Some(suffix)) if first.is_empty() && suffix > 0 => size.saturating_sub(suffix)..size,
+        _ => return Ok(None),
+    };
+    Ok(Some(range))
+}
+
+/// A stored file's bytes with its own type, streamed from the store. Raster
+/// images display inline; everything else downloads, and nothing in it may
+/// run. A single `Range` gets 206 with that part.
+async fn file_response(state: &AppState, deployment: &str, metadata: &Value, headers: &HeaderMap) -> Response {
+    let not_found = || error(StatusCode::NOT_FOUND, "File not found.");
+    let Some(id) = metadata["id"].as_str() else { return not_found() };
+    let size = metadata["size"].as_u64().unwrap_or(0);
+    let range = match requested_range(headers, size) {
+        Ok(range) => range,
+        Err(()) => {
+            let mut response = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+            if let Ok(value) = HeaderValue::from_str(&format!("bytes */{size}")) {
+                response.headers_mut().insert(header::CONTENT_RANGE, value);
+            }
+            return response;
+        }
+    };
+    let blob = match state.files.store.get(deployment, id, range.clone()).await {
+        Ok(Some(blob)) => blob,
+        Ok(None) => return not_found(),
+        Err(e) => {
+            eprintln!("littlebox: could not read file {id}: {e:#}");
+            return not_found();
+        }
+    };
     let content_type = metadata["type"]
         .as_str()
         .unwrap_or("application/octet-stream");
@@ -1445,21 +1568,32 @@ fn file_response(metadata: &Value, bytes: Vec<u8>) -> Response {
         "image/avif",
     ]
     .contains(&content_type);
-    let mut response = Response::new(Body::from(bytes));
-    response.headers_mut().insert(
+    let length = blob.length;
+    let mut response = Response::new(Body::from_stream(tokio_util::io::ReaderStream::with_capacity(blob.reader, 64 * 1024)));
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
+    headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    if let Some(range) = range {
+        *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+        if let Ok(value) = HeaderValue::from_str(&format!("bytes {}-{}/{size}", range.start, range.end.saturating_sub(1))) {
+            response.headers_mut().insert(header::CONTENT_RANGE, value);
+        }
+    }
+    let headers = response.headers_mut();
+    headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_str(files::served_type(content_type))
             .unwrap_or(HeaderValue::from_static("application/octet-stream")),
     );
-    response.headers_mut().insert(
+    headers.insert(
         header::CONTENT_DISPOSITION,
         HeaderValue::from_static(if inline { "inline" } else { "attachment" }),
     );
-    response.headers_mut().insert(
+    headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    response.headers_mut().insert(
+    headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static("default-src 'none'; sandbox"),
     );
@@ -1834,7 +1968,9 @@ async fn portable_state(state: &AppState, deployment: &Deployment) -> Result<Val
         if !valid_file_id(file_id) {
             anyhow::bail!("Stored file id is invalid.");
         }
-        let bytes = tokio::fs::read(files_dir.join(format!("{file_id}.blob"))).await?;
+        let bytes = file_store::read_all(state.files.store.as_ref(), &deployment.id, file_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Stored file {file_id} has no data."))?;
         let mut item = metadata
             .as_object()
             .cloned()
@@ -3024,7 +3160,11 @@ fn initialize_identity_from_base64(path: &Path, encoded: &str, maximum_bytes: us
     Ok(())
 }
 
+/// Installs the small format's file bundle: the bytes through the store, the
+/// index into `directory`, the Deployment's `files` folder.
 async fn restore_initial_files(
+    files_store: &file_store::Files,
+    deployment: &str,
     directory: &Path,
     encoded: &str,
     maximum_bytes: usize,
@@ -3054,8 +3194,8 @@ async fn restore_initial_files(
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("Initial file data is missing."))?,
         )?;
-        if data.len() > 2 * 1024 * 1024 {
-            anyhow::bail!("An initial file exceeds the 2 MiB limit.");
+        if data.len() as u64 > files_store.limits.max_file_bytes {
+            anyhow::bail!("An initial file exceeds the {} limit.", files_store.limits.max_file());
         }
         total += data.len();
         if total > maximum_bytes {
@@ -3096,7 +3236,11 @@ async fn restore_initial_files(
         if let Some(owner) = file_owner(file).filter(|owner| accepted_owner_id(owner)) {
             restored["ownerId"] = Value::String(owner.to_owned());
         }
-        tokio::fs::write(directory.join(format!("{id}.blob")), data).await?;
+        let source = directory.join(format!(".{id}.initial-{}", Uuid::new_v4()));
+        tokio::fs::write(&source, data).await?;
+        let stored = files_store.store.put(deployment, id, &source).await;
+        let _ = tokio::fs::remove_file(&source).await;
+        stored?;
         metadata.push(restored);
     }
     write_atomic(&directory.join("index.json"), &serde_json::to_vec_pretty(&metadata)?).await?;
@@ -3709,6 +3853,7 @@ mod tests {
             s3: None,
             artifact_bucket: "artifacts".into(),
             data_bucket: "data".into(),
+            files: crate::file_store::Files::local(&root),
             data_root: root.into(),
             copies: Arc::new(copies::CopyStatus::default()),
             admin_key: "test-admin".into(),
@@ -4277,6 +4422,7 @@ mod tests {
             s3: None,
             artifact_bucket: "artifacts".into(),
             data_bucket: "data".into(),
+            files: crate::file_store::Files::local(&root),
             data_root: root.into(),
             copies: Arc::new(copies::CopyStatus::default()),
             admin_key: "test-admin".into(),
@@ -5038,14 +5184,14 @@ mod tests {
         let (member, _) = signed_in(&private_state, &private_deployment.id, &private_headers, "member@example.test");
         assert_eq!(list_files(State(private_state), member).await.status(), StatusCode::OK);
 
-        let restored = root.join("restored");
+        let restored = root.join("deployments").join("restored").join("files");
         let kept = Uuid::new_v4().to_string();
         let orphan = Uuid::new_v4().to_string();
         let bundle = json!({"files": [
             {"id": kept, "name": "kept.txt", "type": "text/plain", "size": 2, "visibility": "public", "ownerId": "user-1", "createdAt": 1, "dataBase64": "aGk="},
             {"id": orphan, "name": "orphan.txt", "type": "text/plain", "size": 2, "visibility": "public", "createdAt": 1, "dataBase64": "aGk="}
         ]});
-        restore_initial_files(&restored, &encode_base64(bundle.to_string().as_bytes()), 16 * 1024 * 1024).await.unwrap();
+        restore_initial_files(&file_store::Files::local(&root), "restored", &restored, &encode_base64(bundle.to_string().as_bytes()), 16 * 1024 * 1024).await.unwrap();
         let restored_index: Vec<Value> = serde_json::from_slice(&tokio::fs::read(restored.join("index.json")).await.unwrap()).unwrap();
         assert_eq!(restored_index[0]["ownerId"], "user-1");
         assert_eq!(restored_index[0]["visibility"], "public");

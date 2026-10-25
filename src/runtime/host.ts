@@ -750,8 +750,8 @@ export class MiniAppRuntimeHost {
     if (!url.startsWith("data:")) throw new Error("Only local data URLs are supported in this prototype.");
     const visibility = candidate.visibility ?? "private";
     if (visibility !== "private" && visibility !== "public") throw new Error(badFileVisibility);
-    // The Kernel's limit and words for a transfer: 1 byte to 2 MiB.
-    if (!(size >= 1 && size <= 2 * 1024 * 1024)) throw new Error("Transfer size is outside the limit.");
+    // The words a Kernel with the default per-file limit refuses with.
+    if (!(size >= 1 && size <= 2 * 1024 * 1024)) throw new Error("Files must be between 1 byte and 2 MiB.");
     const file: StoredFile = {
       id: crypto.randomUUID(),
       name: String(candidate.name ?? "file"),

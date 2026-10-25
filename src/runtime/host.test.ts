@@ -309,8 +309,8 @@ describe("the preview refuses miniapp.files.upload with the Kernel's words", () 
     ["an empty file", 0],
     ["a file over 2 MiB", 2 * 1024 * 1024 + 1],
   ])("%s", async (_, size) => {
-    const message = "Transfer size is outside the limit.";
-    expect(uploadErrors.find((error) => error.message === message)?.preview).toBeUndefined();
+    const message = "Files must be between 1 byte and 2 MiB.";
+    expect(uploadErrors.find((error) => error.message === "Files must be between 1 byte and <limit>.")?.preview).toBeUndefined();
     const host = new MiniAppRuntimeHost("upload", schema, actions);
     host.setPreviewActor("alice");
     const answer = await handlePreviewMcp(host, {

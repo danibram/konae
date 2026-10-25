@@ -873,7 +873,7 @@ The member claims order 1. The second claim changes no row, so the Kernel answer
 ```
 <!-- /walkthrough:guard -->
 
-An upload is a transfer of at most 2 MiB, then `files_upload`. The file is private to the member who uploaded it. `miniapp.files.url(fileId)` returns its path, `/_littlebox/files/<id>`, which the member reads with the session cookie; a visitor of a private app gets 401 before any file is looked up.
+An upload is a transfer of at most the installation's per-file limit, 2 MiB by default, then `files_upload`. The file is private to the member who uploaded it. `miniapp.files.url(fileId)` returns its path, `/_littlebox/files/<id>`, which the member reads with the session cookie; a visitor of a private app gets 401 before any file is looked up.
 
 <!-- walkthrough:file -->
 ```json

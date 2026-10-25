@@ -1584,6 +1584,7 @@ mod tests {
             s3: None,
             artifact_bucket: "artifacts".into(),
             data_bucket: "data".into(),
+            files: crate::file_store::Files::local(&root),
             data_root: root.into(),
             copies: Arc::new(super::super::copies::CopyStatus::default()),
             admin_key: "test-admin".into(),

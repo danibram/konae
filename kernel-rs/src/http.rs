@@ -1176,7 +1176,7 @@ async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>
         Err(response) => return response,
     };
     let mut response = match caller {
-        Caller::Key(key) => read_file_as_key(&state, &deployment, &key, &id).await,
+        Caller::Key(key) => read_file_as_key(&state, &deployment, &key, &id, &headers).await,
         Caller::Person(_) => serve_file(State(state.clone()), AxumPath(id), headers).await,
         // A cookie from another origin must not reach the file, so the
         // visitor's request goes on without it.
@@ -1203,7 +1203,7 @@ fn key_reads(key: &ApiKey, visibility: &str, private_deployment: bool) -> bool {
     (visibility == "public" && !private_deployment) || key.files.iter().any(|named| named == visibility)
 }
 
-async fn read_file_as_key(state: &AppState, deployment: &Deployment, key: &ApiKey, id: &str) -> Response {
+async fn read_file_as_key(state: &AppState, deployment: &Deployment, key: &ApiKey, id: &str, headers: &HeaderMap) -> Response {
     let not_found = || error(StatusCode::NOT_FOUND, "File not found.");
     if !valid_file_id(id) {
         return not_found();
@@ -1217,10 +1217,7 @@ async fn read_file_as_key(state: &AppState, deployment: &Deployment, key: &ApiKe
     if !key_reads(key, file_visibility(metadata), is_private(deployment)) {
         return not_found();
     }
-    match tokio::fs::read(directory.join(format!("{id}.blob"))).await {
-        Ok(bytes) => file_response(metadata, bytes),
-        Err(_) => not_found(),
-    }
+    file_response(state, &deployment.id, metadata, headers).await
 }
 
 #[cfg(test)]
@@ -1342,6 +1339,7 @@ mod tests {
             s3: None,
             artifact_bucket: "artifacts".into(),
             data_bucket: "data".into(),
+            files: crate::file_store::Files::local(&root),
             data_root: root.into(),
             copies: Arc::new(super::super::copies::CopyStatus::default()),
             admin_key: "test-admin".into(),

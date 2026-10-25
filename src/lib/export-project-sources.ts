@@ -14,6 +14,7 @@ import kernelCopiesSource from "../../kernel-rs/src/copies.rs?raw";
 import kernelDomainSource from "../../kernel-rs/src/domain.rs?raw";
 import kernelDomainCases from "../../kernel-rs/src/domain-cases.json?raw";
 import kernelEjectSource from "../../kernel-rs/src/eject.rs?raw";
+import kernelFileStoreSource from "../../kernel-rs/src/file_store.rs?raw";
 import kernelFilesSource from "../../kernel-rs/src/files.rs?raw";
 import kernelGuardSource from "../../kernel-rs/src/guard.rs?raw";
 import kernelCallsSource from "../../kernel-rs/src/calls.rs?raw";
@@ -73,6 +74,7 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/domain.rs", contents: kernelDomainSource },
   { path: "kernel-rs/src/domain-cases.json", contents: kernelDomainCases },
   { path: "kernel-rs/src/eject.rs", contents: kernelEjectSource },
+  { path: "kernel-rs/src/file_store.rs", contents: kernelFileStoreSource },
   { path: "kernel-rs/src/files.rs", contents: kernelFilesSource },
   { path: "kernel-rs/src/guard.rs", contents: kernelGuardSource },
   { path: "kernel-rs/src/calls.rs", contents: kernelCallsSource },

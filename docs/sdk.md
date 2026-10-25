@@ -236,7 +236,8 @@ Small files stored by the Kernel for one Deployment. A file is private to the us
 - Only the uploader can list or read a private file.
 - On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.
 - files.list and files.upload download over MCP, check the SHA-256 and return a Blob URL. The page's policy allows connect-src 'self' only, so fetch cannot read a Blob URL again. To fetch a file, or to show one without downloading every file, use files.url. It returns the file's path GET /_littlebox/files/<id> on the app's own origin, which img, fetch and a link all reach.
-- The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the 20 MiB quota and its ID answers File not found from then on, through every door.
+- The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the Deployment's file quota and its ID answers File not found from then on, through every door.
+- The operator of the installation sets the per-file limit and the Deployment's file quota. The defaults are 2 MiB per file and 20 MiB per Deployment, and a refusal names the limits in force. Do not promise the defaults in an app's text.
 - A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.
 
 ### miniapp.files.list()
@@ -254,14 +255,14 @@ Returns an array of { id, name, type, size, visibility, createdAt, ownerId, url 
 | `File not found.` | the file was removed or the actor may not read it | Kernel | Never refuses |
 | `Too many active transfers. Cancel completed transfers before starting another.` | the actor already holds 2 transfers, or the Deployment holds 32 | Kernel | Never refuses |
 | `Transfer not found or expired.` | a transfer outlived its 10 minutes | Kernel | Never refuses |
-| `Invalid file size.` | the Kernel announced a size outside 0 to 2 MiB | SDK | Never refuses |
+| `Invalid file size.` | the Kernel announced a size other than the size files.list gave for the file | SDK | Never refuses |
 | `Invalid file block.` | a downloaded block does not continue at the expected offset or exceeds 64 KiB | SDK | Never refuses |
 | `File checksum mismatch.` | the downloaded bytes do not match the SHA-256 the Kernel announced | SDK | Never refuses |
 
 Limits:
 
 - every listed file is downloaded, one at a time, on each call
-- 2 MiB per file
+- each file up to the installation's per-file limit
 
 Editor preview: Reads files from browser storage and returns data URLs.
 
@@ -284,19 +285,19 @@ Returns { id, name, type, size, visibility, createdAt, ownerId, url }. ownerId i
 | --- | --- | --- | --- |
 | `authentication-required` | no one is signed in | Kernel | Same |
 | `File visibility must be private or public.` | visibility is anything other than "private" or "public"; the SDK refuses before it sends anything | SDK | Same |
-| `Transfer size is outside the limit.` | the file is empty or larger than 2 MiB | Kernel | Same |
-| `This deployment has reached its 20 MiB file quota.` | the Deployment's files would exceed 20 MiB together | Kernel | Never refuses |
+| `Files must be between 1 byte and <limit>.` | the file is empty or larger than the installation's per-file limit, which the message names | Kernel | Same |
+| `This deployment has reached its <limit> file quota.` | the Deployment's files would exceed the installation's file quota together, which the message names | Kernel | Never refuses |
 | `File not found.` | the file was removed or the actor may not read it | Kernel | Never refuses |
 | `Too many active transfers. Cancel completed transfers before starting another.` | the actor already holds 2 transfers, or the Deployment holds 32 | Kernel | Never refuses |
 | `Transfer not found or expired.` | a transfer outlived its 10 minutes | Kernel | Never refuses |
-| `Invalid file size.` | the Kernel announced a size outside 0 to 2 MiB | SDK | Never refuses |
+| `Invalid file size.` | the Kernel announced a size other than the size files.list gave for the file | SDK | Never refuses |
 | `Invalid file block.` | a downloaded block does not continue at the expected offset or exceeds 64 KiB | SDK | Never refuses |
 | `File checksum mismatch.` | the downloaded bytes do not match the SHA-256 the Kernel announced | SDK | Never refuses |
 
 Limits:
 
-- 1 byte to 2 MiB per file
-- 20 MiB of files per Deployment
+- 1 byte up to the installation's per-file limit
+- the installation's file quota for all files of the Deployment together
 - 2 transfers at a time per user and 32 per Deployment; each expires after 10 minutes
 - the name is cut to 180 characters with / and \ replaced by -; a type of 128 characters or more, or with a character other than a letter, a digit or one of !#$&^_.+-/, becomes application/octet-stream
 
