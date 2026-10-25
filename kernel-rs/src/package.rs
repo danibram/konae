@@ -862,9 +862,9 @@ mod tests {
         manifest.sign_in_methods = Some(vec![SignInMethod::Password, SignInMethod::Google]);
         let written = serde_json::to_value(&manifest).unwrap();
         assert_eq!(written["signInMethods"], serde_json::json!(["password", "google"]));
-        assert!(check_manifest(&manifest).is_ok());
+        assert!(check_manifest(&manifest, &Default::default()).is_ok());
         manifest.sign_in_methods = Some(vec![SignInMethod::Google]);
-        assert_eq!(check_manifest(&manifest).unwrap_err().to_string(), PASSWORD_REQUIRED);
+        assert_eq!(check_manifest(&manifest, &Default::default()).unwrap_err().to_string(), PASSWORD_REQUIRED);
     }
 
     #[test]

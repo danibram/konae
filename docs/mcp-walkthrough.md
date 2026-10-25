@@ -90,6 +90,10 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
 {
   "result": {
     "chunkBytes": 65536,
+    "files": {
+      "maxFileBytes": 2097152,
+      "quotaBytes": 20971520
+    },
     "firstRun": "platform_guide topic rules, then pieces, then credentials. Publish with the publishing topic or bun run littlebox -- publish, then project_inspect and one actions_invoke.",
     "guideTopics": [
       "rules",

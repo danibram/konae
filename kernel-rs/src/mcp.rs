@@ -2955,6 +2955,7 @@ mod tests {
             artifact_bucket: "artifacts".into(),
             data_bucket: "data".into(),
             data_root: std::env::temp_dir(),
+            files: crate::file_store::Files::local(std::env::temp_dir()),
             copies: Default::default(),
             admin_key: "test-admin".into(),
             accounts: super::accounts::AccountSettings::local(),

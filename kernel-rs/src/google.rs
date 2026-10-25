@@ -939,6 +939,7 @@ mod tests {
             artifact_bucket: "artifacts".into(),
             data_bucket: "data".into(),
             data_root: root.clone(),
+            files: crate::file_store::Files::local(&root),
             copies: Default::default(),
             admin_key: "test-admin".into(),
             accounts: AccountSettings {
