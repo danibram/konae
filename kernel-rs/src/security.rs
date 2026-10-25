@@ -206,7 +206,10 @@ pub(super) async fn headers(State(state): State<AppState>, request: Request, nex
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.to_ascii_lowercase().starts_with("text/html"));
-    let body = if parts.headers.contains_key(header::CONTENT_SECURITY_POLICY) {
+    // A 304 has no body to hash, and a browser replaces the stored headers
+    // with the ones a 304 sends, so a policy here would drop the page's
+    // inline-script hashes. The page keeps the policy it arrived with.
+    let body = if parts.headers.contains_key(header::CONTENT_SECURITY_POLICY) || parts.status == StatusCode::NOT_MODIFIED {
         body
     } else if html {
         let (hashes, body) = match axum::body::to_bytes(body, MAX_HASHED_HTML).await {
@@ -235,6 +238,32 @@ mod tests {
 
     fn sha(text: &str) -> String {
         format!("'sha256-{}'", encode_base64(&Sha256::digest(text.as_bytes())))
+    }
+
+    /// A browser keeps the headers a 304 sends in place of the stored ones,
+    /// so a 304 that carried a policy without the page's inline-script hashes
+    /// broke every published page on its second visit.
+    #[tokio::test]
+    async fn a_not_modified_answer_carries_no_policy() {
+        let root = std::env::temp_dir().join(format!("littlebox-security-304-{}", uuid::Uuid::new_v4()));
+        let (state, visitor) = crate::tests::login_test_state(&root, "public").await;
+        let app = axum::Router::new()
+            .route("/fresh", axum::routing::get(|| async { ([(header::CONTENT_TYPE, "text/html")], "<script>window.a=1</script>") }))
+            .route("/same", axum::routing::get(|| async { StatusCode::NOT_MODIFIED }))
+            .layer(axum::middleware::from_fn_with_state(state.clone(), headers))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let host = visitor[header::HOST].to_str().unwrap().to_owned();
+        let client = reqwest::Client::new();
+        let fresh = client.get(format!("http://{address}/fresh")).header("host", &host).send().await.unwrap();
+        let policy = fresh.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_owned();
+        assert!(policy.contains(&sha("window.a=1")), "{policy}");
+        let same = client.get(format!("http://{address}/same")).header("host", &host).send().await.unwrap();
+        assert_eq!(same.status(), StatusCode::NOT_MODIFIED);
+        assert!(same.headers().get(header::CONTENT_SECURITY_POLICY).is_none());
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[test]
