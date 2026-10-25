@@ -1,6 +1,6 @@
 # Architecture decisions
 
-Each record states its status and which earlier record it amends on its first line, and keeps its later changes as dated notes at the end, oldest first. The next free number is 0024. Before taking it, check `main`, because another branch may have taken it.
+Each record states its status and which earlier record it amends on its first line, and keeps its later changes as dated notes at the end, oldest first. The next free number is 0025. Before taking it, check `main`, because another branch may have taken it.
 
 | ADR | Decides | Amends | Amended by |
 | --- | --- | --- | --- |
@@ -16,7 +16,7 @@ Each record states its status and which earlier record it amends on its first li
 | [0010](0010-kernel-owns-usage-and-signals.md) | The Kernel keeps Usage and Signals per Deployment; a mutation may declare a guard | | 0017 |
 | [0011](0011-one-verified-account-core-for-creators-and-app-users.md) | One verified account core for creators and app users; invitation codes; app invitations; HTTP routes, callers and API keys | 0001, 0002 | 0014 |
 | [0012](0012-account-email-goes-through-a-persistent-queue.md) | Account email leaves through a persistent queue with a sender preflight and limits | | 0016 |
-| [0013](0013-an-app-leaves-as-a-chunked-package.md) | An app leaves as a chunked package behind `export_data`; API keys travel revoked | 0008 | 0014 |
+| [0013](0013-an-app-leaves-as-a-chunked-package.md) | An app leaves as a chunked package behind `export_data`; API keys travel revoked | 0008 | 0014, 0024 |
 | [0014](0014-an-app-migrates-with-one-writer-at-a-time.md) | A migration keeps one writer through maintenance and a confirmation; a restore applies the revocation record | 0011, 0013 | |
 | [0015](0015-a-deployment-answers-on-one-custom-domain.md) | A Deployment answers on one custom domain proved by a TXT record; a package carries the name without its token | 0008, 0013, 0014 | |
 | [0016](0016-a-mutation-may-notify-the-owner-or-the-actor.md) | A mutation may queue one email to the Project Owner or to the caller's verified email when it changes a row | 0010, 0012 | 0021 |
@@ -27,6 +27,7 @@ Each record states its status and which earlier record it amends on its first li
 | [0021](0021-a-notice-lists-its-rows-and-reaches-the-accounts-they-name.md) | A notice lists the rows its mutation changed, shows the run's time, and may reach each verified account a column of those rows names | 0016, 0017 | |
 | [0022](0022-the-build-agent-operates-the-platform-through-the-owners-mcp.md) | The editor's build agent reaches the Kernel through the owner's own MCP session, pinned to the open project, and still edits files only behind the Gate | 0003 | |
 | [0023](0023-an-app-database-runs-in-wal-mode-with-kept-connections.md) | An app Database runs in WAL mode with `synchronous=NORMAL`; Server Actions borrow kept connections, queries run side by side, mutations one at a time | | |
+| [0024](0024-a-deployments-file-bytes-may-live-outside-its-folder.md) | File quotas are installation settings; a Deployment's file bytes may live in an S3 bucket while its index stays in its folder; a copy carries the bytes | 0013 | |
 
 ## Which record answers a question
 
@@ -44,7 +45,7 @@ Each record states its status and which earlier record it amends on its first li
 | Who may an app email, and when? | 0012, 0016, 0021 |
 | What runs when nobody calls the app? | 0017 |
 | How does an account prove its email, and how does a creator get in? | 0011, 0012 |
-| What leaves with an app, and what stays behind? | 0013, 0014 |
+| What leaves with an app, and what stays behind? | 0013, 0014, 0024 |
 | What does a restore bring back? | 0005 note of 2026-11-06, 0011 notes on API keys, 0014 |
 | Which headers keep hosted code on its own origin? | 0008 update of 2026-11-06 |
 | How does an app answer on its own domain? | 0015 |
