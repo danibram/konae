@@ -1513,11 +1513,23 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
     if artifact::kernel_path(&path) {
         return artifact::not_found_page();
     }
+    let cache = ArtifactCache::of(&deployment);
+    // A publish writes a new artifact version, so within one version an address
+    // always resolves to the same bytes. An asset the browser already holds is
+    // answered before the artifact is read. A navigation still resolves its file
+    // so the page view counts by the file served.
+    let navigation = headers
+        .get("sec-fetch-dest")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("document"));
+    if !navigation && cache.version_tag().is_some_and(|tag| etag_matches(&headers, &tag)) {
+        return cache.not_modified(cache.version_tag().unwrap());
+    }
     let routing = artifact::routing(&deployment.manifest);
     for candidate in artifact::candidates(&path, routing) {
         if let Ok(bytes) = read_artifact(&state, &deployment, &candidate).await {
             count_page_view(&state, &deployment, &headers, &candidate);
-            return artifact_response(bytes, &candidate);
+            return cache.respond(&headers, bytes, &candidate);
         }
     }
     // A browser asks for /favicon.ico on every first visit. An app without one answers
@@ -1529,7 +1541,7 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
         artifact::Routing::Spa => match read_artifact(&state, &deployment, "index.html").await {
             Ok(bytes) => {
                 count_page_view(&state, &deployment, &headers, "index.html");
-                artifact_response(bytes, "index.html")
+                cache.respond(&headers, bytes, "index.html")
             }
             Err(_) => error(StatusCode::NOT_FOUND, "Artifact not found."),
         },
@@ -1642,6 +1654,68 @@ fn private_login_page(policy: &SignupPolicy, verification: auth::Verification) -
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+/// How a browser may keep a Deployment's files. Every file is stored but
+/// checked on each use (`no-cache`), so a publish shows at once and an
+/// unchanged file costs a 304. A private app's files are `private` so no shared
+/// cache holds a page that sits behind its login. File names are not
+/// guaranteed to carry a content hash, so nothing is marked `immutable`.
+struct ArtifactCache {
+    version: Option<String>,
+    private: bool,
+}
+
+impl ArtifactCache {
+    fn of(deployment: &Deployment) -> Self {
+        Self { version: deployment.artifact_version.clone(), private: is_private(deployment) }
+    }
+
+    fn version_tag(&self) -> Option<String> {
+        self.version.as_deref().map(|version| format!("\"{version}\""))
+    }
+
+    fn control(&self) -> HeaderValue {
+        HeaderValue::from_static(if self.private { "private, no-cache" } else { "public, no-cache" })
+    }
+
+    fn not_modified(&self, tag: String) -> Response {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        if let Ok(value) = HeaderValue::from_str(&tag) {
+            response.headers_mut().insert(header::ETAG, value);
+        }
+        response.headers_mut().insert(header::CACHE_CONTROL, self.control());
+        response
+    }
+
+    /// A Deployment without an artifact version tags each file by its bytes.
+    fn respond(&self, headers: &HeaderMap, bytes: Vec<u8>, path: &str) -> Response {
+        use sha2::{Digest, Sha256};
+        let tag = self
+            .version_tag()
+            .unwrap_or_else(|| format!("\"{}\"", hex::encode(&Sha256::digest(&bytes)[..16])));
+        if etag_matches(headers, &tag) {
+            return self.not_modified(tag);
+        }
+        let mut response = artifact_response(bytes, path);
+        if let Ok(value) = HeaderValue::from_str(&tag) {
+            response.headers_mut().insert(header::ETAG, value);
+        }
+        response.headers_mut().insert(header::CACHE_CONTROL, self.control());
+        response
+    }
+}
+
+/// `If-None-Match` holds a list of tags, possibly weak. A browser never sends
+/// `*` on a GET, so it matches nothing here.
+fn etag_matches(headers: &HeaderMap, tag: &str) -> bool {
+    headers
+        .get_all(header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(|candidate| candidate.trim())
+        .any(|candidate| candidate.strip_prefix("W/").unwrap_or(candidate) == tag)
 }
 
 fn artifact_response(bytes: Vec<u8>, path: &str) -> Response {
@@ -4521,6 +4595,84 @@ mod tests {
         let usage = usage::read_usage(&root.join("deployments").join(&deployment.id).join(usage::USAGE_DATABASE), &today, &today).unwrap();
         let index = usage["totals"].as_array().unwrap().iter().find(|row| row["kind"] == "page_view" && row["name"] == "index.html").cloned();
         assert_eq!(index, Some(json!({"kind": "page_view", "name": "index.html", "count": 2})));
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_file_the_browser_holds_answers_304_until_the_next_publish() {
+        let root = std::env::temp_dir().join(format!("littlebox-etag-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        let state = test_state(&root);
+        deploy_files(&state, json!({"index.html": "<p>home</p>", "app.js": "1"})).await;
+        for deployment in state.deployments.write().await.values_mut() {
+            deployment.manifest["visibility"] = json!("public");
+        }
+        let (host, deployment) = state.deployments.read().await.iter().next().map(|(h, d)| (h.clone(), d.clone())).unwrap();
+        let get = |path: &str, extra: Vec<(&'static str, String)>| {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::HOST, HeaderValue::from_str(&host).unwrap());
+            for (name, value) in extra {
+                headers.insert(name, HeaderValue::from_str(&value).unwrap());
+            }
+            serve_key(state.clone(), headers, path.into())
+        };
+        let first = get("app.js", vec![]).await;
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(first.headers()[header::CACHE_CONTROL], "public, no-cache");
+        let tag = first.headers()[header::ETAG].to_str().unwrap().to_owned();
+        assert_eq!(tag, format!("\"{}\"", deployment.artifact_version.clone().unwrap()));
+
+        let again = get("app.js", vec![("if-none-match", tag.clone())]).await;
+        assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(again.headers()[header::ETAG], tag.as_str());
+        assert!(axum::body::to_bytes(again.into_body(), 1024).await.unwrap().is_empty());
+        let weak = get("app.js", vec![("if-none-match", format!("\"other\", W/{tag}"))]).await;
+        assert_eq!(weak.status(), StatusCode::NOT_MODIFIED);
+
+        // A navigation still resolves its file, so the page view counts.
+        let page = get("index.html", vec![("if-none-match", tag.clone()), ("sec-fetch-dest", "document".into())]).await;
+        assert_eq!(page.status(), StatusCode::NOT_MODIFIED);
+        usage::flush();
+        let today = usage::day(now_ms());
+        let usage = usage::read_usage(&root.join("deployments").join(&deployment.id).join(usage::USAGE_DATABASE), &today, &today).unwrap();
+        assert!(usage["totals"].as_array().unwrap().iter().any(|row| row["kind"] == "page_view" && row["name"] == "index.html"));
+
+        // A publish changes the tag, so the old one gets the new bytes.
+        deploy_files(&state, json!({"index.html": "<p>home</p>", "app.js": "2"})).await;
+        for deployment in state.deployments.write().await.values_mut() {
+            deployment.manifest["visibility"] = json!("public");
+        }
+        let fresh = get("app.js", vec![("if-none-match", tag.clone())]).await;
+        assert_eq!(fresh.status(), StatusCode::OK);
+        assert_ne!(fresh.headers()[header::ETAG], tag.as_str());
+        assert_eq!(&axum::body::to_bytes(fresh.into_body(), 1024).await.unwrap()[..], b"2");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn an_unversioned_deployment_tags_files_by_their_bytes() {
+        let root = std::env::temp_dir().join(format!("littlebox-etag-bytes-{}", Uuid::new_v4()));
+        let (state, mut headers) = login_test_state(&root, "public").await;
+        let id = state.deployments.read().await.values().next().unwrap().id.clone();
+        for deployment in state.deployments.write().await.values_mut() {
+            deployment.artifact_version = None;
+        }
+        let artifact = artifact_root(&state, &id);
+        tokio::fs::create_dir_all(&artifact).await.unwrap();
+        tokio::fs::write(artifact.join("report.txt"), "secret").await.unwrap();
+        let first = serve_key(state.clone(), headers.clone(), "report.txt".into()).await;
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(first.headers()[header::CACHE_CONTROL], "public, no-cache");
+        let tag = first.headers()[header::ETAG].clone();
+        headers.insert(header::IF_NONE_MATCH, tag.clone());
+        assert_eq!(serve_key(state.clone(), headers.clone(), "report.txt".into()).await.status(), StatusCode::NOT_MODIFIED);
+        tokio::fs::write(artifact.join("report.txt"), "changed").await.unwrap();
+        let changed = serve_key(state.clone(), headers, "report.txt".into()).await;
+        assert_eq!(changed.status(), StatusCode::OK);
+        assert_ne!(changed.headers()[header::ETAG], tag);
+        // A private app's files stay out of shared caches.
+        let deployment = Deployment { manifest: json!({}), ..state.deployments.read().await.values().next().unwrap().clone() };
+        assert_eq!(ArtifactCache::of(&deployment).control(), "private, no-cache");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
