@@ -431,7 +431,21 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         &["deploymentId"],
         true,
     ));
+    tools.push(tool(
+        "sign_in_methods_read",
+        "Read how people sign in to a deployment: password, and google when the owner turned it on. available says whether this installation has a Google client.",
+        json!({"deploymentId":text}),
+        &["deploymentId"],
+        true,
+    ));
     if owner.scopes.iter().any(|s| s == "manage_users") {
+        tools.push(tool(
+            "sign_in_methods_set",
+            "Choose how people sign in to a deployment: [\"password\"] or [\"password\",\"google\"]. Password cannot be turned off. Google needs an installation with a Google client; sign_in_methods_read says whether it has one.",
+            json!({"deploymentId":text,"methods":{"type":"array","items":{"type":"string","enum":["password","google"]},"minItems":1,"maxItems":2}}),
+            &["deploymentId", "methods"],
+            false,
+        ));
         tools.push(tool(
             "signup_policy_set",
             "Choose who may create an account on a deployment: open, invitation (only people invited with app_invitations_create), closed, or allowlist (exact emails or @domain entries). Omitting allowlist keeps the current entries.",
@@ -1496,6 +1510,26 @@ async fn admin_call(
             }
             Ok(value)
         }
+        "sign_in_methods_read" => {
+            let id = a["deploymentId"].as_str().unwrap();
+            let deployment = owned_deployment(state, owner, id, "read").await?;
+            Ok(sign_in_methods_value(state, &deployment))
+        }
+        "sign_in_methods_set" => {
+            let id = a["deploymentId"].as_str().unwrap();
+            let found = owned_deployment(state, owner, id, "manage_users").await?;
+            let methods = requested_sign_in_methods(state, &a["methods"])?;
+            // Releases hold the same lock, so a publish cannot overwrite this change.
+            let _guard = database_lock(state, &format!("project:{}", found.project_id)).await;
+            let mut updated = owned_deployment(state, owner, id, "manage_users").await?;
+            let previous = updated.sign_in_methods.clone();
+            updated.sign_in_methods = methods;
+            persist_deployment(state, &updated).await?;
+            state.deployments.write().await.insert(updated.hostname.clone(), updated.clone());
+            let mut value = sign_in_methods_value(state, &updated);
+            value["previousMethods"] = json!(previous);
+            Ok(value)
+        }
         "signup_policy_read" => {
             let id = a["deploymentId"].as_str().unwrap();
             let deployment = owned_deployment(state, owner, id, "read").await?;
@@ -1671,6 +1705,34 @@ async fn admin_call(
         name if name.starts_with("domain_") => super::domain::admin_call(state, owner, name, &a).await,
         _ => anyhow::bail!("Unknown tool."),
     }
+}
+
+/// The methods `sign_in_methods_set` may store: password always, and
+/// google only on an installation with a Google client.
+fn requested_sign_in_methods(state: &AppState, requested: &Value) -> Result<Vec<SignInMethod>> {
+    let requested: Vec<SignInMethod> = serde_json::from_value(requested.clone())
+        .map_err(|_| anyhow::anyhow!("Name the methods as password and google."))?;
+    let methods = sign_in_methods_from_input(&requested).map_err(anyhow::Error::msg)?;
+    if methods.contains(&SignInMethod::Google) && state.accounts.google.is_none() {
+        anyhow::bail!(super::google::UNAVAILABLE);
+    }
+    Ok(methods)
+}
+
+/// The methods and whether the sign-in page offers each. A Deployment that
+/// asks for Google on an installation without a client keeps the setting and
+/// offers only the password; `notice` says so to the owner.
+fn sign_in_methods_value(state: &AppState, deployment: &Deployment) -> Value {
+    let available = state.accounts.google.is_some();
+    let mut offered = vec![SignInMethod::Password];
+    if available && deployment.sign_in_methods.contains(&SignInMethod::Google) {
+        offered.push(SignInMethod::Google);
+    }
+    let mut value = json!({"deploymentId": deployment.id, "methods": deployment.sign_in_methods, "offered": offered, "googleAvailable": available});
+    if !available && deployment.sign_in_methods.contains(&SignInMethod::Google) {
+        value["notice"] = json!("This app asks for Google sign-in, but this installation has no Google client, so its sign-in page offers only email and password. People whose account came from Google set a password with Forgot your password.");
+    }
+    value
 }
 
 fn signup_policy_value(deployment: &Deployment) -> Value {
@@ -2801,13 +2863,43 @@ mod tests {
         let names = |owner: &Owner| admin_tools(owner).iter().map(|t| t["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
         assert!(names(&reader).contains(&"signup_policy_read".to_owned()));
         assert!(!names(&reader).contains(&"signup_policy_set".to_owned()));
+        assert!(names(&reader).contains(&"sign_in_methods_read".to_owned()));
+        assert!(!names(&reader).contains(&"sign_in_methods_set".to_owned()));
         let publisher = Owner { scopes: vec!["read".into(), "publish".into()], ..reader.clone() };
         assert!(!names(&publisher).contains(&"signup_policy_set".to_owned()), "publish alone does not change who may sign up");
         assert!(!names(&publisher).iter().any(|name| name.starts_with("app_")));
         let manager = Owner { scopes: vec!["read".into(), "manage_users".into()], ..reader };
-        for tool in ["signup_policy_set", "app_users_list", "app_user_suspend", "app_user_resume", "app_invitations_create", "app_invitations_list", "app_invitation_resend", "app_invitation_revoke"] {
+        for tool in ["signup_policy_set", "sign_in_methods_set", "app_users_list", "app_user_suspend", "app_user_resume", "app_invitations_create", "app_invitations_list", "app_invitation_resend", "app_invitation_revoke"] {
             assert!(names(&manager).contains(&tool.to_owned()), "{tool}");
         }
+    }
+
+    #[test]
+    fn sign_in_methods_set_keeps_password_and_refuses_google_without_a_client() {
+        let mut state = AppState {
+            deployments: Arc::new(RwLock::new(HashMap::new())),
+            db_locks: LockMap::default(),
+            s3: None,
+            artifact_bucket: "artifacts".into(),
+            data_bucket: "data".into(),
+            data_root: std::env::temp_dir(),
+            copies: Default::default(),
+            admin_key: "test-admin".into(),
+            accounts: super::accounts::AccountSettings::local(),
+            public_origin: "http://localhost".into(),
+            host_suffix: "localhost".into(),
+            guards: Arc::new(Guards::new(Vec::new())),
+        };
+        let refused = |state: &AppState, methods: Value| requested_sign_in_methods(state, &methods).unwrap_err().to_string();
+        assert_eq!(refused(&state, json!(["password", "google"])), "This installation has no Google sign-in.");
+        assert_eq!(refused(&state, json!(["google"])), PASSWORD_REQUIRED);
+        assert_eq!(refused(&state, json!(["password", "facebook"])), "Name the methods as password and google.");
+        assert_eq!(requested_sign_in_methods(&state, &json!(["password"])).unwrap(), vec![SignInMethod::Password]);
+        state.accounts.google = Some(Arc::new(super::super::google::GoogleConfig::for_test("http://127.0.0.1:9", "http://localhost:8790")));
+        assert_eq!(
+            requested_sign_in_methods(&state, &json!(["google", "password", "google"])).unwrap(),
+            vec![SignInMethod::Password, SignInMethod::Google]
+        );
     }
 
     #[tokio::test]

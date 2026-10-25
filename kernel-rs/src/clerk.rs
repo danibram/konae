@@ -241,7 +241,7 @@ fn valid_id(value: &str, prefix: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
-fn base64url(value: &str) -> Result<Vec<u8>> {
+pub(crate) fn base64url(value: &str) -> Result<Vec<u8>> {
     ensure!(
         !value.is_empty()
             && value.len() % 4 != 1
