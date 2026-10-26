@@ -27,6 +27,7 @@ Each record states its status and which earlier record it amends on its first li
 | [0021](0021-a-notice-lists-its-rows-and-reaches-the-accounts-they-name.md) | A notice lists the rows its mutation changed, shows the run's time, and may reach each verified account a column of those rows names | 0016, 0017 | |
 | [0022](0022-the-build-agent-operates-the-platform-through-the-owners-mcp.md) | The editor's build agent reaches the Kernel through the owner's own MCP session, pinned to the open project, and still edits files only behind the Gate | 0003 | |
 | [0023](0023-an-app-database-runs-in-wal-mode-with-kept-connections.md) | An app Database runs in WAL mode with `synchronous=NORMAL`; Server Actions borrow kept connections, queries run side by side, mutations one at a time | | |
+| [0024](0024-an-installation-names-its-hosts-from-one-domain-and-an-app-may-answer-on-a-path.md) | Proposed. `LITTLEBOX_DOMAIN` names the home, `app.` and app hosts; an owner may put an app on `/p/<id>` or `/p/<name>`, sharing one origin | | |
 
 ## Which record answers a question
 
@@ -48,5 +49,6 @@ Each record states its status and which earlier record it amends on its first li
 | What does a restore bring back? | 0005 note of 2026-11-06, 0011 notes on API keys, 0014 |
 | Which headers keep hosted code on its own origin? | 0008 update of 2026-11-06 |
 | How does an app answer on its own domain? | 0015 |
+| Which host serves what, and how does an app answer on a path? | 0024 |
 | How does a route take a webhook from an outside service? | 0011, 0018 |
 | What shape does a refusal have, and who fixes it? | 0009, 0020 |

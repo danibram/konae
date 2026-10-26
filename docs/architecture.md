@@ -140,7 +140,7 @@ A migration moves one Deployment to another installation with one writer at a ti
 
 Every verification, recovery and invitation link leaves through the queue in `mail.sqlite` ([ADR-0012](./adr/0012-account-email-goes-through-a-persistent-queue.md)). The transaction that issues a challenge writes its email job too, and a worker inside the Kernel sends due jobs through Resend, SMTP or the development mailbox, retrying a provider outage for about two hours. The sender preflight checks that the transport may send as the configured sender, and while it refuses, signup and recovery answer 503 and nothing is queued. Limits per recipient, client address, creator, app and installation refuse a request before anything is stored. Fixed templates hold the text; only the app name, the inviter's account email and the link vary.
 
-The Docker development stack uses Nginx only for hostname routing: `editor.localhost` reaches Vite and the Kernel Admin Interface, while every other hostname, a custom domain included, reaches the Rust Kernel Runtime Interface with `Host` unchanged. MinIO provides the same S3 operations used with hosted providers. Nginx and MinIO do not make authorization decisions.
+The Docker development stack uses Nginx only for hostname routing: `app.localhost` (`LITTLEBOX_DOMAIN=localhost` derives it, ADR-0024) reaches Vite and the Kernel Admin Interface, while every other hostname, a custom domain included, reaches the Rust Kernel Runtime Interface with `Host` unchanged. MinIO provides the same S3 operations used with hosted providers. Nginx and MinIO do not make authorization decisions.
 
 ### Two independent policy axes
 
@@ -217,7 +217,9 @@ All adapters implement the same Kernel seams. Provider identity products may opt
 
 ## Isolation of hosted code
 
-Every app runs on its own host, `<slug>-<id>.<LITTLEBOX_HOST_SUFFIX>`, and the editor runs on a host no app shares. An app may also answer on one custom domain its owner proved with a TXT record ([ADR-0015](./adr/0015-a-deployment-answers-on-one-custom-domain.md)); the Kernel resolves it to the same Deployment, so it is that app's origin too, and no other app or the editor can take it. One layer in `kernel-rs/src/security.rs` adds the headers below to every Kernel response, so an exported Kernel sends them too.
+Every app runs on its own host, `<slug>-<id>.<LITTLEBOX_HOST_SUFFIX>`, and the editor runs on a host no app shares (`app.<domain>` when `LITTLEBOX_DOMAIN` is set, ADR-0024). An app may also answer on one custom domain its owner proved with a TXT record ([ADR-0015](./adr/0015-a-deployment-answers-on-one-custom-domain.md)); the Kernel resolves it to the same Deployment, so it is that app's origin too, and no other app or the editor can take it. One layer in `kernel-rs/src/security.rs` adds the headers below to every Kernel response, so an exported Kernel sends them too.
+
+`<domain>` is one origin that the home and every path address share ([ADR-0024](./adr/0024-an-installation-names-its-hosts-from-one-domain-and-an-app-may-answer-on-a-path.md)). An app on a path address answers its pages, routes and runtime under `<domain>/p/<id>` or `<domain>/p/<name>`, and every such app shares that origin with the others and with the home. A script of one app can therefore open another app's page in the same origin, read its DOM through `window.open`, and send another app's session cookie with a request to its runtime. The Kernel refuses a runtime call whose Referer names another app's path, but only when the browser sends a Referer, so that check is not a boundary. The owner accepts this when turning a path on for an app with accounts or a private app. The isolation this section describes holds for generated hostnames and aliases only.
 
 App hosts get this Content Security Policy:
 

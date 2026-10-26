@@ -32,6 +32,7 @@ After any write through MCP or the editor, observe the effect through the same d
 | This app calls another host | `kind: call` | `fetch` of a secret from the browser |
 | Uploaded files | `miniapp.files` | Large bytes in a SQLite column |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
+| A short link on the installation's domain | path address (`path_set`) | A custom domain when DNS is not yours |
 | Take the app elsewhere | package or migration | Copy (moves the installation) |
 | Leave managed editing | Eject | Package (moves data, not source authority) |
 

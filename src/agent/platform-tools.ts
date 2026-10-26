@@ -63,10 +63,13 @@ export const platformToolPolicy: Readonly<Record<string, Policy>> = {
   signup_policy_read: "read",
   app_users_list: "read",
   domain_read: "read",
+  path_read: "read",
   signup_policy_set: "confirm",
   app_invitations_create: "confirm",
   domain_set: "confirm",
   domain_clear: "confirm",
+  path_set: "confirm",
+  path_clear: "confirm",
 };
 
 const readOnlyDatabaseOperations = new Set(["inspect", "browse", "list-backups"]);
@@ -96,6 +99,13 @@ export function describeCall(name: string, args: Record<string, unknown>): strin
     }
     case "domain_set": return `The agent will set ${String(args.hostname)} as this app's domain and check its TXT record.`;
     case "domain_clear": return "The agent will remove this app's custom domain. The generated address keeps working.";
+    case "path_set": {
+      const turn = args.enabled === true ? "turn on" : "turn off";
+      const named = typeof args.name === "string" ? ` with the name ${args.name}` : args.name === null ? " and remove its name" : "";
+      const shared = args.acceptSharedOrigin === true ? " The path shares its origin with the home and every other app on this installation, so they can use this app's signed-in sessions." : "";
+      return `The agent will ${turn} this app's path address${named}.${shared}`;
+    }
+    case "path_clear": return "The agent will turn off this app's path address and remove its name. The generated address and any custom domain keep working.";
     case "database_execute": return args.operation === "sql"
       ? `The agent will run this SQL on the published app's data: ${String((args.input as { sql?: unknown } | undefined)?.sql ?? "")}`
       : `The agent will ${String(args.operation)} on the published app's data.`;

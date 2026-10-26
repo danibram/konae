@@ -15,7 +15,7 @@ const publishedSdk = read("src/mcp/runtime.js");
 /** Runs an SDK script against a bare window and lists the calls it puts on window.miniapp. */
 function exposedCalls(source: string): string[] {
   const window: { miniapp?: Record<string, Record<string, unknown>> } = {};
-  new Function("window", "addEventListener", "parent", "document", source)(window, () => {}, undefined, undefined);
+  new Function("window", "location", "addEventListener", "parent", "document", source)(window, { pathname: "/" }, () => {}, undefined, undefined);
   return Object.entries(window.miniapp ?? {}).flatMap(([module, calls]) =>
     Object.entries(calls).filter(([, value]) => typeof value === "function").map(([call]) => `${module}.${call}`));
 }
@@ -159,5 +159,48 @@ describe("the rendered readers", () => {
     expect(drift(namedCalls(mcp)).notInContract).toEqual([]);
     const guide = JSON.parse(read(renderedPaths.guide)) as { modules: { calls: { call: string }[] }[] };
     expect(drift(guide.modules.flatMap((module) => module.calls.map((call) => call.call.replace(/^miniapp\./, ""))))).toEqual(agreed);
+  });
+});
+
+describe("the published SDK prefixes every Kernel URL with the page's base path", () => {
+  /** Runs runtime.js on a page at pathname and records the URLs it asks the Kernel for. */
+  async function sdkOn(pathname: string) {
+    const requested: string[] = [];
+    const assigned: string[] = [];
+    const location = { pathname, assign: (url: string) => assigned.push(url) };
+    const window: { miniapp?: Record<string, Record<string, (...args: unknown[]) => Promise<unknown>>> } = {};
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => {
+      requested.push(String(url));
+      return new Response("{}", { status: 500 });
+    }) as typeof fetch;
+    try {
+      new Function("window", "location", "addEventListener", publishedSdk)(window, location, () => {});
+      const fileUrl = await window.miniapp!.files.url("file-1");
+      await window.miniapp!.actions.call("tasks.feed").catch(() => undefined);
+      await window.miniapp!.auth.signIn();
+      return { fileUrl, requested, assigned };
+    } finally {
+      globalThis.fetch = original;
+    }
+  }
+
+  test("the home and a generated hostname use the root paths", async () => {
+    const home = await sdkOn("/");
+    expect(home).toEqual({ fileUrl: "/_littlebox/files/file-1", requested: ["/_littlebox/mcp"], assigned: ["/_littlebox/login"] });
+  });
+
+  test("a path address uses its /p/<segment> prefix for the endpoint, the file address and sign-in", async () => {
+    for (const pathname of ["/p/notes", "/p/notes/", "/p/notes/about/deep.html"]) {
+      const onPath = await sdkOn(pathname);
+      expect(onPath.fileUrl).toBe("/p/notes/_littlebox/files/file-1");
+      expect(onPath.requested).toEqual(["/p/notes/_littlebox/mcp"]);
+      expect(onPath.assigned).toEqual(["/p/notes/_littlebox/login"]);
+    }
+  });
+
+  test("a path that only looks like a prefix keeps the root paths", async () => {
+    expect((await sdkOn("/pages/notes")).fileUrl).toBe("/_littlebox/files/file-1");
+    expect((await sdkOn("/p/")).requested).toEqual(["/_littlebox/mcp"]);
   });
 });

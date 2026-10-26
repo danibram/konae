@@ -18,6 +18,7 @@ function sdkSurfaceOf(html: string): string[] {
   const scope: Record<string, unknown> = {
     window: host,
     addEventListener: () => {},
+    location: { pathname: "/" },
     parent: { postMessage: () => {} },
     fetch: async () => ({ ok: true, json: async () => ({}) }),
     document: { createElement: () => ({ style: {}, dataset: {} }), body: { appendChild: () => {} } },

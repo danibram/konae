@@ -7,6 +7,9 @@ const listed: McpToolDefinition[] = [
   { name: "project_inspect", description: "Inspect a project.", inputSchema: { type: "object", properties: { projectId: text }, required: ["projectId"] } },
   { name: "domain_read", description: "Read a domain.", inputSchema: { type: "object", properties: { deploymentId: text }, required: ["deploymentId"] } },
   { name: "domain_set", description: "Set a domain.", inputSchema: { type: "object", properties: { deploymentId: text, hostname: text }, required: ["deploymentId", "hostname"] } },
+  { name: "path_read", description: "Read a path address.", inputSchema: { type: "object", properties: { deploymentId: text }, required: ["deploymentId"] } },
+  { name: "path_set", description: "Set a path address.", inputSchema: { type: "object", properties: { deploymentId: text, enabled: { type: "boolean" }, name: text, acceptSharedOrigin: { type: "boolean" } }, required: ["deploymentId", "enabled"] } },
+  { name: "path_clear", description: "Clear a path address.", inputSchema: { type: "object", properties: { deploymentId: text }, required: ["deploymentId"] } },
   { name: "database_execute", description: "Run a database operation.", inputSchema: { type: "object", properties: { deploymentId: text, operation: { type: "string" }, input: { type: "object" } }, required: ["deploymentId", "operation"] } },
   { name: "project_sources_save", description: "Save sources.", inputSchema: { type: "object", properties: { projectId: text, transferId: text, expectedRevision: { type: "integer" } } } },
   { name: "token_create", description: "Delegate a credential.", inputSchema: { type: "object", properties: {} } },
@@ -37,7 +40,7 @@ const run = (tool: { execute: (...args: any[]) => Promise<any> } | undefined, pa
 describe("the build agent's tools from the owner's MCP", () => {
   test("only the allowlisted tools reach the model, never source saves, credentials, secrets or transfers", async () => {
     const tools = await toolsFor(binding().value);
-    expect(Object.keys(tools).sort()).toEqual(["database_execute", "domain_read", "domain_set", "platform_guide", "project_inspect"]);
+    expect(Object.keys(tools).sort()).toEqual(["database_execute", "domain_read", "domain_set", "path_clear", "path_read", "path_set", "platform_guide", "project_inspect"]);
     for (const name of ["project_sources_save", "project_sources_read", "token_create", "api_keys_create", "secret_set", "transfer_begin", "package_export", "eject_apply"]) {
       expect(platformToolPolicy[name]).toBeUndefined();
     }
@@ -80,6 +83,30 @@ describe("the build agent's tools from the owner's MCP", () => {
     tools = await toolsFor(decline.value);
     await expect(run(tools.domain_set, { hostname: "notes.example.org" })).rejects.toThrow("The owner declined domain_set. Nothing was changed.");
     expect(decline.calls).toEqual([]);
+  });
+
+  test("the path address reads without asking, and every change asks the owner first", async () => {
+    const { value, calls, confirmations } = binding();
+    const tools = await toolsFor(value);
+    await run(tools.path_read);
+    expect(confirmations).toEqual([]);
+    await run(tools.path_set, { enabled: true, name: "spring-menu" });
+    await run(tools.path_clear);
+    expect(confirmations.map((request) => request.tool)).toEqual(["path_set", "path_clear"]);
+    expect(confirmations[0]!.summary).toBe("The agent will turn on this app's path address with the name spring-menu.");
+    expect(confirmations[1]!.summary).toBe("The agent will turn off this app's path address and remove its name. The generated address and any custom domain keep working.");
+    expect(calls).toEqual([
+      { name: "path_read", args: { deploymentId: "deployment-p1" } },
+      { name: "path_set", args: { enabled: true, name: "spring-menu", deploymentId: "deployment-p1" } },
+      { name: "path_clear", args: { deploymentId: "deployment-p1" } },
+    ]);
+  });
+
+  test("accepting the shared origin is said in the confirmation", async () => {
+    const { value, confirmations } = binding();
+    const tools = await toolsFor(value);
+    await run(tools.path_set, { enabled: true, acceptSharedOrigin: true });
+    expect(confirmations[0]!.summary).toBe("The agent will turn on this app's path address. The path shares its origin with the home and every other app on this installation, so they can use this app's signed-in sessions.");
   });
 
   test("database_execute reads without asking and asks before it writes", async () => {

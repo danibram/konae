@@ -218,12 +218,13 @@ async fn accept_route(State(state): State<AppState>, request: Request) -> Respon
     let Some(deployment) = deployment_for(&state, request.headers()).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
+    let cookie_name = crate::app_cookie_name(&state, &deployment.id, request.headers());
     let input: AcceptInput = match accounts::read_body(&state, request, &deployment.id, |_| "account-link".into()).await {
         Ok((input, _client)) => input,
         Err(response) => return response,
     };
     match accept(&state, &deployment, &input.token, &input.password).await {
-        Ok(session) => accounts::app_session_response(&state, session),
+        Ok(session) => accounts::app_session_response(&cookie_name, session),
         Err(error_value) => auth_error(error_value),
     }
 }
@@ -858,6 +859,9 @@ mod tests {
                 queue: None,
             },
             public_origin: "http://localhost".into(),
+            mcp_origin: None,
+            path_origin: None,
+            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };

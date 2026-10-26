@@ -73,7 +73,16 @@
   "notify.recipient-invalid": { "fix": "capsule", "remedy": "Set notify \"to\" to \"owner\", \"actor\" or {\"column\": \"<name>\"}." },
   "notify.subject-invalid": { "fix": "capsule", "remedy": "Write a notify subject of 1 to 120 characters on one line." },
 
-  "query.limit-missing": { "fix": "capsule", "remedy": "Add a LIMIT to the outer SELECT. A total with no GROUP BY needs none." },
+  "path.hyphen-edge": { "fix": "owner", "remedy": "Start and end the path name with a letter or digit.", "tool": "path_set" },
+  "path.length": { "fix": "owner", "remedy": "Name a path of 3 to 40 characters.", "tool": "path_set" },
+  "path.missing": { "fix": "owner", "remedy": "Name a path, such as spring-menu.", "tool": "path_set" },
+  "path.name-invalid": { "fix": "owner", "remedy": "Use only letters, digits and hyphens in the path name.", "tool": "path_set" },
+  "path.reserved": { "fix": "owner", "remedy": "Choose a name that Littlebox does not use for its own addresses.", "tool": "path_set" },
+  "path.shared-origin": { "fix": "owner", "remedy": "Set acceptSharedOrigin to true, or leave the path off.", "tool": "path_set" },
+  "path.taken": { "fix": "owner", "remedy": "Choose a name that no other app on this installation holds.", "tool": "path_set" },
+  "path.uuid-shape": { "fix": "owner", "remedy": "Choose a name that does not have the shape of an app id.", "tool": "path_set" },
+
+  "query.limit-missing":{ "fix": "capsule", "remedy": "Add a LIMIT to the outer SELECT. A total with no GROUP BY needs none." },
   "query.start": { "fix": "capsule", "remedy": "Start a query with SELECT, and move a WITH clause into a subquery." },
 
   "route.authenticated": { "fix": "capsule", "remedy": "Remove http, or make the action anonymous and choose its callers." },

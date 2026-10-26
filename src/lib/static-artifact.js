@@ -9,13 +9,39 @@
 // are, without the public/ prefix. Every other file ships only when a page, or
 // a stylesheet a page loads, references it. A page that is a fragment runs in
 // the Capsule document with styles.css and the bundled app inline. A page that
-// is a full document keeps its own head and loads the SDK from /runtime.js.
+// is a full document keeps its own head and loads the SDK through a loader that
+// writes its script tag under the page's base path.
 
 /** The attribute that marks the SDK script, so tools that rebuild a document can find it. */
 export const runtimeScriptAttribute = "data-littlebox-runtime";
 
 /** The SDK file a document page loads. The build adds it; a Capsule cannot hold its own. */
 export const runtimeFile = "runtime.js";
+
+/**
+ * The rule that finds the base path of a path address: /p/<id-or-name> and
+ * everything under it. The Kernel strips that prefix before routing, so the
+ * SDK and the inline pages build their Kernel URLs with it. Keep this text
+ * in step with src/mcp/runtime.js, runtimeLoaderScript below and the inline
+ * pages in kernel-rs/src/accounts.rs and kernel-rs/src/app_owner.rs. The tests
+ * check that each of them carries it.
+ */
+export const pathPrefixPattern = /^\/p\/([^\/]+)(\/|$)/;
+
+/** The base path of a pathname: /p/<segment> on a path address, empty at the home or on a generated hostname. */
+export function basePath(pathname) {
+  const match = pathPrefixPattern.exec(pathname);
+  return match ? `/p/${match[1]}` : "";
+}
+
+/**
+ * The inline loader a document page carries in its head. It writes the SDK's
+ * script tag under the page's base path with document.write, so the tag runs
+ * before the page's own scripts, as a tag written in the head would.
+ */
+export function runtimeLoaderScript() {
+  return `<script>(function(){var m=/${pathPrefixPattern.source}/.exec(location.pathname);document.write('<script src="'+(m?'/p/'+m[1]:'')+'/${runtimeFile}"><\\/script>')})();</script>`;
+}
 
 export const routingModes = ["pages", "spa"];
 export const routingMessage = 'Routing must be "pages" or "spa".';
@@ -91,6 +117,7 @@ export function splitFragmentHead(fragment) {
  * input.runtime the SDK source
  * input.head    optional markup for the head of every page
  * input.routing optional "pages" or "spa"
+ * input.warn    optional, called with each root-relative URL warning (see rootRelativeWarnings)
  */
 export async function assembleStaticArtifact(input) {
   checkRouting(input.routing);
@@ -128,6 +155,8 @@ export async function assembleStaticArtifact(input) {
   let usesRuntimeFile = false;
   const bundled = new Set();
   const pending = [];
+  /** Capsule path -> text, for the pages and stylesheets the root-relative check reads. */
+  const seen = {};
   const reference = (raw, from, kind) => {
     const target = resolveReference(raw, from);
     if (target === null) return;
@@ -143,6 +172,7 @@ export async function assembleStaticArtifact(input) {
 
   for (const [served, source] of pages) {
     const html = source === null ? defaultBody : await text(source);
+    if (source !== null) seen[source] = html;
     if (!isDocument(html)) {
       compiled ??= withoutModulePaths(await input.compile(), held);
       scanHtml(html, served, reference);
@@ -150,14 +180,9 @@ export async function assembleStaticArtifact(input) {
       files[served] = renderCapsuleDocument({ body: html, styles: compiled.styles, script: compiled.script, runtime: input.runtime, head: input.head });
       continue;
     }
-    let page = html;
-    let loadsRuntime = false;
-    scanHtml(html, served, (raw, from, kind) => {
-      if (kind !== "link" && resolveReference(raw, from) === runtimeFile) loadsRuntime = true;
-      reference(raw, from, kind);
-    });
-    const additions = `${input.head ?? ""}${loadsRuntime ? "" : `<script src="/${runtimeFile}"></script>`}`;
-    page = insertIntoHead(page, additions);
+    scanHtml(html, served, reference);
+    // A page's own SDK tag would load /runtime.js from the origin root, which a path address cannot reach.
+    const page = insertIntoHead(withoutRuntimeTags(html, served), `${input.head ?? ""}${runtimeLoaderScript()}`);
     usesRuntimeFile = true;
     files[served] = page;
   }
@@ -176,13 +201,22 @@ export async function assembleStaticArtifact(input) {
     }
     const contents = await input.read(source);
     put(target, contents);
-    if (target.endsWith(".css")) scanCss(typeof contents === "string" ? contents : new TextDecoder().decode(contents), target, reference);
+    if (target.endsWith(".css")) {
+      const css = typeof contents === "string" ? contents : new TextDecoder().decode(contents);
+      seen[source] = css;
+      scanCss(css, target, reference);
+    }
   }
 
   for (const [served, source] of sources) {
-    if (source.startsWith("public/") && files[served] === undefined) put(served, await input.read(source));
+    if (source.startsWith("public/") && files[served] === undefined) {
+      const contents = await input.read(source);
+      put(served, contents);
+      if (source.endsWith(".html")) seen[source] = typeof contents === "string" ? contents : new TextDecoder().decode(contents);
+    }
   }
   if (usesRuntimeFile) files[runtimeFile] = input.runtime;
+  for (const { message } of rootRelativeWarnings(seen)) input.warn?.(message);
   const artifact = { version: 1, entrypoint: "index.html", files };
   if (Object.keys(encodings).length) artifact.encodings = encodings;
   return artifact;
@@ -277,6 +311,118 @@ export function scanCss(css, from, reference) {
   }
 }
 
+/**
+ * True for a URL that starts at the origin root: `/about`, `/`, `/?q=1`,
+ * `/_littlebox/...`. A protocol-relative `//host` is not, and neither is the
+ * SDK file the build supplies. On a path address such a URL leaves the app's
+ * prefix, so the build and the Validation Gate warn about it.
+ */
+export function isRootRelativeUrl(raw) {
+  const value = raw.trim();
+  return value.startsWith("/") && !value.startsWith("//") && value !== `/${runtimeFile}`;
+}
+
+/**
+ * The warnings for root-relative URLs in every page and in each stylesheet a
+ * page loads. `files` maps a Capsule path to its text. A file under public/
+ * is served without that prefix and counts as a page when it is .html. The
+ * message names the Capsule file, the URL and the relative address to write.
+ * Returns `{ source, message }` in file-name order, then markup order.
+ */
+export function rootRelativeWarnings(files) {
+  const assetAt = (source) => (source.startsWith("public/") ? source.slice("public/".length) : source);
+  const heldAt = new Map(Object.keys(files).map((source) => [assetAt(source), source]));
+  const warnings = [];
+  const messages = new Set();
+  const sheets = [];
+  const queued = new Set();
+  const warn = (source, from, raw, tag, attribute) => {
+    if (!isRootRelativeUrl(raw)) return;
+    const message = rootRelativeMessage(source, from, raw.trim(), verbFor(tag, attribute));
+    if (messages.has(message)) return;
+    messages.add(message);
+    warnings.push({ source, message });
+  };
+  const queue = (raw, from) => {
+    let path;
+    try { path = resolveReference(raw, from); } catch { return; }
+    const source = path === null ? undefined : heldAt.get(path);
+    if (source === undefined || !source.endsWith(".css") || queued.has(source)) return;
+    queued.add(source);
+    sheets.push(source);
+  };
+
+  for (const source of Object.keys(files).sort()) {
+    const served = servedPath(source);
+    if (served === null || !served.endsWith(".html")) continue;
+    walkHtml(files[source], served, (raw, tag, attribute, rels) => {
+      warn(source, served, raw, tag, attribute);
+      if (tag === "link" && rels.includes("stylesheet")) queue(raw, served);
+    });
+  }
+  for (let index = 0; index < sheets.length; index += 1) {
+    const source = sheets[index];
+    const served = assetAt(source);
+    walkCss(files[source], (raw, attribute) => {
+      warn(source, served, raw, "style", attribute);
+      if (attribute === "@import") queue(raw, served);
+    });
+  }
+  return warnings;
+}
+
+function rootRelativeMessage(source, served, url, verb) {
+  const depth = served.split("/").length - 1;
+  const up = depth ? "../".repeat(depth) : "./";
+  const rest = url.slice(1);
+  let relative;
+  if (rest === "") relative = `${up}index.html`;
+  else if (rest.startsWith("?") || rest.startsWith("#") || depth) relative = `${up}${rest}`;
+  else relative = rest;
+  return `${source} ${verb} ${url}, which leaves the app's path address. Write ${relative} instead.`;
+}
+
+function verbFor(tag, attribute) {
+  if (attribute === "action" || attribute === "formaction") return "submits to";
+  if (attribute === "href" && (tag === "a" || tag === "area")) return "links to";
+  return "loads";
+}
+
+/** Calls `visit(raw, tag, attribute, rels)` for each URL-bearing attribute and each url() or @import in a page's markup and styles. */
+function walkHtml(html, from, visit) {
+  const visible = html.replace(/<!--[\s\S]*?-->/g, "");
+  const tags = /<([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[^\s=\/>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*\/?>/g;
+  let match;
+  while ((match = tags.exec(visible))) {
+    const tag = match[1].toLowerCase();
+    const attributes = parseAttributes(match[2] ?? "");
+    const end = tags.lastIndex;
+    if (tag === "script" || tag === "style") {
+      const close = visible.toLowerCase().indexOf(`</${tag}`, end);
+      if (tag === "style") walkCss(visible.slice(end, close === -1 ? visible.length : close), (raw, attribute) => visit(raw, tag, attribute, []));
+      tags.lastIndex = close === -1 ? visible.length : close;
+    }
+    if (attributes.style !== undefined) walkCss(attributes.style, (raw, attribute) => visit(raw, tag, attribute, []));
+    const rels = (attributes.rel ?? "").toLowerCase().split(/\s+/);
+    for (const name of ["href", "src", "action", "formaction", "poster", "data"]) {
+      if (attributes[name] !== undefined) visit(attributes[name], tag, name, rels);
+    }
+    if (attributes.srcset !== undefined) {
+      for (const candidate of attributes.srcset.split(",")) {
+        const url = candidate.trim().split(/\s+/)[0];
+        if (url) visit(url, tag, "srcset", rels);
+      }
+    }
+  }
+}
+
+/** Calls `visit(raw, "url" | "@import")` for each url() and @import in a stylesheet. */
+function walkCss(css, visit) {
+  const clean = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const match of clean.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)/gi)) visit(match[1] ?? match[2] ?? match[3] ?? "", "url");
+  for (const match of clean.matchAll(/@import\s+(?:"([^"]*)"|'([^']*)')/gi)) visit(match[1] ?? match[2] ?? "", "@import");
+}
+
 function parseAttributes(source) {
   const attributes = {};
   for (const match of source.matchAll(/([^\s=\/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g)) {
@@ -288,6 +434,14 @@ function parseAttributes(source) {
 
 function decodeEntities(value) {
   return value.replace(/&(amp|quot|#39|apos|lt|gt);/g, (_, name) => ({ amp: "&", quot: '"', "#39": "'", apos: "'", lt: "<", gt: ">" })[name]);
+}
+
+/** Removes the empty script tags a page writes for the SDK, so the loader is the only one. */
+function withoutRuntimeTags(html, from) {
+  return html.replace(/<script\b([^>]*)>\s*<\/script\s*>/gi, (tag, attributes) => {
+    const src = parseAttributes(attributes).src;
+    return src !== undefined && resolveReference(src, from) === runtimeFile ? "" : tag;
+  });
 }
 
 /** Puts markup first in the head, so the SDK runs before any script the page names. */

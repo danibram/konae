@@ -10,13 +10,14 @@ use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::Credentials;
 use aws_sdk_s3::{Client as S3Client, config::Builder as S3ConfigBuilder, primitives::ByteStream};
 use axum::{
-    Json, Router,
+    Json, Router, ServiceExt,
     body::Body,
     extract::{Path as AxumPath, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use tower::ServiceBuilder;
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::{Connection, OptionalExtension, params_from_iter, types::Value as SqlValue};
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,7 @@ mod eject;
 mod files;
 mod guard;
 mod guide;
+mod hosts;
 mod http;
 mod invitations;
 mod limits;
@@ -50,6 +52,8 @@ mod model_rules;
 mod notify;
 mod oauth;
 mod package;
+mod path;
+mod path_name;
 mod provider;
 mod recovery;
 mod refusal;
@@ -73,7 +77,13 @@ struct AppState {
     copies: Arc<copies::CopyStatus>,
     admin_key: String,
     public_origin: String,
+    /// `LITTLEBOX_MCP_ORIGIN` or its derived value; `None` keeps the request host.
+    mcp_origin: Option<String>,
     host_suffix: String,
+    /// `<scheme>://<domain>` where path addresses answer; `None` without `LITTLEBOX_DOMAIN`.
+    path_origin: Option<String>,
+    /// `LITTLEBOX_HOME_DEPLOYMENT`: the Deployment that answers `<domain>/` and every non-/p/ path there.
+    home_deployment: Option<String>,
     guards: Arc<Guards>,
     accounts: accounts::AccountSettings,
 }
@@ -386,11 +396,12 @@ async fn main() -> Result<()> {
     if admission::operator_command()? { return Ok(()); }
     let port = env("LITTLEBOX_KERNEL_PORT", "8787").parse::<u16>()?;
     let bind = env("LITTLEBOX_BIND", "127.0.0.1");
-    let public_origin = env("LITTLEBOX_PUBLIC_ORIGIN", "http://localhost:8080");
+    let hosts = hosts::from_env()?;
+    let public_origin = hosts.public_origin.clone();
     let admin_key = admin_key_for(
         &bind,
         &public_origin,
-        std::env::var("LITTLEBOX_MCP_ORIGIN").ok().as_deref(),
+        hosts.mcp_origin.as_deref(),
         std::env::var("LITTLEBOX_ADMIN_KEY").ok().as_deref(),
         std::env::var("LITTLEBOX_ALLOW_DEFAULT_KEY").as_deref() == Ok("1"),
     )?;
@@ -416,12 +427,16 @@ async fn main() -> Result<()> {
         copies: Arc::new(copies::CopyStatus::new(copy_config.as_ref())),
         admin_key,
         public_origin,
-        host_suffix: env("LITTLEBOX_HOST_SUFFIX", "localhost"),
+        mcp_origin: hosts.mcp_origin,
+        host_suffix: hosts.host_suffix,
+        path_origin: hosts.path_origin,
+        home_deployment: path::home_from_env(),
         guards: Arc::new(Guards::new(trusted_proxies(
             &std::env::var("LITTLEBOX_TRUSTED_PROXIES").unwrap_or_default(),
         )?)),
         accounts: account_settings,
     };
+    path::load(&state);
     if let Some(config) = copy_config {
         copies::spawn_schedule(state.clone(), config);
     }
@@ -434,7 +449,22 @@ async fn main() -> Result<()> {
     // switch to required revokes unverified sessions at startup.
     accounts::creator_store(&state)?;
 
-    let app = Router::new()
+    let listener = tokio::net::TcpListener::bind((bind.as_str(), port)).await?;
+    println!("Littlebox Rust Kernel listening on {port}");
+    serve(listener, state).await?;
+    Ok(())
+}
+
+/// Serves the Kernel on a bound listener.
+async fn serve(listener: tokio::net::TcpListener, state: AppState) -> std::io::Result<()> {
+    axum::serve(listener, ServiceExt::<Request>::into_make_service_with_connect_info::<std::net::SocketAddr>(stack(state))).await
+}
+
+/// The Kernel's whole stack. The isolation headers and the path router wrap
+/// the routes, so a path address is rewritten before routing and the headers
+/// cover every response, the home page and the redirects included.
+fn stack(state: AppState) -> tower::util::BoxCloneService<Request, axum::response::Response, std::convert::Infallible> {
+    let routes = Router::new()
         .route("/_littlebox/health", get(health))
         .route("/_littlebox/auth/signup", post(signup))
         .route("/_littlebox/auth/login", post(login))
@@ -450,16 +480,12 @@ async fn main() -> Result<()> {
         .route("/{*path}", get(http::get_route).post(http::post_route))
         .route("/", get(serve_root))
         .layer(axum::middleware::from_fn_with_state(state.clone(), migration::guard))
+        .with_state(state.clone());
+    let service = ServiceBuilder::new()
         .layer(axum::middleware::from_fn_with_state(state.clone(), security::headers))
-        .with_state(state);
-    let listener = tokio::net::TcpListener::bind((bind.as_str(), port)).await?;
-    println!("Littlebox Rust Kernel listening on {port}");
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .await?;
-    Ok(())
+        .layer(axum::middleware::from_fn_with_state(state, path::route))
+        .service(routes);
+    tower::util::BoxCloneService::new(service)
 }
 
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
@@ -693,6 +719,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
     let _database_guard = database_lock(&state, &id).await;
+    let mut notices = Vec::new();
     if let Some(package) = input.initial_package.as_ref() {
         if let Err(error_value) = package::install(&state, package, &deployment.project_id, &directory)
             .await
@@ -700,6 +727,14 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         {
             let _ = tokio::fs::remove_dir_all(&directory).await;
             return error(StatusCode::BAD_REQUEST, &format!("Package import failed: {error_value:#}"));
+        }
+        // The path keeps the owner's choice where it can. What it changed comes back as the import notice.
+        match path::arrive(&state, &deployment, package.manifest.path.as_ref()).await {
+            Ok(lines) => notices = lines,
+            Err(error_value) => {
+                let _ = tokio::fs::remove_dir_all(&directory).await;
+                return error(StatusCode::BAD_REQUEST, &format!("Package import failed: {error_value:#}"));
+            }
         }
     }
     if input.initial_package.is_none() {
@@ -792,7 +827,14 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         .insert(hostname, deployment.clone());
     http::routes_published(&deployment);
     remove_stale_artifacts(&state, &id, &artifact_version).await;
-    Json(json!({"result": deployment})).into_response()
+    let mut result = match serde_json::to_value(&deployment) {
+        Ok(value) => value,
+        Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
+    };
+    if !notices.is_empty() {
+        result["notices"] = json!(notices);
+    }
+    Json(json!({"result": result})).into_response()
 }
 
 async fn stage_local_artifact(
@@ -1154,7 +1196,8 @@ async fn auth_request(
         Ok(session) => {
             let operation = if signup { usage::Operation::Signup } else { usage::Operation::Login };
             usage::count(&state.data_root, &deployment.id, operation);
-            accounts::app_session_response(state, session)
+            let cookie_name = app_cookie_name(state, &deployment.id, headers);
+            accounts::app_session_response(&cookie_name, session)
         }
         Err(error_value) => auth_error(error_value),
     }
@@ -1189,7 +1232,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
     let token = headers.get(header::AUTHORIZATION).and_then(|v|v.to_str().ok()).and_then(|v|v.strip_prefix("Bearer ")).map(str::to_owned)
-        .or_else(|| cookie_value(&headers, app_cookie_name(&state)));
+        .or_else(|| cookie_value(&headers, &app_cookie_name(&state, &deployment.id, &headers)));
     let _identity_guard = database_lock(&state, &format!("identity:{}", deployment.id)).await;
     let auth = match open_auth(&state, &deployment) {
         Ok(auth) => auth,
@@ -1203,16 +1246,20 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let mut response = Json(json!({"result": {"ok": true}})).into_response();
     response
         .headers_mut()
-        .insert(header::SET_COOKIE, cleared_app_cookie(&state));
+        .insert(header::SET_COOKIE, cleared_app_cookie(&state, &deployment.id, &headers));
     response
 }
 
 /// The `Set-Cookie` value that removes the app session cookie from the browser.
-fn cleared_app_cookie(state: &AppState) -> HeaderValue {
-    let name = app_cookie_name(state);
-    let secure = if name.starts_with("__Host-") { "; Secure" } else { "" };
-    HeaderValue::from_str(&format!("{name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}"))
+pub(crate) fn cleared_app_cookie(state: &AppState, deployment_id: &str, headers: &HeaderMap) -> HeaderValue {
+    let name = app_cookie_name(state, deployment_id, headers);
+    HeaderValue::from_str(&format!("{name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}", cookie_secure(&name)))
         .unwrap()
+}
+
+/// `; Secure` for a name with a prefix that requires it.
+pub(crate) fn cookie_secure(name: &str) -> &'static str {
+    if name.starts_with("__Host-") || name.starts_with("__Secure-") { "; Secure" } else { "" }
 }
 
 async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -3278,7 +3325,20 @@ async fn list_s3_keys(s3: &S3Client, bucket: &str, prefix: &str) -> Result<Vec<S
     Ok(keys)
 }
 
+/// The Deployment a request is for. A generated hostname and a verified
+/// alias answer first, as before. Otherwise the request is on the path host,
+/// and `path::route` has put the Deployment it resolved in `RESOLVED_HEADER`,
+/// which the client cannot set because the route removes it first.
 async fn deployment_for(state: &AppState, headers: &HeaderMap) -> Option<Deployment> {
+    if let Some(deployment) = deployment_for_host(state, headers).await {
+        return Some(deployment);
+    }
+    let id = headers.get(path::RESOLVED_HEADER)?.to_str().ok()?;
+    deployment_by_id(state, id).await
+}
+
+/// The Deployment for a generated hostname or a verified alias.
+async fn deployment_for_host(state: &AppState, headers: &HeaderMap) -> Option<Deployment> {
     let host = headers
         .get(header::HOST)?
         .to_str()
@@ -3292,6 +3352,20 @@ async fn deployment_for(state: &AppState, headers: &HeaderMap) -> Option<Deploym
     // A verified custom domain answers as the Deployment's own host.
     let id = domain::serving(state, host)?;
     deployments.values().find(|deployment| deployment.id == id).cloned()
+}
+
+/// The Deployment a request answers, before `path::route` strips its prefix.
+/// The security headers layer runs outside the router and reads the path itself.
+async fn deployment_for_request(state: &AppState, headers: &HeaderMap, path: &str) -> Option<Deployment> {
+    if let Some(deployment) = deployment_for_host(state, headers).await {
+        return Some(deployment);
+    }
+    let id = path::resolve(state, headers, path).await?.deployment_id?;
+    deployment_by_id(state, &id).await
+}
+
+async fn deployment_by_id(state: &AppState, id: &str) -> Option<Deployment> {
+    state.deployments.read().await.values().find(|deployment| deployment.id == id).cloned()
 }
 
 /// Fails closed: a Deployment is public only when its manifest says "public",
@@ -3326,17 +3400,27 @@ fn authenticate_deployment(
     let auth = open_auth(state, deployment)
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
     let token = headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok()).and_then(|value| value.strip_prefix("Bearer ")).map(str::to_owned)
-        .or_else(|| cookie_value(headers, app_cookie_name(state)));
+        .or_else(|| cookie_value(headers, &app_cookie_name(state, &deployment.id, headers)));
     auth.authenticate(token.as_deref())
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
 }
 
-fn app_cookie_name(state: &AppState) -> &'static str {
-    if state.public_origin.starts_with("https://") {
-        "__Host-littlebox_app_session"
-    } else {
-        "littlebox_app_session"
+/// The app session cookie's name for a request to a Deployment.
+///
+/// A generated hostname and a verified alias keep their own origin, so the
+/// name is the one they always had, with `__Host-` under HTTPS. A path address
+/// shares `<domain>` with every other app and the home, so the name carries
+/// the Deployment id. The cookie is `Path=/` because one app answers on two
+/// addresses, `/p/<id>` and `/p/<name>`, and a `Path=/p/<segment>/` cookie set
+/// on one would not reach the other. A `__Host-` name also needs `Path=/`. The
+/// per-app name keeps two apps' sessions from overwriting each other; it does
+/// not keep a hostile app out, since every path shares one origin (ADR-0024).
+pub(crate) fn app_cookie_name(state: &AppState, deployment_id: &str, headers: &HeaderMap) -> String {
+    let https = state.public_origin.starts_with("https://");
+    if path::on_path_host(state, headers) {
+        return format!("{}littlebox_app_session_{deployment_id}", if https { "__Secure-" } else { "" });
     }
+    if https { "__Host-littlebox_app_session" } else { "littlebox_app_session" }.to_owned()
 }
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -3714,6 +3798,9 @@ mod tests {
             admin_key: "test-admin".into(),
             accounts: accounts::AccountSettings::local(),
             public_origin: "http://localhost".into(),
+            mcp_origin: None,
+            path_origin: None,
+            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };
@@ -4282,6 +4369,9 @@ mod tests {
             admin_key: "test-admin".into(),
             accounts: accounts::AccountSettings::local(),
             public_origin: "http://localhost".into(),
+            mcp_origin: None,
+            path_origin: None,
+            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         }
@@ -4381,7 +4471,7 @@ mod tests {
 
     #[test]
     fn default_setup_key_is_refused_behind_a_public_origin() {
-        for origin in ["http://localhost:8790", "http://127.0.0.1:18900", "http://[::1]:8080", "http://editor.localhost"] {
+        for origin in ["http://localhost:8790", "http://127.0.0.1:18900", "http://[::1]:8080", "http://app.localhost"] {
             assert!(admin_key_for("127.0.0.1", origin, None, None, false).is_ok(), "origin={origin}");
         }
         for origin in ["https://apps.example.com", "http://192.168.1.4:8080", "not a url", ""] {
@@ -4394,7 +4484,7 @@ mod tests {
     #[test]
     fn default_setup_key_is_refused_behind_a_public_mcp_origin() {
         let local = "http://localhost:8080";
-        for mcp in ["http://localhost:8790", "http://127.0.0.1:9000", "http://editor.localhost"] {
+        for mcp in ["http://localhost:8790", "http://127.0.0.1:9000", "http://app.localhost"] {
             assert!(admin_key_for("127.0.0.1", local, Some(mcp), None, false).is_ok(), "mcp={mcp}");
         }
         for mcp in ["https://mcp.example.com", "http://192.168.1.4:8080", "not a url", ""] {

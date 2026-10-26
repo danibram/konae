@@ -255,9 +255,11 @@ fn package(state: &AppState, db: &Connection, project: &Value, id: &str, revisio
     }
     let name = source["name"].as_str().or(project["name"].as_str()).unwrap_or(id).to_owned();
     let slug = source["slug"].as_str().or(project["slug"].as_str()).unwrap_or(id).to_owned();
-    let origin = std::env::var("LITTLEBOX_MCP_ORIGIN")
+    let origin = state
+        .mcp_origin
+        .as_deref()
         .map(|origin| origin.trim_end_matches('/').to_owned())
-        .unwrap_or_else(|_| state.public_origin.clone());
+        .unwrap_or_else(|| state.public_origin.clone());
     let config = json!({"url": origin, "project": {"id": id, "name": name, "slug": slug, "sourceAuthority": "external", "manifest": source["manifest"]}});
     anyhow::ensure!(!files.contains_key("littlebox.json"), "The saved sources hold a littlebox.json, which Eject writes itself. Rename that file in the editor first.");
     files.insert("littlebox.json".into(), format!("{}\n", serde_json::to_string_pretty(&config)?));

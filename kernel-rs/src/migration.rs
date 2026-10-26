@@ -1117,6 +1117,9 @@ mod tests {
             accounts: accounts::AccountSettings::local(),
             admin_key: "test-admin".into(),
             public_origin: "http://localhost".into(),
+            mcp_origin: None,
+            path_origin: None,
+            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(limits::Guards::new(Vec::new())),
         }

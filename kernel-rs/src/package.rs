@@ -100,6 +100,10 @@ pub(super) struct Manifest {
     /// issues its own token (`domain::arrive`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) domain: Option<String>,
+    /// The path address: whether it is on, its name and the owner's acceptance.
+    /// Never the Deployment id. The destination keeps a free name (`path::arrive`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) path: Option<super::path::Carried>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -282,6 +286,7 @@ pub(super) async fn export_with(state: &AppState, owner: &Owner, principal: &str
         excluded: EXCLUDED.iter().map(|item| (*item).to_owned()).collect(),
         migration: stamp.as_ref().map(|stamp| stamp.migration.clone()),
         domain: super::domain::for_package(state, &deployment.id),
+        path: super::path::for_package(state, &deployment.id),
     };
     if let Some(stamp) = &stamp {
         let kept = keep(&components, &stamp.keep).await;
@@ -776,6 +781,7 @@ mod tests {
             excluded: vec![],
             migration: None,
             domain: None,
+        path: None,
         }
     }
 

@@ -185,6 +185,7 @@ async fn enter(State(state): State<AppState>, headers: HeaderMap, request: Reque
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
+    let cookie_name = crate::app_cookie_name(&state, &deployment.id, &headers);
     let Ok(bytes) = axum::body::to_bytes(request.into_body(), 1024).await else {
         return error(StatusCode::BAD_REQUEST, "The request is too large.");
     };
@@ -213,7 +214,7 @@ async fn enter(State(state): State<AppState>, headers: HeaderMap, request: Reque
     match session {
         Ok(session) => {
             usage::count(&state.data_root, &deployment.id, usage::Operation::Login);
-            accounts::app_session_response(&state, session)
+            accounts::app_session_response(&cookie_name, session)
         }
         Err(error_value) => auth_error(error_value),
     }
@@ -239,7 +240,7 @@ async fn entry_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
 const ENTRY_PAGE: &str = r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Opening the app</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;font:16px system-ui,sans-serif;color:#20232a;background:#f4f5f7}main{max-width:380px}#error{color:#a32727}@media (prefers-color-scheme:dark){body{background:#14161a;color:#e8eaed}main{background:#1d2026;border-color:#2e333b;box-shadow:none}p{color:#a9b0bc}input{background:#14161a;color:#e8eaed;border-color:#3a404a}input[readonly]{background:#23272e;color:#e8eaed}button{background:#e8eaed;color:#14161a}button+button{background:#2a2f37;color:#e8eaed}#error{color:#ff8a8a}a{color:#8ab4ff}}</style><link rel="icon" href="data:,">
 <main><h1>Opening the app as its owner</h1><p id="error" role="alert"></p></main>
 <script>
-const token=new URLSearchParams(location.hash.slice(1)).get('entry');history.replaceState(null,'',location.pathname);const fail=(text)=>{document.querySelector('#error').textContent=text+' Open the app again from the Users view in the editor.'};if(!token){fail('This link has no entry token.')}else{fetch('/_littlebox/owner-entry',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token})}).then(async(response)=>{if(response.ok){location.replace('/');return}const body=await response.json().catch(()=>({}));fail(body.error||'The app did not open.')},()=>fail('The app did not answer.'))}
+const match=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);const prefix=match?'/p/'+match[1]:'';const token=new URLSearchParams(location.hash.slice(1)).get('entry');history.replaceState(null,'',location.pathname);const fail=(text)=>{document.querySelector('#error').textContent=text+' Open the app again from the Users view in the editor.'};if(!token){fail('This link has no entry token.')}else{fetch(prefix+'/_littlebox/owner-entry',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token})}).then(async(response)=>{if(response.ok){location.replace(prefix+'/');return}const body=await response.json().catch(()=>({}));fail(body.error||'The app did not open.')},()=>fail('The app did not answer.'))}
 </script></html>"#;
 
 #[cfg(test)]

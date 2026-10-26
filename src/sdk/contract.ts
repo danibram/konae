@@ -106,7 +106,7 @@ export const sdkContract = {
   version: 1,
   global: "miniapp",
   endpoint: "/_littlebox/mcp",
-  summary: "window.miniapp is the only host surface a Capsule has, in the editor preview and on every Deployment. Each module is a namespace on it. A published call is one or more MCP tool calls to the runtime endpoint on the host the page loaded from, the Deployment's generated hostname or its custom domain, with that host's app session cookie.",
+  summary: "window.miniapp is the only host surface a Capsule has, in the editor preview and on every Deployment. Each module is a namespace on it. A published call is one or more MCP tool calls to the runtime endpoint, /_littlebox/mcp under the page's base path, on the host the page loaded from, the Deployment's generated hostname or its custom domain, with that host's app session cookie. The base path is /p/<id-or-name> when the page's address starts with /p/<segment>, and empty otherwise.",
   absent: [
     "no fetch to other origins",
     "no localStorage contract",
@@ -147,7 +147,7 @@ export const sdkContract = {
         {
           name: "signIn",
           signature: "miniapp.auth.signIn()",
-          summary: "Send the visitor to the Deployment's login page at /_littlebox/login.",
+          summary: "Send the visitor to the Deployment's login page at /_littlebox/login, under the page's base path.",
           signedOut: true,
           tools: [],
           args: [],
@@ -298,7 +298,7 @@ export const sdkContract = {
           returns: "an array of row objects for a query action, { changes, lastInsertId } for a mutation action, { recorded: true } for a signal action, { callId, queued: true } for a call action",
           errors: [
             { message: "Server action not declared.", when: "actions.json declares no action with that name", source: "kernel" },
-            { message: "authentication-required", when: "the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_littlebox/login", source: "kernel" },
+            { message: "authentication-required", when: "the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to the login page under the base path", source: "kernel" },
             { message: "rate-limited", when: "more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user", source: "kernel", preview: null },
             { message: "Arguments must be an object.", when: "input is not an object, e.g. null", source: "kernel" },
             { message: "Expected a string.", when: "name is not a string", source: "kernel" },
@@ -338,7 +338,7 @@ export const sdkContract = {
       notes: [
         "Only the uploader can list or read a private file.",
         "On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.",
-        "files.list and files.upload download over MCP, check the SHA-256 and return a Blob URL. The page's policy allows connect-src 'self' only, so fetch cannot read a Blob URL again. To fetch a file, or to show one without downloading every file, use files.url. It returns the file's path GET /_littlebox/files/<id> on the app's own origin, which img, fetch and a link all reach.",
+        "files.list and files.upload download over MCP, check the SHA-256 and return a Blob URL. The page's policy allows connect-src 'self' only, so fetch cannot read a Blob URL again. To fetch a file, or to show one without downloading every file, use files.url. It returns the file's path GET /_littlebox/files/<id>, under the page's base path, on the app's own origin, which img, fetch and a link all reach.",
         "The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the 20 MiB quota and its ID answers File not found from then on, through every door.",
         "A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.",
       ],
@@ -396,7 +396,7 @@ export const sdkContract = {
           signedOut: true,
           tools: [],
           args: [{ name: "fileId", type: "string", required: true, description: "The id of a file from files.list or files.upload, or one an action returned" }],
-          returns: "a Promise of the path \"/_littlebox/files/<id>\". Reading it answers the file's bytes with its own type when the caller may read it, 404 File not found when the file is missing, deleted or not theirs, and 401 authentication-required to a visitor of a private Deployment",
+          returns: "a Promise of the path \"<base>/_littlebox/files/<id>\", where <base> is the page's base path: empty, or /p/<id-or-name> on a path address. Reading it answers the file's bytes with its own type when the caller may read it, 404 File not found when the file is missing, deleted or not theirs, and 401 authentication-required to a visitor of a private Deployment",
           errors: [
             noFileId,
             { ...unreadable, when: "reading the path, when the file does not exist, was deleted, or the caller may not read it (404)", status: 404 },
@@ -407,7 +407,7 @@ export const sdkContract = {
             "PNG, JPEG, GIF, WebP and AVIF answer inline; every other type downloads as an attachment",
           ],
           examples: [
-            { code: "image.src = await miniapp.files.url(photo.file_id);", comment: "\"/_littlebox/files/<id>\"" },
+            { code: "image.src = await miniapp.files.url(photo.file_id);", comment: "\"/_littlebox/files/<id>\", with the base path in front on a path address" },
             { code: "const text = await (await fetch(await miniapp.files.url(note.id))).text();" },
           ],
           preview: "Returns the file's data URL from browser storage, and refuses at the call with File not found when the preview actor may not read the file.",
@@ -600,7 +600,7 @@ export const sdkContract = {
         "A provider's preset. { \"provider\": \"github\" | \"shopify\" | \"stripe\" | \"svix\", \"secret\": \"<name>\" } stands for that provider's long form: github for hmac-body over X-Hub-Signature-256 with sha256, hex and prefix sha256=; shopify for hmac-body over X-Shopify-Hmac-Sha256 with sha256 and base64; stripe for timestamped over Stripe-Signature with t=, v1= and window 300; svix for svix, which Resend also uses. A preset takes no other key, so a route has one spelling. Both doors read the table from kernel-rs/src/signature-presets.json, and each row verifies a published or provider-form vector. Any other sender uses the long form.",
         "fields maps an input key to a JSON path into the POST body, such as { \"id\": \"$.data.object.id\" }. Each input fields does not name is read from the body's key of that name, and every other key of the body is left out, so a provider's payload needs no adapter. A path that is missing leaves its input out: a required one is refused as missing, a nullable one binds NULL.",
         "The owner sets the secret with the secret_set admin tool before publishing. It never appears in actions.json, the Build Artifact or an export.",
-        "GET /_littlebox/files/<id>, the path miniapp.files.url returns, answers a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it. A visitor without a session on a private app gets 401 authentication-required before any file is looked up; every other caller who may not read the file gets 404 File not found, the same as for a missing or deleted one.",
+        "GET /_littlebox/files/<id>, the path miniapp.files.url returns under the page's base path, answers a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it. A visitor without a session on a private app gets 401 authentication-required before any file is looked up; every other caller who may not read the file gets 404 File not found, the same as for a missing or deleted one.",
         "The editor preview serves no routes. Run them on a Development Kernel with littlebox dev, or on a Deployment.",
       ],
     },

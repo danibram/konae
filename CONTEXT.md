@@ -6,7 +6,7 @@ Littlebox is the guardrail that lets a person who does not write code, and a per
 
 The terms come in two halves. Read "Words an app author uses" to make an app, edit its files or take it elsewhere; its first part names the words met before an app runs. Read "Words for running an installation" only to operate the Kernel, its accounts, its mail and its copies.
 
-Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, notice, schedule, signature scheme, call action, outbox and SDK module. Usage, Signal and Action Contract keep their capitals, as the older terms do.
+Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, path address, notice, schedule, signature scheme, call action, outbox and SDK module. Usage, Signal and Action Contract keep their capitals, as the older terms do.
 
 ## Words an app author uses
 
@@ -129,6 +129,10 @@ _Avoid_: API spec, OpenAPI document, schema dump
 **Custom Domain**:
 A hostname its owner controls on which one Deployment answers next to its generated hostname, which keeps answering. The owner sets it with `domain_set`, which needs `publish`, and proves control with a TXT record `_littlebox.<hostname>` holding a token the Kernel issued; the Kernel looks the record up itself and the alias serves only once it holds the token. One name serves one Deployment. On it the app has its own origin: its own cookies, the same policy, routes, file path and maintenance page. The operator's proxy terminates TLS and forwards `Host` unchanged. A package carries the name without the token, and the destination issues its own.
 _Avoid_: vanity URL, CNAME (that is one way to point the name), domain mapping
+
+**Path Address**:
+A path on the installation's domain on which one Deployment answers: `<domain>/p/<id>`, and `<domain>/p/<name>` once the owner names it. The owner turns it on with `path_set`, which needs `publish`. Every path and the home share the origin `<domain>`, so an app with accounts or a private app needs the owner's `acceptSharedOrigin` before its path turns on. It needs `LITTLEBOX_DOMAIN`. A package carries the name and the path's state, never the id.
+_Avoid_: short link, vanity path, app URL
 
 **Package**:
 The export of one Deployment's state: its database, its accounts without sessions or email links, its API keys revoked at import, its files, and its Usage and Signals when it has any, captured under the Deployment's locks. A versioned manifest lists each component with its size and SHA-256 and names the published revision. Each component travels as its own transfer, so no step holds a whole component in memory. An import verifies every component and installs the package only into a project that has no Deployment yet; the same package imported again returns the first import. Downloading one needs the `export_data` permission. A migration's package is version 2 and imports in maintenance.

@@ -236,6 +236,7 @@ export async function buildLocal(root: string) {
     bundle: (relative) => bundleModule(root, relative),
     runtime: sdk,
     routing: config?.project?.manifest?.routing,
+    warn: (message) => console.warn(`Warning: ${message}`),
   });
   await mkdir(path.join(root, ".littlebox"), { recursive: true });
   await writeFile(path.join(root, ".littlebox/artifact.json"), JSON.stringify(artifact));

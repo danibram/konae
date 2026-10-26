@@ -48,6 +48,8 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("app_owner_enter", "app_users_list"),
     ("domain_set", "domain_read"),
     ("domain_clear", "domain_read"),
+    ("path_set", "path_read"),
+    ("path_clear", "path_read"),
     ("transfer_begin", "transfer_status"),
     ("transfer_write", "transfer_status"),
     ("transfer_complete", "transfer_status"),
@@ -123,6 +125,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 {"need": "This app calls another app or https service", "use": "kind call with url, body, optional auth and then", "not": "fetch of a secret from the browser"},
                 {"need": "Files a person uploads", "use": "miniapp.files", "not": "Base64 in a SQLite column for large bytes"},
                 {"need": "Who may create an app account", "use": "Signup Policy and invitations", "not": "A homemade users table that bypasses Runtime Actor"},
+                {"need": "A short link on the installation's domain", "use": "path address (path_set)", "not": "A custom domain when DNS is not yours"},
                 {"need": "Take the app to another machine", "use": "package export/import or migration", "not": "Copy (that moves the whole installation)"},
                 {"need": "Leave managed editing for a folder on disk", "use": "Eject", "not": "Package (that moves data, not source authority)"}
             ],
@@ -173,7 +176,8 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "concurrency": "An obsolete plan is rejected. Repeating an applied plan returns the same receipt.",
             "access": "A first release may add initialSignupPolicy {mode, allowlist} with mode open, invitation, closed or allowlist; the Kernel installs it before the app serves. When the owner's request leaves access open for an app with accounts, propose visibility private and mode invitation. Later changes need manage_users and signup_policy_set. Invite people with app_invitations_create only when the owner asks, because it sends email.",
             "import": "A first release may also carry initialPackage to start the Deployment with an exported app's data; the portability topic has the steps.",
-            "domain": "domain_set { deploymentId, hostname } adds a custom domain next to the generated hostname and needs publish. Its first answer names a TXT record, _littlebox.<hostname>, and the token it must hold. Once the record is at the DNS provider and the hostname points at the installation's proxy, which terminates TLS and forwards Host unchanged, call domain_set again: the Kernel looks the record up and the alias serves. domain_read shows the state and domain_clear removes it. bun run littlebox -- domain runs the same steps."
+            "domain": "domain_set { deploymentId, hostname } adds a custom domain next to the generated hostname and needs publish. Its first answer names a TXT record, _littlebox.<hostname>, and the token it must hold. Once the record is at the DNS provider and the hostname points at the installation's proxy, which terminates TLS and forwards Host unchanged, call domain_set again: the Kernel looks the record up and the alias serves. domain_read shows the state and domain_clear removes it. bun run littlebox -- domain runs the same steps.",
+            "path": "path_set { deploymentId, enabled, name?, acceptSharedOrigin? } answers the app on <domain>/p/<id>, and on <domain>/p/<name> once it has a name. The domain is LITTLEBOX_DOMAIN. An app with accounts or a private app needs acceptSharedOrigin true, because every path and the home share one origin, and any other app on the domain can use the sessions of this app's users. path_read returns the state and the addresses; path_clear turns the path off and removes the name. Both need publish. Read back with path_read after a change."
         }),
         "users" => json!({
             "permission": "manage_users, which login adds with --manage-users. signup_policy_read needs only read.",
@@ -338,7 +342,7 @@ mod tests {
             .chain(runtime_tools())
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
-        let prefixes = ["platform_", "project_", "projects_", "schema_", "database_", "storage_", "release_", "signup_policy_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "notices_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "eject_", "migration_", "package_", "mail_", "session_", "domain_"];
+        let prefixes = ["platform_", "project_", "projects_", "schema_", "database_", "storage_", "release_", "signup_policy_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "notices_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "eject_", "migration_", "package_", "mail_", "session_", "domain_", "path_"];
         for name in TOPICS {
             let text = topic(name).unwrap().to_string();
             for word in text.split(|c: char| !(c.is_ascii_lowercase() || c == '_')) {

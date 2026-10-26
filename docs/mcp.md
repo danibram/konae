@@ -44,6 +44,7 @@ If MCP is published on an origin other than the hosting origin, set `LITTLEBOX_M
 | Signing secrets | `secrets_list`, `secret_set`, `secret_delete` |
 | API keys | `api_keys_list`, `api_keys_create`, `api_keys_revoke` |
 | Custom domain | `domain_read`; `domain_set`, `domain_clear` with `publish` |
+| Path address | `path_read`; `path_set`, `path_clear` with `publish` |
 | Usage and Signals | `usage_read`, `signals_read`, `usage_summary`, `usage_overview` |
 | Calls between apps | `calls_read` |
 | Email notices | `notices_read` |
@@ -57,7 +58,7 @@ The catalog depends on the credentials. The Kernel checks the permission again o
 
 This changes the contract. `signup_policy_set` needed `publish` before `manage_users` existed, so a client that changed the policy with a `read`, `write` and `publish` token now gets "Unknown tool" and needs a new token that includes `manage_users`. `bun run littlebox -- login --manage-users` asks for one, and `bun run littlebox -- dev` asks for one on its Development Kernel.
 
-Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `domain_read` needs `read`; `domain_set` and `domain_clear` need `publish`. `usage_read`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read` and `notices_read` need `read`.
+Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `domain_read` needs `read`; `domain_set` and `domain_clear` need `publish`. `path_read` needs `read`; `path_set` and `path_clear` need `publish`. `usage_read`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read` and `notices_read` need `read`.
 
 `project_create` returns a template and an External identity by default. Later sources stay in the user's folder; `project_inspect` returns metadata and the Deployment, without claiming to synchronize that code with the editor.
 
@@ -894,6 +895,17 @@ On the alias the app has its own origin. The runtime endpoint takes requests who
 Two Deployments may both wait on a name; the first whose token appears in the record gets it, and the other is then refused. `kernel-rs/src/domain-cases.json` lists every rule with its message.
 
 ## Action Contract
+
+## Path address
+
+A Deployment can answer on the installation's domain at `<domain>/p/<id>`, and at `<domain>/p/<name>` once it has a name, with no DNS of its own. `LITTLEBOX_DOMAIN` names the domain, and the addresses carry it. [ADR-0024](./adr/0024-an-installation-names-its-hosts-from-one-domain-and-an-app-may-answer-on-a-path.md) records the decisions.
+
+1. `path_set { deploymentId, enabled: true, name? }` turns the path on. A name is 3 to 40 letters, digits and hyphens, does not start or end with a hyphen, is not a word Littlebox uses such as `app` or `mcp`, and does not have the shape of an id. No other Deployment may hold it while its path is on.
+2. An app with accounts needs `acceptSharedOrigin: true` before its path turns on. An app has accounts when it is private, when its signup is not Closed, or when one of its actions has access other than `anonymous`. Without the acceptance the call refuses with `path.shared-origin`. Every path and the home share the origin `<domain>`, so any other app there, including other owners' apps, can use the sessions of this app's users. The app's own hostname keeps its sessions on its own origin.
+3. `path_read { deploymentId }` returns `enabled`, `name`, `acceptSharedOrigin` and the `addresses`. Read it back after each change.
+4. `path_set` with `enabled: false` turns the path off and frees the name, which stays on the record. `path_clear` turns it off and removes the name and the acceptance.
+
+An omitted `name` or `acceptSharedOrigin` keeps the stored value, and `name: null` removes the name while the path stays as `enabled` says. `path_read` answers `domainConfigured: false` when the installation sets no `LITTLEBOX_DOMAIN`. A package carries `enabled`, `name` and `acceptSharedOrigin`, never the Deployment id. On import a name another app holds is dropped, and the release receipt's `notices` says so. A path that would turn on without the acceptance stays off. Without `LITTLEBOX_DOMAIN` the path has no address, and `path_set` with `enabled: true` refuses. `kernel-rs/src/path-cases.json` and `kernel-rs/src/path-state-cases.json` list the rules and their messages.
 
 ```sh
 bun run littlebox -- contract --dir /tmp/my-app

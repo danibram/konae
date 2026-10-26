@@ -14,6 +14,9 @@ import kernelCopiesSource from "../../kernel-rs/src/copies.rs?raw";
 import kernelDomainSource from "../../kernel-rs/src/domain.rs?raw";
 import kernelDomainCases from "../../kernel-rs/src/domain-cases.json?raw";
 import kernelEjectSource from "../../kernel-rs/src/eject.rs?raw";
+import kernelAppDbSource from "../../kernel-rs/src/app_db.rs?raw";
+import kernelHostsSource from "../../kernel-rs/src/hosts.rs?raw";
+import kernelSqliteBenchSource from "../../kernel-rs/src/sqlite_bench.rs?raw";
 import kernelFilesSource from "../../kernel-rs/src/files.rs?raw";
 import kernelGuardSource from "../../kernel-rs/src/guard.rs?raw";
 import kernelCallsSource from "../../kernel-rs/src/calls.rs?raw";
@@ -35,6 +38,10 @@ import kernelNotifySource from "../../kernel-rs/src/notify.rs?raw";
 import kernelNotifyCases from "../../kernel-rs/src/notify-cases.json?raw";
 import kernelNotifyColumnCases from "../../kernel-rs/src/notify-column-cases.json?raw";
 import kernelPackageSource from "../../kernel-rs/src/package.rs?raw";
+import kernelPathSource from "../../kernel-rs/src/path.rs?raw";
+import kernelPathStateCases from "../../kernel-rs/src/path-state-cases.json?raw";
+import kernelPathNameSource from "../../kernel-rs/src/path_name.rs?raw";
+import kernelPathCases from "../../kernel-rs/src/path-cases.json?raw";
 import kernelProviderSource from "../../kernel-rs/src/provider.rs?raw";
 import kernelProviderSignatureCases from "../../kernel-rs/src/provider-signature-cases.json?raw";
 import kernelSignaturePresets from "../../kernel-rs/src/signature-presets.json?raw";
@@ -73,6 +80,9 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/domain.rs", contents: kernelDomainSource },
   { path: "kernel-rs/src/domain-cases.json", contents: kernelDomainCases },
   { path: "kernel-rs/src/eject.rs", contents: kernelEjectSource },
+  { path: "kernel-rs/src/app_db.rs", contents: kernelAppDbSource },
+  { path: "kernel-rs/src/hosts.rs", contents: kernelHostsSource },
+  { path: "kernel-rs/src/sqlite_bench.rs", contents: kernelSqliteBenchSource },
   { path: "kernel-rs/src/files.rs", contents: kernelFilesSource },
   { path: "kernel-rs/src/guard.rs", contents: kernelGuardSource },
   { path: "kernel-rs/src/calls.rs", contents: kernelCallsSource },
@@ -94,6 +104,10 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/migration.rs", contents: kernelMigrationSource },
   { path: "kernel-rs/src/model_rules.rs", contents: kernelModelRulesSource },
   { path: "kernel-rs/src/package.rs", contents: kernelPackageSource },
+  { path: "kernel-rs/src/path.rs", contents: kernelPathSource },
+  { path: "kernel-rs/src/path-state-cases.json", contents: kernelPathStateCases },
+  { path: "kernel-rs/src/path_name.rs", contents: kernelPathNameSource },
+  { path: "kernel-rs/src/path-cases.json", contents: kernelPathCases },
   { path: "kernel-rs/src/provider.rs", contents: kernelProviderSource },
   { path: "kernel-rs/src/provider-signature-cases.json", contents: kernelProviderSignatureCases },
   { path: "kernel-rs/src/signature-presets.json", contents: kernelSignaturePresets },
