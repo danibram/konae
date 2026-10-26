@@ -178,6 +178,7 @@ set -a
 set +a
 port=\u0024{LITTLEBOX_PORT:-8787}
 if [ ! -d node_modules ]; then npm install; fi
+if [ -f app/package.json ] && [ ! -d app/node_modules ]; then (cd app && npm install); fi
 npm run build
 docker compose up -d --build
 ready=0
@@ -205,7 +206,7 @@ Install Node.js 20 or newer, npm, Docker, and curl before starting.
 
 Run \u0060./start.sh\u0060. The script installs the pinned build tool, rebuilds the app, starts the Kernel, and loads the app. It creates \u0060.env\u0060 with a local admin key the first time it runs. Open the URL printed by the script. Docker publishes the Kernel only on 127.0.0.1, and the process drops to the unprivileged user \u0060littlebox\u0060 after locking \u0060data/\u0060 to that user.
 
-Edit the files under \u0060app/\u0060, then run \u0060npm run build\u0060 and \u0060npm run deploy\u0060. The Kernel serves the new artifact at the same local app URL.
+Edit the files under \u0060app/\u0060, then run \u0060npm run build\u0060 and \u0060npm run deploy\u0060. When \u0060app/package.json\u0060 lists packages the app imports, \u0060start.sh\u0060 installs them in \u0060app/node_modules\u0060 and the build bundles them into the app; after you change that list, run \u0060npm install\u0060 in \u0060app/\u0060. The Kernel serves the new artifact at the same local app URL.
 
 Run \u0060docker compose down\u0060 to stop the Kernel. The app database and its backups remain under \u0060data/\u0060.
 
@@ -221,6 +222,7 @@ Install Rust 1.91 or newer as well. Create \u0060.env\u0060 from \u0060.env.exam
 
 \u0060\u0060\u0060sh
 npm install
+if [ -f app/package.json ]; then (cd app && npm install); fi
 npm run build
 set -a; . ./.env; set +a
 LITTLEBOX_DATA_DIR=data LITTLEBOX_KERNEL_PORT=\u0024{LITTLEBOX_PORT:-8787} LITTLEBOX_PUBLIC_ORIGIN=http://localhost:\u0024{LITTLEBOX_PORT:-8787} cargo run --release --locked --manifest-path kernel-rs/Cargo.toml

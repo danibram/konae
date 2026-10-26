@@ -130,8 +130,8 @@
   </ul>
   <p>A copy moves an installation. A package moves one app.</p>
 
-  <h2 id="not-built-yet">Not built yet</h2>
-  <p>Declared Dependencies are decided in ADR-0007 and are not built. Today a Capsule imports only its own files.</p>
+  <h2 id="packages">Packages</h2>
+  <p>An npm package is imported by name once the Capsule's <code>package.json</code> lists it with an exact version. The editor's build fetches it from esm.sh, <code>littlebox build</code> reads it from <code>node_modules</code>, and either way it goes into the app's bundle.</p>
 
   <h2 id="read-next">Read next</h2>
   <ul>

@@ -53,3 +53,12 @@ A Capsule now carries generated dependency files, so export, import and the agen
 ## Note, 2026-11-07: what is built
 
 The application build exists. `src/runtime/browser-build.ts` bundles the Capsule's entrypoint and its relative imports with `esbuild-wasm`, which runs in its own worker, and `src/lib/static-artifact.js` assembles the Build Artifact the Kernel verifies. The migration pipeline runs in the subprocess described above. Declared Dependencies are not built: no Capsule carries a generated manifest or lock, and the builder resolves only files the Capsule holds. The sentences above about the dependency registry and the generated dependency files describe that part of the decision, not the current system.
+
+## Note, 2026-11-09: packages without a registry
+
+A Capsule may import npm packages. Its `package.json` lists them under `dependencies` with exact versions, and that file is the one declaration: the agent and the owner edit it, and nothing is generated from it. The registry and the generated lock above are dropped. The build already runs on the owner's machine, so Littlebox has no reason to choose which libraries an app may use.
+
+- The editor's build resolves a bare import against that list and fetches it from esm.sh at that version, with every other listed package pinned through esm.sh's `deps` parameter so two packages share one copy. It reads only that origin. esbuild links the text into the app's bundle; the editor never evaluates it, so a package gets no nearer the provider keys than a relative import does. The fetch is a build-time dependency on esm.sh, which sees the list of packages a Capsule names.
+- `littlebox build` and the exported kit resolve the same imports from `node_modules` after `npm install`, as esbuild does by default. The kit's `start.sh` installs `app/package.json` and its deploy skips `app/node_modules`.
+- The published app loads nothing from esm.sh. Its Content Security Policy is unchanged.
+- The two sources give the same package versions, not byte-identical bundles: esm.sh compiles a package for `es2022` and npm ships what the author published.

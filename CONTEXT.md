@@ -159,8 +159,8 @@ The irreversible transfer of a Managed Project's source and database-schema auth
 _Avoid_: Export, download
 
 **Declared Dependencies**:
-The libraries a Managed Capsule states it needs, written as intent by its owner or the agent. Littlebox resolves them against pinned, browser-compatible versions and generates the manifest and lock the build consumes; the generated pair is reviewable and exportable but is not a second editable source of truth. Not built yet: ADR-0007 decides it, and today a Capsule imports only its own files.
-_Avoid_: package.json, lockfile (those name the generated form, not the authority)
+The npm packages a Capsule imports by name, listed with exact versions under `dependencies` in its `package.json`. The editor's build fetches each one from esm.sh at that version and links it into the app's bundle; `littlebox build` and the exported kit read the same list from `node_modules` after `npm install`. Either way the published app holds the package's code and loads nothing from another origin. A version range is refused, so every build reads the same code.
+_Avoid_: library allowlist, vendored copy
 
 ## Words for running an installation
 

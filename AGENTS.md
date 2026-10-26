@@ -52,6 +52,7 @@ These are not bugs to paper over. Say them when they matter.
 
 - The editor preview applies no Content Security Policy. Inline handlers and other-origin fetches can still run there; a published app refuses them.
 - The preview has no HTTP routes, schedule timer, notice email, Usage store, call outbox or owner app account. Try those on `littlebox dev` or a published Deployment.
+- The editor's build reads npm packages from esm.sh; `littlebox build` and the export kit read them from `node_modules`. Both use the exact versions in `package.json`, but the bundles are not byte-identical.
 - The Validation Gate checks schema and `actions.json`. A page that names a missing file fails at build or release, not at `validate_capsule`.
 
 ## Where the work lives
