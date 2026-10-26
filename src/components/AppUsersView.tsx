@@ -252,6 +252,8 @@ function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: str
           {!ready && !on && <p className="access-note access-disabled-reason">Set the client ID and the client secret first.</p>}
         </li>
       </ol>
+      {error && <div className="access-error" role="alert">{error}</div>}
+      {status && <div className="access-actions"><span role="status">{status}</span></div>}
       <p className="access-note">A person who continues with Google reaches the app account with the same email, whether it was made with a password or with Google. Google proves only Gmail addresses and addresses of a Google Workspace domain; anyone else signs in with email and password. The signup policy above still decides who may create an account.</p>
     </>;
   }
@@ -260,8 +262,7 @@ function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: str
     <Card className="access-card" role="group" aria-label="Sign in with Google">
       <h3>Sign in with Google</h3>
       {body}
-      {error && <div className="access-error" role="alert">{error}</div>}
-      {status && <div className="access-actions"><span role="status">{status}</span></div>}
+      {!methods && error && <div className="access-error" role="alert">{error}</div>}
     </Card>
   );
 }
