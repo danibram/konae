@@ -129,7 +129,7 @@ function AuthPanel(props: Props) {
         <button type="button" className={view === "users" ? "active" : ""} aria-current={view === "users" || undefined} onClick={() => show("users")}><Users size={13} /> Users</button>
         <button type="button" className={view === "integrations" ? "active" : ""} aria-current={view === "integrations" || undefined} onClick={() => show("integrations")}><Plug size={13} /> Integrations</button>
       </nav>
-      {view === "users" && <AppUsersView deploymentId={props.deployment?.id} visibility={props.visibility ?? "private"} onSetVisibility={props.onSetVisibility} />}
+      {view === "users" && <AppUsersView projectId={props.projectId} deploymentId={props.deployment?.id} visibility={props.visibility ?? "private"} onSetVisibility={props.onSetVisibility} />}
       {view === "integrations" && props.projectId && <IntegrationsView projectId={props.projectId} deploymentId={props.deployment?.id} deploymentUrl={props.deployment?.url} actionsSource={props.actionsSource} />}
       {view === "rules" && <RulesView {...props} />}
     </section>

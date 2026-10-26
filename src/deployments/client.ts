@@ -53,12 +53,21 @@ export function saveSignupPolicy(deploymentId: string, mode: SignupMode, allowli
 
 /**
  * How people sign in to a deployed app. Password is always on. `offered` is
- * what the sign-in page shows: google only when the installation has a
- * Google client (`googleAvailable`). `notice` explains a Deployment that asks
- * for Google on an installation without one, such as after an import.
+ * what the sign-in page shows: google only once the owner turned it on and
+ * set the app's Google client. `googleClient` says whether each half is set,
+ * never its value. `redirectUris` are the callbacks the owner registers in
+ * the Google console. `notice` explains an app that asks for Google without
+ * its client here, such as after an import.
  */
 export type SignInMethod = "password" | "google";
-export type SignInMethods = { deploymentId: string; methods: SignInMethod[]; offered: SignInMethod[]; googleAvailable: boolean; notice?: string };
+export type SignInMethods = {
+  deploymentId: string;
+  methods: SignInMethod[];
+  offered: SignInMethod[];
+  googleClient: { clientIdSet: boolean; clientSecretSet: boolean };
+  redirectUris: string[];
+  notice?: string;
+};
 
 export function readSignInMethods(deploymentId: string) {
   return platformMcp.call<SignInMethods>("sign_in_methods_read", { deploymentId });
@@ -67,6 +76,14 @@ export function readSignInMethods(deploymentId: string) {
 export function saveSignInMethods(deploymentId: string, google: boolean) {
   const methods: SignInMethod[] = google ? ["password", "google"] : ["password"];
   return platformMcp.call<SignInMethods>("sign_in_methods_set", { deploymentId, methods });
+}
+
+/** The project secrets that hold the app's own Google OAuth client. */
+export const GOOGLE_CLIENT_ID = "google_client_id";
+export const GOOGLE_CLIENT_SECRET = "google_client_secret";
+
+export function setGoogleClientPart(projectId: string, name: typeof GOOGLE_CLIENT_ID | typeof GOOGLE_CLIENT_SECRET, value: string) {
+  return platformMcp.call<{ projectId: string; name: string; updatedAt: number }>("secret_set", { projectId, name, value, use: "google" });
 }
 
 // App accounts and invitations. Every tool needs the manage_users permission,
@@ -148,8 +165,13 @@ export function readMailStatus(refresh = false) {
  */
 export type ProjectSecret = { name: string; updatedAt: number; use: "route" | "call"; svixKey?: boolean };
 
-export function listSecrets(projectId: string) {
-  return platformMcp.call<{ projectId: string; secrets: ProjectSecret[] }>("secrets_list", { projectId });
+/**
+ * The project's signing secrets. The app's Google client (`use` "google")
+ * is left out: no route or call reads it, and Auth > Users shows it.
+ */
+export async function listSecrets(projectId: string) {
+  const answer = await platformMcp.call<{ projectId: string; secrets: Array<Omit<ProjectSecret, "use"> & { use: ProjectSecret["use"] | "google" }> }>("secrets_list", { projectId });
+  return { ...answer, secrets: answer.secrets.filter((secret): secret is ProjectSecret => secret.use !== "google") };
 }
 
 export function setSecret(projectId: string, name: string, value: string) {

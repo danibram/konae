@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { signupModes } from "../deployments/client";
 import {
-  apiKeyProblem, batchKey, revokedKeyNotes, defaultSignupMode, expiryText, fileCurl, firstPublishModes, invitationResultMessage, invitationView,
+  apiKeyProblem, batchKey, googleClientProblem, revokedKeyNotes, defaultSignupMode, expiryText, fileCurl, firstPublishModes, invitationResultMessage, invitationView,
   mailReadiness, parseEmailBatch, republishAccessNote, routeActions, routeCurl, secretProblem, secretUsage, signupModeCopy,
   userStateView, visibilityCopy,
 } from "./app-access";
@@ -206,5 +206,14 @@ describe("integrations", () => {
     const [route] = routeActions(source);
     expect(route.fields).toEqual({ id: "$.data.object.id" });
     expect(routeCurl("https://shop.example.net", route, "lbk_test")).toContain(`--data '{"data":{"object":{"id":"text"}},"amount":1}'`);
+  });
+});
+
+describe("googleClientProblem", () => {
+  test("names the Kernel's refusals before the owner saves", () => {
+    expect(googleClientProblem("1001-practice.apps.googleusercontent.com", "GOCSPX-a-long-secret")).toBe("");
+    expect(googleClientProblem("", "")).toBe("");
+    expect(googleClientProblem("GOCSPX-pasted-in-the-wrong-field", "")).toBe("This looks like the client secret. The client ID ends with .apps.googleusercontent.com.");
+    expect(googleClientProblem("", "short")).toContain("16 to 512");
   });
 });

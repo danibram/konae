@@ -268,7 +268,7 @@ function KeyCommands({ keyValue, apiKey, routes, deploymentUrl }: { keyValue?: s
   );
 }
 
-function CopyLine({ label, text }: { label: string; text: string }) {
+export function CopyLine({ label, text }: { label: string; text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="access-copy">

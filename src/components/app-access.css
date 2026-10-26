@@ -47,6 +47,9 @@
 .access-key-head .ui-button { margin-left: auto; }
 .access-commands { display: grid; gap: var(--ds-space-2); }
 .access-commands > small { color: var(--ds-muted); font-size: 11px; }
+.access-steps { display: grid; gap: var(--ds-space-4); margin: 0; padding-left: 20px; }
+.access-steps > li { display: grid; gap: var(--ds-space-2); font-size: 13px; line-height: 1.45; }
+.access-steps > li > strong { font-weight: 650; }
 .access-copy { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--ds-space-2); align-items: center; }
 .access-copy > span { grid-column: 1 / -1; color: var(--ds-muted); font: 650 11px/1.3 var(--ds-font); }
 .access-copy > code { display: block; padding: var(--ds-space-2); border: 1px solid var(--ds-border); background: var(--ds-subtle); color: var(--ds-text); font: 11px/1.5 var(--ds-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }

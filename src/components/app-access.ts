@@ -201,6 +201,20 @@ export function secretProblem(name: string, value: string): string {
   return "";
 }
 
+/**
+ * What the Kernel would refuse in the app's Google client, said before the
+ * owner saves. Either field may stay empty to keep what is set.
+ */
+export function googleClientProblem(clientId: string, clientSecret: string): string {
+  const id = clientId.trim();
+  const secret = clientSecret.trim();
+  if (id.startsWith("GOCSPX-")) return "This looks like the client secret. The client ID ends with .apps.googleusercontent.com.";
+  for (const value of [id, secret]) {
+    if (value && (value.length < 16 || value.length > 512 || !/^[\x21-\x7e]+$/.test(value))) return "A secret value is 16 to 512 printable ASCII characters without spaces.";
+  }
+  return "";
+}
+
 const KEY_PLACEHOLDER = "$LITTLEBOX_API_KEY";
 
 function sample(type: string) {

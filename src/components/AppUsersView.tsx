@@ -2,7 +2,7 @@ import { MailWarning, RefreshCw, Send, Users } from "lucide-react";
 import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import {
   createAppInvitations, listAppInvitations, listAppUsers, openAppAsOwner, readMailStatus, readSignInMethods, readSignupPolicy, resendAppInvitation, resumeAppUser,
-  revokeAppInvitation, saveSignInMethods, saveSignupPolicy, signupModes, suspendAppUser,
+  revokeAppInvitation, saveSignInMethods, saveSignupPolicy, setGoogleClientPart, signupModes, suspendAppUser, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
   type AppInvitation, type AppUser, type AppUserState, type InvitationResult, type MailStatus, type SignInMethods, type SignupMode, type SignupPolicy,
 } from "../deployments/client";
 import type { DeploymentVisibility } from "../deployments/manifest";
@@ -10,12 +10,16 @@ import {
   batchKey, expiryText, formatDate, invitationResultMessage, invitationView, mailReadiness, parseEmailBatch, signupModeCopy,
   userStateView, visibilityCopy, MAX_INVITATION_BATCH, type PendingBatch,
 } from "./app-access";
-import { Badge, Button, Card, EmptyState, Field, LoadingBlock, Select, Switch, Textarea } from "./ui";
+import { CopyLine } from "./IntegrationsView";
+import { googleClientProblem } from "./app-access";
+import { Badge, Button, Card, EmptyState, Field, Input, LoadingBlock, Select, Switch, Textarea } from "./ui";
 import { useLoadingHold } from "./loading-hold";
 import { message, signedOut, useConfirm } from "./useConfirm";
 import "./app-access.css";
 
 type Props = {
+  /** Secrets belong to the project; the app's Google client is two of them. */
+  projectId?: string;
   deploymentId?: string;
   visibility: DeploymentVisibility;
   onSetVisibility?: (visibility: DeploymentVisibility) => void;
@@ -27,7 +31,7 @@ const PAGE = 25;
 const SIGNED_OUT = <p className="access-note">Sign in with <a href="/_littlebox/owner/login">owner sign-in</a> to manage this app's accounts.</p>;
 
 /** App accounts, invitations and who may join, for the published app. Owners only. */
-export function AppUsersView({ deploymentId, visibility, onSetVisibility }: Props) {
+export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibility }: Props) {
   const [mail, setMail] = useState<MailStatus | null>(null);
   const [mailError, setMailError] = useState("");
   const [changed, setChanged] = useState(0);
@@ -59,12 +63,10 @@ export function AppUsersView({ deploymentId, visibility, onSetVisibility }: Prop
           </Select>
         </Field>
         {deploymentId
-          ? ownerSignedOut ? SIGNED_OUT : <>
-            <SignupPolicyControl deploymentId={deploymentId} onSignedOut={onSignedOut} onSaved={onChanged} />
-            <SignInMethodsControl deploymentId={deploymentId} onSignedOut={onSignedOut} />
-          </>
+          ? ownerSignedOut ? SIGNED_OUT : <SignupPolicyControl deploymentId={deploymentId} onSignedOut={onSignedOut} onSaved={onChanged} />
           : <p className="access-note">You choose who can create an app account when you deploy. Invitation only is the choice for a private app.</p>}
       </Card>
+      {deploymentId && projectId && !ownerSignedOut && <GoogleSignIn projectId={projectId} deploymentId={deploymentId} onSignedOut={onSignedOut} />}
       {!deploymentId ? (
         <Card className="access-card">
           <EmptyState icon={<Users size={24} />} title="No app accounts yet" description="People create app accounts on the published app, never in this editor. Deploy the app to invite people and see their accounts here." />
@@ -153,54 +155,115 @@ function SignupPolicyControl({ deploymentId, onSignedOut, onSaved }: { deploymen
 }
 
 /**
- * Continue with Google on the sign-in page. Hidden on an installation
- * without a Google client, unless this app already asks for Google, as an
- * imported one may: then it says why the sign-in page shows only the password.
+ * Continue with Google on the sign-in page. The owner makes a Google OAuth
+ * client for this app in their own Google console, registers the redirect
+ * URIs shown here, pastes its client ID and secret, and turns Google on.
+ * The switch stays off until both halves are set, as the Kernel refuses it.
  */
-function SignInMethodsControl({ deploymentId, onSignedOut }: { deploymentId: string; onSignedOut: () => void }) {
+function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: string; deploymentId: string; onSignedOut: () => void }) {
   const [methods, setMethods] = useState<SignInMethods | null>(null);
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [saved, setSaved] = useState(false);
+  const [status, setStatus] = useState("");
+  const pending = useLoadingHold(!methods && !error);
+
+  const fail = useCallback((cause: unknown) => {
+    if (signedOut(cause)) onSignedOut();
+    else setError(message(cause));
+  }, [onSignedOut]);
 
   useEffect(() => {
     let current = true;
     setMethods(null);
-    readSignInMethods(deploymentId).then((value) => { if (current) setMethods(value); }, (cause) => {
-      if (!current) return;
-      if (signedOut(cause)) onSignedOut();
-      else setError(message(cause));
-    });
+    readSignInMethods(deploymentId).then((value) => { if (current) setMethods(value); }, (cause) => { if (current) fail(cause); });
     return () => { current = false; };
-  }, [deploymentId, onSignedOut]);
+  }, [deploymentId, fail]);
 
-  if (!methods) return error ? <div className="access-error" role="alert">{error}</div> : null;
-  if (methods.notice) return <p className="access-note" role="status">{methods.notice}</p>;
-  if (!methods.googleAvailable) return null;
+  const problem = googleClientProblem(clientId, clientSecret);
 
-  const google = methods.methods.includes("google");
-  const save = async (next: boolean) => {
+  const saveClient = async () => {
+    if (problem) { setError(problem); return; }
     setSaving(true);
     setError("");
-    setSaved(false);
+    setStatus("");
     try {
-      setMethods(await saveSignInMethods(deploymentId, next));
-      setSaved(true);
+      if (clientId.trim()) await setGoogleClientPart(projectId, GOOGLE_CLIENT_ID, clientId.trim());
+      if (clientSecret.trim()) await setGoogleClientPart(projectId, GOOGLE_CLIENT_SECRET, clientSecret.trim());
+      setMethods(await readSignInMethods(deploymentId));
+      setClientId("");
+      setClientSecret("");
+      setStatus("Saved. Littlebox keeps the values and never shows them again.");
     } catch (cause) {
-      if (signedOut(cause)) onSignedOut();
-      setError(message(cause));
+      fail(cause);
     } finally {
       setSaving(false);
     }
   };
 
-  return <>
-    <Field label="Sign-in methods" help="Email and password always stay on. With Google on, the sign-in page also shows Continue with Google. The signup policy above still decides who may have an account, and an email that already has an account connects Google from its account page.">
-      <Switch checked={google} disabled={saving} label="Continue with Google" onChange={(next) => void save(next)} />
-    </Field>
-    {error && <div className="access-error" role="alert">{error}</div>}
-    <div className="access-actions"><span role="status">{saved ? "Saved. The published app uses it now." : ""}</span></div>
-  </>;
+  const toggle = async (next: boolean) => {
+    setSaving(true);
+    setError("");
+    setStatus("");
+    try {
+      setMethods(await saveSignInMethods(deploymentId, next));
+      setStatus(next ? "Google is on. The sign-in page shows Continue with Google now." : "Google is off. The sign-in page shows email and password only.");
+    } catch (cause) {
+      fail(cause);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  let body: ReactNode;
+  if (!methods) body = pending ? <LoadingBlock label="Loading Google sign-in" rows={2} /> : null;
+  else {
+    const { clientIdSet, clientSecretSet } = methods.googleClient;
+    const ready = clientIdSet && clientSecretSet;
+    const on = methods.methods.includes("google");
+    const setLabel = (set: boolean) => <Badge tone={set ? "success" : "neutral"}>{set ? "Set" : "Not set"}</Badge>;
+    body = <>
+      {methods.notice && <p className="access-mail" role="status"><MailWarning size={15} /><span>{methods.notice}</span></p>}
+      <ol className="access-steps">
+        <li>
+          <strong>Make a Google client for this app.</strong>
+          <p className="access-note">In the Google Cloud console, open APIs &amp; Services, then Credentials, and create an OAuth client ID of type Web application. Paste {methods.redirectUris.length > 1 ? "each address" : "this address"} under Authorized redirect URIs.</p>
+          {methods.redirectUris.map((uri, index) => <CopyLine key={uri} label={index === 0 ? "Redirect URI" : "Redirect URI for your custom domain"} text={uri} />)}
+        </li>
+        <li>
+          <strong>Paste the client ID and secret Google shows you.</strong>
+          <div className="access-form-row">
+            <Field label="Client ID" help={clientIdSet ? "Set. Paste a new one to replace it." : "Ends with .apps.googleusercontent.com"}>
+              <Input value={clientId} autoComplete="off" spellCheck={false} placeholder={clientIdSet ? "Set" : "123456-abc.apps.googleusercontent.com"} onChange={(event) => setClientId(event.target.value)} />
+            </Field>
+            <Field label="Client secret" help={clientSecretSet ? "Set. Paste a new one to replace it." : "Starts with GOCSPX- for a new client"}>
+              <Input type="password" value={clientSecret} autoComplete="off" placeholder={clientSecretSet ? "Set" : "GOCSPX-..."} onChange={(event) => setClientSecret(event.target.value)} />
+            </Field>
+          </div>
+          <div className="access-actions">
+            <span>Client ID {setLabel(clientIdSet)} Client secret {setLabel(clientSecretSet)}</span>
+            <Button variant="primary" size="sm" loading={saving} disabled={!clientId.trim() && !clientSecret.trim()} onClick={() => void saveClient()}>Save client</Button>
+          </div>
+        </li>
+        <li>
+          <strong>Turn it on.</strong>
+          <Switch checked={on} disabled={saving || (!ready && !on)} label="Continue with Google" onChange={(next) => void toggle(next)} />
+          {!ready && !on && <p className="access-note access-disabled-reason">Set the client ID and the client secret first.</p>}
+        </li>
+      </ol>
+      <p className="access-note">A person who continues with Google reaches the app account with the same email, whether it was made with a password or with Google. Google proves only Gmail addresses and addresses of a Google Workspace domain; anyone else signs in with email and password. The signup policy above still decides who may create an account.</p>
+    </>;
+  }
+
+  return (
+    <Card className="access-card" role="group" aria-label="Sign in with Google">
+      <h3>Sign in with Google</h3>
+      {body}
+      {error && <div className="access-error" role="alert">{error}</div>}
+      {status && <div className="access-actions"><span role="status">{status}</span></div>}
+    </Card>
+  );
 }
 
 function InviteForm({ deploymentId, mailReady, mailReason, onInvited, onSignedOut }: { deploymentId: string; mailReady: boolean; mailReason: string; onInvited: () => void; onSignedOut: () => void }) {
