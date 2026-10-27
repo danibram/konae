@@ -1965,20 +1965,85 @@ async fn export_portable_state(
     let _project_guard = database_lock(&state, &format!("project:{}", deployment.project_id)).await;
     let deployment = state.deployments.read().await.values()
         .find(|current| current.id == id).cloned().unwrap_or(deployment);
-    let _data_guard = database_lock(&state, &deployment.id).await;
-    let _identity_guard = database_lock(&state, &format!("identity:{}", deployment.id)).await;
     match portable_state(&state, &deployment).await {
         Ok(result) => Json(json!({"result": result})).into_response(),
         Err(error_value) => error(StatusCode::BAD_REQUEST, &error_value.to_string()),
     }
 }
 
+/// The small export's whole budget: databases plus the base64 file bundle.
+const PORTABLE_LIMIT: usize = 16 * 1024 * 1024;
+
+/// The small export format. The databases and the file index are taken under
+/// the Deployment's data and identity locks, so they agree with each other.
+/// The file bytes are read after the locks are released, as a copy reads
+/// them: the bytes under a file ID never change, and a file deleted since the
+/// index was taken is left out. The budget is checked against the sizes the
+/// index records before any byte is read, so a large file store is refused
+/// without loading it.
 async fn portable_state(state: &AppState, deployment: &Deployment) -> Result<Value> {
+    let (database, identity, file_index) = {
+        let _data_guard = database_lock(state, &deployment.id).await;
+        let _identity_guard = database_lock(state, &format!("identity:{}", deployment.id)).await;
+        portable_snapshot(state, deployment).await?
+    };
+    let mut files_budget = PORTABLE_LIMIT.saturating_sub(database.len()).saturating_sub(identity.len());
+    let mut wanted = Vec::with_capacity(file_index.len());
+    for metadata in file_index {
+        let file_id = metadata
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("Stored file has no id."))?
+            .to_owned();
+        if !valid_file_id(&file_id) {
+            anyhow::bail!("Stored file id is invalid.");
+        }
+        let size = metadata.get("size").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let encoded = size.div_ceil(3).saturating_mul(4).saturating_add(serde_json::to_vec(&metadata)?.len());
+        files_budget = files_budget
+            .checked_sub(encoded)
+            .ok_or_else(|| anyhow::anyhow!("Portable state exceeds the 16 MiB combined export limit."))?;
+        let item = metadata
+            .as_object()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Stored file metadata is invalid."))?;
+        wanted.push((file_id, item));
+    }
+    let mut portable_files = Vec::with_capacity(wanted.len());
+    for (file_id, mut item) in wanted {
+        let Some(bytes) = file_store::read_all(state.files.store.as_ref(), &deployment.id, &file_id).await? else {
+            continue;
+        };
+        item.insert("dataBase64".into(), Value::String(encode_base64(&bytes)));
+        portable_files.push(Value::Object(item));
+    }
+    let file_bundle = serde_json::to_vec(&json!({"files": portable_files}))?;
+    let total = database
+        .len()
+        .saturating_add(identity.len())
+        .saturating_add(file_bundle.len());
+    if total > PORTABLE_LIMIT {
+        anyhow::bail!("Portable state exceeds the 16 MiB combined export limit.");
+    }
+    Ok(json!({
+        "domain": domain::for_package(state, &deployment.id),
+        "initialDatabase": encode_base64(&database),
+        "initialIdentity": encode_base64(&identity),
+        "initialFiles": encode_base64(&file_bundle),
+        "initialSignupPolicy": deployment.signup_policy,
+        "initialSignInMethods": deployment.sign_in_methods,
+        "visibility": if is_private(deployment) { "private" } else { "public" },
+        "sizeBytes": total
+    }))
+}
+
+/// The data database, the sanitized identity database and the file index.
+async fn portable_snapshot(state: &AppState, deployment: &Deployment) -> Result<(Vec<u8>, Vec<u8>, Vec<Value>)> {
     let backup_dir = backup_dir(state, &deployment.id);
     tokio::fs::create_dir_all(&backup_dir).await?;
     let database_path = database_path(state, &deployment.id);
     let database = sqlite_snapshot(&database_path, &backup_dir, "portable-data").await?;
-    if database.len() > 16 * 1024 * 1024 {
+    if database.len() > PORTABLE_LIMIT {
         anyhow::bail!("Database exceeds the 16 MiB portable export limit.");
     }
 
@@ -2007,54 +2072,18 @@ async fn portable_state(state: &AppState, deployment: &Deployment) -> Result<Val
     let _ = tokio::fs::remove_file(&identity_source).await;
     let _ = tokio::fs::remove_file(&identity_sanitized).await;
 
-    let files_dir = state
+    let index_path = state
         .data_root
         .join("deployments")
         .join(&deployment.id)
-        .join("files");
-    let index_path = files_dir.join("index.json");
+        .join("files")
+        .join("index.json");
     let file_index = match tokio::fs::read(index_path).await {
         Ok(bytes) => serde_json::from_slice::<Vec<Value>>(&bytes)?,
         Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error_value) => return Err(error_value.into()),
     };
-    let mut portable_files = Vec::with_capacity(file_index.len());
-    for metadata in file_index {
-        let file_id = metadata
-            .get("id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("Stored file has no id."))?;
-        if !valid_file_id(file_id) {
-            anyhow::bail!("Stored file id is invalid.");
-        }
-        let bytes = file_store::read_all(state.files.store.as_ref(), &deployment.id, file_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Stored file {file_id} has no data."))?;
-        let mut item = metadata
-            .as_object()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Stored file metadata is invalid."))?;
-        item.insert("dataBase64".into(), Value::String(encode_base64(&bytes)));
-        portable_files.push(Value::Object(item));
-    }
-    let file_bundle = serde_json::to_vec(&json!({"files": portable_files}))?;
-    let total = database
-        .len()
-        .saturating_add(identity.len())
-        .saturating_add(file_bundle.len());
-    if total > 16 * 1024 * 1024 {
-        anyhow::bail!("Portable state exceeds the 16 MiB combined export limit.");
-    }
-    Ok(json!({
-        "domain": domain::for_package(state, &deployment.id),
-        "initialDatabase": encode_base64(&database),
-        "initialIdentity": encode_base64(&identity),
-        "initialFiles": encode_base64(&file_bundle),
-        "initialSignupPolicy": deployment.signup_policy,
-        "initialSignInMethods": deployment.sign_in_methods,
-        "visibility": if is_private(deployment) { "private" } else { "public" },
-        "sizeBytes": total
-    }))
+    Ok((database, identity, file_index))
 }
 
 async fn sqlite_snapshot(source: &Path, directory: &Path, label: &str) -> Result<Vec<u8>> {
@@ -4886,6 +4915,30 @@ mod tests {
         // A private app's files stay out of shared caches.
         let deployment = Deployment { manifest: json!({}), ..state.deployments.read().await.values().next().unwrap().clone() };
         assert_eq!(ArtifactCache::of(&deployment).control(), "private, no-cache");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn the_small_export_refuses_by_the_index_before_reading_any_bytes() {
+        let root = std::env::temp_dir().join(format!("littlebox-portable-{}", Uuid::new_v4()));
+        let (state, _) = login_test_state(&root, "public").await;
+        let deployment = state.deployments.read().await.values().next().unwrap().clone();
+        let files = root.join("deployments").join(&deployment.id).join("files");
+        tokio::fs::create_dir_all(&files).await.unwrap();
+        let (kept, gone, large) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
+        tokio::fs::write(files.join(format!("{kept}.blob")), b"hello").await.unwrap();
+        let entry = |id: &str, size: u64| json!({"id": id, "name": "f.txt", "type": "text/plain", "size": size, "visibility": "private", "ownerId": "x"});
+        // A file deleted after the index was taken is left out, as a copy leaves it out.
+        tokio::fs::write(files.join("index.json"), serde_json::to_vec(&json!([entry(&kept, 5), entry(&gone, 5)])).unwrap()).await.unwrap();
+        let exported = portable_state(&state, &deployment).await.unwrap();
+        let bundle: Value = serde_json::from_slice(&decode_base64(exported["initialFiles"].as_str().unwrap()).unwrap()).unwrap();
+        assert_eq!(bundle["files"].as_array().unwrap().len(), 1);
+        assert_eq!(bundle["files"][0]["id"], kept.as_str());
+        // A file the index says is too large is refused without its bytes:
+        // the store holds none for it, so a read would fail with another message.
+        tokio::fs::write(files.join("index.json"), serde_json::to_vec(&json!([entry(&kept, 5), entry(&large, 13 * 1024 * 1024)])).unwrap()).await.unwrap();
+        let refused = portable_state(&state, &deployment).await.unwrap_err().to_string();
+        assert_eq!(refused, "Portable state exceeds the 16 MiB combined export limit.");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
