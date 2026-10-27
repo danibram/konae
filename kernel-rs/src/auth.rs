@@ -818,25 +818,41 @@ impl AuthService {
                 IdentitySignIn { session, outcome: IdentityOutcome::Created }
             }
             IdentityIntent::SignIn => {
-                let existing: Option<(String, String, String, String)> = transaction
+                let existing: Option<(String, String, String, String, Option<i64>)> = transaction
                     .query_row(
-                        "SELECT id, email, role, state FROM app_users WHERE email = ?1 COLLATE NOCASE",
+                        "SELECT id, email, role, state, verified_at FROM app_users WHERE email = ?1 COLLATE NOCASE",
                         [&email],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
                     )
                     .optional()
                     .map_err(AuthError::Storage)?;
                 match existing {
-                    Some((user_id, account_email, role, state)) => {
+                    Some((user_id, account_email, role, state, verified_at)) => {
                         match state.as_str() {
                             "active" => {}
                             "suspended" => return Err(AuthError::AccountSuspended),
                             _ => return Err(AuthError::AccountPending),
                         }
-                        // The issuer proved the email, as a confirmation link would.
-                        transaction
-                            .execute("UPDATE app_users SET verified_at = COALESCE(verified_at, ?1) WHERE id = ?2", params![now, user_id])
-                            .map_err(AuthError::Storage)?;
+                        if verified_at.is_none() {
+                            // Nobody proved this email before: under local
+                            // verification anyone may have typed it with a
+                            // password of their own. The person the issuer
+                            // vouches for holds the address, so that password
+                            // and every session made with it stop working.
+                            // Recovery by email sets a new password.
+                            transaction
+                                .execute(
+                                    "UPDATE app_users SET password_hash = ?1, verified_at = ?2 WHERE id = ?3",
+                                    params![unusable_password_hash()?, now, user_id],
+                                )
+                                .map_err(AuthError::Storage)?;
+                            transaction
+                                .execute("DELETE FROM app_sessions WHERE user_id = ?1", [&user_id])
+                                .map_err(AuthError::Storage)?;
+                            transaction
+                                .execute("DELETE FROM account_challenges WHERE user_id = ?1 AND consumed_at IS NULL", [&user_id])
+                                .map_err(AuthError::Storage)?;
+                        }
                         let session = issue_session(&transaction, AuthUser { user_id, name: account_email, role })?;
                         IdentitySignIn { session, outcome: IdentityOutcome::SignedIn }
                     }
@@ -1688,6 +1704,8 @@ mod tests {
         let signed = auth.sign_in_with_identity(&google("PERSON@example.test"), &IdentityIntent::SignIn, |_| false, |_| false, |_, _, _| Ok(())).unwrap();
         assert_eq!((signed.outcome, signed.session.user.user_id.as_str()), (IdentityOutcome::SignedIn, session.user.user_id.as_str()));
         assert!(sign_in(&auth, "person@example.test", PASSWORD).is_ok(), "the password keeps working");
+        // A proven password account keeps its password.
+        assert!(auth.authenticate(Some(&session.token)).unwrap().is_some());
         // A refused admission creates nothing.
         let closed = auth.sign_in_with_identity(&google("stranger@example.test"), &IdentityIntent::SignIn, |_| false, |_| true, |_, _, _| Ok(()));
         assert!(matches!(closed, Err(AuthError::SignupClosed)));
@@ -1700,6 +1718,23 @@ mod tests {
         auth.suspend("person@example.test").unwrap();
         let suspended = auth.sign_in_with_identity(&google("person@example.test"), &IdentityIntent::SignIn, |_| true, |_| true, |_, _, _| Ok(()));
         assert!(matches!(suspended, Err(AuthError::AccountSuspended)));
+    }
+
+    #[test]
+    fn a_google_sign_in_takes_an_unproven_password_account_back_from_whoever_typed_the_email() {
+        let app = TempDb::new();
+        let auth = app.scoped(&deployment_scope("app-one"), Verification::Local);
+        // Under local verification anyone can make an active account for an address they do not hold.
+        let squatter = auth.create_account(NewAccount::prepare("victim@gmail.com", PASSWORD).unwrap()).unwrap();
+        let signed = auth.sign_in_with_identity(&google("victim@gmail.com"), &IdentityIntent::SignIn, |_| false, |_| false, |_, _, _| Ok(())).unwrap();
+        assert_eq!(signed.session.user.user_id, squatter.user.user_id, "the address keeps its account");
+        assert!(auth.authenticate(Some(&squatter.token)).unwrap().is_none(), "the typist's session ends");
+        assert!(matches!(sign_in(&auth, "victim@gmail.com", PASSWORD), Err(AuthError::InvalidCredentials)), "and the typist's password");
+        assert!(auth.authenticate(Some(&signed.session.token)).unwrap().is_some());
+        // From then on the address is proven, so a later Google sign-in leaves the account alone.
+        let again = auth.sign_in_with_identity(&google("victim@gmail.com"), &IdentityIntent::SignIn, |_| false, |_| false, |_, _, _| Ok(())).unwrap();
+        assert!(auth.authenticate(Some(&signed.session.token)).unwrap().is_some());
+        assert_eq!(again.outcome, IdentityOutcome::SignedIn);
     }
 
     #[test]
