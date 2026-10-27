@@ -127,7 +127,7 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
       "platform_guide topic pieces",
       "a credential: platform_guide topic credentials",
       "project_create",
-      "secret_set for each secret a route signs with",
+      "secret_set for each secret a route signs with, and google_client_id and google_client_secret when the app offers Google sign-in",
       "build locally",
       "transfer_begin/write/complete",
       "release_plan",
@@ -756,9 +756,6 @@ The member's calls go to the app's runtime endpoint, `/_littlebox/mcp` on the ap
 ```json
 {
   "result": {
-    "methods": [
-      "password"
-    ],
     "name": "member@walkthrough.test",
     "role": "member",
     "userId": "<member id>"
@@ -1270,7 +1267,7 @@ Exporting needs `export_data`, which OAuth does not grant:
         "chunkBytes": 65536,
         "expiresAt": <time ms>,
         "sha256": "<sha256>",
-        "size": 122880,
+        "size": 110592,
         "transferId": "<identity download>"
       },
       "usage": {
@@ -1292,7 +1289,7 @@ Exporting needs `export_data`, which OAuth does not grant:
         {
           "name": "identity",
           "sha256": "<sha256>",
-          "size": 122880
+          "size": 110592
         },
         {
           "name": "files",
@@ -1351,7 +1348,7 @@ Exporting needs `export_data`, which OAuth does not grant:
     "nextOffset": 65536,
     "offset": 0,
     "sha256": "<sha256>",
-    "size": 122880
+    "size": 110592
   }
 }
 ```
