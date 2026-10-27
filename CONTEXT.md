@@ -61,7 +61,7 @@ The per-Deployment rule for who may create a Runtime Actor account: Open (anyone
 _Avoid_: Invite list, access grant
 
 **Sign-in Methods**:
-The per-Deployment list of ways an app account signs in: `password` always, and `google` when the Project Owner turns on Continue with Google in Auth > Users or with `sign_in_methods_set`. Google needs the app's own Google client, which the owner sets as two Signing Secrets with `"use": "google"`; until both are set it cannot be turned on, and an imported Deployment that asks for Google keeps the setting and offers only the password. A Google sign-in reaches the account that holds the same verified email, and only for an address Google manages (Gmail, or a Workspace domain the token names). The Signup Policy decides whether a new account may exist. A package carries the list and the accounts, never the client.
+The per-Deployment list of ways an app account signs in: `password` always, and `google` when the Project Owner turns on Continue with Google in Auth > Users or with `sign_in_methods_set`. Google needs the app's own Google client, which the owner sets as two signing secrets with `"use": "google"`; until both are set it cannot be turned on, and an imported Deployment that asks for Google keeps the setting and offers only the password. A Google sign-in reaches the account that holds the same verified email, and only for an address Google manages (Gmail, or a Workspace domain the token names). The Signup Policy decides whether a new account may exist. A package carries the list and the accounts, never the client.
 _Avoid_: Social login, SSO
 
 **Agent Credential**:
