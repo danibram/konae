@@ -1,4 +1,4 @@
-import { MailWarning, RefreshCw, Send, Users } from "lucide-react";
+import { MailWarning, RefreshCw, Send, TriangleAlert, Users } from "lucide-react";
 import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import {
   createAppInvitations, listAppInvitations, listAppUsers, openAppAsOwner, readMailStatus, readSignInMethods, readSignupPolicy, resendAppInvitation, resumeAppUser,
@@ -224,7 +224,7 @@ function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: str
     const on = methods.methods.includes("google");
     const setLabel = (set: boolean) => <Badge tone={set ? "success" : "neutral"}>{set ? "Set" : "Not set"}</Badge>;
     body = <>
-      {methods.notice && <p className="access-mail" role="status"><MailWarning size={15} /><span>{methods.notice}</span></p>}
+      {methods.notice && <p className="access-mail" role="status"><TriangleAlert size={15} /><span>{methods.notice}</span></p>}
       <ol className="access-steps">
         <li>
           <strong>Make a Google client for this app.</strong>
