@@ -167,6 +167,9 @@ pub enum AuthError {
     AdmissionRefused(&'static str),
     /// An invitation answered with an identity for another email.
     InvitedEmailDiffers,
+    /// An outside issuer vouched for the email of the owner's app account,
+    /// which never proved that email, so it would take the account back.
+    OwnerAccountUnproven,
     Storage(rusqlite::Error),
     PasswordHash,
 }
@@ -203,6 +206,10 @@ impl fmt::Display for AuthError {
             Self::InvitedEmailDiffers => write!(
                 f,
                 "This invitation is for another email. Continue with the Google account of the invited email."
+            ),
+            Self::OwnerAccountUnproven => write!(
+                f,
+                "This email belongs to the app owner's account. The owner opens it with Open as owner in the editor, not with Google."
             ),
             Self::Storage(_) | Self::PasswordHash => write!(f, "Authentication storage failed."),
         }
@@ -832,6 +839,13 @@ impl AuthService {
                             "active" => {}
                             "suspended" => return Err(AuthError::AccountSuspended),
                             _ => return Err(AuthError::AccountPending),
+                        }
+                        if verified_at.is_none() && role == "owner" {
+                            // The owner's app account comes from the creator
+                            // email, which local verification never proved.
+                            // Google does not take it back or end the
+                            // sessions the owner opened from the editor.
+                            return Err(AuthError::OwnerAccountUnproven);
                         }
                         if verified_at.is_none() {
                             // Nobody proved this email before: under local
@@ -1735,6 +1749,31 @@ mod tests {
         let again = auth.sign_in_with_identity(&google("victim@gmail.com"), &IdentityIntent::SignIn, |_| false, |_| false, |_, _, _| Ok(())).unwrap();
         assert!(auth.authenticate(Some(&signed.session.token)).unwrap().is_some());
         assert_eq!(again.outcome, IdentityOutcome::SignedIn);
+    }
+
+    #[test]
+    fn a_google_sign_in_does_not_take_back_the_owners_unproven_account() {
+        let app = TempDb::new();
+        let auth = app.scoped(&deployment_scope("app-one"), Verification::Local);
+        let mut connection = auth.connection().unwrap();
+        let tx = immediate(&mut connection).unwrap();
+        let claimed = crate::app_owner::claim(&tx, "creator@gmail.com", false).unwrap().unwrap();
+        let owner_session = issue_session(&tx, AuthUser { user_id: claimed.user_id.clone(), name: "creator@gmail.com".into(), role: "owner".into() }).unwrap();
+        tx.commit().unwrap();
+        let refused = auth.sign_in_with_identity(&google("Creator@gmail.com"), &IdentityIntent::SignIn, |_| true, |_| true, |_, _, _| Ok(()));
+        assert!(matches!(refused, Err(AuthError::OwnerAccountUnproven)));
+        assert!(auth.authenticate(Some(&owner_session.token)).unwrap().is_some(), "the owner's session survives");
+        let (role, verified_at): (String, Option<i64>) = auth
+            .connection()
+            .unwrap()
+            .query_row("SELECT role, verified_at FROM app_users WHERE id = ?1", [&claimed.user_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap();
+        assert_eq!((role.as_str(), verified_at), ("owner", None), "nothing changed");
+        // Once the owner's email is proven, Google signs the owner in to the same account.
+        auth.connection().unwrap().execute("UPDATE app_users SET verified_at = 1 WHERE id = ?1", [&claimed.user_id]).unwrap();
+        let signed = auth.sign_in_with_identity(&google("creator@gmail.com"), &IdentityIntent::SignIn, |_| true, |_| true, |_, _, _| Ok(())).unwrap();
+        assert_eq!((signed.session.user.user_id.as_str(), signed.session.user.role.as_str()), (claimed.user_id.as_str(), "owner"));
+        assert!(auth.authenticate(Some(&owner_session.token)).unwrap().is_some(), "a proven account keeps its sessions");
     }
 
     #[test]

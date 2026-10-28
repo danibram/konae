@@ -3689,7 +3689,7 @@ fn auth_error(error_value: AuthError) -> Response {
     let status = match error_value {
         AuthError::InvalidEmail | AuthError::WeakPassword => StatusCode::BAD_REQUEST,
         AuthError::EmailTaken | AuthError::AccountExists => StatusCode::CONFLICT,
-        AuthError::InvitedEmailDiffers => StatusCode::FORBIDDEN,
+        AuthError::InvitedEmailDiffers | AuthError::OwnerAccountUnproven => StatusCode::FORBIDDEN,
         AuthError::InvalidCredentials => StatusCode::UNAUTHORIZED,
         AuthError::AccountPending
         | AuthError::AccountSuspended
