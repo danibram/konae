@@ -22,8 +22,10 @@
 //!
 //! Google's signing keys are fetched only from the fixed JWKS URL, never from
 //! a URL a token names, cached by the answer's Cache-Control and fetched again
-//! once when a token names an unknown key. The keys are Google's, not a
-//! client's, so the installation keeps one cache for every app.
+//! when a token names an unknown key, at most once per `REFETCH_COOLDOWN`, so
+//! a stream of fresh flows cannot make the Kernel call Google each time. The
+//! keys are Google's, not a client's, so the installation keeps one cache for
+//! every app.
 
 use std::{
     sync::Mutex,
@@ -43,6 +45,9 @@ use auth::{IdentityIntent, IdentityOutcome, VerifiedIdentity};
 /// A flow between start and callback lives this long.
 const FLOW_TTL_SECONDS: i64 = 10 * 60;
 const MAX_JWKS_BYTES: usize = 64 * 1024;
+/// A token that names a key the fresh cache lacks fetches the keys again at
+/// most this often. Google publishes a new key well before it signs with it.
+const REFETCH_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
 pub(crate) const CALLBACK_PATH: &str = "/_littlebox/auth/google/callback";
 const START_PATH: &str = "/_littlebox/auth/google/start";
@@ -126,6 +131,7 @@ pub(crate) struct Client {
 
 struct KeyCache {
     keys: Vec<Jwk>,
+    fetched_at: Instant,
     fresh_until: Instant,
 }
 
@@ -249,13 +255,17 @@ impl Google {
     }
 
     /// The key a token names: from the cache while it is fresh, else from
-    /// one fetch of the JWKS URL.
+    /// one fetch of the JWKS URL. An unknown key on a fresh cache fetches
+    /// again only when the last fetch is older than `REFETCH_COOLDOWN`.
     async fn key(&self, kid: &str) -> Option<Jwk> {
         {
             let cache = self.keys.lock().unwrap();
             if let Some(cache) = cache.as_ref().filter(|cache| cache.fresh_until > Instant::now()) {
                 if let Some(key) = cache.keys.iter().find(|key| key.kid == kid) {
                     return Some(key.clone());
+                }
+                if cache.fetched_at.elapsed() < REFETCH_COOLDOWN {
+                    return None;
                 }
             }
         }
@@ -292,7 +302,8 @@ impl Google {
             })
             .take(16)
             .collect();
-        Ok(KeyCache { keys, fresh_until: Instant::now() + Duration::from_secs(max_age) })
+        let fetched_at = Instant::now();
+        Ok(KeyCache { keys, fetched_at, fresh_until: fetched_at + Duration::from_secs(max_age) })
     }
 
     /// Exchanges an authorization code for its ID token with the app's client.
@@ -1096,9 +1107,37 @@ mod tests {
         assert_eq!(google.verify(&forged, APP_CLIENT, &query["nonce"], auth::now_seconds()).await, Err(CHECKS));
         assert!(google.verify(&token, APP_CLIENT, &query["nonce"], auth::now_seconds()).await.is_ok());
         assert_eq!(google.verify(&token, OTHER_CLIENT, &query["nonce"], auth::now_seconds()).await, Err(CHECKS));
-        // Keys are cached; an unknown kid fetched them once more per attempt.
-        assert!(fixture.fake.key_fetches.load(Ordering::SeqCst) <= 3);
+        // Keys are cached, and the unknown kid did not fetch them again within the cooldown.
+        assert_eq!(fixture.fake.key_fetches.load(Ordering::SeqCst), 1);
         assert_eq!(fixture.users(&fixture.deployment(APP).await.id), 0);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_key_fetches_googles_keys_again_at_most_once_a_minute() {
+        let fixture = fixture(SignupMode::Open).await;
+        let google = fixture.state.accounts.google.clone();
+        let fetches = || fixture.fake.key_fetches.load(Ordering::SeqCst);
+        assert!(google.key("local-test").await.is_some());
+        assert_eq!(fetches(), 1);
+        for _ in 0..5 {
+            assert!(google.key("rotated-in").await.is_none());
+        }
+        assert_eq!(fetches(), 1, "fresh flows naming an unknown key do not reach Google each time");
+        assert!(google.key("local-test").await.is_some());
+        // A minute later an unknown key fetches once more, then waits again.
+        let backdate = |google: &Google| {
+            let mut cache = google.keys.lock().unwrap();
+            let cache = cache.as_mut().unwrap();
+            cache.fetched_at = Instant::now() - REFETCH_COOLDOWN - Duration::from_secs(1);
+        };
+        backdate(&google);
+        assert!(google.key("rotated-in").await.is_none());
+        assert!(google.key("rotated-in").await.is_none());
+        assert_eq!(fetches(), 2);
+        // A stale cache fetches whatever the cooldown says.
+        google.keys.lock().unwrap().as_mut().unwrap().fresh_until = Instant::now() - Duration::from_secs(1);
+        assert!(google.key("local-test").await.is_some());
+        assert_eq!(fetches(), 3);
     }
 
     #[tokio::test]
