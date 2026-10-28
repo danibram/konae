@@ -199,7 +199,7 @@ LITTLEBOX_DATA_DIR=/data littlebox-kernel files-migrate --to s3
 LITTLEBOX_DATA_DIR=/data littlebox-kernel files-migrate --to local
 ```
 
-It copies every indexed file, reads each back and compares its SHA-256, records the new store, and only then removes the old copies. A missing file or a mismatch stops it before anything switches. An upload writes its bytes before its index entry and a delete removes the entry first, so a crash can leave bytes no index names. `littlebox-kernel files-reconcile` removes those once they are an hour old, and `--dry-run` only counts them.
+It copies every indexed file, reads each back and compares its SHA-256, records the new store, and only then removes the old copies. A missing file or a mismatch stops it before anything switches. An upload writes its bytes before its index entry and a delete removes the entry first, so a crash can leave bytes no index names. `littlebox-kernel files-reconcile` removes those once they are an hour old, and `--dry-run` only counts them. A serving Kernel holds `kernel.lock` in the data directory, so both commands refuse while it runs, and a Kernel started during a migration refuses to start.
 
 A copy carries the file bytes, read from the bucket after the Deployment's locks are released, so a restore needs no bucket and lands the bytes in each folder. Run `files-migrate --to s3` after a restore to put them back in the bucket.
 

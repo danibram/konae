@@ -438,6 +438,9 @@ async fn main() -> Result<()> {
     )?;
     let data_root = PathBuf::from(env("LITTLEBOX_DATA_DIR", "/data"));
     tokio::fs::create_dir_all(data_root.join("deployments")).await?;
+    // Held until the process exits, so files-migrate and files-reconcile
+    // refuse while this Kernel serves.
+    let _running = file_store::hold_kernel_lock(&data_root)?;
     for line in copies::migrate_layout(&data_root)? {
         println!("Layout migration: moved {line}");
     }

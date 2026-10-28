@@ -757,6 +757,50 @@ pub(crate) async fn reconcile(data_root: &Path, store: &dyn FileStore, now_ms: u
     Ok(summary)
 }
 
+/// A running Kernel holds an exclusive lock on this file in its data
+/// directory for as long as it serves, so an operator command that must not
+/// race uploads can tell it is running.
+pub(crate) const KERNEL_LOCK_FILE: &str = "kernel.lock";
+
+fn lock_file(data_root: &Path) -> Result<std::fs::File> {
+    std::fs::create_dir_all(data_root)?;
+    let path = data_root.join(KERNEL_LOCK_FILE);
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("Could not open {}.", path.display()))
+}
+
+/// The lock a serving Kernel holds. A second Kernel on the same data
+/// directory, or one started while `files-migrate` runs, refuses to start.
+pub(crate) fn hold_kernel_lock(data_root: &Path) -> Result<std::fs::File> {
+    let file = lock_file(data_root)?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => bail!(
+            "Another Kernel or a files command is using {}. Stop it before starting this Kernel.",
+            data_root.display()
+        ),
+        Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+    }
+}
+
+/// Takes the Kernel's lock for an operator command, so the command refuses
+/// while a Kernel serves and a Kernel cannot start while the command runs.
+pub(crate) fn hold_while_stopped(data_root: &Path, command: &str) -> Result<std::fs::File> {
+    let file = lock_file(data_root)?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => bail!(
+            "A Kernel is running on {}. Stop it before {command}, so no upload lands while the files are moved.",
+            data_root.display()
+        ),
+        Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+    }
+}
+
 const MIGRATE_USAGE: &str = "Usage: littlebox-kernel files-migrate --to s3|local";
 const RECONCILE_USAGE: &str = "Usage: littlebox-kernel files-reconcile [--dry-run]";
 
@@ -771,6 +815,7 @@ pub(crate) async fn operator_command() -> Result<bool> {
                 [flag, to] if flag == "--to" && (to == "s3" || to == "local") => to.as_str(),
                 _ => bail!("{MIGRATE_USAGE}"),
             };
+            let _stopped = hold_while_stopped(&data_root, "files-migrate")?;
             let settings = S3Settings::from_env()?.context("files-migrate needs the LITTLEBOX_FILES_S3_ settings of the bucket, in both directions.")?;
             let recorded = read_marker(&data_root).await?.unwrap_or_else(|| describe(None));
             let bucket = describe(Some(&settings));
@@ -806,6 +851,7 @@ pub(crate) async fn operator_command() -> Result<bool> {
                 [flag] if flag == "--dry-run" => true,
                 _ => bail!("{RECONCILE_USAGE}"),
             };
+            let _stopped = hold_while_stopped(&data_root, "files-reconcile")?;
             let files = Files::from_env(&data_root).await?;
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64;
             let summary = reconcile(&data_root, files.store.as_ref(), now, dry_run).await?;
@@ -1051,6 +1097,24 @@ pub(crate) mod tests {
 
     /// `files-migrate` moves every indexed file to the bucket and back with the
     /// same bytes, records the store, and leaves no copy in the old one.
+    #[test]
+    fn files_commands_refuse_while_a_kernel_holds_the_data_directory() {
+        let root = std::env::temp_dir().join(format!("littlebox-kernel-lock-{}", uuid::Uuid::new_v4()));
+        let kernel = hold_kernel_lock(&root).unwrap();
+        for command in ["files-migrate", "files-reconcile"] {
+            let refused = hold_while_stopped(&root, command).unwrap_err().to_string();
+            assert!(refused.starts_with("A Kernel is running on ") && refused.contains(&format!("Stop it before {command}")), "{refused}");
+        }
+        assert!(hold_kernel_lock(&root).unwrap_err().to_string().contains("Another Kernel or a files command"));
+        drop(kernel);
+        // Once the Kernel stops, the command runs, and a Kernel waits for it.
+        let migrating = hold_while_stopped(&root, "files-migrate").unwrap();
+        assert!(hold_kernel_lock(&root).is_err());
+        drop(migrating);
+        assert!(hold_kernel_lock(&root).is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[tokio::test]
     async fn files_migrate_moves_every_indexed_file_and_switches_the_record() {
         let root = std::env::temp_dir().join(format!("littlebox-files-migrate-{}", uuid::Uuid::new_v4()));
