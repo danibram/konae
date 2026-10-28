@@ -11,7 +11,7 @@ import {
   userStateView, visibilityCopy, MAX_INVITATION_BATCH, type PendingBatch,
 } from "./app-access";
 import { CopyLine } from "./IntegrationsView";
-import { googleClientProblem } from "./app-access";
+import { googleRefusal, type GoogleField } from "./app-access";
 import { Badge, Button, Card, EmptyState, Field, Input, LoadingBlock, Select, Switch, Textarea } from "./ui";
 import { useLoadingHold } from "./loading-hold";
 import { message, signedOut, useConfirm } from "./useConfirm";
@@ -166,12 +166,16 @@ function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: str
   const [clientSecret, setClientSecret] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [invalid, setInvalid] = useState<GoogleField | undefined>();
   const [status, setStatus] = useState("");
   const pending = useLoadingHold(!methods && !error);
 
-  const fail = useCallback((cause: unknown) => {
-    if (signedOut(cause)) onSignedOut();
-    else setError(message(cause));
+  // The Kernel checks the values; the card shows its sentence by the field it is about.
+  const fail = useCallback((cause: unknown, saving?: GoogleField) => {
+    if (signedOut(cause)) { onSignedOut(); return; }
+    const refused = googleRefusal(cause, saving);
+    setError(refused?.message ?? message(cause));
+    setInvalid(refused?.field);
   }, [onSignedOut]);
 
   useEffect(() => {
@@ -181,22 +185,30 @@ function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: str
     return () => { current = false; };
   }, [deploymentId, fail]);
 
-  const problem = googleClientProblem(clientId, clientSecret);
-
   const saveClient = async () => {
-    if (problem) { setError(problem); return; }
     setSaving(true);
     setError("");
+    setInvalid(undefined);
     setStatus("");
+    let saving: GoogleField | undefined;
     try {
-      if (clientId.trim()) await setGoogleClientPart(projectId, GOOGLE_CLIENT_ID, clientId.trim());
-      if (clientSecret.trim()) await setGoogleClientPart(projectId, GOOGLE_CLIENT_SECRET, clientSecret.trim());
+      if (clientId.trim()) {
+        saving = "clientId";
+        await setGoogleClientPart(projectId, GOOGLE_CLIENT_ID, clientId.trim());
+        setClientId("");
+      }
+      if (clientSecret.trim()) {
+        saving = "clientSecret";
+        await setGoogleClientPart(projectId, GOOGLE_CLIENT_SECRET, clientSecret.trim());
+        setClientSecret("");
+      }
+      saving = undefined;
       setMethods(await readSignInMethods(deploymentId));
-      setClientId("");
-      setClientSecret("");
       setStatus("Saved. Littlebox keeps the values and never shows them again.");
     } catch (cause) {
-      fail(cause);
+      fail(cause, saving);
+      // A client ID saved before the secret was refused still counts.
+      if (saving === "clientSecret") readSignInMethods(deploymentId).then(setMethods, () => {});
     } finally {
       setSaving(false);
     }
@@ -205,6 +217,7 @@ function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: str
   const toggle = async (next: boolean) => {
     setSaving(true);
     setError("");
+    setInvalid(undefined);
     setStatus("");
     try {
       setMethods(await saveSignInMethods(deploymentId, next));
@@ -235,10 +248,10 @@ function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: str
           <strong>Paste the client ID and secret Google shows you.</strong>
           <div className="access-form-row">
             <Field label="Client ID" help={clientIdSet ? "Set. Paste a new one to replace it." : "Ends with .apps.googleusercontent.com"}>
-              <Input value={clientId} autoComplete="off" spellCheck={false} placeholder={clientIdSet ? "Set" : "123456-abc.apps.googleusercontent.com"} onChange={(event) => setClientId(event.target.value)} />
+              <Input value={clientId} aria-invalid={invalid === "clientId" || undefined} autoComplete="off" spellCheck={false} placeholder={clientIdSet ? "Set" : "123456-abc.apps.googleusercontent.com"} onChange={(event) => setClientId(event.target.value)} />
             </Field>
             <Field label="Client secret" help={clientSecretSet ? "Set. Paste a new one to replace it." : "Starts with GOCSPX- for a new client"}>
-              <Input type="password" value={clientSecret} autoComplete="off" placeholder={clientSecretSet ? "Set" : "GOCSPX-..."} onChange={(event) => setClientSecret(event.target.value)} />
+              <Input type="password" value={clientSecret} aria-invalid={invalid === "clientSecret" || undefined} autoComplete="off" placeholder={clientSecretSet ? "Set" : "GOCSPX-..."} onChange={(event) => setClientSecret(event.target.value)} />
             </Field>
           </div>
           <div className="access-actions">

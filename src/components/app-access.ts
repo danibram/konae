@@ -2,6 +2,8 @@ import type { ApiKey, AppInvitation, AppUserState, InvitationDelivery, Invitatio
 import type { DeploymentVisibility } from "../deployments/manifest";
 import { parseServerActionSource, type ServerActionDefinition } from "../kernel/actions";
 import { bodyFromFields } from "../kernel/route-declaration";
+import { ownerFixes } from "../kernel/refusal";
+import { McpError } from "../mcp/client";
 
 /**
  * What the Users and Integrations views and the publish dialog say. Kept apart
@@ -201,18 +203,21 @@ export function secretProblem(name: string, value: string): string {
   return "";
 }
 
+/** The field of the Google card a refusal belongs to. */
+export type GoogleField = "clientId" | "clientSecret";
+
 /**
- * What the Kernel would refuse in the app's Google client, said before the
- * owner saves. Either field may stay empty to keep what is set.
+ * The Kernel's refusal of a Google client save or of the Google switch, as
+ * the card shows it: the Kernel's own sentence, and the field it belongs to
+ * when the refusal is about the value saved there. The editor does not check
+ * the values itself, so its words cannot drift from the Kernel's; the codes
+ * and sentences are in kernel-rs/src/google-client-cases.json. Null for an
+ * answer that is not an owner's refusal, which the card shows as it is.
  */
-export function googleClientProblem(clientId: string, clientSecret: string): string {
-  const id = clientId.trim();
-  const secret = clientSecret.trim();
-  if (id.startsWith("GOCSPX-")) return "This looks like the client secret. The client ID ends with .apps.googleusercontent.com.";
-  for (const value of [id, secret]) {
-    if (value && (value.length < 16 || value.length > 512 || !/^[\x21-\x7e]+$/.test(value))) return "A secret value is 16 to 512 printable ASCII characters without spaces.";
-  }
-  return "";
+export function googleRefusal(cause: unknown, saving?: GoogleField): { message: string; field?: GoogleField } | null {
+  const refusal = cause instanceof McpError ? cause.refusal : undefined;
+  if (!refusal || !ownerFixes(refusal.code)) return null;
+  return { message: refusal.message, field: refusal.code.startsWith("secret.") ? saving : undefined };
 }
 
 const KEY_PLACEHOLDER = "$LITTLEBOX_API_KEY";

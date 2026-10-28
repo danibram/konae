@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { signupModes } from "../deployments/client";
+import googleCases from "../../kernel-rs/src/google-client-cases.json";
+import { ownerFixes } from "../kernel/refusal";
+import { McpError } from "../mcp/client";
 import {
-  apiKeyProblem, batchKey, googleClientProblem, revokedKeyNotes, defaultSignupMode, expiryText, fileCurl, firstPublishModes, invitationResultMessage, invitationView,
+  apiKeyProblem, batchKey, googleRefusal, revokedKeyNotes, defaultSignupMode, expiryText, fileCurl, firstPublishModes, invitationResultMessage, invitationView,
   mailReadiness, parseEmailBatch, republishAccessNote, routeActions, routeCurl, secretProblem, secretUsage, signupModeCopy,
   userStateView, visibilityCopy,
 } from "./app-access";
@@ -209,11 +212,20 @@ describe("integrations", () => {
   });
 });
 
-describe("googleClientProblem", () => {
-  test("names the Kernel's refusals before the owner saves", () => {
-    expect(googleClientProblem("1001-practice.apps.googleusercontent.com", "GOCSPX-a-long-secret")).toBe("");
-    expect(googleClientProblem("", "")).toBe("");
-    expect(googleClientProblem("GOCSPX-pasted-in-the-wrong-field", "")).toBe("This looks like the client secret. The client ID ends with .apps.googleusercontent.com.");
-    expect(googleClientProblem("", "short")).toContain("16 to 512");
+describe("googleRefusal", () => {
+  test("shows the Kernel's sentence for every case in google-client-cases.json, by the field it is about", () => {
+    const refused = googleCases.cases.filter((item) => typeof item.error === "string");
+    expect(refused.length).toBeGreaterThan(5);
+    for (const item of refused) {
+      const saving = item.input.name === "google_client_secret" ? "clientSecret" : "clientId";
+      const cause = new McpError(item.error!, undefined, { code: item.code!, message: item.error! });
+      const shown = googleRefusal(cause, saving);
+      expect(shown?.message, item.case).toBe(item.error!);
+      expect(shown?.field, item.case).toBe(item.tool === "secret_set" || item.tool === "secret_delete" ? saving : undefined);
+      expect(ownerFixes(item.code), item.case).toBe(true);
+    }
+    // An answer without an owner's refusal code is shown as it is.
+    expect(googleRefusal(new Error("Network down"))).toBeNull();
+    expect(googleRefusal(new McpError("Unknown tool."))).toBeNull();
   });
 });
