@@ -331,6 +331,7 @@ fn unset_secrets_message(actions: &[String], secrets: &[String]) -> Option<Strin
     }
 }
 
+pub(super) const VALUE_INVALID: &str = "A secret value is 16 to 512 printable ASCII characters without spaces.";
 pub(super) const SECRET_REUSED: &str = "Another of your projects already uses this secret value. A signature does not name the app, so a request signed for one would be accepted by the other. Set a different value.";
 
 /// `secrets_list`, `secret_set` and `secret_delete`. The caller has checked
@@ -358,21 +359,20 @@ pub(super) fn secrets_call(db: &Connection, project: &str, deployment: Option<&D
             let secret = a["name"].as_str().unwrap_or("");
             anyhow::ensure!(valid_secret_name(secret), "A secret name uses lowercase letters, digits and \"_\", starting with a letter, up to 64 characters.");
             let value = a["value"].as_str().unwrap_or("");
-            anyhow::ensure!(
-                (16..=512).contains(&value.len()) && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte)),
-                "A secret value is 16 to 512 printable ASCII characters without spaces."
-            );
-            let google_name = [super::google::CLIENT_ID, super::google::CLIENT_SECRET].contains(&secret);
+            if !((16..=512).contains(&value.len()) && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))) {
+                return Err(refuse("secret.value-invalid", VALUE_INVALID).into());
+            }
+            let google_name = super::google::is_client_name(secret);
             let usage = match (a.get("use").and_then(Value::as_str), google_name) {
                 (None | Some("google"), true) => "google",
-                (Some(_), true) => anyhow::bail!(super::google::NAMES_RESERVED),
-                (Some("google"), false) => anyhow::bail!(super::google::NAMES_ONLY),
+                (Some(_), true) => return Err(refuse("secret.google-names-reserved", super::google::NAMES_RESERVED).into()),
+                (Some("google"), false) => return Err(refuse("secret.google-names-only", super::google::NAMES_ONLY).into()),
                 (None | Some("route"), false) => "route",
                 (Some("call"), false) => "call",
                 (Some(_), false) => anyhow::bail!(r#"A secret's use is "route", "call" or "google"."#),
             };
-            if secret == super::google::CLIENT_ID {
-                anyhow::ensure!(!value.starts_with("GOCSPX-"), super::google::ID_LOOKS_LIKE_SECRET);
+            if secret == super::google::CLIENT_ID && value.starts_with("GOCSPX-") {
+                return Err(refuse("secret.google-id-looks-like-secret", super::google::ID_LOOKS_LIKE_SECRET).into());
             }
             // A signature names no app, so a request signed for one project
             // would be accepted by another that holds the same value. A
@@ -399,11 +399,9 @@ pub(super) fn secrets_call(db: &Connection, project: &str, deployment: Option<&D
             let secret = a["name"].as_str().unwrap_or("");
             if let Some(deployment) = deployment {
                 // Turning Google off is the owner's decision, so a delete does not make it.
-                anyhow::ensure!(
-                    !([super::google::CLIENT_ID, super::google::CLIENT_SECRET].contains(&secret)
-                        && deployment.sign_in_methods.contains(&super::SignInMethod::Google)),
-                    super::google::still_on(secret)
-                );
+                if super::google::is_client_name(secret) && deployment.sign_in_methods.contains(&super::SignInMethod::Google) {
+                    return Err(refuse("secret.google-still-on", super::google::still_on(secret)).into());
+                }
                 let program: ActionProgram = serde_json::from_str(&deployment.actions)?;
                 let mut users = program
                     .actions

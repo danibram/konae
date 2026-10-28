@@ -56,6 +56,11 @@ const START_PATH: &str = "/_littlebox/auth/google/start";
 pub(crate) const CLIENT_ID: &str = "google_client_id";
 pub(crate) const CLIENT_SECRET: &str = "google_client_secret";
 
+/// Whether `name` is one of the two secrets that hold the app's Google client.
+pub(crate) fn is_client_name(name: &str) -> bool {
+    name == CLIENT_ID || name == CLIENT_SECRET
+}
+
 /// The refusal for a Deployment whose owner has not turned Google on, or
 /// whose Google client is not set on this installation.
 pub(crate) const NOT_ON: &str = "Google sign-in is not turned on for this app.";

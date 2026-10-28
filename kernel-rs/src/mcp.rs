@@ -1718,14 +1718,17 @@ async fn admin_call(
     }
 }
 
+const METHODS_INVALID: &str = "Name the methods as password and google.";
+
 /// The methods `sign_in_methods_set` may store: password always, and
 /// google only once the app's Google client ID and secret are both set.
 fn requested_sign_in_methods(state: &AppState, deployment: &Deployment, requested: &Value) -> Result<Vec<SignInMethod>> {
+    use super::refusal::refuse;
     let requested: Vec<SignInMethod> = serde_json::from_value(requested.clone())
-        .map_err(|_| anyhow::anyhow!("Name the methods as password and google."))?;
-    let methods = sign_in_methods_from_input(&requested).map_err(anyhow::Error::msg)?;
+        .map_err(|_| refuse("signin.methods-invalid", METHODS_INVALID))?;
+    let methods = sign_in_methods_from_input(&requested).map_err(|message| refuse("signin.password-required", message))?;
     if methods.contains(&SignInMethod::Google) && super::google::client_set(state, deployment) != (true, true) {
-        anyhow::bail!(super::google::NEEDS_CLIENT);
+        return Err(refuse("signin.google-client-unset", super::google::NEEDS_CLIENT).into());
     }
     Ok(methods)
 }
@@ -2953,6 +2956,61 @@ mod tests {
         let manager = Owner { scopes: vec!["read".into(), "manage_users".into()], ..reader };
         for tool in ["signup_policy_set", "sign_in_methods_set", "app_users_list", "app_user_suspend", "app_user_resume", "app_invitations_create", "app_invitations_list", "app_invitation_resend", "app_invitation_revoke"] {
             assert!(names(&manager).contains(&tool.to_owned()), "{tool}");
+        }
+    }
+
+    #[test]
+    fn the_google_client_cases_refuse_with_their_sentence_and_code() {
+        let file: Value = serde_json::from_str(include_str!("google-client-cases.json")).unwrap();
+        let (client_id, client_secret) = (file["context"]["clientId"].as_str().unwrap(), file["context"]["clientSecret"].as_str().unwrap());
+        for case in file["cases"].as_array().unwrap() {
+            let name = case["case"].as_str().unwrap();
+            let root = std::env::temp_dir().join(format!("littlebox-google-cases-{}", Uuid::new_v4()));
+            std::fs::create_dir_all(&root).unwrap();
+            let state = AppState {
+                deployments: Arc::new(RwLock::new(HashMap::new())),
+                db_locks: LockMap::default(),
+                s3: None,
+                artifact_bucket: "artifacts".into(),
+                data_bucket: "data".into(),
+                data_root: root.clone(),
+                files: crate::file_store::Files::local(&root),
+                copies: Default::default(),
+                admin_key: "test-admin".into(),
+                accounts: super::accounts::AccountSettings::local(),
+                public_origin: "http://localhost:8790".into(),
+                host_suffix: "localhost".into(),
+                guards: Arc::new(Guards::new(Vec::new())),
+            };
+            let mut deployment: Deployment = serde_json::from_value(json!({
+                "id": "d1", "projectId": "p1", "projectName": "Practice", "url": "http://practice.localhost:8790", "createdAt": 0,
+                "manifest": {"visibility": "private"}, "hostname": "practice.localhost", "actions": "{\"version\":1,\"actions\":{}}"
+            }))
+            .unwrap();
+            let db = store(&state).unwrap();
+            if case["clientSet"] == true {
+                for (secret, value) in [("google_client_id", client_id), ("google_client_secret", client_secret)] {
+                    super::super::http::secrets_call(&db, "p1", None, "secret_set", &json!({"name": secret, "value": value, "use": "google"})).unwrap();
+                }
+            }
+            if case["googleOn"] == true {
+                deployment.sign_in_methods = vec![SignInMethod::Password, SignInMethod::Google];
+            }
+            let answer = match case["tool"].as_str().unwrap() {
+                "sign_in_methods_set" => requested_sign_in_methods(&state, &deployment, &case["input"]["methods"]).map(|_| json!(null)),
+                tool => super::super::http::secrets_call(&db, "p1", Some(&deployment), tool, &case["input"]),
+            };
+            match (case["error"].as_str(), answer) {
+                (None, Ok(_)) => {}
+                (None, Err(error)) => panic!("{name}: refused with {error}"),
+                (Some(_), Ok(_)) => panic!("{name}: accepted"),
+                (Some(sentence), Err(error)) => {
+                    let refused = super::super::refusal::of(&error).unwrap_or_else(|| panic!("{name}: {error} carries no code"));
+                    assert_eq!((refused.message.as_str(), refused.code), (sentence, case["code"].as_str().unwrap()), "{name}");
+                    assert_eq!(tool_error(&error)["structuredContent"]["error"]["hint"]["fix"], "owner", "{name}");
+                }
+            }
+            let _ = std::fs::remove_dir_all(root);
         }
     }
 

@@ -106,6 +106,12 @@
   "schema.no-changes": { "fix": "capsule", "remedy": "Change a table or column in schema.ts, then plan the migration again." },
   "schema.statement-refused": { "fix": "capsule", "remedy": "Keep only CREATE TABLE and CREATE INDEX in schema.sql. Rows change through mutations." },
 
+  "secret.google-id-looks-like-secret": { "fix": "owner", "remedy": "Paste the client ID, which ends with .apps.googleusercontent.com, and put the GOCSPX- value in google_client_secret.", "tool": "secret_set" },
+  "secret.google-names-only": { "fix": "owner", "remedy": "Name a secret with use google google_client_id or google_client_secret.", "tool": "secret_set" },
+  "secret.google-names-reserved": { "fix": "owner", "remedy": "Set google_client_id and google_client_secret with use google, or leave use out.", "tool": "secret_set" },
+  "secret.google-still-on": { "fix": "owner", "remedy": "Turn Google off with sign_in_methods_set methods [\"password\"], or in Auth > Users, then delete the secret.", "tool": "sign_in_methods_set" },
+  "secret.value-invalid": { "fix": "owner", "remedy": "Paste a value of 16 to 512 printable ASCII characters without spaces.", "tool": "secret_set" },
+
   "signal.invalid": { "fix": "capsule", "remedy": "Give signal a \"name\" and optionally a \"properties\" list of input keys." },
   "signal.missing": { "fix": "capsule", "remedy": "Declare a signal on the signal action." },
   "signal.name-invalid": { "fix": "capsule", "remedy": "Name the signal with dot-separated lowercase words, such as \"order.placed\"." },
@@ -116,6 +122,10 @@
   "signal.property-unbound": { "fix": "capsule", "remedy": "Name only the action's input keys, or actor, as signal properties." },
   "signal.route": { "fix": "capsule", "remedy": "Remove http, or declare the signal on a mutation with a POST route." },
   "signal.statement": { "fix": "capsule", "remedy": "Remove the statement from the signal action." },
+
+  "signin.google-client-unset": { "fix": "owner", "remedy": "Set google_client_id and google_client_secret with secret_set use google, or in Auth > Users, then turn Google on.", "tool": "secret_set" },
+  "signin.methods-invalid": { "fix": "owner", "remedy": "Send methods as [\"password\"] or [\"password\", \"google\"].", "tool": "sign_in_methods_set" },
+  "signin.password-required": { "fix": "owner", "remedy": "Keep \"password\" in methods.", "tool": "sign_in_methods_set" },
 
   "signature.algorithm-invalid": { "fix": "capsule", "remedy": "Set the signature algorithm to \"sha256\" or \"sha1\"." },
   "signature.encoding-invalid": { "fix": "capsule", "remedy": "Set the signature encoding to \"hex\" or \"base64\"." },

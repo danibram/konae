@@ -1,0 +1,22 @@
+{
+ "context": {
+  "note": "The owner's refusals for an app's Google client and its sign-in methods. The Kernel runs every case (mcp.rs tests); the editor shows the Kernel's answer and routes it by code. Each case starts with no secret set and Google off unless it says otherwise.",
+  "clientId": "1001-practice.apps.googleusercontent.com",
+  "clientSecret": "GOCSPX-test-secret-value"
+ },
+ "cases": [
+  { "case": "the client ID", "tool": "secret_set", "input": { "name": "google_client_id", "value": "1001-practice.apps.googleusercontent.com", "use": "google" }, "error": null },
+  { "case": "the client secret, with use left out", "tool": "secret_set", "input": { "name": "google_client_secret", "value": "GOCSPX-test-secret-value" }, "error": null },
+  { "case": "the client secret pasted as the client ID", "tool": "secret_set", "input": { "name": "google_client_id", "value": "GOCSPX-pasted-in-the-wrong-field", "use": "google" }, "error": "This looks like the client secret. The client ID ends with .apps.googleusercontent.com.", "code": "secret.google-id-looks-like-secret" },
+  { "case": "a client ID that is too short", "tool": "secret_set", "input": { "name": "google_client_id", "value": "1001-short", "use": "google" }, "error": "A secret value is 16 to 512 printable ASCII characters without spaces.", "code": "secret.value-invalid" },
+  { "case": "a client secret with a space", "tool": "secret_set", "input": { "name": "google_client_secret", "value": "GOCSPX-test secret-value", "use": "google" }, "error": "A secret value is 16 to 512 printable ASCII characters without spaces.", "code": "secret.value-invalid" },
+  { "case": "a Google name with another use", "tool": "secret_set", "input": { "name": "google_client_id", "value": "1001-practice.apps.googleusercontent.com", "use": "route" }, "error": "google_client_id and google_client_secret hold this app's Google client. Set them with use google.", "code": "secret.google-names-reserved" },
+  { "case": "use google on another name", "tool": "secret_set", "input": { "name": "client_id", "value": "1001-practice.apps.googleusercontent.com", "use": "google" }, "error": "A secret with use google is named google_client_id or google_client_secret.", "code": "secret.google-names-only" },
+  { "case": "deleting the client secret while Google is on", "tool": "secret_delete", "clientSet": true, "googleOn": true, "input": { "name": "google_client_secret" }, "error": "Google sign-in is on for this app and needs google_client_secret. Turn Google off before deleting it.", "code": "secret.google-still-on" },
+  { "case": "deleting the client secret once Google is off", "tool": "secret_delete", "clientSet": true, "input": { "name": "google_client_secret" }, "error": null },
+  { "case": "Google before the client is set", "tool": "sign_in_methods_set", "input": { "methods": ["password", "google"] }, "error": "Set this app's Google client ID and client secret before turning Google on.", "code": "signin.google-client-unset" },
+  { "case": "Google once the client is set", "tool": "sign_in_methods_set", "clientSet": true, "input": { "methods": ["password", "google"] }, "error": null },
+  { "case": "Google without password", "tool": "sign_in_methods_set", "clientSet": true, "input": { "methods": ["google"] }, "error": "Password sign-in cannot be turned off, so every account keeps a way back in.", "code": "signin.password-required" },
+  { "case": "a method the Kernel does not know", "tool": "sign_in_methods_set", "input": { "methods": ["password", "facebook"] }, "error": "Name the methods as password and google.", "code": "signin.methods-invalid" }
+ ]
+}
