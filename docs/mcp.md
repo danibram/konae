@@ -909,8 +909,6 @@ On the alias the app has its own origin. The runtime endpoint takes requests who
 
 Two Deployments may both wait on a name; the first whose token appears in the record gets it, and the other is then refused. `kernel-rs/src/domain-cases.json` lists every rule with its message.
 
-## Action Contract
-
 ## Path address
 
 A Deployment can answer on the installation's domain at `<domain>/p/<id>`, and at `<domain>/p/<name>` once it has a name, with no DNS of its own. `LITTLEBOX_DOMAIN` names the domain, and the addresses carry it. [ADR-0024](./adr/0024-an-installation-names-its-hosts-from-one-domain-and-an-app-may-answer-on-a-path.md) records the decisions.
@@ -921,6 +919,8 @@ A Deployment can answer on the installation's domain at `<domain>/p/<id>`, and a
 4. `path_set` with `enabled: false` turns the path off and frees the name, which stays on the record. `path_clear` turns it off and removes the name and the acceptance.
 
 An omitted `name` or `acceptSharedOrigin` keeps the stored value, and `name: null` removes the name while the path stays as `enabled` says. `path_read` answers `domainConfigured: false` when the installation sets no `LITTLEBOX_DOMAIN`. A package carries `enabled`, `name` and `acceptSharedOrigin`, never the Deployment id. On import a name another app holds is dropped, and the release receipt's `notices` says so. A path that would turn on without the acceptance stays off. Without `LITTLEBOX_DOMAIN` the path has no address, and `path_set` with `enabled: true` refuses. `kernel-rs/src/path-cases.json` and `kernel-rs/src/path-state-cases.json` list the rules and their messages.
+
+## Action Contract
 
 ```sh
 bun run littlebox -- contract --dir /tmp/my-app
