@@ -203,6 +203,16 @@ export function secretProblem(name: string, value: string): string {
   return "";
 }
 
+/**
+ * The label beside each redirect URI the Kernel lists: the generated host
+ * first, then a verified custom domain, and the path address, whose callback
+ * names the Deployment's id under /p/.
+ */
+export function redirectUriLabel(uri: string, index: number): string {
+  if (index === 0) return "Redirect URI";
+  return new URL(uri).pathname.startsWith("/p/") ? "Redirect URI for the path address" : "Redirect URI for your custom domain";
+}
+
 /** The field of the Google card a refusal belongs to. */
 export type GoogleField = "clientId" | "clientSecret";
 

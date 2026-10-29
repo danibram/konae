@@ -1831,6 +1831,9 @@ mod tests {
                 google: Arc::new(crate::google::Google::real()),
             },
             public_origin: "http://localhost".into(),
+            mcp_origin: None,
+            path_origin: None,
+            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(limits::Guards::new(Vec::new())),
         };

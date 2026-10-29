@@ -475,7 +475,7 @@ async fn stage_copy(state: &AppState, staging: &Path, id: &str, created_at: u64)
 }
 
 /// Reads every file the copied index names from the installation's store into
-/// the copy, as `<id>.blob`, so a copy restores without the store (ADR-0024).
+/// the copy, as `<id>.blob`, so a copy restores without the store (ADR-0025).
 /// The bytes under a file ID never change, so reading them after the locks is
 /// safe; a file deleted since the index was taken is left out of the copy.
 async fn copy_file_bytes(state: &AppState, deployment: &str, files: &Path) -> Result<()> {
@@ -509,7 +509,7 @@ fn copy_deployment(source: &Path, target: &Path) -> Result<()> {
             // The migration state travels, so a restore never revives an
             // app that moved or was paused for a migration. The custom
             // domain travels too, so a restored app keeps its alias.
-            "deployment.json" | crate::migration::MARKER_FILE | crate::domain::RECORD_FILE if kind.is_file() => {
+            "deployment.json" | crate::migration::MARKER_FILE | crate::domain::RECORD_FILE | crate::path::RECORD_FILE if kind.is_file() => {
                 std::fs::copy(&from, &to)?;
             }
             database if kind.is_file() && DEPLOYMENT_DATABASES.contains(&database) => vacuum_into(&from, &to)?,
@@ -1156,12 +1156,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("littlebox-copy-domain-{}", uuid::Uuid::new_v4()));
         let (source, target) = (root.join("source"), root.join("target"));
         std::fs::create_dir_all(&source).unwrap();
-        for name in ["deployment.json", crate::domain::RECORD_FILE, "stray.tmp"] {
+        for name in ["deployment.json", crate::domain::RECORD_FILE, crate::path::RECORD_FILE, "stray.tmp"] {
             std::fs::write(source.join(name), "{}").unwrap();
         }
         copy_deployment(&source, &target).unwrap();
         assert!(target.join("deployment.json").exists());
         assert!(target.join(crate::domain::RECORD_FILE).exists());
+        assert!(target.join(crate::path::RECORD_FILE).exists());
         assert!(!target.join("stray.tmp").exists());
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1189,6 +1190,9 @@ mod tests {
             accounts: crate::accounts::AccountSettings::local(),
             admin_key: "test-admin".into(),
             public_origin: "http://localhost".into(),
+            mcp_origin: None,
+            path_origin: None,
+            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         }

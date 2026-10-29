@@ -222,12 +222,13 @@ async fn accept_route(State(state): State<AppState>, request: Request) -> Respon
     let Some(deployment) = deployment_for(&state, request.headers()).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
+    let cookie_name = crate::app_cookie_name(&state, &deployment.id, request.headers());
     let input: AcceptInput = match accounts::read_body(&state, request, &deployment.id, |_| "account-link".into()).await {
         Ok((input, _client)) => input,
         Err(response) => return response,
     };
     match accept(&state, &deployment, &input.token, &input.password).await {
-        Ok(session) => accounts::app_session_response(&state, session),
+        Ok(session) => accounts::app_session_response(&cookie_name, session),
         Err(error_value) => auth_error(error_value),
     }
 }
@@ -269,7 +270,7 @@ const INVITATION_PAGE: &str = r#"<!doctype html><html lang="en"><meta charset="u
 const token=new URLSearchParams(location.hash.slice(1)).get('invitation');const $=s=>document.querySelector(s);
 async function post(path,body){const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const b=await r.json().catch(()=>({}));if(!r.ok)throw Error(b.error||'Request failed.');return b.result;}
 if(!token){$('#note').textContent='This page needs the link from your invitation email.';}else{history.replaceState(null,'',location.pathname);post('/_littlebox/auth/invitation',{token}).then(r=>{$('#title').textContent='Join '+r.app;$('#email').value=r.email;if(r.status==='existing-account'){$('#note').textContent='This email already has an account here. Sign in with its password.';return}if(r.status==='signup-closed'){$('#note').textContent='This app is not accepting new accounts right now. Ask whoever invited you.';return}$('#note').textContent='Choose the password for your account. Accepting activates it and signs you in.';$('#accept').hidden=false;},x=>{$('#note').textContent='';$('#error').textContent=x.message});}
-$('#google')?.addEventListener('click',async()=>{try{const r=await post('/_littlebox/auth/google/start',{invitation:token});location.assign(r.location);}catch(x){$('#error').textContent=x.message}});
+$('#google')?.addEventListener('click',async()=>{try{const m=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);const r=await post((m?'/p/'+m[1]:'')+'/_littlebox/auth/google/start',{invitation:token});location.assign(r.location);}catch(x){$('#error').textContent=x.message}});
 $('#accept').addEventListener('submit',async e=>{e.preventDefault();try{await post('/_littlebox/auth/accept',{token,password:new FormData(e.currentTarget).get('password')});location.replace('/');}catch(x){$('#error').textContent=x.message}});
 </script></html>"#;
 
@@ -877,6 +878,9 @@ mod tests {
                 google: Arc::new(crate::google::Google::real()),
             },
             public_origin: "http://localhost".into(),
+            mcp_origin: None,
+            path_origin: None,
+            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };

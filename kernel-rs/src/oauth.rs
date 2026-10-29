@@ -76,10 +76,8 @@ pub(super) fn valid_host(state: &AppState, headers: &HeaderMap) -> bool {
         return false;
     };
     let public = url::Url::parse(&state.public_origin).ok();
-    let configured = std::env::var("LITTLEBOX_MCP_ORIGIN")
-        .ok()
-        .and_then(|s| url::Url::parse(&s).ok());
-    ["localhost", "127.0.0.1", "[::1]", "editor.localhost"].contains(&host)
+    let configured = state.mcp_origin.as_deref().and_then(|s| url::Url::parse(s).ok());
+    ["localhost", "127.0.0.1", "[::1]", "app.localhost"].contains(&host)
         || host.ends_with(".localhost")
         || public.as_ref().is_some_and(|u| u.host_str() == Some(host))
         || configured
@@ -92,6 +90,11 @@ pub(super) fn valid_host(state: &AppState, headers: &HeaderMap) -> bool {
 }
 
 pub(super) async fn valid_owner_host(state: &AppState, headers: &HeaderMap) -> bool {
+    // The path host serves apps and the home, so it never serves administration,
+    // even when it is `localhost` on a local installation.
+    if super::path::on_path_host(state, headers) {
+        return false;
+    }
     let Some(authority) = headers.get(header::HOST).and_then(|value| value.to_str().ok()) else {
         return false;
     };
@@ -105,18 +108,18 @@ pub(super) async fn valid_owner_host(state: &AppState, headers: &HeaderMap) -> b
     }
     let Some(host) = requested.host_str() else { return false; };
     let public = url::Url::parse(&state.public_origin).ok();
-    let configured = std::env::var("LITTLEBOX_MCP_ORIGIN").ok().and_then(|value| url::Url::parse(&value).ok());
+    let configured = state.mcp_origin.as_deref().and_then(|value| url::Url::parse(value).ok());
     let exact = public.as_ref().is_some_and(|origin| origin.host_str() == Some(host))
         || configured.as_ref().is_some_and(|origin| origin.host_str() == Some(host));
     let local = public.as_ref().and_then(|origin| origin.host_str()).is_some_and(is_local_host)
-        && ["localhost", "127.0.0.1", "[::1]", "editor.localhost"].contains(&host);
+        && ["localhost", "127.0.0.1", "[::1]", "app.localhost"].contains(&host);
     (exact || local)
         && deployment_for(state, headers).await.is_none()
         && !super::security::from_app_origin(state, headers).await
 }
 
 pub(super) fn origin(state: &AppState, headers: &HeaderMap) -> String {
-    if let Ok(origin) = std::env::var("LITTLEBOX_MCP_ORIGIN") {
+    if let Some(origin) = &state.mcp_origin {
         return origin.trim_end_matches('/').to_owned();
     }
     let scheme = if state.public_origin.starts_with("https://") {

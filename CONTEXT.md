@@ -6,7 +6,7 @@ Littlebox is the guardrail that lets a person who does not write code, and a per
 
 The terms come in two halves. Read "Words an app author uses" to make an app, edit its files or take it elsewhere; its first part names the words met before an app runs. Read "Words for running an installation" only to operate the Kernel, its accounts, its mail and its copies.
 
-Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, notice, schedule, signature scheme, call action, outbox, SDK module, sign-in methods, Google client and file store. Usage, Signal and Action Contract keep their capitals, as the older terms do.
+Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, path address, notice, schedule, signature scheme, call action, outbox, SDK module, sign-in methods, Google client and file store. Usage, Signal and Action Contract keep their capitals, as the older terms do.
 
 ## Words an app author uses
 
@@ -37,7 +37,7 @@ The validated, immutable static output of a Project revision that a Deployment s
 _Avoid_: Project source, build cache
 
 **Deployment**:
-The published, addressable instance of a Project with its own hostname, an optional custom domain, visibility, signup policy and database. Everything it is lives in one folder on the Kernel volume: its record, Build Artifact, databases, file index and backups. The bytes of its files live in the installation's file store, which is that folder unless the operator points the Kernel at an S3 bucket; the index in the folder decides which files exist and who may read them, and a package carries the bytes either way (ADR-0024). Republishing replaces its Build Artifact and keeps its hostname and data; immutable release history does not exist yet.
+The published, addressable instance of a Project with its own hostname, an optional custom domain, visibility, signup policy and database. Everything it is lives in one folder on the Kernel volume: its record, Build Artifact, databases, file index and backups. The bytes of its files live in the installation's file store, which is that folder unless the operator points the Kernel at an S3 bucket; the index in the folder decides which files exist and who may read them, and a package carries the bytes either way (ADR-0025). Republishing replaces its Build Artifact and keeps its hostname and data; immutable release history does not exist yet.
 _Avoid_: Project, preview
 
 **Public Deployment**:
@@ -61,8 +61,12 @@ The per-Deployment rule for who may create a Runtime Actor account: Open (anyone
 _Avoid_: Invite list, access grant
 
 **Sign-in Methods**:
-The per-Deployment list of ways an app account signs in: `password` always, and `google` when the Project Owner turns on Continue with Google in Auth > Users or with `sign_in_methods_set`. Google needs the app's own Google client, which the owner sets as two signing secrets with `"use": "google"`; until both are set it cannot be turned on, and an imported Deployment that asks for Google keeps the setting and offers only the password. A Google sign-in reaches the account that holds the same verified email, and only for an address Google manages (Gmail, or a Workspace domain the token names). The Signup Policy decides whether a new account may exist. A package carries the list and the accounts, never the client. The owner's own app account is not taken back by Google while its email is unproven (ADR-0025).
+The per-Deployment list of ways an app account signs in: `password` always, and `google` when the Project Owner turns on Continue with Google in Auth > Users or with `sign_in_methods_set`. Google needs the app's own Google client, which the owner sets as two signing secrets with `"use": "google"`; until both are set it cannot be turned on, and an imported Deployment that asks for Google keeps the setting and offers only the password. A Google sign-in reaches the account that holds the same verified email, and only for an address Google manages (Gmail, or a Workspace domain the token names). The Signup Policy decides whether a new account may exist. A package carries the list and the accounts, never the client. The owner's own app account is not taken back by Google while its email is unproven (ADR-0026).
 _Avoid_: Social login, SSO
+
+**Google Client**:
+An app's own Google OAuth client, which its Project Owner makes in their own Google Cloud console and sets as the two signing secrets `google_client_id` and `google_client_secret` with `"use": "google"`. The owner registers one redirect URI per address the app answers on: its generated host, a verified custom domain, and its path address by id. The values never leave the Kernel and never travel in a package (ADR-0026).
+_Avoid_: OAuth app, installation Google client (there is none)
 
 **Agent Credential**:
 A Project Owner's revocable delegation that permits an external agent to perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity. Its permissions are `read`, `write`, `publish`, `manage_users`, `export_data` and `manage_lifecycle`. Only `manage_users` lists, suspends and invites app accounts or changes a Signup Policy, only `export_data` downloads accounts and data, and only `manage_lifecycle` ejects or migrates a Project. An OAuth client may hold the first four. A call it may not make is refused with the permission it needs.
@@ -134,6 +138,14 @@ _Avoid_: API spec, OpenAPI document, schema dump
 A hostname its owner controls on which one Deployment answers next to its generated hostname, which keeps answering. The owner sets it with `domain_set`, which needs `publish`, and proves control with a TXT record `_littlebox.<hostname>` holding a token the Kernel issued; the Kernel looks the record up itself and the alias serves only once it holds the token. One name serves one Deployment. On it the app has its own origin: its own cookies, the same policy, routes, file path and maintenance page. The operator's proxy terminates TLS and forwards `Host` unchanged. A package carries the name without the token, and the destination issues its own.
 _Avoid_: vanity URL, CNAME (that is one way to point the name), domain mapping
 
+**Path Address**:
+A path on the installation's domain on which one Deployment answers: `<domain>/p/<id>`, and `<domain>/p/<name>` once the owner names it. The owner turns it on with `path_set`, which needs `publish`. Every path and the home share the origin `<domain>`, so an app with accounts or a private app needs the owner's `acceptSharedOrigin` before its path turns on. It needs `LITTLEBOX_DOMAIN`. A package carries the name and the path's state, never the id.
+_Avoid_: short link, vanity path, app URL
+
+**File Store**:
+Where the installation keeps the bytes of app files: each Deployment's folder, or an S3-compatible bucket the operator names with `LITTLEBOX_FILES_S3_*`. The file index in the Deployment's folder decides which files exist either way, and `files-migrate` moves the bytes between the two while no Kernel runs (ADR-0025).
+_Avoid_: bucket (one kind of store), storage
+
 **Package**:
 The export of one Deployment's state: its database, its accounts without sessions or email links, its API keys revoked at import, its files, and its Usage and Signals when it has any, captured under the Deployment's locks. A versioned manifest lists each component with its size and SHA-256 and names the published revision. Each component travels as its own transfer, so no step holds a whole component in memory. An import verifies every component and installs the package only into a project that has no Deployment yet; the same package imported again returns the first import. Downloading one needs the `export_data` permission. A migration's package is version 2 and imports in maintenance.
 _Avoid_: dump, full backup, export file (the kit that carries it is the export)
@@ -159,8 +171,8 @@ The irreversible transfer of a Managed Project's source and database-schema auth
 _Avoid_: Export, download
 
 **Declared Dependencies**:
-The libraries a Managed Capsule states it needs, written as intent by its owner or the agent. Littlebox resolves them against pinned, browser-compatible versions and generates the manifest and lock the build consumes; the generated pair is reviewable and exportable but is not a second editable source of truth. Not built yet: ADR-0007 decides it, and today a Capsule imports only its own files.
-_Avoid_: package.json, lockfile (those name the generated form, not the authority)
+The npm packages a Capsule imports by name, listed with exact versions under `dependencies` in its `package.json`. The editor's build fetches each one from esm.sh at that version and links it into the app's bundle; `littlebox build` and the exported kit read the same list from `node_modules` after `npm install`. Either way the published app holds the package's code and loads nothing from another origin. A version range is refused, so every build reads the same code.
+_Avoid_: library allowlist, vendored copy
 
 ## Words for running an installation
 

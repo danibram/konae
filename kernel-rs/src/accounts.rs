@@ -526,20 +526,20 @@ pub(crate) fn link_sent() -> Response {
     response
 }
 
-/// The `Set-Cookie` value that carries an app session to the browser.
-pub(crate) fn app_session_cookie(state: &AppState, session: &AuthSession) -> HeaderValue {
-    let cookie_name = app_cookie_name(state);
-    let secure = if cookie_name.starts_with("__Host-") { "; Secure" } else { "" };
+/// The `Set-Cookie` value that carries an app session to the browser, under
+/// the name `app_cookie_name` chose for the request.
+pub(crate) fn app_session_cookie(cookie_name: &str, session: &AuthSession) -> HeaderValue {
     HeaderValue::from_str(&format!(
-        "{cookie_name}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800{secure}",
-        session.token
+        "{cookie_name}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800{}",
+        session.token,
+        super::cookie_secure(cookie_name)
     ))
     .unwrap()
 }
 
 /// The app session cookie and body for a session just issued.
-pub(crate) fn app_session_response(state: &AppState, session: AuthSession) -> Response {
-    let cookie = app_session_cookie(state, &session);
+pub(crate) fn app_session_response(cookie_name: &str, session: AuthSession) -> Response {
+    let cookie = app_session_cookie(cookie_name, &session);
     let mut response =
         Json(json!({"result": {"user": session.user, "expiresAt": session.expires_at}})).into_response();
     response.headers_mut().insert(header::SET_COOKIE, cookie);
@@ -567,7 +567,7 @@ pub(crate) async fn runtime_tool(
         anyhow::bail!("Too many sign-in attempts. Try again later.");
     }
     let signed_in = |session: AuthSession| {
-        let cookie = app_session_cookie(state, &session);
+        let cookie = app_session_cookie(&app_cookie_name(state, &deployment.id, headers), &session);
         (json!({"user": session.user, "expiresAt": session.expires_at}), Some(cookie))
     };
     let sent = || (json!({"status": "link-sent", "message": LINK_SENT}), None);
@@ -635,12 +635,13 @@ async fn app_complete(state: AppState, request: Request, purpose: Purpose) -> Re
     let Some(deployment) = deployment_for(&state, request.headers()).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
+    let cookie_name = app_cookie_name(&state, &deployment.id, request.headers());
     let answer: ChallengeAnswer = match read_body(&state, request, &deployment.id, |_| "account-link".into()).await {
         Ok((answer, _)) => answer,
         Err(response) => return response,
     };
     match complete_app(&state, &deployment, purpose, &answer.token, &answer.password).await {
-        Ok(session) => app_session_response(&state, session),
+        Ok(session) => app_session_response(&cookie_name, session),
         Err(error_value) => auth_error(error_value),
     }
 }
@@ -732,14 +733,15 @@ const APP_ACCOUNT_PAGE: &str = r#"<!doctype html><html lang="en"><meta charset="
 <main><h1 id="title">Reset your password</h1><p id="note">Enter the email of your account. If it can use this app, we send a link to choose a new password.</p>
 <form id="recover"><label>Email <input name="email" type="email" required autocomplete="email"></label><button>Send link</button></form>
 <form id="answer" hidden><label>New password <input name="password" type="password" minlength="8" required autocomplete="new-password"></label><button id="confirm">Confirm</button></form>
-<p id="error" role="alert"></p><p><a href="/_littlebox/login">Back to sign in</a></p></main>
+<p id="error" role="alert"></p><p><a id="login" href="/_littlebox/login">Back to sign in</a></p></main>
 <script>
+const match=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);const prefix=match?'/p/'+match[1]:'';const at=path=>prefix+path;document.querySelector('#login').href=at('/_littlebox/login');
 const params=new URLSearchParams(location.hash.slice(1));const purpose=params.has('verification')?'verification':params.has('recovery')?'recovery':null;const token=purpose&&params.get(purpose);
 const $=s=>document.querySelector(s);
 if(token){history.replaceState(null,'',location.pathname);$('#recover').hidden=true;$('#answer').hidden=false;$('#title').textContent=purpose==='verification'?'Confirm your email':'Choose a new password';$('#note').textContent=purpose==='verification'?'Choose the password for your account. Confirming activates it.':'Your other sessions end when you confirm.';}
 async function post(path,body){const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const b=await r.json().catch(()=>({}));if(!r.ok)throw Error(b.error||'Request failed.');return {status:r.status,body:b};}
-$('#recover').addEventListener('submit',async e=>{e.preventDefault();try{const r=await post('/_littlebox/auth/recover',{email:new FormData(e.currentTarget).get('email')});$('#note').textContent=r.body.result.message;$('#error').textContent='';}catch(x){$('#error').textContent=x.message}});
-$('#answer').addEventListener('submit',async e=>{e.preventDefault();try{await post(purpose==='verification'?'/_littlebox/auth/verify':'/_littlebox/auth/reset',{token,password:new FormData(e.currentTarget).get('password')});location.replace('/');}catch(x){$('#error').textContent=x.message}});
+$('#recover').addEventListener('submit',async e=>{e.preventDefault();try{const r=await post(at('/_littlebox/auth/recover'),{email:new FormData(e.currentTarget).get('email')});$('#note').textContent=r.body.result.message;$('#error').textContent='';}catch(x){$('#error').textContent=x.message}});
+$('#answer').addEventListener('submit',async e=>{e.preventDefault();try{await post(at(purpose==='verification'?'/_littlebox/auth/verify':'/_littlebox/auth/reset'),{token,password:new FormData(e.currentTarget).get('password')});location.replace(at('/'));}catch(x){$('#error').textContent=x.message}});
 </script></html>"#;
 
 /// Suspends or resumes a local creator account from the server, before the
@@ -862,6 +864,9 @@ mod tests {
                 google: Arc::new(google::Google::real()),
             },
             public_origin: "http://localhost".into(),
+            mcp_origin: None,
+            path_origin: None,
+            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };

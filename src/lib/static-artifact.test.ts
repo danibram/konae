@@ -1,12 +1,13 @@
 import { describe, expect, mock, test } from "bun:test";
 import * as esbuild from "esbuild";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildLocal } from "../../scripts/littlebox";
 import { createDefaultManifest, normalizeManifest } from "../deployments/manifest";
 import type { MiniAppProject } from "./types";
-import { assembleStaticArtifact, checkRouting, isDocument, resolveReference, routingMessage, runtimeFile, servedPath, splitFragmentHead, stripModulePaths } from "./static-artifact.js";
+import { assembleStaticArtifact, basePath, checkRouting, isDocument, pathPrefixPattern, resolveReference, routingMessage, runtimeFile, runtimeLoaderScript, servedPath, splitFragmentHead, stripModulePaths } from "./static-artifact.js";
 
 // esbuild-wasm starts only in a browser. The editor's build runs here on native
 // esbuild with the editor's own plugin, which resolves every import from the
@@ -85,12 +86,14 @@ describe("the artifact", () => {
     expect(artifact.files["logo.png"]).toBe(btoa(String.fromCharCode(...logo)));
     expect(artifact.files["app.js"]).toBe("/* bundled app.js */");
     expect(artifact.files[runtimeFile]).toBe(runtime);
-    expect(artifact.files["about.html"]).toStartWith('<!doctype html><html lang="en"><head><script src="/runtime.js"></script><meta charset="utf-8">');
+    expect(artifact.files["about.html"]).toStartWith(`<!doctype html><html lang="en"><head>${runtimeLoaderScript()}<meta charset="utf-8">`);
   });
 
-  test("a page that already loads /runtime.js gets no second copy", async () => {
+  test("a page that already loads /runtime.js gets the loader in place of its tag, once", async () => {
     const artifact = await assemble({ "index.html": page("Home", '<script src="/runtime.js"></script><script type="module" src="app.js"></script>'), "app.js": "" });
+    expect(artifact.files["index.html"]).not.toContain('<script src="/runtime.js"></script>');
     expect(artifact.files["index.html"].match(/runtime\.js/g)).toHaveLength(1);
+    expect(artifact.files["index.html"]).toContain('<script type="module" src="app.js">');
   });
 
   test("a fragment page runs in the Capsule document with the SDK inline, as before", async () => {
@@ -224,7 +227,7 @@ describe("the CLI and the editor build the same artifact", () => {
       for (const file of ["index.html", "about.html", "guide/install.html", "robots.txt", "styles.css", "runtime.js", "app.js"]) {
         expect(editor.files[file]).toBe(cli.files[file]);
       }
-      expect(cli.files["index.html"]).toContain('<head><script src="/runtime.js"></script>');
+      expect(cli.files["index.html"]).toContain(`<head>${runtimeLoaderScript()}`);
       expect(cli.files["app.js"]).toContain("document.title = greeting");
     } finally { await rm(root, { recursive: true, force: true }); }
   });
@@ -286,5 +289,41 @@ describe("the CLI and the editor build the same artifact", () => {
       await expect(buildLocal(root)).rejects.toThrow(routingMessage);
       await expect(buildProjectInBrowser({ files: capsule, manifest: { ...createDefaultManifest(), routing: "history" } } as unknown as MiniAppProject)).rejects.toThrow(routingMessage);
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+});
+
+describe("a path address finds its base path, and the SDK loader writes its tag under it", () => {
+  test("basePath reads the first segment after /p/ and is empty everywhere else", () => {
+    expect(basePath("/")).toBe("");
+    expect(basePath("/p/notes")).toBe("/p/notes");
+    expect(basePath("/p/notes/")).toBe("/p/notes");
+    expect(basePath("/p/0b8c2f1e-7a7b-4c4e-9d1f-2a3b4c5d6e7f/about/deep.html")).toBe("/p/0b8c2f1e-7a7b-4c4e-9d1f-2a3b4c5d6e7f");
+    expect(basePath("/p/")).toBe("");
+    expect(basePath("/pages/notes")).toBe("");
+    expect(basePath("/notes/p/x")).toBe("");
+  });
+
+  test("the loader writes the SDK tag under the base path, and at the root with none", () => {
+    const script = runtimeLoaderScript();
+    expect(script.startsWith("<script>") && script.endsWith("</script>")).toBe(true);
+    const body = script.slice("<script>".length, -"</script>".length);
+    expect(body).not.toContain("</script");
+    const written = (pathname: string) => {
+      const out: string[] = [];
+      new Function("location", "document", body)({ pathname }, { write: (text: string) => out.push(text) });
+      return out;
+    };
+    expect(written("/")).toEqual(['<script src="/runtime.js"></script>']);
+    expect(written("/about.html")).toEqual(['<script src="/runtime.js"></script>']);
+    expect(written("/p/notes")).toEqual(['<script src="/p/notes/runtime.js"></script>']);
+    expect(written("/p/notes/guide/install.html")).toEqual(['<script src="/p/notes/runtime.js"></script>']);
+  });
+
+  test("the SDK and every inline page that builds a Kernel URL carry the same prefix rule", () => {
+    const root = path.resolve(import.meta.dir, "../..");
+    const rule = `/${pathPrefixPattern.source}/`;
+    for (const file of ["src/mcp/runtime.js", "src/lib/static-artifact.js", "kernel-rs/src/accounts.rs", "kernel-rs/src/app_owner.rs"]) {
+      expect(readFileSync(path.join(root, file), "utf8")).toContain(rule);
+    }
   });
 });

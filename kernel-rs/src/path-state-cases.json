@@ -1,0 +1,7 @@
+{
+  "cases": [
+    { "case": "a name another enabled app holds", "name": "spring-menu", "error": "spring-menu is taken on this installation. Choose another name, such as spring-menu.", "code": "path.taken" },
+    { "case": "another name the owner might pick", "name": "lunch-menu", "error": "lunch-menu is taken on this installation. Choose another name, such as spring-menu.", "code": "path.taken" },
+    { "case": "an app with accounts on the installation's domain", "domain": "littlebox.com", "error": "This app has accounts or is private, so a path address on littlebox.com shares its origin with the home and every other app there. Any other app on littlebox.com, including other owners' apps, can use the sessions of this app's users. The app's own hostname keeps its sessions on its own origin. Set acceptSharedOrigin to true to accept this, or close signup and keep every action anonymous so the app has no sessions to share.", "code": "path.shared-origin" }
+  ]
+}

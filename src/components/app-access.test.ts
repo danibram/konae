@@ -4,7 +4,7 @@ import googleCases from "../../kernel-rs/src/google-client-cases.json";
 import { ownerFixes } from "../kernel/refusal";
 import { McpError } from "../mcp/client";
 import {
-  apiKeyProblem, batchKey, googleRefusal, revokedKeyNotes, defaultSignupMode, expiryText, fileCurl, firstPublishModes, invitationResultMessage, invitationView,
+  apiKeyProblem, batchKey, googleRefusal, redirectUriLabel, revokedKeyNotes, defaultSignupMode, expiryText, fileCurl, firstPublishModes, invitationResultMessage, invitationView,
   mailReadiness, parseEmailBatch, republishAccessNote, routeActions, routeCurl, secretProblem, secretUsage, signupModeCopy,
   userStateView, visibilityCopy,
 } from "./app-access";
@@ -227,5 +227,13 @@ describe("googleRefusal", () => {
     // An answer without an owner's refusal code is shown as it is.
     expect(googleRefusal(new Error("Network down"))).toBeNull();
     expect(googleRefusal(new McpError("Unknown tool."))).toBeNull();
+  });
+});
+
+describe("redirectUriLabel", () => {
+  test("names the host, the custom domain and the path address", () => {
+    expect(redirectUriLabel("https://notes-1.littlebox.com/_littlebox/auth/google/callback", 0)).toBe("Redirect URI");
+    expect(redirectUriLabel("https://notes.example.org/_littlebox/auth/google/callback", 1)).toBe("Redirect URI for your custom domain");
+    expect(redirectUriLabel("https://littlebox.com/p/0b6c/_littlebox/auth/google/callback", 1)).toBe("Redirect URI for the path address");
   });
 });

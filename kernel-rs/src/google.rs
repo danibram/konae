@@ -4,8 +4,12 @@
 //! and secret as the project secrets `google_client_id` and
 //! `google_client_secret`, and registers this app's own callback,
 //! `https://<app host>/_littlebox/auth/google/callback`, in the Google
-//! console, once for the generated host and once for a verified custom
-//! domain. The whole flow stays on the app's host:
+//! console, once for the generated host, once for a verified custom
+//! domain and once for its path address (`<domain>/p/<id>`) when it has one.
+//! A path address shares its origin with every other path, so its callback
+//! names the Deployment's id, which a rename does not change. The home
+//! address, `<domain>/`, offers no Google sign-in. The whole flow stays on
+//! the app's host:
 //!
 //! `/_littlebox/auth/google/start` → Google → `/_littlebox/auth/google/callback`
 //!
@@ -76,6 +80,10 @@ pub(crate) const NOT_AUTHORITATIVE: &str =
 const CHECKS: &str = "Google's answer did not pass its checks. Start again from the sign-in page.";
 const STALE: &str = "This Google sign-in expired or was already used. Start again from the sign-in page.";
 const OTHER_BROWSER: &str = "This Google sign-in started in another browser. Start again from the sign-in page.";
+/// The home address shares its origin with every path address and has no
+/// callback of its own, so Google does not start there.
+pub(crate) const NOT_ON_HOME: &str =
+    "Google sign-in does not run on the installation's home address. Open this app on its own address to continue with Google.";
 
 /// `secret_delete` refuses a Google secret with this while Google is on.
 pub(crate) fn still_on(name: &str) -> String {
@@ -413,7 +421,32 @@ pub(crate) fn redirect_uris(state: &AppState, deployment: &Deployment) -> Vec<St
     if let Some(record) = domain::read_record(state, &deployment.id).filter(|record| record.verified) {
         hosts.push(record.hostname);
     }
-    hosts.into_iter().map(|host| format!("{}{CALLBACK_PATH}", deployment_url(&state.public_origin, &host))).collect()
+    let mut uris: Vec<String> = hosts.into_iter().map(|host| format!("{}{CALLBACK_PATH}", deployment_url(&state.public_origin, &host))).collect();
+    if let Some(uri) = path_callback(state, deployment) {
+        uris.push(uri);
+    }
+    uris
+}
+
+/// The callback of the Deployment's path address while its path is on. It
+/// names the id, so the name address uses it too and a rename keeps it.
+fn path_callback(state: &AppState, deployment: &Deployment) -> Option<String> {
+    let origin = state.path_origin.as_deref()?.trim_end_matches('/');
+    path::read_record(state, &deployment.id)
+        .filter(|record| record.enabled)
+        .map(|_| format!("{origin}/p/{}{CALLBACK_PATH}", deployment.id))
+}
+
+/// The callback this request's address sends to Google: the host's own, or
+/// on the path host the path address's. Err on the home address.
+fn callback_uri(state: &AppState, deployment: &Deployment, headers: &HeaderMap, origin: &str) -> std::result::Result<String, &'static str> {
+    if path::on_path_host(state, headers) {
+        return match path::prefix(headers) {
+            Some(_) => path_callback(state, deployment).ok_or(FAILED),
+            None => Err(NOT_ON_HOME),
+        };
+    }
+    Ok(format!("{origin}{CALLBACK_PATH}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -462,12 +495,15 @@ fn app_origin(state: &AppState, headers: &HeaderMap) -> Option<String> {
         .then(|| parsed.origin().ascii_serialization())
 }
 
-fn cookie_name(state: &AppState) -> &'static str {
-    if state.public_origin.starts_with("https://") { "__Host-littlebox_google" } else { "littlebox_google" }
+/// The flow cookie's name. On the path host every app shares the origin, so
+/// the name carries the Deployment's id and two apps' flows do not collide.
+fn cookie_name(state: &AppState, deployment: &Deployment, headers: &HeaderMap) -> String {
+    let base = if state.public_origin.starts_with("https://") { "__Host-littlebox_google" } else { "littlebox_google" };
+    if path::on_path_host(state, headers) { format!("{base}_{}", deployment.id) } else { base.to_owned() }
 }
 
-fn browser_cookie(state: &AppState, value: &str, max_age: i64) -> HeaderValue {
-    let name = cookie_name(state);
+fn browser_cookie(state: &AppState, deployment: &Deployment, headers: &HeaderMap, value: &str, max_age: i64) -> HeaderValue {
+    let name = cookie_name(state, deployment, headers);
     let secure = if name.starts_with("__Host-") { "; Secure" } else { "" };
     HeaderValue::from_str(&format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}")).unwrap()
 }
@@ -552,7 +588,7 @@ async fn begin(
     // Google sends the person back only to a URI the owner registered, so
     // the flow starts only on a host whose callback is one of them.
     let origin = app_origin(state, headers).ok_or((StatusCode::BAD_REQUEST, FAILED.to_owned()))?;
-    let redirect_uri = format!("{origin}{CALLBACK_PATH}");
+    let redirect_uri = callback_uri(state, deployment, headers, &origin).map_err(|message| (StatusCode::BAD_REQUEST, message.to_owned()))?;
     if !redirect_uris(state, deployment).contains(&redirect_uri) {
         return Err((StatusCode::BAD_REQUEST, FAILED.into()));
     }
@@ -589,7 +625,7 @@ async fn begin(
         .append_pair("code_challenge", &challenge)
         .append_pair("code_challenge_method", "S256")
         .append_pair("prompt", "select_account");
-    Ok((location.into(), browser_cookie(state, &browser, FLOW_TTL_SECONDS)))
+    Ok((location.into(), browser_cookie(state, deployment, headers, &browser, FLOW_TTL_SECONDS)))
 }
 
 #[derive(Deserialize)]
@@ -650,7 +686,7 @@ async fn callback(State(state): State<AppState>, headers: HeaderMap, Query(query
         return error(StatusCode::NOT_FOUND, "Littlebox deployment not found.");
     };
     let mut response = callback_in(&state, &deployment, &headers, query).await;
-    response.headers_mut().append(header::SET_COOKIE, browser_cookie(&state, "", 0));
+    response.headers_mut().append(header::SET_COOKIE, browser_cookie(&state, &deployment, &headers, "", 0));
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response.headers_mut().insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     response
@@ -664,7 +700,7 @@ async fn callback_in(state: &AppState, deployment: &Deployment, headers: &Header
         return login_link_page(StatusCode::BAD_REQUEST, FAILED);
     };
     let now = auth::now_seconds();
-    let browser = cookie_value(headers, cookie_name(state));
+    let browser = cookie_value(headers, &cookie_name(state, deployment, headers));
     let flow = open(state)
         .map_err(|_| FAILED)
         .and_then(|db| take_flow(&db, &flow_state, &deployment.id, &origin, browser.as_deref(), now));
@@ -684,7 +720,10 @@ async fn callback_in(state: &AppState, deployment: &Deployment, headers: &Header
         _ => return login_link_page(StatusCode::NOT_FOUND, NOT_ON),
     };
     let google = state.accounts.google.clone();
-    let token = match google.exchange(&client, &code, &flow.verifier, &format!("{origin}{CALLBACK_PATH}")).await {
+    let Ok(redirect_uri) = callback_uri(state, deployment, headers, &origin) else {
+        return login_link_page(StatusCode::BAD_REQUEST, FAILED);
+    };
+    let token = match google.exchange(&client, &code, &flow.verifier, &redirect_uri).await {
         Ok(token) => token,
         Err(error_value) => {
             eprintln!("Google sign-in exchange failed: {error_value}");
@@ -700,7 +739,8 @@ async fn callback_in(state: &AppState, deployment: &Deployment, headers: &Header
             let operation = if signed.outcome == IdentityOutcome::Created { usage::Operation::Signup } else { usage::Operation::Login };
             usage::count(&state.data_root, &deployment.id, operation);
             let mut response = (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response();
-            response.headers_mut().insert(header::SET_COOKIE, accounts::app_session_cookie(state, &signed.session));
+            let session_cookie = crate::app_cookie_name(state, &deployment.id, headers);
+            response.headers_mut().insert(header::SET_COOKIE, accounts::app_session_cookie(&session_cookie, &signed.session));
             response
         }
         Err(error_value) => {
@@ -772,13 +812,17 @@ fn page_with_link(status: StatusCode, message: &str, link: &str) -> Response {
     html(status, format!("{PAGE_HEAD}{}</p><p><a href=\"{}\">Back to sign in</a></p></main></html>", escape(message), escape(link)))
 }
 
+/// A page with a link back to sign in. The start and callback paths sit in
+/// `/_littlebox/auth/google/`, so the relative link reaches the sign-in page
+/// under a path address's prefix too.
 fn login_link_page(status: StatusCode, message: &str) -> Response {
-    page_with_link(status, message, "/_littlebox/login")
+    page_with_link(status, message, "../../login")
 }
 
 /// The sign-in page's Google button, as a link: a navigation is not bound by
-/// the page's form-action or connect-src.
-pub(crate) const BUTTON: &str = r#"<a class="google" href="/_littlebox/auth/google/start">Continue with Google</a>"#;
+/// the page's form-action or connect-src. On a path address it keeps the
+/// page's `/p/<segment>` prefix, as the Kernel's other pages do.
+pub(crate) const BUTTON: &str = r#"<a class="google" href="/_littlebox/auth/google/start">Continue with Google</a><script>{const m=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);if(m)document.querySelector('a.google').href='/p/'+m[1]+'/_littlebox/auth/google/start'}</script>"#;
 pub(crate) const BUTTON_STYLE: &str = ".google{display:block;text-align:center;text-decoration:none;font:inherit;border-radius:8px;padding:11px 12px;border:1px solid #c9ced6;color:#20232a;margin-top:16px}@media (prefers-color-scheme:dark){.google{color:#e8eaed;border-color:#3a404a}}";
 
 #[cfg(test)]
@@ -791,6 +835,9 @@ mod tests {
     const KERNEL: &str = "http://localhost:8790";
     const APP: &str = "practice.localhost:8790";
     const OTHER: &str = "other.localhost:8790";
+    /// The installation's domain, where the home and every path address answer.
+    const PATH_ORIGIN: &str = "http://localhost:8790";
+    const PATH_HOST: &str = "localhost:8790";
     const APP_CLIENT: &str = "1001-practice.apps.googleusercontent.com";
     const OTHER_CLIENT: &str = "1002-other.apps.googleusercontent.com";
     const CLIENT_SECRET_VALUE: &str = "GOCSPX-test-secret-value";
@@ -931,6 +978,9 @@ mod tests {
                 google: Arc::new(Google::for_test(&base)),
             },
             public_origin: KERNEL.into(),
+            mcp_origin: None,
+            path_origin: Some(PATH_ORIGIN.into()),
+            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(limits::Guards::new(Vec::new())),
         };
@@ -1098,6 +1148,47 @@ mod tests {
         let refused = start_get(State(fixture.state.clone()), request).await;
         assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
         assert!(text(refused).await.contains(&escape(FAILED)));
+    }
+
+    #[tokio::test]
+    async fn a_path_address_signs_in_through_its_id_callback_and_the_home_offers_no_google() {
+        use tower::ServiceExt;
+        let mut fixture = fixture(SignupMode::Open).await;
+        let app = fixture.deployment(APP).await;
+        // Before the path is on, the owner is shown no path callback.
+        assert!(!redirect_uris(&fixture.state, &app).iter().any(|uri| uri.contains("/p/")));
+        path::turn_on_for_test(&fixture.state, &app.id, Some("spring-practice")).await;
+        let callback_uri = format!("{PATH_ORIGIN}/p/{}{CALLBACK_PATH}", app.id);
+        assert_eq!(redirect_uris(&fixture.state, &app).last(), Some(&callback_uri));
+        let router = |state: AppState| crate::stack(state);
+        let get = |uri: String, cookie: Option<String>| {
+            let mut request = Request::builder().uri(uri).header(header::HOST, PATH_HOST);
+            if let Some(cookie) = cookie {
+                request = request.header(header::COOKIE, cookie);
+            }
+            request.body(Body::empty()).unwrap()
+        };
+        // The name address starts a flow that returns to the id address, which a rename keeps.
+        let started = router(fixture.state.clone()).oneshot(get("/p/spring-practice/_littlebox/auth/google/start".into(), None)).await.unwrap();
+        assert_eq!(started.status(), StatusCode::SEE_OTHER);
+        let query: HashMap<String, String> = url::Url::parse(&location(&started)).unwrap().query_pairs().into_owned().collect();
+        assert_eq!(query["redirect_uri"], callback_uri);
+        let flow_cookie = set_cookies(&started).into_iter().find(|c| c.starts_with(&format!("littlebox_google_{}=", app.id))).expect("a flow cookie named for the app");
+        let now = auth::now_seconds();
+        let claims = json!({"iss": fixture.base, "aud": APP_CLIENT, "azp": APP_CLIENT, "sub": ANA.subject, "email": ANA.email,
+            "email_verified": true, "nonce": query["nonce"], "iat": now, "exp": now + 3600});
+        fixture.fake.grants.lock().unwrap().insert("path-code".into(), Grant { claims, challenge: query["code_challenge"].clone(), redirect_uri: callback_uri.clone(), kid: "local-test" });
+        let back = format!("/p/{}/_littlebox/auth/google/callback?code=path-code&state={}", app.id, query["state"]);
+        let signed = router(fixture.state.clone()).oneshot(get(back, Some(flow_cookie))).await.unwrap();
+        assert_eq!(signed.status(), StatusCode::SEE_OTHER, "{}", text(signed).await);
+        assert_eq!(location(&signed), format!("/p/{}/", app.id), "the app opens under its prefix");
+        assert!(set_cookies(&signed).iter().any(|c| c.starts_with(&format!("littlebox_app_session_{}=", app.id))), "the session is named for the app on the shared origin");
+        assert_eq!(fixture.users(&app.id), 1);
+        // The home address shares the origin and has no callback, so Google does not start there.
+        fixture.state.home_deployment = Some(app.id.clone());
+        let home = router(fixture.state.clone()).oneshot(get("/_littlebox/auth/google/start".into(), None)).await.unwrap();
+        assert_eq!(home.status(), StatusCode::BAD_REQUEST);
+        assert!(text(home).await.contains(&escape(NOT_ON_HOME)));
     }
 
     #[tokio::test]

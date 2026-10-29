@@ -49,7 +49,7 @@ async function bundleInBrowser(files: Record<string, string>, entrypoint: string
     platform: "browser",
     target: "es2022",
     outdir: "out",
-    plugins: [projectFilesPlugin(files)],
+    plugins: [projectFilesPlugin(files), packagesPlugin(declaredPackages(files))],
   });
   const script = result.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
   if (!script) throw new Error("The browser builder did not produce JavaScript.");
@@ -61,8 +61,9 @@ function projectFilesPlugin(files: Record<string, string>): esbuild.Plugin {
     name: "littlebox-project-files",
     setup(build) {
       build.onResolve({ filter: /.*/ }, (args) => {
+        if (args.namespace === "package") return undefined;
         if (!args.importer) return { path: requireProjectFile(args.path), namespace: "littlebox" };
-        if (!args.path.startsWith(".")) throw new Error(`Package imports are not enabled in Managed Projects: ${args.path}`);
+        if (!args.path.startsWith(".")) return undefined;
         const parent = args.importer.includes("/") ? args.importer.slice(0, args.importer.lastIndexOf("/")) : "";
         const candidate = normalizeRelative(`${parent}/${args.path}`);
         const resolved = resolveExtension(candidate, files);
@@ -74,6 +75,109 @@ function projectFilesPlugin(files: Record<string, string>): esbuild.Plugin {
         if (contents === undefined) throw new Error(`Project file not found: ${args.path}`);
         return { contents, loader: loaderFor(args.path), resolveDir: args.path.includes("/") ? args.path.slice(0, args.path.lastIndexOf("/")) : "" };
       });
+    },
+  };
+}
+
+/**
+ * The CDN the editor's build reads packages from. The build fetches each
+ * module as text and esbuild links it into the app's own bundle, so the
+ * published app loads nothing from this origin and nothing fetched here runs
+ * in the editor.
+ */
+export const packageOrigin = "https://esm.sh";
+
+/** Exact versions such as 1.2.3 or 2.0.0-beta.1, so every build reads the same code. */
+const exactVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+/** The `dependencies` of the Capsule's package.json, the one list npm and the editor both read. */
+export function declaredPackages(files: Record<string, string>): Map<string, string> {
+  const source = files["package.json"];
+  if (source === undefined) return new Map();
+  let manifest: unknown;
+  try { manifest = JSON.parse(source); } catch { throw new Error("package.json is not valid JSON."); }
+  const dependencies = (manifest as { dependencies?: unknown } | null)?.dependencies ?? {};
+  if (typeof dependencies !== "object" || dependencies === null || Array.isArray(dependencies)) throw new Error("package.json dependencies must be an object of package names and versions.");
+  const result = new Map<string, string>();
+  for (const [name, version] of Object.entries(dependencies)) {
+    if (typeof version !== "string" || !exactVersion.test(version)) {
+      throw new Error(`package.json asks for ${name} ${JSON.stringify(version)}. Name an exact version, such as "1.2.3", so every build gets the same code.`);
+    }
+    result.set(name, version);
+  }
+  return result;
+}
+
+/** The package name and the path inside it of a bare import such as `@scope/pkg/sub`. */
+function splitSpecifier(specifier: string): { name: string; subpath: string } {
+  const parts = specifier.split("/");
+  const size = specifier.startsWith("@") ? 2 : 1;
+  return { name: parts.slice(0, size).join("/"), subpath: parts.slice(size).join("/") };
+}
+
+/** The CDN URL of a bare import, pinned to the version package.json names. */
+export function packageUrl(specifier: string, packages: Map<string, string>): string {
+  if (specifier.startsWith("node:")) throw new Error(`${specifier} is a Node.js module. The app runs in a browser, so import a package that works there.`);
+  const { name, subpath } = splitSpecifier(specifier);
+  const version = packages.get(name);
+  if (version === undefined) throw new Error(`${specifier} is not in package.json. Add "${name}": "<exact version>" to its dependencies.`);
+  const path = `/${name}@${version}${subpath ? `/${subpath}` : ""}`;
+  // A stylesheet, a JSON file or an asset is served as published; only modules take esm.sh's build options.
+  if (/\.[a-z0-9]+$/i.test(subpath) && !/\.(?:m?js|cjs|jsx?|tsx?)$/i.test(subpath)) return `${packageOrigin}${path}`;
+  // deps pins every declared package, so two packages that share one (a UI library and React, say) link the same copy.
+  const deps = [...packages].filter(([other]) => other !== name).map(([other, pinned]) => `${other}@${pinned}`).join(",");
+  return `${packageOrigin}${path}?target=es2022${deps ? `&deps=${deps}` : ""}`;
+}
+
+const fetchedModules = new Map<string, Promise<Uint8Array>>();
+
+function fetchModule(url: string): Promise<Uint8Array> {
+  let pending = fetchedModules.get(url);
+  if (!pending) {
+    pending = fetch(url).then(async (response) => {
+      if (!response.ok) throw new Error(`${url} answered ${response.status}. Check the package name and version in package.json.`);
+      return new Uint8Array(await response.arrayBuffer());
+    }, (error) => {
+      throw new Error(`The build could not reach ${packageOrigin} for ${url}: ${error instanceof Error ? error.message : error}. Check the connection and build again.`);
+    });
+    // A dropped connection is not cached, or every later build would fail too.
+    pending.catch(() => fetchedModules.delete(url));
+    fetchedModules.set(url, pending);
+  }
+  return pending;
+}
+
+/** A package's code and styles go in as source; a font or an image its CSS names goes in as a data: URL, which the published policy allows. */
+function packageLoader(url: string): esbuild.Loader {
+  const { pathname } = new URL(url);
+  // A package root such as /react@19.0.0 ends in its version, so only a known asset extension counts.
+  return /\.(?:woff2?|ttf|otf|eot|png|jpe?g|gif|svg|webp|avif|ico)$/i.test(pathname) ? "dataurl" : loaderFor(pathname);
+}
+
+/**
+ * Resolves bare imports against package.json and fetches them, with the
+ * modules they import in turn, from packageOrigin. Only that origin is read.
+ */
+function packagesPlugin(packages: Map<string, string>): esbuild.Plugin {
+  return {
+    name: "littlebox-packages",
+    setup(build) {
+      build.onResolve({ filter: /.*/ }, (args) => {
+        if (args.namespace === "package") {
+          if (args.path.startsWith("data:")) return { external: true };
+          // In CSS, url(fonts/a.woff2) and @import are relative to the stylesheet even without ./
+          const relative = args.kind === "url-token" || args.kind === "import-rule";
+          const url = relative || args.path.startsWith("/") || args.path.startsWith(".") || /^https?:/.test(args.path)
+            ? new URL(args.path, args.importer).href
+            : packageUrl(args.path, packages);
+          if (new URL(url).origin !== packageOrigin) throw new Error(`${args.importer} imports ${url}. The build reads packages only from ${packageOrigin}.`);
+          return { path: url, namespace: "package" };
+        }
+        if (args.path.startsWith(".")) return undefined;
+        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(args.path)) throw new Error(`${args.importer} imports ${args.path}. Import a package by its name and list it in package.json.`);
+        return { path: packageUrl(args.path, packages), namespace: "package" };
+      });
+      build.onLoad({ filter: /.*/, namespace: "package" }, async (args) => ({ contents: await fetchModule(args.path), loader: packageLoader(args.path) }));
     },
   };
 }

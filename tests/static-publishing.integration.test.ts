@@ -179,7 +179,9 @@ describe("a multi-page artifact under pages routing", () => {
     const response = await get("static_pages", "/about");
     const policy = response.headers.get("content-security-policy") ?? "";
     const hash = `'sha256-${createHash("sha256").update(inline).digest("base64")}'`;
-    expect(policy).toContain(`script-src 'self' ${hash}`);
+    // The page's own script and the runtime loader the build puts in its head are both listed by hash.
+    expect(policy).toContain("script-src 'self' 'sha256-");
+    expect(policy).toContain(hash);
     expect(policy).not.toContain("'unsafe-inline' 'sha256");
     expect(policy).toContain("frame-ancestors 'none'");
     expect(policy).toContain("connect-src 'self'");

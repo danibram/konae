@@ -13,6 +13,9 @@
 //!   an app cannot frame the editor, another app or itself in another origin.
 //! - Every host gets HSTS when the installation is served over HTTPS, and a
 //!   custom domain gets it without `includeSubDomains`.
+//! - A path address on `<domain>` (ADR-0024) is an app host for these headers.
+//!   The layer runs outside the router, so the home page and the redirects of
+//!   the path router get the same headers as an app response.
 
 use super::*;
 use axum::middleware::Next;
@@ -85,7 +88,7 @@ pub(super) const HSTS_ALIAS: &str = "max-age=31536000";
 /// the `__Host-` cookie names.
 pub(super) fn https(state: &AppState) -> bool {
     state.public_origin.starts_with("https://")
-        || std::env::var("LITTLEBOX_MCP_ORIGIN").is_ok_and(|origin| origin.starts_with("https://"))
+        || state.mcp_origin.as_deref().is_some_and(|origin| origin.starts_with("https://"))
 }
 
 /// The HSTS value for a request, or none over plain HTTP.
@@ -181,12 +184,18 @@ pub(super) async fn from_app_origin(state: &AppState, headers: &HeaderMap) -> bo
     }
     let configured = |value: &str| url::Url::parse(value).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase));
     let public = configured(&state.public_origin);
-    let mcp = std::env::var("LITTLEBOX_MCP_ORIGIN").ok().and_then(|value| configured(&value));
+    let mcp = state.mcp_origin.as_deref().and_then(configured);
     if public.as_deref() == Some(host.as_str()) || mcp.as_deref() == Some(host.as_str()) {
         return false;
     }
+    // The path host is `<domain>`, which holds the path addresses and the home.
+    // With `LITTLEBOX_DOMAIN=localhost` it is the bare `localhost`, so it is
+    // an app origin before the local-editor names below are checked.
+    if super::path::path_host(state).as_deref() == Some(host.as_str()) {
+        return true;
+    }
     let local = public.as_deref().is_some_and(is_local_host);
-    if local && ["localhost", "127.0.0.1", "[::1]", "editor.localhost"].contains(&host.as_str()) {
+    if local && ["localhost", "127.0.0.1", "[::1]", "app.localhost"].contains(&host.as_str()) {
         return false;
     }
     let suffix = state.host_suffix.trim_start_matches('.').to_ascii_lowercase();
@@ -195,7 +204,7 @@ pub(super) async fn from_app_origin(state: &AppState, headers: &HeaderMap) -> bo
 
 /// Adds the isolation headers to every response.
 pub(super) async fn headers(State(state): State<AppState>, request: Request, next: Next) -> Response {
-    let deployment = deployment_for(&state, request.headers()).await;
+    let deployment = deployment_for_request(&state, request.headers(), request.uri().path()).await;
     let app = deployment.is_some();
     let connects = deployment.map(|deployment| super::calls::connects(&deployment.manifest)).unwrap_or_default();
     let hsts = hsts(&state, request.headers());

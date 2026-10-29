@@ -1,6 +1,6 @@
 # One verified account core for creators and app users
 
-Status: accepted, 2026-11-06. Amends [ADR-0002](0002-kernel-owns-identity-and-visibility.md), and its HTTP update amends [ADR-0001](0001-separate-runtime-and-admin-data-access.md)'s rule that a private Deployment runs nothing without a login. [ADR-0012](0012-account-email-goes-through-a-persistent-queue.md) builds on it, and [ADR-0014](0014-an-app-migrates-with-one-writer-at-a-time.md) changes what a restore does with revocations made after a copy. [ADR-0025](0025-an-app-account-may-sign-in-with-the-apps-own-google-client.md) lets a Google ID token prove an app account's email.
+Status: accepted, 2026-11-06. Amends [ADR-0002](0002-kernel-owns-identity-and-visibility.md), and its HTTP update amends [ADR-0001](0001-separate-runtime-and-admin-data-access.md)'s rule that a private Deployment runs nothing without a login. [ADR-0012](0012-account-email-goes-through-a-persistent-queue.md) builds on it, and [ADR-0014](0014-an-app-migrates-with-one-writer-at-a-time.md) changes what a restore does with revocations made after a copy. [ADR-0026](0026-an-app-account-may-sign-in-with-the-apps-own-google-client.md) lets a Google ID token prove an app account's email.
 
 ADR-0002 put identity in the Kernel for app users. The launch plan admits creators the Kernel did not invite and strangers to their apps, so an address someone typed can no longer stand for a person. Both kinds of account need proof of email, recovery and suspension, and an export must carry them to a machine with no identity provider.
 

@@ -2,6 +2,7 @@ import type { Database, SqlJsStatic } from "sql.js";
 import { notifyColumnRefusal, notifyReturning, notifyReturningStatement, parseServerActionSource, resolveServerAction, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
 import { sqlStatementTokens, sqlWordsOf, type SqlToken } from "../lib/sql-tokens";
 import { contractFromProgram } from "../lib/action-contract";
+import { rootRelativeWarnings } from "../lib/static-artifact.js";
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
 import type {
@@ -179,6 +180,8 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       clone?.close();
     }
 
+    // A root-relative URL leaves the app's path address. The build warns with the same words, and the Kernel has no release warning to match.
+    warnings.push(...rootRelativeWarnings(files).map(({ message }) => ({ stage: "actions" as const, message })));
     return { ok: errors.length === 0, errors, checked, ...(warnings.length > 0 ? { warnings } : {}) };
   }
 }

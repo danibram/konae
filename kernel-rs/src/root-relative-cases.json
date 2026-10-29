@@ -1,0 +1,140 @@
+{
+  "cases": [
+    {
+      "case": "a link to /about from the home page",
+      "files": { "index.html": "<a href=\"/about\">About</a>" },
+      "warnings": ["index.html links to /about, which leaves the app's path address. Write about instead."]
+    },
+    {
+      "case": "a link to /about from a page under pages/",
+      "files": { "pages/menu.html": "<a href=\"/about\">About</a>" },
+      "warnings": ["pages/menu.html links to /about, which leaves the app's path address. Write about instead."]
+    },
+    {
+      "case": "a link to /about from a page two folders down",
+      "files": { "pages/guide/install.html": "<a href=\"/about\">About</a>" },
+      "warnings": ["pages/guide/install.html links to /about, which leaves the app's path address. Write ../about instead."]
+    },
+    {
+      "case": "an image at /img.png",
+      "files": { "index.html": "<img src=\"/img.png\">" },
+      "warnings": ["index.html loads /img.png, which leaves the app's path address. Write img.png instead."]
+    },
+    {
+      "case": "a form posting to /send",
+      "files": { "index.html": "<form action=\"/send\"><button>Send</button></form>" },
+      "warnings": ["index.html submits to /send, which leaves the app's path address. Write send instead."]
+    },
+    {
+      "case": "a root-relative link to the home URL",
+      "files": { "index.html": "<a href=\"/\">Home</a>" },
+      "warnings": ["index.html links to /, which leaves the app's path address. Write ./index.html instead."]
+    },
+    {
+      "case": "a root-relative query string on the home URL",
+      "files": { "index.html": "<a href=\"/?q=1\">Search</a>" },
+      "warnings": ["index.html links to /?q=1, which leaves the app's path address. Write ./?q=1 instead."]
+    },
+    {
+      "case": "a path under /_littlebox is not prefixed by the app",
+      "files": { "index.html": "<a href=\"/_littlebox/files/x\">File</a>" },
+      "warnings": ["index.html links to /_littlebox/files/x, which leaves the app's path address. Write _littlebox/files/x instead."]
+    },
+    {
+      "case": "a srcset with two root-relative candidates",
+      "files": { "index.html": "<img src=\"small.png\" srcset=\"/a.png 1x, /b.png 2x\">" },
+      "warnings": [
+        "index.html loads /a.png, which leaves the app's path address. Write a.png instead.",
+        "index.html loads /b.png, which leaves the app's path address. Write b.png instead."
+      ]
+    },
+    {
+      "case": "a root-relative url() in a style element on the page",
+      "files": { "index.html": "<style>body{background:url(/bg.png)}</style>" },
+      "warnings": ["index.html loads /bg.png, which leaves the app's path address. Write bg.png instead."]
+    },
+    {
+      "case": "a root-relative url() in a style attribute",
+      "files": { "index.html": "<div style=\"background:url(/bg.png)\"></div>" },
+      "warnings": ["index.html loads /bg.png, which leaves the app's path address. Write bg.png instead."]
+    },
+    {
+      "case": "a stylesheet the page loads names /bg.png in url()",
+      "files": {
+        "index.html": "<link rel=\"stylesheet\" href=\"styles.css\">",
+        "styles.css": "body{background:url(/bg.png)}"
+      },
+      "warnings": ["styles.css loads /bg.png, which leaves the app's path address. Write bg.png instead."]
+    },
+    {
+      "case": "a stylesheet in a folder names /bg.png, so the fix goes up one level from the stylesheet",
+      "files": {
+        "pages/guide/install.html": "<link rel=\"stylesheet\" href=\"../css/site.css\">",
+        "css/site.css": "a{background:url(/bg.png)}"
+      },
+      "warnings": ["css/site.css loads /bg.png, which leaves the app's path address. Write ../bg.png instead."]
+    },
+    {
+      "case": "a stylesheet that imports /theme.css",
+      "files": {
+        "index.html": "<link rel=\"stylesheet\" href=\"styles.css\">",
+        "styles.css": "@import \"/theme.css\";"
+      },
+      "warnings": ["styles.css loads /theme.css, which leaves the app's path address. Write theme.css instead."]
+    },
+    {
+      "case": "a root-relative stylesheet link names the page's own stylesheet",
+      "files": {
+        "index.html": "<link rel=\"stylesheet\" href=\"/styles.css\">",
+        "styles.css": "body{background:url(/bg.png)}"
+      },
+      "warnings": [
+        "index.html loads /styles.css, which leaves the app's path address. Write styles.css instead.",
+        "styles.css loads /bg.png, which leaves the app's path address. Write bg.png instead."
+      ]
+    },
+    {
+      "case": "a stylesheet no page loads is not read",
+      "files": {
+        "index.html": "<p>Hello</p>",
+        "unused.css": "body{background:url(/bg.png)}"
+      },
+      "warnings": []
+    },
+    {
+      "case": "a public html file is a page served at the root",
+      "files": { "public/robots.html": "<a href=\"/about\">About</a>" },
+      "warnings": ["public/robots.html links to /about, which leaves the app's path address. Write about instead."]
+    },
+    {
+      "case": "a protocol-relative URL is not root-relative",
+      "files": { "index.html": "<a href=\"//cdn.example.com/x\">x</a><img src=\"//cdn.example.com/y.png\">" },
+      "warnings": []
+    },
+    {
+      "case": "the SDK file the build supplies is exempt",
+      "files": { "index.html": "<script src=\"/runtime.js\"></script>" },
+      "warnings": []
+    },
+    {
+      "case": "a file under /runtime.js/ is not the SDK and is warned about",
+      "files": { "index.html": "<script src=\"/runtime.js/extra.js\"></script>" },
+      "warnings": ["index.html loads /runtime.js/extra.js, which leaves the app's path address. Write runtime.js/extra.js instead."]
+    },
+    {
+      "case": "relative and fragment URLs are fine",
+      "files": { "index.html": "<a href=\"about.html\">A</a><a href=\"./about.html\">B</a><a href=\"#top\">C</a><img src=\"./img.png\">" },
+      "warnings": []
+    },
+    {
+      "case": "a root-relative URL inside an HTML comment is not read",
+      "files": { "index.html": "<!-- <a href=\"/about\">About</a> -->" },
+      "warnings": []
+    },
+    {
+      "case": "a URL inside a script body is not read",
+      "files": { "index.html": "<script>fetch(\"/api\")</script>" },
+      "warnings": []
+    }
+  ]
+}

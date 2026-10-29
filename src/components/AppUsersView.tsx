@@ -11,7 +11,7 @@ import {
   userStateView, visibilityCopy, MAX_INVITATION_BATCH, type PendingBatch,
 } from "./app-access";
 import { CopyLine } from "./IntegrationsView";
-import { googleRefusal, type GoogleField } from "./app-access";
+import { googleRefusal, redirectUriLabel, type GoogleField } from "./app-access";
 import { Badge, Button, Card, EmptyState, Field, Input, LoadingBlock, Select, Switch, Textarea } from "./ui";
 import { useLoadingHold } from "./loading-hold";
 import { message, signedOut, useConfirm } from "./useConfirm";
@@ -242,7 +242,7 @@ function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: str
         <li>
           <strong>Make a Google client for this app.</strong>
           <p className="access-note">In the Google Cloud console, open APIs &amp; Services, then Credentials, and create an OAuth client ID of type Web application. Paste {methods.redirectUris.length > 1 ? "each address" : "this address"} under Authorized redirect URIs.</p>
-          {methods.redirectUris.map((uri, index) => <CopyLine key={uri} label={index === 0 ? "Redirect URI" : "Redirect URI for your custom domain"} text={uri} />)}
+          {methods.redirectUris.map((uri, index) => <CopyLine key={uri} label={redirectUriLabel(uri, index)} text={uri} />)}
         </li>
         <li>
           <strong>Paste the client ID and secret Google shows you.</strong>

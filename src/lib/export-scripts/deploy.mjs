@@ -150,6 +150,8 @@ async function finishImport(state) {
 async function readProjectFiles(directory, prefix = '') {
   const result = {};
   for (const entry of await readdir(directory, { withFileTypes: true })) {
+    // Installed packages are build input, not app source, as in the CLI.
+    if (entry.name === 'node_modules') continue;
     const relative = prefix ? prefix + '/' + entry.name : entry.name;
     if (entry.isDirectory()) Object.assign(result, await readProjectFiles(path.join(directory, entry.name), relative));
     else if (entry.isFile()) result[relative] = await readFile(path.join(directory, entry.name), 'utf8');

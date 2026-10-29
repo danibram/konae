@@ -1,6 +1,6 @@
 # Google sign-in for app users and an S3 file store
 
-Plan written and built on November 9, 2026. Part 1 is recorded in [ADR-0025](../adr/0025-an-app-account-may-sign-in-with-the-apps-own-google-client.md) and Part 2 in [ADR-0024](../adr/0024-a-deployments-file-bytes-may-live-outside-its-folder.md). Decisions marked "Revised" describe what was built; the code is the reference where this plan and it differ.
+Plan written and built on November 9, 2026. Part 1 is recorded in [ADR-0026](../adr/0026-an-app-account-may-sign-in-with-the-apps-own-google-client.md) and Part 2 in [ADR-0025](../adr/0025-a-deployments-file-bytes-may-live-outside-its-folder.md). Decisions marked "Revised" describe what was built; the code is the reference where this plan and it differ.
 
 ## Why
 

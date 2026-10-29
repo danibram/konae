@@ -57,7 +57,7 @@ To run the complete publishing stack:
 docker compose up --build
 ```
 
-Open [http://editor.localhost:8080](http://editor.localhost:8080). Published apps receive URLs such as `http://tiny-tasks-a1b2c3.localhost:8080`; `*.localhost` resolves locally without editing `/etc/hosts` on modern browsers.
+Open [http://app.localhost:8080](http://app.localhost:8080). Published apps receive URLs such as `http://tiny-tasks-a1b2c3.localhost:8080`; `*.localhost` resolves locally without editing `/etc/hosts` on modern browsers.
 
 Compose publishes the gateway, MinIO API and MinIO console on `127.0.0.1` only. The Kernel container binds `0.0.0.0` inside the Compose network with the development setup key, so the Compose file sets `LITTLEBOX_ALLOW_DEFAULT_KEY=1`. Do not copy that setting to a reachable installation.
 
@@ -118,9 +118,11 @@ The Kernel reads these at startup. Defaults are the values in `kernel-rs/src` un
 | `LITTLEBOX_FILES_S3_PATH_STYLE` | `1` | `1` addresses the bucket as `<endpoint>/<bucket>`, `0` as `<bucket>.<endpoint host>`. |
 | `LITTLEBOX_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses whose `X-Forwarded-For` header the Kernel trusts for rate limiting. CIDR ranges are rejected. |
 | `LITTLEBOX_DATA_DIR` | `/data` (`data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory: one folder per Deployment under `deployments/<id>/`, plus `owners.sqlite`, `mcp.sqlite`, `mail.sqlite` and `calls.sqlite`. |
-| `LITTLEBOX_PUBLIC_ORIGIN` | `http://localhost:8080` (`http://localhost:<kernel port>` under `dev:local`) | Origin used to build app URLs. Its scheme and port are copied onto each app hostname, and an `https://` origin makes OAuth metadata use HTTPS. |
-| `LITTLEBOX_HOST_SUFFIX` | `localhost` | Domain appended to new app hostnames, as in `<slug>-<id>.localhost`. |
-| `LITTLEBOX_MCP_ORIGIN` | unset | Public origin of the MCP endpoint, without a path, when it differs from the hosting origin. OAuth discovery advertises it. |
+| `LITTLEBOX_DOMAIN` | unset | Derives the installation's hosts from one domain (ADR-0024): the public and MCP origin become `<scheme>://app.<domain>` and the app suffix becomes `<domain>`. The scheme is `http` for `localhost` and `https` otherwise, or `LITTLEBOX_SCHEME`. `LITTLEBOX_PUBLIC_PORT` is appended when set. Each older variable below still wins when it is set. The local stack sets `localhost` with port `8080`. |
+| `LITTLEBOX_PUBLIC_ORIGIN` | `http://localhost:8080` (`http://localhost:<kernel port>` under `dev:local`), or `<scheme>://app.<domain>` with `LITTLEBOX_DOMAIN` | Origin used to build app URLs. Its scheme and port are copied onto each app hostname, and an `https://` origin makes OAuth metadata use HTTPS. |
+| `LITTLEBOX_HOST_SUFFIX` | `localhost`, or `<domain>` with `LITTLEBOX_DOMAIN` | Domain appended to new app hostnames, as in `<slug>-<id>.localhost`. |
+| `LITTLEBOX_MCP_ORIGIN` | unset, or the public origin with `LITTLEBOX_DOMAIN` | Public origin of the MCP endpoint, without a path, when it differs from the hosting origin. OAuth discovery advertises it. |
+| `LITTLEBOX_HOME_DEPLOYMENT` | unset | Deployment id that answers `<domain>/` and every other path on the domain that is not `/p/<segment>`, when `LITTLEBOX_DOMAIN` is set (ADR-0024). Unset, `<domain>/` answers a short page that links to the editor. |
 | `LITTLEBOX_DNS_RESOLVER` | the first `nameserver` in `/etc/resolv.conf` | The resolver, as an IP address with an optional port, that the Kernel asks for a custom domain's TXT record `_littlebox.<hostname>` when `domain_set` runs (ADR-0015). |
 | `LITTLEBOX_S3_ENDPOINT` | unset | S3 endpoint URL. The Kernel always serves artifacts from its data directory; when this is set it also uploads each artifact to `LITTLEBOX_ARTIFACT_BUCKET` and can send copies to `LITTLEBOX_DATA_BUCKET`. When unset, the Kernel ignores the other S3 variables. |
 | `LITTLEBOX_S3_REGION` | `us-east-1` | S3 region. |
@@ -190,7 +192,7 @@ A failed copy never stops the Kernel from serving. It is logged, and `/_littlebo
 
 ### File bytes in a bucket
 
-With `LITTLEBOX_FILES_S3_BUCKET` set, the bytes of app files live in that bucket and each Deployment's `files/index.json` stays in its folder, which still decides which files exist and who may read them ([ADR-0024](./docs/adr/0024-a-deployments-file-bytes-may-live-outside-its-folder.md)). The Kernel sends only `PutObject`, `GetObject` with a range, `DeleteObject` and `ListObjectsV2`, and every byte still passes through it; the browser never gets a bucket URL. It has been tested against SeaweedFS, not yet against R2, Scaleway or Hetzner.
+With `LITTLEBOX_FILES_S3_BUCKET` set, the bytes of app files live in that bucket and each Deployment's `files/index.json` stays in its folder, which still decides which files exist and who may read them ([ADR-0025](./docs/adr/0025-a-deployments-file-bytes-may-live-outside-its-folder.md)). The Kernel sends only `PutObject`, `GetObject` with a range, `DeleteObject` and `ListObjectsV2`, and every byte still passes through it; the browser never gets a bucket URL. It has been tested against SeaweedFS, not yet against R2, Scaleway or Hetzner.
 
 `files-store.json` in the data directory records which store holds the bytes, and a Kernel whose settings name another store refuses to start. To move the bytes, stop the Kernel and run, with the `LITTLEBOX_FILES_S3_` settings set in both directions:
 

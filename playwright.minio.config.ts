@@ -8,7 +8,7 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 10_000 },
   use: {
-    baseURL: "http://editor.localhost:8080",
+    baseURL: "http://app.localhost:8080",
     channel: "chrome",
     screenshot: "only-on-failure",
     trace: "retain-on-failure",

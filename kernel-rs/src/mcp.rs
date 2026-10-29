@@ -7,7 +7,7 @@ const VERSION: &str = "2025-11-25";
 pub(super) const CHUNK: usize = 64 * 1024;
 const MAX_TRANSFER: usize = 32 * 1024 * 1024;
 pub(super) fn owner_cookie_name(state: &AppState) -> &'static str {
-    let mcp_https = std::env::var("LITTLEBOX_MCP_ORIGIN").is_ok_and(|origin| origin.starts_with("https://"));
+    let mcp_https = state.mcp_origin.as_deref().is_some_and(|origin| origin.starts_with("https://"));
     if state.public_origin.starts_with("https://") || mcp_https {
         "__Host-littlebox_owner_session"
     } else {
@@ -226,6 +226,7 @@ async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
         let _data = database_lock(state, deployment).await;
         let _identity = database_lock(state, &format!("identity:{deployment}")).await;
         super::domain::forget(state, deployment).await?;
+        super::path::forget(state, deployment).await?;
         let folder = deployment_dir(state, deployment);
         let parked = trash.join(format!("{deployment}-{}", Uuid::new_v4().simple()));
         match tokio::fs::rename(&folder, &parked).await {
@@ -398,6 +399,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         tool("secrets_list", "List a project's signing secrets: each one's name, use and svixKey, which says whether its value decodes as a svix whsec_ key. Values are never returned.", json!({"projectId":text}), &["projectId"], true),
         tool("api_keys_list", "List a deployment's API keys without their secrets.", json!({"deploymentId":text}), &["deploymentId"], true),
         super::domain::read_tool(),
+        super::path::read_tool(),
     ]);
     if owner.scopes.iter().any(|s| s == "export_data") {
         tools.extend([
@@ -483,6 +485,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             ),
         ]);
         tools.extend(super::domain::tools());
+        tools.extend(super::path::tools());
     }
     if owner.scopes.iter().any(|s| s == "manage_lifecycle") {
         tools.extend(super::eject::tools());
@@ -704,7 +707,8 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
     if !runtime && super::security::from_app_origin(&state, &headers).await {
         return error(StatusCode::FORBIDDEN, "Administration refuses requests from app origins.");
     }
-    let host_known = super::oauth::valid_host(&state, &headers) || (runtime && super::domain::is_alias_request(&state, &headers));
+    let host_known = super::oauth::valid_host(&state, &headers)
+        || (runtime && (super::domain::is_alias_request(&state, &headers) || super::path::on_path_host(&state, &headers)));
     if !same_origin(&headers) || !host_known {
         return error(
             StatusCode::FORBIDDEN,
@@ -722,6 +726,9 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
         let Some(deployment) = deployment_for(&state, &headers).await else {
             return error(StatusCode::NOT_FOUND, "Deployment not found.");
         };
+        if super::path::foreign_referer(&state, &headers, &deployment.id) {
+            return error(StatusCode::FORBIDDEN, "A page of another app's path address cannot call this app.");
+        }
         // A key would otherwise read as an unknown session token, and the
         // program would get a visitor's answers without knowing why.
         if bearer(&headers).is_some_and(|token| token.starts_with("lbk_")) {
@@ -977,7 +984,7 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
     if clear_cookie {
         response
             .headers_mut()
-            .insert(header::SET_COOKIE, super::cleared_app_cookie(&state));
+            .insert(header::SET_COOKIE, super::cleared_app_cookie(&state, app.as_deref().unwrap_or_default(), &headers));
     }
     if let Some(cookie) = session_cookie {
         response.headers_mut().insert(header::SET_COOKIE, cookie);
@@ -1714,6 +1721,7 @@ async fn admin_call(
         name if name.starts_with("eject_") => super::eject::admin_call(state, owner, principal, name, &a).await,
         name if name.starts_with("migration_") => super::migration::admin_call(state, owner, principal, name, &a).await,
         name if name.starts_with("domain_") => super::domain::admin_call(state, owner, name, &a).await,
+        name if name.starts_with("path_") => super::path::admin_call(state, owner, name, &a).await,
         _ => anyhow::bail!("Unknown tool."),
     }
 }
@@ -2439,8 +2447,9 @@ pub(super) async fn schema_plan(input: Value) -> Result<Value> {
         .ok()
         .filter(|value| !value.is_empty());
     let bind = std::env::var("LITTLEBOX_BIND").unwrap_or_else(|_| "127.0.0.1".into());
-    let public_origin = std::env::var("LITTLEBOX_PUBLIC_ORIGIN").unwrap_or_default();
-    let mcp_origin = std::env::var("LITTLEBOX_MCP_ORIGIN").unwrap_or_default();
+    let hosts = super::hosts::from_env()?;
+    let public_origin = hosts.public_origin;
+    let mcp_origin = hosts.mcp_origin.unwrap_or_default();
     if helper.is_none() && super::derive_must_isolate(&bind, &public_origin, &mcp_origin) {
         anyhow::bail!(
             "Schema derivation needs LITTLEBOX_DERIVE_HELPER on a Kernel that is not loopback-only."
@@ -2979,6 +2988,9 @@ mod tests {
                 admin_key: "test-admin".into(),
                 accounts: super::accounts::AccountSettings::local(),
                 public_origin: "http://localhost:8790".into(),
+                mcp_origin: None,
+                path_origin: None,
+                home_deployment: None,
                 host_suffix: "localhost".into(),
                 guards: Arc::new(Guards::new(Vec::new())),
             };
@@ -3030,6 +3042,9 @@ mod tests {
             admin_key: "test-admin".into(),
             accounts: super::accounts::AccountSettings::local(),
             public_origin: "http://localhost:8790".into(),
+            mcp_origin: None,
+            path_origin: None,
+            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };
@@ -3086,6 +3101,9 @@ mod tests {
             admin_key: "test-admin".into(),
             accounts: super::accounts::AccountSettings::local(),
             public_origin: "http://localhost".into(),
+            mcp_origin: None,
+            path_origin: None,
+            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };
@@ -3148,6 +3166,9 @@ mod tests {
             accounts: super::accounts::AccountSettings::local(),
             admin_key: "test-admin".into(),
             public_origin: "http://localhost".into(),
+            mcp_origin: None,
+            path_origin: None,
+            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };

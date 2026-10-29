@@ -1590,6 +1590,9 @@ mod tests {
             admin_key: "test-admin".into(),
             accounts: super::super::accounts::AccountSettings::local(),
             public_origin: public_origin.into(),
+            mcp_origin: None,
+            path_origin: None,
+            home_deployment: None,
             host_suffix: "apps.example.org".into(),
             guards: Arc::new(super::super::limits::Guards::new(Vec::new())),
         }

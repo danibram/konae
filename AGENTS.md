@@ -32,6 +32,7 @@ After any write through MCP or the editor, observe the effect through the same d
 | This app calls another host | `kind: call` | `fetch` of a secret from the browser |
 | Uploaded files | `miniapp.files` | Large bytes in a SQLite column |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
+| A short link on the installation's domain | path address (`path_set`) | A custom domain when DNS is not yours |
 | Take the app elsewhere | package or migration | Copy (moves the installation) |
 | Leave managed editing | Eject | Package (moves data, not source authority) |
 
@@ -53,6 +54,7 @@ These are not bugs to paper over. Say them when they matter.
 - The preview has no HTTP routes, schedule timer, notice email, Usage store, call outbox or owner app account. Try those on `littlebox dev` or a published Deployment.
 - The editor preview refuses a file over 2 MiB. A Kernel refuses at its own `LITTLEBOX_FILE_MAX_BYTES`, 2 MiB unless the operator raised it, and names the number.
 - The editor preview has no Google sign-in. `miniapp.auth.signInWithGoogle()` refuses there; try it on a published Deployment once its owner has set the app's Google client and turned Google on.
+- The editor's build reads npm packages from esm.sh; `littlebox build` and the export kit read them from `node_modules`. Both use the exact versions in `package.json`, but the bundles are not byte-identical.
 - The Validation Gate checks schema and `actions.json`. A page that names a missing file fails at build or release, not at `validate_capsule`.
 
 ## Where the work lives

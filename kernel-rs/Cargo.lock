@@ -1518,6 +1518,7 @@ dependencies = [
  "sha2",
  "tokio",
  "tokio-util",
+ "tower",
  "url",
  "uuid",
 ]

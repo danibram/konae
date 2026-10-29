@@ -7,7 +7,7 @@ import { createHostedArtifact, type BuildArtifact } from "../runtime/artifact";
 import type { MiniAppProject } from "./types";
 import { buildProjectExport, type ExportFile } from "./export-project-kit";
 import { kernelFiles as bundledKernelFiles } from "./export-project-sources";
-import { assembleStaticArtifact } from "./static-artifact.js";
+import { assembleStaticArtifact, runtimeLoaderScript } from "./static-artifact.js";
 
 const project: MiniAppProject = {
   id: "app_notes",
@@ -294,7 +294,7 @@ describe("buildProjectExport", () => {
       const rebuilt = JSON.parse(await readFile(path.join(directory, "littlebox/artifact.json"), "utf8")) as BuildArtifact;
       expect(Object.keys(rebuilt.files).sort()).toEqual(["about.html", "app.js", "index.html", "logo.png", "robots.txt", "runtime.js"]);
       expect(rebuilt.files["about.html"]).toContain("<title>About us</title>");
-      expect(rebuilt.files["about.html"]).toContain('<head><script src="/runtime.js"></script>');
+      expect(rebuilt.files["about.html"]).toContain(`<head>${runtimeLoaderScript()}`);
       expect(rebuilt.files["runtime.js"]).toBe("window.miniapp={};");
       expect(rebuilt.files["logo.png"]).toBe(built.files["logo.png"]);
       expect(rebuilt.encodings).toEqual({ "logo.png": "base64" });
