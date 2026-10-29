@@ -794,7 +794,7 @@ pub(crate) fn hold_while_stopped(data_root: &Path, command: &str) -> Result<std:
     match file.try_lock() {
         Ok(()) => Ok(file),
         Err(std::fs::TryLockError::WouldBlock) => bail!(
-            "A Kernel is running on {}. Stop it before {command}, so no upload lands while the files are moved.",
+            "A Kernel is running on {}. Stop it before {command}, so no upload lands while the command reads the files.",
             data_root.display()
         ),
         Err(std::fs::TryLockError::Error(error)) => Err(error.into()),

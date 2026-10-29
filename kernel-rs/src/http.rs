@@ -246,8 +246,8 @@ fn secret_value(db: &Connection, project: &str, name: &str) -> Result<Option<Str
     stored_secret(db, project, name, false)
 }
 
-/// One stored value: a half of the app's Google client when `google`, else a
-/// secret a route or a call may use. Neither kind ever reads the other.
+/// One stored value. With `google` it is a half of the app's Google client,
+/// otherwise a secret a route or a call may use. Neither kind ever reads the other.
 fn stored_secret(db: &Connection, project: &str, name: &str, google: bool) -> Result<Option<String>> {
     secrets_table(db)?;
     Ok(db

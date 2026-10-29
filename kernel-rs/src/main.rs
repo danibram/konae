@@ -1715,7 +1715,7 @@ async fn login_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
     };
     match authenticate_deployment(&state, &deployment, &headers) {
         Ok(Some(_)) => (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response(),
-        Ok(None) => private_login_page(&deployment.signup_policy, state.accounts.verification, google::offered(&state, &deployment)),
+        Ok(None) => private_login_page(&deployment.signup_policy, state.accounts.verification, google::offered_here(&state, &deployment, &headers)),
         Err(response) => response,
     }
 }
@@ -1745,7 +1745,7 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
     if is_private(&deployment) {
         match authenticate_deployment(&state, &deployment, &headers) {
             Ok(Some(_)) => {}
-            Ok(None) => return private_login_page(&deployment.signup_policy, state.accounts.verification, google::offered(&state, &deployment)),
+            Ok(None) => return private_login_page(&deployment.signup_policy, state.accounts.verification, google::offered_here(&state, &deployment, &headers)),
             Err(response) => return response,
         }
     }

@@ -413,6 +413,12 @@ pub(crate) fn offered(state: &AppState, deployment: &Deployment) -> bool {
     deployment.sign_in_methods.contains(&SignInMethod::Google) && client(state, deployment).is_some()
 }
 
+/// Whether the sign-in page this request opens offers Google: `offered`, and
+/// not on the home address, where `start` refuses.
+pub(crate) fn offered_here(state: &AppState, deployment: &Deployment, headers: &HeaderMap) -> bool {
+    offered(state, deployment) && !(path::on_path_host(state, headers) && path::prefix(headers).is_none())
+}
+
 /// The redirect URIs the owner registers in the Google console: the
 /// generated host's callback and, once verified, the custom domain's. The
 /// start step sends one of these and no other.
@@ -437,8 +443,8 @@ fn path_callback(state: &AppState, deployment: &Deployment) -> Option<String> {
         .map(|_| format!("{origin}/p/{}{CALLBACK_PATH}", deployment.id))
 }
 
-/// The callback this request's address sends to Google: the host's own, or
-/// on the path host the path address's. Err on the home address.
+/// The callback this request's address sends to Google. It is the host's own,
+/// or on the path host the path address's, and Err on the home address.
 fn callback_uri(state: &AppState, deployment: &Deployment, headers: &HeaderMap, origin: &str) -> std::result::Result<String, &'static str> {
     if path::on_path_host(state, headers) {
         return match path::prefix(headers) {
@@ -1189,6 +1195,10 @@ mod tests {
         let home = router(fixture.state.clone()).oneshot(get("/_littlebox/auth/google/start".into(), None)).await.unwrap();
         assert_eq!(home.status(), StatusCode::BAD_REQUEST);
         assert!(text(home).await.contains(&escape(NOT_ON_HOME)));
+        let page = router(fixture.state.clone()).oneshot(get("/_littlebox/login".into(), None)).await.unwrap();
+        assert!(!text(page).await.contains("Continue with Google"), "the home's sign-in page offers no Google");
+        let page = router(fixture.state.clone()).oneshot(get(format!("/p/{}/_littlebox/login", app.id), None)).await.unwrap();
+        assert!(text(page).await.contains("Continue with Google"), "the path address's sign-in page does");
     }
 
     #[tokio::test]
