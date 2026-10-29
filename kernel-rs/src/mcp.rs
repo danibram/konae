@@ -1727,7 +1727,7 @@ fn requested_sign_in_methods(state: &AppState, deployment: &Deployment, requeste
     let requested: Vec<SignInMethod> = serde_json::from_value(requested.clone())
         .map_err(|_| refuse("signin.methods-invalid", METHODS_INVALID))?;
     let methods = sign_in_methods_from_input(&requested).map_err(|message| refuse("signin.password-required", message))?;
-    if methods.contains(&SignInMethod::Google) && super::google::client_set(state, deployment) != (true, true) {
+    if methods.contains(&SignInMethod::Google) && !super::google::client_set(state, deployment).complete() {
         return Err(refuse("signin.google-client-unset", super::google::NEEDS_CLIENT).into());
     }
     Ok(methods)
@@ -1738,7 +1738,7 @@ fn requested_sign_in_methods(state: &AppState, deployment: &Deployment, requeste
 /// Deployment that asks for Google without its client here, as after an
 /// import, keeps the setting and offers only the password; `notice` says so.
 fn sign_in_methods_value(state: &AppState, deployment: &Deployment) -> Value {
-    let (client_id, client_secret) = super::google::client_set(state, deployment);
+    let client = super::google::client_set(state, deployment);
     let mut offered = vec![SignInMethod::Password];
     if super::google::offered(state, deployment) {
         offered.push(SignInMethod::Google);
@@ -1747,10 +1747,10 @@ fn sign_in_methods_value(state: &AppState, deployment: &Deployment) -> Value {
         "deploymentId": deployment.id,
         "methods": deployment.sign_in_methods,
         "offered": offered,
-        "googleClient": {"clientIdSet": client_id, "clientSecretSet": client_secret},
+        "googleClient": {"clientIdSet": client.id, "clientSecretSet": client.secret},
         "redirectUris": super::google::redirect_uris(state, deployment),
     });
-    if deployment.sign_in_methods.contains(&SignInMethod::Google) && !(client_id && client_secret) {
+    if deployment.sign_in_methods.contains(&SignInMethod::Google) && !client.complete() {
         value["notice"] = json!(GOOGLE_CLIENT_MISSING);
     }
     value

@@ -359,25 +359,44 @@ fn local_http(origin: &str) -> bool {
     })
 }
 
+/// The app's client ID and secret as stored, each when set. Values stay in the Kernel.
+#[derive(Default)]
+pub(crate) struct StoredClient {
+    pub(crate) id: Option<String>,
+    pub(crate) secret: Option<String>,
+}
+
+/// Which halves of the app's Google client are set, never their values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ClientSet {
+    pub(crate) id: bool,
+    pub(crate) secret: bool,
+}
+
+impl ClientSet {
+    pub(crate) fn complete(self) -> bool {
+        self.id && self.secret
+    }
+}
+
 /// The app's Google client, when the owner set both its ID and its secret.
 fn client(state: &AppState, deployment: &Deployment) -> Option<Client> {
-    match client_state(state, deployment) {
-        (Some(id), Some(secret)) => Some(Client { id, secret }),
+    match stored_client(state, deployment) {
+        StoredClient { id: Some(id), secret: Some(secret) } => Some(Client { id, secret }),
         _ => None,
     }
 }
 
-/// The app's client ID and secret, each when set. Values stay in the Kernel.
-fn client_state(state: &AppState, deployment: &Deployment) -> (Option<String>, Option<String>) {
+fn stored_client(state: &AppState, deployment: &Deployment) -> StoredClient {
     mcp::store(state)
         .and_then(|db| http::google_client(&db, &deployment.project_id))
-        .unwrap_or((None, None))
+        .unwrap_or_default()
 }
 
 /// Whether the app's client ID and client secret are each set.
-pub(crate) fn client_set(state: &AppState, deployment: &Deployment) -> (bool, bool) {
-    let (id, secret) = client_state(state, deployment);
-    (id.is_some(), secret.is_some())
+pub(crate) fn client_set(state: &AppState, deployment: &Deployment) -> ClientSet {
+    let stored = stored_client(state, deployment);
+    ClientSet { id: stored.id.is_some(), secret: stored.secret.is_some() }
 }
 
 /// Whether this Deployment's sign-in page offers Google: the owner turned it
@@ -415,8 +434,7 @@ fn open(state: &AppState) -> Result<Connection> {
            intent TEXT NOT NULL,
            intent_value TEXT NOT NULL DEFAULT '',
            expires_at INTEGER NOT NULL
-         );
-         DROP TABLE IF EXISTS google_codes;",
+         );",
     )?;
     Ok(db)
 }
@@ -1333,7 +1351,7 @@ mod tests {
         let app = fixture.deployment(APP).await;
         mcp::store(&fixture.state).unwrap().execute("DELETE FROM project_secrets WHERE project = ?1 AND name = ?2", [&app.project_id, CLIENT_SECRET]).unwrap();
         assert!(!offered(&fixture.state, &app));
-        assert_eq!(client_set(&fixture.state, &app), (true, false));
+        assert_eq!(client_set(&fixture.state, &app), ClientSet { id: true, secret: false });
         assert!(text(start(fixture.state.clone()).await).await.contains(&escape(NOT_ON)));
     }
 

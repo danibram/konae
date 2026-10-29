@@ -243,29 +243,28 @@ fn secret_for_calls_only(db: &Connection, project: &str, name: &str) -> Result<b
 
 /// A secret a route or a call may use. The app's Google client is never one.
 fn secret_value(db: &Connection, project: &str, name: &str) -> Result<Option<String>> {
+    stored_secret(db, project, name, false)
+}
+
+/// One stored value: a half of the app's Google client when `google`, else a
+/// secret a route or a call may use. Neither kind ever reads the other.
+fn stored_secret(db: &Connection, project: &str, name: &str, google: bool) -> Result<Option<String>> {
     secrets_table(db)?;
     Ok(db
         .query_row(
-            "SELECT value FROM project_secrets WHERE project=?1 AND name=?2 AND use <> 'google'",
-            params_from_iter([project, name]),
+            "SELECT value FROM project_secrets WHERE project=?1 AND name=?2 AND (use = 'google') = ?3",
+            rusqlite::params![project, name, google],
             |row| row.get(0),
         )
         .optional()?)
 }
 
 /// The app's Google OAuth client ID and secret, each when the owner set it.
-pub(super) fn google_client(db: &Connection, project: &str) -> Result<(Option<String>, Option<String>)> {
-    secrets_table(db)?;
-    let read = |name: &str| -> Result<Option<String>> {
-        Ok(db
-            .query_row(
-                "SELECT value FROM project_secrets WHERE project=?1 AND name=?2 AND use = 'google'",
-                params_from_iter([project, name]),
-                |row| row.get(0),
-            )
-            .optional()?)
-    };
-    Ok((read(super::google::CLIENT_ID)?, read(super::google::CLIENT_SECRET)?))
+pub(super) fn google_client(db: &Connection, project: &str) -> Result<super::google::StoredClient> {
+    Ok(super::google::StoredClient {
+        id: stored_secret(db, project, super::google::CLIENT_ID, true)?,
+        secret: stored_secret(db, project, super::google::CLIENT_SECRET, true)?,
+    })
 }
 
 /// Refuses a release whose signed bindings name a secret the project does not have.
@@ -1537,8 +1536,10 @@ mod tests {
         assert_eq!(set("project_a", "google_client_id", id, None).unwrap()["use"], "google");
         set("project_a", "google_client_secret", "GOCSPX-shared-secret-value", Some("google")).unwrap();
         set("project_b", "google_client_secret", "GOCSPX-shared-secret-value", Some("google")).unwrap();
-        assert_eq!(google_client(&db, "project_a").unwrap(), (Some(id.to_owned()), Some("GOCSPX-shared-secret-value".to_owned())));
-        assert_eq!(google_client(&db, "project_b").unwrap(), (None, Some("GOCSPX-shared-secret-value".to_owned())));
+        let client = google_client(&db, "project_a").unwrap();
+        assert_eq!((client.id.as_deref(), client.secret.as_deref()), (Some(id), Some("GOCSPX-shared-secret-value")));
+        let client = google_client(&db, "project_b").unwrap();
+        assert_eq!((client.id.as_deref(), client.secret.as_deref()), (None, Some("GOCSPX-shared-secret-value")));
         // secrets_list answers each one's use; a route or a call never reads its value.
         let listed = secrets_call(&db, "project_a", None, "secrets_list", &json!({})).unwrap();
         assert_eq!(listed["secrets"].as_array().unwrap().iter().map(|row| row["use"].clone()).collect::<Vec<_>>(), vec![json!("google"), json!("google")]);
