@@ -14,7 +14,7 @@ Each record states its status and which earlier record it amends on its first li
 | [0008](0008-authenticated-mcp-is-the-platform-operation-protocol.md) | Authenticated MCP is the operation protocol for the editor, agents and apps; hosted-code isolation headers; the file lifecycle | 0001, 0002 | 0013 |
 | [0009](0009-the-gate-and-the-kernel-share-one-query-bound.md) | A query needs a top-level `LIMIT`, and the Gate and the Kernel refuse statements with the same words | | 0020 |
 | [0010](0010-kernel-owns-usage-and-signals.md) | The Kernel keeps Usage and Signals per Deployment; a mutation may declare a guard | | 0017 |
-| [0011](0011-one-verified-account-core-for-creators-and-app-users.md) | One verified account core for creators and app users; invitation codes; app invitations; HTTP routes, callers and API keys | 0001, 0002 | 0014 |
+| [0011](0011-one-verified-account-core-for-creators-and-app-users.md) | One verified account core for creators and app users; invitation codes; app invitations; HTTP routes, callers and API keys | 0001, 0002 | 0014, 0025 |
 | [0012](0012-account-email-goes-through-a-persistent-queue.md) | Account email leaves through a persistent queue with a sender preflight and limits | | 0016 |
 | [0013](0013-an-app-leaves-as-a-chunked-package.md) | An app leaves as a chunked package behind `export_data`; API keys travel revoked | 0008 | 0014, 0024 |
 | [0014](0014-an-app-migrates-with-one-writer-at-a-time.md) | A migration keeps one writer through maintenance and a confirmation; a restore applies the revocation record | 0011, 0013 | |
@@ -28,12 +28,14 @@ Each record states its status and which earlier record it amends on its first li
 | [0022](0022-the-build-agent-operates-the-platform-through-the-owners-mcp.md) | The editor's build agent reaches the Kernel through the owner's own MCP session, pinned to the open project, and still edits files only behind the Gate | 0003 | |
 | [0023](0023-an-app-database-runs-in-wal-mode-with-kept-connections.md) | An app Database runs in WAL mode with `synchronous=NORMAL`; Server Actions borrow kept connections, queries run side by side, mutations one at a time | | |
 | [0024](0024-a-deployments-file-bytes-may-live-outside-its-folder.md) | File quotas are installation settings; a Deployment's file bytes may live in an S3 bucket while its index stays in its folder; a copy carries the bytes | 0013 | |
+| [0025](0025-an-app-account-may-sign-in-with-the-apps-own-google-client.md) | An app account may sign in with the app's own Google client, on the app's host, matched by an email Google manages; the owner's unproven account is not taken back | 0011 | |
 
 ## Which record answers a question
 
 | Question | ADR |
 | --- | --- |
 | Who may open an app, and who may read a row? | 0001, 0002, 0011 |
+| How does an app account sign in with Google? | 0025 |
 | Who may call an HTTP route, and how is a request signed? | 0011, update "a route binds its action" |
 | How does an app call another app or a service? | 0019 |
 | What does the agent run, and where? | 0003, 0022 |

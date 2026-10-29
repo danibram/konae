@@ -6,7 +6,7 @@ Littlebox is the guardrail that lets a person who does not write code, and a per
 
 The terms come in two halves. Read "Words an app author uses" to make an app, edit its files or take it elsewhere; its first part names the words met before an app runs. Read "Words for running an installation" only to operate the Kernel, its accounts, its mail and its copies.
 
-Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, notice, schedule, signature scheme, call action, outbox and SDK module. Usage, Signal and Action Contract keep their capitals, as the older terms do.
+Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, notice, schedule, signature scheme, call action, outbox, SDK module, sign-in methods, Google client and file store. Usage, Signal and Action Contract keep their capitals, as the older terms do.
 
 ## Words an app author uses
 
@@ -61,7 +61,7 @@ The per-Deployment rule for who may create a Runtime Actor account: Open (anyone
 _Avoid_: Invite list, access grant
 
 **Sign-in Methods**:
-The per-Deployment list of ways an app account signs in: `password` always, and `google` when the Project Owner turns on Continue with Google in Auth > Users or with `sign_in_methods_set`. Google needs the app's own Google client, which the owner sets as two signing secrets with `"use": "google"`; until both are set it cannot be turned on, and an imported Deployment that asks for Google keeps the setting and offers only the password. A Google sign-in reaches the account that holds the same verified email, and only for an address Google manages (Gmail, or a Workspace domain the token names). The Signup Policy decides whether a new account may exist. A package carries the list and the accounts, never the client.
+The per-Deployment list of ways an app account signs in: `password` always, and `google` when the Project Owner turns on Continue with Google in Auth > Users or with `sign_in_methods_set`. Google needs the app's own Google client, which the owner sets as two signing secrets with `"use": "google"`; until both are set it cannot be turned on, and an imported Deployment that asks for Google keeps the setting and offers only the password. A Google sign-in reaches the account that holds the same verified email, and only for an address Google manages (Gmail, or a Workspace domain the token names). The Signup Policy decides whether a new account may exist. A package carries the list and the accounts, never the client. The owner's own app account is not taken back by Google while its email is unproven (ADR-0025).
 _Avoid_: Social login, SSO
 
 **Agent Credential**:
@@ -107,7 +107,7 @@ How a route's signature is computed and where it travels, declared as `"scheme"`
 _Avoid_: webhook format, provider adapter
 
 **Signing Secret**:
-A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. One set with `"use": "call"` instead signs, or holds the API key for, the Project's call actions, and may repeat another project's route secret. The two set with `"use": "google"`, `google_client_id` and `google_client_secret`, hold the app's own Google OAuth client for Sign-in Methods; no route or call reads them. In Littlebox's own signature scheme a sender proves a request with an HMAC under it of a timestamp, a nonce, the method, the path, the canonical query string and the body; in a provider's scheme, with the HMAC that provider computes. It never appears in `actions.json`, a Build Artifact or an export.
+A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. One set with `"use": "call"` instead signs, or holds the API key for, the Project's call actions, and may repeat another project's route secret. The two set with `"use": "google"`, `google_client_id` and `google_client_secret`, hold the app's own Google client for its sign-in methods; no route or call reads them. In Littlebox's own signature scheme a sender proves a request with an HMAC under it of a timestamp, a nonce, the method, the path, the canonical query string and the body; in a provider's scheme, with the HMAC that provider computes. It never appears in `actions.json`, a Build Artifact or an export.
 _Avoid_: webhook token, API key
 
 **API Key**:
