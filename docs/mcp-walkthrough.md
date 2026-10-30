@@ -368,7 +368,7 @@ cat /tmp/orders/index.html
 ```html
 <main>
   <h1>Orders</h1>
-  <p><a href="/about">About this app</a></p>
+  <p><a href="about">About this app</a></p>
   <button id="claim">Claim the oldest open order</button>
   <ul id="orders"></ul>
 </main>
@@ -381,8 +381,8 @@ cat /tmp/orders/pages/about.html
 ```html
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>About Orders</title><link rel="stylesheet" href="/styles.css"></head>
-<body><main><h1>About</h1><p>Orders arrive from the shop's webhook. Members claim them.</p><p><a href="/">Back</a></p></main></body>
+<head><meta charset="utf-8"><title>About Orders</title><link rel="stylesheet" href="styles.css"></head>
+<body><main><h1>About</h1><p>Orders arrive from the shop's webhook. Members claim them.</p><p><a href="./index.html">Back</a></p></main></body>
 </html>
 ```
 

@@ -26,15 +26,15 @@ const today = new Date().toISOString().slice(0, 10);
 const APP_FILES: Record<string, string> = {
   "index.html": `<main>
   <h1>Orders</h1>
-  <p><a href="/about">About this app</a></p>
+  <p><a href="about">About this app</a></p>
   <button id="claim">Claim the oldest open order</button>
   <ul id="orders"></ul>
 </main>
 `,
   "pages/about.html": `<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>About Orders</title><link rel="stylesheet" href="/styles.css"></head>
-<body><main><h1>About</h1><p>Orders arrive from the shop's webhook. Members claim them.</p><p><a href="/">Back</a></p></main></body>
+<head><meta charset="utf-8"><title>About Orders</title><link rel="stylesheet" href="styles.css"></head>
+<body><main><h1>About</h1><p>Orders arrive from the shop's webhook. Members claim them.</p><p><a href="./index.html">Back</a></p></main></body>
 </html>
 `,
   "styles.css": "body { font: 16px system-ui; max-width: 48rem; margin: 3rem auto; padding: 1rem; }\n",
