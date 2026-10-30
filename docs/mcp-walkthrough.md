@@ -107,7 +107,7 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
       "portability",
       "refusals"
     ],
-    "localDevelopment": "Use bun run littlebox -- login, init, dev, build, contract, publish, conform, export or eject; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything.",
+    "localDevelopment": "Use bun run littlebox -- init, dev, build, contract, login, publish, pull, sql, conform, export or eject; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything.",
     "maxTransferBytes": 33554432,
     "name": "Littlebox",
     "protocolVersion": "2025-11-25",
@@ -158,7 +158,7 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
       "--manage-lifecycle": "adds manage_lifecycle",
       "--manage-users": "adds manage_users"
     },
-    "login": "bun run littlebox -- login --dir <folder> --url <Kernel URL> reads LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD. Add LITTLEBOX_INVITATION_CODE, the code the operator issued with littlebox-kernel creator-code-create, to create the account, or LITTLEBOX_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.littlebox/credentials.json, which init, publish, export and eject read. LITTLEBOX_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with LITTLEBOX_PASSWORD in the same run.",
+    "login": "bun run littlebox -- login --dir <folder> --url <Kernel URL> reads LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD. Add LITTLEBOX_INVITATION_CODE, the code the operator issued with littlebox-kernel creator-code-create, to create the account, or LITTLEBOX_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.littlebox/credentials.json, which publish, pull, sql, export and eject read. LITTLEBOX_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with LITTLEBOX_PASSWORD in the same run.",
     "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data or manage_lifecycle.",
     "permissions": {
       "export_data": "package_export, project_export, database_export, and migration_begin together with manage_lifecycle",
@@ -285,7 +285,7 @@ content-type: application/json
 
 ## 4. Create the project
 
-`init` registers an External project on the Kernel and writes a template into an empty folder. Dotfiles, such as the `.littlebox` folder `login` wrote, do not count. The project starts private, and its `signupPolicy` admits only people the owner invites.
+`init` writes a template and `littlebox.json` into an empty folder. It makes the project ID itself and calls no Kernel, so it needs no credential. The first `publish` registers the project as External. Dotfiles, such as the `.littlebox` folder `login` wrote, do not count. The project starts private, and its `signupPolicy` admits only people the owner invites.
 
 <!-- walkthrough:init -->
 ```sh
@@ -293,7 +293,7 @@ bun run littlebox -- init --dir /tmp/orders --name Orders --url http://localhost
 ```
 
 ```text
-Created Orders in /tmp/orders.
+Created Orders in /tmp/orders. Run it with: bun run littlebox -- dev --dir /tmp/orders
 ```
 
 ```sh
@@ -305,16 +305,15 @@ cat /tmp/orders/littlebox.json
   "url": "http://localhost:4173",
   "project": {
     "id": "<project id>",
+    "name": "Orders",
+    "slug": "orders",
     "manifest": {
       "version": 1,
       "visibility": "private",
       "signupPolicy": {
         "mode": "invitation"
       }
-    },
-    "name": "Orders",
-    "slug": "orders",
-    "sourceAuthority": "external"
+    }
   }
 }
 ```

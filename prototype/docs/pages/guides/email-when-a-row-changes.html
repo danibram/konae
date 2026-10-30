@@ -80,7 +80,7 @@
 <ul>
 <li>Call the mutation, then read the notice's state with <code>notices_read</code> and the Deployment's <code>deploymentId</code>. It lists the app's notice jobs, newest first, 50 at a time.</li>
 <li><code>mail_status</code> counts notice jobs per state under <code>queue.notices</code>.</li>
-<li>On <code>littlebox dev</code>, the email lands in <code>&lt;folder&gt;/.littlebox/dev-data/mailbox.jsonl</code> and goes to no provider.</li>
+<li>On <code>littlebox dev</code>, the email lands in <code>&lt;folder&gt;/.littlebox/dev-data/mailbox.jsonl</code> and goes to no provider. <code>littlebox events</code> lists it with its recipient, subject and text, and <code>dev</code> serves the same list as a page on the next port.</li>
 <li>After a release, the read-back for <code>release_apply</code> is <code>project_inspect</code>. Delivered means a mail server took the message, not that a person read it.</li>
 </ul>
 <p>The editor preview sends no notice email and has no Usage store. Try <code>notify</code> on <code>littlebox dev</code> or on a Deployment.</p>

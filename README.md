@@ -151,7 +151,8 @@ The editor, the `littlebox` CLI and the test configurations read these:
 | `LITTLEBOX_EDITOR_PORT` | `dev:local` | `4173` | Port of the Vite editor. |
 | `LITTLEBOX_KERNEL_URL` | `dev:local`, `vite.config.ts` | `http://127.0.0.1:<kernel port>` under `dev:local`, `http://127.0.0.1:8787` for plain `bun run dev` | Kernel the editor proxies `/mcp`, `/_littlebox`, `/oauth` and `/.well-known` to. |
 | `LITTLEBOX_MCP_TOKEN` | `littlebox` CLI | unset | Bearer token for `init`, `publish`, `export --with-data` and `eject`. When unset, the CLI reads `.littlebox/credentials.json`. |
-| `LITTLEBOX_URL` | `littlebox login`, `littlebox init`, `littlebox eject` | `http://localhost:4173` | Littlebox installation to talk to. `--url` overrides it. |
+| `LITTLEBOX_KERNEL_BIN` | `littlebox dev` | unset | A Kernel binary built from this checkout. `dev` starts it instead of compiling one with `cargo`. |
+| `LITTLEBOX_URL` | `littlebox login`, `littlebox init`, `littlebox eject` | `http://localhost:4173`; unset for `init` | Littlebox installation to talk to. `--url` overrides it. `init` writes it into `littlebox.json` only when it is set. |
 | `LITTLEBOX_EMAIL`, `LITTLEBOX_PASSWORD` | `littlebox login` | unset | Owner credentials exchanged for a 24-hour MCP token. |
 | `LITTLEBOX_SETUP_KEY` | `littlebox login` | unset | Installation setup key, needed only to create an installation's first owner. |
 | `LITTLEBOX_INVITATION_CODE` | `littlebox login` | unset | Invitation code that creates the account when it does not exist yet. Under required verification, add `--verify-from <data folder>/mailbox.jsonl` on a development Kernel to answer the emailed link in the same run. |
@@ -159,7 +160,7 @@ The editor, the `littlebox` CLI and the test configurations read these:
 | `LITTLEBOX_TEST_KERNEL_PORT` | `playwright.local.config.ts` | `8794` | Kernel port for the local end-to-end suite. |
 | `LITTLEBOX_PORT` | exported self-host kit | `8787` | Port the exported Kernel publishes, read from the kit's `.env`. |
 
-`littlebox dev` ignores every `LITTLEBOX_` and `VITE_` variable from your shell. It starts its own Kernel on `127.0.0.1` with a generated setup key and data under `.littlebox/dev-data`, and opens signup on the local Deployment so you can create test accounts.
+`littlebox dev` ignores every `LITTLEBOX_` and `VITE_` variable from your shell. It starts its own Kernel on `127.0.0.1` with a generated setup key and data under `.littlebox/dev-data`, and opens signup on the local Deployment so you can create test accounts. It sets a local value for each signing secret `actions.json` names and prints it, and it serves a page of the email, calls, scheduled runs and Signals the app produced on the port after the app's, on this machine only.
 
 ## Data directory and copies
 
@@ -231,13 +232,28 @@ Open **Platform access** in the editor to create an owner account or sign in. Th
 
 Agents connect to `/mcp` using OAuth with PKCE or a scoped, expiring bearer token. Apps use the SDK over `/_littlebox/mcp` with their own app sessions. On a public app, a signed-out visitor may call actions declared with `"access": "anonymous"`; every other runtime operation requires an app session, and administration always requires an owner credential. The old operation routes return HTTP 410, except the file read path `GET /_littlebox/files/<id>`, which answers its allowed callers under the file's visibility.
 
-With `LITTLEBOX_MCP_TOKEN` configured, create and develop a project from this repository:
+Create and develop a project from this repository. `init` and `dev` need no credential and no installation:
 
 ```sh
-bun run littlebox -- init --dir /tmp/my-app --name "My app" --url http://localhost:4173
+bun run littlebox -- init --dir /tmp/my-app --name "My app"
 bun run littlebox -- dev --dir /tmp/my-app
+```
+
+Publish it to an installation once you have an account there. `login` saves a credential and the installation's address in the folder, and the first `publish` registers the project and writes that address into `littlebox.json`:
+
+```sh
+LITTLEBOX_EMAIL=you@example.com LITTLEBOX_PASSWORD=... bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173 --export-data
 bun run littlebox -- publish --dir /tmp/my-app
 ```
+
+To debug against what the published app holds, or to try the next version on it before publishing, copy its database, accounts and files to this machine and start the local Kernel from the copy:
+
+```sh
+bun run littlebox -- pull --dir /tmp/my-app
+bun run littlebox -- dev --dir /tmp/my-app --reset
+```
+
+`pull` needs the `export_data` permission and writes only to `.littlebox/pull`. Nothing travels back. The local Kernel sends its email to a file and never writes to the published app. [The MCP guide](./docs/mcp.md#local-development-cycle) describes the cycle, including a schema change rehearsed with `sql`, which runs on the local Kernel unless `--prod` names the published app, and `events`, which lists the email, calls, scheduled runs and Signals of a local run. `dev` serves the same list as a page on the port after the app's. `bun link` in this repository puts `littlebox` on your path, so the commands also run as `littlebox dev` from any folder.
 
 The code stays in that folder. Development starts a separate local Rust Kernel with its own identities, files and database. `publish` deploys as private unless `littlebox.json` sets `project.manifest.visibility` to `"public"`. `project.manifest.signupPolicy` names who may create an app account on the first release; `init` writes private and `{ "mode": "invitation" }`, and a later publish that names another policy warns and changes nothing. See [the MCP guide](./docs/mcp.md) for credentials, tools, limits and deployment configuration. [The MCP walkthrough](./docs/mcp-walkthrough.md) takes one app from a credential through publishing, invitations, export, import, Eject and migration, with each command and the Kernel's exact answer; `login --manage-users` gets the permission that inviting needs.
 
