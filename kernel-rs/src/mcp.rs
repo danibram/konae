@@ -389,7 +389,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     ];
     if owner.scopes.iter().any(|s| s == "write") {
         tools.extend([
-            tool("project_create", "Register a project. For an editor project, upload its JSON without a projectId and pass sourcesTransferId to create the project and its files atomically. Repeating the same initial files is safe; existing saved files cannot be replaced here.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourceAuthority":{"type":"string","enum":["managed","external"]},"sourcesTransferId":text}), &["name"], false),
+            tool("project_create", "Register a project and return a template's files, the ones littlebox init writes: template is tasks, notes (the default), members, form, webhook, digest or gallery, and without a manifest the project takes the template's visibility. Write the files into the folder and keep id, slug and manifest in littlebox.json. For an editor project, upload its JSON without a projectId and pass sourcesTransferId to create the project and its files atomically. Repeating the same initial files is safe; existing saved files cannot be replaced here.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourceAuthority":{"type":"string","enum":["managed","external"]},"sourcesTransferId":text,"template":{"type":"string","enum":["tasks","notes","members","form","webhook","digest","gallery"]}}), &["name"], false),
             tool("project_sources_save", "Save Managed project sources if the expected source revision still matches. Upload the project JSON first: { id, name, slug, files: { path: text }, directories, databaseModel: { source, acceptedSource, revision }, manifest, updatedAt }, the format the editor saves and docs/mcp.md describes under Eject.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
             tool("project_delete", "Delete a project for good: its registry entry, saved editor files and secrets, and, when it is published, its Deployment with the database, app accounts, uploaded files, backups and custom domain. The address stops answering at once. name must equal the project's name. Read back with projects_list.", json!({"projectId":text,"name":text}), &["projectId","name"], false),
             tool("schema_plan", "Derive and validate SQL from two Drizzle models in an isolated subprocess.", json!({"acceptedSource":text,"candidateSource":text,"projectId":text}), &["acceptedSource","candidateSource"], false),
@@ -1240,7 +1240,7 @@ async fn admin_call(
                 ],
                 "guideTopics":super::guide::TOPICS,
                 "runtimeTools":["auth_session","actions_invoke","files_list","files_read","files_upload","files_update","files_delete"],
-                "localDevelopment":"Use bun run littlebox -- login, init, dev, build, contract, publish, conform, export or eject; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything."
+                "localDevelopment":"Use bun run littlebox -- init, dev, build, contract, login, publish, pull, sql, conform, export or eject; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything."
             }),
         ),
         "mail_status" => super::mail::status_tool(state, a["refresh"].as_bool().unwrap_or(false)).await,
@@ -1348,7 +1348,8 @@ async fn admin_call(
                     .any(|d| d.project_id == id),
                 "Existing deployments must be claimed by their original operator."
             );
-            let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"sourceAuthority":a["sourceAuthority"].as_str().unwrap_or("external"),"manifest":a.get("manifest").cloned().unwrap_or(json!({"version":1,"visibility":"private"})),"files":starter_files()});
+            let template = project_template(a["template"].as_str())?;
+            let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"sourceAuthority":a["sourceAuthority"].as_str().unwrap_or("external"),"manifest":a.get("manifest").cloned().unwrap_or(json!({"version":1,"visibility":template["visibility"]})),"files":template["files"]});
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             tx.execute(
                 "INSERT INTO projects(id,owner,body) VALUES(?1,?2,?3)",
@@ -1770,8 +1771,15 @@ fn signup_policy_value(deployment: &Deployment) -> Value {
     json!({"deploymentId":deployment.id,"visibility":if is_private(deployment) { "private" } else { "public" },"mode":deployment.signup_policy.mode,"allowlist":deployment.signup_policy.allowlist})
 }
 
-fn starter_files() -> Value {
-    json!({"index.html":"<main><h1>My app</h1><button id=login>Sign in</button><pre id=result></pre></main>","styles.css":"body { font: 16px system-ui; max-width: 48rem; margin: 3rem auto; padding: 1rem; }","app.js":"document.querySelector('#login').onclick = () => miniapp.auth.signIn();\nminiapp.auth.session().then(user => document.querySelector('#result').textContent = user.name);\n","schema.sql":"CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY, title TEXT NOT NULL, user_id TEXT NOT NULL);","actions.json":"{\"version\":1,\"actions\":{\"items.list\":{\"kind\":\"query\",\"access\":\"authenticated\",\"statement\":\"SELECT id,title FROM items WHERE user_id = ?1 LIMIT 50\",\"bindings\":[{\"source\":\"actor\",\"field\":\"id\"}]}}}"})
+/// The Capsule a project is born as: one of the templates in
+/// project-templates.json, which `bun run templates:render` writes from the
+/// editor's templates and `littlebox init` reads too.
+fn project_template(id: Option<&str>) -> Result<Value> {
+    let all: Value = serde_json::from_str(include_str!("project-templates.json"))?;
+    let id = id.or(all["default"].as_str()).unwrap_or_default();
+    let template = &all["templates"][id];
+    anyhow::ensure!(template.is_object(), "Unknown template {id}.");
+    Ok(template.clone())
 }
 
 /// Legacy recovery proves the accepted model against SQLite before persisting it.

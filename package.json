@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "bin": { "littlebox": "scripts/littlebox.ts" },
   "scripts": {
     "dev": "vite --config vite.config.ts",
     "dev:local": "bun run scripts/dev-local.ts",
@@ -16,6 +17,7 @@
     "test:e2e:local": "playwright test --config playwright.local.config.ts",
     "littlebox": "bun run scripts/littlebox.ts",
     "sdk:render": "bun run scripts/render-sdk.ts",
+    "templates:render": "bun run scripts/render-templates.ts",
     "ui:render": "bun run scripts/render-app-ui.ts"
   },
   "dependencies": {

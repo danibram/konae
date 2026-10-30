@@ -2,7 +2,7 @@
 // archive in fixed blocks, so a 256 MiB database never sits in memory.
 import { createHash } from "node:crypto";
 import { open, rm } from "node:fs/promises";
-import { decodeBase64, McpError, type McpClient, type Transfer } from "../src/mcp/client";
+import { decodeBase64, encodeBase64, McpError, type McpClient, type Transfer } from "../src/mcp/client";
 import { normalizeArchivePath, tarHeader, tarPadding, type TarEntry } from "../src/lib/tar";
 
 const block = 64 * 1024;
@@ -71,4 +71,30 @@ export async function writeTarFile(output: string, entries: readonly (TarEntry |
     throw error;
   }
   await target.close();
+}
+
+/**
+ * Sends `file` as one upload transfer in the Kernel's block size and returns
+ * its ID. `component` names the Package component, which raises the size cap
+ * to that component's quota. A failed upload releases its transfer.
+ */
+export async function uploadFromFile(client: McpClient, file: string, content: { name: string; size: number; sha256: string }, projectId: string) {
+  const transfer = await client.call<Transfer>("transfer_begin", { projectId, size: content.size, sha256: content.sha256, component: content.name });
+  const source = await open(file, "r");
+  try {
+    const buffer = new Uint8Array(transfer.chunkBytes);
+    for (let offset = 0; offset < content.size;) {
+      const { bytesRead } = await source.read(buffer, 0, Math.min(buffer.length, content.size - offset), offset);
+      if (bytesRead === 0) throw new McpError(`${file} is shorter than its manifest size.`);
+      await client.call("transfer_write", { transferId: transfer.transferId, offset, data: encodeBase64(buffer.subarray(0, bytesRead)) });
+      offset += bytesRead;
+    }
+    await client.call("transfer_complete", { transferId: transfer.transferId });
+    return transfer.transferId;
+  } catch (error) {
+    await client.cancel(transfer.transferId).catch(() => {});
+    throw error;
+  } finally {
+    await source.close();
+  }
 }

@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { watch } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,8 +7,11 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { McpClient, type Transfer } from "../src/mcp/client";
 import { normalizeManifest } from "../src/deployments/manifest";
-import { checkPackageManifest, packageComponentFiles, type PackageManifest } from "../src/lib/portable-package";
-import { downloadToFile, writeTarFile, type FileTarEntry } from "./package-files";
+import { packageComponentFiles, type PackageManifest } from "../src/lib/portable-package";
+import { writeTarFile, type FileTarEntry } from "./package-files";
+import { PROJECT_TEMPLATES_FILE, type ProjectTemplates } from "./project-templates";
+import type { AppEvent } from "./events";
+import { PULL_DIRECTORY, describePulled, downloadPackage, installPulledAlone, pullLocal, readPulled, uploadPulled, type Pulled } from "./pull";
 import {
   ACTION_CONTRACT_FILE, ACTION_CONTRACT_MARKDOWN, ACTION_CONTRACT_SCHEMA_FILE,
   actionContractSchema, generateActionContract, renderActionContractMarkdown, serializeActionContract,
@@ -18,7 +22,8 @@ import { assembleStaticArtifact } from "../src/lib/static-artifact.js";
 
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
-type Config = { url: string; project: Project };
+/** `url` is absent in a project that `init` wrote without one, until a publish names the installation. */
+type Config = { url?: string; project: Project };
 type SignupMode = "open" | "invitation" | "closed" | "allowlist";
 export type SignupPolicy = { mode: SignupMode; allowlist: string[] };
 
@@ -72,6 +77,15 @@ export function loginScopes(args: string[]) {
     ...(args.includes("--manage-lifecycle") ? ["manage_lifecycle"] : [])];
 }
 
+/** The templates `init --template` takes: the ids of src/lib/templates, which the editor's new-project dialog and project_create offer too. */
+export const INIT_TEMPLATES = ["tasks", "notes", "members", "form", "webhook", "digest", "gallery"] as const;
+
+/** Where a running `dev` leaves its Kernel's address, owner token and Deployment for `sql` and `events`. */
+const DEV_SESSION = ".littlebox/dev.json";
+
+/** What publish, pull and export say when nothing names the installation. */
+export const NO_INSTALLATION = "No installation to talk to. Pass --url <Kernel URL>, or run login in this folder, which saves the one it signed in to.";
+
 /** What `littlebox help` prints: every command with its options, in the order a project meets them. */
 export const HELP = `Usage: bun run littlebox -- <command> [options]
 
@@ -83,12 +97,34 @@ login     --dir <folder> --url <Kernel URL> [--manage-users] [--export-data] [--
           Each flag adds that permission: inviting app users, exporting live data, Eject and migration.
           On a Kernel that verifies email, creating the account sends a link; --verify-from reads it from
           a development mailbox on this machine and sets LITTLEBOX_PASSWORD, for loopback Kernels only.
-init      --dir <empty folder> --name <name> --url <Kernel URL>   Registers a project and writes a template.
-dev       --dir <folder> [--port 8796]   Runs the app on a local Development Kernel and republishes on change.
+init      --dir <empty folder> [--name <name>] [--template <id>] [--url <Kernel URL>]
+          Writes a template and littlebox.json. It needs no credential and no Kernel, and the first
+          publish registers the project. Templates: ${INIT_TEMPLATES.join(", ")}.
+dev       --dir <folder> [--port 8796] [--events-port 8797] [--reset]
+          Runs the app on a local Development Kernel and republishes on change.
           Its email, notices included, goes to <folder>/.littlebox/dev-data/mailbox.jsonl.
+          It sets and prints a local value for each signing secret actions.json names, and serves a
+          page of what the app did (email, calls, scheduled runs, Signals) on the next port.
+          LITTLEBOX_KERNEL_BIN names a built Kernel binary to run instead of compiling one.
+          --reset deletes <folder>/.littlebox/dev-data first. A Development Kernel with no data starts
+          from the copy pull left, when there is one.
+sql       --dir <folder> [--prod] [--url <Kernel URL>] ("<statement>" | --file <file.sql>)
+          Runs SQL on the app's database through database_execute, the owner's door, on the
+          Development Kernel that dev is running for this folder. Only --prod reaches the published
+          Deployment.
+events    --dir <folder> [--follow] [--json] [--days 7] [--prod]
+          Lists what the app did besides answer its page: email, calls to other services, scheduled
+          runs, routes and Signals, oldest first. On the Development Kernel an email shows its
+          recipient and text, because nothing is sent. --json prints one object per line and --follow
+          keeps printing. Only --prod reads the published Deployment.
+pull      --dir <folder> [--url <Kernel URL>]
+          Downloads the published app's database, accounts and files into <folder>/.littlebox/pull.
+          Needs a credential from login --export-data. Run dev --reset to start the local app from it.
 build     --dir <folder>                 Writes .littlebox/artifact.json.
 contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its schema and action-contract.md.
-publish   --dir <folder>                 Builds and publishes. Set each signing secret with secret_set first.
+publish   --dir <folder> [--url <Kernel URL>]
+          Builds and publishes to the installation littlebox.json names, or --url, or the one login
+          saved. Set each signing secret with secret_set first.
 conform   --url <app URL> --contract <file> [--token <app session>] [--key <API key>]
           [--secret <name>=<value>] [--inputs <file>]
           Calls every action and checks the answers against the contract. It runs each mutation once,
@@ -101,7 +137,8 @@ domain    --deployment <id> [--set <hostname> | --clear] [--url <Kernel URL>]
           Shows, sets or clears the app's custom domain. --set prints the TXT record that proves you
           control the hostname; run it again once the record is at your DNS provider.
 
-Every command but login reads the credential from <folder>/.littlebox/credentials.json or LITTLEBOX_MCP_TOKEN.`;
+init, build, contract and dev need no credential. Every other command but login reads it from
+<folder>/.littlebox/credentials.json or LITTLEBOX_MCP_TOKEN.`;
 
 function endpoint(url: string) { return new URL("/mcp", url).href; }
 async function json<T>(filename: string): Promise<T> { return JSON.parse(await readFile(filename, "utf8")); }
@@ -248,7 +285,8 @@ export async function buildLocal(root: string) {
  * goes as `initialSignupPolicy`; on a later one the Kernel keeps the app's
  * policy and `warn` gets one line when littlebox.json names another.
  */
-export async function publishLocal(root: string, config: Config, token: string, warn: (message: string) => void = console.warn) {
+export async function publishLocal(root: string, config: Config, token: string, warn: (message: string) => void = console.warn, pulled?: Pulled) {
+  if (!config.url) throw Error(NO_INSTALLATION);
   const client = new McpClient(endpoint(config.url), { token });
   const wanted = manifestSignupPolicy(config.project.manifest);
   // The policy is not part of the Capsule manifest, so the Kernel's project record never holds an allowlist.
@@ -258,19 +296,24 @@ export async function publishLocal(root: string, config: Config, token: string, 
   const remote = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId: project.id });
   const first = !remote.deployment;
   const { artifact, files } = await buildLocal(root);
+  // Only a project without a Deployment takes a package, so a pulled copy goes with the first release or not at all.
+  const components = first && pulled ? await uploadPulled(client, root, pulled, project.id) : undefined;
   const payload = {
     project: { ...project, files }, visibility: manifest.visibility ?? "private", artifact,
     ...(first && wanted ? { initialSignupPolicy: wanted } : {}),
+    ...(components ? { visibility: pulled!.manifest.visibility, initialPackage: { manifest: pulled!.manifest, components } } : {}),
   };
-  const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), project.id);
   let receipt: { id: string; url: string };
+  let transfer: Transfer | undefined;
   try {
+    transfer = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), project.id);
     const plan = await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
     await writeFile(path.join(root, ".littlebox/release-plan.json"), JSON.stringify(plan, null, 2));
     receipt = await client.call<{ id: string; url: string }>("release_apply", { planId: plan.planId });
     await writeFile(path.join(root, ".littlebox/deployment.json"), JSON.stringify(receipt, null, 2));
   } finally {
-    try { await client.cancel(transfer.transferId); } catch (error) { console.warn(`Could not release the upload: ${error instanceof Error ? error.message : error}`); }
+    for (const id of Object.values(components ?? {})) await client.cancel(id).catch(() => {});
+    if (transfer) try { await client.cancel(transfer.transferId); } catch (error) { console.warn(`Could not release the upload: ${error instanceof Error ? error.message : error}`); }
   }
   if (!first && wanted) {
     // Reading the policy needs only read. A Kernel that cannot answer leaves the publish as it is.
@@ -278,7 +321,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
     const warning = current?.mode && signupPolicyWarning(wanted, { mode: current.mode, allowlist: current.allowlist ?? [] });
     if (warning) warn(warning);
   }
-  return receipt;
+  return Object.assign(receipt, { first });
 }
 
 export async function exportLocal(root: string, config: Config, output: string, token?: string) {
@@ -288,6 +331,7 @@ export async function exportLocal(root: string, config: Config, output: string, 
   const scratch = token === undefined ? undefined : await mkdtemp(path.join(tmpdir(), "littlebox-package-"));
   try {
     if (token !== undefined && scratch) {
+      if (!config.url) throw Error(NO_INSTALLATION);
       const client = new McpClient(endpoint(config.url), { token });
       const remote = await client.call<{ deployment?: { id: string; manifest?: Record<string, unknown> } }>("project_inspect", { projectId: config.project.id });
       if (!remote.deployment) throw Error("Publish the project before exporting its live data, or omit --with-data.");
@@ -296,29 +340,9 @@ export async function exportLocal(root: string, config: Config, output: string, 
         throw Error("The deployment did not provide its visibility. Live data export stopped.");
       }
       manifest = deployedManifest;
-      let exported: { manifest: unknown; downloads: Record<string, Transfer> };
-      try {
-        exported = await client.call("package_export", { deploymentId: remote.deployment.id });
-      } catch (error) {
-        if (error instanceof Error && error.message.includes("Unknown tool")) {
-          throw Error("Exporting live data needs a credential with the export_data permission. Run login with --export-data, or create a token with export_data for this project.");
-        }
-        throw error;
-      }
-      const components: FileTarEntry[] = [];
-      let checked: PackageManifest;
-      try {
-        checked = checkPackageManifest(exported.manifest);
-        for (const content of checked.contents) {
-          const transfer = exported.downloads[content.name];
-          if (!transfer || transfer.size !== content.size || transfer.sha256 !== content.sha256) throw Error(`The ${content.name} download does not match the package manifest.`);
-          const file = path.join(scratch, packageComponentFiles[content.name]);
-          await downloadToFile(client, transfer, file);
-          components.push({ path: `littlebox/package/${packageComponentFiles[content.name]}`, file, size: content.size });
-        }
-      } finally {
-        for (const transfer of Object.values(exported.downloads)) await client.cancel(transfer.transferId).catch(() => {});
-      }
+      const downloaded = await downloadPackage(client, remote.deployment.id, scratch);
+      const checked = downloaded.manifest;
+      const components: FileTarEntry[] = downloaded.files.map(({ name, file, size }) => ({ path: `littlebox/package/${packageComponentFiles[name as keyof typeof packageComponentFiles]}`, file, size }));
       captured = { package: checked, files: components };
     }
     const [{ projectExportEntries }, { kernelFiles }] = await Promise.all([
@@ -428,6 +452,64 @@ export async function ignoreInGit(root: string, entries: string[]) {
   await writeFile(file, `${separator}${missing.join("\n")}\n`, { flag: "a" });
 }
 
+function slugOf(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "app";
+}
+
+/**
+ * Writes a template and littlebox.json into an empty folder, without a Kernel.
+ * The project ID is made here; the first publish registers it on the
+ * installation with project_create, which takes an ID the caller chose.
+ */
+export async function initLocal(root: string, options: { name?: string; template?: string; url?: string } = {}) {
+  // The file project_create answers from, so a folder starts the same through the CLI and through MCP.
+  const all = await json<ProjectTemplates>(path.join(toolRoot, PROJECT_TEMPLATES_FILE));
+  const born = all.templates[options.template ?? all.default];
+  if (!born) throw Error(`Unknown template ${options.template}. Choose one of: ${INIT_TEMPLATES.join(", ")}.`);
+  await assertEmptyForInit(root);
+  const name = options.name ?? "My app";
+  for (const [filename, source] of Object.entries(born.files)) {
+    const target = path.resolve(root, filename);
+    if (!target.startsWith(path.resolve(root) + path.sep)) throw Error("Invalid template path.");
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, source, { flag: "wx" });
+  }
+  // The template says who may open the app. Only people the owner invites can create an account.
+  const manifest = { version: 1, visibility: born.visibility, signupPolicy: INIT_SIGNUP_POLICY };
+  const config: Config = { ...(options.url ? { url: options.url } : {}), project: { id: `app_${crypto.randomUUID()}`, name, slug: slugOf(name), manifest } };
+  await writeFile(path.join(root, "littlebox.json"), `${JSON.stringify(config, null, 2)}\n`, { flag: "wx" });
+  await ignoreInGit(root, [".littlebox/", "node_modules/"]);
+  return config;
+}
+
+/**
+ * Sets, on a Development Kernel, each signing secret actions.json names and
+ * the Kernel does not hold, to a value made here, and returns one line per
+ * secret it set. A release that signs with an unset secret is refused, and
+ * the published app's values never leave its installation.
+ */
+export async function setDevSecrets(root: string, client: Pick<McpClient, "call">, project: { id: string; name: string; slug: string; manifest: Record<string, unknown> }) {
+  let actions: Record<string, { http?: { signature?: { secret?: string } }; auth?: { secret?: string } }>;
+  try { actions = JSON.parse(await readFile(path.join(root, "actions.json"), "utf8")).actions ?? {}; } catch { return []; }
+  const wanted = new Map<string, "route" | "call">();
+  for (const action of Object.values(actions)) {
+    if (typeof action?.http?.signature?.secret === "string") wanted.set(action.http.signature.secret, "route");
+    if (typeof action?.auth?.secret === "string") wanted.set(action.auth.secret, "call");
+  }
+  if (wanted.size === 0) return [];
+  await client.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
+  const held = new Set((await client.call<{ secrets?: { name: string }[] }>("secrets_list", { projectId: project.id })).secrets?.map((secret) => secret.name));
+  const lines: string[] = [];
+  for (const [name, use] of wanted) {
+    if (held.has(name)) continue;
+    // whsec_ and base64, so a svix route takes it too.
+    const value = `whsec_${Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString("base64")}`;
+    await client.call("secret_set", { projectId: project.id, name, value, use });
+    lines.push(`Set the secret ${name} on this Development Kernel to ${value}. Sign local requests with it; the published app keeps its own.`);
+  }
+  return lines;
+}
+
 /** init writes a template into the directory, so it must hold nothing but dotfiles (.git, .littlebox, .gitignore). */
 async function assertEmptyForInit(root: string) {
   let entries: string[] = [];
@@ -471,7 +553,7 @@ async function main() {
     console.log(HELP);
     return;
   }
-  if (!["login", "init", "build", "contract", "conform", "eject", "export", "publish", "dev", "domain"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
+  if (!["login", "init", "build", "contract", "conform", "eject", "export", "publish", "dev", "pull", "sql", "events", "domain"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
   const option = (name: string, fallback?: string) => {
     const i = args.indexOf(`--${name}`);
     if (i < 0) return fallback;
@@ -495,23 +577,8 @@ async function main() {
     return;
   }
   if (command === "init") {
-    const url = option("url", process.env.LITTLEBOX_URL ?? "http://localhost:4173")!;
-    const client = new McpClient(endpoint(url), { token: await credentials(root) });
-    // Checked before project_create: the template's file names are only known after it, and a refusal then would leave an orphan project.
-    await assertEmptyForInit(root);
-    const project = await client.call<Project>("project_create", { name: option("name", "My app")! });
-    const files = project.files ?? {};
-    for (const [filename, source] of Object.entries(files)) {
-      const target = path.resolve(root, filename);
-      if (!target.startsWith(root + path.sep)) throw Error("Invalid template path.");
-      await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, source, { flag: "wx" });
-    }
-    const { files: _, ...metadata } = project;
-    // A new app starts private, and only people the owner invites can create an account.
-    const manifest = { ...metadata.manifest, visibility: "private", signupPolicy: INIT_SIGNUP_POLICY };
-    await writeFile(path.join(root, "littlebox.json"), JSON.stringify({ url, project: { ...metadata, manifest } }, null, 2), { flag: "wx" });
-    await ignoreInGit(root, [".littlebox/", "node_modules/"]);
-    console.log(`Created ${project.name} in ${root}.`);
+    const config = await initLocal(root, { name: option("name"), template: option("template"), url: option("url", process.env.LITTLEBOX_URL) });
+    console.log(`Created ${config.project.name} in ${root}. Run it with: bun run littlebox -- dev --dir ${root}`);
     return;
   }
   if (command === "build") { await buildLocal(root); console.log("Built .littlebox/artifact.json"); return; }
@@ -547,33 +614,111 @@ async function main() {
     return;
   }
   const config = await json<Config>(path.join(root, "littlebox.json"));
+  // The installation: --url, then littlebox.json, then the one login saved beside the token it would send.
+  const installation = async () => {
+    const url = option("url") ?? config.url ?? (await json<{ url?: string }>(path.join(root, ".littlebox/credentials.json")).catch(() => undefined))?.url;
+    if (!url) throw Error(NO_INSTALLATION);
+    return url;
+  };
   if (command === "export") {
     const output = path.resolve(option("out", path.join(root, ".littlebox/selfhost.tar"))!);
-    await exportLocal(root, config, output, args.includes("--with-data") ? await credentials(root) : undefined);
+    const withData = args.includes("--with-data");
+    await exportLocal(root, withData ? { ...config, url: await installation() } : config, output, withData ? await credentials(root) : undefined);
     console.log(`Exported self-hosted app to ${output}.`);
     return;
   }
-  if (command === "publish") { console.log((await publishLocal(root, config, await credentials(root))).url); return; }
+  if (command === "publish") {
+    const url = await installation();
+    console.log((await publishLocal(root, { ...config, url }, await credentials(root))).url);
+    // A project init wrote without an installation keeps the first one it was published to.
+    if (!config.url) await writeFile(path.join(root, "littlebox.json"), `${JSON.stringify({ url, ...config }, null, 2)}\n`);
+    return;
+  }
+  // sql and events reach the Development Kernel dev is running for the folder, and the published Deployment only with --prod.
+  const target = async (): Promise<{ client: McpClient; deploymentId: string; local: boolean; feed?: string }> => {
+    if (!args.includes("--prod")) {
+      const session = await json<{ url: string; token: string; deploymentId: string; events?: string }>(path.join(root, DEV_SESSION)).catch(() => undefined);
+      if (!session) throw Error(`No Development Kernel is running for this folder. Start one with: bun run littlebox -- dev --dir ${root}\nTo reach the published app instead, add --prod.`);
+      return { client: new McpClient(endpoint(session.url), { token: session.token }), deploymentId: session.deploymentId, local: true, feed: session.events };
+    }
+    const client = new McpClient(endpoint(await installation()), { token: await credentials(root) });
+    const remote = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId: config.project.id });
+    if (!remote.deployment) throw Error("This project has no Deployment yet. Publish it first.");
+    return { client, deploymentId: remote.deployment.id, local: false };
+  };
+  if (command === "sql") {
+    const file = option("file");
+    // The statement is the one argument that is neither a flag nor a flag's value.
+    const inline = args.find((arg, i) => !arg.startsWith("--") && !["--dir", "--url", "--file"].includes(args[i - 1]));
+    const sql = file ? await readFile(path.resolve(file), "utf8") : inline;
+    if (!sql?.trim()) throw Error("Give the statement in quotes or with --file <file.sql>.");
+    const { client, deploymentId } = await target();
+    console.log(JSON.stringify(await client.call("database_execute", { deploymentId, operation: "sql", input: { sql } }), null, 2));
+    return;
+  }
+  if (command === "events") {
+    const { formatEvent, readEvents } = await import("./events");
+    const { client, deploymentId, local, feed } = await target();
+    const days = Number(option("days", "7"));
+    if (!Number.isInteger(days) || days < 1 || days > 400) throw Error("--days takes a whole number from 1 to 400.");
+    const asJson = args.includes("--json");
+    const seen = new Map<number, number>();
+    const printed = new Set<string>();
+    const read = async () => {
+      // Only a Development Kernel has a mailbox this machine can read.
+      // dev's events page stamps each mail when it is written, so its answer is preferred to a read from here.
+      const served = feed ? await fetch(`${feed}/events.json?days=${days}`).then((response) => response.ok ? response.json() as Promise<AppEvent[]> : undefined).catch(() => undefined) : undefined;
+      const events = served ?? await readEvents(client, deploymentId, { days, seen, mailbox: local ? path.join(root, ".littlebox/dev-data/mailbox.jsonl") : undefined });
+      for (const event of events) {
+        // A notice or a call changes state, so the same event prints again when its outcome does.
+        const key = `${event.id}:${event.outcome}`;
+        if (printed.has(key)) continue;
+        printed.add(key);
+        console.log(asJson ? JSON.stringify(event) : formatEvent(event));
+      }
+    };
+    await read();
+    if (!args.includes("--follow")) {
+      if (printed.size === 0 && !asJson) console.log(`Nothing yet in the last ${days} days: no email, call, scheduled run, route or Signal.`);
+      return;
+    }
+    for (;;) { await Bun.sleep(1000); await read().catch((error) => { console.error(error instanceof Error ? error.message : error); process.exit(1); }); }
+  }
+  if (command === "pull") {
+    const url = await installation();
+    const pulled = await pullLocal(root, new McpClient(endpoint(url), { token: await credentials(root) }), url, config.project.id);
+    console.log(`Saved ${describePulled(pulled)} in ${path.join(root, PULL_DIRECTORY)}. It holds the app's accounts and rows, so keep .littlebox out of Git.`);
+    console.log(`Start the local app from it with: bun run littlebox -- dev --dir ${root} --reset`);
+    return;
+  }
   if (command === "dev") {
-    await mkdir(path.join(root, ".littlebox/dev-data"), { recursive: true });
+    const dataDirectory = path.join(root, ".littlebox/dev-data");
+    const devSession = path.join(root, DEV_SESSION);
+    if (args.includes("--reset")) await rm(dataDirectory, { recursive: true, force: true });
+    await mkdir(dataDirectory, { recursive: true });
     const secretFile = path.join(root, ".littlebox/dev-secret");
     let secret: string;
     try { secret = await readFile(secretFile, "utf8"); } catch { secret = crypto.randomUUID() + crypto.randomUUID(); await writeFile(secretFile, secret, { mode: 0o600 }); }
     const port = option("port", "8796")!;
     if (!/^\d+$/.test(port) || Number(port) < 1024 || Number(port) > 65535) throw Error("Choose a local port between 1024 and 65535.");
-    const compilation = Bun.spawn(["cargo", "build", "--manifest-path", path.join(toolRoot, "kernel-rs/Cargo.toml")], { stdout: "inherit", stderr: "inherit" });
-    if (await compilation.exited !== 0) throw Error("Could not build the Development Kernel.");
+    // LITTLEBOX_KERNEL_BIN names a Kernel binary built from these sources, so dev runs without cargo.
+    const kernelBinary = process.env.LITTLEBOX_KERNEL_BIN ? path.resolve(process.env.LITTLEBOX_KERNEL_BIN) : path.join(toolRoot, "kernel-rs/target/debug/littlebox-kernel");
+    if (!process.env.LITTLEBOX_KERNEL_BIN) {
+      const compilation = Bun.spawn(["cargo", "build", "--manifest-path", path.join(toolRoot, "kernel-rs/Cargo.toml")], { stdout: "inherit", stderr: "inherit" });
+      if (await compilation.exited !== 0) throw Error("Could not build the Development Kernel. Install Rust, or set LITTLEBOX_KERNEL_BIN to a Kernel binary built from this checkout.");
+    }
     const env: Record<string, string | undefined> = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_DATA_DIR: path.join(root, ".littlebox/dev-data"), LITTLEBOX_ADMIN_KEY: secret, LITTLEBOX_KERNEL_PORT: port, LITTLEBOX_PUBLIC_ORIGIN: `http://localhost:${port}`, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: toolRoot,
       // Account links and notices land in a file on this machine, never a provider.
       LITTLEBOX_MAIL_TRANSPORT: "development",
       // Shortens every schedule so a run can be watched; the Kernel takes it only on loopback.
       ...(process.env.LITTLEBOX_SCHEDULE_MIN_SECONDS ? { LITTLEBOX_SCHEDULE_MIN_SECONDS: process.env.LITTLEBOX_SCHEDULE_MIN_SECONDS } : {}) };
     for (const key of Object.keys(env)) if (key.startsWith("LITTLEBOX_S3_") || ["LITTLEBOX_ARTIFACT_BUCKET", "LITTLEBOX_DATA_BUCKET", "LITTLEBOX_MCP_ORIGIN"].includes(key)) delete env[key];
-    const child = Bun.spawn([path.join(toolRoot, "kernel-rs/target/debug/littlebox-kernel")], { env, stdout: "inherit", stderr: "inherit" });
+    const child = Bun.spawn([kernelBinary], { env, stdout: "inherit", stderr: "inherit" });
     const stop = () => { child.kill(); };
     process.once("SIGINT", stop); process.once("SIGTERM", stop);
     process.once("exit", stop);
     const url = `http://127.0.0.1:${port}`;
+    let feed: { url: string; stop(): void } | undefined;
     let ready = false;
     for (let attempt = 0; attempt < 100; attempt++) {
       if (child.exitCode !== null) throw Error("Development Kernel stopped before becoming ready.");
@@ -586,15 +731,49 @@ async function main() {
     // Development accounts come from signup, so the local app starts Open and a republish never warns.
     const devConfig = { ...config, url, project: { ...config.project, manifest: { ...config.project.manifest, signupPolicy: { mode: "open" } } } };
     try {
-      const first = await publishLocal(root, devConfig, token);
-      // dev-data kept from an earlier run may hold another policy. The development
+      const admin = new McpClient(endpoint(url), { token });
+      const pulled = await readPulled(root);
+      const { signupPolicy: _, ...manifest } = devConfig.project.manifest;
+      let first: { id: string; url: string; first: boolean };
+      const secrets = async () => { for (const line of await setDevSecrets(root, admin, { ...devConfig.project, manifest })) console.log(line); };
+      try {
+        await secrets();
+        first = await publishLocal(root, devConfig, token, console.warn, pulled);
+      } catch (error) {
+        // A refused first release leaves no Deployment. When the refusal is a schema the pulled copy
+        // does not have yet, install the copy alone and keep serving until it is migrated.
+        const schemaBehind = error instanceof Error && error.message.includes("does not match the deployed schema");
+        const remote = pulled && schemaBehind ? await admin.call<{ deployment?: unknown }>("project_inspect", { projectId: config.project.id }).catch(() => undefined) : undefined;
+        if (!pulled || !remote || remote.deployment) throw error;
+        first = { ...await installPulledAlone(admin, root, pulled, { ...devConfig.project, manifest }), first: true };
+        console.error(`${error instanceof Error ? error.message : error}\nThe pulled copy is installed without the app. Change its database the way the published one must change, for example: bun run littlebox -- sql --dir ${root} "ALTER TABLE ..." Then save a file and dev publishes the app again.`);
+      }
+      // The marker sits in dev-data, so --reset removes it with the data it describes.
+      const marker = path.join(dataDirectory, "pulled.json");
+      if (pulled && first.first) {
+        await writeFile(marker, JSON.stringify({ packageId: pulled.manifest.packageId }));
+        console.log(`Started from ${describePulled(pulled)}. Its sessions did not travel and its API keys arrive revoked. Its accounts keep their passwords; to sign in as one without knowing it, ask the app for a password reset and open the link in ${path.join(dataDirectory, "mailbox.jsonl")}.`);
+      } else if (pulled && (await json<{ packageId?: string }>(marker).catch(() => undefined))?.packageId !== pulled.manifest.packageId) {
+        console.log(`A pulled copy this Development Kernel did not start from waits in ${path.join(root, PULL_DIRECTORY)}. Run dev with --reset to replace the local data with it.`);
+      }
+      // The events page answers on the next port, on this machine only. A taken port leaves the command, which reads the Kernel itself.
+      const { serveEvents } = await import("./events");
+      const eventsPort = Number(option("events-port", String(Number(port) + 1)));
+      try { feed = serveEvents(admin, first.id, path.join(dataDirectory, "mailbox.jsonl"), eventsPort); }
+      catch { console.warn(`Port ${eventsPort} is taken, so the events page is off. Choose another with --events-port, or run events.`); }
+      // What sql and events read: this Kernel, its owner token, the Deployment and the events page.
+      await writeFile(devSession, JSON.stringify({ url, token, deploymentId: first.id, ...(feed ? { events: feed.url } : {}) }), { mode: 0o600 });
+      // dev-data kept from an earlier run, or a pulled copy, may hold another policy. The development
       // Kernel is isolated and local, so let the developer create test accounts.
-      await new McpClient(endpoint(url), { token }).call("signup_policy_set", { deploymentId: first.id, mode: "open" });
+      await admin.call("signup_policy_set", { deploymentId: first.id, mode: "open" });
       console.log(first.url);
+      console.log(feed
+        ? `Email, calls, scheduled runs and Signals of this app: ${feed.url} in a browser, or bun run littlebox -- events --dir ${root} --json`
+        : `See the email, calls, scheduled runs and Signals of this app with: bun run littlebox -- events --dir ${root} --follow`);
       let working = false; let queued = false;
       const rebuild = async () => {
         if (working) { queued = true; return; } working = true;
-        do { queued = false; try { console.log(`Updated ${(await publishLocal(root, devConfig, token)).url}. Reload the app to see changes.`); } catch (e) { console.error(e instanceof Error ? e.message : e); } } while (queued);
+        do { queued = false; try { await secrets(); console.log(`Updated ${(await publishLocal(root, devConfig, token)).url}. Reload the app to see changes.`); } catch (e) { console.error(e instanceof Error ? e.message : e); } } while (queued);
         working = false;
       };
       let timer: ReturnType<typeof setTimeout>;
@@ -603,7 +782,7 @@ async function main() {
         clearTimeout(timer); timer = setTimeout(() => void rebuild(), 200);
       });
       await child.exited; watcher.close();
-    } finally { child.kill(); }
+    } finally { child.kill(); feed?.stop(); await rm(devSession, { force: true }); }
     return;
   }
 }
