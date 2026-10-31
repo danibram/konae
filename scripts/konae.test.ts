@@ -100,10 +100,10 @@ describe("konae CLI", () => {
     expect(html).toContain("<script data-konae-runtime>");
   });
 
-  test("login adds manage_users, export_data and manage_lifecycle only when a flag asks", () => {
+  test("login adds manage_users and export_data only when a flag asks", () => {
     expect(loginScopes([])).toEqual(["read", "write", "publish"]);
     expect(loginScopes(["--manage-users"])).toEqual(["read", "write", "publish", "manage_users"]);
-    expect(loginScopes(["--manage-lifecycle", "--export-data", "--manage-users"])).toEqual(["read", "write", "publish", "manage_users", "export_data", "manage_lifecycle"]);
+    expect(loginScopes(["--export-data", "--manage-users"])).toEqual(["read", "write", "publish", "manage_users", "export_data"]);
   });
 
   test("login --verify-from reads the newest creator verification link for the email and works only on this machine", async () => {
@@ -131,7 +131,7 @@ describe("konae CLI", () => {
   });
 
   test("help names every command and every login flag, and an unknown command prints it", async () => {
-    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "--manage-users", "--export-data", "--manage-lifecycle", "--verify-from", "--with-data", "--secret", "--key", "--inputs", "domain", "--deployment", "--set", "--clear", "pull", "sql", "events", "--prod", "--follow", "--json", "--events-port", "KONAE_KERNEL_BIN", "--file", "--reset", "--template"]) expect(HELP).toContain(word);
+    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "--manage-users", "--export-data", "--verify-from", "--with-data", "--secret", "--key", "--inputs", "domain", "--deployment", "--set", "--clear", "pull", "sql", "events", "--prod", "--follow", "--json", "--events-port", "KONAE_KERNEL_BIN", "--file", "--reset", "--template"]) expect(HELP).toContain(word);
     const run = cli("deploy");
     expect(await run.exited).toBe(1);
     expect(await new Response(run.stderr).text()).toContain("Unknown command deploy.\n\nUsage: bun run konae --");

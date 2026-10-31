@@ -103,7 +103,7 @@ test("an exported kit serves the app with its accounts and rows on the app's own
   expect(signup.status).toBe(200);
   const ownerCookie = signup.headers.get("set-cookie")!.split(";")[0];
   const admin = new McpClient(`${sourceUrl}/mcp`, { fetch: (input, init) => { const headers = new Headers(init?.headers); headers.set("cookie", ownerCookie); return fetch(input, { ...init, headers }); } });
-  const { token } = await admin.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish", "export_data", "manage_lifecycle"], ttlSeconds: 3600 });
+  const { token } = await admin.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish", "export_data"], ttlSeconds: 3600 });
 
   // A project published from its folder.
   const projectId = "self-host-notes";

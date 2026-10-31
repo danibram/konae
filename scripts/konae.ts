@@ -72,8 +72,7 @@ export function signupPolicyWarning(wanted: SignupPolicy, current: SignupPolicy)
 export function loginScopes(args: string[]) {
   return ["read", "write", "publish",
     ...(args.includes("--manage-users") ? ["manage_users"] : []),
-    ...(args.includes("--export-data") ? ["export_data"] : []),
-    ...(args.includes("--manage-lifecycle") ? ["manage_lifecycle"] : [])];
+    ...(args.includes("--export-data") ? ["export_data"] : [])];
 }
 
 /** The templates `init --template` takes: the ids of src/lib/templates, which the editor's new-project dialog and project_create offer too. */
@@ -88,12 +87,12 @@ export const NO_INSTALLATION = "No installation to talk to. Pass --url <Kernel U
 /** What `konae help` prints: every command with its options, in the order a project meets them. */
 export const HELP = `Usage: bun run konae -- <command> [options]
 
-login     --dir <folder> --url <Kernel URL> [--manage-users] [--export-data] [--manage-lifecycle]
+login     --dir <folder> --url <Kernel URL> [--manage-users] [--export-data]
           [--verify-from <mailbox.jsonl>]
           Reads KONAE_EMAIL and KONAE_PASSWORD, plus KONAE_INVITATION_CODE to create the
           account with an operator's invitation code, or KONAE_SETUP_KEY for the first owner.
           Saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json.
-          Each flag adds that permission: inviting app users, exporting live data and migration.
+          Each flag adds that permission: inviting app users and exporting live data.
           On a Kernel that verifies email, creating the account sends a link; --verify-from reads it from
           a development mailbox on this machine and sets KONAE_PASSWORD, for loopback Kernels only.
 init      --dir <empty folder> [--name <name>] [--template <id>] [--url <Kernel URL>]

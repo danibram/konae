@@ -69,7 +69,7 @@ An app's own Google OAuth client, which its Project Owner makes in their own Goo
 _Avoid_: OAuth app, installation Google client (there is none)
 
 **Agent Credential**:
-A Project Owner's revocable delegation that permits an external agent to perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity. Its permissions are `read`, `write`, `publish`, `manage_users`, `export_data` and `manage_lifecycle`. Only `manage_users` lists, suspends and invites app accounts or changes a Signup Policy, only `export_data` downloads accounts and data, and only `manage_lifecycle` migrates a Project. An OAuth client may hold the first four. A call it may not make is refused with the permission it needs.
+A Project Owner's revocable delegation that permits an external agent to perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity. Its permissions are `read`, `write`, `publish`, `manage_users` and `export_data`. Only `manage_users` lists, suspends and invites app accounts or changes a Signup Policy, and only `export_data` downloads accounts and data. An OAuth client may hold the first four. A call it may not make is refused with the permission it needs.
 _Avoid_: Runtime session, setup key
 
 **Development Kernel**:

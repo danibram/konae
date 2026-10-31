@@ -184,21 +184,20 @@ describe("the MCP walkthrough", () => {
     r.add("text", printed);
 
     r.step("login");
-    const login = await run(["login", "--dir", app(), "--url", a.url, "--manage-users", "--export-data", "--manage-lifecycle"], { KONAE_EMAIL: "agent@walkthrough.test", KONAE_PASSWORD: password, KONAE_INVITATION_CODE: s.code });
+    const login = await run(["login", "--dir", app(), "--url", a.url, "--manage-users", "--export-data"], { KONAE_EMAIL: "agent@walkthrough.test", KONAE_PASSWORD: password, KONAE_INVITATION_CODE: s.code });
     expect(login.code).toBe(0);
     s.token = JSON.parse(await readFile(path.join(app(), ".konae/credentials.json"), "utf8")).token;
 
     r.step("session");
     const session = await tool("session_inspect");
     r.name((session.result as any).ownerId, "<owner id>");
-    expect((session.result as any).scopes).toEqual(["read", "write", "publish", "manage_users", "export_data", "manage_lifecycle"]);
+    expect((session.result as any).scopes).toEqual(["read", "write", "publish", "manage_users", "export_data"]);
     expect((session.result as any).can).toEqual({
       read: true,
       write: true,
       publish: true,
       manage_users: true,
       export_data: true,
-      manage_lifecycle: true,
       createTokens: false,
     });
   }, 60_000);
@@ -248,7 +247,7 @@ describe("the MCP walkthrough", () => {
 
     r.step("oauth-scope");
     const refused = await http("GET", a, `/oauth/authorize?${new URLSearchParams({ ...args, scope: "read export_data" })}`, { headers: { cookie }, shownHeaders: { cookie: "konae_owner_session=<owner session>" } });
-    expect(JSON.parse(refused.text).error_description).toBe("Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data or manage_lifecycle; run konae login with --export-data or --manage-lifecycle for a token that holds them.");
+    expect(JSON.parse(refused.text).error_description).toBe("Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data; run konae login with --export-data for a token that holds it.");
   }, 60_000);
 
   test("4. init", async () => {

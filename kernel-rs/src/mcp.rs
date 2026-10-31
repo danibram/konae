@@ -172,7 +172,6 @@ pub(super) fn authenticate_owner(state: &AppState, headers: &HeaderMap) -> Resul
                 "manage_users".into(),
                 "tokens".into(),
                 "export_data".into(),
-                "manage_lifecycle".into(),
             ],
             projects: vec![],
             session: true,
@@ -489,7 +488,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     if owner.session {
         tools.extend([
             tool("tokens_list", "List active delegated credentials without exposing their secrets.", json!({}), &[], true),
-            tool("token_create", "Issue a revocable agent credential with selected scopes and project grants.", json!({"scopes":{"type":"array","items":{"type":"string","enum":["read","write","publish","manage_users","export_data","manage_lifecycle"]},"minItems":1},"projectIds":{"type":"array","items":text},"ttlSeconds":{"type":"integer","minimum":60,"maximum":2592000}}), &["scopes"], false),
+            tool("token_create", "Issue a revocable agent credential with selected scopes and project grants.", json!({"scopes":{"type":"array","items":{"type":"string","enum":["read","write","publish","manage_users","export_data"]},"minItems":1},"projectIds":{"type":"array","items":text},"ttlSeconds":{"type":"integer","minimum":60,"maximum":2592000}}), &["scopes"], false),
             tool("token_revoke", "Revoke an agent credential using its returned ID.", json!({"tokenId":text}), &["tokenId"], false),
         ]);
     }

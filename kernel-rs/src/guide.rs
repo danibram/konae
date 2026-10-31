@@ -22,7 +22,7 @@ pub(super) const TOPICS: [&str; 10] = [
 
 /// The permissions a delegated credential may hold. The owner's browser
 /// session holds all of them.
-const SCOPES: [&str; 6] = ["read", "write", "publish", "manage_users", "export_data", "manage_lifecycle"];
+const SCOPES: [&str; 5] = ["read", "write", "publish", "manage_users", "export_data"];
 
 /// How to observe the effect of a write through the same door. A write with
 /// no entry here must be listed in [`READ_BACK_GAPS`]. Staging transfers are
@@ -130,8 +130,8 @@ pub(super) fn topic(name: &str) -> Result<Value> {
         }),
         "credentials" => json!({
             "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae-kernel creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
-            "flags": {"--manage-users": "adds manage_users", "--export-data": "adds export_data", "--manage-lifecycle": "adds manage_lifecycle"},
-            "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data or manage_lifecycle.",
+            "flags": {"--manage-users": "adds manage_users", "--export-data": "adds export_data"},
+            "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data.",
             "permissions": {
                 "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read",
                 "write": "project_create, project_sources_save, project_delete, schema_plan, and database_execute changes",
@@ -243,7 +243,6 @@ pub(super) fn session_can(owner: &Owner) -> Value {
         "publish": holds("publish"),
         "manage_users": holds("manage_users"),
         "export_data": holds("export_data"),
-        "manage_lifecycle": holds("manage_lifecycle"),
         "createTokens": owner.session
     })
 }
@@ -253,7 +252,6 @@ fn login_flag(scope: &str) -> Option<&'static str> {
     match scope {
         "manage_users" => Some("--manage-users"),
         "export_data" => Some("--export-data"),
-        "manage_lifecycle" => Some("--manage-lifecycle"),
         _ => None,
     }
 }
@@ -419,6 +417,6 @@ mod tests {
         let mut browser = owner(&SCOPES);
         browser.session = true;
         assert_eq!(session_can(&browser)["createTokens"], true);
-        assert_eq!(session_can(&browser)["manage_lifecycle"], true);
+        assert_eq!(session_can(&browser)["export_data"], true);
     }
 }

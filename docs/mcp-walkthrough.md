@@ -23,11 +23,11 @@ It creates one creator account. The setup key no longer creates accounts on this
 ```
 <!-- /walkthrough:operator -->
 
-`konae login` creates the account with that code and saves a 24-hour token in the folder. It always asks for `read`, `write` and `publish`. A delegated token cannot add a permission to itself later, so ask now for every permission the work needs: `--manage-users` to invite people, `--export-data` to export, `--manage-lifecycle` to migrate.
+`konae login` creates the account with that code and saves a 24-hour token in the folder. It always asks for `read`, `write` and `publish`. A delegated token cannot add a permission to itself later, so ask now for every permission the work needs: `--manage-users` to invite people, and `--export-data` to export.
 
 <!-- walkthrough:login -->
 ```sh
-KONAE_EMAIL=agent@walkthrough.test KONAE_PASSWORD=walkthrough-agent-password KONAE_INVITATION_CODE=<invitation code> bun run konae -- login --dir /tmp/orders --url http://localhost:4173 --manage-users --export-data --manage-lifecycle
+KONAE_EMAIL=agent@walkthrough.test KONAE_PASSWORD=walkthrough-agent-password KONAE_INVITATION_CODE=<invitation code> bun run konae -- login --dir /tmp/orders --url http://localhost:4173 --manage-users --export-data
 ```
 
 ```text
@@ -52,7 +52,6 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
     "can": {
       "createTokens": false,
       "export_data": true,
-      "manage_lifecycle": true,
       "manage_users": true,
       "publish": true,
       "read": true,
@@ -66,8 +65,7 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
       "write",
       "publish",
       "manage_users",
-      "export_data",
-      "manage_lifecycle"
+      "export_data"
     ]
   }
 }
@@ -154,11 +152,10 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
   "result": {
     "flags": {
       "--export-data": "adds export_data",
-      "--manage-lifecycle": "adds manage_lifecycle",
       "--manage-users": "adds manage_users"
     },
     "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae-kernel creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
-    "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data or manage_lifecycle.",
+    "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data.",
     "permissions": {
       "export_data": "package_export, project_export and database_export",
       "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
@@ -246,7 +243,6 @@ content-type: application/json
     "can": {
       "createTokens": false,
       "export_data": false,
-      "manage_lifecycle": false,
       "manage_users": true,
       "publish": true,
       "read": true,
@@ -277,7 +273,7 @@ curl -i 'http://localhost:4173/oauth/authorize?client_id=<client id>&redirect_ur
 HTTP 400
 content-type: application/json
 
-{"error":"invalid_request","error_description":"Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data or manage_lifecycle; run konae login with --export-data or --manage-lifecycle for a token that holds them."}
+{"error":"invalid_request","error_description":"Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data; run konae login with --export-data for a token that holds it."}
 ```
 <!-- /walkthrough:oauth-scope -->
 

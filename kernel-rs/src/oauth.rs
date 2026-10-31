@@ -284,7 +284,7 @@ fn authorization(
             && scopes
                 .iter()
                 .all(|s| ["read", "write", "publish", "manage_users"].contains(s)),
-        "Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data or manage_lifecycle; run konae login with --export-data or --manage-lifecycle for a token that holds them."
+        "Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data; run konae login with --export-data for a token that holds it."
     );
     anyhow::ensure!(get("state").len() <= 2048, "State is too large.");
     Ok(client)
