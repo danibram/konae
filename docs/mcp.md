@@ -61,7 +61,7 @@ This changes the contract. `signup_policy_set` needed `publish` before `manage_u
 
 Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `domain_read` needs `read`; `domain_set` and `domain_clear` need `publish`. `path_read` needs `read`; `path_set` and `path_clear` need `publish`. `usage_read`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read` and `notices_read` need `read`.
 
-`project_create` returns a template and an External identity by default. Later sources stay in the user's folder; `project_inspect` returns metadata and the Deployment, without claiming to synchronize that code with the editor.
+`project_create` returns a template and an External identity by default. The template is one of `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` and `gallery`, named with `template`, and its files are the ones `littlebox init` writes, because both read `kernel-rs/src/project-templates.json`, which `bun run templates:render` writes from the editor's templates. Without a `manifest` the project takes the template's visibility. Later sources stay in the user's folder; `project_inspect` returns metadata and the Deployment, without claiming to synchronize that code with the editor.
 
 The editor uploads a new app's JSON without a `projectId`, then calls `project_create` with `sourceAuthority: "managed"` and `sourcesTransferId`. The Kernel validates the files and saves the project registry entry and files in one transaction, returning `sourcesRevision: 1`. A failed upload or validation leaves no project entry. Repeating the same initial files returns the saved revision; different files cannot overwrite an existing save through `project_create`. Subsequent edits use `project_sources_save` with that revision.
 
@@ -212,15 +212,46 @@ The role travels with the identity file in a package, a portable export and a mi
 
 ## Local development cycle
 
-From this repository, get a credential that can create and publish projects with `login` (described at the end of [Build and publish](#build-and-publish)), or set `LITTLEBOX_MCP_TOKEN` to one.
+`init` and `dev` run from this repository without a credential and without an installation.
 
 ```sh
-LITTLEBOX_EMAIL=you@example.com LITTLEBOX_PASSWORD=... bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173
-bun run littlebox -- init --dir /tmp/my-app --name "My app" --url http://localhost:4173
+bun run littlebox -- init --dir /tmp/my-app --name "My app"
 bun run littlebox -- dev --dir /tmp/my-app --port 8796
 ```
 
-`dev` compiles and starts the Rust Kernel with data under `/tmp/my-app/.littlebox/dev-data`. It generates a separate development identity, removes the remote configuration from its environment and publishes the build to that local Kernel. That Deployment is private, so `dev` then sets its signup policy to Open and you can create test accounts. It prints the URL and rebuilds when the sources change. Reload the app to see the new build. When the command exits, the Kernel stops and the data stays in that folder.
+`init` writes a template and `littlebox.json` into an empty folder. It makes the project ID itself, and `--template` takes one of the editor's templates: `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` or `gallery`. The project is External, and it is registered on an installation by its first `publish`, which calls `project_create` with that ID. `publish`, `pull`, `sql` and `export --with-data` talk to the installation `--url` names, else the `url` in `littlebox.json`, else the one `login` saved in the folder. A first publish of a project that names none writes the address into `littlebox.json`.
+
+`dev` compiles and starts the Rust Kernel, or starts the binary `LITTLEBOX_KERNEL_BIN` names without compiling, with data under `/tmp/my-app/.littlebox/dev-data`. It generates a separate development identity, removes the remote configuration from its environment and publishes the build to that local Kernel. That Deployment is private, so `dev` then sets its signup policy to Open and you can create test accounts. A signing secret that `actions.json` names and the local Kernel does not hold gets a value made on the spot, which `dev` prints so a local request can be signed with it; the published app's values never leave its installation. It prints the URL and rebuilds when the sources change. Reload the app to see the new build. When the command exits, the Kernel stops and the data stays in that folder.
+
+### Start from what the published app holds
+
+```sh
+bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173 --export-data
+bun run littlebox -- pull --dir /tmp/my-app
+bun run littlebox -- dev --dir /tmp/my-app --reset
+```
+
+`pull` calls `package_export` on the project's Deployment and writes the components into `/tmp/my-app/.littlebox/pull` with a `pull.json` that names the installation and the time. It needs `export_data`, as every download of state does, and a pull that fails keeps the copy an earlier pull left. The copy holds the app's accounts with their password hashes, its rows and its files, so it belongs to the same care as the credential beside it; `.littlebox` is already in `.gitignore`.
+
+A Development Kernel that holds no data starts from that copy. `dev` sends it as `initialPackage` with its first release, the import that [Export and import an app](#export-and-import-an-app) describes. Only a project without a Deployment takes a package, so `dev` never replaces data it already has. `--reset` deletes `.littlebox/dev-data` first, which is how a newer pull, or a clean start, takes effect; without it `dev` says a copy is waiting and keeps the local data. Sessions do not travel and API keys arrive revoked. An account signs in with the password it has on the published app, and a password reset asked on the local app lands in `.littlebox/dev-data/mailbox.jsonl`. Nothing travels back. No command writes local data to a published app, and the local Kernel sends no email.
+
+The copy's database has the schema of the published app. A release only creates tables and indexes, so when the folder's actions need a column the copy lacks, the release is refused with the sentence `publish` would get, such as `action notes.list does not match the deployed schema: no such column: pinned`. `dev` then installs the copy without the app and keeps running. Change the database through the owner's door, and repeat the statement on the published app before publishing there:
+
+```sh
+bun run littlebox -- sql --dir /tmp/my-app "ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
+bun run littlebox -- sql --dir /tmp/my-app --prod "ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
+bun run littlebox -- publish --dir /tmp/my-app
+```
+
+`sql` runs `database_execute` with `operation: "sql"` on the Development Kernel that `dev` is running for the folder, and after it a saved file makes `dev` publish the app again. Only `--prod` reaches the published Deployment, which needs `write`. With no Development Kernel running, `sql` stops and says so instead of falling through to the published database. `--file <file.sql>` reads the statement from a file.
+
+### See what a local run did
+
+```sh
+bun run littlebox -- events --dir /tmp/my-app --follow
+```
+
+`events` lists what the app did besides answer its page: email, calls to other services, scheduled runs, routes and Signals, oldest first. It reads the tools the editor's What happened view reads (`usage_summary`, `calls_read`, `notices_read`, `signals_read`) and words each outcome the same way. On a Development Kernel it also reads `.littlebox/dev-data/mailbox.jsonl`, so an email shows its recipient, subject and text, and an account email its link; nothing is sent. A mailbox line carries no time, so a mail is stamped when `events` first reads it. While `dev` runs it also serves the same list as a page on the next port, `http://localhost:8797` for the default, on this machine only and read again every two seconds; `--events-port` moves it. That server stamps each mail within a second of its writing, and `events` reads from it when it is up. `--json` prints one object per line for a program or an agent, `--follow` keeps printing as things happen, `--days` sets how far back to read, and `--prod` reads the published Deployment, where recipients stay unnamed as `notices_read` leaves them.
 
 The Runtime Actor creates its account inside the local app. That account is neither the owner's nor a production account. The SDK injected into the build offers the usual calls.
 

@@ -129,12 +129,14 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 {"need": "Who may create an app account", "use": "Signup Policy and invitations", "not": "A homemade users table that bypasses Runtime Actor"},
                 {"need": "A short link on the installation's domain", "use": "path address (path_set)", "not": "A custom domain when DNS is not yours"},
                 {"need": "Take the app to another machine", "use": "package export/import or migration", "not": "Copy (that moves the whole installation)"},
+                {"need": "Debug, or try the next version, on what the published app holds", "use": "littlebox pull, then dev --reset", "not": "Publishing to find out"},
+                {"need": "See the email, calls, scheduled runs and Signals of a local run", "use": "littlebox events (--json for an agent), or the page dev serves", "not": "Reading the Kernel's files by hand"},
                 {"need": "Leave managed editing for a folder on disk", "use": "Eject", "not": "Package (that moves data, not source authority)"}
             ],
             "unit": "A Deployment folder on the Kernel is the app: artifact, database, identity, files and Usage. Prefer adding a declaration inside the Capsule over adding a new platform resource."
         }),
         "credentials" => json!({
-            "login": "bun run littlebox -- login --dir <folder> --url <Kernel URL> reads LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD. Add LITTLEBOX_INVITATION_CODE, the code the operator issued with littlebox-kernel creator-code-create, to create the account, or LITTLEBOX_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.littlebox/credentials.json, which init, publish, export and eject read. LITTLEBOX_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with LITTLEBOX_PASSWORD in the same run.",
+            "login": "bun run littlebox -- login --dir <folder> --url <Kernel URL> reads LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD. Add LITTLEBOX_INVITATION_CODE, the code the operator issued with littlebox-kernel creator-code-create, to create the account, or LITTLEBOX_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.littlebox/credentials.json, which publish, pull, sql, export and eject read. LITTLEBOX_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with LITTLEBOX_PASSWORD in the same run.",
             "flags": {"--manage-users": "adds manage_users", "--export-data": "adds export_data", "--manage-lifecycle": "adds manage_lifecycle"},
             "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data or manage_lifecycle.",
             "permissions": {
@@ -149,15 +151,21 @@ pub(super) fn topic(name: &str) -> Result<Value> {
         }),
         "development" => json!({
             "commands": [
-                "bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173",
-                "bun run littlebox -- init --dir /tmp/my-app --name 'My app' --url http://localhost:4173",
-                "bun run littlebox -- dev --dir /tmp/my-app",
+                "bun run littlebox -- init --dir /tmp/my-app --name 'My app' [--template tasks|notes|members|form|webhook|digest|gallery]",
+                "bun run littlebox -- dev --dir /tmp/my-app [--reset]",
                 "bun run littlebox -- build --dir /tmp/my-app",
                 "bun run littlebox -- contract --dir /tmp/my-app",
+                "bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173 [--export-data]",
                 "bun run littlebox -- publish --dir /tmp/my-app",
+                "bun run littlebox -- pull --dir /tmp/my-app",
+                "bun run littlebox -- sql --dir /tmp/my-app [--prod] '<statement>'",
+                "bun run littlebox -- events --dir /tmp/my-app [--follow] [--json] [--prod]",
                 "bun run littlebox -- conform --url <app URL> --contract /tmp/my-app/action-contract.json --token <app session> --key <API key> --secret <name>=<value>"
             ],
-            "credentials": "login saves the credential in the folder, and init and publish read it from there or from LITTLEBOX_MCP_TOKEN. The credentials topic lists the permissions. Never put a token in app source.",
+            "credentials": "init, dev, build and contract need no credential. login saves the credential and the installation's address in the folder, and publish, pull and sql read it from there or from LITTLEBOX_MCP_TOKEN. The first publish registers the project with project_create. The credentials topic lists the permissions. Never put a token in app source.",
+            "liveData": "pull downloads the published app's package (database, accounts, files) into .littlebox/pull and needs export_data. A Development Kernel with no data starts from it, and dev --reset deletes .littlebox/dev-data so a copy can take effect. Nothing travels back to the published app. When the folder's actions need a column the copy lacks, dev installs the copy alone and says so; run sql with the ALTER, save a file, then repeat the statement with sql --prod on the published app before publish. sql and events reach the Development Kernel that dev is running, and the published Deployment only with --prod.",
+            "events": "events lists what the local app did besides answer its page: email with its recipient and text (nothing is sent; it lands in .littlebox/dev-data/mailbox.jsonl), calls to other services, scheduled runs, routes and Signals. dev serves the same list as a page on the port after the app's. Run events with --json after calling an action to check a notify, a call or a signal did what the Capsule declares, and with --follow to watch.",
+            "start": "In an empty folder, either run init, or call project_create with a name and an optional template and write the files it returns plus littlebox.json {url, project:{id,name,slug,manifest}}. Both give the same files. Then dev runs it locally and publish sends it to the installation.",
             "isolation": "dev uses the same Rust Kernel with separate local identities, data and files under .littlebox/dev-data, publishes there as Open so test accounts can sign up, and does not proxy production.",
             "sourceAuthority": "Code and builds stay in your folder. Source is not synchronized to the browser editor.",
             "contract": "contract writes action-contract.json, its schema and action-contract.md from actions.json and schema.sql. conform calls every action on a Deployment and checks the answers against that file, so point it at a test Deployment. The owner reads what ran with usage_read and signals_read."

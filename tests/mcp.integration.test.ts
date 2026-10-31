@@ -412,8 +412,9 @@ describe("authenticated MCP", () => {
     expect(await run("build")).toContain("artifact.json");
     expect(await run("publish")).toContain("http://external-proof-");
     const config = await Bun.file(path.join(directory, "littlebox.json")).json();
-    expect(config.project.sourceAuthority).toBe("external");
-    const state = await alice.call<{ revision: number }>("project_inspect", { projectId: config.project.id });
+    // init made the ID without a Kernel, and the first publish registered the project as External.
+    const state = await alice.call<{ revision: number; project: { sourceAuthority: string } }>("project_inspect", { projectId: config.project.id });
+    expect(state.project.sourceAuthority).toBe("external");
     expect(state.revision).toBe(1);
     const port = String(18950 + Math.floor(Math.random() * 50));
     const dev = Bun.spawn([process.execPath, "run", "scripts/littlebox.ts", "dev", "--dir", directory, "--port", port], {

@@ -34,6 +34,8 @@ After any write through MCP or the editor, observe the effect through the same d
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | A short link on the installation's domain | path address (`path_set`) | A custom domain when DNS is not yours |
 | Take the app elsewhere | package or migration | Copy (moves the installation) |
+| Debug, or try the next version, on what the published app holds | `littlebox pull` + `dev --reset` | Publishing to find out |
+| See the email, calls, scheduled runs and Signals of a local run | `littlebox events` | Reading the Kernel's files by hand |
 | Leave managed editing | Eject | Package (moves data, not source authority) |
 
 A Deployment folder on the Kernel is the app. Prefer a declaration inside the Capsule over a new platform resource. Topic `pieces` of `platform_guide` is the same table for agents.
@@ -42,8 +44,8 @@ A Deployment folder on the Kernel is the app. Prefer a declaration inside the Ca
 
 Keep this path short. If it grows, fix the path before adding docs.
 
-1. Credential: `littlebox login`, or MCP `platform_guide` topics `rules`, `pieces`, `credentials`.
-2. App that runs: editor apply through the Gate, or `init` + `dev` / `publish`.
+1. App that runs: editor apply through the Gate, or `littlebox init` + `dev`, which need no credential.
+2. Credential, to publish or to operate: `littlebox login` then `publish`, or MCP `platform_guide` topics `rules`, `pieces`, `credentials`.
 3. Proof: open the Deployment URL, call one Server Action, then `project_inspect` (and `conform` when checking a contract).
 
 ## Named divergences

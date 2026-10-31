@@ -9,7 +9,7 @@ Two Littlebox apps, published on a Kernel through MCP the way any owner's agent 
 
 ## Publish one
 
-With a credential from `bun run littlebox -- login` (or `LITTLEBOX_MCP_TOKEN` set to an owner token):
+`init` needs no credential, but `publish` does, so run `bun run littlebox -- login` first (or set `LITTLEBOX_MCP_TOKEN` to an owner token):
 
 ```sh
 bun run littlebox -- init --dir /tmp/lb-docs --name "Littlebox docs" --url http://localhost:4173

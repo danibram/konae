@@ -73,7 +73,7 @@ bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173 --manag
 <li>After <code>signup_policy_set</code>, the read-back is <code>signup_policy_read</code>.</li>
 <li>After <code>app_invitations_create</code>, <code>app_invitation_resend</code> or <code>app_invitation_revoke</code>, the read-back is <code>app_invitations_list</code>. It shows each invitation's status.</li>
 <li>After <code>app_user_suspend</code>, <code>app_user_resume</code> or <code>app_owner_enter</code>, the read-back is <code>app_users_list</code>.</li>
-<li>On <code>littlebox dev</code>, the invitation email lands in <code>&lt;folder&gt;/.littlebox/dev-data/mailbox.jsonl</code>.</li>
+<li>On <code>littlebox dev</code>, the invitation email lands in <code>&lt;folder&gt;/.littlebox/dev-data/mailbox.jsonl</code>, and <code>littlebox events</code> lists it with its link.</li>
 <li>Decide whether you may call these tools from <code>session_inspect</code>'s <code>can</code> map. A tool your credential may not call answers <code>Unknown tool or insufficient permission.</code> and names the permission.</li>
 </ul>
 <p>The editor preview has no owner app account and sends no email, so test invitations on <code>littlebox dev</code> or on a Deployment. A package keeps the invitation as history without its link, and the owner resends it.</p>

@@ -61,6 +61,7 @@ import kernelCargoLock from "../../kernel-rs/Cargo.lock?raw";
 import kernelCargoManifest from "../../kernel-rs/Cargo.toml?raw";
 import kernelMainSource from "../../kernel-rs/src/main.rs?raw";
 import kernelSdkGuide from "../../kernel-rs/src/sdk-guide.json?raw";
+import kernelProjectTemplates from "../../kernel-rs/src/project-templates.json?raw";
 import type { ExportFile } from "./export-project-kit";
 
 export const kernelFiles: ExportFile[] = [
@@ -122,6 +123,7 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/refusal.rs", contents: kernelRefusalSource },
   { path: "kernel-rs/src/refusal-codes.json", contents: kernelRefusalCodes },
   { path: "kernel-rs/src/sdk-guide.json", contents: kernelSdkGuide },
+  { path: "kernel-rs/src/project-templates.json", contents: kernelProjectTemplates },
   { path: "kernel-rs/src/security.rs", contents: kernelSecuritySource },
   { path: "kernel-rs/src/sql_rules.rs", contents: kernelSqlRulesSource },
   { path: "kernel-rs/src/sql-rule-cases.json", contents: kernelSqlRuleCases },

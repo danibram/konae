@@ -39,18 +39,15 @@
       <div id="content" class="content">
 <article>
 <h1>Edit the app's files with the CLI</h1>
-<p>Log in, create a folder with <code>init</code>, run it locally with <code>dev</code>, and send it to the Kernel with <code>publish</code>.</p>
+<p>Create a folder with <code>init</code>, run it locally with <code>dev</code>, then log in and send it to the Kernel with <code>publish</code>.</p>
 
 <h2 id="before-you-start">Before you start</h2>
-<p>You need a Littlebox installation to talk to, and an account on it. <code>login</code> reads <code>LITTLEBOX_EMAIL</code> and <code>LITTLEBOX_PASSWORD</code>. To create the account in the same step, also set <code>LITTLEBOX_INVITATION_CODE</code>, the code the operator issued, or <code>LITTLEBOX_SETUP_KEY</code> for the installation's first owner. The commands below run from a checkout of the repository.</p>
+<p><code>init</code> and <code>dev</code> need nothing but a checkout of the repository. To publish you need a Littlebox installation to talk to, and an account on it. <code>login</code> reads <code>LITTLEBOX_EMAIL</code> and <code>LITTLEBOX_PASSWORD</code>. To create the account in the same step, also set <code>LITTLEBOX_INVITATION_CODE</code>, the code the operator issued, or <code>LITTLEBOX_SETUP_KEY</code> for the installation's first owner. The commands below run from a checkout of the repository.</p>
 
 <h2 id="steps">Steps</h2>
 <ol>
-<li>Log in. This saves a 24-hour token with <code>read</code>, <code>write</code> and <code>publish</code> in <code>&lt;folder&gt;/.littlebox/credentials.json</code>. Keep <code>.littlebox</code> out of Git. <code>LITTLEBOX_MCP_TOKEN</code> overrides the file.
-<pre><code class="language-sh">LITTLEBOX_EMAIL=you@example.com LITTLEBOX_PASSWORD=... \
-bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173</code></pre></li>
-<li>Create the project. <code>init</code> needs an empty folder. It registers the project on the Kernel and writes the template and a <code>littlebox.json</code>. It writes the app private, with signup policy Invitation only.
-<pre><code class="language-sh">bun run littlebox -- init --dir /tmp/my-app --name 'My app' --url http://localhost:4173</code></pre></li>
+<li>Create the project. <code>init</code> needs an empty folder and no credential. It writes a template and a <code>littlebox.json</code> with a project ID it makes itself. It writes the app private, with signup policy Invitation only.
+<pre><code class="language-sh">bun run littlebox -- init --dir /tmp/my-app --name 'My app'</code></pre></li>
 <li>Run it locally. <code>dev</code> starts a Development Kernel with its own identities, data and files under <code>.littlebox/dev-data</code>, and republishes each time you save a file. It publishes locally as Open so test accounts can sign up, and it never proxies production. The default port is 8796.
 <pre><code class="language-sh">bun run littlebox -- dev --dir /tmp/my-app</code></pre></li>
 <li>Edit the Capsule files in the folder. Open the URL <code>dev</code> prints and reload after each change. Email, notices included, goes to <code>.littlebox/dev-data/mailbox.jsonl</code>.</li>
@@ -58,7 +55,10 @@ bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173</code><
 <pre><code class="language-sh">bun run littlebox -- contract --dir /tmp/my-app
 bun run littlebox -- conform --url &lt;app URL&gt; --contract /tmp/my-app/action-contract.json</code></pre>
 <code>conform</code> runs each mutation once, so point it at a test Deployment.</li>
-<li>Publish. This builds the folder and publishes it with the credential from <code>login</code>. It prints the Deployment URL.
+<li>Log in. This saves a 24-hour token with <code>read</code>, <code>write</code> and <code>publish</code> in <code>&lt;folder&gt;/.littlebox/credentials.json</code>. Keep <code>.littlebox</code> out of Git. <code>LITTLEBOX_MCP_TOKEN</code> overrides the file.
+<pre><code class="language-sh">LITTLEBOX_EMAIL=you@example.com LITTLEBOX_PASSWORD=... \
+bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173</code></pre></li>
+<li>Publish. This builds the folder and publishes it with the credential from <code>login</code>, to the installation <code>login</code> saved. The first publish registers the project there and writes the address into <code>littlebox.json</code>. It prints the Deployment URL.
 <pre><code class="language-sh">bun run littlebox -- publish --dir /tmp/my-app</code></pre></li>
 <li>Open the Deployment URL and call one Server Action.</li>
 </ol>

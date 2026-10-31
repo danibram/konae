@@ -42,7 +42,7 @@
   <p class="lead">The <code>littlebox</code> command makes an app in a folder, runs it on a Development Kernel, publishes it, and moves it. Run it from the repository root with Bun.</p>
   <pre><code>bun run littlebox -- &lt;command&gt; [options]
 bun run littlebox -- help</code></pre>
-  <p>Every command except <code>login</code> reads its credential from <code>&lt;folder&gt;/.littlebox/credentials.json</code> or from <code>LITTLEBOX_MCP_TOKEN</code>. Never put a token in app source.</p>
+  <p><code>init</code>, <code>dev</code>, <code>build</code> and <code>contract</code> need no credential. Every other command except <code>login</code> reads its credential from <code>&lt;folder&gt;/.littlebox/credentials.json</code> or from <code>LITTLEBOX_MCP_TOKEN</code>. Never put a token in app source.</p>
 
   <h2 id="login">login</h2>
   <pre><code>bun run littlebox -- login --dir ./my-app --url http://localhost:4173 [--manage-users] [--export-data] [--manage-lifecycle] [--verify-from &lt;mailbox.jsonl&gt;]</code></pre>
@@ -58,12 +58,24 @@ bun run littlebox -- help</code></pre>
   <p>A delegated token cannot widen itself later, so the flags are the only way the CLI gets these permissions. On a Kernel that verifies email, creating the account sends a link. <code>--verify-from</code> reads that link from a development mailbox on this machine and works only with a Kernel on <code>localhost</code> or <code>127.0.0.1</code>.</p>
 
   <h2 id="init">init</h2>
-  <pre><code>bun run littlebox -- init --dir ./my-app --name 'My app' --url http://localhost:4173</code></pre>
-  <p>Registers a project and writes a template into an empty folder. The project is External.</p>
+  <pre><code>bun run littlebox -- init --dir ./my-app [--name 'My app'] [--template &lt;id&gt;] [--url &lt;Kernel URL&gt;]</code></pre>
+  <p>Writes a template and <code>littlebox.json</code> into an empty folder, without a credential or a Kernel. The templates are the editor's: <code>tasks</code>, <code>notes</code> (the default), <code>members</code>, <code>form</code>, <code>webhook</code>, <code>digest</code> and <code>gallery</code>. The project is External, and its first <code>publish</code> registers it on the installation.</p>
 
   <h2 id="dev">dev</h2>
-  <pre><code>bun run littlebox -- dev --dir ./my-app [--port 8796]</code></pre>
-  <p>Compiles and starts the Rust Kernel with data under <code>.littlebox/dev-data</code>, with its own identities and no link to production. It publishes the build there, sets the signup policy to Open so test accounts can sign up, and rebuilds when the sources change. Its email, notices included, goes to <code>.littlebox/dev-data/mailbox.jsonl</code>. When the command exits, the Kernel stops and the data stays in the folder.</p>
+  <pre><code>bun run littlebox -- dev --dir ./my-app [--port 8796] [--events-port 8797] [--reset]</code></pre>
+  <p>Compiles and starts the Rust Kernel with data under <code>.littlebox/dev-data</code>, with its own identities and no link to production. It publishes the build there, sets the signup policy to Open so test accounts can sign up, and rebuilds when the sources change. Its email, notices included, goes to <code>.littlebox/dev-data/mailbox.jsonl</code>. When the command exits, the Kernel stops and the data stays in the folder. <code>--reset</code> deletes that data first. A Development Kernel with no data starts from the copy <code>pull</code> left, when there is one.</p>
+
+  <h2 id="pull">pull</h2>
+  <pre><code>bun run littlebox -- pull --dir ./my-app [--url &lt;Kernel URL&gt;]</code></pre>
+  <p>Downloads the published app's database, accounts and files into <code>.littlebox/pull</code>. Needs a credential from <code>login --export-data</code>. Run <code>dev --reset</code> to start the local app from the copy. Nothing travels back to the published app.</p>
+
+  <h2 id="sql">sql</h2>
+  <pre><code>bun run littlebox -- sql --dir ./my-app [--prod] [--url &lt;Kernel URL&gt;] ("&lt;statement&gt;" | --file &lt;file.sql&gt;)</code></pre>
+  <p>Runs SQL on the app's database through <code>database_execute</code>, on the Development Kernel that <code>dev</code> is running for the folder. That is where to rehearse a schema change on a pulled copy. Only <code>--prod</code> reaches the published Deployment.</p>
+
+  <h2 id="events">events</h2>
+  <pre><code>bun run littlebox -- events --dir ./my-app [--follow] [--json] [--days 7] [--prod]</code></pre>
+  <p>Lists what the app did besides answer its page: email, calls to other services, scheduled runs, routes and Signals, oldest first. On the Development Kernel an email shows its recipient and text, because nothing is sent. <code>--json</code> prints one object per line, <code>--follow</code> keeps printing, and only <code>--prod</code> reads the published Deployment. While <code>dev</code> runs, the same list is a page on the port after the app's.</p>
 
   <h2 id="build">build</h2>
   <pre><code>bun run littlebox -- build --dir ./my-app</code></pre>
@@ -74,8 +86,8 @@ bun run littlebox -- help</code></pre>
   <p>Writes <code>action-contract.json</code>, its schema and <code>action-contract.md</code>, from <code>actions.json</code> and <code>schema.sql</code>.</p>
 
   <h2 id="publish">publish</h2>
-  <pre><code>bun run littlebox -- publish --dir ./my-app</code></pre>
-  <p>Builds and publishes. Set each signing secret with <code>secret_set</code> first, because a release that signs with an unset secret is refused. On a first release it sends <code>project.manifest.signupPolicy</code> from <code>littlebox.json</code>.</p>
+  <pre><code>bun run littlebox -- publish --dir ./my-app [--url &lt;Kernel URL&gt;]</code></pre>
+  <p>Builds and publishes to the installation <code>littlebox.json</code> names, or <code>--url</code>, or the one <code>login</code> saved. Set each signing secret with <code>secret_set</code> first, because a release that signs with an unset secret is refused. On a first release it sends <code>project.manifest.signupPolicy</code> from <code>littlebox.json</code>.</p>
 
   <h2 id="conform">conform</h2>
   <pre><code>bun run littlebox -- conform --url &lt;app URL&gt; --contract ./my-app/action-contract.json [--token &lt;app session&gt;] [--key &lt;API key&gt;] [--secret &lt;name&gt;=&lt;value&gt;] [--inputs &lt;file&gt;]</code></pre>

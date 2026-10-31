@@ -1,8 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { HELP, VERIFY_BY_LINK, creatorVerificationToken, domainLocal, ignoreInGit, isLoopbackUrl, loginScopes, manifestSignupPolicy, publishLocal, signupPolicyWarning } from "./littlebox";
+import { templateChoices } from "../src/lib/templates";
+import { PROJECT_TEMPLATES_FILE, renderProjectTemplates } from "./project-templates";
+import { formatEvent, mailEvents, serveEvents } from "./events";
+import { HELP, INIT_TEMPLATES, NO_INSTALLATION, VERIFY_BY_LINK, creatorVerificationToken, domainLocal, ignoreInGit, isLoopbackUrl, loginScopes, manifestSignupPolicy, publishLocal, signupPolicyWarning } from "./littlebox";
 
 /** A stand-in Kernel MCP endpoint that records tool calls and can fail chosen ones. */
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
@@ -128,7 +131,7 @@ describe("littlebox CLI", () => {
   });
 
   test("help names every command and every login flag, and an unknown command prints it", async () => {
-    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "eject", "--manage-users", "--export-data", "--manage-lifecycle", "--verify-from", "--with-data", "--project", "--revision", "--secret", "--key", "--inputs", "domain", "--deployment", "--set", "--clear"]) expect(HELP).toContain(word);
+    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "eject", "--manage-users", "--export-data", "--manage-lifecycle", "--verify-from", "--with-data", "--project", "--revision", "--secret", "--key", "--inputs", "domain", "--deployment", "--set", "--clear", "pull", "sql", "events", "--prod", "--follow", "--json", "--events-port", "LITTLEBOX_KERNEL_BIN", "--file", "--reset", "--template"]) expect(HELP).toContain(word);
     const run = cli("deploy");
     expect(await run.exited).toBe(1);
     expect(await new Response(run.stderr).text()).toContain("Unknown command deploy.\n\nUsage: bun run littlebox --");
@@ -241,6 +244,138 @@ describe("littlebox CLI", () => {
     expect(await run.exited).toBe(0);
     const written = JSON.parse(await readFile(path.join(directory, "littlebox.json"), "utf8"));
     expect(written.project.manifest).toMatchObject({ visibility: "private", signupPolicy: { mode: "invitation" } });
+  });
+
+  test("init needs no Kernel and no credential, and names no installation unless --url does", async () => {
+    const run = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "littlebox.ts"), "init", "--dir", directory, "--name", "Field Notes!"], {
+      env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_"))) as Record<string, string>, stdout: "pipe", stderr: "pipe",
+    });
+    expect(await run.exited).toBe(0);
+    expect(calls).toEqual([]);
+    const written = JSON.parse(await readFile(path.join(directory, "littlebox.json"), "utf8"));
+    expect(written.url).toBeUndefined();
+    expect(written.project).toMatchObject({ name: "Field Notes!", slug: "field-notes" });
+    expect(written.project.id).toMatch(/^app_[0-9a-f-]{36}$/);
+    for (const file of ["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]) expect((await readFile(path.join(directory, file), "utf8")).length).toBeGreaterThan(0);
+  });
+
+  test("init takes the editor's templates by id and refuses another before it writes", async () => {
+    expect([...INIT_TEMPLATES]).toEqual(templateChoices.map((choice) => choice.id));
+    // The file init and project_create both read is what the editor's templates render to.
+    expect(await readFile(path.join(import.meta.dir, "..", PROJECT_TEMPLATES_FILE), "utf8"), "Run bun run templates:render.").toBe(renderProjectTemplates());
+    const run = cli("init", "--dir", directory, "--template", "blog");
+    expect(await run.exited).toBe(1);
+    expect(await new Response(run.stderr).text()).toContain("Unknown template blog. Choose one of: tasks, notes, members");
+    await expect(readFile(path.join(directory, "littlebox.json"), "utf8")).rejects.toThrow();
+    // The shared list is for anyone with the link, so it is born public.
+    expect(await cli("init", "--dir", directory, "--template", "tasks").exited).toBe(0);
+    expect(JSON.parse(await readFile(path.join(directory, "littlebox.json"), "utf8")).project.manifest.visibility).toBe("public");
+  });
+
+  test("a publish with no installation in littlebox.json goes to the one login saved, and keeps it", async () => {
+    await writeFile(path.join(directory, "app.js"), "console.log('hi');");
+    const config = { project: { id: "app_test", name: "Test", slug: "test", manifest: { visibility: "private" } } };
+    await writeFile(path.join(directory, "littlebox.json"), JSON.stringify(config));
+    await expect(publishLocal(directory, config, "token")).rejects.toThrow(NO_INSTALLATION);
+    const refused = cli("publish", "--dir", directory);
+    expect(await refused.exited).toBe(1);
+    expect(await new Response(refused.stderr).text()).toContain(NO_INSTALLATION);
+    expect(calls).toEqual([]);
+
+    await mkdir(path.join(directory, ".littlebox"));
+    await writeFile(path.join(directory, ".littlebox/credentials.json"), JSON.stringify({ url: origin(), token: "token" }));
+    expect(await cli("publish", "--dir", directory).exited).toBe(0);
+    expect(calls.map((call) => call.name)).toContain("release_apply");
+    expect(JSON.parse(await readFile(path.join(directory, "littlebox.json"), "utf8"))).toEqual({ url: origin(), ...config });
+  });
+
+  test("a pulled copy goes with a first release as its package, and never with a later one", async () => {
+    await writeFile(path.join(directory, "app.js"), "console.log('hi');");
+    const bytes = new TextEncoder().encode("database bytes");
+    const sha256 = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+    const manifest = { format: "littlebox-package", version: 1, packageId: "pkg_1", createdAt: 1, deploymentId: "dep_origin", projectId: "app_test", visibility: "public", publishedRevision: 1, contents: [{ name: "database", size: bytes.length, sha256 }], excluded: [] };
+    await mkdir(path.join(directory, ".littlebox/pull"), { recursive: true });
+    await writeFile(path.join(directory, ".littlebox/pull/database.sqlite"), bytes);
+    const pulled = { manifest, from: "http://origin.test", at: 1 } as Parameters<typeof publishLocal>[4];
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: { visibility: "private" } } };
+
+    const first = await publishLocal(directory, config, "token", () => {}, pulled);
+    expect(first.first).toBe(true);
+    expect(calls.find((call) => call.name === "transfer_begin")!.arguments).toMatchObject({ component: "database", size: bytes.length, sha256, projectId: "app_test" });
+    const payload = JSON.parse(uploaded.slice(bytes.length));
+    expect(payload.initialPackage).toEqual({ manifest, components: { database: "transfer_1" } });
+    // The copy says who may open the app it was taken from.
+    expect(payload.visibility).toBe("public");
+
+    calls.length = 0; uploaded = "";
+    answers.project_inspect = { deployment: { id: "dep_1" } };
+    const later = await publishLocal(directory, config, "token", () => {}, pulled);
+    expect(later.first).toBe(false);
+    expect(calls.filter((call) => call.name === "transfer_begin")).toHaveLength(1);
+    expect(JSON.parse(uploaded).initialPackage).toBeUndefined();
+  });
+
+  test("sql and events reach the Development Kernel unless --prod, and say so when none runs", async () => {
+    await writeFile(path.join(directory, "littlebox.json"), JSON.stringify({ project: { id: "app_test", name: "Test", slug: "test", manifest: {} } }));
+    for (const command of [["sql", "SELECT 1"], ["events"]]) {
+      const run = cli(command[0], "--dir", directory, ...command.slice(1));
+      expect(await run.exited).toBe(1);
+      const refusal = await new Response(run.stderr).text();
+      expect(refusal).toContain("No Development Kernel is running for this folder.");
+      expect(refusal).toContain("add --prod");
+    }
+    expect(calls).toEqual([]);
+    // --prod is the only way to the published database.
+    answers.project_inspect = { deployment: { id: "dep_1" } };
+    await mkdir(path.join(directory, ".littlebox"));
+    await writeFile(path.join(directory, ".littlebox/credentials.json"), JSON.stringify({ url: origin(), token: "token" }));
+    expect(await cli("sql", "--dir", directory, "--prod", "SELECT 1").exited).toBe(0);
+    expect(calls.find((call) => call.name === "database_execute")!.arguments).toEqual({ deploymentId: "dep_1", operation: "sql", input: { sql: "SELECT 1" } });
+    const empty = cli("sql", "--dir", directory);
+    expect(await empty.exited).toBe(1);
+    expect(await new Response(empty.stderr).text()).toContain("Give the statement in quotes or with --file");
+  });
+
+  test("events lists a development mailbox line as mail, with its recipient and text, and only the Deployment's own", () => {
+    const mailbox = [
+      JSON.stringify({ to: "owner@app.test", purpose: "notify", scope: "deployment:dep_1", action: "messages.send", subject: "New message", text: "Ana wrote:\nHola\n" }),
+      JSON.stringify({ to: "ana@app.test", purpose: "recovery", scope: "deployment:dep_1", link: "http://app.localhost/_littlebox/account#recovery=abc" }),
+      JSON.stringify({ to: "other@app.test", purpose: "notify", scope: "deployment:dep_2", action: "x", subject: "s", text: "t" }),
+      JSON.stringify({ to: "creator@app.test", purpose: "verification", scope: "creator", link: "http://localhost/#verification=abc" }),
+      "not json",
+    ].join("\n");
+    const seen = new Map<number, number>();
+    const events = mailEvents(mailbox, "dep_1", seen, 1_000);
+    expect(events.map((event) => event.title)).toEqual(["Email from messages.send to owner@app.test", "Account email (recovery) to ana@app.test"]);
+    expect(events[1].mail!.link).toContain("#recovery=abc");
+    // A later read keeps the time a line was first seen, so --follow prints it once.
+    expect(mailEvents(mailbox, "dep_1", seen, 9_000).map((event) => event.at)).toEqual([1_000, 1_000]);
+    expect(formatEvent(events[0])).toBe("00:00:01  mail      Email from messages.send to owner@app.test  (New message)\n          Written to the development mailbox. Nothing was sent.\n          | Ana wrote:\n          | Hola");
+  });
+
+  test("the events page answers on this machine with the mail and the Kernel's own record, and names a Kernel that fails", async () => {
+    const mailbox = path.join(directory, "mailbox.jsonl");
+    await writeFile(mailbox, `${JSON.stringify({ to: "owner@app.test", purpose: "notify", scope: "deployment:dep_1", action: "messages.send", subject: "New message", text: "<b>Hola</b>" })}\n`);
+    const kernel = { failing: false, async call(name: string) {
+      if (this.failing) throw Error("The Kernel stopped.");
+      return ({ usage_summary: { usage: { days: [] }, metrics: [], actions: [] }, calls_read: { calls: [] }, notices_read: { notices: [] }, signals_read: { signals: [{ name: "order.placed", at: 5, properties: { total: 3 } }] } } as Record<string, unknown>)[name];
+    } };
+    const feed = serveEvents(kernel as never, "dep_1", mailbox, 0);
+    try {
+      expect(new URL(feed.url).hostname).toBe("localhost");
+      const page = await fetch(feed.url);
+      expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
+      // The page writes values as text, so a mail's markup stays text.
+      expect(await page.text()).not.toContain("innerHTML");
+      const events = await (await fetch(`${feed.url}/events.json`)).json() as { kind: string; title: string; mail?: { text: string } }[];
+      expect(events.map((event) => event.kind)).toEqual(["signal", "mail"]);
+      expect(events[1]).toMatchObject({ title: "Email from messages.send to owner@app.test", mail: { text: "<b>Hola</b>" } });
+      kernel.failing = true;
+      const failed = await fetch(`${feed.url}/events.json`);
+      expect(failed.status).toBe(502);
+      expect(await failed.json()).toEqual({ error: "The Kernel stopped." });
+      expect((await fetch(`${feed.url}/other`)).status).toBe(404);
+    } finally { feed.stop(); }
   });
 
   test("ignoreInGit adds an entry once", async () => {

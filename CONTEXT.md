@@ -76,6 +76,10 @@ _Avoid_: Runtime session, setup key
 The local development authority that reproduces the Kernel interfaces without granting an application access to production resources.
 _Avoid_: Production proxy, mock API
 
+**Pulled Copy**:
+A package of a published app's database, accounts and files that `littlebox pull` keeps in the project folder, and that a Development Kernel with no data starts from. It moves one way, from the Deployment to the developer's machine.
+_Avoid_: Sync, mirror, staging database
+
 ### As the app grows
 
 **Guard**:
