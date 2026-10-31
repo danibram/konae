@@ -400,15 +400,6 @@ test("a private Invitation only app admits the person the owner invites from the
   await expect(row.getByRole("button", { name: /Resend/ })).toHaveCount(0);
   await expect(users.getByRole("group", { name: "App accounts" }).getByRole("row").filter({ hasText: invitee })).toContainText("Active");
 
-  // Open as owner: the owner's own app account, created with the role owner, opens in a new tab.
-  const ownerTab = context.waitForEvent("page");
-  await users.getByRole("button", { name: "Open as owner", exact: true }).click();
-  const owned = await ownerTab;
-  await expect(owned.getByPlaceholder("Keep a thought…")).toBeVisible({ timeout: 15_000 });
-  expect(await owned.evaluate(async () => (await (window as unknown as { miniapp: { auth: { session(): Promise<{ role: string }> } } }).miniapp.auth.session()).role)).toBe("owner");
-  await expect(users.getByRole("group", { name: "Your account in this app" })).toContainText("with the role owner");
-  await expect(users.getByRole("group", { name: "App accounts" }).getByRole("row").filter({ hasText: "Owner" })).toContainText("Active");
-  await owned.close();
   // The Auth panel scrolls inside the window, so a tall window shows the whole view.
   // Buttons fade their colour on a theme change; "disabled" finishes that before the capture.
   await page.setViewportSize({ width: 1280, height: 2000 });

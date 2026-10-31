@@ -433,7 +433,6 @@ fn user(owner: String, subject: String) -> AuthUser {
     AuthUser {
         user_id: owner,
         name: subject,
-        role: "owner".into(),
     }
 }
 

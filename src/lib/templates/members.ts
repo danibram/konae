@@ -3,13 +3,16 @@ import type { TemplateSource } from "./types";
 
 /**
  * Every staff action checks the caller's role with this one predicate. The
- * owner's role comes from the Kernel through me.join; admin comes from the
- * owner's promote. The Kernel accepts it as written, with ?1 bound to actor.id.
+ * app's owner is a profiles row the Project Owner marks with SQL in Data;
+ * admin comes from that owner's promote. The Kernel accepts it as written,
+ * with ?1 bound to actor.id.
  */
 export const adminCheck = "(SELECT role FROM profiles WHERE user_id = ?1) IN ('admin', 'owner')";
 
-const schema = `-- One row per person who joined. The Kernel says who is signed in and which
--- account is the owner's; the role column is the app's own decision.
+const schema = `-- One row per person who joined. The Kernel says who is signed in; the role
+-- column is the app's own decision. Everyone joins as member. To name the
+-- app's owner, run in Data > SQL, with the account ID that Auth > Users shows:
+--   UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>';
 -- Staff actions check: ${adminCheck}
 CREATE TABLE IF NOT EXISTS profiles (
   user_id TEXT PRIMARY KEY NOT NULL,
@@ -27,7 +30,6 @@ CREATE TABLE IF NOT EXISTS posts (
 `;
 
 const actor = { source: "actor", field: "id" };
-const role = { source: "actor", field: "role" };
 const now = { source: "kernel", field: "now" };
 const userId = { source: "input", key: "userId", type: "string", maxLength: 64 };
 
@@ -37,8 +39,8 @@ const actions = {
     "me.join": {
       kind: "mutation",
       access: "authenticated",
-      statement: "INSERT INTO profiles (user_id, display_name, role, joined_at) VALUES (?1, ?2, CASE WHEN ?3 = 'owner' THEN 'owner' ELSE 'member' END, ?4) ON CONFLICT (user_id) DO NOTHING",
-      bindings: [actor, { source: "input", key: "displayName", type: "string", maxLength: 40 }, role, now],
+      statement: "INSERT INTO profiles (user_id, display_name, role, joined_at) VALUES (?1, ?2, 'member', ?3) ON CONFLICT (user_id) DO NOTHING",
+      bindings: [actor, { source: "input", key: "displayName", type: "string", maxLength: 40 }, now],
     },
     "me.get": {
       kind: "query",
@@ -75,15 +77,15 @@ const actions = {
       kind: "mutation",
       access: "authenticated",
       guard: "Only the owner can make a member an admin.",
-      statement: "UPDATE profiles SET role = 'admin' WHERE user_id = ?1 AND role = 'member' AND ?2 = 'owner'",
-      bindings: [userId, role],
+      statement: "UPDATE profiles SET role = 'admin' WHERE user_id = ?1 AND role = 'member' AND (SELECT role FROM profiles WHERE user_id = ?2) = 'owner'",
+      bindings: [userId, actor],
     },
     "members.demote": {
       kind: "mutation",
       access: "authenticated",
       guard: "Only the owner can return an admin to member.",
-      statement: "UPDATE profiles SET role = 'member' WHERE user_id = ?1 AND role = 'admin' AND ?2 = 'owner'",
-      bindings: [userId, role],
+      statement: "UPDATE profiles SET role = 'member' WHERE user_id = ?1 AND role = 'admin' AND (SELECT role FROM profiles WHERE user_id = ?2) = 'owner'",
+      bindings: [userId, actor],
     },
   },
 };

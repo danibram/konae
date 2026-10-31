@@ -424,9 +424,7 @@ async fn run(state: &AppState, deployment: &Deployment, inviter: &str, name: &st
                 let emails: Vec<String> = serde_json::from_value(a["emails"].clone())?;
                 anyhow::ensure!(emails.len() <= MAX_BATCH, "Invite at most {MAX_BATCH} people per call.");
                 let (auth, inviter, key) = (auth.clone(), inviter.clone(), key.clone());
-                // An invitation to the owner's own creator email makes that account the app's owner.
-                let own_email = inviter_display(state, &inviter);
-                off(move || write(&auth, |tx| create(tx, &auth, &target, &inviter, own_email.as_deref(), &key, &emails))).await?
+                off(move || write(&auth, |tx| create(tx, &auth, &target, &inviter, &key, &emails))).await?
             } else {
                 let invitation = text("invitationId");
                 let (auth, inviter, key) = (auth.clone(), inviter.clone(), key.clone());
@@ -549,7 +547,7 @@ fn pending_account(tx: &Connection, email: &str) -> Result<Result<(String, bool)
         None => {
             let id = Uuid::new_v4().to_string();
             tx.execute(
-                "INSERT INTO app_users (id, email, password_hash, role, created_at, state) VALUES (?1, ?2, ?3, 'member', ?4, 'pending')",
+                "INSERT INTO app_users (id, email, password_hash, created_at, state) VALUES (?1, ?2, ?3, ?4, 'pending')",
                 params![id, email, auth::NO_PASSWORD, auth::now_seconds()],
             )?;
             Ok((id, true))
@@ -562,7 +560,6 @@ fn create(
     auth: &AuthService,
     deployment: &Deployment,
     inviter: &str,
-    own_email: Option<&str>,
     key: &str,
     emails: &[String],
 ) -> Result<Prepared, Refusal> {
@@ -597,11 +594,6 @@ fn create(
                 continue;
             }
         };
-        if own_email.is_some_and(|own| own.eq_ignore_ascii_case(&email)) {
-            // Only the owner's mailbox can answer this link, so the account it
-            // activates is the owner's, as with app_owner_enter.
-            tx.execute("UPDATE app_users SET role = 'owner' WHERE id = ?1", [&user_id])?;
-        }
         let challenge = auth.issue_challenge(tx, &user_id, &email, Purpose::Invitation)?;
         let invitation = Uuid::new_v4().to_string();
         tx.execute(
@@ -724,7 +716,7 @@ fn set_suspended(auth: &AuthService, user_id: &str, suspend: bool) -> Result<Val
 fn list_users(db: &Connection, state: Option<&str>, cursor: Option<&str>, limit: usize) -> Result<Value, AuthError> {
     let mut query = db
         .prepare(
-            "SELECT id, email, state, verified_at, created_at, role FROM app_users
+            "SELECT id, email, state, verified_at, created_at FROM app_users
              WHERE (?1 IS NULL OR state = ?1) AND (?2 IS NULL OR email > ?2)
              ORDER BY email LIMIT ?3",
         )
@@ -739,7 +731,6 @@ fn list_users(db: &Connection, state: Option<&str>, cursor: Option<&str>, limit:
                 "verified": verified_at.is_some(),
                 "verifiedAt": verified_at,
                 "createdAt": row.get::<_, i64>(4)?,
-                "role": row.get::<_, String>(5)?,
             }))
         })
         .map_err(storage)?
@@ -855,6 +846,7 @@ mod tests {
                 artifact_version: None,
                 signup_policy: SignupPolicy::from_input(mode, &[]).unwrap(),
                 sign_in_methods: default_sign_in_methods(),
+                contact_email: None,
             };
             std::fs::create_dir_all(root.join("deployments").join(&item.id)).unwrap();
             deployments.insert(host.to_owned(), item);
@@ -1077,29 +1069,6 @@ mod tests {
         let users = fixture.call("app_users_list", json!({})).await.unwrap();
         assert_eq!(users["users"][0]["verified"], true);
         assert_eq!(users["users"][0]["state"], "active");
-    }
-
-    #[tokio::test]
-    async fn an_invitation_to_the_owners_own_email_makes_that_account_the_apps_owner() {
-        let fixture = fixture(SignupMode::Invitation);
-        Connection::open(fixture.root.join("owners.sqlite"))
-            .unwrap()
-            .execute_batch(&format!("CREATE TABLE app_users(id TEXT PRIMARY KEY, email TEXT NOT NULL); INSERT INTO app_users VALUES ('{OWNER}', 'olga@example.test');"))
-            .unwrap();
-        fixture.invite(&["ana@example.test"], "member-batch").await;
-        let ana = fixture.last_token();
-        fixture.invite(&["Olga@Example.test"], "owner-batch").await;
-        let olga = fixture.last_token();
-        let accepted = fixture.answer(APP_HOST, &olga, PASSWORD).await;
-        assert_eq!(accepted.status(), StatusCode::OK);
-        let body: Value = serde_json::from_slice(&axum::body::to_bytes(accepted.into_body(), 1 << 16).await.unwrap()).unwrap();
-        assert_eq!(body["result"]["user"]["role"], "owner", "the session the link opens carries the role");
-        assert_eq!(fixture.answer(APP_HOST, &ana, PASSWORD).await.status(), StatusCode::OK);
-        let users = fixture.call("app_users_list", json!({})).await.unwrap();
-        let roles: Vec<(String, String)> = users["users"].as_array().unwrap().iter()
-            .map(|user| (user["email"].as_str().unwrap().to_owned(), user["role"].as_str().unwrap().to_owned()))
-            .collect();
-        assert_eq!(roles, vec![("ana@example.test".into(), "member".into()), ("olga@example.test".into(), "owner".into())]);
     }
 
     #[tokio::test]

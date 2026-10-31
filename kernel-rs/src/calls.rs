@@ -1269,7 +1269,7 @@ async fn run_then(
         values.insert(key.clone(), value);
     }
     let values = Value::Object(values);
-    let params = match resolve_bindings(mutation, &values, None, None) {
+    let params = match resolve_bindings(mutation, &values, None) {
         Ok(params) => params,
         Err(message) => return ("failed", Some(message)),
     };

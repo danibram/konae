@@ -14,10 +14,10 @@ A Runtime Actor's permissions are evaluated by server-side actions and never imp
 
 ## Who may read a row
 
-The app decides, in the statement and its bindings. A Server Action binds the caller with `{ "source": "actor", "field": "id" }` or `"role"`.
+The app decides, in the statement and its bindings. A Server Action binds the caller with `{ "source": "actor", "field": "id" }`.
 
 - `id` is the app user's ID or the API key's ID. It is nothing for a visitor and for a schedule's run.
-- `role` is `owner` for the Project Owner's own app account and `member` for every other app user. A visitor, a key, a signed request and a schedule's run have no role, and the binding yields null.
+- Roles are rows in the app's own tables. An app that needs an administrator keeps a table such as `profiles(user_id, role)` and checks it in SQL against that ID. The owner names the first one with SQL in Data.
 
 ```json
 "items.list": {
@@ -78,10 +78,6 @@ An invitation never changes an active account's password or resumes a suspended 
 ## Suspending and resuming
 
 An account is pending until it proves control of its email, active, or suspended. Only an active account gets a session. `app_user_suspend` ends sessions and keeps the account's ID and rows. `app_user_resume` returns it to `active` if it ever verified, otherwise `pending`. `app_users_list` shows each account's state and role.
-
-## The owner's account in an app
-
-The Project Owner's own app account has the role `owner`. Only the owner's browser session, through `app_owner_enter`, or an invitation the owner sends to their own email creates it. `app_owner_enter` returns a link that signs the account in once, within two minutes.
 
 ## Credentials for agents
 

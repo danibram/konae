@@ -26,17 +26,17 @@ A guard is 1 to 200 characters on one line. It goes on a mutation only. A query 
     }
     ```
 
-3. For an owner-only action, bind the actor's role and test it in the `WHERE`. The role is `owner` for the Project Owner's own app account and `member` for everyone else.
+3. For an owner-only action, keep the role in the app's own table and test it in the `WHERE` against the caller's ID. The Project Owner names the app's owner with SQL in Data.
 
     ```json
     "members.promote": {
       "kind": "mutation",
       "access": "authenticated",
       "guard": "Only the app's owner can make a member a team admin.",
-      "statement": "UPDATE profiles SET role = 'admin' WHERE user_id = ?1 AND role = 'member' AND ?2 = 'owner'",
+      "statement": "UPDATE profiles SET role = 'admin' WHERE user_id = ?1 AND role = 'member' AND (SELECT role FROM profiles WHERE user_id = ?2) = 'owner'",
       "bindings": [
         { "source": "input", "key": "userId", "type": "string", "maxLength": 64 },
-        { "source": "actor", "field": "role" }
+        { "source": "actor", "field": "id" }
       ]
     }
     ```

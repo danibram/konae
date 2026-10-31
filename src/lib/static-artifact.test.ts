@@ -322,7 +322,7 @@ describe("a path address finds its base path, and the SDK loader writes its tag 
   test("the SDK and every inline page that builds a Kernel URL carry the same prefix rule", () => {
     const root = path.resolve(import.meta.dir, "../..");
     const rule = `/${pathPrefixPattern.source}/`;
-    for (const file of ["src/mcp/runtime.js", "src/lib/static-artifact.js", "kernel-rs/src/accounts.rs", "kernel-rs/src/app_owner.rs"]) {
+    for (const file of ["src/mcp/runtime.js", "src/lib/static-artifact.js", "kernel-rs/src/accounts.rs"]) {
       expect(readFileSync(path.join(root, file), "utf8")).toContain(rule);
     }
   });

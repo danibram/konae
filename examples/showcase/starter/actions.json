@@ -99,12 +99,11 @@
     "me.join": {
       "kind": "mutation",
       "access": "authenticated",
-      "statement": "INSERT INTO profiles (user_id, display_name, role, joined_at) VALUES (?1, ?2, CASE WHEN ?4 = 'owner' THEN 'owner' ELSE 'member' END, ?3) ON CONFLICT (user_id) DO UPDATE SET role = 'owner' WHERE excluded.role = 'owner' AND profiles.role <> 'owner'",
+      "statement": "INSERT INTO profiles (user_id, display_name, role, joined_at) VALUES (?1, ?2, 'member', ?3) ON CONFLICT (user_id) DO NOTHING",
       "bindings": [
         { "source": "actor", "field": "id" },
         { "source": "input", "key": "displayName", "type": "string", "maxLength": 40 },
-        { "source": "kernel", "field": "now" },
-        { "source": "actor", "field": "role" }
+        { "source": "kernel", "field": "now" }
       ],
       "signal": { "name": "member.joined", "properties": ["actor"] }
     },
@@ -252,9 +251,9 @@
     "members.list": {
       "kind": "query",
       "access": "authenticated",
-      "statement": "SELECT p.user_id, p.display_name, p.role, p.avatar_file_id, p.joined_at FROM profiles p WHERE ?1 = 'owner' AND (?2 IS NULL OR p.display_name LIKE '%' || ?2 || '%') ORDER BY p.display_name LIMIT 100",
+      "statement": "SELECT p.user_id, p.display_name, p.role, p.avatar_file_id, p.joined_at FROM profiles p WHERE EXISTS (SELECT 1 FROM profiles o WHERE o.user_id = ?1 AND o.role = 'owner') AND (?2 IS NULL OR p.display_name LIKE '%' || ?2 || '%') ORDER BY p.display_name LIMIT 100",
       "bindings": [
-        { "source": "actor", "field": "role" },
+        { "source": "actor", "field": "id" },
         { "source": "input", "key": "q", "type": "string", "maxLength": 40, "nullable": true }
       ]
     },
@@ -262,10 +261,10 @@
       "kind": "mutation",
       "access": "authenticated",
       "guard": "Only the app's owner can make a member a team admin.",
-      "statement": "UPDATE profiles SET role = 'admin' WHERE user_id = ?1 AND role = 'member' AND ?2 = 'owner'",
+      "statement": "UPDATE profiles SET role = 'admin' WHERE user_id = ?1 AND role = 'member' AND EXISTS (SELECT 1 FROM profiles o WHERE o.user_id = ?2 AND o.role = 'owner')",
       "bindings": [
         { "source": "input", "key": "userId", "type": "string", "maxLength": 64 },
-        { "source": "actor", "field": "role" }
+        { "source": "actor", "field": "id" }
       ],
       "signal": { "name": "role.changed", "properties": ["userId", "actor"] }
     },
@@ -273,10 +272,10 @@
       "kind": "mutation",
       "access": "authenticated",
       "guard": "Only the app's owner can return a team admin to member.",
-      "statement": "UPDATE profiles SET role = 'member' WHERE user_id = ?1 AND role = 'admin' AND ?2 = 'owner'",
+      "statement": "UPDATE profiles SET role = 'member' WHERE user_id = ?1 AND role = 'admin' AND EXISTS (SELECT 1 FROM profiles o WHERE o.user_id = ?2 AND o.role = 'owner')",
       "bindings": [
         { "source": "input", "key": "userId", "type": "string", "maxLength": 64 },
-        { "source": "actor", "field": "role" }
+        { "source": "actor", "field": "id" }
       ],
       "signal": { "name": "role.changed", "properties": ["userId", "actor"] }
     },
@@ -284,18 +283,18 @@
       "kind": "mutation",
       "access": "authenticated",
       "guard": "Only the app's owner can remove an update.",
-      "statement": "DELETE FROM updates WHERE id = ?2 AND ?1 = 'owner'",
+      "statement": "DELETE FROM updates WHERE id = ?2 AND EXISTS (SELECT 1 FROM profiles o WHERE o.user_id = ?1 AND o.role = 'owner')",
       "bindings": [
-        { "source": "actor", "field": "role" },
+        { "source": "actor", "field": "id" },
         { "source": "input", "key": "id", "type": "number" }
       ]
     },
     "admin.stats": {
       "kind": "query",
       "access": "authenticated",
-      "statement": "SELECT (SELECT COUNT(*) FROM profiles) AS members, (SELECT COUNT(*) FROM profiles WHERE role = 'admin') AS admins, (SELECT COUNT(*) FROM notes) AS notes, (SELECT COUNT(*) FROM attachments) AS attachments, (SELECT COUNT(*) FROM attachments WHERE public = 1) AS published, (SELECT COUNT(*) FROM updates) AS updates WHERE ?1 = 'owner' LIMIT 1",
+      "statement": "SELECT (SELECT COUNT(*) FROM profiles) AS members, (SELECT COUNT(*) FROM profiles WHERE role = 'admin') AS admins, (SELECT COUNT(*) FROM notes) AS notes, (SELECT COUNT(*) FROM attachments) AS attachments, (SELECT COUNT(*) FROM attachments WHERE public = 1) AS published, (SELECT COUNT(*) FROM updates) AS updates WHERE EXISTS (SELECT 1 FROM profiles o WHERE o.user_id = ?1 AND o.role = 'owner') LIMIT 1",
       "bindings": [
-        { "source": "actor", "field": "role" }
+        { "source": "actor", "field": "id" }
       ]
     }
   }

@@ -962,6 +962,7 @@ mod tests {
                 artifact_version: None,
                 signup_policy: SignupPolicy::from_input(mode, &["@practice.example".into()]).unwrap(),
                 sign_in_methods: vec![SignInMethod::Password, SignInMethod::Google],
+                contact_email: None,
             };
             std::fs::create_dir_all(root.join("deployments").join(&item.id)).unwrap();
             deployments.insert(hostname.to_owned(), item);
@@ -1372,7 +1373,7 @@ mod tests {
         store
             .transaction(|tx| {
                 tx.execute(
-                    "INSERT INTO app_users (id, email, password_hash, role, created_at, state) VALUES (?1, ?2, ?3, 'member', 0, 'pending')",
+                    "INSERT INTO app_users (id, email, password_hash, created_at, state) VALUES (?1, ?2, ?3, 0, 'pending')",
                     params![user_id, email, auth::NO_PASSWORD],
                 )?;
                 let issued = store.issue_challenge(tx, &user_id, email, auth::Purpose::Invitation)?;

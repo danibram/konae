@@ -35,17 +35,9 @@ describe("server actions", () => {
       .toThrow("authenticated");
   });
 
-  test("the actor role binds a person's role and null for a visitor or a key, as on the Kernel", () => {
-    const program = parseServerActionSource(JSON.stringify({ version: 1, actions: {
-      "members.promote": { kind: "mutation", access: "authenticated", statement: "UPDATE members SET role = 'admin' WHERE id = ?1 AND ?2 = 'owner'",
-        bindings: [{ source: "input", key: "id", type: "number" }, { source: "actor", field: "role" }], guard: "Only the owner can promote." },
-      "me.owner": { kind: "query", access: "anonymous", statement: "SELECT ?1 = 'owner' AS owner LIMIT 1", bindings: [{ source: "actor", field: "role" }] },
-    } }));
-    expect(resolveServerAction(program, "members.promote", { id: 4 }, { actorId: "olga", actorRole: "owner" }).params).toEqual([4, "owner"]);
-    expect(resolveServerAction(program, "members.promote", { id: 4 }, { actorId: "ana", actorRole: "member" }).params).toEqual([4, "member"]);
-    expect(resolveServerAction(program, "members.promote", { id: 4 }, { actorId: "key-1" }).params).toEqual([4, null]);
-    expect(resolveServerAction(program, "me.owner", {}, { actorId: null }).params).toEqual([null]);
-    expect(() => resolveServerAction(program, "me.owner", { role: "owner" }, { actorId: null, actorRole: null })).toThrow("Unexpected action input: role");
+  test("the actor binds only an ID; a role binding is refused, as on the Kernel", () => {
+    expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions: { "members.promote": { kind: "mutation", access: "authenticated", statement: "UPDATE members SET role = 'admin' WHERE id = ?1 AND ?2 = 'owner'",
+      bindings: [{ source: "input", key: "id", type: "number" }, { source: "actor", field: "role" }] } } }))).toThrow("Invalid binding 1 in members.promote.");
     expect(() => parseServerActionSource(JSON.stringify({ version: 1, actions: { "a.b": { kind: "query", access: "anonymous", statement: "SELECT ?1 AS x LIMIT 1", bindings: [{ source: "actor", field: "email" }] } } }))).toThrow("Invalid binding 0 in a.b.");
   });
 

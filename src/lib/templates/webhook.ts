@@ -10,6 +10,13 @@ CREATE TABLE IF NOT EXISTS events (
   received_at INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS events_external_id_unique ON events(external_id);
+
+-- The accounts that read the feed. The owner adds one from Data > SQL with
+-- the account ID that Auth > Users shows:
+--   INSERT INTO admins (user_id) VALUES ('<account id>');
+CREATE TABLE IF NOT EXISTS admins (
+  user_id TEXT PRIMARY KEY
+);
 `;
 
 const actions = {
@@ -35,8 +42,14 @@ const actions = {
     "events.list": {
       kind: "query",
       access: "authenticated",
-      statement: "SELECT id, external_id, title, repo, received_at FROM events WHERE ?1 = 'owner' ORDER BY id DESC LIMIT 100",
-      bindings: [{ source: "actor", field: "role" }],
+      statement: "SELECT id, external_id, title, repo, received_at FROM events WHERE EXISTS (SELECT 1 FROM admins WHERE user_id = ?1) ORDER BY id DESC LIMIT 100",
+      bindings: [{ source: "actor", field: "id" }],
+    },
+    "admins.me": {
+      kind: "query",
+      access: "authenticated",
+      statement: "SELECT count(*) AS admin FROM admins WHERE user_id = ?1",
+      bindings: [{ source: "actor", field: "id" }],
     },
   },
 };
@@ -49,14 +62,14 @@ const html = `
       <p class="ui-eyebrow">Webhook</p>
       <h1 class="ui-title">Issue feed</h1>
     </div>
-    <div class="ui-identity"><span id="identity"></span><button id="sign-in" class="ui-button ui-button-sm">Owner sign in</button></div>
+    <div class="ui-identity"><span id="identity"></span><button id="sign-in" class="ui-button ui-button-sm">Staff sign in</button></div>
   </header>
 
   <p class="ui-lede">Point a GitHub webhook for issue events at <code>/hooks/github</code> on this app, with the secret you save as <code>github_webhook</code> under Integrations. The Kernel checks every signature and drops a redelivery.</p>
   <p id="status" class="ui-status" role="status" aria-live="polite"></p>
 
   <section id="feed" hidden>
-    <div class="ui-section-head"><span>Events</span><span>Only the owner sees these</span></div>
+    <div class="ui-section-head"><span>Events</span><span>Only the accounts in admins see these</span></div>
     <div id="events" class="ui-list"></div>
   </section>
 </main>`;
@@ -66,8 +79,9 @@ async function start() {
   const session = await miniapp.auth.session();
   $('#identity').textContent = session.role === 'anonymous' ? '' : session.name;
   $('#sign-in').hidden = session.role !== 'anonymous';
-  $('#feed').hidden = session.role !== 'owner';
-  if (session.role !== 'owner') return;
+  const admin = session.role !== 'anonymous' && (await miniapp.actions.call('admins.me'))[0].admin > 0;
+  $('#feed').hidden = !admin;
+  if (!admin) return;
   const events = await miniapp.actions.call('events.list');
   $('#events').innerHTML = events.length ? events.map(event =>
     '<article class="ui-list-item"><div class="ui-list-main"><p>' + escapeHtml(event.title) + '</p><small>' + escapeHtml(event.repo || 'GitHub') + ' · ' + when(event.received_at) + '</small></div></article>'

@@ -49,7 +49,7 @@ An authenticated workspace member allowed to edit a Project and administer its d
 _Avoid_: Runtime user, app user
 
 **Runtime Actor**:
-Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a signed-in app user, or a service holding an API key. Its permissions are evaluated by server-side actions and never imply Project ownership. An `actor` binding of the `id` yields the app user's ID or the key's ID, and nothing for a visitor or for a schedule's run. One of the `role` yields the app user's role on that app: `owner` for the Project Owner's own app account, which only the owner's session or the owner's own invitation creates, and `member` for everyone else; a visitor, a key, a signed request and a schedule's run have no role and bind null.
+Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a signed-in app user, or a service holding an API key. Its permissions are evaluated by server-side actions and never imply Project ownership. An `actor` binding of the `id` yields the app user's ID or the key's ID, and nothing for a visitor or for a schedule's run.
 _Avoid_: Owner, editor user
 
 **Signup Policy**:
@@ -57,7 +57,7 @@ The per-Deployment rule for who may create a Runtime Actor account: Open (anyone
 _Avoid_: Invite list, access grant
 
 **Sign-in Methods**:
-The per-Deployment list of ways an app account signs in: `password` always, and `google` when the Project Owner turns on Continue with Google in Auth > Users or with `sign_in_methods_set`. Google needs the app's own Google client, which the owner sets as two signing secrets with `"use": "google"`; until both are set it cannot be turned on, and an imported Deployment that asks for Google keeps the setting and offers only the password. A Google sign-in reaches the account that holds the same verified email, and only for an address Google manages (Gmail, or a Workspace domain the token names). The Signup Policy decides whether a new account may exist. A package carries the list and the accounts, never the client. The owner's own app account is not taken back by Google while its email is unproven (ADR-0026).
+The per-Deployment list of ways an app account signs in: `password` always, and `google` when the Project Owner turns on Continue with Google in Auth > Users or with `sign_in_methods_set`. Google needs the app's own Google client, which the owner sets as two signing secrets with `"use": "google"`; until both are set it cannot be turned on, and an imported Deployment that asks for Google keeps the setting and offers only the password. A Google sign-in reaches the account that holds the same verified email, and only for an address Google manages (Gmail, or a Workspace domain the token names). The Signup Policy decides whether a new account may exist. A package carries the list and the accounts, never the client.
 _Avoid_: Social login, SSO
 
 **Google Client**:

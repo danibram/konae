@@ -57,7 +57,7 @@ pub(crate) fn check_action(name: &str, action: &ActionDefinition) -> Result<(), 
         }
         let valid = match binding.source.as_str() {
             "input" => binding.key.is_some() && matches!(binding.value_type.as_deref(), Some("string" | "number" | "boolean")),
-            "actor" => matches!(binding.field.as_deref(), Some("id" | "role")),
+            "actor" => binding.field.as_deref() == Some("id"),
             "kernel" => binding.field.as_deref() == Some("now"),
             // An absent value and null both bind NULL.
             "literal" => binding.value.as_ref().is_none_or(|value| value.is_string() || value.is_number()),

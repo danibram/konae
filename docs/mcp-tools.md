@@ -93,7 +93,6 @@ Every tool that writes has a tool that observes its effect through the same door
 | `app_invitation_revoke` | `app_invitations_list` |
 | `app_user_suspend` | `app_users_list` |
 | `app_user_resume` | `app_users_list` |
-| `app_owner_enter` | `app_users_list` |
 | `domain_set` | `domain_read` |
 | `domain_clear` | `domain_read` |
 | `path_set` | `path_read` |

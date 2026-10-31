@@ -79,7 +79,7 @@ describe("a project born from a template", () => {
     });
   }
 
-  test("members writes its admin check once, as one scalar subquery, and keeps owner-only steps on actor.role", () => {
+  test("members writes its admin check once, as one scalar subquery, and checks the owner in its own rows", () => {
     const { actions } = JSON.parse(born("members").files["actions.json"]!) as { actions: Record<string, { statement: string; bindings: { source: string; field?: string }[] }> };
     const staff = Object.entries(actions).filter(([, action]) => action.statement.includes(adminCheck)).map(([name]) => name);
     expect(staff).toEqual(["posts.remove", "members.list"]);
@@ -88,8 +88,8 @@ describe("a project born from a template", () => {
       expect(action.statement.split(adminCheck).length).toBeLessThanOrEqual(2);
     }
     for (const name of ["members.promote", "members.demote"]) {
-      expect(actions[name].statement).toContain("?2 = 'owner'");
-      expect(actions[name].bindings[1]).toEqual({ source: "actor", field: "role" });
+      expect(actions[name].statement).toContain("(SELECT role FROM profiles WHERE user_id = ?2) = 'owner'");
+      expect(actions[name].bindings[1]).toEqual({ source: "actor", field: "id" });
     }
   });
 

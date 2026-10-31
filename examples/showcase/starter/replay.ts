@@ -388,30 +388,10 @@ try {
     ben: await ben.call<{ userId: string; role: string }>("auth_session"),
     olga: await olga.call<{ userId: string; name: string; role: string }>("auth_session"),
   };
-  // The Project Owner's own email signs up as an ordinary app account, a member until the owner claims it.
+  // The Project Owner's own email signs up as an ordinary app account.
   assert.equal(sessions.olga.name, ownerEmail);
   assert.equal(sessions.olga.role, "member");
   check("Verified open signup", `Signup answers 202 with no session cookie, only the signup hint; the pending account's sign-in from Ana's browser answers ${pendingLogin.status} with the hint to open the link first, and from another browser the plain 401; and the emailed link sets the password and opens a session. Ana, Ben and the owner's app account are active, all three members.`);
-
-  // ------------------------------------------------- the owner's role, from the Users view
-  // Open as owner in the editor calls app_owner_enter with the owner's session. It links the
-  // account with the owner's email, gives it the role owner and returns a one-time entry link.
-  const entry = await A.owner.call<{ userId: string; account: string; passwordCleared: boolean; role: string; url: string }>("app_owner_enter", { deploymentId: receipt.id });
-  assert.deepEqual([entry.userId, entry.account, entry.passwordCleared, entry.role], [sessions.olga.userId, "existing", false, "owner"]);
-  const entryUrl = new URL(entry.url);
-  assert.equal(`${entryUrl.origin}${entryUrl.pathname}`, `${receipt.url}/_konae/owner-entry`);
-  const entryToken = new URLSearchParams(entryUrl.hash.slice(1)).get("entry")!;
-  const entered = await S.auth("/_konae/owner-entry", { token: entryToken });
-  assert.equal(entered.status, 200, await entered.clone().text());
-  assert.equal((await entered.json()).result.user.role, "owner");
-  cookies.olga = cookieOf(entered)!;
-  const entryAgain = await S.auth("/_konae/owner-entry", { token: entryToken });
-  assert.deepEqual([entryAgain.status, (await entryAgain.json()).error], [410, "This link is invalid, expired or already used."]);
-  // The session the owner opened with a password reads the new role too.
-  sessions.olga = await olga.call<{ userId: string; name: string; role: string }>("auth_session");
-  assert.equal(sessions.olga.role, "owner");
-  const ownerUsers = (await A.owner.call<{ users: { email: string; role: string }[] }>("app_users_list", { deploymentId: receipt.id })).users;
-  assert.deepEqual(ownerUsers.map((user) => [user.email, user.role]), [[people.ana, "member"], [people.ben, "member"], [ownerEmail, "owner"]]);
 
   // Each person joins the app once; a second join changes nothing.
   for (const [who, caller] of [["ana", ana], ["ben", ben], ["olga", olga]] as const) {
@@ -420,7 +400,11 @@ try {
   }
 
   // ------------------------------------------------- a team admin, promoted by the owner
-  // me.join copied the owner's role from the actor binding into the profile.
+  // Everyone joins as member. The Project Owner names Olga the app's owner with owner SQL,
+  // as the Data panel does; the Kernel keeps no role.
+  assert.equal((await action(olga, "me.get"))[0].role, "member");
+  const named = await A.owner.call<{ changes: number }>("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: `UPDATE profiles SET role = 'owner' WHERE user_id = '${sessions.olga.userId}'` } });
+  assert.equal(named.changes, 1, JSON.stringify(named));
   assert.equal((await action(olga, "me.get"))[0].role, "owner");
 
   const benPromotes = await message(action(ben, "members.promote", { userId: sessions.ben.userId }));
@@ -446,7 +430,7 @@ try {
   refused("Guard", "Ben (member) posts in the team area", benPosts);
   const [stats] = await action(olga, "admin.stats");
   assert.equal(stats.admins, 1);
-  check("Owner and team admin", `Open as owner (app_owner_enter, the owner's session) links the account with the owner's email and returns an entry link that signs it in once and answers 410 after; auth_session and app_users_list then give it the role owner, and me.join copies that role into the app's profile through { "source": "actor", "field": "role" }, with no key-only route. Ben's members.promote is refused with "${benPromotes}"; Ana sees an empty roster and is refused a team post until the owner promotes her with members.promote, a guarded mutation. Then team.roster lists ana (admin) and olga (owner), her post lands, and her own members.promote, members.list and admin.stats get the guard or no rows. Ben still reads no team row.`);
+  check("Owner and team admin", `Everyone joins as member and auth_session says member for every account. The Project Owner names Olga the app's owner with database_execute sql on the profiles table, and the owner-only actions check that row against actor.id. Ben's members.promote is refused with "${benPromotes}"; Ana sees an empty roster and is refused a team post until the owner promotes her with members.promote, a guarded mutation. Then team.roster lists ana (admin) and olga (owner), her post lands, and her own members.promote, members.list and admin.stats get the guard or no rows. Ben still reads no team row.`);
 
   // ------------------------------------------------------- the visitor's view
   const visitor = S.runtime();

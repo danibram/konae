@@ -1,36 +1,5 @@
 [
  {
-  "case": "a route whose action binds the caller's role",
-  "actions": {
-   "orders.remove": {
-    "kind": "mutation",
-    "access": "anonymous",
-    "statement": "DELETE FROM orders WHERE external_id = ?1 AND ?2 = 'owner'",
-    "bindings": [
-     {
-      "source": "input",
-      "key": "id",
-      "type": "string"
-     },
-     {
-      "source": "actor",
-      "field": "role"
-     }
-    ],
-    "guard": "Only the app's owner can remove an order.",
-    "http": {
-     "method": "POST",
-     "path": "/api/orders/remove",
-     "callers": [
-      "session",
-      "key"
-     ]
-    }
-   }
-  },
-  "error": null
- },
- {
   "case": "a signed POST on an anonymous mutation",
   "actions": {
    "orders.receive": {

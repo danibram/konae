@@ -453,9 +453,6 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             false,
         ));
         tools.extend(super::invitations::admin_tools());
-        if owner.session {
-            tools.push(super::app_owner::admin_tool());
-        }
     }
     if owner.scopes.iter().any(|s| s == "publish") {
         tools.extend([
@@ -1650,7 +1647,10 @@ async fn admin_call(
             );
             transfer(state, principal, &json!({"transferId":row.2}))?;
             let bytes = tokio::fs::read(transfer_path(state, &row.2)?).await?;
-            let payload: Value = serde_json::from_slice(&bytes)?;
+            let mut payload: Value = serde_json::from_slice(&bytes)?;
+            // The owner's email is where notify to the owner sends. It comes
+            // from Konae's owner record, never from the payload.
+            payload["contactEmail"] = owner_email(state, &owner.id).map_or(Value::Null, Value::String);
             for key in ["name", "slug", "manifest"] {
                 if let Some(value) = payload["project"].get(key) {
                     metadata[key] = value.clone();
@@ -1670,12 +1670,19 @@ async fn admin_call(
             tx.commit()?;
             Ok(receipt)
         }
-        "app_owner_enter" => super::app_owner::admin_call(state, owner, &a).await,
         name if name.starts_with("app_") => super::invitations::admin_call(state, owner, name, &a).await,
         name if name.starts_with("domain_") => super::domain::admin_call(state, owner, name, &a).await,
         name if name.starts_with("path_") => super::path::admin_call(state, owner, name, &a).await,
         _ => anyhow::bail!("Unknown tool."),
     }
+}
+
+/// The email of the owner's active account, when Konae keeps one. An owner
+/// who signs in through Clerk has none.
+fn owner_email(state: &AppState, owner: &str) -> Option<String> {
+    let db = Connection::open_with_flags(state.data_root.join("owners.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    db.busy_timeout(std::time::Duration::from_secs(5)).ok()?;
+    db.query_row("SELECT email FROM app_users WHERE id = ?1 AND state = 'active'", [owner], |row| row.get(0)).optional().ok().flatten()
 }
 
 const METHODS_INVALID: &str = "Name the methods as password and google.";

@@ -1,6 +1,7 @@
 -- One row per person who joined. The role lives here, in the app's rows:
--- the Kernel knows who is signed in and which account is the owner's, and
--- the app decides what each role may do. me.join copies the owner's role in.
+-- the Kernel knows who is signed in, and the app decides what each role may
+-- do. Everyone joins as member; the Project Owner names the app's owner with
+-- SQL in Data: UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>';
 CREATE TABLE IF NOT EXISTS profiles (
   user_id TEXT PRIMARY KEY NOT NULL,
   display_name TEXT NOT NULL CHECK (length(trim(display_name)) BETWEEN 1 AND 40),

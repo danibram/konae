@@ -1,13 +1,20 @@
 import { templateHelpers, templateStyles } from "./shared";
 import type { TemplateSource } from "./types";
 
-const schema = `-- Written by any visitor through the form. Only the owner reads it.
+const schema = `-- Written by any visitor through the form. Only the accounts in admins read it.
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   email TEXT NOT NULL,
   body TEXT NOT NULL,
   received_at INTEGER NOT NULL
+);
+
+-- The accounts that read what the app keeps for its staff. The owner adds one
+-- from Data > SQL with the account ID that Auth > Users shows:
+--   INSERT INTO admins (user_id) VALUES ('<account id>');
+CREATE TABLE IF NOT EXISTS admins (
+  user_id TEXT PRIMARY KEY
 );
 `;
 
@@ -33,8 +40,14 @@ const actions = {
     "messages.list": {
       kind: "query",
       access: "authenticated",
-      statement: "SELECT id, name, email, body, received_at FROM messages WHERE ?1 = 'owner' ORDER BY id DESC LIMIT 100",
-      bindings: [{ source: "actor", field: "role" }],
+      statement: "SELECT id, name, email, body, received_at FROM messages WHERE EXISTS (SELECT 1 FROM admins WHERE user_id = ?1) ORDER BY id DESC LIMIT 100",
+      bindings: [{ source: "actor", field: "id" }],
+    },
+    "admins.me": {
+      kind: "query",
+      access: "authenticated",
+      statement: "SELECT count(*) AS admin FROM admins WHERE user_id = ?1",
+      bindings: [{ source: "actor", field: "id" }],
     },
   },
 };
@@ -47,7 +60,7 @@ const html = `
       <p class="ui-eyebrow">Get in touch</p>
       <h1 class="ui-title">Write to us</h1>
     </div>
-    <div class="ui-identity"><span id="identity"></span><button id="sign-in" class="ui-button ui-button-sm">Owner sign in</button></div>
+    <div class="ui-identity"><span id="identity"></span><button id="sign-in" class="ui-button ui-button-sm">Staff sign in</button></div>
   </header>
 
   <form id="message-form" class="ui-card ui-form">
@@ -59,7 +72,7 @@ const html = `
   <p id="status" class="ui-status" role="status" aria-live="polite"></p>
 
   <section id="inbox" hidden>
-    <div class="ui-section-head"><span>Messages</span><span>Only the owner sees these</span></div>
+    <div class="ui-section-head"><span>Messages</span><span>Only the accounts in admins see these</span></div>
     <div id="messages" class="ui-list"></div>
   </section>
 </main>`;
@@ -69,8 +82,9 @@ async function start() {
   const session = await miniapp.auth.session();
   $('#identity').textContent = session.role === 'anonymous' ? '' : session.name;
   $('#sign-in').hidden = session.role !== 'anonymous';
-  $('#inbox').hidden = session.role !== 'owner';
-  if (session.role !== 'owner') return;
+  const admin = session.role !== 'anonymous' && (await miniapp.actions.call('admins.me'))[0].admin > 0;
+  $('#inbox').hidden = !admin;
+  if (!admin) return;
   const messages = await miniapp.actions.call('messages.list');
   $('#messages').innerHTML = messages.length ? messages.map(message =>
     '<article class="ui-list-item"><div class="ui-list-main"><p>' + escapeHtml(message.body) + '</p><small>' + escapeHtml(message.name) + ' · ' + escapeHtml(message.email) + ' · ' + when(message.received_at) + '</small></div></article>'

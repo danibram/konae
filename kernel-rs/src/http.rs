@@ -618,13 +618,6 @@ impl Caller {
         }
     }
 
-    /// A person's role in the app. A key is a program, not a member, so it has none.
-    fn actor_role(&self) -> Option<&str> {
-        match self {
-            Caller::Person(user) => Some(&user.role),
-            Caller::Key(_) | Caller::Visitor => None,
-        }
-    }
 }
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {
@@ -1147,7 +1140,7 @@ async fn run_verified(
         None => input,
     };
     let action = &table.program.actions[name];
-    let params = match resolve_bindings(action, &input, caller.actor_id(), caller.actor_role()) {
+    let params = match resolve_bindings(action, &input, caller.actor_id()) {
         Ok(params) => params,
         Err(message) => return refusal(StatusCode::BAD_REQUEST, &message),
     };

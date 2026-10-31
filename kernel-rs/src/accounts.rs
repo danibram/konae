@@ -822,6 +822,7 @@ mod tests {
             artifact_version: None,
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
+            contact_email: None,
         }
     }
 

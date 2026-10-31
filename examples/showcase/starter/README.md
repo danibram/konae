@@ -26,8 +26,8 @@ Every rule lives in `actions.json`. The Kernel binds the caller's ID and the SQL
 | Accounts | Signup Policy Open, `KONAE_ACCOUNT_VERIFICATION=required` | `konae.json` `signupPolicy`, the Kernel's sign-in page |
 | Member area | `actor` bindings on `authenticated` actions | `me.*`, `notes.*`, `attachments.*` |
 | Team area with roles | A role column and guarded mutations whose `WHERE` checks the caller's role | `team.*`, `updates.publish` |
-| Admin area for the owner | Guards on `{ "source": "actor", "field": "role" }` equal to `'owner'`, which the Kernel gives only the Project Owner's own account | `members.list`, `members.promote`, `members.demote`, `updates.remove`, `admin.stats` |
-| The in-app owner | Open as owner in the editor's Users view (`app_owner_enter`) links the account with the owner's email and gives it the role `owner`; `me.join` copies that role into the profile | `me.join` |
+| Admin area for the owner | Guards that find the caller's `profiles` row with role `'owner'` through `{ "source": "actor", "field": "id" }` | `members.list`, `members.promote`, `members.demote`, `updates.remove`, `admin.stats` |
+| The in-app owner | The Project Owner sets one `profiles` row to `owner` with SQL in the editor's Data panel; the Kernel keeps no role | `me.join` adds everyone as member |
 | Private write API | A key-only route on a public app; the key's ID is the actor | `updates.post` at `POST /api/updates` |
 | Signed webhook | A route with a signature and a signing secret set with `secret_set` | `status.report` at `POST /hooks/status`, header `X-Starter-Signature` |
 | Call to the team inbox | A call action the Kernel signs and sends to the [inbox](../inbox/README.md) showcase's webhook, with a `then` mutation that keeps the answer (ADR-0019) | `status.escalate`, `status.escalated`, `status.escalations`; the secret `inbox_events` set with `"use": "call"` |
@@ -64,7 +64,7 @@ cp examples/showcase/starter/{index.html,styles.css,app.js,favicon.svg,schema.sq
 bun run konae -- publish --dir /tmp/starter
 ```
 
-Then, as the Project Owner, open the project's Auth > Users view in the editor and choose Open as owner. The app opens signed in as your own email with the role `owner`, and its admin area is where you make members team admins. An agent with the owner's browser session calls `app_owner_enter` for the same link.
+Then, as the Project Owner, join the app with your own account, copy its ID from the project's Auth > Users view, and run `UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>'` in Data > SQL on the published database. The app's admin area is where you then make members team admins.
 
 ## What the replay proves
 
@@ -76,7 +76,7 @@ The run of 2026-11-07 passed every check in about 75 seconds.
 | A visitor reads the public rows and the public API only | `status.list`, `updates.list`, `downloads.list` and `GET /api/updates` answer; `notes.list`, `team.roster` and `me.join` answer `authentication-required`; the key-only route answers 401; a private attachment answers 404 |
 | A member reads and writes only their own rows | Ben reads only his note; deleting Ana's note gets the guard; a `userId` input is refused |
 | A team admin promoted by a guarded mutation sees the team area | Ben's and Ana's `members.promote` get the guard; the owner's promotes Ana; then `team.roster` and `team.posts` answer her and still answer Ben with no rows |
-| The owner's account is the app's owner without a key | Ana, Ben and the owner sign up as members; `app_owner_enter` with the owner's session links the owner's account, its entry link signs in once and answers 410 after, and `auth_session` and `app_users_list` then say `owner`; `me.join` stores that role from the actor binding |
+| The owner's account is the app's owner without a key | Ana, Ben and the owner sign up and join as members; the owner's `database_execute` sql sets the owner's `profiles` row to `owner`, and the owner-only actions read that row against `actor.id` |
 | A key writes within its scope and is refused outside it | The Release bot key posts 12 updates whose `author_id` is the key's ID; on the webhook it gets 403 |
 | A signed webhook updates a row | Two deliveries insert and update `api`; unsigned, replayed, stale and wrongly signed deliveries answer 401, 409, 401, 401 |
 | A status change reaches the team inbox through a call | The replay publishes the inbox showcase on the same Kernel. Ana's `status.escalate` answers `{ callId, queued: true }`; the Kernel signs the request with `inbox_events` and the inbox's route files one event with source `starter`, which `GET /api/events` with an inbox key returns. `status.escalated` stores status 200 and filed 1, and filed 0 for the same change again. A visitor's call answers `authentication-required`, writing the answer by hand is refused, and `calls_read` lists three calls delivered on the first attempt |
@@ -95,7 +95,7 @@ Each row is a limit the app met, with the exact answer. None was worked around.
 
 | Primitive | Request | Answer | What it costs the app |
 | --- | --- | --- | --- |
-| Owner inside the app | `auth_session` for the app account the Project Owner opened with the owner's own email | Was `role "member"`, with no binding that told the app this account was its owner, so Starter appointed one through a key-only route called with curl. Fixed on 2026-11-07: Open as owner in the Users view, or `app_owner_enter`, gives that account the role `owner`, which `auth_session` returns and `{ "source": "actor", "field": "role" }` binds | None now. The key-only route `owners.appoint` is gone |
+| Owner inside the app | `auth_session` for the app account the Project Owner opened with the owner's own email | Was `role "member"`, with no binding that told the app this account was its owner, so Starter appointed one through a key-only route called with curl. Fixed on 2026-11-07 with an owner role the Kernel gave the owner's account; replaced on 2026-11-10, when ADR-0027 removed that role, by a `profiles` row the owner sets with SQL. |
 | Actor binding | An action that wants the caller's email | No binding gives it: only `actor.id`, `kernel.now` and literals exist | Display names are typed by the member, and the owner matches emails to IDs with `app_users_list` |
 | Required verification | Ana signs in before opening her verification link | Was `401 {"error":"Email or password is incorrect."}`. Fixed on 2026-11-07: from her browser, `401 {"error":"Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first."}`; from another browser, the plain answer | None now. The hint depends on a cookie the signup request set, never on the account, so it tells nobody whether an address has an account |
 | conform | `conform --token` as a member, on `updates.publish`, a guarded mutation with a nullable `body` | Fixed on 2026-11-07: `PASS updates.publish: answers without the nullable body. Refused with its guard, "Only team admins can publish an update.": the bindings accepted the call without body.` Before, the same probe failed with `Refused with "Only team admins can publish an update." where the contract makes body optional.` | None now. conform passes a guard refusal on the probe that omits a nullable input, as it does on the valid call |

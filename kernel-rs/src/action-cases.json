@@ -225,7 +225,7 @@
   "code": "action.binding-invalid"
  },
  {
-  "case": "an actor binding of the role",
+  "case": "an actor binding of the role, which no account has",
   "actions": {
    "members.promote": {
     "kind": "mutation",
@@ -244,7 +244,8 @@
     ]
    }
   },
-  "error": null
+  "error": "Invalid binding 1 in members.promote.",
+  "code": "action.binding-invalid"
  },
  {
   "case": "an actor binding of another field",

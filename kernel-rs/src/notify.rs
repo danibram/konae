@@ -2,7 +2,8 @@
 //! changes a row (ADR-0016).
 //!
 //! `"notify": { "to": "owner" | "actor", "subject", "body" }` sends to the
-//! Project Owner's account email or to the calling account's verified email,
+//! Deployment's contact email, which a publish from Konae fills with the
+//! owner's email, or to the calling account's verified email,
 //! never to an address from the input, so an app cannot relay mail. The
 //! subject and body are templates whose only placeholders are
 //! `{input.<key>}`, for one of the action's input bindings, and `{actor.id}`.
@@ -445,8 +446,8 @@ fn queue_notices(
     };
     let all: Vec<&Map<String, Value>> = changed.rows.iter().collect();
     match &declared.to {
-        Recipient::Owner => match owner_email(state, &creator)? {
-            Some(email) => Ok(vec![send(&email, &all, changed.count)?]),
+        Recipient::Owner => match deployment.contact_email.as_deref() {
+            Some(email) => Ok(vec![send(email, &all, changed.count)?]),
             None => Ok(vec![NoticeOutcome::Refused("owner-has-no-email")]),
         },
         Recipient::Actor => {
@@ -484,15 +485,6 @@ fn read_only(path: &std::path::Path) -> anyhow::Result<Option<Connection>> {
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
     Ok(Some(connection))
-}
-
-/// The email of the owner's active account in `owners.sqlite`. An owner
-/// who signs in through Clerk keeps no email in the Kernel.
-fn owner_email(state: &AppState, owner: &str) -> anyhow::Result<Option<String>> {
-    let Some(db) = read_only(&state.data_root.join("owners.sqlite"))? else { return Ok(None) };
-    Ok(db
-        .query_row("SELECT email FROM app_users WHERE id = ?1 AND state = 'active'", [owner], |row| row.get(0))
-        .optional()?)
 }
 
 /// The email of an active app account that proved control of it by

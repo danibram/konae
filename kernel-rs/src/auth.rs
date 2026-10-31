@@ -128,12 +128,24 @@ pub struct AuthService {
     verification: Verification,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+/// A signed-in app account. Roles are rows in the app's own tables; the
+/// `role` a client reads is "member" for every account and "anonymous" for a
+/// visitor, so it tells signed in from signed out and nothing more.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthUser {
     pub user_id: String,
     pub name: String,
-    pub role: String,
+}
+
+impl Serialize for AuthUser {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut user = serializer.serialize_struct("AuthUser", 3)?;
+        user.serialize_field("userId", &self.user_id)?;
+        user.serialize_field("name", &self.name)?;
+        user.serialize_field("role", "member")?;
+        user.end()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -167,9 +179,6 @@ pub enum AuthError {
     AdmissionRefused(&'static str),
     /// An invitation answered with an identity for another email.
     InvitedEmailDiffers,
-    /// An outside issuer vouched for the email of the owner's app account,
-    /// which never proved that email, so it would take the account back.
-    OwnerAccountUnproven,
     Storage(rusqlite::Error),
     PasswordHash,
 }
@@ -206,10 +215,6 @@ impl fmt::Display for AuthError {
             Self::InvitedEmailDiffers => write!(
                 f,
                 "This invitation is for another email. Continue with the Google account of the invited email."
-            ),
-            Self::OwnerAccountUnproven => write!(
-                f,
-                "This email belongs to the app owner's account. The owner opens it with Open as owner in the editor, not with Google."
             ),
             Self::Storage(_) | Self::PasswordHash => write!(f, "Authentication storage failed."),
         }
@@ -268,7 +273,6 @@ impl AuthService {
                id TEXT PRIMARY KEY,
                email TEXT NOT NULL UNIQUE COLLATE NOCASE,
                password_hash TEXT NOT NULL,
-               role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'member')),
                created_at INTEGER NOT NULL
              );
              CREATE TABLE IF NOT EXISTS app_sessions (
@@ -319,14 +323,13 @@ impl AuthService {
         let user = AuthUser {
             user_id: Uuid::new_v4().to_string(),
             name: account.email.clone(),
-            role: "member".into(),
         };
         let mut connection = self.connection()?;
         let transaction = connection.transaction().map_err(AuthError::Storage)?;
         let inserted = transaction
             .execute(
-                "INSERT OR IGNORE INTO app_users (id, email, password_hash, role, created_at, state)
-             VALUES (?1, ?2, ?3, 'member', ?4, 'active')",
+                "INSERT OR IGNORE INTO app_users (id, email, password_hash, created_at, state)
+             VALUES (?1, ?2, ?3, ?4, 'active')",
                 params![user.user_id, account.email, account.password_hash, now_seconds()],
             )
             .map_err(AuthError::Storage)?;
@@ -350,15 +353,14 @@ impl AuthService {
         validate_password(password).map_err(|_| AuthError::InvalidCredentials)?;
         let connection = self.connection()?;
         let record = connection.query_row(
-            "SELECT id, email, password_hash, role FROM app_users WHERE email = ?1 COLLATE NOCASE",
+            "SELECT id, email, password_hash FROM app_users WHERE email = ?1 COLLATE NOCASE",
             [&email],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
         ).optional().map_err(AuthError::Storage)?;
-        Ok(record.map(|(user_id, email, password_hash, role)| StoredLogin {
+        Ok(record.map(|(user_id, email, password_hash)| StoredLogin {
             user: AuthUser {
                 user_id,
                 name: email,
-                role,
             },
             password_hash,
         }))
@@ -398,7 +400,7 @@ impl AuthService {
         let connection = self.connection()?;
         let record = connection
             .query_row(
-                "SELECT u.id, u.email, u.role, s.expires_at
+                "SELECT u.id, u.email, s.expires_at
              FROM app_sessions s JOIN app_users u ON u.id = s.user_id
              WHERE s.token_hash = ?1 AND u.state = 'active'",
                 [&token_hash],
@@ -406,14 +408,13 @@ impl AuthService {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(2)?,
                     ))
                 },
             )
             .optional()
             .map_err(AuthError::Storage)?;
-        let Some((user_id, email, role, expires_at)) = record else {
+        let Some((user_id, email, expires_at)) = record else {
             return Ok(None);
         };
         if expires_at <= now_seconds() {
@@ -428,7 +429,6 @@ impl AuthService {
         Ok(Some(AuthUser {
             user_id,
             name: email,
-            role,
         }))
     }
 
@@ -501,8 +501,8 @@ impl AuthService {
                 let user_id = Uuid::new_v4().to_string();
                 transaction
                     .execute(
-                        "INSERT INTO app_users (id, email, password_hash, role, created_at, state)
-                         VALUES (?1, ?2, ?3, 'member', ?4, 'pending')",
+                        "INSERT INTO app_users (id, email, password_hash, created_at, state)
+                         VALUES (?1, ?2, ?3, ?4, 'pending')",
                         params![user_id, email, NO_PASSWORD, now_seconds()],
                     )
                     .map_err(AuthError::Storage)?;
@@ -659,15 +659,11 @@ impl AuthService {
         transaction
             .execute("DELETE FROM app_sessions WHERE user_id = ?1", [&user_id])
             .map_err(AuthError::Storage)?;
-        let role: String = transaction
-            .query_row("SELECT role FROM app_users WHERE id = ?1", [&user_id], |row| row.get(0))
-            .map_err(AuthError::Storage)?;
         let session = issue_session(
             &transaction,
             AuthUser {
                 user_id,
                 name: email,
-                role,
             },
         )?;
         transaction.commit().map_err(AuthError::Storage)?;
@@ -773,17 +769,17 @@ impl AuthService {
         let transaction = immediate(&mut connection)?;
         let outcome = match intent {
             IdentityIntent::Invitation { token_hash } => {
-                let record: Option<(String, String, String, String)> = transaction
+                let record: Option<(String, String, String)> = transaction
                     .query_row(
-                        "SELECT u.id, u.email, u.state, u.role FROM account_challenges c JOIN app_users u ON u.id = c.user_id
+                        "SELECT u.id, u.email, u.state FROM account_challenges c JOIN app_users u ON u.id = c.user_id
                          WHERE c.token_hash = ?1 AND c.purpose = 'invitation' AND c.scope = ?2
                            AND c.consumed_at IS NULL AND c.expires_at > ?3",
                         params![token_hash, self.scope, now],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                     )
                     .optional()
                     .map_err(AuthError::Storage)?;
-                let Some((user_id, invited, state, role)) = record else {
+                let Some((user_id, invited, state)) = record else {
                     return Err(AuthError::InvalidChallenge);
                 };
                 match state.as_str() {
@@ -821,31 +817,24 @@ impl AuthService {
                 transaction
                     .execute("DELETE FROM app_sessions WHERE user_id = ?1", [&user_id])
                     .map_err(AuthError::Storage)?;
-                let session = issue_session(&transaction, AuthUser { user_id, name: invited, role })?;
+                let session = issue_session(&transaction, AuthUser { user_id, name: invited })?;
                 IdentitySignIn { session, outcome: IdentityOutcome::Created }
             }
             IdentityIntent::SignIn => {
-                let existing: Option<(String, String, String, String, Option<i64>)> = transaction
+                let existing: Option<(String, String, String, Option<i64>)> = transaction
                     .query_row(
-                        "SELECT id, email, role, state, verified_at FROM app_users WHERE email = ?1 COLLATE NOCASE",
+                        "SELECT id, email, state, verified_at FROM app_users WHERE email = ?1 COLLATE NOCASE",
                         [&email],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                     )
                     .optional()
                     .map_err(AuthError::Storage)?;
                 match existing {
-                    Some((user_id, account_email, role, state, verified_at)) => {
+                    Some((user_id, account_email, state, verified_at)) => {
                         match state.as_str() {
                             "active" => {}
                             "suspended" => return Err(AuthError::AccountSuspended),
                             _ => return Err(AuthError::AccountPending),
-                        }
-                        if verified_at.is_none() && role == "owner" {
-                            // The owner's app account comes from the creator
-                            // email, which local verification never proved.
-                            // Google does not take it back or end the
-                            // sessions the owner opened from the editor.
-                            return Err(AuthError::OwnerAccountUnproven);
                         }
                         if verified_at.is_none() {
                             // Nobody proved this email before: under local
@@ -867,7 +856,7 @@ impl AuthService {
                                 .execute("DELETE FROM account_challenges WHERE user_id = ?1 AND consumed_at IS NULL", [&user_id])
                                 .map_err(AuthError::Storage)?;
                         }
-                        let session = issue_session(&transaction, AuthUser { user_id, name: account_email, role })?;
+                        let session = issue_session(&transaction, AuthUser { user_id, name: account_email })?;
                         IdentitySignIn { session, outcome: IdentityOutcome::SignedIn }
                     }
                     None => {
@@ -877,12 +866,12 @@ impl AuthService {
                         let user_id = Uuid::new_v4().to_string();
                         transaction
                             .execute(
-                                "INSERT INTO app_users (id, email, password_hash, role, created_at, state, verified_at)
-                                 VALUES (?1, ?2, ?3, 'member', ?4, 'active', ?4)",
+                                "INSERT INTO app_users (id, email, password_hash, created_at, state, verified_at)
+                                 VALUES (?1, ?2, ?3, ?4, 'active', ?4)",
                                 params![user_id, email, unusable_password_hash()?, now],
                             )
                             .map_err(AuthError::Storage)?;
-                        let session = issue_session(&transaction, AuthUser { user_id, name: email.clone(), role: "member".into() })?;
+                        let session = issue_session(&transaction, AuthUser { user_id, name: email.clone() })?;
                         IdentitySignIn { session, outcome: IdentityOutcome::Created }
                     }
                 }
@@ -1384,7 +1373,6 @@ mod tests {
             .signup("two@example.test", "another correct password")
             .unwrap();
         assert_ne!(session.user.user_id, other_user.user.user_id);
-        assert_eq!(session.user.role, "member");
         assert!(one.authenticate(Some(&session.token)).unwrap().is_some());
         assert_eq!(
             one.authenticate(Some(&other_user.token))
@@ -1515,7 +1503,7 @@ mod tests {
         assert_eq!(state_of(&app, "new@example.test").1, "pending");
         // No password was stored at signup, so none signs in.
         assert!(matches!(sign_in(&auth, "new@example.test", PASSWORD), Err(AuthError::InvalidCredentials)));
-        let user = AuthUser { user_id: state_of(&app, "new@example.test").0, name: "new@example.test".into(), role: "member".into() };
+        let user = AuthUser { user_id: state_of(&app, "new@example.test").0, name: "new@example.test".into() };
         assert!(matches!(auth.start_session(user), Err(AuthError::AccountPending)));
         let session = auth
             .complete_challenge(Purpose::Verification, &challenge.token, password(PASSWORD), |_| true)
@@ -1752,31 +1740,6 @@ mod tests {
     }
 
     #[test]
-    fn a_google_sign_in_does_not_take_back_the_owners_unproven_account() {
-        let app = TempDb::new();
-        let auth = app.scoped(&deployment_scope("app-one"), Verification::Local);
-        let mut connection = auth.connection().unwrap();
-        let tx = immediate(&mut connection).unwrap();
-        let claimed = crate::app_owner::claim(&tx, "creator@gmail.com", false).unwrap().unwrap();
-        let owner_session = issue_session(&tx, AuthUser { user_id: claimed.user_id.clone(), name: "creator@gmail.com".into(), role: "owner".into() }).unwrap();
-        tx.commit().unwrap();
-        let refused = auth.sign_in_with_identity(&google("Creator@gmail.com"), &IdentityIntent::SignIn, |_| true, |_| true, |_, _, _| Ok(()));
-        assert!(matches!(refused, Err(AuthError::OwnerAccountUnproven)));
-        assert!(auth.authenticate(Some(&owner_session.token)).unwrap().is_some(), "the owner's session survives");
-        let (role, verified_at): (String, Option<i64>) = auth
-            .connection()
-            .unwrap()
-            .query_row("SELECT role, verified_at FROM app_users WHERE id = ?1", [&claimed.user_id], |row| Ok((row.get(0)?, row.get(1)?)))
-            .unwrap();
-        assert_eq!((role.as_str(), verified_at), ("owner", None), "nothing changed");
-        // Once the owner's email is proven, Google signs the owner in to the same account.
-        auth.connection().unwrap().execute("UPDATE app_users SET verified_at = 1 WHERE id = ?1", [&claimed.user_id]).unwrap();
-        let signed = auth.sign_in_with_identity(&google("creator@gmail.com"), &IdentityIntent::SignIn, |_| true, |_| true, |_, _, _| Ok(())).unwrap();
-        assert_eq!((signed.session.user.user_id.as_str(), signed.session.user.role.as_str()), (claimed.user_id.as_str(), "owner"));
-        assert!(auth.authenticate(Some(&owner_session.token)).unwrap().is_some(), "a proven account keeps its sessions");
-    }
-
-    #[test]
     fn a_suspended_account_gets_no_session_and_no_challenge() {
         let app = TempDb::new();
         let auth = app.required();
@@ -1845,7 +1808,7 @@ mod tests {
         let connection = Connection::open(&app.0).unwrap();
         connection.execute_batch(
             "CREATE TABLE app_users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-               password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'member')),
+               password_hash TEXT NOT NULL,
                created_at INTEGER NOT NULL);
              CREATE TABLE app_sessions (token_hash TEXT PRIMARY KEY,
                user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL);",

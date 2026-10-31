@@ -29,7 +29,6 @@ mod accounts;
 mod action_shape;
 mod admission;
 mod app_db;
-mod app_owner;
 mod artifact;
 mod auth;
 mod calls;
@@ -107,6 +106,10 @@ struct Deployment {
     signup_policy: SignupPolicy,
     /// How people sign in. Password always; Google when the owner turned it on.
     sign_in_methods: Vec<SignInMethod>,
+    /// Where `"notify": { "to": "owner" }` sends. A publish from Konae fills
+    /// it with the owner's email; the Kernel keeps no record of owners.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    contact_email: Option<String>,
 }
 
 /// The stored form of a Deployment, where the signup policy may be missing.
@@ -127,6 +130,8 @@ struct DeploymentRecord {
     signup_policy: Option<SignupPolicy>,
     #[serde(default)]
     sign_in_methods: Option<Vec<SignInMethod>>,
+    #[serde(default)]
+    contact_email: Option<String>,
 }
 
 impl From<DeploymentRecord> for Deployment {
@@ -155,6 +160,7 @@ impl From<DeploymentRecord> for Deployment {
                 .sign_in_methods
                 .and_then(|methods| sign_in_methods_from_input(&methods).ok())
                 .unwrap_or_else(default_sign_in_methods),
+            contact_email: record.contact_email,
         }
     }
 }
@@ -316,6 +322,9 @@ struct DeployInput {
     initial_package: Option<package::InitialPackage>,
     #[serde(default)]
     initial_domain: Option<String>,
+    /// The email `notify` to the owner reaches. Konae's release_apply sets it.
+    #[serde(default)]
+    contact_email: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -497,7 +506,6 @@ fn stack(state: AppState) -> tower::util::BoxCloneService<Request, axum::respons
         .merge(accounts::routes())
         .merge(http::routes())
         .merge(invitations::routes())
-        .merge(app_owner::routes())
         .merge(mail::routes())
         .route("/_konae/{*path}", axum::routing::any(|| async { error(StatusCode::GONE, "Use authenticated MCP for platform operations.") }))
         .route("/{*path}", get(http::get_route).post(http::post_route))
@@ -748,6 +756,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             Some(item) => item.sign_in_methods.clone(),
             None => initial_sign_in_methods.unwrap_or_else(default_sign_in_methods),
         },
+        contact_email: input.contact_email.clone(),
     };
     let directory = state.data_root.join("deployments").join(&id);
     if let Err(error_value) = tokio::fs::create_dir_all(&directory).await {
@@ -1025,7 +1034,6 @@ async fn invoke_action(
         action,
         &input,
         actor.as_ref().map(|user| user.user_id.as_str()),
-        actor.as_ref().map(|user| user.role.as_str()),
     ) {
         Ok(value) => value,
         Err(message) => return error(StatusCode::BAD_REQUEST, &message),
@@ -2721,15 +2729,11 @@ fn run_mutation(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -
 }
 
 /// Binds an action's parameters. `actor_id` is the caller's ID: a person's
-/// or an API key's. `actor_role` is a person's role in this app's
-/// `identity.sqlite`, "owner" or "member", and None for a visitor, a key or a
-/// signed request, which binds NULL rather than failing, so a guard such as
-/// `?1 = 'owner'` refuses them.
+/// or an API key's.
 fn resolve_bindings(
     action: &ActionDefinition,
     input: &Value,
     actor_id: Option<&str>,
-    actor_role: Option<&str>,
 ) -> std::result::Result<Vec<SqlValue>, String> {
     let object = input
         .as_object()
@@ -2755,9 +2759,6 @@ fn resolve_bindings(
             "actor" if binding.field.as_deref() == Some("id") => actor_id
                 .map(|id| SqlValue::Text(id.to_owned()))
                 .ok_or_else(|| "This action requires an authenticated actor.".to_string()),
-            "actor" if binding.field.as_deref() == Some("role") => {
-                Ok(actor_role.map_or(SqlValue::Null, |role| SqlValue::Text(role.to_owned())))
-            }
             "kernel" if binding.field.as_deref() == Some("now") => {
                 Ok(SqlValue::Integer(now_ms() as i64))
             }
@@ -3648,7 +3649,7 @@ fn auth_error(error_value: AuthError) -> Response {
     let status = match error_value {
         AuthError::InvalidEmail | AuthError::WeakPassword => StatusCode::BAD_REQUEST,
         AuthError::EmailTaken | AuthError::AccountExists => StatusCode::CONFLICT,
-        AuthError::InvitedEmailDiffers | AuthError::OwnerAccountUnproven => StatusCode::FORBIDDEN,
+        AuthError::InvitedEmailDiffers => StatusCode::FORBIDDEN,
         AuthError::InvalidCredentials => StatusCode::UNAUTHORIZED,
         AuthError::AccountPending
         | AuthError::AccountSuspended
@@ -3866,6 +3867,7 @@ mod tests {
             artifact_version: None,
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
+            contact_email: None,
         };
         tokio::fs::create_dir_all(root.join("deployments").join(&deployment.id))
             .await
@@ -3980,7 +3982,7 @@ mod tests {
             }],
         );
         assert_eq!(
-            resolve_bindings(&definition, &json!({"title": "Ship it"}), None, None).unwrap(),
+            resolve_bindings(&definition, &json!({"title": "Ship it"}), None).unwrap(),
             vec![SqlValue::Text("Ship it".into())]
         );
         assert!(
@@ -3988,34 +3990,15 @@ mod tests {
                 &definition,
                 &json!({"title": "Ship it", "sql": "DROP TABLE tasks"}),
                 None,
-                None,
             )
             .unwrap_err()
             .contains("Unexpected")
         );
         assert!(
-            resolve_bindings(&definition, &json!({"title": 42}), None, None)
+            resolve_bindings(&definition, &json!({"title": 42}), None)
                 .unwrap_err()
                 .contains("non-empty string")
         );
-    }
-
-    #[test]
-    fn the_actor_role_binds_a_persons_role_and_null_for_anyone_else() {
-        let definition: ActionDefinition = serde_json::from_value(json!({"kind": "mutation", "access": "authenticated",
-            "statement": "UPDATE profiles SET role = 'admin' WHERE user_id = ?2 AND ?1 = 'owner'",
-            "bindings": [{"source": "actor", "field": "role"}, {"source": "actor", "field": "id"}]})).unwrap();
-        assert_eq!(
-            resolve_bindings(&definition, &json!({}), Some("olga"), Some("owner")).unwrap(),
-            vec![SqlValue::Text("owner".into()), SqlValue::Text("olga".into())]
-        );
-        assert_eq!(resolve_bindings(&definition, &json!({}), Some("ana"), Some("member")).unwrap()[0], SqlValue::Text("member".into()));
-        // An API key has an ID and no role; the role binds NULL and the guard's WHERE refuses.
-        assert_eq!(resolve_bindings(&definition, &json!({}), Some("key-1"), None).unwrap()[0], SqlValue::Null);
-        let anonymous: ActionDefinition = serde_json::from_value(json!({"kind": "query", "access": "anonymous",
-            "statement": "SELECT ?1 = 'owner' AS owner LIMIT 1", "bindings": [{"source": "actor", "field": "role"}]})).unwrap();
-        assert_eq!(resolve_bindings(&anonymous, &json!({}), None, None).unwrap(), vec![SqlValue::Null], "a visitor binds NULL instead of failing");
-        assert!(resolve_bindings(&anonymous, &json!({"role": "owner"}), None, None).unwrap_err().contains("Unexpected action input: role"), "an input cannot supply it");
     }
 
     #[tokio::test]
@@ -4470,25 +4453,25 @@ mod tests {
             let definition = action("query", "SELECT ?1", vec![binding]);
             assert!(validate_action("inputs.echo", &definition).is_ok());
             for input in [json!({}), json!({"value": null})] {
-                assert_eq!(resolve_bindings(&definition, &input, None, None).unwrap(), vec![SqlValue::Null]);
+                assert_eq!(resolve_bindings(&definition, &input, None).unwrap(), vec![SqlValue::Null]);
             }
-            assert!(resolve_bindings(&definition, &json!({"other": null}), None, None).unwrap_err().contains("Unexpected"));
+            assert!(resolve_bindings(&definition, &json!({"other": null}), None).unwrap_err().contains("Unexpected"));
             let wrong = match value_type {
                 "string" => json!({"value": 5}),
                 "number" => json!({"value": "5"}),
                 _ => json!({"value": 0}),
             };
-            assert!(resolve_bindings(&definition, &wrong, None, None).is_err());
+            assert!(resolve_bindings(&definition, &wrong, None).is_err());
             let required = action("query", "SELECT ?1", vec![input_binding("value", value_type, Some(4))]);
-            assert!(resolve_bindings(&required, &json!({}), None, None).is_err());
-            assert!(resolve_bindings(&required, &json!({"value": null}), None, None).is_err());
+            assert!(resolve_bindings(&required, &json!({}), None).is_err());
+            assert!(resolve_bindings(&required, &json!({"value": null}), None).is_err());
         }
         let mut binding = input_binding("value", "string", Some(4));
         binding.nullable = true;
         let definition = action("query", "SELECT ?1", vec![binding]);
-        assert!(resolve_bindings(&definition, &json!({"value": ""}), None, None).is_err());
-        assert!(resolve_bindings(&definition, &json!({"value": "longer"}), None, None).is_err());
-        assert_eq!(resolve_bindings(&definition, &json!({"value": "ship"}), None, None).unwrap(), vec![SqlValue::Text("ship".into())]);
+        assert!(resolve_bindings(&definition, &json!({"value": ""}), None).is_err());
+        assert!(resolve_bindings(&definition, &json!({"value": "longer"}), None).is_err());
+        assert_eq!(resolve_bindings(&definition, &json!({"value": "ship"}), None).unwrap(), vec![SqlValue::Text("ship".into())]);
         for source in ["actor", "kernel", "literal"] {
             let mut binding = input_binding("value", "string", None);
             binding.source = source.into();
@@ -4617,19 +4600,19 @@ mod tests {
             vec![input_binding("value", "number", None)],
         );
         assert_eq!(
-            resolve_bindings(&definition, &json!({"value": 5}), None, None).unwrap(),
+            resolve_bindings(&definition, &json!({"value": 5}), None).unwrap(),
             vec![SqlValue::Integer(5)]
         );
         assert_eq!(
-            resolve_bindings(&definition, &json!({"value": -3}), None, None).unwrap(),
+            resolve_bindings(&definition, &json!({"value": -3}), None).unwrap(),
             vec![SqlValue::Integer(-3)]
         );
         assert_eq!(
-            resolve_bindings(&definition, &json!({"value": 5.5}), None, None).unwrap(),
+            resolve_bindings(&definition, &json!({"value": 5.5}), None).unwrap(),
             vec![SqlValue::Real(5.5)]
         );
         assert_eq!(
-            resolve_bindings(&definition, &json!({"value": u64::MAX}), None, None).unwrap(),
+            resolve_bindings(&definition, &json!({"value": u64::MAX}), None).unwrap(),
             vec![SqlValue::Real(u64::MAX as f64)]
         );
 
@@ -4640,7 +4623,7 @@ mod tests {
             .unwrap()
             .execute("CREATE TABLE items(label TEXT)", [])
             .unwrap();
-        let params = resolve_bindings(&definition, &json!({"value": 5}), None, None).unwrap();
+        let params = resolve_bindings(&definition, &json!({"value": 5}), None).unwrap();
         run_mutation(&path, &definition, params).unwrap();
         let stored: String = Connection::open(&path)
             .unwrap()
@@ -4685,9 +4668,9 @@ mod tests {
         let one = action("mutation", "SELECT ?", vec![input_binding("title", "string", Some(1))]);
         // One emoji is 4 UTF-8 bytes and 2 UTF-16 code units, like "\u{1F600}".length in a browser.
         let emoji = json!({"title": "\u{1F600}"});
-        assert!(resolve_bindings(&two, &emoji, None, None).is_ok());
-        assert!(resolve_bindings(&one, &emoji, None, None).unwrap_err().contains("too long"));
-        assert!(resolve_bindings(&two, &json!({"title": "\u{e9}\u{e9}"}), None, None).is_ok());
+        assert!(resolve_bindings(&two, &emoji, None).is_ok());
+        assert!(resolve_bindings(&one, &emoji, None).unwrap_err().contains("too long"));
+        assert!(resolve_bindings(&two, &json!({"title": "\u{e9}\u{e9}"}), None).is_ok());
     }
 
     async fn deploy_files(state: &AppState, files: Value) -> Value {

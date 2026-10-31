@@ -20,7 +20,7 @@
 //! Deployment's actions one after another and skips a Deployment whose last
 //! tick is still running, so runs never pile up. A Deployment in maintenance
 //! is skipped and runs once when it leaves it. A run binds `kernel.now`, its
-//! literals and NULL for `actor` (both `id` and `role`), since nobody called it; a statement can
+//! literals and NULL for `actor.id`, since nobody called it; a statement can
 //! test `?n IS NULL` to tell the timer from a person, because a call from a
 //! person always binds an ID. A guard does not apply: a run that changes no
 //! row had nothing to do. A Signal is recorded when the run changed a row.
@@ -296,7 +296,7 @@ async fn run_due(
 }
 
 /// The values a scheduled run binds: `kernel.now`, the literals, and NULL
-/// for `actor`, its `id` and its `role` alike. The parser refuses input
+/// for `actor.id`. The parser refuses input
 /// bindings on a scheduled action.
 fn parameters(action: &ActionDefinition, now: u64) -> Vec<SqlValue> {
     action
@@ -574,12 +574,12 @@ mod tests {
     fn a_run_binds_now_its_literals_and_no_actor() {
         let program = program(&json!({
             "holds.release": {"kind": "mutation", "access": "authenticated", "schedule": {"every": "5m"},
-                "statement": "UPDATE holds SET released_at = ?1 WHERE until < ?1 AND (?2 IS NULL) AND kind = ?3 AND ?4 IS NULL",
-                "bindings": [{"source": "kernel", "field": "now"}, {"source": "actor", "field": "id"}, {"source": "literal", "value": "room"}, {"source": "actor", "field": "role"}]}
+                "statement": "UPDATE holds SET released_at = ?1 WHERE until < ?1 AND (?2 IS NULL) AND kind = ?3",
+                "bindings": [{"source": "kernel", "field": "now"}, {"source": "actor", "field": "id"}, {"source": "literal", "value": "room"}]}
         }));
         assert_eq!(
             parameters(&program.actions["holds.release"], 42),
-            vec![SqlValue::Integer(42), SqlValue::Null, SqlValue::Text("room".into()), SqlValue::Null]
+            vec![SqlValue::Integer(42), SqlValue::Null, SqlValue::Text("room".into())]
         );
     }
 }

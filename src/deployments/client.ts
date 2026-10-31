@@ -89,18 +89,11 @@ export function setGoogleClientPart(projectId: string, name: typeof GOOGLE_CLIEN
 // which the owner's browser session holds. docs/mcp.md, "Users and invitations".
 
 export type AppUserState = "pending" | "active" | "suspended";
-export type AppUser = { userId: string; email: string; state: AppUserState; verified: boolean; verifiedAt: number | null; createdAt: number; role: "owner" | "member" };
+export type AppUser = { userId: string; email: string; state: AppUserState; verified: boolean; verifiedAt: number | null; createdAt: number };
 export type AppUserPage = { users: AppUser[]; nextCursor: string | null };
 
 export function listAppUsers(deploymentId: string, options: { limit?: number; cursor?: string; state?: AppUserState } = {}) {
   return platformMcp.call<AppUserPage>("app_users_list", { deploymentId, ...options });
-}
-
-/** The owner's own app account and a one-time link that signs it in. See docs/mcp.md, "The owner's account in an app". */
-export type OwnerEntry = { userId: string; email: string; role: "owner"; account: "created" | "existing"; passwordCleared: boolean; url: string; expiresAt: number };
-
-export function openAppAsOwner(deploymentId: string) {
-  return platformMcp.call<OwnerEntry>("app_owner_enter", { deploymentId });
 }
 
 export function suspendAppUser(deploymentId: string, userId: string) {

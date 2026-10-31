@@ -32,13 +32,13 @@ An invitation is the owner's offer of an account on one Deployment to one email.
 
 ## Your own app account
 
-The Project Owner's own app account has the role `owner`. An invitation you send to your own email gives that role. `app_owner_enter`, for the owner's browser session only, creates or links the account and returns a link that signs it in once within two minutes. Guard owner-only actions with `?n = 'owner'` on an `actor` binding of the `role`.
+Your own app account is an app account like any other. Sign up or accept an invitation with your email. When the app keeps roles, name yourself its owner with SQL in Data, using the account ID that Auth > Users shows.
 
 ## Check it worked
 
 - After `signup_policy_set`, the read-back is `signup_policy_read`.
 - After `app_invitations_create`, `app_invitation_resend` or `app_invitation_revoke`, the read-back is `app_invitations_list`. It shows each invitation's status.
-- After `app_user_suspend`, `app_user_resume` or `app_owner_enter`, the read-back is `app_users_list`.
+- After `app_user_suspend` or `app_user_resume`, the read-back is `app_users_list`.
 - On `konae dev`, the invitation email lands in `<folder>/.konae/dev-data/mailbox.jsonl`, and `konae events` lists it with its link.
 - Decide whether you may call these tools from `session_inspect`'s `can` map. A tool your credential may not call answers `Unknown tool or insufficient permission.` and names the permission.
 

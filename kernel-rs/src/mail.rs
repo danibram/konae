@@ -1787,6 +1787,7 @@ mod tests {
             artifact_version: None,
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
+            contact_email: Some("owner@example.test".into()),
         }
     }
 
@@ -2598,21 +2599,14 @@ mod tests {
 
     // -- Notices (ADR-0016) ----------------------------------------------------
 
-    /// One owner account in `owners.sqlite` and two app accounts, one that
-    /// answered a link and one that did not.
+    /// Two app accounts, one that answered a link and one that did not. The
+    /// owner's address is the Deployment's contact email, which `deployment` sets.
     fn notice_accounts(fixture: &Fixture) {
-        Connection::open(fixture.root.join("owners.sqlite"))
-            .unwrap()
-            .execute_batch(
-                "CREATE TABLE app_users (id TEXT PRIMARY KEY, email TEXT NOT NULL, state TEXT NOT NULL);
-                 INSERT INTO app_users VALUES ('creator-1', 'owner@example.test', 'active');",
-            )
-            .unwrap();
         Connection::open(fixture.root.join("deployments").join(&fixture.app.id).join("identity.sqlite"))
             .unwrap()
             .execute_batch(
                 "CREATE TABLE app_users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL,
-                   role TEXT NOT NULL DEFAULT 'member', created_at INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'active', verified_at INTEGER);
+                   created_at INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'active', verified_at INTEGER);
                  INSERT INTO app_users (id, email, password_hash, created_at, state, verified_at)
                    VALUES ('ana', 'ana@example.test', 'x', 1, 'active', 1), ('ben', 'ben@example.test', 'x', 1, 'active', NULL),
                    ('cy', 'cy@example.test', 'x', 1, 'suspended', 1);",
@@ -2759,7 +2753,12 @@ mod tests {
     #[tokio::test]
     async fn a_notice_without_a_proven_address_stores_nothing_and_says_why() {
         let fixture = fixture(Scripted::new()).await;
-        notify(&fixture, "alerts.raise", json!({"title": "No owner email yet"}), None).await;
+        // A Deployment published without a contact email has nowhere to send.
+        let program = notice_program();
+        let without = Deployment { contact_email: None, ..fixture.app.clone() };
+        let changed = super::super::notify::Changed { count: 1, rows: &[], now: 0 };
+        let caller = super::super::notify::Caller { account: None, actor_id: None };
+        super::super::notify::record(&fixture.state, &without, "alerts.raise", &program.actions["alerts.raise"], &json!({"title": "No owner email yet"}), caller, changed).await;
         notice_accounts(&fixture);
         notify(&fixture, "bookings.create", json!({"room": "Oak"}), Some("ben")).await;
         notify(&fixture, "bookings.create", json!({"room": "Oak"}), Some("cy")).await;

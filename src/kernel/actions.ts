@@ -10,7 +10,7 @@ import { assertCallTargets, assertNoCallKeys, parseCall, type CallDeclaration } 
 type ActionBinding =
   | { source: "input"; key: string; type: "string"; maxLength?: number; nullable?: boolean }
   | { source: "input"; key: string; type: "number" | "boolean"; nullable?: boolean }
-  | { source: "actor"; field: "id" | "role" }
+  | { source: "actor"; field: "id" }
   | { source: "kernel"; field: "now" }
   | { source: "literal"; value: string | number | null };
 
@@ -134,12 +134,8 @@ export function actionDeclarations(program: ServerActionProgram): RuntimeActionD
   return Object.values(program.actions).map(({ name, kind, access }) => ({ name, kind, access }));
 }
 
-/**
- * Who calls. `actorRole` is a person's role in the app, "owner" or "member";
- * a visitor, an API key and a signed request have none, and the role binding
- * binds null for them, as on the Kernel.
- */
-export type ResolveContext = { actorId: string | null; actorRole?: string | null; now?: number };
+/** Who calls: a person's or an API key's ID, or null for a visitor. */
+export type ResolveContext = { actorId: string | null; now?: number };
 
 export function resolveServerAction(
   program: ServerActionProgram,
@@ -513,7 +509,7 @@ function parseBinding(actionName: string, index: number, value: unknown): Action
     }
     if (binding.type === "number" || binding.type === "boolean") return { source: "input", key: binding.key, type: binding.type, ...(nullable === undefined ? {} : { nullable }) };
   }
-  if (binding.source === "actor" && (binding.field === "id" || binding.field === "role")) return { source: "actor", field: binding.field };
+  if (binding.source === "actor" && binding.field === "id") return { source: "actor", field: "id" };
   if (binding.source === "kernel" && binding.field === "now") return { source: "kernel", field: "now" };
   // An absent value and null both bind NULL, as on the Kernel.
   if (binding.source === "literal" && (binding.value === undefined || binding.value === null || typeof binding.value === "string" || typeof binding.value === "number")) {
@@ -525,7 +521,6 @@ function parseBinding(actionName: string, index: number, value: unknown): Action
 function resolveBinding(binding: ActionBinding, input: Record<string, unknown>, context: ResolveContext) {
   if (binding.source === "literal") return binding.value;
   if (binding.source === "kernel") return context.now ?? Date.now();
-  if (binding.source === "actor" && binding.field === "role") return context.actorRole ?? null;
   if (binding.source === "actor") {
     if (!context.actorId) throw new Error("This action requires an authenticated actor.");
     return context.actorId;

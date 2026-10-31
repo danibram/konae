@@ -23,7 +23,7 @@ export const runtimeFile = "runtime.js";
  * everything under it. The Kernel strips that prefix before routing, so the
  * SDK and the inline pages build their Kernel URLs with it. Keep this text
  * in step with src/mcp/runtime.js, runtimeLoaderScript below and the inline
- * pages in kernel-rs/src/accounts.rs and kernel-rs/src/app_owner.rs. The tests
+ * page in kernel-rs/src/accounts.rs. The tests
  * check that each of them carries it.
  */
 export const pathPrefixPattern = /^\/p\/([^\/]+)(\/|$)/;

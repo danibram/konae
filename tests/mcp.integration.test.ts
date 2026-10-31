@@ -1001,54 +1001,40 @@ describe("app accounts under required verification", () => {
     expect(await login("cara@strict.test", password, setCookie(runtime))).toEqual([401, hint]);
   }, 30_000);
 
-  test("Open as owner gives the owner's own account the role owner, and a guard reads it", async () => {
+  test("an app keeps its roles in its own rows, and a publish records the owner's email for notices", async () => {
     const id = "strict_owner_app";
-    const release = {
+    const release = (actions: object) => ({
       project: { id, name: "Owner app", slug: "strict-owner-app", manifest: { version: 1, visibility: "public" }, files: {
         "schema.sql": "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, title TEXT NOT NULL, user_id TEXT NOT NULL);",
-        "actions.json": JSON.stringify({ version: 1, actions: {
-          "notes.pin": { kind: "mutation", access: "authenticated", statement: "INSERT INTO notes(title, user_id) SELECT 'pinned', ?2 WHERE ?1 = 'owner'", bindings: [{ source: "actor", field: "role" }, { source: "actor", field: "id" }], guard: "Only the app's owner can pin a note." },
-          "me.role": { kind: "query", access: "anonymous", statement: "SELECT ?1 AS role LIMIT 1", bindings: [{ source: "actor", field: "role" }] },
-        } }),
+        "actions.json": JSON.stringify({ version: 1, actions }),
       } }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Owner app</main>" } },
-    };
+    });
     await owner.call("project_create", { projectId: id, name: "Owner app" });
-    const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify(release)), id);
+    // The Kernel keeps no role, so a binding of one is refused.
+    const refused = await owner.upload(new TextEncoder().encode(JSON.stringify(release({
+      "me.role": { kind: "query", access: "anonymous", statement: "SELECT ?1 AS role LIMIT 1", bindings: [{ source: "actor", field: "role" }] },
+    }))), id);
+    await expect(owner.call("release_plan", { transferId: refused.transferId })).rejects.toThrow("Invalid binding 0 in me.role.");
+    await owner.cancel(refused.transferId);
+    const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify(release({
+      "notes.list": { kind: "query", access: "authenticated", statement: "SELECT id, title FROM notes WHERE user_id = ?1 LIMIT 50", bindings: [{ source: "actor", field: "id" }] },
+    }))), id);
     const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
     const receipt = await owner.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId });
+    await owner.cancel(transfer.transferId);
+    const inspected = await owner.call<{ deployment: { contactEmail?: string } }>("project_inspect", { projectId: id });
+    expect(inspected.deployment.contactEmail).toBe(ownerEmail);
     await owner.call("signup_policy_set", { deploymentId: receipt.id, mode: "open" });
     const at = (route: string, body: unknown, cookie?: string) => post(route, body, { host: receipt.hostname, ...(cookie ? { cookie } : {}) });
     const runtimeAs = (cookie?: string) => new McpClient(`${strictUrl}/_konae/mcp`, { fetch: (input, init) => {
       const headers = new Headers(init?.headers); headers.set("host", receipt.hostname); headers.set("x-forwarded-for", freshClient()); if (cookie) headers.set("cookie", cookie);
       return fetch(input, { ...init, headers });
     } });
-    // A member, signed up with the link.
     await at("/_konae/auth/signup", { email: "member@strict.test" });
     const member = setCookie(await at("/_konae/auth/verify", { token: await token("member@strict.test", "verification"), password }))!;
-    expect(await runtimeAs(member).call("actions_invoke", { name: "me.role" })).toEqual([{ role: "member" }]);
-    await expect(runtimeAs(member).call("actions_invoke", { name: "notes.pin" })).rejects.toThrow("Only the app's owner can pin a note.");
-    expect(await runtimeAs().call("actions_invoke", { name: "me.role" })).toEqual([{ role: null }]);
-
-    // The owner opens the app from the editor: the account is created with the role owner.
-    const entry = await owner.call<{ email: string; account: string; role: string; url: string }>("app_owner_enter", { deploymentId: receipt.id });
-    expect([entry.email, entry.account, entry.role]).toEqual([ownerEmail, "created", "owner"]);
-    const entryToken = new URLSearchParams(new URL(entry.url).hash.slice(1)).get("entry")!;
-    expect((await fetch(entry.url.split("#")[0], { headers: { host: receipt.hostname } })).status).toBe(200);
-    const entered = await at("/_konae/owner-entry", { token: entryToken });
-    expect(entered.status).toBe(200);
-    const ownerApp = runtimeAs(setCookie(entered));
-    expect(await ownerApp.call<{ role: string; name: string }>("auth_session")).toMatchObject({ role: "owner", name: ownerEmail });
-    expect(await ownerApp.call("actions_invoke", { name: "notes.pin" })).toMatchObject({ changes: 1 });
-    expect((await at("/_konae/owner-entry", { token: entryToken })).status).toBe(410);
-    const users = await owner.call<{ users: { email: string; role: string; verified: boolean }[] }>("app_users_list", { deploymentId: receipt.id });
-    expect(users.users.map((user) => [user.email, user.role, user.verified])).toEqual([["member@strict.test", "member", true], [ownerEmail, "owner", true]]);
-
-    // A delegated token, even with manage_users, cannot sign the owner in to the app.
-    const delegated = (await owner.call<{ token: string }>("token_create", { scopes: ["read", "manage_users"], ttlSeconds: 600 })).token;
-    const agent = new McpClient(`${strictUrl}/mcp`, { token: delegated });
-    const listed = await (await fetch(`${strictUrl}/mcp`, { method: "POST", headers: { authorization: `Bearer ${delegated}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) })).text();
-    expect(listed).toContain("app_users_list");
-    expect(listed).not.toContain("app_owner_enter");
-    await expect(agent.call("app_owner_enter", { deploymentId: receipt.id })).rejects.toThrow("Unknown tool or insufficient permission.");
+    expect(await runtimeAs(member).call<{ role: string }>("auth_session")).toMatchObject({ role: "member", name: "member@strict.test" });
+    const users = await owner.call<{ users: Record<string, unknown>[] }>("app_users_list", { deploymentId: receipt.id });
+    expect(users.users.map((user) => [user.email, "role" in user])).toEqual([["member@strict.test", false]]);
+    await expect(owner.call("app_owner_enter", { deploymentId: receipt.id })).rejects.toThrow("Unknown tool");
   }, 60_000);
 });
