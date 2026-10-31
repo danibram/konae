@@ -16,7 +16,7 @@ No app runs on any installation yet, so nothing here keeps an old format alive.
 | **Export / import** | Export hands over the app folder. Import takes one. There is no other way in or out. |
 | **Gate** | The checks the editor runs before it accepts a change. The Kernel runs the same checks when the app runs. |
 
-Removed: Managed Project, External Project, Eject, Migration, Pulled Copy, Development Kernel, package as a separate format, Database Model and `schema.ts`, the `owner` role of an app account, `manage_lifecycle`.
+Removed: Managed Project, External Project, Eject, migration, pulled copy, Development Kernel, package as a separate format, Database Model and `schema.ts`, the `owner` role of an app account, `manage_lifecycle`.
 
 ## Decisions
 
