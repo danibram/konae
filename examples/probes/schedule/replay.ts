@@ -115,13 +115,3 @@ await probe("schedule", 23060, async (kit) => {
   assert(gaps.every((gap) => gap >= 400), `Failed runs overlapped: ${gaps.join(", ")} ms apart.`);
   kit.pass("A failing run is retried", `With the table renamed, ${failures.length} runs failed one tick apart with "${failure.error}", none overlapping; the first tick after the owner renamed it back ran ok.`);
 });
-  const paused = (await usage()).scheduled.length;
-  await Bun.sleep(5000);
-  const during = (await usage()).scheduled.length;
-  const status = await owner.call<{ operationId: string }>("migration_status", { deploymentId: app.deploymentId });
-  await owner.call("migration_cancel", { operationId: status.operationId });
-  await waitFor("run after maintenance", (current) => current.scheduled.length > during);
-  assert(during - paused <= 1, `${during - paused} runs started during maintenance.`);
-  assert.equal((await notices()).length, 2, "Failures, recovery without new rows and maintenance send no extra notice.");
-  kit.pass("Maintenance", `While migration_begin held the app in maintenance for 5 seconds, ${during - paused} runs started (one may finish as the pause begins); after migration_cancel the next tick ran it again.`);
-});

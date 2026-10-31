@@ -403,8 +403,8 @@ try {
   // Everyone joins as member. The Project Owner names Olga the app's owner with owner SQL,
   // as the Data panel does; the Kernel keeps no role.
   assert.equal((await action(olga, "me.get"))[0].role, "member");
-  const named = await A.owner.call<{ changes: number }>("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: `UPDATE profiles SET role = 'owner' WHERE user_id = '${sessions.olga.userId}'` } });
-  assert.equal(named.changes, 1, JSON.stringify(named));
+  const ownerNamed = await A.owner.call<{ changes: number }>("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: `UPDATE profiles SET role = 'owner' WHERE user_id = '${sessions.olga.userId}'` } });
+  assert.equal(ownerNamed.changes, 1, JSON.stringify(ownerNamed));
   assert.equal((await action(olga, "me.get"))[0].role, "owner");
 
   const benPromotes = await message(action(ben, "members.promote", { userId: sessions.ben.userId }));
