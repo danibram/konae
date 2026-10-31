@@ -56,7 +56,7 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn marker_path(data_root: &Path, id: &str) -> PathBuf {
-    data_root.join("deployments").join(id).join(MARKER_FILE)
+    crate::layout::folder(&data_root, &id).join(MARKER_FILE)
 }
 
 fn marker(data_root: &Path, id: &str) -> Option<Arc<Marker>> {

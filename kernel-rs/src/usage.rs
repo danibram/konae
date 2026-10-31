@@ -133,7 +133,7 @@ fn enqueue(message: Message) {
 }
 
 fn folder(data_root: &Path, deployment_id: &str) -> PathBuf {
-    data_root.join("deployments").join(deployment_id)
+    crate::layout::folder(&data_root, &deployment_id)
 }
 
 /// Counts one authorized operation. Call it only after the operation succeeded.
@@ -845,7 +845,7 @@ mod tests {
     fn the_writer_counts_and_records_off_the_request_path() {
         let root = scratch("writer");
         let id = "deployment-a";
-        std::fs::create_dir_all(root.join("deployments").join(id)).unwrap();
+        std::fs::create_dir_all(crate::layout::folder(&root, &id)).unwrap();
         let program = program(&json!({
             "orders.place": {"kind": "mutation", "access": "anonymous", "statement": "INSERT INTO orders (id, note) VALUES (?1, ?2)",
               "bindings": [{"source": "input", "key": "id", "type": "string"}, {"source": "input", "key": "note", "type": "string", "nullable": true}],
@@ -862,7 +862,7 @@ mod tests {
         // A Deployment folder that is gone gets no new file.
         count(&root, "deployment-gone", Operation::Session);
         flush();
-        let path = root.join("deployments").join(id).join(USAGE_DATABASE);
+        let path = crate::layout::usage(&root, &id);
         let today = day(super::super::now_ms());
         let usage = read_usage(&path, &today, &today).unwrap();
         let totals = usage["totals"].as_array().unwrap();

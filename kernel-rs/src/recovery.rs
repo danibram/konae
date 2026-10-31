@@ -226,7 +226,7 @@ pub(crate) fn reconcile(root: &Path, entries: &[Entry]) -> Result<usize> {
         let identity = match (entry.kind.as_str(), entry.deployment_id.as_deref()) {
             ("creator", _) => root.join("owners.sqlite"),
             (_, Some(deployment)) if !deployment.is_empty() && !deployment.contains(['/', '\\', '.']) => {
-                root.join("deployments").join(deployment).join("identity.sqlite")
+                crate::layout::identity(&root, &deployment)
             }
             _ => continue,
         };

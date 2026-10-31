@@ -1620,7 +1620,7 @@ mod tests {
     #[tokio::test]
     async fn a_call_that_keeps_failing_retries_with_backoff_then_fails_and_runs_its_then_once() {
         let root = std::env::temp_dir().join(format!("konae-calls-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root, "https://editor.example.org");
         // .invalid never resolves (RFC 2606), so every attempt fails DNS, which retries.
         let app = publish(&state, call_action("https://hooks.invalid/send"), "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);").await.unwrap();
@@ -1632,7 +1632,7 @@ mod tests {
             }).unwrap()
         };
         let logged = |root: &Path| -> Vec<(Option<i64>, Option<String>)> {
-            let db = Connection::open(root.join("deployments").join(&app.id).join("database.sqlite")).unwrap();
+            let db = Connection::open(crate::layout::database(&root, &app.id)).unwrap();
             let mut query = db.prepare("SELECT status, error FROM log").unwrap();
             query.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
         };
@@ -1667,7 +1667,7 @@ mod tests {
     #[tokio::test]
     async fn the_installation_rules_refuse_at_release_and_a_private_answer_refuses_at_run() {
         let root = std::env::temp_dir().join(format!("konae-calls-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root, "https://editor.example.org");
         let schema = "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);";
         assert_eq!(

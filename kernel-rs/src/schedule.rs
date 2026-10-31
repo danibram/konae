@@ -245,7 +245,7 @@ async fn run_due(
     now: &(dyn Fn() -> u64 + Sync),
 ) -> anyhow::Result<()> {
     let id = &deployment.id;
-    let folder = state.data_root.join("deployments").join(id);
+    let folder = crate::layout::folder(&state.data_root, &id);
     if !folder.is_dir() {
         return Ok(());
     }
@@ -404,7 +404,7 @@ mod tests {
             let root = std::env::temp_dir().join(format!("konae-schedule-{label}-{}", uuid::Uuid::new_v4()));
             let (state, _) = crate::tests::login_test_state(&root, "public").await;
             let id = state.deployments.read().await.values().next().unwrap().id.clone();
-            let db = rusqlite::Connection::open(root.join("deployments").join(&id).join("database.sqlite")).unwrap();
+            let db = rusqlite::Connection::open(crate::layout::database(&root, &id)).unwrap();
             db.execute_batch("CREATE TABLE holds (id INTEGER PRIMARY KEY, until INTEGER NOT NULL, released_at INTEGER);").unwrap();
             Self { root, state, id, now: Default::default() }
         }
@@ -427,19 +427,19 @@ mod tests {
         }
 
         fn sql(&self, statement: &str) {
-            let db = rusqlite::Connection::open(self.root.join("deployments").join(&self.id).join("database.sqlite")).unwrap();
+            let db = rusqlite::Connection::open(crate::layout::database(&self.root, &self.id)).unwrap();
             db.execute_batch(statement).unwrap();
         }
 
         fn released(&self) -> i64 {
-            let db = rusqlite::Connection::open(self.root.join("deployments").join(&self.id).join("database.sqlite")).unwrap();
+            let db = rusqlite::Connection::open(crate::layout::database(&self.root, &self.id)).unwrap();
             db.query_row("SELECT COUNT(*) FROM holds WHERE released_at IS NOT NULL", [], |row| row.get(0)).unwrap()
         }
 
         /// The runs `usage_read` returns for the whole of November 2026, oldest first.
         fn runs(&self) -> Vec<(String, String, i64)> {
             usage::flush();
-            let path = self.root.join("deployments").join(&self.id).join(usage::USAGE_DATABASE);
+            let path = crate::layout::usage(&self.root, &self.id);
             let usage = usage::read_usage(&path, "2026-11-01", "2026-11-30").unwrap();
             let mut runs = usage["scheduled"]
                 .as_array()
@@ -526,7 +526,7 @@ mod tests {
 
         // Usage counts every run under scheduled, and the runs that changed
         // a row record their Signal with no actor.
-        let path = rig.root.join("deployments").join(&rig.id).join(usage::USAGE_DATABASE);
+        let path = crate::layout::usage(&rig.root, &rig.id);
         let usage = usage::read_usage(&path, "2026-11-07", "2026-11-07").unwrap();
         assert!(usage["totals"].as_array().unwrap().contains(&json!({"kind": "scheduled", "name": "holds.release", "count": 7})), "{usage}");
         assert!(!usage["totals"].as_array().unwrap().iter().any(|total| total["kind"] == "refused"));

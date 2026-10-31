@@ -490,7 +490,7 @@ fn read_only(path: &std::path::Path) -> anyhow::Result<Option<Connection>> {
 /// The email of an active app account that proved control of it by
 /// answering a verification, invitation or recovery link.
 fn verified_email(state: &AppState, deployment_id: &str, account: &str) -> anyhow::Result<Option<String>> {
-    let path = state.data_root.join("deployments").join(deployment_id).join("identity.sqlite");
+    let path = crate::layout::identity(&state.data_root, &deployment_id);
     let Some(db) = read_only(&path)? else { return Ok(None) };
     Ok(db
         .query_row(

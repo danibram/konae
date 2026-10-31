@@ -43,6 +43,7 @@ mod guide;
 mod hosts;
 mod http;
 mod invitations;
+mod layout;
 mod limits;
 mod mail;
 mod mcp;
@@ -433,7 +434,7 @@ async fn main() -> Result<()> {
         std::env::var("KONAE_ALLOW_DEFAULT_KEY").as_deref() == Ok("1"),
     )?;
     let data_root = PathBuf::from(env("KONAE_DATA_DIR", "/data"));
-    tokio::fs::create_dir_all(data_root.join("deployments")).await?;
+    tokio::fs::create_dir_all(crate::layout::apps(&data_root)).await?;
     // Held until the process exits, so files-migrate and files-reconcile
     // refuse while this Kernel serves.
     let _running = file_store::hold_kernel_lock(&data_root)?;
@@ -552,7 +553,7 @@ async fn s3_client_from_env() -> Option<S3Client> {
 
 /// The Deployment's folder: its record, artifact, databases, files and backups.
 fn deployment_dir(state: &AppState, id: &str) -> PathBuf {
-    state.data_root.join("deployments").join(id)
+    crate::layout::folder(&state.data_root, &id)
 }
 
 fn artifact_root(state: &AppState, id: &str) -> PathBuf {
@@ -758,7 +759,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         },
         contact_email: input.contact_email.clone(),
     };
-    let directory = state.data_root.join("deployments").join(&id);
+    let directory = crate::layout::folder(&state.data_root, &id);
     if let Err(error_value) = tokio::fs::create_dir_all(&directory).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
@@ -1042,11 +1043,8 @@ async fn invoke_action(
     if action.kind == "call" {
         return calls::enqueue(&state, &deployment, &name, &input).await;
     }
-    let db_path = state
-        .data_root
-        .join("deployments")
-        .join(&deployment.id)
-        .join("database.sqlite");
+    let db_path = crate::layout::database(&state
+        .data_root, &deployment.id);
     // A signal action runs no SQL. The Signal is queued for the Usage store and
     // the answer does not wait for the write.
     let result = if action.kind == "signal" {
@@ -1311,11 +1309,8 @@ async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Respon
     }
     let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
     let private_deployment = is_private(&deployment);
-    let path = state
-        .data_root
-        .join("deployments")
-        .join(&deployment.id)
-        .join("files")
+    let path = crate::layout::files(&state
+        .data_root, &deployment.id)
         .join("index.json");
     match tokio::fs::read(path).await {
         Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
@@ -1952,11 +1947,8 @@ async fn export_database(
         return error(StatusCode::UNAUTHORIZED, "Admin authorization required.");
     }
     let _guard = database_lock(&state, &id).await;
-    let path = state
-        .data_root
-        .join("deployments")
-        .join(id)
-        .join("database.sqlite");
+    let path = crate::layout::database(&state
+        .data_root, &id);
     match tokio::fs::read(path).await {
         Ok(bytes) => ([(header::CONTENT_TYPE, "application/vnd.sqlite3")], bytes).into_response(),
         Err(_) => error(StatusCode::NOT_FOUND, "Database not found."),
@@ -2066,11 +2058,8 @@ async fn portable_snapshot(state: &AppState, deployment: &Deployment) -> Result<
         anyhow::bail!("Database exceeds the 16 MiB portable export limit.");
     }
 
-    let identity_path = state
-        .data_root
-        .join("deployments")
-        .join(&deployment.id)
-        .join("identity.sqlite");
+    let identity_path = crate::layout::identity(&state
+        .data_root, &deployment.id);
     let _ = open_auth(state, deployment)?;
     let identity_copy = sqlite_snapshot(&identity_path, &backup_dir, "portable-identity").await?;
     let identity_source = backup_dir.join(format!("identity-source-{}.sqlite", Uuid::new_v4()));
@@ -2091,11 +2080,8 @@ async fn portable_snapshot(state: &AppState, deployment: &Deployment) -> Result<
     let _ = tokio::fs::remove_file(&identity_source).await;
     let _ = tokio::fs::remove_file(&identity_sanitized).await;
 
-    let index_path = state
-        .data_root
-        .join("deployments")
-        .join(&deployment.id)
-        .join("files")
+    let index_path = crate::layout::files(&state
+        .data_root, &deployment.id)
         .join("index.json");
     let file_index = match tokio::fs::read(index_path).await {
         Ok(bytes) => serde_json::from_slice::<Vec<Value>>(&bytes)?,
@@ -2204,11 +2190,8 @@ async fn admin_database(
 }
 
 fn database_path(state: &AppState, id: &str) -> PathBuf {
-    state
-        .data_root
-        .join("deployments")
-        .join(id)
-        .join("database.sqlite")
+    crate::layout::database(&state
+        .data_root, &id)
 }
 
 /// Named locks on one database or transfer. Each is a read-write lock: a
@@ -3396,7 +3379,7 @@ async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Result
 /// starts empty; `konae-kernel restore` installs copied folders first.
 async fn load_deployments(root: &Path, public_origin: &str) -> Result<HashMap<String, Deployment>> {
     let mut result = HashMap::new();
-    let mut entries = tokio::fs::read_dir(root.join("deployments")).await?;
+    let mut entries = tokio::fs::read_dir(crate::layout::apps(&root)).await?;
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path().join("deployment.json");
         if let Ok(bytes) = tokio::fs::read(path).await {
@@ -3869,7 +3852,7 @@ mod tests {
             sign_in_methods: default_sign_in_methods(),
             contact_email: None,
         };
-        tokio::fs::create_dir_all(root.join("deployments").join(&deployment.id))
+        tokio::fs::create_dir_all(crate::layout::folder(&root, &deployment.id))
             .await
             .unwrap();
         let state = AppState {
@@ -4700,7 +4683,7 @@ mod tests {
     #[tokio::test]
     async fn a_browser_navigation_to_a_page_counts_one_page_view_by_the_file_served() {
         let root = std::env::temp_dir().join(format!("konae-page-views-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root);
         deploy_files(&state, json!({"index.html": "<p>home</p>", "about.html": "<p>about</p>", "app.js": "1"})).await;
         let (host, deployment) = state.deployments.read().await.iter().next().map(|(h, d)| (h.clone(), d.clone())).unwrap();
@@ -4724,7 +4707,7 @@ mod tests {
         assert_eq!(get("missing", &navigation).await.status(), StatusCode::NOT_FOUND);
         usage::flush();
         let today = usage::day(now_ms());
-        let usage = usage::read_usage(&root.join("deployments").join(&deployment.id).join(usage::USAGE_DATABASE), &today, &today).unwrap();
+        let usage = usage::read_usage(&crate::layout::usage(&root, &deployment.id), &today, &today).unwrap();
         let views: Vec<_> = usage["totals"].as_array().unwrap().iter().filter(|row| row["kind"] == "page_view").cloned().collect();
         assert_eq!(views, vec![
             json!({"kind": "page_view", "name": "about.html", "count": 2}),
@@ -4738,7 +4721,7 @@ mod tests {
         assert_eq!(get("items/3", &navigation).await.status(), StatusCode::OK);
         assert_eq!(get("missing-chunk.js", &[("sec-fetch-dest", "script")]).await.status(), StatusCode::OK);
         usage::flush();
-        let usage = usage::read_usage(&root.join("deployments").join(&deployment.id).join(usage::USAGE_DATABASE), &today, &today).unwrap();
+        let usage = usage::read_usage(&crate::layout::usage(&root, &deployment.id), &today, &today).unwrap();
         let index = usage["totals"].as_array().unwrap().iter().find(|row| row["kind"] == "page_view" && row["name"] == "index.html").cloned();
         assert_eq!(index, Some(json!({"kind": "page_view", "name": "index.html", "count": 2})));
         let _ = tokio::fs::remove_dir_all(root).await;
@@ -4747,7 +4730,7 @@ mod tests {
     #[tokio::test]
     async fn a_file_the_browser_holds_answers_304_until_the_next_publish() {
         let root = std::env::temp_dir().join(format!("konae-etag-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root);
         deploy_files(&state, json!({"index.html": "<p>home</p>", "app.js": "1"})).await;
         for deployment in state.deployments.write().await.values_mut() {
@@ -4780,7 +4763,7 @@ mod tests {
         assert_eq!(page.status(), StatusCode::NOT_MODIFIED);
         usage::flush();
         let today = usage::day(now_ms());
-        let usage = usage::read_usage(&root.join("deployments").join(&deployment.id).join(usage::USAGE_DATABASE), &today, &today).unwrap();
+        let usage = usage::read_usage(&crate::layout::usage(&root, &deployment.id), &today, &today).unwrap();
         assert!(usage["totals"].as_array().unwrap().iter().any(|row| row["kind"] == "page_view" && row["name"] == "index.html"));
 
         // A publish changes the tag, so the old one gets the new bytes.
@@ -4827,7 +4810,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-portable-{}", Uuid::new_v4()));
         let (state, _) = login_test_state(&root, "public").await;
         let deployment = state.deployments.read().await.values().next().unwrap().clone();
-        let files = root.join("deployments").join(&deployment.id).join("files");
+        let files = crate::layout::files(&root, &deployment.id);
         tokio::fs::create_dir_all(&files).await.unwrap();
         let (kept, gone, large) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
         tokio::fs::write(files.join(format!("{kept}.blob")), b"hello").await.unwrap();
@@ -4849,7 +4832,7 @@ mod tests {
     #[tokio::test]
     async fn republish_stops_serving_files_missing_from_the_new_artifact() {
         let root = std::env::temp_dir().join(format!("konae-republish-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root);
         let first = deploy_files(
             &state,
@@ -4867,7 +4850,7 @@ mod tests {
         assert_eq!(read_artifact(&state, &deployment, "new.js").await.unwrap(), b"2");
         assert!(read_artifact(&state, &deployment, "old.js").await.is_err());
         assert!(read_artifact(&state, &deployment, "assets/old.css").await.is_err());
-        let mut entries = std::fs::read_dir(root.join("deployments").join(&id).join("artifact"))
+        let mut entries = std::fs::read_dir(crate::layout::artifact(&root, &id))
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect::<Vec<_>>();
@@ -4880,7 +4863,7 @@ mod tests {
     async fn new_deployments_pick_a_policy_from_visibility_and_redeploys_keep_it() {
         for (visibility, expected) in [("public", SignupMode::Open), ("private", SignupMode::Closed)] {
             let root = std::env::temp_dir().join(format!("konae-policy-{}", Uuid::new_v4()));
-            tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+            tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
             let state = test_state(&root);
             let first = deploy_with_visibility(&state, json!({"index.html": "<p>one</p>"}), visibility).await;
             assert_eq!(first["signupPolicy"]["mode"], json!(expected), "visibility={visibility}");
@@ -4890,7 +4873,7 @@ mod tests {
             assert_eq!(second["signupPolicy"], json!({"mode": "allowlist", "allowlist": ["@example.test"]}));
             let id = second["id"].as_str().unwrap();
             let stored: Deployment = serde_json::from_slice(
-                &tokio::fs::read(root.join("deployments").join(id).join("deployment.json")).await.unwrap(),
+                &tokio::fs::read(crate::layout::record(&root, &id)).await.unwrap(),
             )
             .unwrap();
             assert_eq!(stored.signup_policy.mode, SignupMode::Allowlist);
@@ -4915,7 +4898,7 @@ mod tests {
         ];
         for (first, chosen, second, expected) in cases {
             let root = std::env::temp_dir().join(format!("konae-flip-{}", Uuid::new_v4()));
-            tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+            tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
             let state = test_state(&root);
             deploy_with_visibility(&state, json!({"index.html": "<p>one</p>"}), first).await;
             if let Some((mode, entry)) = chosen {
@@ -4926,7 +4909,7 @@ mod tests {
             assert_eq!(republished["signupPolicy"], expected, "{first} {chosen:?} -> {second}");
             let id = republished["id"].as_str().unwrap();
             let stored: Deployment = serde_json::from_slice(
-                &tokio::fs::read(root.join("deployments").join(id).join("deployment.json")).await.unwrap(),
+                &tokio::fs::read(crate::layout::record(&root, &id)).await.unwrap(),
             )
             .unwrap();
             assert_eq!(serde_json::to_value(&stored.signup_policy).unwrap(), expected);
@@ -4995,11 +4978,11 @@ mod tests {
     #[tokio::test]
     async fn a_failed_record_write_removes_the_new_artifact_version() {
         let root = std::env::temp_dir().join(format!("konae-orphan-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root);
         let first = deploy_files(&state, json!({"index.html": "<p>one</p>"})).await;
         let id = first["id"].as_str().unwrap().to_owned();
-        let record = root.join("deployments").join(&id).join("deployment.json");
+        let record = crate::layout::record(&root, &id);
         tokio::fs::remove_file(&record).await.unwrap();
         tokio::fs::create_dir_all(record.join("blocker")).await.unwrap();
         let body = json!({
@@ -5015,7 +4998,7 @@ mod tests {
             .body(Body::from(body.to_string()))
             .unwrap();
         assert_eq!(deploy(State(state.clone()), request).await.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let versions = std::fs::read_dir(root.join("deployments").join(&id).join("artifact")).unwrap().count();
+        let versions = std::fs::read_dir(crate::layout::artifact(&root, &id)).unwrap().count();
         assert_eq!(versions, 1, "only the live version remains");
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         assert_eq!(read_artifact(&state, &deployment, "index.html").await.unwrap(), b"<p>one</p>");
@@ -5027,7 +5010,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-legacy-{}", Uuid::new_v4()));
         let (state, _) = login_test_state(&root, "public").await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
-        let directory = root.join("deployments").join(&deployment.id).join("artifact");
+        let directory = crate::layout::artifact(&root, &deployment.id);
         tokio::fs::create_dir_all(&directory).await.unwrap();
         tokio::fs::write(directory.join("index.html"), "legacy").await.unwrap();
         assert_eq!(read_artifact(&state, &deployment, "index.html").await.unwrap(), b"legacy");
@@ -5058,10 +5041,7 @@ mod tests {
             .iter()
             .find(|item| item["label"] == "Before restore")
             .expect("restore must keep a copy of the live database");
-        let snapshot = root
-            .join("deployments")
-            .join(id)
-            .join("backups")
+        let snapshot = crate::layout::backups(&root, &id)
             .join(format!("{}.sqlite", before["id"].as_str().unwrap()));
         let rows: i64 = Connection::open(snapshot)
             .unwrap()
@@ -5078,11 +5058,8 @@ mod tests {
 
     pub(crate) fn signed_in(state: &AppState, deployment_id: &str, headers: &HeaderMap, email: &str) -> (HeaderMap, String) {
         let auth = AuthService::open(
-            state
-                .data_root
-                .join("deployments")
-                .join(deployment_id)
-                .join("identity.sqlite"),
+            crate::layout::identity(&state
+                .data_root, &deployment_id),
         )
         .unwrap();
         let session = auth.signup(email, "correct horse battery").unwrap();
@@ -5105,7 +5082,7 @@ mod tests {
         let (state, headers) = login_test_state(&root, "public").await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (headers, _) = signed_in(&state, &deployment.id, &headers, "owner@example.test");
-        let files = root.join("deployments").join(&deployment.id).join("files");
+        let files = crate::layout::files(&root, &deployment.id);
         tokio::fs::create_dir_all(&files).await.unwrap();
         tokio::fs::write(files.join("index.json"), "{not json").await.unwrap();
         let body = json!({"name": "a.txt", "type": "text/plain", "dataUrl": "data:text/plain;base64,aGk="});
@@ -5187,7 +5164,7 @@ mod tests {
         );
 
         let legacy_id = Uuid::new_v4().to_string();
-        let directory = root.join("deployments").join(&deployment.id).join("files");
+        let directory = crate::layout::files(&root, &deployment.id);
         tokio::fs::write(directory.join(format!("{legacy_id}.blob")), b"hi").await.unwrap();
         let mut index: Vec<Value> = serde_json::from_slice(&tokio::fs::read(directory.join("index.json")).await.unwrap()).unwrap();
         index.push(json!({"id": legacy_id, "name": "old.txt", "type": "text/plain", "size": 2, "createdAt": 1}));
@@ -5208,7 +5185,7 @@ mod tests {
         let (member, _) = signed_in(&private_state, &private_deployment.id, &private_headers, "member@example.test");
         assert_eq!(list_files(State(private_state), member).await.status(), StatusCode::OK);
 
-        let restored = root.join("deployments").join("restored").join("files");
+        let restored = crate::layout::files(&root, &"restored");
         let kept = Uuid::new_v4().to_string();
         let orphan = Uuid::new_v4().to_string();
         let bundle = json!({"files": [

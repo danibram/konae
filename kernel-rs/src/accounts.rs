@@ -184,11 +184,8 @@ pub(crate) fn signup_hint_applies(state: &AppState, deployment: &Deployment, hea
 /// Opens one Deployment's account store in this installation's mode.
 pub(crate) fn app_store(state: &AppState, deployment: &Deployment) -> Result<AuthService, AuthError> {
     AuthService::open_in(
-        state
-            .data_root
-            .join("deployments")
-            .join(&deployment.id)
-            .join("identity.sqlite"),
+        crate::layout::identity(&state
+            .data_root, &deployment.id),
         &deployment_scope(&deployment.id),
         state.accounts.verification,
     )
@@ -843,7 +840,7 @@ mod tests {
         let mut deployments = HashMap::new();
         for host in [APP_HOST, OTHER_HOST] {
             let item = deployment(host);
-            std::fs::create_dir_all(root.join("deployments").join(&item.id)).unwrap();
+            std::fs::create_dir_all(crate::layout::folder(&root, &item.id)).unwrap();
             deployments.insert(host.to_owned(), item);
         }
         let mailbox = Arc::new(MemoryMailbox::default());
@@ -891,7 +888,7 @@ mod tests {
 
         async fn app_state_of(&self, host: &str, email: &str) -> String {
             let app = self.app(host).await;
-            Connection::open(self.root.join("deployments").join(app.id).join("identity.sqlite"))
+            Connection::open(crate::layout::identity(&self.root, &app.id))
                 .unwrap()
                 .query_row("SELECT state FROM app_users WHERE email = ?1", [email], |row| row.get(0))
                 .unwrap()

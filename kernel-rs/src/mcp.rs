@@ -207,7 +207,7 @@ async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
     };
     // A Deployment the map never loaded still owns a folder with its project ID.
     let mut ids: Vec<String> = removed.iter().map(|d| d.id.clone()).collect();
-    if let Ok(mut entries) = tokio::fs::read_dir(state.data_root.join("deployments")).await {
+    if let Ok(mut entries) = tokio::fs::read_dir(crate::layout::apps(&state.data_root)).await {
         while let Some(entry) = entries.next_entry().await? {
             let Ok(bytes) = tokio::fs::read(entry.path().join("deployment.json")).await else { continue };
             let Ok(record) = serde_json::from_slice::<Value>(&bytes) else { continue };

@@ -964,7 +964,7 @@ mod tests {
                 sign_in_methods: vec![SignInMethod::Password, SignInMethod::Google],
                 contact_email: None,
             };
-            std::fs::create_dir_all(root.join("deployments").join(&item.id)).unwrap();
+            std::fs::create_dir_all(crate::layout::folder(&root, &item.id)).unwrap();
             deployments.insert(hostname.to_owned(), item);
         }
         let state = AppState {
@@ -1041,7 +1041,7 @@ mod tests {
         }
 
         fn identity(&self, deployment_id: &str) -> Connection {
-            Connection::open(self.root.join("deployments").join(deployment_id).join("identity.sqlite")).unwrap()
+            Connection::open(crate::layout::identity(&self.root, &deployment_id)).unwrap()
         }
 
         /// Starts a flow on `host` and returns the browser cookie and the
@@ -1091,7 +1091,7 @@ mod tests {
         async fn password_account(&self, host: &str, email: &str) -> String {
             let deployment = self.deployment(host).await;
             let store = AuthService::open_in(
-                self.root.join("deployments").join(&deployment.id).join("identity.sqlite"),
+                crate::layout::identity(&self.root, &deployment.id),
                 &auth::deployment_scope(&deployment.id),
                 auth::Verification::Local,
             )
@@ -1145,7 +1145,7 @@ mod tests {
         assert!(shown.contains(&query["redirect_uri"]));
         // A verified custom domain adds its own callback, and starts there send it.
         let record = domain::Record { hostname: "practice.example.com".into(), token: "t".into(), verified: true, verified_at: Some(1), created_at: 1 };
-        std::fs::write(fixture.root.join("deployments").join(&app.id).join(domain::RECORD_FILE), serde_json::to_vec(&record).unwrap()).unwrap();
+        std::fs::write(crate::layout::folder(&fixture.root, &app.id).join(domain::RECORD_FILE), serde_json::to_vec(&record).unwrap()).unwrap();
         let shown = redirect_uris(&fixture.state, &app);
         assert_eq!(shown[1], format!("http://practice.example.com:8790{CALLBACK_PATH}"));
         // A host whose callback the owner was not shown does not start a flow.
@@ -1352,7 +1352,7 @@ mod tests {
         // The package carries identity.sqlite; the destination app has its
         // own client, and Google gives this person another subject there.
         let (app, other) = (fixture.deployment(APP).await, fixture.deployment(OTHER).await);
-        let moved = fixture.root.join("deployments").join(&other.id).join("identity.sqlite");
+        let moved = crate::layout::identity(&fixture.root, &other.id);
         fixture.identity(&app.id).execute("VACUUM INTO ?1", [moved.to_string_lossy().as_ref()]).unwrap();
         for item in fixture.state.deployments.write().await.values_mut() {
             item.signup_policy = SignupPolicy::from_input(SignupMode::Closed, &[]).unwrap();

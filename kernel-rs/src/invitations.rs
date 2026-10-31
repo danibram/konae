@@ -848,7 +848,7 @@ mod tests {
                 sign_in_methods: default_sign_in_methods(),
                 contact_email: None,
             };
-            std::fs::create_dir_all(root.join("deployments").join(&item.id)).unwrap();
+            std::fs::create_dir_all(crate::layout::folder(&root, &item.id)).unwrap();
             deployments.insert(host.to_owned(), item);
         }
         let mailbox = Arc::new(MemoryMailbox::default());
@@ -915,7 +915,7 @@ mod tests {
         async fn db(&self) -> Connection {
             let app = self.app(APP_HOST).await;
             store(&self.state, &app).unwrap();
-            Connection::open(self.root.join("deployments").join(app.id).join("identity.sqlite")).unwrap()
+            Connection::open(crate::layout::identity(&self.root, &app.id)).unwrap()
         }
 
         async fn accounts_named(&self, email: &str) -> Vec<(String, String)> {
@@ -1303,7 +1303,7 @@ mod tests {
         drop(copy);
 
         let imported_id = Uuid::new_v4().to_string();
-        let directory = fixture.root.join("deployments").join(&imported_id);
+        let directory = crate::layout::folder(&fixture.root, &imported_id);
         std::fs::create_dir_all(&directory).unwrap();
         super::super::initialize_identity_from_base64(&directory.join("identity.sqlite"), exported["initialIdentity"].as_str().unwrap(), 16 << 20).unwrap();
         let imported = Deployment { id: imported_id, hostname: "invite-imported.localhost".into(), url: "http://invite-imported.localhost".into(), ..app.clone() };

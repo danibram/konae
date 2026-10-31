@@ -1029,7 +1029,7 @@ impl MailQueue {
             return Some(self.data_root.join("owners.sqlite"));
         }
         let id = scope.strip_prefix("deployment:")?;
-        (!id.is_empty() && !id.contains(['/', '\\', '.'])).then(|| self.data_root.join("deployments").join(id).join("identity.sqlite"))
+        (!id.is_empty() && !id.contains(['/', '\\', '.'])).then(|| crate::layout::identity(&self.data_root, &id))
     }
 
     /// Whether the job's challenge is still open: not used, replaced,
@@ -1801,7 +1801,7 @@ mod tests {
         let other = deployment("notes.localhost", "project-b");
         let mut deployments = HashMap::new();
         for item in [&app, &other] {
-            std::fs::create_dir_all(root.join("deployments").join(&item.id)).unwrap();
+            std::fs::create_dir_all(crate::layout::folder(&root, &item.id)).unwrap();
             deployments.insert(item.hostname.clone(), item.clone());
         }
         // Both projects belong to one creator.
@@ -1865,13 +1865,13 @@ mod tests {
                 .unwrap()
         }
         fn challenges(&self, app: &Deployment) -> i64 {
-            Connection::open(self.root.join("deployments").join(&app.id).join("identity.sqlite"))
+            Connection::open(crate::layout::identity(&self.root, &app.id))
                 .unwrap()
                 .query_row("SELECT COUNT(*) FROM account_challenges", [], |row| row.get(0))
                 .unwrap()
         }
         fn account_state(&self, app: &Deployment, email: &str) -> Option<String> {
-            Connection::open(self.root.join("deployments").join(&app.id).join("identity.sqlite"))
+            Connection::open(crate::layout::identity(&self.root, &app.id))
                 .unwrap()
                 .query_row("SELECT state FROM app_users WHERE email = ?1", [email], |row| row.get(0))
                 .optional()
@@ -2602,7 +2602,7 @@ mod tests {
     /// Two app accounts, one that answered a link and one that did not. The
     /// owner's address is the Deployment's contact email, which `deployment` sets.
     fn notice_accounts(fixture: &Fixture) {
-        Connection::open(fixture.root.join("deployments").join(&fixture.app.id).join("identity.sqlite"))
+        Connection::open(crate::layout::identity(&fixture.root, &fixture.app.id))
             .unwrap()
             .execute_batch(
                 "CREATE TABLE app_users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL,
@@ -2636,7 +2636,7 @@ mod tests {
     /// The `notify` lines of the app's Usage, by name.
     fn notice_usage(fixture: &Fixture) -> Vec<(String, i64)> {
         super::super::usage::flush();
-        let db = Connection::open(fixture.root.join("deployments").join(&fixture.app.id).join("usage.sqlite")).unwrap();
+        let db = Connection::open(crate::layout::folder(&fixture.root, &fixture.app.id).join("usage.sqlite")).unwrap();
         let mut statement = db.prepare("SELECT name, SUM(count) FROM usage_daily WHERE kind = 'notify' GROUP BY name ORDER BY name").unwrap();
         statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
     }

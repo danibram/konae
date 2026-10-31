@@ -75,7 +75,7 @@ pub(crate) struct LocalFolder {
 
 impl LocalFolder {
     pub(crate) fn new(data_root: &Path) -> Self {
-        Self { deployments: data_root.join("deployments") }
+        Self { deployments: crate::layout::apps(&data_root) }
     }
 
     fn path(&self, deployment: &str, file: &str) -> PathBuf {
@@ -599,7 +599,7 @@ impl Files {
 
 /// The IDs and sizes a Deployment's index names, or none without an index.
 pub(crate) async fn indexed_files(data_root: &Path, deployment: &str) -> Result<Option<Vec<(String, u64)>>> {
-    let path = data_root.join("deployments").join(deployment).join("files").join("index.json");
+    let path = crate::layout::files(&data_root, &deployment).join("index.json");
     let bytes = match tokio::fs::read(&path).await {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1081,7 +1081,7 @@ pub(crate) mod tests {
     }
 
     fn index(root: &Path, deployment: &str, files: &[(&str, u64)]) {
-        let directory = root.join("deployments").join(deployment).join("files");
+        let directory = crate::layout::files(&root, &deployment);
         std::fs::create_dir_all(&directory).unwrap();
         let entries: Vec<_> = files.iter().map(|(id, size)| serde_json::json!({"id": id, "size": size, "visibility": "private"})).collect();
         std::fs::write(directory.join("index.json"), serde_json::to_vec(&entries).unwrap()).unwrap();

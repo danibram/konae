@@ -58,7 +58,7 @@ fn report(label: &str, mut samples: Vec<Duration>) {
 #[ignore]
 async fn sqlite_bench() {
     let root = std::env::temp_dir().join(format!("konae-sqlite-bench-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(root.join("deployments").join(ID)).unwrap();
+    std::fs::create_dir_all(crate::layout::folder(&root, &ID)).unwrap();
     let state = state(&root);
     let path = database_path(&state, ID);
     initialize_database(&path).unwrap();

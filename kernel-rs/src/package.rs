@@ -869,7 +869,7 @@ mod tests {
     async fn round_trip(source: Arc<dyn file_store::FileStore>, target: Arc<dyn file_store::FileStore>, root: &Path) {
         let (a, b) = ("00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b");
         let deployment = Uuid::new_v4().to_string();
-        let index_dir = root.join("deployments").join(&deployment).join("files");
+        let index_dir = crate::layout::files(&root, &deployment);
         std::fs::create_dir_all(&index_dir).unwrap();
         for (id, bytes) in [(a, b"first file".to_vec()), (b, vec![7u8; 100_000])] {
             let temp = root.join("upload");
@@ -883,7 +883,7 @@ mod tests {
         std::fs::write(index_dir.join("index.json"), index.to_string()).unwrap();
         let archive = root.join("files.tar");
         let arrival = Uuid::new_v4().to_string();
-        let target_dir = root.join("deployments").join(&arrival).join("files");
+        let target_dir = crate::layout::files(&root, &arrival);
         let (from, to) = (file_store::BlockingFiles::new(source.clone(), &deployment), file_store::BlockingFiles::new(target.clone(), &arrival));
         let (archive_path, index_path, target_path) = (archive.clone(), index_dir.clone(), target_dir.clone());
         tokio::task::spawn_blocking(move || {
@@ -921,7 +921,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
         let store: Arc<dyn file_store::FileStore> = Arc::new(file_store::LocalFolder::new(&root));
         let deployment = "source";
-        let source = root.join("deployments").join(deployment).join("files");
+        let source = crate::layout::files(&root, &deployment);
         std::fs::create_dir_all(&source).unwrap();
         let (a, b) = ("00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b");
         std::fs::write(source.join(format!("{a}.blob")), b"first file").unwrap();

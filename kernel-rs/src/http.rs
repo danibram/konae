@@ -1402,7 +1402,7 @@ mod tests {
     #[tokio::test]
     async fn a_static_request_does_not_parse_actions_and_a_publish_replaces_the_routes() {
         let root = std::env::temp_dir().join(format!("konae-route-cache-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root);
         let first = publish_route(&state, "/api/count").await;
         assert_eq!(route_parses(&first.id), 1, "the publish parses the actions once");
@@ -1449,7 +1449,7 @@ mod tests {
     #[tokio::test]
     async fn a_provider_delivery_runs_once_and_a_failed_one_can_be_retried() {
         let root = std::env::temp_dir().join(format!("konae-provider-route-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root);
         let secret = "github-route-secret-0123";
         secrets_call(&super::super::mcp::store(&state).unwrap(), "provider_route", None, "secret_set", &json!({"name": "github_webhook", "value": secret})).unwrap();

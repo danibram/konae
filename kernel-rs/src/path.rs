@@ -82,7 +82,7 @@ pub(crate) fn load(state: &AppState) {
 
 fn load_index(root: &Path) -> Index {
     let mut index = Index::new();
-    let Ok(entries) = std::fs::read_dir(root.join("deployments")) else { return index };
+    let Ok(entries) = std::fs::read_dir(crate::layout::apps(&root)) else { return index };
     for entry in entries.flatten() {
         let Some(id) = entry.file_name().to_str().map(str::to_owned) else { continue };
         let Some(record) = std::fs::read(entry.path().join(RECORD_FILE)).ok().and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok()) else {
@@ -558,7 +558,7 @@ mod tests {
     #[tokio::test]
     async fn a_segment_answers_only_while_its_path_is_on() {
         let root = std::env::temp_dir().join(format!("konae-path-segment-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root, Some("https://konae.es"));
         folder(&state, "d1").await;
         folder(&state, "d2").await;
@@ -588,7 +588,7 @@ mod tests {
     #[tokio::test]
     async fn an_app_has_accounts_when_it_is_private_open_or_calls_a_non_anonymous_action() {
         let root = std::env::temp_dir().join(format!("konae-path-accounts-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root, Some("https://konae.es"));
         let app = publish(&state, "plain").await;
         // Public, signup Open by default: accounts.
@@ -624,7 +624,7 @@ mod tests {
     #[tokio::test]
     async fn path_set_checks_the_name_the_domain_and_the_shared_origin_before_it_writes() {
         let root = std::env::temp_dir().join(format!("konae-path-set-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root, Some("https://konae.es"));
         let notes = publish(&state, "notes").await;
         let other = publish(&state, "other").await;
@@ -688,7 +688,7 @@ mod tests {
     #[tokio::test]
     async fn an_installation_without_a_domain_reads_the_path_but_does_not_turn_it_on() {
         let root = std::env::temp_dir().join(format!("konae-path-nodomain-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root, None);
         let app = publish(&state, "solo").await;
         let read = admin_call(&state, &owner(), "path_read", &json!({"deploymentId": app.id})).await.unwrap();
@@ -703,7 +703,7 @@ mod tests {
     #[tokio::test]
     async fn a_package_keeps_a_free_name_and_says_what_it_dropped() {
         let root = std::env::temp_dir().join(format!("konae-path-arrive-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root, Some("https://konae.es"));
         let notes = publish(&state, "notes").await;
         set(&state, &notes.id, json!({"enabled": true, "acceptSharedOrigin": true, "name": "spring-menu"})).await.unwrap();
@@ -778,7 +778,7 @@ mod tests {
 
     async fn scratch(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("konae-path-{label}-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         root
     }
 

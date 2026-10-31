@@ -123,7 +123,7 @@ fn with_index<T>(state: &AppState, f: impl FnOnce(&mut Index) -> T) -> T {
 /// records. A copy restored into this directory brings its files along.
 fn load_index(root: &Path) -> Index {
     let mut index = Index::new();
-    let Ok(entries) = std::fs::read_dir(root.join("deployments")) else { return index };
+    let Ok(entries) = std::fs::read_dir(crate::layout::apps(&root)) else { return index };
     for entry in entries.flatten() {
         let Some(id) = entry.file_name().to_str().map(str::to_owned) else { continue };
         if let Some(record) = std::fs::read(entry.path().join(RECORD_FILE)).ok().and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok()) {
@@ -621,7 +621,7 @@ mod tests {
     #[tokio::test]
     async fn an_alias_serves_after_its_txt_record_and_only_for_one_deployment() {
         let root = std::env::temp_dir().join(format!("konae-domain-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root);
         let notes = publish(&state, "notes").await;
         let other = publish(&state, "other").await;

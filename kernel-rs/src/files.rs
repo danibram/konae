@@ -261,7 +261,7 @@ mod tests {
         let named = json!({"name": format!("{}a{}", "\u{1}".repeat(500), "\u{7f}"), "type": "text/plain", "dataUrl": encode_base64(b"x")});
         let stored = response_json(upload_file(State(state.clone()), alice.clone(), Request::builder().body(Body::from(named.to_string())).unwrap()).await).await;
         assert_eq!(stored["result"]["name"], "a");
-        let directory = root.join("deployments").join(&deployment.id).join("files");
+        let directory = crate::layout::files(&root, &deployment.id);
         let full: Vec<Value> = (0..MAX_FILES).map(|index| json!({"id": format!("{index:036}"), "name": "f", "type": "text/plain", "size": 1, "visibility": "private", "ownerId": "x"})).collect();
         std::fs::write(directory.join("index.json"), serde_json::to_vec(&full).unwrap()).unwrap();
         let refused = upload_file(State(state.clone()), alice.clone(), upload_body(1, None)).await;
@@ -275,7 +275,7 @@ mod tests {
         let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
-        let directory = root.join("deployments").join(&deployment.id).join("files");
+        let directory = crate::layout::files(&root, &deployment.id);
         let mut ids = Vec::new();
         for _ in 0..10 {
             ids.push(upload(&state, &alice, 2 * 1024 * 1024, Some("public")).await);
@@ -365,7 +365,7 @@ mod tests {
         let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
-        let directory = root.join("deployments").join(&deployment.id).join("files");
+        let directory = crate::layout::files(&root, &deployment.id);
         tokio::fs::create_dir_all(&directory).await.unwrap();
         let private_legacy = Uuid::new_v4().to_string();
         let public_legacy = Uuid::new_v4().to_string();
