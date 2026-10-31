@@ -10,7 +10,6 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { DatabaseAdminHost, MiniAppRuntimeHost, StoredFile } from "../runtime/host";
-import type { DrizzleDatabaseModel } from "../lib/types";
 import { parseServerActionSource, routeCallers } from "../kernel/actions";
 import { Button, EmptyState as UiEmptyState, Field, Select } from "./ui";
 import { DatabaseStudio } from "./DatabaseStudio";
@@ -31,10 +30,7 @@ export const previewUploadsNote =
 type Props = {
   view: "database" | "files" | "auth";
   host: MiniAppRuntimeHost;
-  databaseModel: DrizzleDatabaseModel;
   onEditSchema: () => void;
-  onDatabaseModelAccepted: (source: string, revision: string) => void | Promise<void>;
-  onDatabaseModelRestored: (source: string, revision: string) => void | Promise<void>;
   onExportDatabase: () => void;
   onFilesChanged: () => void;
   deployedDatabase?: DatabaseAdminHost;
@@ -57,10 +53,7 @@ export function CapabilityWorkspace(props: Props) {
     return (
       <DatabaseStudio
         host={props.databaseTarget === "deployed" && props.deployedDatabase ? props.deployedDatabase : props.host}
-        databaseModel={props.databaseModel}
         onEditSchema={props.onEditSchema}
-        onDatabaseModelAccepted={props.onDatabaseModelAccepted}
-        onDatabaseModelRestored={props.onDatabaseModelRestored}
         onExportDatabase={props.onExportDatabase}
         target={props.databaseTarget}
         deployedLabel={props.deployedLabel}

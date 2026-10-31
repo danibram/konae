@@ -5,27 +5,12 @@ import { appStyles } from "./templates/shared";
 /** The design system, then nothing: the starter needs no rules of its own. */
 const starterStyles = appStyles();
 
-export const starterDatabaseModelSource = `import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-
-export const tasks = sqliteTable("tasks", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  title: text("title").notNull(),
-  done: integer("done", { mode: "boolean" }).notNull().default(false),
-  createdAt: integer("created_at").notNull(),
-});
-`;
-
 export const starterProject: MiniAppProject = {
   id: "app_tiny_tasks",
   name: "Tiny Tasks",
   slug: "tiny-tasks",
   manifest: createDefaultManifest(),
   updatedAt: Date.now(),
-  databaseModel: {
-    source: starterDatabaseModelSource,
-    acceptedSource: starterDatabaseModelSource,
-    revision: "baseline",
-  },
   directories: [],
   files: {
     "index.html": `
@@ -190,7 +175,6 @@ export function cloneStarter(): MiniAppProject {
     ...starterProject,
     directories: [...starterProject.directories],
     files: { ...starterProject.files },
-    databaseModel: { ...starterProject.databaseModel },
     manifest: createDefaultManifest(),
     updatedAt: Date.now(),
   };

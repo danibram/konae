@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseServerActionSource, resolveServerAction } from "../kernel/actions";
 import { cloneStarter } from "./starter";
-import { privateNotesDatabaseModelSource, withPrivateNotes } from "./private-notes";
+import { withPrivateNotes } from "./private-notes";
 
 describe("private notes starter", () => {
   test("transforms a project without changing its identity", () => {
@@ -12,8 +12,6 @@ describe("private notes starter", () => {
     expect(project.id).toBe(original.id);
     expect(project.name).toBe(original.name);
     expect(project.slug).toBe(original.slug);
-    expect(project.databaseModel.source).toBe(privateNotesDatabaseModelSource);
-    expect(project.databaseModel.acceptedSource).toBe(privateNotesDatabaseModelSource);
     expect(project.files["schema.sql"]).toContain("owner_id TEXT NOT NULL");
     expect(original.files["schema.sql"]).not.toContain("owner_id");
     expect(project.manifest.runtime.auth.mode).toBe("optional");

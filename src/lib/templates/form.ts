@@ -11,17 +11,6 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 `;
 
-const model = `import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-
-export const messages = sqliteTable("messages", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  name: text("name").notNull(),
-  email: text("email").notNull(),
-  body: text("body").notNull(),
-  receivedAt: integer("received_at").notNull(),
-});
-`;
-
 const actions = {
   version: 1,
   actions: {
@@ -109,7 +98,6 @@ export const formTemplate: TemplateSource = {
   name: "Public form",
   sentence: "Anyone can send a message; the owner gets an email and reads them all here.",
   visibility: "public",
-  model,
   files: {
     "index.html": html,
     "styles.css": templateStyles,

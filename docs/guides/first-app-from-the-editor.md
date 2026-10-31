@@ -34,7 +34,7 @@ Observe the result through the same door you wrote through, before you tell anyo
 
 ## Data and republishing
 
-Use Data to choose the local or deployed database, edit the model, review a generated migration, create backups and restore them. Publishing the same project keeps its URL and database, and the republished app stops serving files that the new artifact no longer contains. Local and deployed model acceptance are tracked separately.
+Use Data to choose the local or deployed database, browse and edit rows, run SQL, create backups and restore them. `schema.sql` is the only model: a publish adds the tables and indexes it declares, and a changed or removed column needs an `ALTER TABLE` in SQL, on the preview and on the published app. Publishing the same project keeps its URL and database, and the republished app stops serving files that the new artifact no longer contains.
 
 The Auth panel lets you try the app as Guest, Alice and Bob in the preview. A published app uses its own accounts.
 

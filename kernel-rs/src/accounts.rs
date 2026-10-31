@@ -820,7 +820,6 @@ mod tests {
             hostname: host.into(),
             actions: "{}".into(),
             artifact_version: None,
-            database_model: None,
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
         }

@@ -55,17 +55,13 @@ describe("capsule paths", () => {
 
 describe("capsule reserved paths", () => {
   /**
-   * The bug this pins: the agent could write /workspace/schema.ts or
-   * /workspace/schema.ts/x.js, a merged proposal put it in the project, and
-   * the export then used it in place of the real database model. Case variants
-   * such as App.js overwrote the real file on a case-insensitive filesystem.
+   * The bug this pins: case variants such as App.js, or a path inside a
+   * Capsule file, overwrote the real file on a case-insensitive filesystem.
    */
-  test("refuses protected paths that are not Capsule files, in any case", async () => {
+  test("refuses case variants of Capsule files and paths inside them", async () => {
     const space = workspace();
     for (const path of [
-      "/workspace/schema.ts",
-      "/workspace/schema.ts/x.js",
-      "/workspace/SCHEMA.TS",
+      "/workspace/SCHEMA.SQL",
       "/workspace/App.js",
       "/workspace/Index.html",
       "/workspace/actions.JSON/x.json",

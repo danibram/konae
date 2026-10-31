@@ -10,7 +10,6 @@ The app is a product probe. It uses Konae's primitives the way a creator would, 
 | --- | --- |
 | `index.html`, `styles.css`, `app.js` | The page. Plain CSS with the design system's neutral surfaces and indigo accent, light and dark from `prefers-color-scheme`. Listeners are attached in JavaScript, so the page runs under the Kernel's Content Security Policy. |
 | `schema.sql` | `habits`, `checkins` and `days`. A check-in's `day` is a `YYYY-MM-DD` string with a `CHECK`, unique per habit. A `days` row is one person's closed day. |
-| `schema.ts` | The Database Model the editor would hold, matching `schema.sql`. |
 | `actions.json` | Twelve Server Actions. Nine are `authenticated`. Eight of them bind the actor; the ninth, `days.close`, declares a schedule and binds only `kernel.now`. Three are `anonymous` with an HTTP route that declares `"callers": ["key"]` and also bind the actor, for an API key. `habits.create`, `habits.import` and `habits.archive` declare a guard. |
 | `replay.ts` | Starts its own Kernel, publishes the app and runs every flow below. |
 

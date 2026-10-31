@@ -1202,7 +1202,6 @@ mod tests {
     /// a live session and an uploaded file, plus an owner with a session.
     fn seed(root: &Path) -> (Deployment, String) {
         let deployment = Deployment {
-            database_model: None,
             id: uuid::Uuid::new_v4().to_string(),
             project_id: "app_copy".into(),
             project_name: "Copy test".into(),

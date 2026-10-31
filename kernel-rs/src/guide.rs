@@ -31,7 +31,6 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("project_create", "project_inspect"),
     ("project_sources_save", "project_sources_read"),
     ("project_delete", "projects_list"),
-    ("schema_plan", "schema_plan"),
     ("database_execute", "database_execute"),
     ("secret_set", "secrets_list"),
     ("secret_delete", "secrets_list"),
@@ -134,7 +133,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data.",
             "permissions": {
                 "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read",
-                "write": "project_create, project_sources_save, project_delete, schema_plan, and database_execute changes",
+                "write": "project_create, project_sources_save, project_delete and database_execute changes",
                 "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, and initialSignupPolicy on a first release",
                 "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
                 "export_data": "package_export, project_export and database_export"
@@ -329,7 +328,7 @@ mod tests {
             .chain(runtime_tools())
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
-        let prefixes = ["platform_", "project_", "projects_", "schema_", "database_", "storage_", "release_", "signup_policy_", "sign_in_methods_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "notices_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "package_", "mail_", "session_", "domain_", "path_"];
+        let prefixes = ["platform_", "project_", "projects_", "database_", "storage_", "release_", "signup_policy_", "sign_in_methods_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "notices_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "package_", "mail_", "session_", "domain_", "path_"];
         for name in TOPICS {
             let text = topic(name).unwrap().to_string();
             for word in text.split(|c: char| !(c.is_ascii_lowercase() || c == '_')) {

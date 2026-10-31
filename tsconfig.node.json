@@ -8,9 +8,7 @@
     "noEmit": true
   },
   "include": [
-    "vite.config.ts",
-    "database-lifecycle",
-    "src/database-lifecycle/contracts.ts"
+    "vite.config.ts"
   ],
   "exclude": [
     "**/*.test.ts"

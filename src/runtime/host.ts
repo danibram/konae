@@ -10,8 +10,6 @@ import {
 } from "./security";
 import { parseServerActionSource, resolveServerAction, routeCallers, type ServerActionProgram } from "../kernel/actions";
 import { thenOf } from "../kernel/calls";
-import type { ApplyDatabaseMigrationInput } from "../database-lifecycle/contracts";
-import { carryChecks } from "../lib/carry-checks";
 
 export type StoredFile = {
   id: string;
@@ -60,8 +58,6 @@ export type DatabaseBackup = {
   label: string;
   createdAt: number;
   sizeBytes: number;
-  databaseModelSource?: string;
-  schemaRevision?: string;
 };
 
 export type RuntimeSession = {
@@ -81,9 +77,8 @@ export type DatabaseAdminHost = {
   deleteRow(tableName: string, rowId: SqlValue): Promise<unknown>;
   exportDatabase(): Promise<Uint8Array>;
   listDatabaseBackups?(): Promise<DatabaseBackup[]>;
-  createDatabaseBackup?(label?: string, model?: { source: string; revision: string }): Promise<DatabaseBackup>;
+  createDatabaseBackup?(label?: string): Promise<DatabaseBackup>;
   restoreDatabaseBackup?(backupId: string): Promise<DatabaseBackup>;
-  applyDatabaseMigration?(input: ApplyDatabaseMigrationInput): Promise<{ backup: DatabaseBackup }>;
 };
 
 type StoredDatabaseBackup = DatabaseBackup & { database: string };
@@ -279,15 +274,13 @@ export class MiniAppRuntimeHost {
     return this.readDatabaseBackups().map(({ database: _database, ...backup }) => backup);
   }
 
-  async createDatabaseBackup(label = "Before migration", model?: { source: string; revision: string }): Promise<DatabaseBackup> {
+  async createDatabaseBackup(label = "Manual backup"): Promise<DatabaseBackup> {
     const bytes = await this.exportDatabase();
     const backup: StoredDatabaseBackup = {
       id: crypto.randomUUID(),
       label,
       createdAt: Date.now(),
       sizeBytes: bytes.byteLength,
-      databaseModelSource: model?.source,
-      schemaRevision: model?.revision,
       database: bytesToBase64(bytes),
     };
     const backups = [backup, ...this.readDatabaseBackups()].slice(0, localBackupLimit);
@@ -316,44 +309,6 @@ export class MiniAppRuntimeHost {
     previous.close();
     const { database: _database, ...summary } = backup;
     return summary;
-  }
-
-  async applyDatabaseMigration(input: ApplyDatabaseMigrationInput): Promise<{ backup: DatabaseBackup }> {
-    if (input.statements.length === 0) throw new Error("The migration plan has no statements.");
-    const SQL = await loadSqlJs();
-    const current = await this.dbPromise;
-    // A rebuilt table keeps the CHECKs schema.sql gave it, as on the Kernel.
-    const carried = carryChecks(input.statements, (name) => {
-      const sql = current.exec("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE", [name])[0]?.values[0]?.[0];
-      return typeof sql === "string" ? sql : null;
-    });
-    if ("error" in carried) throw carried.error;
-    const statements = carried.statements;
-    const clone = new SQL.Database(current.export());
-    try {
-      for (const statement of statements) clone.run(statement);
-      const integrity = clone.exec("PRAGMA integrity_check")[0]?.values[0]?.[0];
-      if (integrity !== "ok") throw new Error("The migrated database failed SQLite's integrity check.");
-    } finally {
-      clone.close();
-    }
-
-    const backup = await this.createDatabaseBackup(`Before migration · ${input.id.slice(0, 8)}`, {
-      source: input.recoveryModelSource,
-      revision: input.fromHash,
-    });
-    current.run("BEGIN IMMEDIATE");
-    try {
-      for (const statement of statements) current.run(statement);
-      const integrity = current.exec("PRAGMA integrity_check")[0]?.values[0]?.[0];
-      if (integrity !== "ok") throw new Error("The migrated database failed SQLite's integrity check.");
-      current.run("COMMIT");
-      this.persist(current);
-      return { backup };
-    } catch (error) {
-      current.run("ROLLBACK");
-      throw error;
-    }
   }
 
   /**
@@ -844,8 +799,6 @@ export class MiniAppRuntimeHost {
         && typeof backup.createdAt === "number"
         && typeof backup.sizeBytes === "number"
         && typeof backup.database === "string"
-        && (backup.databaseModelSource === undefined || typeof backup.databaseModelSource === "string")
-        && (backup.schemaRevision === undefined || typeof backup.schemaRevision === "string")
       ));
     } catch {
       return [];

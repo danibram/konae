@@ -26,23 +26,6 @@ CREATE TABLE IF NOT EXISTS posts (
 );
 `;
 
-const model = `import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-
-export const profiles = sqliteTable("profiles", {
-  userId: text("user_id").primaryKey(),
-  displayName: text("display_name").notNull(),
-  role: text("role").notNull().default("member"),
-  joinedAt: integer("joined_at").notNull(),
-});
-
-export const posts = sqliteTable("posts", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  authorId: text("author_id").notNull(),
-  body: text("body").notNull(),
-  createdAt: integer("created_at").notNull(),
-});
-`;
-
 const actor = { source: "actor", field: "id" };
 const role = { source: "actor", field: "role" };
 const now = { source: "kernel", field: "now" };
@@ -210,7 +193,6 @@ export const membersTemplate: TemplateSource = {
   name: "Members with roles",
   sentence: "People sign in and post; the owner makes some of them admins who can moderate.",
   visibility: "private",
-  model,
   files: {
     "index.html": html,
     "styles.css": templateStyles,

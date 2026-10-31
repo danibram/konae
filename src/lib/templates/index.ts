@@ -49,7 +49,6 @@ export function applyTemplate(base: MiniAppProject, id: TemplateId): MiniAppProj
     ...base,
     directories: [],
     files: { ...source.files },
-    databaseModel: { source: source.model, acceptedSource: source.model, revision: "baseline" },
     manifest: withVisibility({
       ...base.manifest,
       runtime: { ...base.manifest.runtime, database: { ...base.manifest.runtime.database, actions: declarations } },

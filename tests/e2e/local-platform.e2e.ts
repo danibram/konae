@@ -332,34 +332,6 @@ test("public notes authenticate users and isolate private rows", async ({ page, 
   await download.saveAs(testInfo.outputPath("notes-selfhost.tar"));
 });
 
-test("local and deployed migrations track their own model state", async ({ page, context }) => {
-  await createProject(page, `Separate database models ${Date.now()}`);
-  const url = await publish(page);
-  const app = await context.newPage();
-  await app.goto(url);
-  await app.getByPlaceholder(/Add one small thing/).fill("Keep published data");
-  await app.getByRole("button", { name: "Add task" }).click();
-  await expect(app.getByText("Keep published data")).toBeVisible();
-  const model = await openFile(page, "schema.ts");
-  await model.fill((await model.inputValue()).replace('  title: text("title").notNull(),', '  title: text("title").notNull(),\n  priority: text("priority").notNull().default("normal"),'));
-  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: /Data/i }).click();
-  await page.getByLabel("Database target").selectOption("local");
-  const views = page.getByRole("navigation", { name: "Database views" });
-  await views.getByRole("button", { name: "Schema", exact: true }).click();
-  await page.getByRole("button", { name: "Apply migration", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("Migration applied");
-  await page.getByLabel("Database target").selectOption("deployed");
-  await expect(page.getByRole("region", { name: "Migration plan" })).toContainText("priority");
-  await page.getByRole("button", { name: "Apply migration", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("Migration applied");
-  await views.getByRole("button", { name: "Data", exact: true }).click();
-  await expect(page.locator(".editable-grid")).toContainText("Keep published data");
-  await expect(page.locator(".editable-grid")).toContainText("normal");
-  expect(await publish(page)).toBe(url);
-  await app.reload();
-  await expect(app.getByText("Keep published data")).toBeVisible();
-});
-
 // playwright.local.config.ts starts the Kernel with KONAE_MAIL_TRANSPORT=development,
 // which writes each message to mailbox.jsonl in the data directory instead of sending it.
 async function invitationLink(to: string) {

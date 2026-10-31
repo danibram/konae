@@ -1,6 +1,6 @@
 # Use a Drizzle schema as the Managed Project database model
 
-Status: accepted, 2026-10-21. Amends [ADR-0003](0003-in-browser-agent-on-pi-agent-core.md): the agent edits `schema.ts`, not `schema.sql`.
+Status: superseded by [ADR-0027](0027-an-app-is-one-folder-that-the-kernel-serves-with-or-without-konae.md). Accepted 2026-10-21. Amends [ADR-0003](0003-in-browser-agent-on-pi-agent-core.md): the agent edits `schema.ts`, not `schema.sql`.
 
 Every Managed Project will expose a constrained Drizzle `schema.ts` as its canonical, editable Database Model. Users and agents iterate on that model in the Konae editor; Konae derives SQL migrations, validation artifacts and database backups through one managed database-lifecycle module. Generated SQL remains reviewable and portable, but it is not a second editable source of truth.
 

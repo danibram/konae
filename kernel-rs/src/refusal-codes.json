@@ -109,10 +109,6 @@
   "schedule.too-often": { "fix": "capsule", "remedy": "Run every 5 minutes or less often." },
   "schedule.too-rare": { "fix": "capsule", "remedy": "Use \"daily\" or a period of 24 hours or less." },
 
-  "schema.check-names-removed-column": { "fix": "capsule", "remedy": "Keep the column in schema.ts, or rebuild the table without that CHECK in the SQL console, then apply the migration again." },
-  "schema.model-differs-from-database": { "fix": "owner", "remedy": "Apply the migration that brings the database to the accepted model with database_execute apply-migration or in Data, or restore a backup taken under that model, then publish again.", "tool": "database_execute" },
-  "schema.model-not-accepted": { "fix": "owner", "remedy": "Apply the planned migration with database_execute apply-migration or in Data, or put schema.ts back to the accepted model, then publish again.", "tool": "database_execute" },
-  "schema.no-changes": { "fix": "capsule", "remedy": "Change a table or column in schema.ts, then plan the migration again." },
   "schema.statement-refused": { "fix": "capsule", "remedy": "Keep only CREATE TABLE and CREATE INDEX in schema.sql. Rows change through mutations." },
 
   "secret.google-id-looks-like-secret": { "fix": "owner", "remedy": "Paste the client ID, which ends with .apps.googleusercontent.com, and put the GOCSPX- value in google_client_secret.", "tool": "secret_set" },

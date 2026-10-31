@@ -17,7 +17,6 @@ mini-app/
 │   └── feature.ts
 ├── package.json      # optional, the npm packages the app imports
 ├── schema.sql
-├── schema.ts         # optional, the Database Model of the editor's Data panel
 └── actions.json
 ```
 
@@ -30,8 +29,7 @@ A folder that the CLI publishes also keeps `konae.json`, which names its project
 | `app.js` or `src/main.ts` | The entrypoint. The build bundles its relative imports and the npm packages it imports by name. |
 | `index.html`, other `.html` | Pages. Every `.html` at the root and under `pages/` is a page. Pages under `pages/` publish without the prefix. |
 | `styles.css` | Styles the pages load. |
-| `schema.sql` | The schema the Gate and the Kernel check and run. It may only create tables and indexes, and it must be safe to run twice, because the Kernel runs it again each time it opens the database. |
-| `schema.ts` | The Database Model, a Drizzle declaration the editor's Data panel edits. The Kernel derives a reviewed migration from two versions of it with `schema_plan`. An app that never changes a deployed table does not need it. |
+| `schema.sql` | The only model of the database. The Gate and the Kernel check and run it. It may only create tables and indexes, and it must be safe to run twice, because the Kernel runs it again each time it opens the database. A publish adds the tables and indexes it declares; a changed or removed column needs the owner's `ALTER TABLE` in Data or `konae sql --prod`. |
 | `package.json` | The npm packages the app imports, under `dependencies` with exact versions. A version range is refused. The editor's build reads them from esm.sh, and `konae build` reads them from `node_modules`. The published app holds their code and loads nothing from another origin. |
 | `actions.json` | The Server Action declarations. See [Server Actions](./server-actions.md). |
 | `404.html` | The page answered for a path the Deployment does not hold, under the default routing mode. |

@@ -8,9 +8,7 @@ Product terms are capitalized. Declaration keys stay lowercase: guard, notice, s
 
 **Project.** The source lineage, schema, capability configuration and deployment history owned by a workspace member. Its sources open in the editor, and the CLI publishes them from a folder.
 
-**Capsule.** The editable source of a Project taken as one unit. It is a nested source tree with an entrypoint, `app.js` or `src/main.ts`, plus optional `index.html` and `styles.css`, the schema in `schema.sql`, which the Validation Gate and the Kernel check and run, the Database Model in `schema.ts` when the editor's Data panel manages the tables, and the Server Action declarations in `actions.json`. See [The Capsule](./capsule.md).
-
-**Database Model.** The editable declaration of a Project's intended data structure, from which schema revisions and migrations are derived. It is source authority, unlike the current database or a generated SQL snapshot.
+**Capsule.** The editable source of a Project taken as one unit. It is a nested source tree with an entrypoint, `app.js` or `src/main.ts`, plus optional `index.html` and `styles.css`, the schema in `schema.sql`, the only model of the database, which the Validation Gate and the Kernel check and run, and the Server Action declarations in `actions.json`. See [The Capsule](./capsule.md).
 
 **Server Action.** A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. It runs one SQL statement. See [Server Actions](./server-actions.md).
 

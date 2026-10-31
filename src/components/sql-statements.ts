@@ -41,8 +41,8 @@ function classifyStatement(tokens: SqlToken[]): { read: boolean; danger: string 
     const name = objectName(tokens, words[2] === "IF" ? 4 : 2);
     return { read: false, danger: `${kind} deletes ${name ?? "it"} and everything in it.` };
   }
-  if (first === "ALTER") return { read: false, danger: "ALTER TABLE changes the table structure outside schema.ts." };
-  if (first === "CREATE") return { read: false, danger: "CREATE changes the database structure outside schema.ts." };
+  if (first === "ALTER") return { read: false, danger: "ALTER TABLE changes the table structure outside schema.sql. Change schema.sql to match, so a new database gets the same table." };
+  if (first === "CREATE") return { read: false, danger: "CREATE changes the database structure outside schema.sql. Add it to schema.sql too, so a new database gets it." };
 
   // A leading WITH only names subqueries; the statement does what its main verb does.
   const main = first === "WITH" ? mainVerbAfterWith(tokens) : tokens.findIndex((token) => token.kind === "word");
@@ -113,9 +113,4 @@ function objectName(tokens: SqlToken[], wordIndex: number): string | null {
     seen += 1;
   }
   return null;
-}
-
-/** Table names declared with `sqliteTable("name", …)` in a Drizzle model. */
-export function modelTableNames(source: string): string[] {
-  return [...source.matchAll(/sqliteTable\(\s*["'`]([^"'`]+)["'`]/g)].map((match) => match[1]);
 }

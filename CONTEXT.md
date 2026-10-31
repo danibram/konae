@@ -17,12 +17,8 @@ The source lineage, schema, capability configuration and deployment history owne
 _Avoid_: App when referring specifically to editable source
 
 **Capsule**:
-The editable source of a Project taken as one unit. It is a nested source tree with an entrypoint, `app.js` or `src/main.ts`, from which relative imports are bundled, plus optional `index.html` and `styles.css`, the schema in `schema.sql`, which the Validation Gate and the Kernel check and run, the Database Model in `schema.ts` when the editor's Data panel manages the tables, and the Server Action declarations in `actions.json`. Its pages are every `.html` at the root and under `pages/`, and files under `public/` are published as they are. It is the shape the editor and the agent read and write; what a Deployment serves is the Build Artifact built from it.
+The editable source of a Project taken as one unit. It is a nested source tree with an entrypoint, `app.js` or `src/main.ts`, from which relative imports are bundled, plus optional `index.html` and `styles.css`, the schema in `schema.sql`, the only model of the database, which the Validation Gate and the Kernel check and run, and the Server Action declarations in `actions.json`. Its pages are every `.html` at the root and under `pages/`, and files under `public/` are published as they are. It is the shape the editor and the agent read and write; what a Deployment serves is the Build Artifact built from it.
 _Avoid_: bundle, repo, the project files
-
-**Database Model**:
-The editable declaration of a Project's intended data structure from which schema revisions and migrations are derived. It is source authority, unlike the current database, a generated SQL snapshot or an individual migration.
-_Avoid_: Live database, migration, schema dump
 
 **Server Action**:
 A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. It runs one SQL statement. A query starts with `SELECT`, a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, and a `WITH` clause sits inside the statement, never in front of it. The Validation Gate and the Kernel refuse a statement that breaks a rule, and an action whose name, access, kind or bindings they do not take, with the same words, and a project declares at most 100 actions. A call action runs no SQL; the Kernel sends its request. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for the callers the route takes, of a signed request, an API key and a signed-in user; an `authenticated` action may not. An action whose route does not answer anyone answers only there, never through `miniapp.actions.call`.

@@ -58,7 +58,7 @@ beforeAll(async () => {
 
 async function startKernel() {
   kernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
-    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_S3_"))), KONAE_DATA_DIR: root, KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development" },
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_S3_"))), KONAE_DATA_DIR: root, KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development" },
     stdout: "ignore", stderr: "inherit",
   });
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -146,7 +146,7 @@ describe("authenticated MCP", () => {
 
   test("creating an editor project saves its files atomically", async () => {
     const id = "atomic_editor_creation";
-    const project = { id, name: "Atomic", slug: "atomic", files: { "index.html": "first" }, directories: [], databaseModel: { source: "", acceptedSource: "", revision: "" }, manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
+    const project = { id, name: "Atomic", slug: "atomic", files: { "index.html": "first" }, directories: [], manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
     const args = { projectId: id, name: project.name };
     const invalid = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...project, files: { "index.html": 123 } })));
     await expect(alice.call("project_create", { ...args, sourcesTransferId: invalid.transferId })).rejects.toThrow("Invalid project files");
@@ -171,7 +171,7 @@ describe("authenticated MCP", () => {
   test("saved sources persist per owner and reject stale writes", async () => {
     const id = "project_sources_proof";
     await alice.call("project_create", { projectId: id, name: "Sources" });
-    const project = { id, name: "Sources", slug: "sources", files: { "index.html": "first" }, directories: [], databaseModel: { source: "", acceptedSource: "", revision: "" }, manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
+    const project = { id, name: "Sources", slug: "sources", files: { "index.html": "first" }, directories: [], manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
     const upload = await alice.upload(new TextEncoder().encode(JSON.stringify(project)), id);
     expect(await alice.call("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: 0 })).toEqual({ revision: 1 });
     await expect(alice.call("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: 0 })).rejects.toThrow("revision conflict");
@@ -411,7 +411,7 @@ describe("authenticated MCP", () => {
     expect(state).toMatchObject({ revision: 1, sourcesRevision: 0 });
     // The project published from the folder takes the editor's saves too.
     expect(await alice.call("project_sources_read", { projectId: config.project.id })).toEqual({ revision: 0, transfer: null });
-    const editorFiles = { id: config.project.id, name: config.project.name, slug: config.project.slug, files: { "index.html": "<main>From the editor</main>" }, directories: [], databaseModel: { source: "", acceptedSource: "", revision: "" }, manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
+    const editorFiles = { id: config.project.id, name: config.project.name, slug: config.project.slug, files: { "index.html": "<main>From the editor</main>" }, directories: [], manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
     const editorUpload = await alice.upload(new TextEncoder().encode(JSON.stringify(editorFiles)), config.project.id);
     expect(await alice.call("project_sources_save", { projectId: config.project.id, transferId: editorUpload.transferId, expectedRevision: 0 })).toEqual({ revision: 1 });
     await alice.cancel(editorUpload.transferId);
@@ -941,7 +941,7 @@ describe("app accounts under required verification", () => {
     const strictPort = Number(process.env.KONAE_MCP_STRICT_TEST_PORT) || 20400 + Math.floor(Math.random() * 90);
     strictUrl = `http://127.0.0.1:${strictPort}`;
     strictKernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
-      env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_DATA_DIR: strictRoot, KONAE_KERNEL_PORT: String(strictPort), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: strictUrl, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development", KONAE_ACCOUNT_VERIFICATION: "required" },
+      env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_DATA_DIR: strictRoot, KONAE_KERNEL_PORT: String(strictPort), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: strictUrl, KONAE_HOST_SUFFIX: "localhost", KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development", KONAE_ACCOUNT_VERIFICATION: "required" },
       stdout: "ignore", stderr: "inherit",
     });
     let ready = false;

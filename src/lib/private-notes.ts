@@ -2,16 +2,6 @@ import type { RuntimeActionDeclaration } from "../deployments/manifest";
 import type { MiniAppProject } from "./types";
 import { appStyles } from "./templates/shared";
 
-export const privateNotesDatabaseModelSource = `import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-
-export const notes = sqliteTable("notes", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  ownerId: text("owner_id").notNull(),
-  title: text("title").notNull(),
-  createdAt: integer("created_at").notNull(),
-});
-`;
-
 const privateNotesSchema = `CREATE TABLE IF NOT EXISTS notes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   owner_id TEXT NOT NULL,
@@ -204,11 +194,6 @@ export function withPrivateNotes(project: MiniAppProject): MiniAppProject {
   return {
     ...project,
     directories: [...project.directories],
-    databaseModel: {
-      source: privateNotesDatabaseModelSource,
-      acceptedSource: privateNotesDatabaseModelSource,
-      revision: "baseline",
-    },
     files: {
       ...project.files,
       "index.html": privateNotesIndex,

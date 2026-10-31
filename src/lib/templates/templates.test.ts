@@ -67,7 +67,6 @@ describe("a project born from a template", () => {
       expect(declared).toEqual(Object.keys(parseServerActionSource(project.files["actions.json"]!).actions).sort());
       expect(project.id).toBe("app_template_test");
       expect(project.slug).toBe("test");
-      expect(project.databaseModel.source).toBe(project.databaseModel.acceptedSource);
       for (const name of ["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]) expect(project.files[name as keyof typeof project.files]).toBeTruthy();
     });
 

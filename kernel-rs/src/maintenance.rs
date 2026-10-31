@@ -169,7 +169,7 @@ pub(super) async fn guard(State(state): State<AppState>, request: Request, next:
 
 /// Tools that change nothing a paused app serves. Every other tool that
 /// names a paused Deployment, its project or one of its plans is refused.
-const OPEN_TOOLS: [&str; 24] = [
+const OPEN_TOOLS: [&str; 23] = [
     "platform_guide",
     "platform_describe",
     "mail_status",
@@ -192,7 +192,6 @@ const OPEN_TOOLS: [&str; 24] = [
     "package_export",
     "database_export",
     "project_export",
-    "schema_plan",
     "release_plan",
 ];
 const READ_TOOLS_SUFFIX: [&str; 2] = ["_list", "_read"];

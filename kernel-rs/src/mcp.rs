@@ -265,14 +265,11 @@ fn validate_sources(source: &Value, id: &str) -> Result<()> {
         && safe_relative_path(value) && !value.chars().any(|c| c.is_control());
     anyhow::ensure!(source["id"] == id && string(&source["name"], 80)
         && source["name"].as_str().is_some_and(|s| !s.trim().is_empty())
-        && string(&source["slug"], 100) && source["updatedAt"].as_u64().is_some(), "Invalid project metadata. Send {{ id, name, slug, files, directories, databaseModel, manifest, updatedAt }} with the project's own id, a name of 1 to 80 characters, a slug of up to 100 and updatedAt in milliseconds.");
+        && string(&source["slug"], 100) && source["updatedAt"].as_u64().is_some(), "Invalid project metadata. Send {{ id, name, slug, files, directories, manifest, updatedAt }} with the project's own id, a name of 1 to 80 characters, a slug of up to 100 and updatedAt in milliseconds.");
     let files = source["files"].as_object().ok_or_else(|| anyhow::anyhow!("Invalid project files."))?;
     anyhow::ensure!(files.len() <= 1_000 && files.iter().all(|(name, body)| path(name) && string(body, MAX_TRANSFER)), "Invalid project files.");
     let directories = source["directories"].as_array().ok_or_else(|| anyhow::anyhow!("Invalid project directories."))?;
     anyhow::ensure!(directories.len() <= 1_000 && directories.iter().all(|entry| entry.as_str().is_some_and(path)), "Invalid project directories.");
-    let model = &source["databaseModel"];
-    anyhow::ensure!(model.is_object() && string(&model["source"], MAX_TRANSFER)
-        && string(&model["acceptedSource"], MAX_TRANSFER) && string(&model["revision"], 256), "Invalid database model. Send databaseModel as {{ source, acceptedSource, revision }} strings; an app without a Drizzle model sends empty sources.");
     let manifest = &source["manifest"];
     let actions = manifest["runtime"]["database"]["actions"].as_array();
     anyhow::ensure!(manifest["version"] == 1 && ["public", "private"].contains(&manifest["visibility"].as_str().unwrap_or(""))
@@ -373,7 +370,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         tool(
             "database_execute",
             "Administer a deployment database. Mutations require write permission.",
-            json!({"deploymentId":text,"operation":{"type":"string","enum":["inspect","browse","sql","update-cell","insert-row","delete-row","list-backups","create-backup","restore-backup","apply-migration"]},"input":{"type":"object"}}),
+            json!({"deploymentId":text,"operation":{"type":"string","enum":["inspect","browse","sql","update-cell","insert-row","delete-row","list-backups","create-backup","restore-backup"]},"input":{"type":"object"}}),
             &["deploymentId", "operation"],
             false,
         ),
@@ -388,9 +385,8 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     if owner.scopes.iter().any(|s| s == "write") {
         tools.extend([
             tool("project_create", "Register a project and return a template's files, the ones konae init writes: template is tasks, notes (the default), members, form, webhook, digest or gallery, and without a manifest the project takes the template's visibility. Write the files into the folder and keep id, slug and manifest in konae.json. To save the editor's files with it, upload the project JSON without a projectId and pass sourcesTransferId to create the project and its files atomically. Repeating the same initial files is safe; existing saved files cannot be replaced here.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourcesTransferId":text,"template":{"type":"string","enum":["tasks","notes","members","form","webhook","digest","gallery"]}}), &["name"], false),
-            tool("project_sources_save", "Save the project sources the editor opens if the expected source revision still matches. Upload the project JSON first: { id, name, slug, files: { path: text }, directories, databaseModel: { source, acceptedSource, revision }, manifest, updatedAt }, the format the editor saves and docs/mcp.md describes.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
+            tool("project_sources_save", "Save the project sources the editor opens if the expected source revision still matches. Upload the project JSON first: { id, name, slug, files: { path: text }, directories, manifest, updatedAt }, the format the editor saves and docs/mcp.md describes.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
             tool("project_delete", "Delete a project for good: its registry entry, saved editor files and secrets, and, when it is published, its Deployment with the database, app accounts, uploaded files, backups and custom domain. The address stops answering at once. name must equal the project's name. Read back with projects_list.", json!({"projectId":text,"name":text}), &["projectId","name"], false),
-            tool("schema_plan", "Derive and validate SQL from two Drizzle models in an isolated subprocess.", json!({"acceptedSource":text,"candidateSource":text,"projectId":text}), &["acceptedSource","candidateSource"], false),
         ]);
     }
     tools.extend([
@@ -1345,7 +1341,7 @@ async fn admin_call(
         "project_inspect" => {
             let id = a["projectId"].as_str().unwrap();
             let (project, revision) = owned_project(state, owner, id, "read")?;
-            let deployment = recover_deployed_model(state, id).await?;
+            let deployment = find_project_deployment(&*state.deployments.read().await, id);
             let sources_revision: u64 = store(state)?
                 .query_row("SELECT revision FROM project_sources WHERE project=?1", [id], |r| r.get(0))
                 .optional()?
@@ -1599,14 +1595,6 @@ async fn admin_call(
             let bytes = axum::body::to_bytes(response.into_body(), MAX_TRANSFER).await?;
             download(state, principal, &bytes, Some(&d.project_id)).await
         }
-        "schema_plan" => {
-            if let Some(id) = a["projectId"].as_str() {
-                owned_project(state, owner, id, "write")?;
-            } else {
-                owner.require("write", None)?;
-            }
-            schema_plan(a).await
-        }
         "release_plan" => {
             let transfer = transfer(state, principal, &json!({"transferId":a["transferId"]}))?;
             anyhow::ensure!(
@@ -1745,176 +1733,6 @@ fn project_template(id: Option<&str>) -> Result<Value> {
     Ok(template.clone())
 }
 
-/// Legacy recovery proves the accepted model against SQLite before persisting it.
-/// Editable source and saved revision labels alone cannot establish deployment state.
-async fn recover_deployed_model(state: &AppState, project_id: &str) -> Result<Option<Deployment>> {
-    let _project = database_lock(state, &format!("project:{project_id}")).await;
-    let Some(mut deployment) = find_project_deployment(&*state.deployments.read().await, project_id) else { return Ok(None) };
-    if deployment.database_model.is_some() { return Ok(Some(deployment)); }
-    let saved: Option<Vec<u8>> = store(state)?.query_row(
-        "SELECT body FROM project_sources WHERE project=?1", [project_id], |r| r.get(0)).optional()?;
-    let Some(saved) = saved else { return Ok(Some(deployment)) };
-    let saved: Value = serde_json::from_slice(&saved)?;
-    let Some(source) = saved["databaseModel"]["acceptedSource"].as_str() else { return Ok(Some(deployment)) };
-    let expected = match model_schema(source).await {
-        Ok(expected) => expected,
-        Err(_) => return Ok(Some(deployment)),
-    };
-    let _data = database_lock(state, &deployment.id).await;
-    let actual = Connection::open(database_path(state, &deployment.id))?;
-    if schema_tokens(&expected)? != schema_tokens(&actual)? { return Ok(Some(deployment)); }
-    deployment.database_model = Some(DatabaseModel {
-        source: source.to_owned(), accepted_source: source.to_owned(), revision: digest(source.as_bytes()),
-    });
-    persist_deployment(state, &deployment).await?;
-    state.deployments.write().await.insert(deployment.hostname.clone(), deployment.clone());
-    Ok(Some(deployment))
-}
-
-pub(super) async fn model_schema(source: &str) -> Result<Connection> {
-    let expected = Connection::open_in_memory()?;
-    if source.trim().is_empty() { return Ok(expected); }
-    // The temporary table lets Drizzle derive additions from a valid model.
-    let baseline = "import { sqliteTable as lbProofTable, integer as lbProofInteger } from \"drizzle-orm/sqlite-core\"; export const lbSchemaProof = lbProofTable(\"__konae_schema_proof\", { id: lbProofInteger(\"id\") });";
-    let plan = schema_plan(json!({"acceptedSource":baseline,"candidateSource":format!("{source}\n{baseline}")})).await?;
-    expected.execute_batch("CREATE TABLE __konae_schema_proof(id INTEGER)")?;
-    for sql in plan["statements"].as_array().into_iter().flatten() {
-        expected.execute_batch(sql.as_str().unwrap_or_default())?;
-    }
-    expected.execute_batch("DROP TABLE __konae_schema_proof")?;
-    Ok(expected)
-}
-
-pub(super) async fn model_matches_path(source: &str, path: &Path) -> Result<bool> {
-    let expected = model_schema(source).await?;
-    let actual = Connection::open(path)?;
-    Ok(schema_tokens(&expected)? == schema_tokens(&actual)?)
-}
-
-/// Token comparison retains defaults, constraints, indexes, triggers and views.
-/// SQLite's integer AUTOINCREMENT primary key already rejects a stored NULL.
-pub(super) fn schema_tokens(db: &Connection) -> Result<Vec<(String, String, Vec<String>)>> {
-    let mut query = db.prepare("SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name")?;
-    let rows = query.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?)))?;
-    let mut result = Vec::new();
-    for row in rows {
-        let (kind, name, sql) = row?;
-        let mut tokens = Vec::<String>::new();
-        let sql = sql.unwrap_or_default();
-        let mut chars = sql.chars().peekable();
-        while let Some(c) = chars.next() {
-            if c.is_whitespace() || c == ';' { continue; }
-            let mut token = String::new();
-            if ['\'', '"', '`', '['].contains(&c) {
-                let end = if c == '[' { ']' } else { c };
-                if c == '\'' { token.push(c); }
-                while let Some(next) = chars.next() {
-                    if next == end {
-                        if chars.peek() == Some(&end) { token.push(next); chars.next(); }
-                        else { break; }
-                    } else { token.push(next); }
-                }
-                if c == '\'' { token.push(c); } else {
-                    token = token.to_ascii_lowercase();
-                    if ["null", "true", "false", "current_date", "current_time", "current_timestamp"].contains(&token.as_str()) {
-                        token.insert_str(0, "identifier:");
-                    }
-                }
-            } else if c.is_alphanumeric() || c == '_' {
-                token.push(c);
-                while chars.peek().is_some_and(|next| next.is_alphanumeric() || *next == '_') { token.push(chars.next().unwrap()); }
-                token = token.to_ascii_lowercase();
-            } else { token.push(c); }
-            tokens.push(token);
-        }
-        let mut at = 0;
-        while at + 2 < tokens.len() {
-            if tokens[at..at+3] == ["autoincrement", "not", "null"] { tokens.drain(at+1..at+3); }
-            at += 1;
-        }
-        let mut at = 0;
-        while at + 1 < tokens.len() {
-            if tokens[at] == "default" {
-                if tokens[at+1] == "false" { tokens[at+1] = "0".into(); }
-                if tokens[at+1] == "true" { tokens[at+1] = "1".into(); }
-                if at + 3 < tokens.len() && tokens[at+2..at+4] == ["not", "null"] {
-                    tokens[at..at+4].rotate_right(2);
-                    at += 2;
-                }
-            }
-            at += 1;
-        }
-        if kind == "table" {
-            drop_checks(&mut tokens);
-            canonicalize_column_order(&mut tokens);
-        }
-        result.push((kind, name, tokens));
-    }
-    Ok(result)
-}
-
-/// A Database Model cannot declare a CHECK: the model guard refuses `sql`, which
-/// Drizzle's `check()` needs. schema.sql may add CHECKs the model never states,
-/// so the comparison leaves out each CHECK group and a CONSTRAINT name before it.
-fn drop_checks(tokens: &mut Vec<String>) {
-    let mut kept = Vec::with_capacity(tokens.len());
-    let mut at = 0;
-    while at < tokens.len() {
-        let named = tokens[at] == "constraint" && tokens.get(at + 2).map(String::as_str) == Some("check");
-        let start = if named { at + 2 } else { at };
-        if tokens[start] == "check" && tokens.get(start + 1).map(String::as_str) == Some("(") {
-            let mut depth = 0;
-            at = start + 1;
-            while at < tokens.len() {
-                match tokens[at].as_str() { "(" => depth += 1, ")" => depth -= 1, _ => {} }
-                at += 1;
-                if depth == 0 { break; }
-            }
-            continue;
-        }
-        kept.push(std::mem::take(&mut tokens[at]));
-        at += 1;
-    }
-    *tokens = kept;
-}
-
-/// ALTER TABLE appends columns even when the model declares them earlier.
-/// Column definitions sort by name; composite constraints keep their own order.
-fn canonicalize_column_order(tokens: &mut Vec<String>) {
-    if tokens.first().map(String::as_str) != Some("create") || tokens.get(1).map(String::as_str) != Some("table") { return; }
-    let Some(open) = tokens.iter().position(|token| token == "(") else { return };
-    let mut depth = 1;
-    let mut start = open + 1;
-    let mut columns = Vec::new();
-    let mut constraints = Vec::new();
-    let mut close = None;
-    for at in open + 1..tokens.len() {
-        match tokens[at].as_str() {
-            "(" => depth += 1,
-            ")" => depth -= 1,
-            _ => {},
-        }
-        if depth == 0 || (depth == 1 && tokens[at] == ",") {
-            let definition = tokens[start..at].to_vec();
-            if definition.is_empty() {}
-            else if definition.first().is_some_and(|word| ["constraint", "primary", "unique", "check", "foreign"].contains(&word.as_str())) {
-                constraints.push(definition);
-            } else { columns.push(definition); }
-            start = at + 1;
-        }
-        if depth == 0 { close = Some(at); break; }
-    }
-    let Some(close) = close else { return };
-    columns.sort();
-    let mut normalized = tokens[..open + 1].to_vec();
-    for definition in columns.into_iter().chain(constraints) {
-        if normalized.len() > open + 1 { normalized.push(",".into()); }
-        normalized.extend(definition);
-    }
-    normalized.extend_from_slice(&tokens[close..]);
-    *tokens = normalized;
-}
-
 /// A tool's failed result. The text stays the sentence clients read today; a
 /// refused Capsule also answers `{ error: { code, message, hint } }` (ADR-0020).
 fn tool_error(error: &anyhow::Error) -> Value {
@@ -1926,9 +1744,6 @@ fn tool_error(error: &anyhow::Error) -> Value {
 }
 
 pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
-    if let Some(model) = &input.project.database_model {
-        super::model_rules::accepted(&model.source, &model.accepted_source, &model.revision)?;
-    }
     if let Some(hostname) = &input.initial_domain {
         super::domain::check_hostname(hostname, &super::domain::Rules::of(state))?;
         anyhow::ensure!(input.initial_package.is_none(), "Send the domain in the package manifest when importing a package.");
@@ -2011,16 +1826,6 @@ pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> R
             &program,
         )
     })();
-    let result = match result {
-        Ok(()) => match &input.project.database_model {
-            Some(model) => match model_matches_path(&model.accepted_source, &temp).await {
-                Ok(matches) => super::model_rules::deployed(matches).map_err(Into::into),
-                Err(error) => Err(error),
-            },
-            None => Ok(()),
-        },
-        Err(error) => Err(error),
-    };
     let _ = tokio::fs::remove_file(temp).await;
     result
 }
@@ -2410,88 +2215,6 @@ async fn transfer_call(
     }
 }
 
-pub(super) async fn schema_plan(input: Value) -> Result<Value> {
-    let root = std::env::var("KONAE_SOURCE_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or(std::env::current_dir()?);
-    let helper = std::env::var("KONAE_DERIVE_HELPER")
-        .ok()
-        .filter(|value| !value.is_empty());
-    let bind = std::env::var("KONAE_BIND").unwrap_or_else(|_| "127.0.0.1".into());
-    let hosts = super::hosts::from_env()?;
-    let public_origin = hosts.public_origin;
-    let mcp_origin = hosts.mcp_origin.unwrap_or_default();
-    if helper.is_none() && super::derive_must_isolate(&bind, &public_origin, &mcp_origin) {
-        anyhow::bail!(
-            "Schema derivation needs KONAE_DERIVE_HELPER on a Kernel that is not loopback-only."
-        );
-    }
-    let mut command = if let Some(helper) = helper {
-        let mut command = tokio::process::Command::new(helper);
-        command.current_dir("/tmp");
-        command
-    } else {
-        let bun = std::env::var("KONAE_BUN_PATH").unwrap_or_else(|_| "bun".into());
-        let mut command = tokio::process::Command::new(bun);
-        command
-            .arg("run")
-            .arg(root.join("database-lifecycle/derive-migration.ts"))
-            .current_dir(root);
-        command
-    };
-    let mut child = command
-        .env_clear()
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()?;
-    let mut stdin = child.stdin.take().unwrap();
-    stdin.write_all(input.to_string().as_bytes()).await?;
-    drop(stdin);
-    let mut stdout = child.stdout.take().unwrap();
-    let mut output = Vec::new();
-    tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        (&mut stdout)
-            .take(4_000_001)
-            .read_to_end(&mut output)
-            .await?;
-        anyhow::ensure!(
-            output.len() <= 4_000_000,
-            "Migration reply exceeds size limit."
-        );
-        child.wait().await?;
-        Ok::<(), anyhow::Error>(())
-    })
-    .await??;
-    let output = String::from_utf8(output)?;
-    let reply: Value = serde_json::from_str(
-        output
-            .rsplit("<<konae-schema-reply>>")
-            .next()
-            .unwrap_or(""),
-    )?;
-    anyhow::ensure!(
-        reply["ok"] == true,
-        "{}",
-        reply["error"]
-            .as_str()
-            .unwrap_or("Migration derivation failed.")
-    );
-    let statements: Vec<String> = serde_json::from_value(reply["statements"].clone())?;
-    super::model_rules::planned(&statements)?;
-    let sql = statements.join("\n--> statement-breakpoint\n");
-    let from = digest(input["acceptedSource"].as_str().unwrap().as_bytes());
-    let to = digest(input["candidateSource"].as_str().unwrap().as_bytes());
-    let destructive = statements.iter().any(|s| {
-        let s = s.to_uppercase();
-        s.contains("DROP ") || s.contains("DELETE FROM")
-    });
-    Ok(
-        json!({"id":digest(format!("{from}:{to}:{sql}").as_bytes()),"fromHash":from,"toHash":to,"sql":sql,"statements":statements,"destructive":destructive,"candidateModelSource":input["candidateSource"]}),
-    )
-}
-
 async fn owner_config(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if !super::oauth::valid_owner_host(&state, &headers).await { return StatusCode::FORBIDDEN.into_response(); }
     match super::clerk::ClerkConfig::from_env() {
@@ -2739,16 +2462,15 @@ mod tests {
     use super::*;
 
     /// A Kernel route that refuses with `refusal_error` keeps its code
-    /// through a tool that calls the route, as `database_execute` does for
-    /// `apply-migration`.
+    /// through a tool that calls the route.
     #[tokio::test]
     async fn a_route_refusal_keeps_its_code_through_the_tool() {
-        let sentence = "Table habits has a CHECK that names column note, which this migration removes. Rebuild habits without that CHECK in the SQL console, or keep note, then apply the migration again.";
-        let refused = super::super::refusal::refuse("schema.check-names-removed-column", sentence);
+        let sentence = "Action a.b has an invalid guard. Use a message of 1 to 200 characters on one line.";
+        let refused = super::super::refusal::refuse("guard.invalid", sentence);
         let error = response_value(super::super::refusal_error(&refused)).await.unwrap_err();
         let answer = tool_error(&error);
         assert_eq!(answer["content"][0]["text"], sentence);
-        assert_eq!(answer["structuredContent"]["error"]["code"], "schema.check-names-removed-column");
+        assert_eq!(answer["structuredContent"]["error"]["code"], "guard.invalid");
         assert_eq!(answer["structuredContent"]["error"]["hint"]["fix"], "capsule");
         let plain = response_value(super::super::error(StatusCode::BAD_REQUEST, "Unknown database operation.")).await.unwrap_err();
         assert!(tool_error(&plain).get("structuredContent").is_none());
@@ -2767,24 +2489,6 @@ mod tests {
         assert_eq!(answer["structuredContent"]["error"]["hint"]["fix"], "capsule");
         let other = tool_error(&anyhow::anyhow!("Upload is not complete."));
         assert_eq!(other, json!({"content": [{"type": "text", "text": "Upload is not complete."}], "isError": true}));
-    }
-
-    fn tokens_of(sql: &str) -> Vec<(String, String, Vec<String>)> {
-        let db = Connection::open_in_memory().unwrap();
-        db.execute_batch(sql).unwrap();
-        schema_tokens(&db).unwrap()
-    }
-
-    #[test]
-    fn a_model_matches_a_schema_that_adds_check_constraints() {
-        // What Drizzle derives from a model: it has no way to declare a CHECK.
-        let model = tokens_of("CREATE TABLE `habits` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,\n\t`name` text NOT NULL,\n\t`state` text DEFAULT 'on' NOT NULL\n);");
-        let written = tokens_of("CREATE TABLE IF NOT EXISTS habits (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 60), state TEXT NOT NULL DEFAULT 'on' CHECK (state IN ('on', 'off')), CONSTRAINT short CHECK (length(name) < 99), CHECK (id > 0));");
-        assert_eq!(model, written);
-        let extra = tokens_of("CREATE TABLE habits (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL CHECK (length(name) > 0), state TEXT NOT NULL DEFAULT 'on', extra TEXT);");
-        assert_ne!(model, extra);
-        let nullable = tokens_of("CREATE TABLE habits (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT CHECK (length(name) > 0), state TEXT NOT NULL DEFAULT 'on');");
-        assert_ne!(model, nullable);
     }
 
     #[tokio::test]
@@ -3108,12 +2812,12 @@ mod tests {
     #[test]
     fn a_refused_source_save_names_the_expected_format() {
         let manifest = json!({"version":1,"visibility":"private","runtime":{"database":{"mode":"declared-actions","actions":[]},"auth":{"mode":"optional"},"files":{"access":"deployment"}}});
-        let base = json!({"id":"app_a","name":"A","slug":"a","files":{"index.html":"<main></main>"},"directories":[],"databaseModel":{"source":"","acceptedSource":"","revision":"r1"},"manifest":manifest,"updatedAt":1});
+        let base = json!({"id":"app_a","name":"A","slug":"a","files":{"index.html":"<main></main>"},"directories":[],"manifest":manifest,"updatedAt":1});
         assert!(validate_sources(&base, "app_a").is_ok());
         let refusal = |change: &dyn Fn(&mut Value)| { let mut source = base.clone(); change(&mut source); validate_sources(&source, "app_a").unwrap_err().to_string() };
-        assert_eq!(refusal(&|s| { s.as_object_mut().unwrap().remove("databaseModel"); }), "Invalid database model. Send databaseModel as { source, acceptedSource, revision } strings; an app without a Drizzle model sends empty sources.");
+        assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("directories"); }).starts_with("Invalid project directories."));
         assert!(refusal(&|s| s["manifest"] = json!({"version":1,"visibility":"private"})).starts_with("Invalid project manifest. Send { version: 1, visibility, runtime: { database: { mode: \"declared-actions\""));
-        assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("updatedAt"); }).starts_with("Invalid project metadata. Send { id, name, slug, files, directories, databaseModel, manifest, updatedAt }"));
+        assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("updatedAt"); }).starts_with("Invalid project metadata. Send { id, name, slug, files, directories, manifest, updatedAt }"));
     }
 
     /// The sdk topic is src/sdk/contract.ts rendered to sdk-guide.json. Every

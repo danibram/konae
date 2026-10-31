@@ -39,9 +39,9 @@ describe("workspace project registry", () => {
     expect(found.map((project) => project.id)).toEqual(["app_mine"]);
   });
 
-  test("local copies with another timestamp or deployed revision are not extra projects", () => {
+  test("local copies with another timestamp are not extra projects", () => {
     const saved = cloneStarter();
-    const cached = { ...saved, updatedAt: saved.updatedAt - 100, databaseModel: { ...saved.databaseModel, revision: "old-browser-revision" } };
+    const cached = { ...saved, updatedAt: saved.updatedAt - 100 };
     expect(recoveryDrafts([cached], [saved])).toEqual([]);
   });
 

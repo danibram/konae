@@ -12,17 +12,6 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 `;
 
-const model = `import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-
-export const entries = sqliteTable("entries", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  userId: text("user_id").notNull(),
-  body: text("body").notNull(),
-  createdAt: integer("created_at").notNull(),
-  digestedAt: integer("digested_at"),
-});
-`;
-
 const actions = {
   version: 1,
   actions: {
@@ -124,7 +113,6 @@ export const digestTemplate: TemplateSource = {
   name: "Nightly digest",
   sentence: "Members write entries; each morning every member gets an email listing what they wrote the day before.",
   visibility: "private",
-  model,
   files: {
     "index.html": html,
     "styles.css": templateStyles,

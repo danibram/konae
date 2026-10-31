@@ -1,14 +1,3 @@
-FROM oven/bun:1.3.11 AS tooling
-WORKDIR /app
-COPY package.json bun.lock ./
-# At runtime the Kernel only spawns database-lifecycle/derive-migration.ts,
-# which needs drizzle-kit, drizzle-orm, esbuild and typescript. Install those
-# four with the root package.json specifiers. Bun reuses the resolutions in
-# bun.lock and prunes the rest, so the editor's dependencies stay out.
-RUN bun -e 'const p = await Bun.file("package.json").json(); const all = { ...p.dependencies, ...p.devDependencies }; const keep = ["drizzle-kit", "drizzle-orm", "esbuild", "typescript"]; await Bun.write("package.json", JSON.stringify({ name: p.name, private: true, type: p.type, dependencies: Object.fromEntries(keep.map((name) => [name, all[name]])) }));' \
-  && bun install
-COPY database-lifecycle ./database-lifecycle
-
 FROM rust:1.91-bookworm AS build
 
 WORKDIR /src
@@ -16,8 +5,6 @@ COPY kernel-rs/Cargo.toml kernel-rs/Cargo.lock ./
 RUN mkdir src && printf 'fn main() {}\n' > src/main.rs && cargo build --release --locked
 COPY kernel-rs/src ./src
 RUN touch src/main.rs && cargo build --release --locked
-COPY kernel-rs/derive-helper.c ./derive-helper.c
-RUN gcc -O2 -s -o konae-derive derive-helper.c
 
 FROM debian:bookworm-slim
 
@@ -26,23 +13,14 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd --system --gid 10001 konae \
   && useradd --system --uid 10001 --gid konae --home-dir /data --no-create-home --shell /usr/sbin/nologin konae \
-  && groupadd --system --gid 10002 konae-derive \
-  && useradd --system --uid 10002 --gid konae-derive --home-dir /tmp --no-create-home --shell /usr/sbin/nologin konae-derive \
   && mkdir -p /data \
   && chown konae:konae /data \
   && chmod 0700 /data
 COPY --from=build /src/target/release/konae-kernel /usr/local/bin/konae-kernel
-COPY --from=build /src/konae-derive /usr/local/bin/konae-derive
-RUN chown root:root /usr/local/bin/konae-derive && chmod 4755 /usr/local/bin/konae-derive
-COPY --from=tooling /usr/local/bin/bun /usr/local/bin/bun
-COPY --from=tooling /app/package.json /opt/konae/package.json
-COPY --from=tooling /app/node_modules /opt/konae/node_modules
-COPY --from=tooling /app/database-lifecycle /opt/konae/database-lifecycle
 COPY ops/kernel-entrypoint.sh /usr/local/bin/konae-entrypoint
 RUN chmod 755 /usr/local/bin/konae-entrypoint
 # The Kernel binds all interfaces here, so it refuses the local development
-# key unless the compose file opts in. Schema derivation goes through the
-# setuid helper, which becomes konae-derive before the model loads.
-ENV KONAE_BUN_PATH=/usr/local/bin/bun KONAE_SOURCE_ROOT=/opt/konae KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/data KONAE_DERIVE_HELPER=/usr/local/bin/konae-derive
+# key unless the compose file opts in.
+ENV KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/data
 EXPOSE 8787
 ENTRYPOINT ["/usr/local/bin/konae-entrypoint"]

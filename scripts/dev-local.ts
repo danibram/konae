@@ -51,8 +51,6 @@ process.on("SIGINT", () => stop(0));
 process.on("SIGTERM", () => stop(0));
 
 const kernelEnv = {
-  KONAE_BUN_PATH: process.execPath,
-  KONAE_SOURCE_ROOT: root,
   ...process.env,
   KONAE_KERNEL_PORT: kernelPort,
   KONAE_DATA_DIR: dataRoot,
@@ -68,8 +66,7 @@ delete kernelEnv.KONAE_DATA_BUCKET;
 const editorEnv = {
   ...process.env,
   KONAE_KERNEL_URL: kernelUrl,
-  KONAE_BUN_PATH: process.execPath,
-};
+  };
 
 console.log(`Konae editor: http://localhost:${editorPort}`);
 console.log(`Konae Kernel: ${kernelUrl}`);

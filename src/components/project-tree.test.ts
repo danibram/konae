@@ -8,8 +8,8 @@ const tree = {
 
 describe("project tree", () => {
   test("nests paths under their folders, folders first", () => {
-    const nodes = buildTree([...Object.keys(tree.files), "schema.ts"], tree.directories);
-    expect(nodes.map((node) => node.name)).toEqual(["src", "app.js", "schema.ts"]);
+    const nodes = buildTree([...Object.keys(tree.files), "schema.sql"], tree.directories);
+    expect(nodes.map((node) => node.name)).toEqual(["src", "app.js", "schema.sql"]);
     const src = nodes[0];
     if (src.kind !== "directory") throw new Error("src should be a folder");
     expect(src.children.map((node) => node.name)).toEqual(["empty", "features", "label.js"]);
@@ -35,18 +35,17 @@ describe("project tree", () => {
     expect(() => renamePath(tree, "src/features/tasks.ts", "src/label.js/tasks.ts")).toThrow("is a file");
   });
 
-  /** The bug this pins: a user file named schema.ts replaced the real model in exports and could not be deleted. */
   test("refuses to rename onto or away from a reserved project file", () => {
-    expect(() => renamePath(tree, "src/label.js", "schema.ts")).toThrow("schema.ts is a reserved project file");
+    expect(() => renamePath(tree, "src/label.js", "schema.sql")).toThrow("schema.sql is a reserved project file");
     expect(() => renamePath(tree, "src/label.js", "app.js")).toThrow("app.js is a reserved project file");
     expect(() => renamePath(tree, "app.js", "main.js")).toThrow("app.js is a reserved project file and cannot be renamed or moved.");
-    expect(() => renamePath(tree, "src", "schema.ts")).toThrow("reserved");
+    expect(() => renamePath(tree, "src", "schema.sql")).toThrow("reserved");
   });
 
   /** The bug this pins: a rename to App.js or to a case variant of a sibling overwrote a file once exported to a case-insensitive filesystem. */
   test("compares reserved paths and collisions without case", () => {
     expect(() => renamePath(tree, "src/label.js", "App.js")).toThrow("app.js is a reserved project file");
-    expect(() => renamePath(tree, "src/label.js", "Schema.TS")).toThrow("schema.ts is a reserved project file");
+    expect(() => renamePath(tree, "src/label.js", "Schema.SQL")).toThrow("schema.sql is a reserved project file");
     expect(() => renamePath(tree, "src/label.js", "SRC/Features/Tasks.ts")).toThrow("A file already exists at src/features/tasks.ts.");
     expect(() => renamePath(tree, "app.js", "x.js")).toThrow("reserved");
     expect(() => renamePath(tree, "src/label.js", "SRC")).toThrow("A folder already exists at src.");

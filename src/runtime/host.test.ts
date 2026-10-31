@@ -328,37 +328,3 @@ describe("the preview refuses miniapp.files.upload with the Kernel's words", () 
   });
 });
 
-describe("a preview migration keeps the CHECKs schema.sql added", () => {
-  // kernel-rs/src/check-carry-cases.json holds the cases; the Kernel's
-  // apply_migration runs the same carry over a Deployment's database.
-  const checked = "CREATE TABLE IF NOT EXISTS habits(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'on' CHECK (state IN ('on', 'off')), note TEXT, CONSTRAINT short_note CHECK (note IS NULL OR length(note) < 20));";
-  const rebuild = (columns: string[]) => [
-    "PRAGMA foreign_keys=OFF;",
-    `CREATE TABLE \`__new_habits\` (\n\t${["`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL", "`name` text NOT NULL", "`state` text DEFAULT 'off' NOT NULL", "`note` text"].filter((_, index) => index < columns.length).join(",\n\t")}\n);\n`,
-    `INSERT INTO \`__new_habits\`(${columns.map((name) => `"${name}"`).join(", ")}) SELECT ${columns.map((name) => `"${name}"`).join(", ")} FROM \`habits\`;`,
-    "DROP TABLE `habits`;",
-    "ALTER TABLE `__new_habits` RENAME TO `habits`;",
-    "PRAGMA foreign_keys=ON;",
-  ];
-  const plan = (statements: string[]) => ({ id: "carry-checks-plan", fromHash: "before", toHash: "after", sql: statements.join("\n"), statements, destructive: true, recoveryModelSource: "" });
-
-  test("a rebuilt table refuses a row its CHECK refused before", async () => {
-    const host = new MiniAppRuntimeHost("carry", checked, '{"version":1,"actions":{}}');
-    await host.runSql("INSERT INTO habits(name) VALUES('read')");
-    await host.applyDatabaseMigration(plan(rebuild(["id", "name", "state", "note"])));
-    const table = await host.runSql("SELECT sql FROM sqlite_master WHERE name = 'habits'");
-    expect(String(table.rows[0].sql)).toContain("DEFAULT 'off'");
-    await expect(host.runSql("INSERT INTO habits(name, state) VALUES('walk', 'maybe')")).rejects.toThrow("CHECK constraint failed");
-    await expect(host.runSql("INSERT INTO habits(name, note) VALUES('walk', 'a note that is far too long')")).rejects.toThrow("CHECK constraint failed");
-    expect((await host.runSql("SELECT name, state FROM habits")).rows).toEqual([{ name: "read", state: "on" }]);
-  });
-
-  test("a rebuild that drops a column a CHECK names is refused with the Kernel's words and changes nothing", async () => {
-    const host = new MiniAppRuntimeHost("carry-refused", checked, '{"version":1,"actions":{}}');
-    const before = (await host.runSql("SELECT sql FROM sqlite_master WHERE name = 'habits'")).rows;
-    await expect(host.applyDatabaseMigration(plan(rebuild(["id", "name", "state"])))).rejects.toThrow("Table habits has a CHECK that names column note, which this migration removes. Rebuild habits without that CHECK in the SQL console, or keep note, then apply the migration again.");
-    await expect(host.applyDatabaseMigration(plan(rebuild(["id", "name", "state"])))).rejects.toMatchObject({ code: "schema.check-names-removed-column" });
-    expect((await host.runSql("SELECT sql FROM sqlite_master WHERE name = 'habits'")).rows).toEqual(before);
-    expect(await host.listDatabaseBackups()).toEqual([]);
-  });
-});

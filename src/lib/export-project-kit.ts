@@ -256,7 +256,7 @@ On the domain the app keeps its accounts, rows and rules. Sessions do not cross 
 
 ## Changing the database
 
-\u0060app/schema.ts\u0060 is the Database Model the Konae editor used to plan migrations. This export has no migration generator, so editing it changes nothing. Change \u0060app/schema.sql\u0060 instead, and only in ways the Kernel accepts on every deploy: new tables and indexes with \u0060IF NOT EXISTS\u0060. Back up \u0060data/\u0060 before any change to an existing table.
+\u0060app/schema.sql\u0060 is the model. The Kernel runs it on every deploy, so add new tables and indexes there with \u0060IF NOT EXISTS\u0060. A changed or removed column needs an \u0060ALTER TABLE\u0060 on the database. Back up \u0060data/\u0060 before any change to an existing table.
 
 Keep \u0060.env\u0060 private. It contains the owner key for this local Kernel. The exported app source and static artifact contain no Konae-hosted credentials.
 
@@ -325,9 +325,6 @@ export function projectExportEntries(
     path: `app/${safeProjectPath(path)}`,
     contents,
   }));
-  if (!project.files["schema.ts"] && project.databaseModel.source) {
-    files.push({ path: "app/schema.ts", contents: project.databaseModel.source });
-  }
   const contract = actionContractEntries(project.files["actions.json"], project.files["schema.sql"] ?? "", { id: project.id, name: project.name });
   const normalizedArtifact = {
     version: artifact.version,
@@ -352,7 +349,6 @@ export function projectExportEntries(
       name: project.name,
       slug: project.slug,
       manifest: portableState?.visibility ? { ...project.manifest, visibility: portableState.visibility } : project.manifest,
-      databaseModel: project.databaseModel,
       ...(portableState?.domain ? { domain: portableState.domain } : {}),
     }, null, 2) },
     { path: "konae/artifact.json", contents: JSON.stringify(normalizedArtifact, null, 2) },

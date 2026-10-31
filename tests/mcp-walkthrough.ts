@@ -92,7 +92,7 @@ function cleanEnv() {
 export async function startKernel(port: number, data: string, setupKey: string): Promise<KernelProcess> {
   const url = `http://127.0.0.1:${port}`;
   const child = Bun.spawn([kernelBinary], {
-    env: { ...cleanEnv(), KONAE_DATA_DIR: data, KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, KONAE_MAIL_TRANSPORT: "development" },
+    env: { ...cleanEnv(), KONAE_DATA_DIR: data, KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_MAIL_TRANSPORT: "development" },
     stdout: "ignore", stderr: "inherit",
   });
   for (let attempt = 0; attempt < 150; attempt++) {

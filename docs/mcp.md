@@ -60,7 +60,7 @@ If MCP is published on an origin other than the hosting origin, set `KONAE_MCP_O
 | --- | --- |
 | Discovery | `platform_describe`, `platform_guide`, `session_inspect`, `mail_status`, `projects_list`, `project_inspect` |
 | Projects | `project_create`, `project_sources_read`, `project_sources_save`, `project_delete` |
-| Owner schema and data | `schema_plan`, `database_execute`, `storage_test` |
+| Owner data | `database_execute`, `storage_test` |
 | App export, with `export_data` | `package_export`, `project_export`, `database_export` |
 | Publishing | `release_plan`, `release_apply` |
 | Signup policy | `signup_policy_read`, `signup_policy_set` |
@@ -78,7 +78,7 @@ If MCP is published on an origin other than the hosting origin, set `KONAE_MCP_O
 | App runtime | `auth_session`, `auth_logout`, `actions_invoke`, `files_list`, `files_upload`, `files_read`, `files_update`, `files_delete` and transfers |
 | App accounts, also before sign-in | `auth_signup`, `auth_verify`, `auth_recover`, `auth_reset` |
 
-The catalog depends on the credentials. The Kernel checks the permission again on execution. A call to a tool the credential does not list answers `Unknown tool or insufficient permission.` and, for a tool another credential would list, the permission it needs and how to get it, such as `app_invitations_create needs a credential with manage_users. Run konae login with --manage-users, or use a token from token_create that includes it.` A tool of the runtime endpoint called here says so. A token limited to projects cannot create other projects. For `schema_plan`, that token must pass a `projectId` it has access to. Reading the signup policy needs the `read` scope. Changing it, and every `app_users_*` and `app_invitation*` tool, needs `manage_users`. The owner's browser session holds it. A delegated token holds it only when it was created with it, so tokens issued before this permission existed do not gain it. `read` alone never lists accounts or invitations.
+The catalog depends on the credentials. The Kernel checks the permission again on execution. A call to a tool the credential does not list answers `Unknown tool or insufficient permission.` and, for a tool another credential would list, the permission it needs and how to get it, such as `app_invitations_create needs a credential with manage_users. Run konae login with --manage-users, or use a token from token_create that includes it.` A tool of the runtime endpoint called here says so. A token limited to projects cannot create other projects. Reading the signup policy needs the `read` scope. Changing it, and every `app_users_*` and `app_invitation*` tool, needs `manage_users`. The owner's browser session holds it. A delegated token holds it only when it was created with it, so tokens issued before this permission existed do not gain it. `read` alone never lists accounts or invitations.
 
 This changes the contract. `signup_policy_set` needed `publish` before `manage_users` existed, so a client that changed the policy with a `read`, `write` and `publish` token now gets "Unknown tool" and needs a new token that includes `manage_users`. `bun run konae -- login --manage-users` asks for one, and `bun run konae -- dev` asks for one on its Development Kernel.
 
@@ -94,13 +94,12 @@ The editor saves sources with `project_sources_save { projectId, transferId, exp
 { "id": "app_notes", "name": "Notes", "slug": "notes", "updatedAt": 1762430000000,
   "files": { "index.html": "<main id=app></main>", "app.js": "...", "schema.sql": "...", "actions.json": "..." },
   "directories": [],
-  "databaseModel": { "source": "", "acceptedSource": "", "revision": "r1" },
   "manifest": { "version": 1, "visibility": "private",
     "runtime": { "database": { "mode": "declared-actions", "actions": [{ "name": "notes.list", "kind": "query", "access": "authenticated" }] },
       "auth": { "mode": "optional" }, "files": { "access": "deployment" } } } }
 ```
 
-A save refuses JSON without one of these parts with the part's name and its expected shape, such as `Invalid database model. Send databaseModel as { source, acceptedSource, revision } strings; an app without a Drizzle model sends empty sources.`
+A save refuses JSON without one of these parts with the part's name and its expected shape, such as `Invalid project manifest. Send { version: 1, visibility, runtime: … }`.
 
 `project_delete { projectId, name }` needs `write` and deletes a project for good. `name` must equal the project's name; any other value is refused with `The name does not match this project. Type the project's name exactly to delete it.` The Kernel removes the project's Deployments from routing first, so their addresses stop answering, then deletes each Deployment folder (database, app accounts, uploaded files, backups, custom domain) and its stored artifacts, then the registry entry, saved editor files, plans and signing secrets. The answer lists the deleted Deployment IDs. Read back with `projects_list`. A paused app refuses it like any other change. Export a package first to keep the data. The build agent does not get this tool.
 
@@ -1018,16 +1017,6 @@ Column names follow SQLite: the alias, or the column's own name. An expression w
 
 `conform` is what a replacement backend would run. It calls every action through the runtime endpoint with generated inputs and checks the answer's shape, then probes each refusal the contract lists: an undeclared action, an undeclared, missing, mistyped, empty or overlong input, a caller without a session or without an ID, and on a route an unsigned, stale or replayed signature, a caller with no key or session where the route needs one, an unknown API key, a key the route does not take, an undeclared query or body key, a body that is not JSON, a POST to an unbound path, and a `HEAD` on a `GET` route, checked by its status alone since the answer has no body. A guarded mutation must answer its guard when its statement changes no row: `conform` sends the valid input, and again when the first call changed a row, and fails a backend that answers `{ changes: 0 }` instead; when both calls change a row it reports the check as skipped. A caller without the role a guard checks meets that guard on every call, so a guard refusal passes the valid call and the probes that omit a nullable input: the bindings accepted the call and the app's rule refused it. An action whose route is its only door is checked to refuse `actions_invoke` with `Action <name> answers only on its HTTP route, <method> <path>.`, and its inputs are probed on the route. A refusal passes only when the contract lists the message and the backend answers with it, with the contract's status on a route. `--token` carries an app session token, the value of the app session cookie; `KONAE_APP_EMAIL` and `KONAE_APP_PASSWORD` sign in for one instead. `--secret <name>=<value>` signs a route and may repeat, with a fresh nonce for each request. `--key` sends an API key to a route that takes one when no secret signs it, and an action that binds the caller's ID gets the key or, with `--token`, the session cookie. The generated inputs are a short unique string, the number 1 and `true`; a statement that reads a string as more than text, such as `json_each(?1)`, needs a real value, which `--inputs <file>` gives as JSON keyed by action name, for example `{ "items.jsonin": { "ids": "[1, 2]" } }`. A valid call refused with a message the contract does not list fails and says so. A check that needs a credential it was not given is reported as skipped, not passed. It runs every mutation once with real input, so point it at a test Deployment. It exits with 1 when any check fails.
 
-## Deployed database models
-
-A release may include `project.databaseModel` with `source`, `acceptedSource` and `revision`. Publishing requires equal source strings and a nonempty revision. Both planning and applying derive that model through the isolated schema helper and compare it with SQLite after the proposed additive schema runs. A model that describes another schema is refused before the live deployment changes. The Kernel persists the accepted model in `deployment.json` and returns it through `release_apply` and `project_inspect`, so reloading the editor keeps the deployed schema revision.
-
-A release without `databaseModel`, such as a CLI publish, keeps the previous model only when it still matches the resulting schema. Otherwise the receipt has no model. For a legacy deployment without one, `project_inspect` may recover the saved model's `acceptedSource` only after deriving it and comparing it with live SQLite. It does not accept the current editable source or the saved revision label as proof. Recovery records the accepted source's SHA-256 as its revision. When derivation or comparison fails, the model remains absent and the editor keeps schema editing and publishing blocked.
-
-`schema_plan` returns `candidateModelSource` alongside its existing plan fields. Send the complete plan and `recoveryModelSource` to `database_execute` with `operation: "apply-migration"`. The Kernel checks the old accepted source, derives the plan again and compares its hashes and statements before applying it. A successful apply persists the candidate source and `toHash`. Older callers that omit the candidate can still apply SQL, but the Kernel clears the accepted model rather than retaining a stale revision.
-
-Database backups return `databaseModelSource` and `schemaRevision` when the deployment has an accepted model. Restore returns those fields and restores the persisted model with the database. A backup without model metadata clears the model; any later legacy recovery still has to prove it against SQLite.
-
 ## Export and import an app
 
 `package_export` takes a `deploymentId` and captures the app under its project, data and identity locks. No action, upload, signup, policy change or release lands halfway; they wait for the capture to finish. A 256 MiB database takes a few seconds. It returns a manifest and one download transfer per component.
@@ -1134,7 +1123,7 @@ The audit log in `mcp.sqlite` records each owner tool call with its project or D
 
 The official SDK checks connection, listing and MCP calls, as well as the OAuth flow with registration and PKCE. The browser tests cover publishing, republishing, migrations, restore and export.
 
-The self-hosted export includes the Kernel, its MCP and OAuth modules, and a deploy script that uses authenticated MCP. The platform image includes Bun and the Drizzle tooling. The minimal self-hosted kit supports administrative SQL and migrations supplied by its owner; it does not include the tool that derives Drizzle models.
+The self-hosted export includes the Kernel, its MCP and OAuth modules, and a deploy script that uses authenticated MCP. The minimal self-hosted kit supports administrative SQL that its owner writes.
 
 `project_export`, which needs `export_data`, includes `initialSignupPolicy` with `{ "mode": "open" | "invitation" | "closed" | "allowlist", "allowlist": [...] }` alongside the portable database, accounts and files. It captures `visibility` under the same project lock, so exporters use the snapshot's visibility even if an earlier project inspection or editor copy differs. A release may import that policy only on its first Deployment. The Kernel validates and installs the policy before serving that Deployment, so a public app exported with Closed signup never opens registration during import. Republishing cannot override the policy through initial state. Older exports without these fields use the inspected Deployment's visibility or the editor's current project and the normal signup defaults.
 

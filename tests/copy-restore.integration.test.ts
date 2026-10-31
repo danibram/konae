@@ -28,7 +28,7 @@ beforeAll(async () => {
 
 function kernelEnv(root: string, extra: Record<string, string> = {}) {
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_")));
-  return { ...inherited, KONAE_DATA_DIR: root, KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, ...extra };
+  return { ...inherited, KONAE_DATA_DIR: root, KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_HOST_SUFFIX: "localhost", ...extra };
 }
 
 async function startKernel(root: string, extra: Record<string, string> = {}) {

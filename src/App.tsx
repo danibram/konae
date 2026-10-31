@@ -58,7 +58,6 @@ import { deployProject, HostedDatabaseClient, type DeploymentReceipt, type Signu
 import { McpError, platformMcp } from "./mcp/client";
 import { readReleaseFacts } from "./deployments/release-facts";
 import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/manifest";
-import { createSchemaSnapshot } from "./database-lifecycle/schema-snapshot";
 import { parseServerActionSource } from "./kernel/actions";
 import { applyLocalAgentEdit } from "./lib/agent";
 import { parseRoute, pushRoute } from "./lib/routing";
@@ -87,7 +86,6 @@ const knownFileMeta: Record<string, { label: string; icon: typeof FileText; lang
   "index.html": { label: "index.html", icon: FileCode2, language: "HTML" },
   "styles.css": { label: "styles.css", icon: FileText, language: "CSS" },
   "app.js": { label: "app.js", icon: FileJson2, language: "JAVASCRIPT" },
-  "schema.ts": { label: "schema.ts", icon: Database, language: "DRIZZLE · TYPESCRIPT" },
   "schema.sql": { label: "SQL", icon: Database, language: "SQL" },
   "actions.json": { label: "actions.json", icon: ShieldCheck, language: "SERVER ACTIONS" },
 };
@@ -338,15 +336,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
    */
   const previewDocumentKey = useMemo(() => documentFingerprint(previewDocument), [previewDocument]);
   const activeDeployment = deployments[project.id] ?? null;
-  const deployedDatabase = useMemo(() => activeDeployment?.databaseModel ? new HostedDatabaseClient(activeDeployment.id) : undefined, [activeDeployment]);
-  const deployedModel = activeDeployment?.databaseModel ?? project.databaseModel;
-  const targetDatabaseModel = databaseTarget === "deployed" && activeDeployment
-    ? { ...deployedModel, source: project.databaseModel.source }
-    : project.databaseModel;
+  const deployedDatabase = useMemo(() => activeDeployment ? new HostedDatabaseClient(activeDeployment.id) : undefined, [activeDeployment]);
   const actionContract = useActionContract(project.files["actions.json"], project.files["schema.sql"], project);
   const contractOpen = activeFile === ACTION_CONTRACT_MARKDOWN;
-  const activeSource = activeFile === "schema.ts" ? project.databaseModel.source
-    : contractOpen ? (actionContract.ok ? actionContract.markdown : actionContract.reason) : project.files[activeFile] ?? "";
+  const activeSource = contractOpen ? (actionContract.ok ? actionContract.markdown : actionContract.reason) : project.files[activeFile] ?? "";
   const activeMeta = fileMetaFor(activeFile);
   const lines = activeSource.split("\n").length;
 
@@ -444,15 +437,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   const updateFile = (value: string) => {
     if (contractOpen) return;
-    setProject((current) => activeFile === "schema.ts" ? {
-      ...current,
-      updatedAt: Date.now(),
-      databaseModel: { ...current.databaseModel, source: value },
-    } : {
+    setProject((current) => ({
       ...current,
       updatedAt: Date.now(),
       files: { ...current.files, [activeFile]: value },
-    });
+    }));
   };
 
   // Tree edits are computed before React sees them, because a throw inside a
@@ -523,24 +512,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     if (activeFile === path || activeFile.startsWith(`${path}/`)) setActiveFile("app.js");
     setSelectedPath("app.js");
     setPendingDelete(null);
-  };
-
-  const acceptDatabaseModel = async (source: string, revision: string) => {
-    const projectId = project.id;
-    const deployed = databaseTarget === "deployed" && deployedDatabase;
-    const database = deployed || hostRef.current;
-    const schema = await createSchemaSnapshot(database);
-    const acceptedModel = { source, acceptedSource: source, revision };
-    setProject((current) => current.id !== projectId ? current : ({
-      ...current,
-      updatedAt: Date.now(),
-      files: { ...current.files, "schema.sql": schema },
-      databaseModel: deployed ? { ...current.databaseModel, source } : acceptedModel,
-    }));
-    if (deployed) setDeployments((current) => ({
-      ...current,
-      [projectId]: { ...current[projectId], databaseModel: acceptedModel },
-    }));
   };
 
   /**
@@ -775,10 +746,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setOperationError("");
     try {
       const { createProjectExport } = await import("./lib/export-project");
-      if (activeDeployment && !activeDeployment.databaseModel) throw new Error("The deployed schema revision is unavailable in this browser. A full export requires the deployed schema.");
-      if (project.databaseModel.source !== (activeDeployment ? deployedModel : project.databaseModel).acceptedSource) {
-        throw new Error("Apply or revert the schema changes for the exported database first.");
-      }
       const artifact = await buildProjectInBrowser(project);
       const state = activeDeployment && deployedDatabase
         ? await deployedDatabase.exportPortableState()
@@ -804,17 +771,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setPublishing(true);
     setDeployError("");
     try {
-      if (activeDeployment && !activeDeployment.databaseModel) throw new Error("The deployed schema revision is unavailable in this browser. Publishing is paused until it can be verified.");
-      const model = activeDeployment ? deployedModel : project.databaseModel;
-      if (project.databaseModel.source !== model.acceptedSource) {
-        throw new Error(activeDeployment
-          ? "Apply the schema migration to the deployed database in Data before publishing."
-          : "Apply or revert the local schema changes before publishing.");
-      }
       const artifact = await buildProjectInBrowser(project);
       // The signup policy goes only with a first release; the Kernel keeps it on a republish.
       const initialSignupPolicy = !activeDeployment && signupMode ? { mode: signupMode, allowlist: [] } : undefined;
-      const record = { ...await deployProject(project, visibility, artifact, initialSignupPolicy), databaseModel: { ...model } };
+      const record = await deployProject(project, visibility, artifact, initialSignupPolicy);
       setProject((current) => ({ ...current, manifest: record.manifest, updatedAt: Date.now() }));
       setDeployment(record);
       setDeployments((current) => ({ ...current, [project.id]: record }));
@@ -1023,8 +983,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     requestAnimationFrame(() => editorRef.current?.setSelectionRange(...caret));
   };
 
-  const fileLead = ["actions.json", "schema.sql", "schema.ts", "index.html", "styles.css", "app.js"];
-  const explorerFiles = [...new Set([...Object.keys(project.files), "schema.ts", ACTION_CONTRACT_MARKDOWN])].sort((a, b) => {
+  const fileLead = ["actions.json", "schema.sql", "index.html", "styles.css", "app.js"];
+  const explorerFiles = [...new Set([...Object.keys(project.files), ACTION_CONTRACT_MARKDOWN])].sort((a, b) => {
     const ai = fileLead.indexOf(a);
     const bi = fileLead.indexOf(b);
     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi) || a.localeCompare(b);
@@ -1059,7 +1019,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         activeFile={activeFile}
         selectedPath={selectedPath}
         iconFor={(path) => fileMetaFor(path).icon}
-        noteFor={(path) => path === "actions.json" ? "returns at most 100" : path === "schema.ts" ? "model" : path === "schema.sql" ? "kernel runs this" : path === ACTION_CONTRACT_MARKDOWN ? "generated" : ""}
+        noteFor={(path) => path === "actions.json" ? "returns at most 100" : path === "schema.sql" ? "kernel runs this" : path === ACTION_CONTRACT_MARKDOWN ? "generated" : ""}
         onSelect={setSelectedPath}
         onOpenFile={(file) => { setActiveFile(file); setSelectedPath(file); }}
       />
@@ -1147,14 +1107,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     icon,
     body: (
       <Suspense fallback={<LoadingBlock label="Loading this panel" rows={4} className="panel-loading" />}>
-        {id === "data" && activeDeployment && !activeDeployment.databaseModel && <p role="alert">The deployed schema revision is unavailable in this browser. Deployed database editing is paused.</p>}
         <CapabilityWorkspace
           view={id === "data" ? "database" : id}
           host={hostRef.current}
-          databaseModel={targetDatabaseModel}
-          onEditSchema={() => { setActiveFile("schema.ts"); reveal("code"); }}
-          onDatabaseModelAccepted={acceptDatabaseModel}
-          onDatabaseModelRestored={acceptDatabaseModel}
+          onEditSchema={() => { setActiveFile("schema.sql"); reveal("code"); }}
           onExportDatabase={() => void exportDatabase()}
           onFilesChanged={() => runPreview()}
           deployedDatabase={deployedDatabase}

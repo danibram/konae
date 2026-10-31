@@ -5,11 +5,9 @@ export type ProjectTree = {
 
 /**
  * Files every project has, which the editor never creates, renames, moves or
- * deletes as ordinary tree entries. schema.ts is listed even when the project
- * does not hold it as a file: the export writes the database model there, and
- * a user file at that path would replace the real model.
+ * deletes as ordinary tree entries.
  */
-export const protectedProjectPaths: ReadonlySet<string> = new Set(["index.html", "styles.css", "app.js", "schema.sql", "actions.json", "schema.ts"]);
+export const protectedProjectPaths: ReadonlySet<string> = new Set(["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]);
 
 /**
  * The key two project paths share when a case-insensitive filesystem (the
@@ -22,7 +20,7 @@ export function foldPath(path: string): string {
 
 /**
  * The protected path that `path` is or would sit inside, or null. The match
- * ignores case: `App.js` or `SCHEMA.TS` overwrites the real file once the
+ * ignores case: `App.js` or `SCHEMA.SQL` overwrites the real file once the
  * project is exported to a case-insensitive filesystem.
  */
 export function reservedPathConflict(path: string): string | null {

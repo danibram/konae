@@ -1,12 +1,11 @@
-import type { DrizzleDatabaseModel, MiniAppProject } from "../lib/types";
+import type { MiniAppProject } from "../lib/types";
 import type { DatabaseAdminHost, DatabaseBackup, DatabasePage, DatabaseRunResult, DatabaseTable } from "../runtime/host";
-import type { ApplyDatabaseMigrationInput } from "../database-lifecycle/contracts";
 import type { SqlValue } from "sql.js";
 import type { DeploymentRecord, DeploymentVisibility } from "./manifest";
 import type { BuildArtifact } from "../runtime/artifact";
 import { platformMcp, decodeBase64, type Transfer } from "../mcp/client";
 
-export type DeploymentReceipt = DeploymentRecord & { accessCode?: string; databaseModel?: DrizzleDatabaseModel };
+export type DeploymentReceipt = DeploymentRecord & { accessCode?: string };
 
 export type PortableProjectState = {
   visibility?: DeploymentVisibility;
@@ -230,16 +229,12 @@ export class HostedDatabaseClient implements DatabaseAdminHost {
     return this.request<DatabaseBackup[]>({ operation: "list-backups" });
   }
 
-  createDatabaseBackup(label = "Manual backup", model?: { source: string; revision: string }) {
-    return this.request<DatabaseBackup>({ operation: "create-backup", label, model });
+  createDatabaseBackup(label = "Manual backup") {
+    return this.request<DatabaseBackup>({ operation: "create-backup", label });
   }
 
   restoreDatabaseBackup(backupId: string) {
     return this.request<DatabaseBackup>({ operation: "restore-backup", backupId });
-  }
-
-  applyDatabaseMigration(input: ApplyDatabaseMigrationInput) {
-    return this.request<{ backup: DatabaseBackup }>({ operation: "apply-migration", ...input });
   }
 
   async exportDatabase() {

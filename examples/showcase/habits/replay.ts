@@ -16,7 +16,7 @@ import { buildLocal } from "../../../scripts/konae";
 import { createCapsuleValidator } from "../../../src/agent/gate";
 
 const repo = path.resolve(import.meta.dir, "../../..");
-const appFiles = ["index.html", "styles.css", "app.js", "schema.sql", "schema.ts", "actions.json"];
+const appFiles = ["index.html", "styles.css", "app.js", "schema.sql", "actions.json"];
 const port = Number(process.env.KONAE_SHOWCASE_PORT ?? 21410);
 assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Set KONAE_SHOWCASE_PORT to a free local port.");
 const url = `http://127.0.0.1:${port}`;
@@ -48,7 +48,7 @@ function kernelEnv(data: string, extra: Record<string, string> = {}) {
     ...inherited,
     KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
     KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: data, KONAE_ADMIN_KEY: setupKey,
-    KONAE_BUN_PATH: process.execPath, KONAE_SOURCE_ROOT: repo, KONAE_TRUSTED_PROXIES: "127.0.0.1",
+    KONAE_TRUSTED_PROXIES: "127.0.0.1",
     KONAE_ACCOUNT_VERIFICATION: "required", KONAE_MAIL_TRANSPORT: "development",
     // days.close is declared daily at 00:05 UTC; the test clock runs it every 2 seconds.
     KONAE_SCHEDULE_MIN_SECONDS: "2",
@@ -194,7 +194,6 @@ try {
   };
   const editorSource = (files: Record<string, string>) => ({
     id: projectId, name: "Habits", slug: "habits", files, directories: [],
-    databaseModel: { source: files["schema.ts"], acceptedSource: files["schema.ts"], revision: "r1" },
     manifest, updatedAt: Date.now(),
   });
   await owner.call("project_create", { projectId, name: "Habits", slug: "habits", manifest });

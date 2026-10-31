@@ -12,17 +12,6 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE UNIQUE INDEX IF NOT EXISTS events_external_id_unique ON events(external_id);
 `;
 
-const model = `import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-
-export const events = sqliteTable("events", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  externalId: text("external_id").notNull().unique(),
-  title: text("title").notNull(),
-  repo: text("repo").notNull().default(""),
-  receivedAt: integer("received_at").notNull(),
-});
-`;
-
 const actions = {
   version: 1,
   actions: {
@@ -95,7 +84,6 @@ export const webhookTemplate: TemplateSource = {
   name: "Webhook receiver",
   sentence: "Another service sends signed events to the app; the owner reads them here.",
   visibility: "private",
-  model,
   files: {
     "index.html": html,
     "styles.css": templateStyles,

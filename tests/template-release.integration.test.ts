@@ -26,8 +26,7 @@ beforeAll(async () => {
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))),
       KONAE_DATA_DIR: root, KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey,
-      KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, KONAE_SOURCE_ROOT: process.cwd(),
-    },
+      KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", },
     stdout: "ignore", stderr: "inherit",
   });
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -46,37 +45,36 @@ afterAll(async () => {
   if (root) await rm(root, { recursive: true, force: true });
 });
 
-type Release = { id: string; files: Record<string, string>; manifest: object; model: string };
+type Release = { id: string; files: Record<string, string>; manifest: object };
 
-async function plan({ id, files, manifest, model }: Release) {
+async function plan({ id, files, manifest }: Release) {
   await client.call("project_create", { projectId: id, name: id, manifest });
   const program = JSON.parse(files["actions.json"]) as { actions: Record<string, { http?: { signature?: { secret?: string } }; auth?: { secret?: string } }> };
   for (const action of Object.values(program.actions)) {
     const secret = action.http?.signature?.secret ?? action.auth?.secret;
     if (secret) await client.call("secret_set", { projectId: id, name: secret, value: `whsec_${btoa(`${id}-${secret}-signing-key`)}` });
   }
-  const databaseModel = { source: model, acceptedSource: model, revision: "baseline" };
-  const project = { id, name: id, slug: id.replaceAll("_", "-"), files, manifest, databaseModel };
+  const project = { id, name: id, slug: id.replaceAll("_", "-"), files, manifest };
   const transfer = await client.upload(new TextEncoder().encode(JSON.stringify({ project, visibility: "private", artifact })), id);
   try { return await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId }); }
   finally { await client.cancel(transfer.transferId).catch(() => {}); }
 }
 
 for (const { id } of templateChoices) {
-  test(`the ${id} template plans a release with its accepted model`, async () => {
+  test(`the ${id} template plans a release`, async () => {
     const project = applyTemplate({ ...structuredClone(starterProject), id: `template_${id}`, slug: `template-${id}` }, id);
     const files = Object.fromEntries(Object.entries(project.files).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
     const manifest = { ...project.manifest, visibility: "private" };
-    expect((await plan({ id: project.id, files, manifest, model: project.databaseModel.source })).planId).toBeTruthy();
+    expect((await plan({ id: project.id, files, manifest })).planId).toBeTruthy();
   }, 60_000);
 }
 
 for (const app of ["habits", "starter"]) {
-  test(`the ${app} showcase plans a release with schema.ts as its accepted model`, async () => {
+  test(`the ${app} showcase plans a release from schema.sql`, async () => {
     const dir = path.join("examples/showcase", app);
     const files: Record<string, string> = {};
-    for (const name of ["schema.sql", "schema.ts", "actions.json"]) files[name] = await readFile(path.join(dir, name), "utf8");
+    for (const name of ["schema.sql", "actions.json"]) files[name] = await readFile(path.join(dir, name), "utf8");
     const manifest = { version: 1, visibility: "private" };
-    expect((await plan({ id: `showcase_${app}`, files, manifest, model: files["schema.ts"] })).planId).toBeTruthy();
+    expect((await plan({ id: `showcase_${app}`, files, manifest })).planId).toBeTruthy();
   }, 60_000);
 }

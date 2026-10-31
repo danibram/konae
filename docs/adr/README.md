@@ -7,7 +7,7 @@ Each record states its status and which earlier record it amends on its first li
 | [0001](0001-separate-runtime-and-admin-data-access.md) | Browsers reach data only through named Server Actions; owner tools use a separate Admin Interface | | 0008, 0011 |
 | [0002](0002-kernel-owns-identity-and-visibility.md) | The Kernel, not a provider, owns sessions, grants, visibility and signup policy | | 0011 |
 | [0003](0003-in-browser-agent-on-pi-agent-core.md) | The build agent runs in the browser on pi-agent-core and edits a scratch copy behind the Validation Gate | | 0004, 0022 |
-| [0004](0004-use-drizzle-schema-as-the-managed-database-model.md) | `schema.ts` in Drizzle is a Managed Project's Database Model; migrations derive from it | 0003 | |
+| [0004](0004-use-drizzle-schema-as-the-managed-database-model.md) | Superseded by 0027. `schema.ts` in Drizzle is a Managed Project's Database Model; migrations derive from it | 0003 | 0027 |
 | [0005](0005-build-artifacts-separate-managed-and-external-projects.md) | Superseded by 0027 except the static publishing rules. The Build Artifact is the publishing contract; Eject moves source authority; one folder per Deployment; the static publishing rules | | 0007, 0027 |
 | [0006](0006-external-projects-use-a-local-development-kernel.md) | Superseded by 0027. External Projects develop against a local Development Kernel | | 0027 |
 | [0007](0007-managed-builds-run-in-the-browser.md) | Managed builds run in the browser; schema derivation runs in a subprocess, never in the Kernel process | 0005 | |

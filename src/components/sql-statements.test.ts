@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifySql, modelTableNames } from "./sql-statements";
+import { classifySql } from "./sql-statements";
 
 describe("SQL console statements", () => {
   test("reads run without asking", () => {
@@ -59,7 +59,7 @@ describe("SQL console statements", () => {
     expect(classifySql("DROP TABLE main.tasks").danger).toContain("deletes tasks");
     // A trigger body, including a CASE ... END inside it, is one statement.
     expect(classifySql("CREATE TRIGGER t AFTER INSERT ON tasks BEGIN UPDATE tasks SET done = CASE WHEN 1 THEN 1 END; END; SELECT 1").danger)
-      .toBe("CREATE changes the database structure outside schema.ts.");
+      .toBe("CREATE changes the database structure outside schema.sql. Add it to schema.sql too, so a new database gets it.");
   });
 
   /** The bug this pins: a leading WITH made any statement read as a SELECT. */
@@ -82,9 +82,5 @@ describe("SQL console statements", () => {
     expect(classifySql("WITH x AS (SELECT 1)").read).toBe(false);
     expect(classifySql("BEGIN; COMMIT").read).toBe(false);
     expect(classifySql("SELECT replace(title, 'a', 'b') FROM tasks")).toEqual({ read: true, danger: null });
-  });
-
-  test("reads table names from a Drizzle model", () => {
-    expect(modelTableNames('export const tasks = sqliteTable("tasks", {});\nconst n = sqliteTable(\'notes\', {})')).toEqual(["tasks", "notes"]);
   });
 });

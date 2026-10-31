@@ -960,7 +960,6 @@ mod tests {
                 hostname: hostname.into(),
                 actions: "{}".into(),
                 artifact_version: None,
-                database_model: None,
                 signup_policy: SignupPolicy::from_input(mode, &["@practice.example".into()]).unwrap(),
                 sign_in_methods: vec![SignInMethod::Password, SignInMethod::Google],
             };

@@ -35,7 +35,7 @@ export async function startKernel(options: { port: number; data: string; setupKe
     ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))) as Record<string, string>,
     KONAE_DATA_DIR: options.data, KONAE_KERNEL_PORT: String(options.port), KONAE_BIND: "127.0.0.1",
     KONAE_ADMIN_KEY: options.setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost",
-    KONAE_BUN_PATH: process.execPath, KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
+    KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
     ...options.env,
   };
   let child: ReturnType<typeof Bun.spawn> | undefined;

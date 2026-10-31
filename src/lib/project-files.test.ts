@@ -29,21 +29,20 @@ describe("project file tree", () => {
     });
   });
 
-  /** The bug this pins: a new schema.ts hid the real model in exports and could not be deleted. */
   test("refuses to create a reserved project file or anything inside one", () => {
     const tree = { files: { "app.js": "app" }, directories: [] };
-    expect(() => createFile(tree, "schema.ts")).toThrow("schema.ts is a reserved project file. Choose another name.");
-    expect(() => createFile(tree, "/schema.ts/")).toThrow("schema.ts is a reserved project file");
-    expect(() => createDirectory(tree, "schema.ts")).toThrow("schema.ts is a reserved project file");
+    expect(() => createFile(tree, "schema.sql")).toThrow("schema.sql is a reserved project file. Choose another name.");
+    expect(() => createFile(tree, "/schema.sql/")).toThrow("schema.sql is a reserved project file");
+    expect(() => createDirectory(tree, "schema.sql")).toThrow("schema.sql is a reserved project file");
     expect(() => createFile(tree, "actions.json/x.json")).toThrow("actions.json is a reserved project file");
     expect(createFile(tree, "src/schema.ts").files["src/schema.ts"]).toBe("");
   });
 
-  /** The bug this pins: App.js and SCHEMA.TS passed, then overwrote the real files on a case-insensitive filesystem. */
+  /** The bug this pins: App.js and SCHEMA.SQL passed, then overwrote the real files on a case-insensitive filesystem. */
   test("compares reserved paths and collisions without case", () => {
     const tree = { files: { "app.js": "app", "src/Label.js": "l" }, directories: ["docs"] };
     expect(() => createFile(tree, "App.js")).toThrow("app.js is a reserved project file");
-    expect(() => createFile(tree, "SCHEMA.TS")).toThrow("schema.ts is a reserved project file");
+    expect(() => createFile(tree, "SCHEMA.SQL")).toThrow("schema.sql is a reserved project file");
     expect(() => createFile(tree, "Index.html")).toThrow("index.html is a reserved project file");
     expect(() => createDirectory(tree, "Actions.JSON/x")).toThrow("actions.json is a reserved project file");
     expect(() => createFile(tree, "src/label.js")).toThrow("A file already exists at src/Label.js.");

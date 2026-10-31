@@ -161,9 +161,8 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
       err<T, FileError>(new FileError("not_supported", message, path));
 
     /**
-     * Why the agent may not write `file`, or null. The protected project paths
-     * other than the five Capsule files (schema.ts, anything inside a protected
-     * file, and case variants such as App.js) are refused: a merged proposal
+     * Why the agent may not write `file`, or null. Anything inside a protected
+     * file, and case variants of one such as App.js, are refused: a merged proposal
      * lands them in the project, and the export would then write them over the
      * real files. A new path that differs from an existing one only by case is
      * refused too, because a case-insensitive filesystem stores both as one.

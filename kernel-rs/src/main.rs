@@ -33,7 +33,6 @@ mod app_owner;
 mod artifact;
 mod auth;
 mod calls;
-mod checks;
 mod clerk;
 mod copies;
 mod domain;
@@ -49,7 +48,6 @@ mod limits;
 mod mail;
 mod mcp;
 mod maintenance;
-mod model_rules;
 mod notify;
 mod oauth;
 mod package;
@@ -109,8 +107,6 @@ struct Deployment {
     signup_policy: SignupPolicy,
     /// How people sign in. Password always; Google when the owner turned it on.
     sign_in_methods: Vec<SignInMethod>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    database_model: Option<DatabaseModel>,
 }
 
 /// The stored form of a Deployment, where the signup policy may be missing.
@@ -131,8 +127,6 @@ struct DeploymentRecord {
     signup_policy: Option<SignupPolicy>,
     #[serde(default)]
     sign_in_methods: Option<Vec<SignInMethod>>,
-    #[serde(default)]
-    database_model: Option<DatabaseModel>,
 }
 
 impl From<DeploymentRecord> for Deployment {
@@ -161,7 +155,6 @@ impl From<DeploymentRecord> for Deployment {
                 .sign_in_methods
                 .and_then(|methods| sign_in_methods_from_input(&methods).ok())
                 .unwrap_or_else(default_sign_in_methods),
-            database_model: record.database_model,
         }
     }
 }
@@ -325,14 +318,6 @@ struct DeployInput {
     initial_domain: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DatabaseModel {
-    source: String,
-    accepted_source: String,
-    revision: String,
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProjectInput {
@@ -341,8 +326,6 @@ struct ProjectInput {
     slug: String,
     files: HashMap<String, String>,
     manifest: Value,
-    #[serde(default)]
-    database_model: Option<DatabaseModel>,
 }
 
 #[derive(Deserialize)]
@@ -363,10 +346,6 @@ struct DatabaseBackup {
     created_at: u64,
     size_bytes: u64,
     key: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    database_model_source: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    schema_revision: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -745,15 +724,10 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         .as_ref()
         .map(|item| item.url.clone())
         .unwrap_or_else(|| deployment_url(&state.public_origin, &hostname));
-    if let Some(model) = input.project.database_model.as_ref() {
-        if let Err(refused) = model_rules::accepted(&model.source, &model.accepted_source, &model.revision) {
-            return refusal_error(&refused);
-        }
-    }
     let mut manifest = input.project.manifest;
     manifest["visibility"] = Value::String(input.visibility.clone());
     let artifact_version = format!("v{}", Uuid::new_v4().simple());
-    let mut deployment = Deployment {
+    let deployment = Deployment {
         id: id.clone(),
         project_id: input.project.id,
         project_name: input.project.name,
@@ -766,7 +740,6 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         hostname: hostname.clone(),
         actions,
         artifact_version: Some(artifact_version.clone()),
-        database_model: input.project.database_model,
         signup_policy: match existing.as_ref() {
             Some(item) => item.signup_policy.for_republish(is_private(item), &input.visibility),
             None => initial_signup_policy.unwrap_or_else(|| SignupPolicy::initial(&input.visibility)),
@@ -829,13 +802,6 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             StatusCode::BAD_REQUEST,
             &format!("Schema update failed: {error_value}"),
         );
-    }
-    if deployment.database_model.is_none() {
-        if let Some(model) = existing.as_ref().and_then(|d| d.database_model.clone()) {
-            if mcp::model_matches_path(&model.accepted_source, &db_path).await.unwrap_or(false) {
-                deployment.database_model = Some(model);
-            }
-        }
     }
     let identity_path = directory.join("identity.sqlite");
     if !identity_path.exists() {
@@ -2225,13 +2191,6 @@ async fn admin_database(
             Ok(result) => Json(json!({"result": result})).into_response(),
             Err(e) => error(StatusCode::BAD_REQUEST, &e.to_string()),
         },
-        "apply-migration" => match apply_migration(&state, &deployment.id, &body).await {
-            Ok(result) => Json(json!({"result": result})).into_response(),
-            Err(e) => match refusal::of(&e) {
-                Some(refused) => refusal_error(refused),
-                None => error(StatusCode::BAD_REQUEST, &e.to_string()),
-            },
-        },
         _ => error(StatusCode::BAD_REQUEST, "Unknown database operation."),
     }
 }
@@ -2620,7 +2579,7 @@ async fn list_backups(state: &AppState, id: &str) -> Result<Vec<Value>> {
             continue;
         }
         let backup: DatabaseBackup = serde_json::from_slice(&tokio::fs::read(entry.path()).await?)?;
-        backups.push(json!({"id":backup.id,"label":backup.label,"createdAt":backup.created_at,"sizeBytes":backup.size_bytes,"databaseModelSource":backup.database_model_source,"schemaRevision":backup.schema_revision}));
+        backups.push(json!({"id":backup.id,"label":backup.label,"createdAt":backup.created_at,"sizeBytes":backup.size_bytes}));
     }
     backups.sort_by(|a, b| b["createdAt"].as_u64().cmp(&a["createdAt"].as_u64()));
     Ok(backups)
@@ -2635,13 +2594,7 @@ async fn create_backup(state: &AppState, id: &str, label: &str) -> Result<Value>
     let db = Connection::open(&db_path)?;
     db.execute("VACUUM INTO ?1", [snapshot_path.to_string_lossy().as_ref()])?;
     let size = tokio::fs::metadata(&snapshot_path).await?.len();
-    let model = state.deployments.read().await.values().find(|d| d.id == id).and_then(|d| d.database_model.clone());
-    let model = if let Some(model) = model {
-        if mcp::model_matches_path(&model.accepted_source, &snapshot_path).await.unwrap_or(false) { Some(model) } else { None }
-    } else { None };
     let backup = DatabaseBackup {
-        database_model_source: model.as_ref().map(|m| m.accepted_source.clone()),
-        schema_revision: model.map(|m| m.revision),
         id: backup_id.clone(),
         label: label.chars().take(120).collect(),
         created_at: now_ms(),
@@ -2654,7 +2607,7 @@ async fn create_backup(state: &AppState, id: &str, label: &str) -> Result<Value>
     )
     .await?;
     Ok(
-        json!({"id":backup.id,"label":backup.label,"createdAt":backup.created_at,"sizeBytes":backup.size_bytes,"databaseModelSource":backup.database_model_source,"schemaRevision":backup.schema_revision}),
+        json!({"id":backup.id,"label":backup.label,"createdAt":backup.created_at,"sizeBytes":backup.size_bytes}),
     )
 }
 
@@ -2662,7 +2615,8 @@ async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Result<V
     if backup_id.is_empty() || backup_id.contains('/') || backup_id.contains("..") {
         anyhow::bail!("Invalid backup ID.");
     }
-    let metadata: DatabaseBackup = serde_json::from_slice(&tokio::fs::read(backup_dir(state, id).join(format!("{backup_id}.json"))).await?)?;
+    // The metadata file proves the backup exists before anything changes.
+    let _: DatabaseBackup = serde_json::from_slice(&tokio::fs::read(backup_dir(state, id).join(format!("{backup_id}.json"))).await?)?;
     let backup_path = backup_dir(state, id).join(format!("{backup_id}.sqlite"));
     let bytes = tokio::fs::read(&backup_path).await?;
     create_backup(state, id, "Before restore").await?;
@@ -2676,83 +2630,7 @@ async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Result<V
         anyhow::bail!("The backup failed SQLite's integrity check.");
     }
     replace_database_file(&temp_path, &database_path(state, id))?;
-    let model = metadata.database_model_source.as_ref().zip(metadata.schema_revision.as_ref()).map(|(source, revision)| DatabaseModel {
-        source: source.clone(), accepted_source: source.clone(), revision: revision.clone(),
-    });
-    persist_database_model(state, id, model).await?;
-    Ok(json!({"id":backup_id,"sizeBytes":bytes.len(),"databaseModelSource":metadata.database_model_source,"schemaRevision":metadata.schema_revision}))
-}
-
-async fn persist_database_model(state: &AppState, id: &str, model: Option<DatabaseModel>) -> Result<()> {
-    let mut deployment = state.deployments.read().await.values().find(|d| d.id == id).cloned()
-        .ok_or_else(|| anyhow::anyhow!("Deployment not found."))?;
-    deployment.database_model = model;
-    persist_deployment(state, &deployment).await?;
-    state.deployments.write().await.insert(deployment.hostname.clone(), deployment);
-    Ok(())
-}
-
-async fn apply_migration(state: &AppState, id: &str, body: &Value) -> Result<Value> {
-    let statements = body
-        .get("statements")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("Migration statements are required."))?;
-    if statements.is_empty() || statements.len() > 200 {
-        anyhow::bail!("Migration must contain 1 to 200 statements.");
-    }
-    let candidate = body["candidateModelSource"].as_str();
-    let next_model = if let Some(source) = candidate {
-        let previous = body["recoveryModelSource"].as_str().ok_or_else(|| anyhow::anyhow!("The migration needs its accepted model."))?;
-        let deployed = state.deployments.read().await.values().find(|d| d.id == id).and_then(|d| d.database_model.clone());
-        if let Some(deployed) = deployed {
-            anyhow::ensure!(deployed.accepted_source == previous, "The deployed database model changed. Reload and plan the migration again.");
-        }
-        let planned = mcp::schema_plan(json!({"acceptedSource":previous,"candidateSource":source})).await?;
-        anyhow::ensure!(planned["id"] == body["id"] && planned["fromHash"] == body["fromHash"] && planned["toHash"] == body["toHash"] && planned["statements"] == body["statements"],
-            "The migration differs from its database models. Plan it again.");
-        Some(DatabaseModel { source: source.into(), accepted_source: source.into(), revision: planned["toHash"].as_str().unwrap().into() })
-    } else { None };
-    let candidate_schema = match &next_model {
-        Some(model) => Some(mcp::model_schema(&model.accepted_source).await?),
-        None => None,
-    };
-    let mut planned = Vec::with_capacity(statements.len());
-    for statement in statements {
-        let sql = statement
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Migration statement must be text."))?;
-        if sql.len() > 100_000 {
-            anyhow::bail!("Migration statement is too large.");
-        }
-        planned.push(sql.to_owned());
-    }
-    // A rebuilt table keeps the CHECKs schema.sql gave it. Refused before the
-    // backup, so a refused migration leaves no recovery point behind.
-    let statements = {
-        let db = Connection::open(database_path(state, id))?;
-        let live = |name: &str| db.query_row("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1 COLLATE NOCASE", [name], |row| row.get::<_, String>(0)).ok();
-        checks::carry_checks(&planned, live)?
-    };
-    let backup = create_backup(state, id, "Before migration").await?;
-    {
-        let mut db = Connection::open(database_path(state, id))?;
-        restrict_database(&db)?;
-        let tx = db.transaction()?;
-        for sql in &statements {
-            tx.execute_batch(sql)?;
-        }
-        if let Some(expected) = &candidate_schema {
-            anyhow::ensure!(mcp::schema_tokens(expected)? == mcp::schema_tokens(&tx)?,
-                "The migrated database does not match its candidate model. The migration was rolled back.");
-        }
-        let integrity: String = tx.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-        if integrity != "ok" {
-            anyhow::bail!("Migrated database failed SQLite integrity check.");
-        }
-        tx.commit()?;
-    }
-    persist_database_model(state, id, next_model).await?;
-    Ok(json!({"backup":backup}))
+    Ok(json!({"id":backup_id,"sizeBytes":bytes.len()}))
 }
 
 /// Runs an action's statement on a blocking thread while the caller holds
@@ -3053,9 +2931,8 @@ struct SqlTok {
     kind: SqlTokKind,
     text: String,
     depth: i32,
-    /// Offsets in chars into the statement, so a reader can quote the token as written.
+    /// Offset in chars into the statement, so a reader can quote the token as written.
     start: usize,
-    end: usize,
 }
 
 impl SqlTok {
@@ -3110,9 +2987,9 @@ fn sql_tokens(sql: &str) -> Vec<SqlTok> {
             }
             let span_end = (end + 1).min(chars.len());
             tokens.push(if char == '\'' {
-                SqlTok { kind: SqlTokKind::String, text: String::new(), depth, start: index, end: span_end }
+                SqlTok { kind: SqlTokKind::String, text: String::new(), depth, start: index }
             } else {
-                SqlTok { kind: SqlTokKind::Ident, text, depth, start: index, end: span_end }
+                SqlTok { kind: SqlTokKind::Ident, text, depth, start: index }
             });
             index = span_end;
             continue;
@@ -3120,7 +2997,7 @@ fn sql_tokens(sql: &str) -> Vec<SqlTok> {
         if is_sql_word_start(char) {
             let mut end = index + 1;
             while end < chars.len() && is_sql_word_cont(chars[end]) { end += 1; }
-            tokens.push(SqlTok { kind: SqlTokKind::Word, text: chars[index..end].iter().collect(), depth, start: index, end });
+            tokens.push(SqlTok { kind: SqlTokKind::Word, text: chars[index..end].iter().collect(), depth, start: index });
             index = end;
             continue;
         }
@@ -3129,7 +3006,7 @@ fn sql_tokens(sql: &str) -> Vec<SqlTok> {
             while end < chars.len() && (chars[end].is_ascii_alphanumeric() || chars[end] == '.' || chars[end] == '_') {
                 end += 1;
             }
-            tokens.push(SqlTok { kind: SqlTokKind::Symbol, text: chars[index..end].iter().collect(), depth, start: index, end });
+            tokens.push(SqlTok { kind: SqlTokKind::Symbol, text: chars[index..end].iter().collect(), depth, start: index });
             index = end;
             continue;
         }
@@ -3138,7 +3015,7 @@ fn sql_tokens(sql: &str) -> Vec<SqlTok> {
             continue;
         }
         if char == ')' { depth = (depth - 1).max(0); }
-        tokens.push(SqlTok { kind: SqlTokKind::Symbol, text: char.to_string(), depth, start: index, end: index + 1 });
+        tokens.push(SqlTok { kind: SqlTokKind::Symbol, text: char.to_string(), depth, start: index });
         if char == '(' { depth += 1; }
         index += 1;
     }
@@ -3925,29 +3802,6 @@ fn admin_key_for(
     Ok(key.to_owned())
 }
 
-/// A reachable Kernel must not evaluate a Drizzle model as its own user.
-/// Loopback with a local origin may spawn the worker in-process.
-pub(crate) fn derive_must_isolate(bind: &str, public_origin: &str, mcp_origin: &str) -> bool {
-    !loopback_bind(bind)
-        || !origin_is_local_or_empty(public_origin)
-        || !origin_is_local_or_empty(mcp_origin)
-}
-
-fn loopback_bind(bind: &str) -> bool {
-    let bind = bind.trim().trim_matches(['[', ']']);
-    bind == "127.0.0.1" || bind == "::1" || bind.eq_ignore_ascii_case("localhost")
-}
-
-fn origin_is_local_or_empty(origin: &str) -> bool {
-    if origin.is_empty() {
-        return true;
-    }
-    url::Url::parse(origin)
-        .ok()
-        .and_then(|parsed| parsed.host_str().map(is_local_host))
-        .unwrap_or(false)
-}
-
 /// True for localhost, *.localhost and loopback IP addresses.
 fn is_local_host(host: &str) -> bool {
     let host = host.to_ascii_lowercase();
@@ -4010,7 +3864,6 @@ mod tests {
             hostname: "login-test.localhost".into(),
             actions: "{}".into(),
             artifact_version: None,
-            database_model: None,
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
         };
@@ -4163,24 +4016,6 @@ mod tests {
             "statement": "SELECT ?1 = 'owner' AS owner LIMIT 1", "bindings": [{"source": "actor", "field": "role"}]})).unwrap();
         assert_eq!(resolve_bindings(&anonymous, &json!({}), None, None).unwrap(), vec![SqlValue::Null], "a visitor binds NULL instead of failing");
         assert!(resolve_bindings(&anonymous, &json!({"role": "owner"}), None, None).unwrap_err().contains("Unexpected action input: role"), "an input cannot supply it");
-    }
-
-    /// The refusal keeps its code out of apply_migration, so the route answers
-    /// it with `refusal_error`, and it comes before the recovery point.
-    #[tokio::test]
-    async fn a_migration_that_drops_a_checked_column_refuses_with_its_code_and_no_backup() {
-        let root = std::env::temp_dir().join(format!("konae-carry-refusal-{}", Uuid::new_v4()));
-        let state = test_state(&root);
-        let path = database_path(&state, "dep");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        Connection::open(&path).unwrap().execute_batch("CREATE TABLE habits(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, note TEXT, CONSTRAINT short_note CHECK (note IS NULL OR length(note) < 20))").unwrap();
-        let body = json!({"statements": ["ALTER TABLE `habits` DROP COLUMN `note`;"]});
-        let error = apply_migration(&state, "dep", &body).await.unwrap_err();
-        let refused = refusal::of(&error).expect("a refusal with a code");
-        assert_eq!(refused.code, "schema.check-names-removed-column");
-        assert_eq!(refused.message, "Table habits has a CHECK that names column note, which this migration removes. Rebuild habits without that CHECK in the SQL console, or keep note, then apply the migration again.");
-        assert!(!backup_dir(&state, "dep").exists());
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -5405,14 +5240,5 @@ mod tests {
         assert_eq!(restored_index[1]["visibility"], "public");
 
         let _ = tokio::fs::remove_dir_all(root).await;
-    }
-
-    #[test]
-    fn reachable_kernels_isolate_schema_derivation() {
-        assert!(!derive_must_isolate("127.0.0.1", "http://localhost:8787", ""));
-        assert!(!derive_must_isolate("::1", "", ""));
-        assert!(derive_must_isolate("0.0.0.0", "http://localhost:8787", ""));
-        assert!(derive_must_isolate("127.0.0.1", "https://apps.example", ""));
-        assert!(derive_must_isolate("127.0.0.1", "http://localhost:8787", "https://mcp.example"));
     }
 }

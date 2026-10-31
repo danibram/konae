@@ -1,7 +1,7 @@
 import type { DeploymentReceipt } from "../deployments/client";
 import { normalizeManifest } from "../deployments/manifest";
 import { architectureProjectId } from "./architecture";
-import { cloneStarter, repairDroppedPreviewUpload, starterDatabaseModelSource } from "./starter";
+import { cloneStarter, repairDroppedPreviewUpload } from "./starter";
 import type { MiniAppProject } from "./types";
 import { directoriesForFiles } from "./project-files";
 
@@ -50,7 +50,7 @@ function draftSignature(project: MiniAppProject): string {
     if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)]));
     return value;
   };
-  return JSON.stringify(canonical({ name: repaired.name, slug: repaired.slug, files: repaired.files, directories: [...(repaired.directories ?? [])].sort(), model: repaired.databaseModel?.source, manifest: repaired.manifest }));
+  return JSON.stringify(canonical({ name: repaired.name, slug: repaired.slug, files: repaired.files, directories: [...(repaired.directories ?? [])].sort(), manifest: repaired.manifest }));
 }
 
 const projectsKey = "konae:projects";
@@ -138,24 +138,18 @@ function normalizeProjects(projects: MiniAppProject[]) {
   return projects.flatMap((project) => {
     if (!project?.id || seen.has(project.id)) return [];
     seen.add(project.id);
+    // A draft from an older editor may still carry a databaseModel; schema.sql is the only model now.
+    const { databaseModel: _model, ...current } = project as MiniAppProject & { databaseModel?: unknown };
     const refreshed = refreshUneditedSeed({
-      ...project,
-      files: { ...starter.files, ...project.files },
+      ...current,
+      files: { ...starter.files, ...current.files },
     });
     return [repairDroppedPreviewUpload({
       ...refreshed,
       directories: project.directories ?? directoriesForFiles(refreshed.files ?? {}),
-      databaseModel: project.databaseModel ?? legacyDatabaseModel(project.files?.["schema.sql"] ?? ""),
       manifest: normalizeManifest(project.manifest),
     })];
   });
-}
-
-function legacyDatabaseModel(schema: string) {
-  const source = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?tasks\b/i.test(schema)
-    ? starterDatabaseModelSource
-    : `import { sqliteTable } from "drizzle-orm/sqlite-core";\n\n// Legacy schema.sql requires conversion before its first managed migration.\nvoid sqliteTable;\n`;
-  return { source, acceptedSource: source, revision: "legacy-baseline" };
 }
 
 function refreshUneditedSeed(project: MiniAppProject): MiniAppProject {

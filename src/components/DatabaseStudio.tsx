@@ -27,32 +27,23 @@ import type {
   DatabaseTable,
   DatabaseAdminHost,
 } from "../runtime/host";
-import { planDatabaseChange } from "../database-lifecycle/client";
-import { carryChecks } from "../lib/carry-checks";
-import { McpError } from "../mcp/client";
-import { RefusalError } from "../kernel/refusal";
-import type { DatabaseMigrationPlan } from "../database-lifecycle/contracts";
-import type { DrizzleDatabaseModel } from "../lib/types";
 import { Badge, Button, Dialog, EmptyState, LoadingBlock } from "./ui";
 import { SqlEditor } from "./SqlEditor";
-import { classifySql, modelTableNames } from "./sql-statements";
+import { classifySql } from "./sql-statements";
 
 type StudioTab = "data" | "sql" | "schema" | "backups";
 type SortState = { column: string; direction: "ASC" | "DESC" } | null;
 
 type Props = {
   host: DatabaseAdminHost;
-  databaseModel: DrizzleDatabaseModel;
   onEditSchema: () => void;
-  onDatabaseModelAccepted: (source: string, revision: string) => void | Promise<void>;
-  onDatabaseModelRestored: (source: string, revision: string) => void | Promise<void>;
   onExportDatabase: () => void;
   target?: "local" | "deployed";
   deployedLabel?: string;
   onTargetChange?: (target: "local" | "deployed") => void;
 };
 
-export function DatabaseStudio({ host, databaseModel, onEditSchema, onDatabaseModelAccepted, onDatabaseModelRestored, onExportDatabase, target = "local", deployedLabel, onTargetChange }: Props) {
+export function DatabaseStudio({ host, onEditSchema, onExportDatabase, target = "local", deployedLabel, onTargetChange }: Props) {
   const [tab, setTab] = useState<StudioTab>("data");
   const [tables, setTables] = useState<DatabaseTable[]>([]);
   const [tablesReady, setTablesReady] = useState(false);
@@ -120,8 +111,8 @@ export function DatabaseStudio({ host, databaseModel, onEditSchema, onDatabaseMo
         />
       )}
       {tab === "sql" && <SqlConsole host={host} tables={tables} onMutated={mutated} />}
-      {tab === "schema" && <SchemaView host={host} tables={tables} databaseModel={databaseModel} onEdit={onEditSchema} onApplied={async (source, revision) => { await onDatabaseModelAccepted(source, revision); mutated(); }} />}
-      {tab === "backups" && <BackupsView databaseModel={databaseModel} host={host} tables={tables} onExport={onExportDatabase} onRestored={async (backup) => { if (backup.databaseModelSource) await onDatabaseModelRestored(backup.databaseModelSource, backup.schemaRevision ?? "restored"); mutated(); }} />}
+      {tab === "schema" && <SchemaView tables={tables} onEdit={onEditSchema} />}
+      {tab === "backups" && <BackupsView host={host} tables={tables} onExport={onExportDatabase} onRestored={mutated} />}
 
       <footer className="database-statusbar">
         <span><i /> {target === "deployed" ? "Deployed database" : "Local database"}</span>
@@ -434,144 +425,32 @@ function QueryHistory({ history, onSelect }: { history: Array<{ sql: string; ela
 }
 
 /**
- * The plan as it will run on this database: a table Drizzle rebuilds keeps the
- * CHECKs schema.sql gave it, or the migration is refused with the words both
- * doors apply it with (src/lib/carry-checks.ts). The statements the host
- * receives stay Drizzle's, since the host carries them again from its own tables.
+ * The tables the database holds now. schema.sql is the model: a publish runs
+ * it, so a new table or index arrives, and a changed column needs the owner's
+ * ALTER TABLE in the SQL view.
  */
-async function carriedPlan(host: DatabaseAdminHost, plan: DatabaseMigrationPlan): Promise<{ plan: DatabaseMigrationPlan & { shownSql: string; shownCount: number } } | { error: RefusalError }> {
-  // Unread tables show Drizzle's plan; the host carries the CHECKs at apply all the same.
-  const live = await host.runSql("SELECT name, sql FROM sqlite_master WHERE type = 'table' LIMIT 1000").catch(() => null);
-  if (!live) return { plan: { ...plan, shownSql: plan.sql, shownCount: plan.statements.length } };
-  const tables = new Map(live.rows.map((row) => [String(row.name).toLowerCase(), String(row.sql ?? "")]));
-  const carried = carryChecks(plan.statements, (name) => tables.get(name.toLowerCase()) || null);
-  if ("error" in carried) return carried;
-  return { plan: { ...plan, shownSql: carried.statements.join("\n--> statement-breakpoint\n"), shownCount: carried.statements.length } };
-}
-
-/**
- * The remedy beside a refused migration: the preview and the plan refuse with a
- * RefusalError, the Kernel answers through MCP with the same code (ADR-0020).
- * Any other failure has no remedy.
- */
-export function refusalRemedy(cause: unknown): string {
-  if (cause instanceof RefusalError) return cause.hint.remedy;
-  if (cause instanceof McpError) return cause.refusal?.hint?.remedy ?? "";
-  return "";
-}
-
-function SchemaView({ host, tables, databaseModel, onEdit, onApplied }: {
-  host: DatabaseAdminHost;
-  tables: DatabaseTable[];
-  databaseModel: DrizzleDatabaseModel;
-  onEdit: () => void;
-  onApplied: (source: string, revision: string) => void | Promise<void>;
-}) {
-  const [plan, setPlan] = useState<(DatabaseMigrationPlan & { shownSql: string; shownCount: number }) | null>(null);
-  const [planning, setPlanning] = useState(false);
-  const [applying, setApplying] = useState(false);
-  const [error, setError] = useState("");
-  const [remedy, setRemedy] = useState("");
-  const [message, setMessage] = useState("");
-
-  const fail = (cause: unknown) => {
-    setError(cause instanceof Error ? cause.message : String(cause));
-    setRemedy(refusalRemedy(cause));
-  };
-
-  useEffect(() => {
-    setPlan(null);
-    setError("");
-    setRemedy("");
-    if (databaseModel.source === databaseModel.acceptedSource) {
-      setPlanning(false);
-      return;
-    }
-    setMessage("");
-    setPlanning(true);
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => {
-      void planDatabaseChange({
-        acceptedSource: databaseModel.acceptedSource,
-        candidateSource: databaseModel.source,
-      }, { signal: controller.signal }).then(async (next) => {
-        const reviewed = await carriedPlan(host, next);
-        if (controller.signal.aborted) return;
-        if ("error" in reviewed) fail(reviewed.error);
-        else setPlan(reviewed.plan);
-      }).catch((cause) => {
-        if (!controller.signal.aborted) fail(cause);
-      }).finally(() => {
-        if (!controller.signal.aborted) setPlanning(false);
-      });
-    }, 400);
-    return () => {
-      window.clearTimeout(timeout);
-      controller.abort();
-    };
-  }, [host, databaseModel.source, databaseModel.acceptedSource]);
-
-  const apply = async () => {
-    if (!plan || !host.applyDatabaseMigration) return;
-    setApplying(true);
-    setError("");
-    setRemedy("");
-    setMessage("");
-    try {
-      const { shownSql: _shown, shownCount: _count, ...planned } = plan;
-      await host.applyDatabaseMigration({ ...planned, recoveryModelSource: databaseModel.acceptedSource });
-      await onApplied(databaseModel.source, plan.toHash);
-      setMessage("Migration applied · recovery point created");
-    } catch (cause) {
-      fail(cause);
-    } finally {
-      setApplying(false);
-    }
-  };
-
-  const inSync = databaseModel.source === databaseModel.acceptedSource;
-  // The model can match what was accepted while the database itself has moved,
-  // for example after a DROP TABLE in the SQL console.
-  const missingTables = inSync ? modelTableNames(databaseModel.acceptedSource).filter((name) => !tables.some((table) => table.name === name)) : [];
-  const drifted = missingTables.length > 0;
-  const lifecycleStatus = error || message
-    || (applying ? "Applying migration · creating recovery point"
-      : planning ? "Changes detected · generating Drizzle migration"
-        : plan ? "Migration ready · review generated SQL"
-          : drifted ? `Database differs from schema.ts · missing ${missingTables.join(", ")}`
-            : inSync ? "These columns are what a row keeps." : "The columns changed. Apply writes the SQL.");
-
+function SchemaView({ tables, onEdit }: { tables: DatabaseTable[]; onEdit: () => void }) {
   return (
     <div className="studio-document-view schema-model-view">
       <header>
-        <div><p>{schemaTableLabel(databaseModel.source)}</p><h3>{rowKeeps(databaseModel.source)}</h3></div>
+        <div><p>schema.sql</p><h3>{tables.length === 0 ? "No tables yet." : `${tables.length} table${tables.length === 1 ? "" : "s"} in this database.`}</h3></div>
       </header>
       <ul className="schema-columns">
-        {schemaColumns(databaseModel.source).map((column) => (
-          <li key={column.name}><strong>{columnLabel(column.name)}</strong><span>{columnKind(column)}{column.required ? " · required" : ""}</span></li>
+        {tables.map((table) => (
+          <li key={table.name}><strong>{table.name}</strong><span>{table.columns.join(", ")}</span></li>
         ))}
       </ul>
-      <div className="schema-actions"><button onClick={onEdit}><Pencil size={12} /> Edit the columns</button></div>
-      <div className={`schema-lifecycle-status ${error || (drifted && !message) ? "is-error" : plan ? "is-ready" : inSync ? "is-synced" : ""}`} role="status">{planning && <RefreshCw className="spin" size={12} />}{!planning && plan && !error && <Check size={12} />}{lifecycleStatus}</div>
-      {error && <div className="backup-error" role="alert">{error}{remedy && <p className="refusal-remedy">{remedy}</p>}</div>}
-      {plan ? (
-        <section className="migration-plan" aria-label="Migration plan">
-          <header><div><p>DRIZZLE KIT PLAN</p><h4>Migration ready</h4><small>{plan.shownCount} statement{plan.shownCount === 1 ? "" : "s"} · {plan.id.slice(0, 8)}</small></div>{plan.destructive && <strong>OWNER APPROVAL REQUIRED</strong>}</header>
-          <pre><code>{plan.shownSql}</code></pre>
-          <footer><span>A backup will be created immediately before apply.</span><button onClick={() => void apply()} disabled={applying || !host.applyDatabaseMigration}>{applying ? "Applying…" : plan.destructive ? "Approve and apply migration" : "Apply migration"}</button></footer>
-        </section>
-      ) : drifted ? <aside className="schema-drift"><History size={18} /><div><strong>Restore the missing table{missingTables.length === 1 ? "" : "s"}</strong><p>A statement in the SQL console changed the database outside schema.ts. Restore a backup in Backups, or change schema.ts to match.</p></div></aside>
-      : null}
+      <div className="schema-actions"><button onClick={onEdit}><Pencil size={12} /> Edit schema.sql</button></div>
+      <p className="schema-rule">A publish runs schema.sql, so a new table or index arrives with it. A changed or removed column does not: change it with ALTER TABLE in SQL, here and on the published app.</p>
     </div>
   );
 }
 
-function BackupsView({ host, tables, onExport, onRestored, databaseModel }: {
-  databaseModel: DrizzleDatabaseModel;
+function BackupsView({ host, tables, onExport, onRestored }: {
   host: DatabaseAdminHost;
   tables: DatabaseTable[];
   onExport: () => void;
-  onRestored: (backup: DatabaseBackup) => void | Promise<void>;
+  onRestored: () => void;
 }) {
   const rowCount = tables.reduce((total, table) => total + table.totalRows, 0);
   const supportsRestore = Boolean(host.listDatabaseBackups && host.createDatabaseBackup && host.restoreDatabaseBackup);
@@ -594,7 +473,7 @@ function BackupsView({ host, tables, onExport, onRestored, databaseModel }: {
     setError("");
     setMessage("");
     try {
-      await host.createDatabaseBackup("Manual backup", { source: databaseModel.acceptedSource, revision: databaseModel.revision });
+      await host.createDatabaseBackup("Manual backup");
       await loadBackups();
       setMessage("Backup created");
     } catch (cause) {
@@ -610,9 +489,9 @@ function BackupsView({ host, tables, onExport, onRestored, databaseModel }: {
     setError("");
     setMessage("");
     try {
-      const backup = await host.restoreDatabaseBackup(restoreId);
+      await host.restoreDatabaseBackup(restoreId);
       setRestoreId("");
-      await onRestored(backup);
+      onRestored();
       setMessage("Backup restored");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -652,37 +531,6 @@ function BackupsView({ host, tables, onExport, onRestored, databaseModel }: {
       ) : <div className="future-backups"><History size={20} /><div><strong>Managed restore is not available for this target yet</strong><p>Download a consistent SQLite snapshot before changing the deployed database.</p></div></div>}
     </div>
   );
-}
-
-function schemaColumns(source: string): Array<{ name: string; type: string; required: boolean }> {
-  return [...source.matchAll(/^\s*\w+\s*:\s*(text|integer|real|blob)\s*\(\s*"([^"]+)"[^)]*\)([^\n]*)/gm)].map((match) => ({
-    type: match[1],
-    name: match[2],
-    required: /notNull|primaryKey/.test(match[3]),
-  }));
-}
-
-function schemaTableLabel(source: string): string {
-  const match = /export const (\w+)\s*=\s*sqliteTable/.exec(source);
-  if (!match) return "Schema";
-  const name = match[1];
-  return name.charAt(0).toUpperCase() + name.slice(1);
-}
-
-function rowKeeps(source: string): string {
-  const names = [...source.matchAll(/^\s*\w+\s*:\s*(?:text|integer|real|blob)\s*\(\s*"([^"]+)"/gm)]
-    .map((match) => match[1].replaceAll("_", " "))
-    .filter((name) => name !== "id");
-  if (names.length === 0) return "The columns live in schema.ts.";
-  if (names.length === 1) return `A row keeps ${names[0]}.`;
-  return `A row keeps ${names.slice(0, -1).join(", ")} and ${names.at(-1)}.`;
-}
-
-function columnKind(column: { name: string; type: string }): string {
-  if (column.name === "done") return "yes or no";
-  if (column.name === "created_at" || column.name.endsWith("_at")) return "time";
-  if (column.name === "id") return "id";
-  return column.type;
 }
 
 function columnLabel(name: string): string {

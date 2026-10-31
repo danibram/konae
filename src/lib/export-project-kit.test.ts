@@ -15,7 +15,6 @@ const project: MiniAppProject = {
   slug: "private-notes",
   manifest: createDefaultManifest(),
   updatedAt: 1,
-  databaseModel: { source: "export const notes = {};", acceptedSource: "export const notes = {};", revision: "rev_1" },
   directories: ["src"],
   files: {
     "index.html": "<main id=app></main>",
@@ -102,7 +101,7 @@ describe("buildProjectExport", () => {
     const { archive, entries } = buildProjectExport(project, artifact, kernelFiles);
     const files = readTar(archive);
     expect(files.get("app/src/main.ts")).toBe("console.log('app')");
-    expect(files.get("app/schema.ts")).toBe("export const notes = {};");
+    expect(files.has("app/schema.ts")).toBe(false);
     expect(files.get("kernel-rs/src/main.rs")).toBe("fn main() {}");
     expect(files.get("Dockerfile")).toContain("cargo build --release --locked");
     expect(files.get("Dockerfile")).toContain("useradd");

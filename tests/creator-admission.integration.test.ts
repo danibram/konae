@@ -84,7 +84,7 @@ beforeAll(async () => {
   const port = Number(process.env.KONAE_ADMISSION_TEST_PORT) || 19400 + Math.floor(Math.random() * 90);
   url = `http://127.0.0.1:${port}`;
   kernel = Bun.spawn([binary], {
-    env: { ...operatorEnv(), KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development", KONAE_MAIL_LIMIT_RECIPIENT_PER_MINUTE: "100", KONAE_MAIL_LIMIT_CLIENT_PER_HOUR: "1000" },
+    env: { ...operatorEnv(), KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development", KONAE_MAIL_LIMIT_RECIPIENT_PER_MINUTE: "100", KONAE_MAIL_LIMIT_CLIENT_PER_HOUR: "1000" },
     stdout: "ignore", stderr: "inherit",
   });
   for (let attempt = 0; attempt < 100; attempt++) {

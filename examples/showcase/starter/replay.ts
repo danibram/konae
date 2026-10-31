@@ -23,7 +23,7 @@ import { createCapsuleValidator } from "../../../src/agent/gate";
 import { signRoute } from "../../../src/lib/route-signature";
 
 const repo = path.resolve(import.meta.dir, "../../..");
-const capsuleFiles = ["index.html", "styles.css", "app.js", "favicon.svg", "schema.sql", "schema.ts", "actions.json"];
+const capsuleFiles = ["index.html", "styles.css", "app.js", "favicon.svg", "schema.sql", "actions.json"];
 const port = Number(process.env.KONAE_SHOWCASE_PORT ?? 23450);
 assert(Number.isInteger(port) && port >= 1024 && port + 1 <= 65535, "Set KONAE_SHOWCASE_PORT to a free local port; the replay also uses the next one.");
 const scratch = await mkdtemp(path.join(tmpdir(), "konae-showcase-starter-"));
@@ -74,7 +74,7 @@ async function startKernel(kernelPort: number, name: string): Promise<Kernel> {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
       KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(kernelPort), KONAE_PUBLIC_ORIGIN: url,
       KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: data, KONAE_ADMIN_KEY: setupKey,
-      KONAE_BUN_PATH: process.execPath, KONAE_SOURCE_ROOT: repo, KONAE_TRUSTED_PROXIES: "127.0.0.1",
+      KONAE_TRUSTED_PROXIES: "127.0.0.1",
       KONAE_ACCOUNT_VERIFICATION: "required", KONAE_MAIL_TRANSPORT: "development",
     },
   });
@@ -337,7 +337,7 @@ try {
       auth: { mode: "optional" }, files: { access: "deployment" },
     },
   };
-  const editorSource = { id: editorId, name: "Starter", slug: "starter-editor", files: sources, directories: [], databaseModel: { source: sources["schema.ts"], acceptedSource: sources["schema.ts"], revision: "r1" }, manifest, updatedAt: Date.now() };
+  const editorSource = { id: editorId, name: "Starter", slug: "starter-editor", files: sources, directories: [], manifest, updatedAt: Date.now() };
   await A.owner.call("project_create", { projectId: editorId, name: "Starter", slug: "starter-editor", manifest });
   const saveUpload = await A.owner.upload(json(editorSource), editorId);
   const saved = await A.owner.call<{ revision: number }>("project_sources_save", { projectId: editorId, transferId: saveUpload.transferId, expectedRevision: 0 });

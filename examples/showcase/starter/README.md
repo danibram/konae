@@ -12,7 +12,7 @@ Every rule lives in `actions.json`. The Kernel binds the caller's ID and the SQL
 | `styles.css` | The design system's tokens from `src/design-system.css`, light and dark, as plain CSS |
 | `app.js` | The page: `miniapp.auth`, `miniapp.actions` and `miniapp.files`, `textContent` only, no inline handlers |
 | `favicon.svg` | The icon, as text so the editor's saved sources can hold it |
-| `schema.sql`, `schema.ts` | Seven tables; the SQL the Kernel runs and the Database Model the editor reads |
+| `schema.sql` | Seven tables; the SQL the Kernel runs |
 | `actions.json` | 29 actions: the only door to the database, and the one call to another app |
 | `replay.ts` | Starts two Kernels, proves every claim below and removes them |
 | `AGENT.md` | What an agent reads before adapting this app |
@@ -52,7 +52,7 @@ By hand, against a Kernel you started with `bun run dev:local`:
 ```sh
 KONAE_EMAIL=you@example.com KONAE_PASSWORD=... bun run konae -- login --dir /tmp/starter --url http://localhost:4173
 bun run konae -- init --dir /tmp/starter --name Starter --url http://localhost:4173
-cp examples/showcase/starter/{index.html,styles.css,app.js,favicon.svg,schema.sql,schema.ts,actions.json} /tmp/starter/
+cp examples/showcase/starter/{index.html,styles.css,app.js,favicon.svg,schema.sql,actions.json} /tmp/starter/
 # In /tmp/starter/konae.json set "visibility": "public" and "signupPolicy": { "mode": "open" },
 # and delete the template's other files.
 # Set the webhook's secret before the first publish: in the editor's Auth > Integrations view, or over MCP

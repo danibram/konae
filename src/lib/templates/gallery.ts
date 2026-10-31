@@ -12,17 +12,6 @@ CREATE TABLE IF NOT EXISTS photos (
 CREATE UNIQUE INDEX IF NOT EXISTS photos_file_id_unique ON photos(file_id);
 `;
 
-const model = `import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-
-export const photos = sqliteTable("photos", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  userId: text("user_id").notNull(),
-  fileId: text("file_id").notNull().unique(),
-  title: text("title").notNull(),
-  createdAt: integer("created_at").notNull(),
-});
-`;
-
 const actions = {
   version: 1,
   actions: {
@@ -145,7 +134,6 @@ export const galleryTemplate: TemplateSource = {
   name: "File gallery",
   sentence: "Signed-in people add images and every visitor sees them.",
   visibility: "public",
-  model,
   files: {
     "index.html": html,
     "styles.css": templateStyles,

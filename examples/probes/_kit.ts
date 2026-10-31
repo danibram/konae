@@ -72,7 +72,6 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
         ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
         KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
         KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: dataDir, KONAE_ADMIN_KEY: setupKey,
-        KONAE_BUN_PATH: process.execPath, KONAE_SOURCE_ROOT: repo,
         KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
         // The schedule probe sets it to watch a run in seconds instead of minutes.
         ...(process.env.KONAE_SCHEDULE_MIN_SECONDS ? { KONAE_SCHEDULE_MIN_SECONDS: process.env.KONAE_SCHEDULE_MIN_SECONDS } : {}),

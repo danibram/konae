@@ -344,12 +344,10 @@ export async function exportLocal(root: string, config: Config, output: string, 
     const [{ projectExportEntries }, { kernelFiles }] = await Promise.all([
       import("../src/lib/export-project-kit"), import("../src/lib/export-project-sources"),
     ]);
-    const model = files["schema.ts"] ?? "";
     const project = {
       ...config.project,
       manifest: normalizeManifest({ ...manifest, visibility: manifest.visibility ?? "private" }),
       files, directories: [], updatedAt: Date.now(),
-      databaseModel: { source: model, acceptedSource: model, revision: "external" },
     };
     const entries = projectExportEntries(project, artifact, kernelFiles, captured && { package: captured.package });
     // The kit rebuilds from app/, so it also needs the files that are not
@@ -644,8 +642,7 @@ async function main() {
       const compilation = Bun.spawn(["cargo", "build", "--manifest-path", path.join(toolRoot, "kernel-rs/Cargo.toml")], { stdout: "inherit", stderr: "inherit" });
       if (await compilation.exited !== 0) throw Error("Could not build the Development Kernel. Install Rust, or set KONAE_KERNEL_BIN to a Kernel binary built from this checkout.");
     }
-    const env: Record<string, string | undefined> = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))), KONAE_BIND: "127.0.0.1", KONAE_DATA_DIR: path.join(root, ".konae/dev-data"), KONAE_ADMIN_KEY: secret, KONAE_KERNEL_PORT: port, KONAE_PUBLIC_ORIGIN: `http://localhost:${port}`, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, KONAE_SOURCE_ROOT: toolRoot,
-      // Account links and notices land in a file on this machine, never a provider.
+    const env: Record<string, string | undefined> = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))), KONAE_BIND: "127.0.0.1", KONAE_DATA_DIR: path.join(root, ".konae/dev-data"), KONAE_ADMIN_KEY: secret, KONAE_KERNEL_PORT: port, KONAE_PUBLIC_ORIGIN: `http://localhost:${port}`, KONAE_HOST_SUFFIX: "localhost", // Account links and notices land in a file on this machine, never a provider.
       KONAE_MAIL_TRANSPORT: "development",
       // Shortens every schedule so a run can be watched; the Kernel takes it only on loopback.
       ...(process.env.KONAE_SCHEDULE_MIN_SECONDS ? { KONAE_SCHEDULE_MIN_SECONDS: process.env.KONAE_SCHEDULE_MIN_SECONDS } : {}) };

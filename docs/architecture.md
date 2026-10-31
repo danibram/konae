@@ -21,11 +21,10 @@ mini-app/
 │   └── feature.ts
 ├── package.json      # optional, the npm packages the app imports
 ├── schema.sql
-├── schema.ts         # optional, the Database Model of the editor's Data panel
 └── actions.json
 ```
 
-[The Capsule](./capsule.md) says what each file does. The editor stores an arbitrary source tree in one exportable JSON object, together with the Drizzle Database Model shown as `schema.ts`. The browser compiles `app.js`, or `src/main.ts` when it exists, and its relative imports with WebAssembly. The Project record also carries a versioned manifest (`CapsuleManifest` in `src/deployments/manifest.ts`) with deployment visibility, declared runtime actions and capability policies, but never SQL implementations, credentials or administrative grants. The manifest is a field of the Project, not a file in the tree. A folder the CLI publishes keeps it in `konae.json`.
+[The Capsule](./capsule.md) says what each file does. The editor stores an arbitrary source tree in one exportable JSON object. The browser compiles `app.js`, or `src/main.ts` when it exists, and its relative imports with WebAssembly. The Project record also carries a versioned manifest (`CapsuleManifest` in `src/deployments/manifest.ts`) with deployment visibility, declared runtime actions and capability policies, but never SQL implementations, credentials or administrative grants. The manifest is a field of the Project, not a file in the tree. A folder the CLI publishes keeps it in `konae.json`.
 
 ## Current local topology
 
@@ -211,7 +210,7 @@ An adapter would not receive authority to make access decisions. The Kernel woul
 ## Provider adapters
 
 - A managed adapter may use Workers, D1/libSQL and R2/S3.
-- The self-hosted adapter is the Rust Kernel in `kernel-rs/`: one process with SQLite files and local disk, plus optional S3 for artifacts. It spawns Bun only to derive schema migrations.
+- The self-hosted adapter is the Rust Kernel in `kernel-rs/`: one process with SQLite files and local disk, plus optional S3 for artifacts. It spawns no other process.
 - A Railway adapter may provide a shared Node runtime and an escape hatch for applications that need Docker or unrestricted server packages.
 
 All adapters implement the same Kernel seams. Provider identity products may optionally protect infrastructure administration, but they are never the application session or grant authority. The exported kit holds the sources, the manifest, the Rust Kernel and, with live state, a package of the standard SQLite files and uploads. Provider-specific identifiers must not appear in application code. Only the self-hosted adapter exists today.
