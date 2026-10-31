@@ -1,93 +1,87 @@
 # An app is one folder that the Kernel serves, with or without Konae
 
-Status: proposed, 2026-11-10. Amends [ADR-0005](0005-build-artifacts-separate-managed-and-external-projects.md) (Eject and the Managed and External split go), [ADR-0007](0007-managed-builds-run-in-the-browser.md) only in naming a second builder outside the editor, [ADR-0008](0008-authenticated-mcp-is-the-platform-operation-protocol.md) (where the owner's MCP lives), [ADR-0013](0013-an-app-leaves-as-a-chunked-package.md) (what a package holds), [ADR-0014](0014-an-app-migrates-with-one-writer-at-a-time.md) (the live migration goes) and [ADR-0018](0018-a-route-verifies-a-providers-own-signature.md) and [ADR-0019](0019-an-app-calls-another-from-the-kernel.md) (where a secret is stored).
+Status: proposed, 2026-11-10. Supersedes [ADR-0004](0004-use-drizzle-schema-as-the-managed-database-model.md), [ADR-0005](0005-build-artifacts-separate-managed-and-external-projects.md) except its static publishing rules, [ADR-0006](0006-external-projects-use-a-local-development-kernel.md) and [ADR-0014](0014-an-app-migrates-with-one-writer-at-a-time.md) except the maintenance state and the revocation record. Amends [ADR-0001](0001-separate-runtime-and-admin-data-access.md), [ADR-0008](0008-authenticated-mcp-is-the-platform-operation-protocol.md), [ADR-0011](0011-one-verified-account-core-for-creators-and-app-users.md), [ADR-0012](0012-account-email-goes-through-a-persistent-queue.md), [ADR-0013](0013-an-app-leaves-as-a-chunked-package.md), [ADR-0015](0015-a-deployment-answers-on-one-custom-domain.md), [ADR-0016](0016-a-mutation-may-notify-the-owner-or-the-actor.md), [ADR-0019](0019-an-app-calls-another-from-the-kernel.md) and [ADR-0026](0026-an-app-account-may-sign-in-with-the-apps-own-google-client.md) where each one names an owner inside an app, a secret's home, a migration or a kind of project.
 
-Today one binary serves apps and hosts the editor's operations, and an app exists in three shapes: saved sources in `mcp.sqlite`, a Deployment folder, and a package that only another full installation can open as a signed-in owner. An owner has to learn Eject, Managed, External, package, migration and export to know how to take an app somewhere. The aim of this record is that the owner learns one thing, the app's folder, and that working on it outside the platform is as smooth as inside.
+No app runs on any installation yet, so nothing here keeps an old format alive.
 
-## Names
+## The concepts
 
-- **Konae** is the product and the platform: the editor, the build agent, creator accounts and their admission, the list of projects, publishing from the browser.
-- **The Kernel** is the library and the server with everything one app needs to run: Server Actions, app accounts and sessions, the Signup Policy, guards, notices, schedules, signals, HTTP routes, call actions, files, Usage, and the checks the Validation Gate shares.
+| Word | Meaning |
+| --- | --- |
+| **Konae** | The platform: the editor, the build agent, owners, the list of apps. It is where an app is made and managed. |
+| **Kernel** | The server that runs apps: Server Actions, app accounts, files, schedules, notices, routes, calls, Usage. Konae contains one. An exported app runs on one with no Konae around it. |
+| **Owner** | A person with a Konae account. An owner exists only in Konae. The Kernel has no record of owners. |
+| **App user** | A person with an account in one app. The Kernel keeps the account and its session. Roles are rows in the app's own tables. |
+| **App folder** | Everything an app is, in one layout, the same on a laptop, inside Konae and in an export. |
+| **Export / import** | Export hands over the app folder. Import takes one. There is no other way in or out. |
+| **Gate** | The checks the editor runs before it accepts a change. The Kernel runs the same checks when the app runs. |
 
-Identifiers take the Konae name in a change of their own, before the split: `KONAE_*` variables, `/_konae/` routes, `konae.json`, the `konae` CLI and the `konae-kernel` binary. This record writes the names the code has today.
+Removed: Managed Project, External Project, Eject, Migration, Pulled Copy, Development Kernel, package as a separate format, Database Model and `schema.ts`, the `owner` role of an app account, `manage_lifecycle`.
 
-## Decision
+## Decisions
 
-### One folder is the app
+### 1. One app folder
 
 ```
 my-app/
-  app/             sources: pages, actions.json, schema.sql
-  dist/            what the build wrote, which is what the Kernel serves
-  data/            database.sqlite, identity.sqlite, usage.sqlite, files/
-  package.json     an ordinary Vite project: `npm run dev`, `npm run build`
-  app.json         name, visibility, Signup Policy, sign-in methods, Kernel version
-  compose.yaml     runs the published Kernel image on this folder
-  .env             project secrets, never exported and never committed
-  AGENTS.md        what the pieces are and where this app declares each rule
-  action-contract.md
+  app/            pages, actions.json, schema.sql
+  dist/           the built static files the Kernel serves
+  data/           database.sqlite, identity.sqlite, usage.sqlite, files/
+  konae.json      name, visibility, Signup Policy, sign-in methods, contact email, Kernel version
+  compose.yaml    runs the published Kernel image on this folder
+  .env            secrets, never exported and never committed
+  AGENTS.md
+  action-contract.md, actions.d.ts
 ```
 
-- The folder on the owner's machine, the folder Konae keeps for the project, and what export hands over are the same thing. Saved sources leave `mcp.sqlite` and live in `app/`.
-- `docker compose up` in the folder serves the app. The image holds the Kernel, so nobody compiles Rust and nothing in the folder is tied to an operating system.
-- The Kernel does not build, as ADR-0007 decided: the process that holds every app's database runs no project code and no third-party package. Outside Konae the folder is an ordinary Vite project. `npm run dev` gives a page that reloads on save and sends `/_littlebox/*` to the Kernel, and `npm run build` writes `dist/`. In Konae the editor's browser build writes the same `dist/`.
-- A person on their own machine may build with anything. When a folder arrives, Konae tries the browser build on `app/`. If it builds, the app is edited in the web like any other. If it does not, Konae serves the `dist/` that came with it, checked as untrusted input the way ADR-0007 checks an artifact, and the editor says the app is built on its owner's machine. This is not a kind of project and nobody chooses it. It follows from the sources, and it ends when the sources build in the browser again.
-- The Kernel reads `actions.json` and `schema.sql` when they change and refuses them with the Gate's words. The dev page shows that refusal, so there is no separate checking tool to install.
-- `app/` and `app.json` are what a person or an agent edits and commits. `data/` is what the running app writes.
+`konae init` writes it, `konae dev` serves it, export downloads it, and the Kernel keeps each app in it. Today `init`, the export kit and the Kernel's `deployments/<id>/` are three layouts and saved sources sit in `mcp.sqlite`. They become this one.
 
-### Export and import are the only way in and out
+### 2. Export and import
 
-- **Export** downloads the folder. The app on Konae keeps running and nothing about it changes.
-- **Import** uploads a folder. Into a new project it creates the app. Into an existing project it replaces the sources, the data or both, as the owner chooses, after Konae takes a backup it can restore. It never merges rows.
-- Eject, the Managed and External kinds of project, and the live migration of ADR-0014 are removed. A person who leaves for good exports and deletes the project.
-- The owner can put an app in maintenance and take it out, with a button in Konae and on the admin page. Moving an app with no lost write is three steps the owner sees: maintenance, export, import. The maintenance state is the one ADR-0014 introduced; only its automation goes.
-- A package never carries a secret, and API keys still travel revoked.
+- Export hands over the app folder with everything of the app and nothing of Konae: no owner account, no credential, no project record, no secret.
+- Import takes a folder. Into a new app, Konae assigns it to the owner who imports. Into an existing app, it replaces the sources, the data or both, as the owner chooses, after a backup that can be restored. It never merges rows. Sessions and API keys survive an import into the same app, as they survive a restore.
+- `project_export`, `database_export`, the self-host kit, the Eject package and the chunked package are one thing now. The chunked upload stays as how a folder travels over MCP.
+- An owner can put an app in maintenance and take it out. Moving an app with no lost write is maintenance, export, import. ADR-0014 rejected trusting the operator to do that; this record accepts it for one concept fewer.
 
-### The owner manages the app from the app
+### 3. Owners stay in Konae, users stay in the app
 
-The Kernel serves `/_littlebox/admin` on every app to an app account with the role `owner`. The Kernel writes the page, not the Capsule. It holds accounts, invitations, suspension, the Signup Policy, API keys and SQL Studio, over the functions Konae's owner tools call today.
+- An app account has no `owner` role. The Kernel stores identity. An app that wants an administrator keeps roles in its own table, as the templates do.
+- `"notify": { "to": "owner" }` sends to the contact email in `konae.json`. Konae fills it with the owner's email on publish.
+- Managing users (list, invite, suspend, Signup Policy), API keys and SQL is done in Konae's editor. The Kernel serves no admin page on an app's origin.
+- An owner may enter the app as one of its users through a one-time link. The audit log records it and the session is marked so Usage and Signals do not count it as that user. This replaces "Open as owner".
+- Outside Konae the same operations are commands of the Kernel on the machine, and the database is a SQLite file.
 
-- The page asks for the owner's password to open and again for each change. It shares an origin with the app's scripts, and a password the scripts never see is the guard that holds on a shared origin.
-- The app's scripts get no SDK for any of it.
-- It is not served on a path address, where apps of different owners share one origin. The owner opens it on the app's own host.
-- `owner <email>` on the machine names the first owner of an app that has none.
+### 4. The Kernel is a library, Konae is built on it
 
-Secrets stay with whoever runs the machine, in `.env`. On Konae the owner sets them in the editor as now.
+`kernel-rs` becomes a Cargo workspace. `kernel` is a library and a binary that serves a directory of app folders. `konae` links it and adds the owner's MCP on `/mcp`, owner accounts and admission, and the app list. The Kernel keeps the runtime endpoint the browser SDK calls. The Kernel never opens `owners.sqlite` or `mcp.sqlite`. Secrets move from `mcp.sqlite` to the app's data, and the check that one owner does not reuse a secret across apps stays in Konae.
 
-### One library, two binaries
+### 5. `schema.sql` is the only model
 
-`kernel-rs` becomes a Cargo workspace. The `kernel` crate is a library and a binary that serves a directory of app folders. The `konae` binary links it and adds the owner's MCP, creator accounts and the project list. One library keeps the rule that the Gate and the Kernel refuse with the same words.
+- `schema.sql` states what the database should be. The Kernel compares it with the live database, using SQLite itself to read both, and derives the change. Adding a table or a column applies. Dropping or retyping one shows the plan and asks.
+- `schema.ts`, Drizzle, `schema_plan` and the bun subprocess in the Kernel go.
+- `actions.d.ts` is generated from the Action Contract, so `miniapp.actions.call` is typed by action name, input and returned columns.
 
-The browser SDK reaches the app through `/_littlebox/mcp`, a JSON-RPC endpoint on the app's host that takes only an app session. It belongs to the Kernel. `/mcp`, with the owner's tools, belongs to Konae. `mcp.rs` splits along that line.
+### 6. The publishing contract is `dist/`
 
-| Side | Modules |
-| --- | --- |
-| Kernel | `http`, `calls`, `schedule`, `notify`, `guard`, `checks`, `files`, `file_store`, `google`, `auth`, `path`, `path_name`, `domain`, `hosts`, `security`, `limits`, `app_db`, `action_shape`, `sql_rules`, `model_rules`, `refusal`, `provider`, `artifact`, `package`, `usage`, `mail`, `invitations`, `app_owner`, app accounts, the runtime half of `mcp`, `copies`, `recovery`, SQL Studio and backups |
-| Konae | the owner half of `mcp`, `oauth`, `clerk`, `admission`, `guide`, creator accounts |
-| Removed | `eject`, the migration tools except the maintenance state and its guard |
+Any builder may write `dist/`. The Kernel checks it as untrusted input against the static publishing rules of ADR-0005 and ADR-0007 and refuses what breaks them. The folder's default is a Vite setup that passes. The Kernel does not build. When a folder arrives in Konae and the editor's browser build can build `app/`, the app is edited in the web. When it cannot, Konae serves the `dist/` that came with it and the editor says the app is built on its owner's machine.
 
-Konae's own data is `owners.sqlite` and `mcp.sqlite`. The Kernel never opens them. Usage stays in each app's `usage.sqlite`, so it leaves with the app, and Konae reads it for its overview.
+### 7. One implementation of the checks, later
+
+The Gate is TypeScript and the Kernel is Rust, held together by shared case files. After the split, the Kernel's checks become a crate with no I/O that compiles to WebAssembly for the editor. A spike decides whether that works before anything is promised.
 
 ## Order of work
 
-1. Rename identifiers to Konae. No behaviour changes, and routes that published apps already call keep answering under the old prefix.
-2. Inside the current crate, split `mcp.rs`, move `project_secrets` and the saved sources into the app's folder, and cut every reference from Kernel modules to creator accounts and project records. Behaviour does not change.
-3. Split into the workspace. The compiler then proves step 2 is complete.
-4. Serve a folder with no sign-in, publish the image, and write the folder's Vite project, `compose.yaml` and `AGENTS.md`.
-5. The admin page, with the maintenance button.
-6. Import into an existing project. Then remove Eject, the two kinds of project and the migration tools.
+1. Rename to Konae. In progress.
+2. Remove what this record removes: Eject, the two kinds of project, the migration tools, `schema.ts` and Drizzle, the `owner` role and `app_owner`. Less code makes every later step smaller.
+3. The one folder: sources and secrets leave `mcp.sqlite`, `init`, `dev`, export and the Kernel agree on the layout, and `dev` stops creating a hidden owner.
+4. Split the crate into `kernel` and `konae`.
+5. Schema changes derived by the Kernel, and `actions.d.ts`.
+6. Import into an existing app, the maintenance button, entering as a user.
+7. The Kernel image and the commands for a Kernel without Konae.
+8. The spike for one implementation of the checks.
 
-## Open
+Each step ends with the Kernel and TypeScript suites green and, from step 3 on, the editor opened signed in and tried in a browser.
 
-- Whether the Runtime Interface becomes plain HTTP routes after the split, and whether an app later lists each Server Action as an MCP tool for a person's agent.
-- Whether `owners.sqlite` and `mcp.sqlite` merge.
-- Where the Kernel image is published.
-- Whether a Capsule builds under Vite unchanged. The editor bundles with esbuild in the browser and reads npm packages from esm.sh; the folder would bundle with Vite from `node_modules`. Step 4 starts by building the `examples/product-fit` apps both ways.
-- How a change to `schema.sql` reaches `data/database.sqlite` in development.
+## Not in this record
 
-## Consequences
-
-- There are two builders, the editor's and Vite, reading the same sources. They already differ today between the editor and `littlebox build`, and AGENTS.md names that divergence.
-- An owner who exports, changes rows outside and imports loses the rows Konae gained meanwhile, unless they import sources only. The import dialog says so and the backup undoes it.
-- Moving an app between installations keeps one writer only if the owner presses maintenance first. Nothing enforces it.
-- Projects that were ejected become ordinary projects whose `app/` holds their sources.
+An MCP endpoint per app for a user's agent, a plain HTTP runtime endpoint, merging Konae's two databases, and the merge of older records into fewer topic records.
