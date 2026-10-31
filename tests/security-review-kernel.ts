@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildLocal } from "../scripts/konae";
 import { McpClient } from "../src/mcp/client";
-import { buildKernel, freshClient, password, release, startKernel, type Kernel } from "./migration-kernel";
+import { buildKernel, freshClient, password, release, startKernel, type Kernel } from "./kernel-harness";
 
 export { freshClient, password };
 

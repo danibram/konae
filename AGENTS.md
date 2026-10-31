@@ -33,7 +33,7 @@ After any write through MCP or the editor, observe the effect through the same d
 | Uploaded files | `miniapp.files` | Large bytes in a SQLite column |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | A short link on the installation's domain | path address (`path_set`) | A custom domain when DNS is not yours |
-| Take the app elsewhere | package or migration | Copy (moves the installation) |
+| Take the app elsewhere | package export and import | Copy (moves the installation) |
 | Debug, or try the next version, on what the published app holds | `konae pull` + `dev --reset` | Publishing to find out |
 | See the email, calls, scheduled runs and Signals of a local run | `konae events` | Reading the Kernel's files by hand |
 

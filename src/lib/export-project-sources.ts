@@ -34,7 +34,7 @@ import kernelHttpSource from "../../kernel-rs/src/http.rs?raw";
 import kernelHttpBindingCases from "../../kernel-rs/src/http-binding-cases.json?raw";
 import kernelSignatureCases from "../../kernel-rs/src/signature-cases.json?raw";
 import kernelMailSource from "../../kernel-rs/src/mail.rs?raw";
-import kernelMigrationSource from "../../kernel-rs/src/migration.rs?raw";
+import kernelMaintenanceSource from "../../kernel-rs/src/maintenance.rs?raw";
 import kernelModelRulesSource from "../../kernel-rs/src/model_rules.rs?raw";
 import kernelNotifySource from "../../kernel-rs/src/notify.rs?raw";
 import kernelNotifyCases from "../../kernel-rs/src/notify-cases.json?raw";
@@ -106,7 +106,7 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/notify.rs", contents: kernelNotifySource },
   { path: "kernel-rs/src/notify-cases.json", contents: kernelNotifyCases },
   { path: "kernel-rs/src/notify-column-cases.json", contents: kernelNotifyColumnCases },
-  { path: "kernel-rs/src/migration.rs", contents: kernelMigrationSource },
+  { path: "kernel-rs/src/maintenance.rs", contents: kernelMaintenanceSource },
   { path: "kernel-rs/src/model_rules.rs", contents: kernelModelRulesSource },
   { path: "kernel-rs/src/package.rs", contents: kernelPackageSource },
   { path: "kernel-rs/src/path.rs", contents: kernelPathSource },

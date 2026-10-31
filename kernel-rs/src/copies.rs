@@ -506,10 +506,10 @@ fn copy_deployment(source: &Path, target: &Path) -> Result<()> {
         let name = name.to_string_lossy();
         let (from, to) = (entry.path(), target.join(&*name));
         match &*name {
-            // The migration state travels, so a restore never revives an
-            // app that moved or was paused for a migration. The custom
+            // The maintenance state travels, so a restore never revives an
+            // app that was in maintenance. The custom
             // domain travels too, so a restored app keeps its alias.
-            "deployment.json" | crate::migration::MARKER_FILE | crate::domain::RECORD_FILE | crate::path::RECORD_FILE if kind.is_file() => {
+            "deployment.json" | crate::maintenance::MARKER_FILE | crate::domain::RECORD_FILE | crate::path::RECORD_FILE if kind.is_file() => {
                 std::fs::copy(&from, &to)?;
             }
             database if kind.is_file() && DEPLOYMENT_DATABASES.contains(&database) => vacuum_into(&from, &to)?,
@@ -1152,17 +1152,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_copy_carries_the_custom_domain_with_the_record_and_the_migration_state() {
+    fn a_copy_carries_the_custom_domain_with_the_record_and_the_maintenance_state() {
         let root = std::env::temp_dir().join(format!("konae-copy-domain-{}", uuid::Uuid::new_v4()));
         let (source, target) = (root.join("source"), root.join("target"));
         std::fs::create_dir_all(&source).unwrap();
-        for name in ["deployment.json", crate::domain::RECORD_FILE, crate::path::RECORD_FILE, "stray.tmp"] {
+        for name in ["deployment.json", crate::maintenance::MARKER_FILE, crate::domain::RECORD_FILE, crate::path::RECORD_FILE, "stray.tmp"] {
             std::fs::write(source.join(name), "{}").unwrap();
         }
         copy_deployment(&source, &target).unwrap();
         assert!(target.join("deployment.json").exists());
         assert!(target.join(crate::domain::RECORD_FILE).exists());
         assert!(target.join(crate::path::RECORD_FILE).exists());
+        assert!(target.join(crate::maintenance::MARKER_FILE).exists());
         assert!(!target.join("stray.tmp").exists());
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1422,29 +1423,28 @@ mod tests {
         let summary = restore(&Source::Directory(copies.clone()), None, &held, None).await.unwrap();
         assert!(summary.reconciled.as_ref().is_err_and(|reason| reason.contains("started.json")));
         assert!(recovery::hold(&held).is_some(), "an unreadable record keeps the installation in maintenance");
-        assert!(crate::migration::pause(&held, &deployment.id).is_some());
+        assert!(crate::maintenance::pause(&held, &deployment.id).is_some());
         for path in [source, copies, restored, held] {
             let _ = std::fs::remove_dir_all(path);
         }
     }
 
-    /// A paused or retired origin restored from a copy stays paused, so a
+    /// An app in maintenance restored from a copy stays in maintenance, so a
     /// restore cannot add a second writer.
     #[tokio::test]
-    async fn a_copy_carries_the_migration_state() {
+    async fn a_copy_carries_the_maintenance_state() {
         let (source, copies, restored) = (scratch("marker-source"), scratch("marker-target"), scratch("marker-restored"));
         let (deployment, _) = seed(&source);
-        let marker = json!({"role": "origin", "phase": "confirmed", "operationId": "op-copied"});
-        std::fs::write(source.join("deployments").join(&deployment.id).join(crate::migration::MARKER_FILE), marker.to_string()).unwrap();
+        std::fs::write(source.join("deployments").join(&deployment.id).join(crate::maintenance::MARKER_FILE), json!({"since": 1}).to_string()).unwrap();
         run_copy(&state(&source), &[Target::Directory(copies.clone())]).await.unwrap();
         restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
-        let (operation, message, _) = crate::migration::pause(&restored, &deployment.id).expect("the restored app stays paused");
-        assert_eq!(operation, "op-copied");
-        assert!(message.contains("moved"));
+        let message = crate::maintenance::pause(&restored, &deployment.id).expect("the restored app stays in maintenance");
+        assert!(message.contains("in maintenance"));
         for path in [source, copies, restored] {
             let _ = std::fs::remove_dir_all(path);
         }
     }
+
 
     /// The files an S3 copy holds when KONAE_COPY_SECRET is set: each
     /// sealed with the copy ID and path, and a manifest naming the cipher.

@@ -48,7 +48,7 @@ mod invitations;
 mod limits;
 mod mail;
 mod mcp;
-mod migration;
+mod maintenance;
 mod model_rules;
 mod notify;
 mod oauth;
@@ -523,7 +523,7 @@ fn stack(state: AppState) -> tower::util::BoxCloneService<Request, axum::respons
         .route("/_konae/{*path}", axum::routing::any(|| async { error(StatusCode::GONE, "Use authenticated MCP for platform operations.") }))
         .route("/{*path}", get(http::get_route).post(http::post_route))
         .route("/", get(serve_root))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), migration::guard))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), maintenance::guard))
         .with_state(state.clone());
     let service = ServiceBuilder::new()
         .layer(axum::middleware::from_fn_with_state(state.clone(), security::headers))
@@ -785,7 +785,6 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
     if let Some(package) = input.initial_package.as_ref() {
         if let Err(error_value) = package::install(&state, package, &deployment.project_id, &directory)
             .await
-            .and_then(|()| migration::imported(&state.data_root, &id, &deployment.project_id, &package.manifest))
         {
             let _ = tokio::fs::remove_dir_all(&directory).await;
             file_store::forget_deployment(state.files.store.as_ref(), &id).await;

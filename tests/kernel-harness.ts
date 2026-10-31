@@ -1,15 +1,13 @@
-// Starts Kernels and moves an app between them with migration_begin, the
-// package transfers and migration_activate. Used by
-// tests/migration.integration.test.ts and tests/smoke/migration.ts.
+// Starts Kernels, publishes apps on them and imports a package into a new
+// project. Used by the security review and check-carry suites.
 import { open, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { downloadToFile } from "../scripts/package-files";
 import { McpClient, encodeBase64, type Transfer } from "../src/mcp/client";
 import type { PackageManifest } from "../src/lib/portable-package";
 
 const repo = path.resolve(import.meta.dir, "..");
 export const kernelBinary = path.join(repo, "kernel-rs/target/debug/konae-kernel");
-export const password = "migration-test-password";
+export const password = "kernel-harness-password";
 let nextClient = 0;
 /** A client address per request, so the signup and sign-in limits never trip. */
 export const freshClient = () => { nextClient++; return `198.18.${Math.floor(nextClient / 250) % 250}.${nextClient % 250 + 1}`; };
@@ -102,23 +100,8 @@ export async function release(client: McpClient, payload: object, projectId: str
 
 export type Deployment = { id: string; hostname: string; url: string; projectId: string };
 
-export type Begun = {
-  operationId: string; phase: string; paused: boolean; packageId?: string; manifest?: PackageManifest;
-  downloads?: Record<string, Transfer>; waitingFor?: string; message?: string;
-};
-
-/** The files of a captured migration: each component and the release payload. */
+/** A downloaded package: each component's file, and the release payload under `release`. */
 export type Captured = { manifest: PackageManifest; files: Record<string, string> };
-
-export async function downloadMigration(client: McpClient, begun: Begun, directory: string): Promise<Captured> {
-  if (!begun.manifest || !begun.downloads) throw Error(`Migration ${begun.operationId} has not captured the app: ${JSON.stringify(begun)}`);
-  const files: Record<string, string> = {};
-  for (const name of [...begun.manifest.contents.map((content) => content.name), "release"]) {
-    files[name] = path.join(directory, name);
-    await downloadToFile(client, begun.downloads[name], files[name]);
-  }
-  return { manifest: begun.manifest, files };
-}
 
 async function uploadFile(client: McpClient, file: string, content: { name: string; size: number; sha256: string }, projectId: string) {
   const transfer = await client.call<Transfer>("transfer_begin", { projectId, size: content.size, sha256: content.sha256, component: content.name });
@@ -135,8 +118,8 @@ async function uploadFile(client: McpClient, file: string, content: { name: stri
   return transfer.transferId;
 }
 
-/** Imports a captured migration into `projectId`, creating the project if needed. */
-export async function importMigration(client: McpClient, captured: Captured, projectId: string, name = "Migrated app") {
+/** Imports a downloaded package into `projectId`, creating the project if needed. */
+export async function importPackage(client: McpClient, captured: Captured, projectId: string, name = "Imported app") {
   await client.call("project_create", { projectId, name }).catch((error: Error) => {
     if (!/exists|already/i.test(error.message)) throw error;
   });

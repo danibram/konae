@@ -497,26 +497,6 @@ describe("the MCP walkthrough", () => {
     expect((keys.result as any).keys[0].revokedReason).toBe("import");
   }, 180_000);
 
-  test("14. begin and cancel a migration", async () => {
-    r.step("migration-begin");
-    const begun = await tool("migration_begin", { deploymentId: s.deploymentId }, { pick: (value) => ({ operationId: value.operationId, packageId: value.packageId, phase: value.phase, paused: value.paused, downloads: Object.keys(value.downloads), next: value.next }) });
-    const operationId = (begun.result as any).operationId;
-    r.name(operationId, "<operation id>");
-    r.name((begun.result as any).packageId, "<migration package id>");
-    expect((await http("POST", a, "/hooks/orders", { host: s.hostname, headers: { "content-type": "application/json" }, body: "{}" })).response.status).toBe(503);
-
-    r.step("migration-cancel");
-    await tool("migration_cancel", { operationId }, { pick: (value) => ({ operationId: value.operationId, effects: value.effects }) });
-    const status = await tool("migration_status", { deploymentId: s.deploymentId }, { pick: (value) => ({ phase: value.phase, paused: value.paused, operationId: value.operationId }) });
-    expect((status.result as any).paused).toBe(false);
-    const client = new McpClient(`${a.url}/mcp`, { token: s.token });
-    for (const transfer of Object.values((begun.result as any).downloads) as Transfer[]) await client.cancel(transfer.transferId).catch(() => {});
-    const body = JSON.stringify({ id: "A-2", total: 30 });
-    const signature = await signRoute(secret, { method: "POST", path: "/hooks/orders", body }, Math.floor(Date.now() / 1000), "walkthrough-nonce-2");
-    r.name(signature.match(/v1=([0-9a-f]+)/)![1], "<hmac 2>");
-    expect((await http("POST", a, "/hooks/orders", { host: s.hostname, headers: { "content-type": "application/json", "x-signature": signature }, body })).response.status).toBe(200);
-  }, 120_000);
-
   test("docs/mcp-walkthrough.md shows what this run recorded", async () => {
     const document = await readFile(docPath, "utf8");
     const rendered = renderDocument(document, r);

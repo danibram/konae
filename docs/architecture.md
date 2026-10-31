@@ -87,8 +87,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
     ├── files/              # index.json, and the uploads unless a bucket holds them (ADR-0025)
     ├── backups/            # Data panel snapshots and the recovery point before a schema migration
     ├── domain.json         # the custom domain and its proof, ADR-0015
-    ├── migration.json      # only while a migration pauses or has retired it, ADR-0014
-    └── migration/          # the package a migration kept, on the origin
+    └── maintenance.json    # only while the app is in maintenance, ADR-0027
 ```
 
 ### The Kernel's modules
@@ -121,7 +120,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 | `schedule.rs` | A mutation's schedule, the timer that runs it and the record of each run ([ADR-0017](./adr/0017-the-kernel-runs-a-declared-schedule.md)) |
 | `recovery.rs` | The revocation record and `konae-kernel reconcile` |
 | `package.rs` | The chunked package, `package_export` and its import |
-| `migration.rs` | Migration and maintenance |
+| `maintenance.rs` | The maintenance state and its guards |
 | `domain.rs` | Custom domains: the hostname rules, the TXT proof through the Kernel's own DNS lookup, and the alias index |
 
 `src/lib/export-project-sources.ts` lists every one of these files, so an exported kit compiles the same Kernel.
@@ -134,9 +133,9 @@ An artifact holds pages and the files they load. `kernel-rs/src/artifact.rs` dec
 
 A scheduled copy takes each Deployment's data and identity locks, snapshots its SQLite files with `VACUUM INTO`, copies the rest of its folder and writes a manifest of SHA-256 checksums last. It sends the result to a directory on another disk, an S3 prefix in the data bucket, or both, and keeps 24 recent and 30 daily copies. Copy failures are logged and reported under `copies` in `/_konae/health`; they never block serving. `konae-kernel restore` is the only way back: it installs one copy into an empty data directory, verifies every checksum, signs out every session and agent credential and ends every open email link. App API keys stay valid, because a restore brings back the same installation for the same owner; an import into another installation revokes them. Suspensions and key revocations made after the copy are written to each copy target as they happen, and restore applies them, or starts the installation in maintenance when it cannot read them ([ADR-0014](./adr/0014-an-app-migrates-with-one-writer-at-a-time.md)). With `KONAE_COPY_SECRET` the files sent to S3 are encrypted.
 
-A Deployment in maintenance, for a migration or after an unreconciled restore, keeps that state in `deployments/<id>/migration.json` or the data directory's `recovery-hold.json`. One middleware answers its host with a maintenance page or a 503 that names the operation, the administrative tools that would change it refuse, and the mail worker holds its email. The Kernel reads nothing from the data bucket at startup.
+A Deployment in maintenance, by its own state or after an unreconciled restore, keeps that state in `deployments/<id>/maintenance.json` or the data directory's `recovery-hold.json`. One middleware answers its host with a maintenance page or a 503, the administrative tools that would change it refuse, and the mail worker holds its email. The Kernel reads nothing from the data bucket at startup.
 
-A migration moves one Deployment to another installation with one writer at a time ([ADR-0014](./adr/0014-an-app-migrates-with-one-writer-at-a-time.md)). `migration_begin` pauses the origin and captures a version 2 package; the destination imports it paused; `migration_confirm` retires the origin and reveals a confirmation, and only `migration_activate` with that confirmation opens the destination. A copy moves a whole installation for the same owner; a package moves one app, possibly to another owner, so its import revokes API keys and a restore keeps them.
+A copy moves a whole installation for the same owner; a package moves one app, possibly to another owner, so its import revokes API keys and a restore keeps them.
 
 ### Account email
 

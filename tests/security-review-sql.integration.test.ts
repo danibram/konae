@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { parseServerActionSource } from "../src/kernel/actions";
 import { encodeBase64 } from "../src/mcp/client";
-import { release } from "./migration-kernel";
+import { release } from "./kernel-harness";
 import { answerText, rawCall, runtimeClient, startLab, testPort, type Lab } from "./security-review-kernel";
 
 let lab: Lab;

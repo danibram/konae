@@ -147,7 +147,7 @@ data/
     └── backups/            # snapshots made from the Data panel
 ```
 
-[The architecture](./architecture.md#current-self-hosted-topology) lists the files that appear only during a migration, after a restore or with the development mailbox.
+[The architecture](./architecture.md#current-self-hosted-topology) lists the files that appear only in maintenance, after a restore or with the development mailbox.
 
 A Kernel that finds the older layout, with `artifacts/<id>/` and `backups/<id>/` at the top of the data directory, moves both into the Deployment's folder when it starts and logs each move. It refuses to start when the old and new locations both hold files, and names the two paths.
 
@@ -188,7 +188,7 @@ KONAE_DATA_DIR=/data konae-kernel reconcile --without-record
 
 Run `reconcile` with the Kernel stopped, or start it again afterwards: a running Kernel keeps the maintenance it read at startup.
 
-A Deployment paused or retired by a migration stays so after a restore, because its migration state travels in the copy.
+A Deployment in maintenance stays so after a restore, because its maintenance state travels in the copy.
 
 ## Verified accounts
 

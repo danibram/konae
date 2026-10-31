@@ -58,10 +58,6 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("package_export", "transfer_read"),
     ("project_export", "transfer_read"),
     ("database_export", "transfer_read"),
-    ("migration_begin", "migration_status"),
-    ("migration_confirm", "migration_status"),
-    ("migration_cancel", "migration_status"),
-    ("migration_activate", "migration_status"),
     ("token_create", "tokens_list"),
     ("token_revoke", "tokens_list"),
     ("auth_logout", "auth_session"),
@@ -126,7 +122,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 {"need": "Files a person uploads", "use": "miniapp.files", "not": "Base64 in a SQLite column for large bytes"},
                 {"need": "Who may create an app account", "use": "Signup Policy and invitations", "not": "A homemade users table that bypasses Runtime Actor"},
                 {"need": "A short link on the installation's domain", "use": "path address (path_set)", "not": "A custom domain when DNS is not yours"},
-                {"need": "Take the app to another machine", "use": "package export/import or migration", "not": "Copy (that moves the whole installation)"},
+                {"need": "Take the app to another machine", "use": "package export and import", "not": "Copy (that moves the whole installation)"},
                 {"need": "Debug, or try the next version, on what the published app holds", "use": "konae pull, then dev --reset", "not": "Publishing to find out"},
                 {"need": "See the email, calls, scheduled runs and Signals of a local run", "use": "konae events (--json for an agent), or the page dev serves", "not": "Reading the Kernel's files by hand"}
             ],
@@ -137,12 +133,11 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "flags": {"--manage-users": "adds manage_users", "--export-data": "adds export_data", "--manage-lifecycle": "adds manage_lifecycle"},
             "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data or manage_lifecycle.",
             "permissions": {
-                "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read, migration_status",
+                "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read",
                 "write": "project_create, project_sources_save, project_delete, schema_plan, and database_execute changes",
                 "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, and initialSignupPolicy on a first release",
                 "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
-                "export_data": "package_export, project_export, database_export, and migration_begin together with manage_lifecycle",
-                "manage_lifecycle": "the migration tools"
+                "export_data": "package_export, project_export and database_export"
             },
             "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds."
         }),
@@ -211,11 +206,6 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "Build the folder, upload the release JSON of the publishing topic with initialPackage { manifest, components: { <name>: <transferId> } }, then release_plan and release_apply.",
                 "Sessions, email links and live API keys stay behind: people sign in with their passwords, and api_keys_list shows each key revoked at import so the owner issues new ones."
             ],
-            "migration": [
-                "migration_begin { deploymentId } needs manage_lifecycle and export_data. The app pauses at once and the answer holds the package downloads and next steps.",
-                "Import on the destination as above, adding the release download as the release payload, then migration_confirm here and migration_activate there.",
-                "migration_cancel { operationId } before migration_confirm resumes the app. migration_status reads the state."
-            ]
         }),
         "refusals" => refusals(),
         _ => bail!("Unknown guide topic. Choose one of {}.", TOPICS.join(", ")),
@@ -316,10 +306,6 @@ mod tests {
             "package_export needs a credential with export_data. Run konae login with --export-data, or use a token from token_create that includes it."
         );
         assert_eq!(
-            missing_permission("migration_begin", &publisher).unwrap(),
-            "migration_begin needs a credential with manage_lifecycle. Run konae login with --manage-lifecycle, or use a token from token_create that includes it."
-        );
-        assert_eq!(
             missing_permission("release_plan", &owner(&["read"])).unwrap(),
             "release_plan needs a credential with publish. Run konae login, or use a token from token_create that includes it."
         );
@@ -345,7 +331,7 @@ mod tests {
             .chain(runtime_tools())
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
-        let prefixes = ["platform_", "project_", "projects_", "schema_", "database_", "storage_", "release_", "signup_policy_", "sign_in_methods_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "notices_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "migration_", "package_", "mail_", "session_", "domain_", "path_"];
+        let prefixes = ["platform_", "project_", "projects_", "schema_", "database_", "storage_", "release_", "signup_policy_", "sign_in_methods_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "notices_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "package_", "mail_", "session_", "domain_", "path_"];
         for name in TOPICS {
             let text = topic(name).unwrap().to_string();
             for word in text.split(|c: char| !(c.is_ascii_lowercase() || c == '_')) {

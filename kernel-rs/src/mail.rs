@@ -1051,8 +1051,8 @@ impl MailQueue {
     /// Runs one claimed job. Returns true when the provider accepted it.
     async fn process(&self, job: Claimed) -> Result<bool> {
         // A paused app sends nothing; the job waits uncounted.
-        if super::migration::holds_mail(&self.data_root, &job.scope) {
-            self.release(&job.id, super::migration::MAIL_HOLD_MS, false, None)?;
+        if super::maintenance::holds_mail(&self.data_root, &job.scope) {
+            self.release(&job.id, super::maintenance::MAIL_HOLD_MS, false, None)?;
             return Ok(false);
         }
         if job.purpose == NOTIFY {
@@ -1924,7 +1924,7 @@ mod tests {
         let fixture = fixture(transport.clone()).await;
         fixture.signup(&fixture.app, "person@example.test").await.unwrap();
         fixture.signup(&fixture.other, "person@example.test").await.unwrap();
-        crate::migration::pause_for_test(&fixture.root, &fixture.app.id, true);
+        crate::maintenance::pause_for_test(&fixture.root, &fixture.app.id, true);
         assert_eq!(fixture.queue().run_once().await.unwrap(), 1, "only the other app's job leaves");
         assert_eq!(transport.sent()[0].scope, format!("deployment:{}", fixture.other.id));
         let attempts: i64 = fixture
@@ -1932,7 +1932,7 @@ mod tests {
             .query_row("SELECT attempts FROM jobs WHERE scope = ?1", [format!("deployment:{}", fixture.app.id)], |row| row.get(0))
             .unwrap();
         assert_eq!(attempts, 0, "a held job keeps its attempts");
-        crate::migration::pause_for_test(&fixture.root, &fixture.app.id, false);
+        crate::maintenance::pause_for_test(&fixture.root, &fixture.app.id, false);
         fixture.due_now();
         assert_eq!(fixture.queue().run_once().await.unwrap(), 1);
         assert_eq!(transport.sent().len(), 2);

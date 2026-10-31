@@ -17,7 +17,7 @@ Each record states its status and which earlier record it amends on its first li
 | [0011](0011-one-verified-account-core-for-creators-and-app-users.md) | One verified account core for creators and app users; invitation codes; app invitations; HTTP routes, callers and API keys | 0001, 0002 | 0014, 0026 |
 | [0012](0012-account-email-goes-through-a-persistent-queue.md) | Account email leaves through a persistent queue with a sender preflight and limits | | 0016 |
 | [0013](0013-an-app-leaves-as-a-chunked-package.md) | An app leaves as a chunked package behind `export_data`; API keys travel revoked | 0008 | 0014, 0025 |
-| [0014](0014-an-app-migrates-with-one-writer-at-a-time.md) | A migration keeps one writer through maintenance and a confirmation; a restore applies the revocation record | 0011, 0013 | |
+| [0014](0014-an-app-migrates-with-one-writer-at-a-time.md) | Superseded by 0027 except the maintenance state and the revocation record. A migration keeps one writer through maintenance and a confirmation; a restore applies the revocation record | 0011, 0013 | 0027 |
 | [0015](0015-a-deployment-answers-on-one-custom-domain.md) | A Deployment answers on one custom domain proved by a TXT record; a package carries the name without its token | 0008, 0013, 0014 | |
 | [0016](0016-a-mutation-may-notify-the-owner-or-the-actor.md) | A mutation may queue one email to the Project Owner or to the caller's verified email when it changes a row | 0010, 0012 | 0021 |
 | [0017](0017-the-kernel-runs-a-declared-schedule.md) | A mutation may declare a schedule that the Kernel's timer runs once a period; `subscribe` is refused | 0010 | 0021 |

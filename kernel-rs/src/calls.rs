@@ -1078,14 +1078,8 @@ async fn process(state: &AppState, job: Claimed) -> Result<()> {
         let attempt = Attempt { error: Some("app-gone"), ..Default::default() };
         return finish(&data_root, &job.id, &attempt, None);
     };
-    // A retired origin never resumes, so its calls end; the app's new home
-    // does not have them.
-    if super::migration::marker(&data_root, &deployment.id).is_some_and(|marker| marker.retired()) {
-        let attempt = Attempt { error: Some("app-moved"), ..Default::default() };
-        return finish(&data_root, &job.id, &attempt, None);
-    }
     // A paused app sends nothing; the call waits uncounted.
-    if super::migration::pause(&data_root, &deployment.id).is_some() {
+    if super::maintenance::pause(&data_root, &deployment.id).is_some() {
         return release(&data_root, &job.id, PAUSE_WAIT_MS, false, &Attempt::default());
     }
     let program: ActionProgram = serde_json::from_str(&deployment.actions)?;
@@ -1173,7 +1167,7 @@ async fn send_in_process(
 ) -> Result<(u16, Vec<u8>), (&'static str, bool)> {
     // A paused app answers every request from outside with its maintenance
     // refusal; a call from inside meets the same.
-    if super::migration::pause(&state.data_root, &app.id).is_some() {
+    if super::maintenance::pause(&state.data_root, &app.id).is_some() {
         return Ok((503, br#"{"error":"This app is paused."}"#.to_vec()));
     }
     let mut map = HeaderMap::new();
@@ -1660,19 +1654,13 @@ mod tests {
         let outbox = read_outbox(&root, &app.id, i64::MAX).unwrap();
         assert_eq!(outbox["calls"][0]["then"], json!({"action": "hook.logged", "state": "done", "message": null}));
 
-        // A paused app keeps its call waiting, uncounted; a retired origin ends it.
-        super::super::migration::pause_for_test(&root, &app.id, true);
+        // A paused app keeps its call waiting, uncounted.
+        super::super::maintenance::pause_for_test(&root, &app.id, true);
         assert_eq!(enqueue(&state, &app, "hook.send", &json!({})).await.status(), StatusCode::OK);
         assert_eq!(run_once(&state).await.unwrap(), 1);
         let waiting = connection(&root).unwrap().query_row(
             "SELECT state, attempts FROM calls ORDER BY rowid DESC LIMIT 1", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))).unwrap();
         assert_eq!(waiting, ("pending".to_owned(), 0));
-        super::super::migration::retire_for_test(&root, &app.id);
-        connection(&root).unwrap().execute("UPDATE calls SET next_attempt_at = 0", []).unwrap();
-        assert_eq!(run_once(&state).await.unwrap(), 1);
-        let moved = read_outbox(&root, &app.id, i64::MAX).unwrap();
-        assert_eq!((moved["calls"][0]["state"].as_str(), moved["calls"][0]["error"].as_str()), (Some("failed"), Some("app-moved")));
-        assert_eq!(logged(&root).len(), 1, "a moved app runs no then mutation");
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -1,6 +1,6 @@
-# Walkthrough: from a credential to a migration over MCP
+# Walkthrough: from a credential to an import over MCP
 
-This page takes one app through every operation an external agent performs on Konae: get an Agent Credential, create a project, run it on a Development Kernel, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, publish it with a signup policy, invite a member, check it against its Action Contract, read its Usage and Signals, export it, import it on a second Kernel, and begin and cancel a migration.
+This page takes one app through every operation an external agent performs on Konae: get an Agent Credential, create a project, run it on a Development Kernel, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, publish it with a signup policy, invite a member, check it against its Action Contract, read its Usage and Signals, export it and import it on a second Kernel.
 
 Every command and every answer below was recorded from real Kernels by `tests/mcp-walkthrough.integration.test.ts`, which fails when this page differs from what the Kernel answers. Values that change on every run appear as placeholders in angle brackets, such as `<project id>`. Kernel A answers on `http://localhost:4173`, Kernel B on `http://localhost:4174`, and the Development Kernel on `http://localhost:8796`. An app's host is `<slug>-<suffix>.localhost` on its Kernel's port.
 
@@ -160,11 +160,10 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
     "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae-kernel creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
     "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data or manage_lifecycle.",
     "permissions": {
-      "export_data": "package_export, project_export, database_export, and migration_begin together with manage_lifecycle",
-      "manage_lifecycle": "the migration tools",
+      "export_data": "package_export, project_export and database_export",
       "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
       "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, and initialSignupPolicy on a first release",
-      "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read, migration_status",
+      "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read",
       "write": "project_create, project_sources_save, project_delete, schema_plan, and database_execute changes"
     },
     "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds."
@@ -267,7 +266,7 @@ content-type: application/json
 ```
 <!-- /walkthrough:oauth-token -->
 
-OAuth offers `read`, `write`, `publish` and `manage_users`. Exporting and migration need a token from `konae login`:
+OAuth offers `read`, `write`, `publish` and `manage_users`. Exporting needs a token from `konae login`:
 
 <!-- walkthrough:oauth-scope -->
 ```sh
@@ -1633,112 +1632,3 @@ content-type: application/json
 }
 ```
 <!-- /walkthrough:import-check -->
-
-## 15. Begin and cancel a migration
-
-`migration_begin` pauses the app at once and captures it as a version 2 package. Its answer lists the downloads and what comes next. While paused, the app refuses writes with 503:
-
-<!-- walkthrough:migration-begin -->
-```json
-{
-  "name": "migration_begin",
-  "arguments": {
-    "deploymentId": "<deployment id>"
-  }
-}
-```
-
-```json
-{
-  "result": {
-    "operationId": "<operation id>",
-    "packageId": "<migration package id>",
-    "phase": "captured",
-    "paused": true,
-    "downloads": [
-      "database",
-      "files",
-      "identity",
-      "release",
-      "usage"
-    ],
-    "next": [
-      "Download every component and the release with transfer_read.",
-      "On the destination, create the project, upload each component with transfer_begin and its component name, and release the downloaded release payload with initialPackage naming the manifest and the uploads.",
-      "Check the imported app with read tools; it stays paused.",
-      "Run migration_confirm here, then migration_activate on the destination with the confirmation it returns."
-    ]
-  }
-}
-```
-
-```sh
-curl -i -X POST 'http://orders-<suffix>.localhost:4173/hooks/orders' -H 'content-type: application/json' --data '{}'
-```
-
-```text
-HTTP 503
-content-type: application/json
-retry-after: 300
-
-{"error":"This app is paused for migration <operation id>. It accepts no writes, signups, recovery, administrative changes or email until the migration is confirmed or cancelled.","maintenance":true,"operationId":"<operation id>"}
-```
-<!-- /walkthrough:migration-begin -->
-
-Before `migration_confirm`, `migration_cancel` resumes the app, and the webhook is accepted again:
-
-<!-- walkthrough:migration-cancel -->
-```json
-{
-  "name": "migration_cancel",
-  "arguments": {
-    "operationId": "<operation id>"
-  }
-}
-```
-
-```json
-{
-  "result": {
-    "operationId": "<operation id>",
-    "effects": {
-      "destination": "A package already imported elsewhere can never be activated: its confirmation was not issued and is now discarded.",
-      "email": "Email ended by the pause is not sent. Resend pending invitations; people ask again for verification or recovery links.",
-      "origin": "Accepts writes, signups, recovery and email again."
-    }
-  }
-}
-```
-
-```json
-{
-  "name": "migration_status",
-  "arguments": {
-    "deploymentId": "<deployment id>"
-  }
-}
-```
-
-```json
-{
-  "result": {
-    "phase": "cancelled",
-    "paused": false,
-    "operationId": "<operation id>"
-  }
-}
-```
-
-```sh
-curl -i -X POST 'http://orders-<suffix>.localhost:4173/hooks/orders' -H 'content-type: application/json' -H 'x-signature: t=<unix seconds>,n=walkthrough-nonce-2,v1=<hmac 2>' --data '{"id":"A-2","total":30}'
-```
-
-```text
-HTTP 200
-content-type: application/json
-
-{"result":{"changes":1,"lastInsertId":3}}
-```
-<!-- /walkthrough:migration-cancel -->
-
-To finish a migration instead, import the package on the destination as in step 14 with the `release` download as the payload, run `migration_confirm` on the origin, and `migration_activate` with its confirmation on the destination. [Migrate an app](mcp.md#migrate-an-app) has the details.

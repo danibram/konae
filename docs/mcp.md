@@ -25,7 +25,7 @@ Each owner administers their own projects. The page creates read-only or read, e
 | `konae login` | `read`, `write` and `publish`, plus one scope per flag: `--manage-users`, `--export-data`, `--manage-lifecycle` | 24 hours |
 | An OAuth client | `read`, `write`, `publish` and `manage_users`. The consent screen does not offer `export_data` or `manage_lifecycle`, and asking for either answers `Invalid scope.` | Per token |
 
-Only `export_data` downloads an app's accounts and data, and only `manage_lifecycle` migrates a project. The owner's browser session holds both.
+Only `export_data` downloads an app's accounts and data, and only `manage_lifecycle` changes a project's lifecycle. The owner's browser session holds both.
 
 The setup key does not authenticate MCP tools and is not included in the editor bundle. The server listens on `127.0.0.1` by default. The Kernel refuses to start on a non-loopback address, or with a `KONAE_PUBLIC_ORIGIN` whose host is not `localhost`, a `*.localhost` name or a loopback IP, while the setup key is unset or still `local-development-key`, unless `KONAE_ALLOW_DEFAULT_KEY=1`. For a remote installation, configure the setup key, the HTTPS origin and the proxy before listening on another interface.
 
@@ -50,7 +50,7 @@ Call `platform_describe` and `projects_list` after connecting. `platform_describ
 
 `session_inspect` returns `can` for the scopes this credential holds. After a write, call the read-back named in `rules` before retrying or telling the owner it worked.
 
-[The walkthrough](mcp-walkthrough.md) runs every step from a credential to a migration against a Kernel, with the exact answers. An agent needs filesystem and local execution tools to create files and build an app. The MCP server does not read paths on the user's machine.
+[The walkthrough](mcp-walkthrough.md) runs every step from a credential to an import on a second Kernel, with the exact answers. An agent needs filesystem and local execution tools to create files and build an app. The MCP server does not read paths on the user's machine.
 
 If MCP is published on an origin other than the hosting origin, set `KONAE_MCP_ORIGIN` to its public origin, without a path. The proxy must preserve `Host`. Owner signup answers on that host too, so the Kernel refuses to start with the default setup key when this host is not local. Browser calls to the editor and to the runtime use their own origin; there is no open CORS.
 
@@ -60,7 +60,6 @@ If MCP is published on an origin other than the hosting origin, set `KONAE_MCP_O
 | --- | --- |
 | Discovery | `platform_describe`, `platform_guide`, `session_inspect`, `mail_status`, `projects_list`, `project_inspect` |
 | Projects | `project_create`, `project_sources_read`, `project_sources_save`, `project_delete` |
-| Migration, with `manage_lifecycle` | `migration_begin`, `migration_confirm`, `migration_cancel`, `migration_activate`; `migration_status` with `read` |
 | Owner schema and data | `schema_plan`, `database_execute`, `storage_test` |
 | App export, with `export_data` | `package_export`, `project_export`, `database_export` |
 | Publishing | `release_plan`, `release_apply` |
@@ -246,7 +245,7 @@ The role comes from the owner's own credential, never from signup or an input:
 - An owner signed in through the optional hosted identity adapter has no email in the Kernel and gets `Your owner account signs in through the hosted identity provider, so this installation has no email to give your app account. Sign up in the app instead.`
 - `app_invitations_create` for the owner's own creator email marks the pending account `owner`, since only the owner's mailbox can answer the link.
 
-The role travels with the identity file in a package, a portable export and a migration, so after an import to another owner's installation the previous owner's account is still `owner` and the new owner's Open as owner adds a second; no tool removes the role, and `app_user_suspend` is the lever until one does. The editor's preview has no owner account: Alice and Bob are members.
+The role travels with the identity file in a package and a portable export, so after an import to another owner's installation the previous owner's account is still `owner` and the new owner's Open as owner adds a second; no tool removes the role, and `app_user_suspend` is the lever until one does. The editor's preview has no owner account: Alice and Bob are members.
 
 ## Local development cycle
 
@@ -628,7 +627,7 @@ A pointer that finds nothing, or null, leaves its input out, so it binds NULL wh
 
 A call's `then` mutation processes its declared `notify` when it changes a row, using the inputs mapped from the answer. It uses the same queue, budgets and Usage outcomes as other mutations. A notice to `owner` reaches the project owner. A notice to `actor` records `no-account` because the answer has no caller. A refused or unchanged mutation sends nothing.
 
-`calls_read { "deploymentId", "cursor"? }` needs `read` and lists the app's calls newest first, 50 at a time: the action, `pending`, `delivered` or `failed`, attempts, method, URL, status, error kind, the first 1 KiB of the answer and the `then` mutation's outcome (`done`, `refused` with the guard, or `failed` with the reason). The outbox keeps the newest 1000 finished calls per app. Pending calls do not travel in a package or a migration; on the destination, the page invokes them again, and a retired origin ends its pending calls with `app-moved`. Scheduled copies carry `calls.sqlite`, so a restore brings the outbox back as the copy held it.
+`calls_read { "deploymentId", "cursor"? }` needs `read` and lists the app's calls newest first, 50 at a time: the action, `pending`, `delivered` or `failed`, attempts, method, URL, status, error kind, the first 1 KiB of the answer and the `then` mutation's outcome (`done`, `refused` with the guard, or `failed` with the reason). The outbox keeps the newest 1000 finished calls per app. Pending calls do not travel in a package; on the destination, the page invokes them again. Scheduled copies carry `calls.sqlite`, so a restore brings the outbox back as the copy held it.
 
 ### A page that reads another app
 
@@ -787,7 +786,7 @@ Some work has to happen when nobody asks: a hold that lapsed is released so the 
 
 | Rule | What the Kernel does |
 | --- | --- |
-| Once a period | The period it last ran for is kept in the Deployment's `usage.sqlite`. A restart, a copy, a package and a migration carry it, so a daily job does not run twice in a day. A Kernel that was down for several periods runs the action once when it is back |
+| Once a period | The period it last ran for is kept in the Deployment's `usage.sqlite`. A restart, a copy and a package carry it, so a daily job does not run twice in a day. A Kernel that was down for several periods runs the action once when it is back |
 | Publishing | The first period an action is seen in counts as done, so publishing never runs it. A republish that changes the schedule starts again from the next period |
 | One run at a time | A run takes the Deployment's data lock and has the 2-second statement budget. A Deployment's scheduled actions run one after another in name order, and its next look waits until they finish |
 | Maintenance | A Deployment in maintenance runs nothing, and runs each due action once when it leaves maintenance |
@@ -855,7 +854,7 @@ The notice is recorded only when the statement changed a row, after the answer i
 | `sender-not-ready` | The sender preflight was not ready. The job is stored as failed with this kind and never sent |
 | `storage-error` | The queue could not be written. The Kernel logs it |
 
-A queued notice is a job in the same queue as account email, with purpose `notify`, its text sealed with the queue's key until the provider accepts it. It is sent like any job, retried the same way, held while its app is paused for a migration, and fails as `notice-expired` when it has not left within a day. The owner reads its state with `mail_status`, whose `queue.notices` counts notice jobs per state, and each notice with `notices_read { "deploymentId", "cursor"? }`, which needs `read` and lists that app's notice jobs newest first, 50 at a time: the action, `pending`, `accepted`, `delivered` or `failed`, attempts, the failure kind, and when it was queued, last changed and, while pending, next tried. It names no recipient. A notice the Kernel did not queue is no job; Usage counts it under `notify` with its reason. The editor's What happened panel reads it with `calls_read`, `usage_summary` and `signals_read`. Notices count apart from account email so a busy app never uses up the allowance signup and recovery need: 200 a day per app, 500 per creator and 50 a day per recipient from one app; the installation's 1,000 a day counts every email. The editor preview sends no email. The Action Contract lists the notice on its action.
+A queued notice is a job in the same queue as account email, with purpose `notify`, its text sealed with the queue's key until the provider accepts it. It is sent like any job, retried the same way, held while its app is in maintenance, and fails as `notice-expired` when it has not left within a day. The owner reads its state with `mail_status`, whose `queue.notices` counts notice jobs per state, and each notice with `notices_read { "deploymentId", "cursor"? }`, which needs `read` and lists that app's notice jobs newest first, 50 at a time: the action, `pending`, `accepted`, `delivered` or `failed`, attempts, the failure kind, and when it was queued, last changed and, while pending, next tried. It names no recipient. A notice the Kernel did not queue is no job; Usage counts it under `notify` with its reason. The editor's What happened panel reads it with `calls_read`, `usage_summary` and `signals_read`. Notices count apart from account email so a busy app never uses up the allowance signup and recovery need: 200 a day per app, 500 per creator and 50 a day per recipient from one app; the installation's 1,000 a day counts every email. The editor preview sends no email. The Action Contract lists the notice on its action.
 
 | Declaration | Message |
 | --- | --- |
@@ -1088,8 +1087,8 @@ To import on another Kernel, first create the project there with `project_create
 | Package for a project with a Deployment | `Portable state can only be imported on the first deployment.` |
 | Upload bytes that differ from the declared SHA-256 | `Upload size or SHA-256 mismatch.` |
 | Upload that differs from the manifest | `The database component does not match the size and SHA-256 in the manifest.` |
-| Another manifest version | `Package version 3 is not supported. This Kernel reads versions 1 and 2.` |
-| Version 2 without a migration stamp, or a stamp on version 1 | `A version 2 package must name its migration.` / `Only a version 2 package may name a migration.` |
+| Another manifest version | `Package version 2 is not supported. This Kernel reads version 1.` |
+| A package whose custom domain another Deployment on the destination serves | `Package import failed: <name> already serves another Deployment on this installation. …` |
 | Component over its limit | `Transfer size is outside the limit of 67108864 bytes for the identity component.` |
 | Not enough disk at `transfer_begin` for a component, at `package_export` or at `release_plan` | `Not enough free space on the Kernel volume to import this app: 340 MiB needed, 120 MiB free.` |
 
@@ -1099,72 +1098,17 @@ The CLI's `export --with-data` downloads the package into the kit as `konae/pack
 
 `project_export`, the small format, and `database_export`, the raw database file, now need `export_data` too. It returns the database, accounts and files as base64 in one transfer of at most 16 MiB, and a release still imports it through `initialDatabase`, `initialIdentity`, `initialFiles` and `initialSignupPolicy`.
 
-## Migrate an app
+## Maintenance
 
-A migration moves one app to another installation with its accounts, rows, files, Usage and Signals, policy and published artifact, and leaves exactly one installation taking its writes. [ADR-0014](./adr/0014-an-app-migrates-with-one-writer-at-a-time.md) records the decisions, and `tests/smoke/migration.ts` rehearses the whole procedure on two Kernels.
-
-1. Prepare the destination: a Kernel with its own `KONAE_PUBLIC_ORIGIN`, an owner, an email transport, and the route signing secrets the app needs set with `secret_set` on a project with the same ID.
-2. On the origin, `migration_begin { deploymentId, waitSeconds? }`. The app pauses at once, then the Kernel waits up to `waitSeconds` (30 by default, at most 120) for work in progress and captures the package. Download every entry of `downloads` with `transfer_read`.
-3. On the destination, upload each component with `transfer_begin` and its component name, add `initialPackage` to the `release` download, and release it with `release_plan` and `release_apply`. The imported app is paused. Check it with read tools.
-4. On the origin, `migration_confirm { operationId, newUrl? }`. Keep the `confirmation` from the receipt.
-5. On the destination, `migration_activate { deploymentId, confirmation, resendInvitations? }`. The app serves; people sign in with their passwords.
-
-### Maintenance
-
-While an app is paused its host answers a request for a page, or any `GET` outside `/_konae/`, with a 503 maintenance page that names the operation, and every other request with HTTP 503, `Retry-After: 300` and:
+An app in maintenance takes no writes. Its host answers a request for a page, or any `GET` outside `/_konae/`, with a 503 maintenance page, and every other request with HTTP 503, `Retry-After: 300` and:
 
 ```json
-{ "error": "This app is paused for migration 5d74cf67-…. It accepts no writes, signups, recovery, administrative changes or email until the migration is confirmed or cancelled.", "operationId": "5d74cf67-…", "maintenance": true }
+{ "error": "This app is in maintenance. It accepts no writes, signups, recovery, administrative changes or email until it comes out of maintenance.", "maintenance": true }
 ```
 
-That covers actions, uploads and file reads, signup, sign-in, recovery, invitation acceptance, HTTP routes and the runtime MCP endpoint. Nothing is redirected. Owner tools that would change the app are refused with the same message: publishing, the signup policy, suspending and resuming accounts, invitations, secrets, API keys and owner SQL that writes. Tools ending in `_list` or `_read`, `package_export`, `database_export`, `project_export`, `release_plan`, `database_execute` with `inspect`, `browse` or `list-backups`, and the migration tools keep working. The mail worker holds the app's queued email; a held job keeps its attempt count.
+That covers actions, uploads and file reads, signup, sign-in, recovery, invitation acceptance, HTTP routes and the runtime MCP endpoint. Nothing is redirected. Owner tools that would change the app are refused with the same message: publishing, the signup policy, suspending and resuming accounts, invitations, secrets, API keys and owner SQL that writes. Tools ending in `_list` or `_read`, `package_export`, `database_export`, `project_export`, `release_plan` and `database_execute` with `inspect`, `browse` or `list-backups` keep working. The mail worker holds the app's queued email, and a held job keeps its attempt count. Calls and schedules wait.
 
-The pause is the file `deployments/<id>/migration.json`. A restart keeps it, a scheduled copy carries it, and a restore of that copy stays paused. A file that cannot be parsed pauses the app with a message that names it.
-
-### Tools
-
-`migration_begin` needs `manage_lifecycle` and `export_data`. It writes the pause, takes the project, data and identity locks once each so every write that began before the pause finishes, then waits while an email of the app is with the provider. When the wait ends before that, it returns `phase: "pausing"` with `settle.waitingFor` set to `operations` or `mail`; the app stays paused and the next call continues. Then it ends the app's other queued email (`settle.mailEnded`), captures the package and returns `phase: "captured"` with `operationId`, `packageId`, `manifest` and `downloads`, one per component plus `release`. Calling it again while captured returns the same operation and package with new downloads. A copy does not carry the kept package, so an origin restored while captured captures again under the same operation and confirmation, with a new `packageId`. An error after the pause ends with `The app stays paused: call migration_begin again to retry, or migration_cancel to resume it.`
-
-The manifest is version 2. Its `migration` stamp names the operation, the origin Deployment, project and URL, the size and SHA-256 of the `release` download, and `confirmationHash`, the SHA-256 of a confirmation the origin keeps until `migration_confirm`. A Kernel that reads only version 1 refuses the package. The `release` download is a release payload with the live artifact, `actions.json`, the project manifest and the visibility; it has no `schema.sql`, because the database arrives whole.
-
-`migration_status { deploymentId }` needs `read` and returns `role` (`origin` or `destination`), `phase`, `paused`, the operation, the package and, once confirmed, `confirmedAt`, `retainUntil` and `newUrl`. It never returns the confirmation.
-
-`migration_confirm { operationId, newUrl? }` needs `manage_lifecycle` and a captured operation. The origin stays paused for good, keeps its state and the kept package until `retainUntil`, seven days later, and shows `newUrl` on its maintenance page until then. `newUrl` must be an absolute `https` URL, or `http` on a loopback host, with no credentials, query or fragment, on another host than the app's generated one. Without `newUrl`, an app with a verified custom domain shows the alias, which moves with the package once its DNS points at the destination; the page served on the alias itself shows no link to itself. The receipt holds the `confirmation`. Repeating returns the same receipt.
-
-`migration_cancel { operationId }` needs `manage_lifecycle`. It resumes the origin, deletes the kept package and discards the confirmation, so a package already imported elsewhere can never be activated. Email ended by the pause is not sent again: resend invitations, and people ask again for verification or recovery links. Repeating returns the same receipt.
-
-`migration_activate { deploymentId, confirmation, resendInvitations? }` runs on the destination and needs `manage_lifecycle`, and `manage_users` with `resendInvitations`. It checks the confirmation against the package's hash, ends any session, email link or API key in the imported accounts, and starts serving. The receipt lists pending invitations; with `resendInvitations` each gets a new seven-day link on the destination's host, and `invitations.resent` holds each result. Repeating returns the same receipt.
-
-The audit log records each migration tool with the Deployment as target and the operation as detail.
-
-### What travels
-
-| Carried | Not carried |
-| --- | --- |
-| Account IDs, password hashes, verified state and suspensions | Sessions, verification, recovery and invitation links |
-| Rows, files and their owners, Usage and Signals | Live API keys and route signing secrets |
-| API keys, revoked at import, with their names and scopes | |
-| Visibility and signup policy | Queued email; pending invitations keep their recipient and are resent |
-| The live artifact and `actions.json` | The origin's hostname; the destination builds one from its own origin |
-| The custom domain's hostname, pending until `domain_set` finds the destination's token | The custom domain's token; the destination issues its own |
-
-A custom domain moves in this order, so the alias never answers 404: activate the destination, read its new token with `domain_read`, add it to the TXT record next to the origin's value, call `domain_set` on the destination, then point the name's DNS at the destination. The paused import refuses `domain_set` until it is activated.
-
-| Refusal | Message |
-| --- | --- |
-| `migration_begin` without `export_data` | `Permission denied for export_data.` |
-| Any migration tool but `migration_status` without `manage_lifecycle` | `Unknown tool or insufficient permission. migration_begin needs a credential with manage_lifecycle. Run konae login with --manage-lifecycle, or use a token from token_create that includes it.`, naming the tool called |
-| A write, signup, sign-in, recovery or route call on a paused app | HTTP 503 with the operation, as above |
-| An owner change to a paused app | `This app is paused for migration <id>. …` |
-| `migration_cancel` after confirmation | `Migration <id> was confirmed, so its destination may already accept writes. Cancelling would leave two installations writing. …` |
-| `migration_begin` on a confirmed origin | `Migration <id> was confirmed: this app now takes its writes at the destination. Migrate it from there.` |
-| `migration_begin` on an import that is not active | `This app was imported by migration <id> and is not active yet. …` |
-| `migration_confirm` after cancel, or before the capture | `Migration <id> was cancelled. Begin a new migration.` / `… has not captured the app yet. …` |
-| `migration_activate` with another confirmation, or after the origin cancelled | `This confirmation does not belong to migration <id>. …` |
-| `migration_activate` on an app that was not imported | `This app was not imported by a migration, so it has nothing to activate.` |
-| `newUrl` over plain `http`, with credentials, a query or fragment, or on the app's own host | `newUrl must use https.` and the like |
-| A second package into an app that has one | `Portable state can only be imported on the first deployment.` |
-| A package whose custom domain another Deployment on the destination serves | `Package import failed: <name> already serves another Deployment on this installation. …` |
+The state is the file `deployments/<id>/maintenance.json`. A restart keeps it, a scheduled copy carries it, and a restore of that copy stays in maintenance. A file that cannot be parsed keeps the app in maintenance with a message that names it. No tool sets it yet; [ADR-0027](./adr/0027-an-app-is-one-folder-that-the-kernel-serves-with-or-without-konae.md) gives the owner a button for it.
 
 ### Restore and the revocation record
 

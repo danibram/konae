@@ -6,7 +6,7 @@ Konae is the guardrail that lets a person who does not write code, and a person 
 
 The terms come in two halves. Read "Words an app author uses" to make an app, edit its files or take it elsewhere; its first part names the words met before an app runs. Read "Words for running an installation" only to operate the Kernel, its accounts, its mail and its copies.
 
-Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, migration, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, path address, notice, schedule, signature scheme, call action, outbox, SDK module, sign-in methods, Google client and file store. Usage, Signal and Action Contract keep their capitals, as the older terms do.
+Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, path address, notice, schedule, signature scheme, call action, outbox, SDK module, sign-in methods, Google client and file store. Usage, Signal and Action Contract keep their capitals, as the older terms do.
 
 ## Words an app author uses
 
@@ -151,15 +151,11 @@ Where the installation keeps the bytes of app files: each Deployment's folder, o
 _Avoid_: bucket (one kind of store), storage
 
 **Package**:
-The export of one Deployment's state: its database, its accounts without sessions or email links, its API keys revoked at import, its files, and its Usage and Signals when it has any, captured under the Deployment's locks. A versioned manifest lists each component with its size and SHA-256 and names the published revision. Each component travels as its own transfer, so no step holds a whole component in memory. An import verifies every component and installs the package only into a project that has no Deployment yet; the same package imported again returns the first import. Downloading one needs the `export_data` permission. A migration's package is version 2 and imports in maintenance.
+The export of one Deployment's state: its database, its accounts without sessions or email links, its API keys revoked at import, its files, and its Usage and Signals when it has any, captured under the Deployment's locks. A versioned manifest lists each component with its size and SHA-256 and names the published revision. Each component travels as its own transfer, so no step holds a whole component in memory. An import verifies every component and installs the package only into a project that has no Deployment yet; the same package imported again returns the first import. Downloading one needs the `export_data` permission.
 _Avoid_: dump, full backup, export file (the kit that carries it is the export)
 
-**Migration**:
-The move of one Deployment to another installation so that exactly one installation takes its writes. The origin enters maintenance and captures a package with its live artifact. It is then either confirmed, which retires it for good, shows a link to the new address for seven days and reveals a confirmation, or cancelled, which resumes it. The destination imports the package in maintenance and leaves it only through activation with that confirmation. People sign in again with their passwords; sessions, links and signing secrets do not travel, and API keys arrive revoked.
-_Avoid_: replication, sync, transfer (a transfer is one upload or download)
-
 **Maintenance**:
-The state of a Deployment that takes no writes. Its host shows a page naming the operation and refuses actions, uploads, signups, sign-ins, recovery, invitations and HTTP routes, the owner cannot change it, and its email waits. A migration keeps it in the Deployment's folder, `migration.json`, so a restart or a restore keeps it. A restore that cannot read the revocation record keeps it for the whole installation in `recovery-hold.json` until `konae-kernel reconcile` runs.
+The state of a Deployment that takes no writes. Its host shows a maintenance page and refuses actions, uploads, signups, sign-ins, recovery, invitations and HTTP routes, the owner cannot change it, its email waits, and its calls and schedules wait. The state lives in the Deployment's folder, `maintenance.json`, so a restart, a copy or a restore keeps it. A restore that cannot read the revocation record keeps it for the whole installation in `recovery-hold.json` until `konae-kernel reconcile` runs.
 _Avoid_: downtime, read-only mode (reads stop too)
 
 **Declared Dependencies**:

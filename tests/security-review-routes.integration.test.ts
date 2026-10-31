@@ -6,7 +6,7 @@ import { cp } from "node:fs/promises";
 import path from "node:path";
 import { buildLocal } from "../scripts/konae";
 import { signRoute } from "../src/lib/route-signature";
-import { release } from "./migration-kernel";
+import { release } from "./kernel-harness";
 import { answerText, appUser, freshClient, hostFetch, rawCall, runtimeClient, startLab, testPort, type Lab } from "./security-review-kernel";
 
 let lab: Lab;

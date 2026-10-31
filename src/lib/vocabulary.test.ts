@@ -88,9 +88,9 @@ describe("the words of CONTEXT.md", () => {
     expect(terms.filter((term) => !headings.has(term.toLowerCase()))).toEqual([]);
   });
 
-  test("the terms introduced with the HTTP module, copies, migration, accounts and mail each have one entry", () => {
+  test("the terms introduced with the HTTP module, copies, maintenance, accounts and mail each have one entry", () => {
     const introduced = [
-      "API Key", "Signing Secret", "Guard", "Callers", "Package", "Copy", "Migration", "Maintenance", "Revocation Record",
+      "API Key", "Signing Secret", "Guard", "Callers", "Package", "Copy", "Maintenance", "Revocation Record",
       "Invitation", "Invitation Code", "Email Job", "Sender Preflight", "Action Contract", "SDK Module", "Usage", "Signal",
     ];
     const entries = [...context.matchAll(/^\*\*([^*]+)\*\*:$/gm)].map((match) => match[1]);

@@ -218,7 +218,7 @@ async fn tick(state: &AppState, clock: Clock, running: &Arc<Mutex<HashSet<String
                 _ => None,
             })
             .collect::<Vec<_>>();
-        if work.is_empty() || super::migration::pause(&state.data_root, &deployment.id).is_some() {
+        if work.is_empty() || super::maintenance::pause(&state.data_root, &deployment.id).is_some() {
             continue;
         }
         if !running.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(deployment.id.clone()) {
@@ -264,7 +264,7 @@ async fn run_due(
         }
         let _lock = super::action_lock(state, id, &action.kind).await;
         // Maintenance may have begun while an earlier action ran.
-        if super::migration::pause(&state.data_root, id).is_some() || !folder.is_dir() {
+        if super::maintenance::pause(&state.data_root, id).is_some() || !folder.is_dir() {
             return Ok(());
         }
         let at = now();
@@ -516,11 +516,11 @@ mod tests {
         assert_eq!(rig.released(), 3);
 
         // Maintenance skips the run; leaving it runs the open slot once.
-        crate::migration::pause_for_test(&rig.root, &rig.id, true);
+        crate::maintenance::pause_for_test(&rig.root, &rig.id, true);
         rig.at("2026-11-07T13:15:00");
         rig.run(&actions, real).await;
         assert_eq!(rig.runs().len(), 6);
-        crate::migration::pause_for_test(&rig.root, &rig.id, false);
+        crate::maintenance::pause_for_test(&rig.root, &rig.id, false);
         rig.run(&actions, real).await;
         assert_eq!(rig.runs().len(), 7);
 
@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(signals["signals"][0]["properties"], json!({"actor": null}));
         let failed = &usage["scheduled"].as_array().unwrap().iter().find(|run| run["outcome"] == "failed").unwrap()["error"];
         assert!(failed.as_str().unwrap().contains("no such table: holds"), "{failed}");
-        crate::migration::forget(&rig.root);
+        crate::maintenance::forget(&rig.root);
     }
 
     #[tokio::test]

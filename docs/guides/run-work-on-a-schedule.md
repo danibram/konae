@@ -48,7 +48,7 @@ A schedule fits work such as releasing a hold that lapsed or closing a day. The 
 - Only the timer runs it. `miniapp.actions.call`, `actions_invoke` and the editor preview refuse it with `Action <name> runs only on its schedule.` It can also declare an `http` route, which then runs it.
 - A Deployment in maintenance runs nothing and runs each due action once when it leaves maintenance.
 - A run that changes a row can `notify` the owner once. A notice to `actor` records `no-account` because the timer has no caller.
-- The last period run is kept with Usage, so a restart, a copy or a migration does not run it twice.
+- The last period run is kept with Usage, so a restart, a copy or a package does not run it twice.
 
 ## Check it worked
 

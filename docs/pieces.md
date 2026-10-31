@@ -19,7 +19,7 @@ This is the same table as the `pieces` topic of `platform_guide`.
 | Uploaded files | `miniapp.files` | Large bytes in a SQLite column |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | A short link on the installation's domain | Path address (`path_set`) | A custom domain when DNS is not yours |
-| Take the app elsewhere | Package or migration | Copy (moves the installation) |
+| Take the app elsewhere | Package export and import | Copy (moves the installation) |
 | Debug, or try the next version, on what the published app holds | `konae pull` + `dev --reset` | Publishing to find out |
 | See the email, calls, scheduled runs and Signals of a local run | `konae events` | Reading the Kernel's files by hand |
 
@@ -31,7 +31,7 @@ A Deployment folder on the Kernel is the app. It holds the artifact, database, i
 
 - `guard`, `notify`, `schedule`, `signal`, `http` and `kind: call` are on [Server Actions](./server-actions.md).
 - Signup Policy and invitations are on [Accounts and access](./accounts-and-access.md).
-- Package and migration are in the [take the app elsewhere](./guides/take-the-app-elsewhere.md) guide.
+- Package export and import are in the [take the app elsewhere](./guides/take-the-app-elsewhere.md) guide.
 
 ## Read next
 

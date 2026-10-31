@@ -32,9 +32,6 @@ use super::*;
 
 pub(super) const PACKAGE_FORMAT: &str = "konae-package";
 pub(super) const PACKAGE_VERSION: u64 = 1;
-/// A migration package: version 1 plus a `migration` stamp. A Kernel that
-/// reads only version 1 refuses it instead of serving it at once.
-pub(super) const MIGRATION_PACKAGE_VERSION: u64 = 2;
 /// `usage` travels when the Deployment has a Usage store, ADR-0010.
 pub(super) const COMPONENT_NAMES: [&str; 4] = ["database", "identity", "files", "usage"];
 const MIB: u64 = 1024 * 1024;
@@ -92,9 +89,6 @@ pub(super) struct Manifest {
     pub(super) contents: Vec<Content>,
     #[serde(default)]
     pub(super) excluded: Vec<String>,
-    /// Present only in a migration package; `migration.rs` reads it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) migration: Option<Value>,
     /// The custom domain's hostname, without its token. The destination
     /// issues its own token (`domain::arrive`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -142,16 +136,10 @@ pub(super) fn component_limit(name: &str, files: &file_store::FileLimits) -> Res
 pub(super) fn check_manifest(manifest: &Manifest, files: &file_store::FileLimits) -> Result<()> {
     ensure!(manifest.format == PACKAGE_FORMAT, "This is not a Konae package manifest.");
     ensure!(
-        manifest.version == PACKAGE_VERSION || manifest.version == MIGRATION_PACKAGE_VERSION,
-        "Package version {} is not supported. This Kernel reads versions {PACKAGE_VERSION} and {MIGRATION_PACKAGE_VERSION}.",
+        manifest.version == PACKAGE_VERSION,
+        "Package version {} is not supported. This Kernel reads version {PACKAGE_VERSION}.",
         manifest.version
     );
-    match (&manifest.migration, manifest.version) {
-        (None, PACKAGE_VERSION) => {}
-        (Some(stamp), MIGRATION_PACKAGE_VERSION) => migration::check_stamp(stamp)?,
-        (None, _) => bail!("A version {MIGRATION_PACKAGE_VERSION} package must name its migration."),
-        (Some(_), _) => bail!("Only a version {MIGRATION_PACKAGE_VERSION} package may name a migration."),
-    }
     ensure!(
         ["public", "private"].contains(&manifest.visibility.as_str()),
         "The package manifest has no valid visibility."
@@ -221,20 +209,6 @@ fn free_bytes(_path: &Path) -> Result<u64> {
 /// transfer per component. The capture holds the project, data and identity
 /// locks, so no write, signup, policy change or release lands halfway.
 pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id: &str) -> Result<Value> {
-    export_with(state, owner, principal, id, None).await
-}
-
-/// What a migration adds to a capture: the stamp that goes into the
-/// manifest, and the folder that keeps the components, so the same package
-/// can be offered again after its transfers expire.
-pub(super) struct Stamp {
-    pub(super) migration: Value,
-    pub(super) keep: PathBuf,
-}
-
-/// `export`, with an optional migration stamp. A stamped capture is a
-/// version 2 package and its components stay in `stamp.keep`.
-pub(super) async fn export_with(state: &AppState, owner: &Owner, principal: &str, id: &str, stamp: Option<Stamp>) -> Result<Value> {
     let deployment = owned_deployment(state, owner, id, "export_data").await?;
     let held: usize = store(state)?.query_row(
         "SELECT COUNT(*) FROM transfers WHERE principal=?1 AND expires>?2",
@@ -279,7 +253,7 @@ pub(super) async fn export_with(state: &AppState, owner: &Owner, principal: &str
     };
     let manifest = Manifest {
         format: PACKAGE_FORMAT.into(),
-        version: if stamp.is_some() { MIGRATION_PACKAGE_VERSION } else { PACKAGE_VERSION },
+        version: PACKAGE_VERSION,
         package_id: Uuid::new_v4().to_string(),
         created_at: now_ms(),
         deployment_id: deployment.id.clone(),
@@ -292,17 +266,9 @@ pub(super) async fn export_with(state: &AppState, owner: &Owner, principal: &str
         sources_revision,
         contents: components.iter().map(|(name, _, size, sha256)| Content { name: name.clone(), size: *size, sha256: sha256.clone() }).collect(),
         excluded: EXCLUDED.iter().map(|item| (*item).to_owned()).collect(),
-        migration: stamp.as_ref().map(|stamp| stamp.migration.clone()),
         domain: super::domain::for_package(state, &deployment.id),
         path: super::path::for_package(state, &deployment.id),
     };
-    if let Some(stamp) = &stamp {
-        let kept = keep(&components, &stamp.keep).await;
-        let _ = tokio::fs::remove_dir_all(&scratch).await;
-        kept?;
-        let downloads = offer(state, principal, &deployment.id, &deployment.project_id, &stamp.keep, &manifest.contents).await?;
-        return Ok(json!({"manifest": manifest, "downloads": downloads}));
-    }
     let mut downloads = serde_json::Map::new();
     let mut failure = None;
     for (name, path, size, sha256) in &components {
@@ -333,54 +299,6 @@ pub(super) async fn export_with(state: &AppState, owner: &Owner, principal: &str
         return Err(error_value);
     }
     Ok(json!({"manifest": manifest, "downloads": downloads}))
-}
-
-/// Moves captured components into `keep`, named after their component.
-async fn keep(components: &[(String, PathBuf, u64, String)], keep: &Path) -> Result<()> {
-    tokio::fs::create_dir_all(keep).await?;
-    for (name, path, _, _) in components {
-        tokio::fs::rename(path, keep.join(name)).await?;
-    }
-    Ok(())
-}
-
-/// Offers kept components as `export_data` downloads. Each transfer file is
-/// a hard link to the kept file, so a second offer costs no space and the
-/// bytes cannot differ from the manifest.
-pub(super) async fn offer(
-    state: &AppState,
-    principal: &str,
-    deployment_id: &str,
-    project_id: &str,
-    keep: &Path,
-    contents: &[Content],
-) -> Result<serde_json::Map<String, Value>> {
-    let mut downloads = serde_json::Map::new();
-    let created = async {
-        for content in contents {
-            let source = keep.join(&content.name);
-            let (size, sha256) = copies::checksum_file(&source).with_context(|| format!("The kept {} component is missing.", content.name))?;
-            ensure!(size == content.size && sha256 == content.sha256, "The kept {} component no longer matches its manifest.", content.name);
-            let body = json!({"direction":"download","size":size,"sha256":sha256,"complete":true,"projectId":project_id,
-                "exportData":true,"deploymentId":deployment_id,"component":content.name});
-            let transfer = new_transfer(state, principal, body).await?;
-            let target = transfer_path(state, transfer["transferId"].as_str().unwrap_or_default())?;
-            downloads.insert(content.name.clone(), transfer);
-            tokio::fs::remove_file(&target).await?;
-            tokio::fs::hard_link(&source, &target).await?;
-        }
-        Ok::<(), anyhow::Error>(())
-    }
-    .await;
-    if let Err(error_value) = created {
-        for transfer in downloads.values() {
-            let id = transfer["transferId"].as_str().unwrap_or_default();
-            store(state)?.execute("DELETE FROM transfers WHERE id=?1 AND principal=?2", params![id, principal])?;
-            let _ = tokio::fs::remove_file(transfer_path(state, id)?).await;
-        }
-        return Err(error_value);
-    }
-    Ok(downloads)
 }
 
 fn folder_size(folder: &Path) -> Result<u64> {
@@ -786,6 +704,48 @@ fn copy_verified(source: &Path, target: &Path, content: &Content) -> Result<()> 
     Ok(())
 }
 
+/// Remembers which package each project imported, so a retried import
+/// returns its first receipt.
+pub(super) fn install_imports(db: &Connection) -> Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS package_imports(package_id TEXT NOT NULL, project TEXT NOT NULL, plan TEXT NOT NULL, PRIMARY KEY(package_id, project));",
+    )?;
+    Ok(())
+}
+
+/// A second `release_plan` with a package this project already imported
+/// gets the first plan and its receipt instead of a refusal.
+pub(super) fn replay_import(state: &AppState, owner: &Owner, project: &str, package_id: &str) -> Result<Option<Value>> {
+    let db = store(state)?;
+    let replay: Option<(String, String)> = db
+        .query_row(
+            "SELECT i.plan, p.receipt FROM package_imports i JOIN plans p ON p.id=i.plan
+             WHERE i.package_id=?1 AND i.project=?2 AND p.owner=?3 AND p.receipt IS NOT NULL",
+            params![package_id, project, owner.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(match replay {
+        Some((plan, receipt)) => Some(json!({
+            "planId": plan,
+            "projectId": project,
+            "applied": true,
+            "packageId": package_id,
+            "receipt": serde_json::from_str::<Value>(&receipt)?,
+        })),
+        None => None,
+    })
+}
+
+pub(super) fn remember_import(state: &AppState, package_id: &str, project: &str, plan: &str) -> Result<()> {
+    store(state)?.execute(
+        "INSERT INTO package_imports(package_id,project,plan) VALUES(?1,?2,?3)
+         ON CONFLICT(package_id,project) DO UPDATE SET plan=excluded.plan",
+        params![package_id, project, plan],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -806,7 +766,6 @@ mod tests {
             sources_revision: None,
             contents: vec![Content { name: "database".into(), size: 4096, sha256: "a".repeat(64) }],
             excluded: vec![],
-            migration: None,
             domain: None,
         path: None,
         }
@@ -818,16 +777,9 @@ mod tests {
         let mut next = manifest();
         next.version = 3;
         assert!(check_manifest(&next, &Default::default()).unwrap_err().to_string().contains("Package version 3 is not supported"));
-        let mut unstamped = manifest();
-        unstamped.version = MIGRATION_PACKAGE_VERSION;
-        assert!(check_manifest(&unstamped, &Default::default()).unwrap_err().to_string().contains("must name its migration"));
-        let mut stamped = manifest();
-        stamped.migration = Some(json!({"operationId": "op", "confirmationHash": "c".repeat(64)}));
-        assert!(check_manifest(&stamped, &Default::default()).unwrap_err().to_string().contains("Only a version 2 package"));
-        stamped.version = MIGRATION_PACKAGE_VERSION;
-        assert!(check_manifest(&stamped, &Default::default()).is_ok());
-        stamped.migration = Some(json!({"operationId": "op", "confirmationHash": "not a hash"}));
-        assert!(check_manifest(&stamped, &Default::default()).is_err());
+        let mut second = manifest();
+        second.version = 2;
+        assert!(check_manifest(&second, &Default::default()).unwrap_err().to_string().contains("Package version 2 is not supported"));
         let mut foreign = manifest();
         foreign.format = "zip".into();
         assert!(check_manifest(&foreign, &Default::default()).is_err());

@@ -1,13 +1,12 @@
 # Take the app elsewhere
 
-Export a package to move one app's accounts, data and rules to another machine, or run a migration when exactly one installation must take the writes.
+Export a package to move one app's accounts, data and rules to another machine.
 
 ## Pick the right move
 
 | You want | Use | Why |
 | --- | --- | --- |
 | A copy of one app on another machine | Package export and import | It moves one Deployment's database, accounts, files and, when present, Usage and Signals. |
-| The app to leave and the old one to stop | Migration | It pauses the origin, then retires it when you confirm, so one installation takes the writes. |
 | To move a whole installation | Copy | A copy moves an installation, not one app. It is operator work, not an app feature. |
 
 A package never moves sessions, email links or live API keys. People sign in again with their passwords, and each API key arrives revoked, so you issue new ones. Signing secrets do not travel either, so set them again on the destination.
@@ -52,7 +51,6 @@ The page and its Server Actions answer from the same host. The SDK calls `/_kona
     bun run konae -- export --dir /tmp/notes --out /tmp/notes-kit.tar --with-data
     ```
 
-    To leave the installation for good, so the origin stops taking writes, run a [migration](#migrate-with-one-writer-at-a-time) instead.
 2. On the new machine, unpack the kit and write `.env` before the first deploy. The Kernel names the app's generated address when it creates the app, so these names have to be set first.
 
     ```sh
@@ -94,29 +92,14 @@ For an app whose HTTP routes check a signature, `npm run deploy` stops at `relea
 3. Build the folder and upload the release JSON, with `initialPackage` holding the `manifest` and a `components` map of component name to `transferId`. Then call `release_plan` and `release_apply`. An import installs only into a project that has no Deployment yet. The same package imported again returns the first import.
 4. Issue new API keys. `api_keys_list` shows each key revoked at import.
 
-## Migrate with one writer at a time
-
-A migration needs `manage_lifecycle` and `export_data` on the origin and `manage_lifecycle` on the destination. Log in with both flags.
-
-```sh
-bun run konae -- login --dir /tmp/my-app --url http://localhost:4173 --export-data --manage-lifecycle
-```
-
-1. Call `migration_begin` with the origin's `deploymentId`. The app pauses at once and shows a maintenance page. It takes no writes, signups, sign-ins, invitations or HTTP routes. The answer holds the package downloads and the next steps.
-2. Import on the destination as above, adding the release download as the release payload. The imported app stays in maintenance. Check it with read tools.
-3. Call `migration_confirm` on the origin with `operationId` and, if the address changed, `newUrl`. The origin stays retired and shows a link to the new address for seven days. Keep the `confirmation` it returns.
-4. Call `migration_activate` on the destination with `deploymentId` and the `confirmation`. Add `resendInvitations` to send pending invitations again from the new host.
-5. To stop, call `migration_cancel` with `operationId` before `migration_confirm`. It resumes the origin. After a confirm, cancel is refused.
-
 ## Check it worked
 
 - After `package_export`, `project_export` or `database_export`, the read-back is `transfer_read`. Verify the size and SHA-256 of every component.
 - After `transfer_begin`, `transfer_write` or `transfer_complete`, the read-back is `transfer_status`. Bytes in an open transfer are not a Deployment.
 - After `release_apply` on the destination, the read-back is `project_inspect`.
-- After any `migration_*` call, the read-back is `migration_status`. A `service_timeout` or interrupted call must be verified the same way before you retry.
 - On the destination, sign in with an existing password and open one row the app owned.
 
-The editor preview is not a Deployment, so it has no database to package. Test the whole move on two `konae dev` Kernels or two real installations. The repository's migration rehearsal runs the procedure on two local Kernels with `bun run tests/smoke/migration.ts --port 19460`.
+The editor preview is not a Deployment, so it has no database to package. Test the whole move on two `konae dev` Kernels or two real installations.
 
 ## Read next
 

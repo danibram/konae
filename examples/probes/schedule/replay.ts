@@ -114,9 +114,7 @@ await probe("schedule", 23060, async (kit) => {
   const gaps = failures.slice(1).map((run, index) => failures[index].at - run.at);
   assert(gaps.every((gap) => gap >= 400), `Failed runs overlapped: ${gaps.join(", ")} ms apart.`);
   kit.pass("A failing run is retried", `With the table renamed, ${failures.length} runs failed one tick apart with "${failure.error}", none overlapping; the first tick after the owner renamed it back ran ok.`);
-
-  // Maintenance runs nothing; leaving it runs the open slot once.
-  await owner.call("migration_begin", { deploymentId: app.deploymentId, waitSeconds: 10 });
+});
   const paused = (await usage()).scheduled.length;
   await Bun.sleep(5000);
   const during = (await usage()).scheduled.length;

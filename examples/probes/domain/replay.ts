@@ -129,24 +129,12 @@ await probe("domain", 23060, async (kit) => {
   assert.equal((await page(aliasHost)).status, 404, "an imported name waits for its own token");
   kit.pass("Package", `package_export's manifest names domain ${alias} and holds no token. Importing it while the origin serves the name answers "${held.slice(0, 90)}…". After domain_clear the alias answers 404, the generated hostname 200, and the import arrives with ${alias} pending under a new token.`);
 
-  // A migration's maintenance page links the alias.
   // A new claim meets the old record: the first answer says so instead of refusing a token nobody could know.
   const reclaimed = await set(app.deploymentId, alias);
   assert.equal(reclaimed.status, "pending");
   assert.match(reclaimed.dns!, /not this token yet\.$/);
   dns.txt(record, [reclaimed.record!.value, arrived.record!.value]);
   assert.equal((await set(app.deploymentId, alias)).status, "active");
-  const begun = await owner.call<{ operationId: string; phase: string }>("migration_begin", { deploymentId: app.deploymentId, waitSeconds: 5 });
-  assert.equal(begun.phase, "captured");
-  const confirmed = await owner.call<{ newUrl: string }>("migration_confirm", { operationId: begun.operationId });
-  assert.equal(confirmed.newUrl, `${aliasOrigin}/`);
-  const generatedPage = await page(`${app.host}:${port}`);
-  const generatedHtml = await generatedPage.text();
-  assert.equal(generatedPage.status, 503);
-  assert(generatedHtml.includes(`href="${aliasOrigin}/"`), generatedHtml);
-  const aliasPage = await page(aliasHost);
-  assert.equal(aliasPage.status, 503);
-  assert(!(await aliasPage.text()).includes("<a href="), "the alias does not link to itself");
-  kit.pass("Maintenance page", `migration_confirm without newUrl records ${confirmed.newUrl}. The generated hostname's 503 page links it; the same page on the alias shows no link to itself.`);
+  kit.pass("Reclaim", `A new claim on ${alias} meets the old record, says so, and turns active once the record holds its token.`);
 }, { env: { KONAE_DNS_RESOLVER: dns.address } });
 dns.stop();

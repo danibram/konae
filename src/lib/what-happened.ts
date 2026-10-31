@@ -87,7 +87,6 @@ export const callFailures: Record<string, Outcome> = {
   "http-outside": { tone: "danger", words: "The address uses plain http, which reaches only an app of this installation.", fix: { who: "capsule", what: `Use https. ${actionsJson}`, where: "capsule" } },
   "editor-host": { tone: "danger", words: "The address is the editor's own host.", fix: { who: "capsule", what: `Call an app or an outside service. ${actionsJson}`, where: "capsule" } },
   "app-not-found": { tone: "danger", words: "No app of this installation answers at that address.", fix: { who: "capsule", what: `The other app may be unpublished or renamed. ${actionsJson}`, where: "capsule" } },
-  "app-moved": { tone: "neutral", words: "This app moved to another installation, so the call ended here.", fix: { who: "owner", what: "Trigger the action again on the app's new home." } },
   "app-gone": { tone: "neutral", words: "This app was removed before the call was sent." },
   "action-gone": { tone: "neutral", words: "A later publish removed the call action before it was sent." },
   "secret-unset": { tone: "danger", words: "The call signs with a secret that has no value.", fix: { who: "owner", what: hintOf("call.secret-unset" satisfies RefusalCode).remedy, where: "integrations" } },

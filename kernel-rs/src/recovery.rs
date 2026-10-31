@@ -419,8 +419,8 @@ mod tests {
         let reason = apply_or_hold(&root, Ok(None)).unwrap().unwrap_err();
         assert!(reason.contains("started.json"));
         assert!(hold(&root).unwrap().contains("reconcile"));
-        assert!(super::super::migration::pause(&root, "any-app").is_some());
-        assert!(super::super::migration::holds_mail(&root, "creator"));
+        assert!(super::super::maintenance::pause(&root, "any-app").is_some());
+        assert!(super::super::maintenance::holds_mail(&root, "creator"));
         let broken = apply_or_hold(&root, Ok(Some(vec![b"{not json".to_vec()]))).unwrap().unwrap_err();
         assert!(broken.contains("does not parse"));
         let failed = apply_or_hold(&root, Err(anyhow::anyhow!("bucket unreachable"))).unwrap().unwrap_err();

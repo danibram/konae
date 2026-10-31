@@ -11,8 +11,8 @@ Small Capsules that decide the cells of the [capability matrix](../../docs/resea
 | [survey](survey/replay.ts) | An anonymous survey and a signed-in vote | Multi-answer form in one write, tallies, one vote per person |
 | [notify](notify/replay.ts) | A print drop with a waitlist and orders | Email on an event: a notice to the owner, a confirmation to the person who ordered, what is not sent, what both doors refuse |
 | [platform](platform/replay.ts) | Notes with reminders | No mail tool or kind on the runtime door, realtime push, third-party login, an unclaimed hostname, and the schedule and subscription forms both doors refuse |
-| [domain](domain/replay.ts) | A public guestbook on guestbook.example.org | Custom domain: the TXT proof through a fake resolver, the alias as the app's origin, one holder per name, the package and the maintenance page |
-| [schedule](schedule/replay.ts) | Reminders that a schedule surfaces when they fall due | Scheduled work: a run with nobody asking, its Usage, a retried failure, maintenance and owner notices |
+| [domain](domain/replay.ts) | A public guestbook on guestbook.example.org | Custom domain: the TXT proof through a fake resolver, the alias as the app's origin, one holder per name and the package |
+| [schedule](schedule/replay.ts) | Reminders that a schedule surfaces when they fall due | Scheduled work: a run with nobody asking, its Usage, a retried failure and owner notices |
 | [calls](calls/replay.ts) | A tasks app that escalates to a desk app, two Capsules in `tasks/` and `desk/` | Calls between apps, retries and the outbox, notices from a then mutation, a page reading another app's public route |
 
 Run them all, each on its own port from 23000:

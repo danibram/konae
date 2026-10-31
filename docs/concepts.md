@@ -2,7 +2,7 @@
 
 The words an app author meets, in the order the app meets them. They are the terms of `CONTEXT.md` at the root of the repository, and the editor and the Kernel use the same words in their messages.
 
-Product terms are capitalized. Declaration keys stay lowercase: guard, notice, schedule, package, migration and invitation.
+Product terms are capitalized. Declaration keys stay lowercase: guard, notice, schedule, package and invitation.
 
 ## Before the app runs
 
@@ -68,9 +68,7 @@ Product terms are capitalized. Declaration keys stay lowercase: guard, notice, s
 
 **Package.** The export of one Deployment's state, which is its database, its accounts without sessions or email links, its API keys revoked at import, its files, and its Usage and Signals when it has any. A versioned manifest lists each component with its size and SHA-256.
 
-**Migration.** The move of one Deployment to another installation so that exactly one installation takes its writes.
-
-**Maintenance.** The state of a Deployment that takes no writes. Its host shows a page naming the operation, and its email waits.
+**Maintenance.** The state of a Deployment that takes no writes. Its host shows a maintenance page, and its email waits.
 
 ## Words for running an installation
 
