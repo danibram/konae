@@ -500,7 +500,7 @@ function AccountList({ deploymentId, changed, onSignedOut }: { deploymentId: str
           {stateFilters.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </Select>
       </header>
-      <p className="access-note">People who use this app. An app account cannot open this editor; the one marked Owner is your own.</p>
+      <p className="access-note">People who use this app. An app account cannot open this editor. The ID under each email is what an action binds as actor.id, and what an app's own roles table stores.</p>
       {error && <div className="access-error" role="alert">{error}</div>}
       {!rows || accountsPending ? <LoadingBlock label="Loading app accounts" rows={4} /> : rows.length === 0 ? (
         <p className="access-note">{filter ? `No ${userStateView[filter].label.toLowerCase()} app accounts.` : "No app accounts yet. People appear here once they sign up or you invite them."}</p>
