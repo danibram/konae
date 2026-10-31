@@ -1,6 +1,6 @@
 # Architecture decisions
 
-Each record states its status and which earlier record it amends on its first line, and keeps its later changes as dated notes at the end, oldest first. The next free number is 0027. Before taking it, check `main`, because another branch may have taken it.
+Each record states its status and which earlier record it amends on its first line, and keeps its later changes as dated notes at the end, oldest first. The next free number is 0028. Before taking it, check `main`, because another branch may have taken it.
 
 | ADR | Decides | Amends | Amended by |
 | --- | --- | --- | --- |
@@ -30,6 +30,7 @@ Each record states its status and which earlier record it amends on its first li
 | [0024](0024-an-installation-names-its-hosts-from-one-domain-and-an-app-may-answer-on-a-path.md) | Proposed. `LITTLEBOX_DOMAIN` names the home, `app.` and app hosts; an owner may put an app on `/p/<id>` or `/p/<name>`, sharing one origin | | |
 | [0025](0025-a-deployments-file-bytes-may-live-outside-its-folder.md) | File quotas are installation settings; a Deployment's file bytes may live in an S3 bucket while its index stays in its folder; a copy carries the bytes | 0013 | |
 | [0026](0026-an-app-account-may-sign-in-with-the-apps-own-google-client.md) | An app account may sign in with the app's own Google client, on the app's host, matched by an email Google manages; the owner's unproven account is not taken back | 0011 | |
+| [0027](0027-an-app-is-one-folder-that-the-kernel-serves-with-or-without-konae.md) | Proposed. An app is one folder the Kernel serves with or without Konae; export and import are the only way in and out; the owner manages the app from the app; Eject and live migration go | 0005, 0008, 0013, 0014, 0018, 0019 | |
 
 ## Which record answers a question
 
