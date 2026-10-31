@@ -22,11 +22,11 @@ use std::sync::{Mutex, OnceLock};
 /// Set on a request that answers a path address or the home, to the id of the
 /// Deployment it answers. `route` removes any copy a client sent before it
 /// resolves, so only this layer can set it, and `deployment_for` reads it.
-pub(crate) const RESOLVED_HEADER: &str = "x-littlebox-path-deployment";
+pub(crate) const RESOLVED_HEADER: &str = "x-konae-path-deployment";
 /// Set beside `RESOLVED_HEADER` on a request that came in under `/p/<segment>`,
 /// to that prefix, so a handler can tell a path address from the home after
 /// the router stripped it. `route` removes any copy a client sent.
-pub(crate) const PREFIX_HEADER: &str = "x-littlebox-path-prefix";
+pub(crate) const PREFIX_HEADER: &str = "x-konae-path-prefix";
 
 /// The `/p/<segment>` prefix the router stripped from this request, if any.
 pub(crate) fn prefix(headers: &HeaderMap) -> Option<&str> {
@@ -106,15 +106,14 @@ pub(crate) fn deployment_for_segment(state: &AppState, segment: &str) -> Option<
     with_index(state, |index| index.get(segment).cloned())
 }
 
-/// The home Deployment named by `LITTLEBOX_HOME_DEPLOYMENT`, read once at startup.
-pub(crate) fn home_from_env() -> Option<String> {
-    std::env::var("LITTLEBOX_HOME_DEPLOYMENT").ok().map(|value| value.trim().to_owned()).filter(|value| !value.is_empty())
-}
+/// The path name whose Deployment answers `<domain>/`. The operator claims it
+/// with `path_set` like any other name, before anyone else does.
+pub(crate) const HOME_NAME: &str = "konae-home";
 
 // ---------------------------------------------------------------------------
 // Resolution and the router
 
-/// The host name of `<domain>`, lowercased, or `None` without `LITTLEBOX_DOMAIN`.
+/// The host name of `<domain>`, lowercased, or `None` without `KONAE_DOMAIN`.
 pub(crate) fn path_host(state: &AppState) -> Option<String> {
     url::Url::parse(state.path_origin.as_deref()?).ok()?.host_str().map(str::to_ascii_lowercase)
 }
@@ -145,7 +144,7 @@ pub(crate) struct Resolution {
 /// Where a request on the path host goes. `None` when the request names
 /// another host. A path under `/p/` names an address; any other path belongs
 /// to the home. The segment is lowercased here, and the home is the
-/// configured Deployment when it still exists.
+/// Deployment whose enabled path holds the name `konae-home`.
 pub(crate) async fn resolve(state: &AppState, headers: &HeaderMap, path: &str) -> Option<Resolution> {
     if !on_path_host(state, headers) {
         return None;
@@ -157,22 +156,16 @@ pub(crate) async fn resolve(state: &AppState, headers: &HeaderMap, path: &str) -
             prefix: Some(format!("/p/{segment}")),
         });
     }
-    Some(Resolution { deployment_id: home(state).await, prefix: None })
-}
-
-/// The home Deployment's id, when `LITTLEBOX_HOME_DEPLOYMENT` names a Deployment that exists.
-async fn home(state: &AppState) -> Option<String> {
-    let id = state.home_deployment.as_deref()?;
-    state.deployments.read().await.values().any(|deployment| deployment.id == id).then(|| id.to_owned())
+    Some(Resolution { deployment_id: deployment_for_segment(state, HOME_NAME), prefix: None })
 }
 
 /// Runs before routing, on every request, and answers a path address as the
 /// same routes under its prefix. `/p/<segment>/rest?query` routes as `/rest?query`,
-/// so `/_littlebox/mcp`, the files, the runtime and the HTTP routes answer
+/// so `/_konae/mcp`, the files, the runtime and the HTTP routes answer
 /// unchanged. `/p/<segment>` with no slash redirects to `/p/<segment>/`, so the
 /// relative URLs of the page resolve under the prefix. A `Location` the app
 /// sends from the root is prefixed too. Other paths on the path host belong to
-/// the home, and `/` with no home is a short platform page.
+/// the home, and with no home they answer the normal not-found.
 pub(crate) async fn route(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
     request.headers_mut().remove(RESOLVED_HEADER);
     request.headers_mut().remove(PREFIX_HEADER);
@@ -180,14 +173,10 @@ pub(crate) async fn route(State(state): State<AppState>, mut request: Request, n
         return next.run(request).await;
     };
     let Some(prefix) = resolution.prefix else {
-        return match resolution.deployment_id {
-            Some(id) => {
-                request.headers_mut().insert(RESOLVED_HEADER, HeaderValue::from_str(&id).unwrap());
-                next.run(request).await
-            }
-            None if request.uri().path() == "/" => home_page(&state),
-            None => next.run(request).await,
-        };
+        if let Some(id) = resolution.deployment_id {
+            request.headers_mut().insert(RESOLVED_HEADER, HeaderValue::from_str(&id).unwrap());
+        }
+        return next.run(request).await;
     };
     // An unknown segment passes through, so the routes answer the normal not-found.
     let Some(id) = resolution.deployment_id else {
@@ -218,17 +207,6 @@ pub(crate) async fn route(State(state): State<AppState>, mut request: Request, n
         }
     }
     response
-}
-
-/// The page `<domain>/` answers when no home is set. It names the editor's
-/// origin and nothing else, so the path host shows no app.
-fn home_page(state: &AppState) -> Response {
-    let origin = state.public_origin.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
-    let body = format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>Littlebox</title><h1>Littlebox</h1>\
-         <p>The editor is at <a href=\"{origin}\">{origin}</a>.</p>"
-    );
-    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response()
 }
 
 /// Refuses a request on the path host whose Referer is a path address of
@@ -406,7 +384,7 @@ fn view(state: &AppState, id: &str, record: Option<Record>) -> Value {
         "domainConfigured": state.path_origin.is_some(),
     });
     if state.path_origin.is_none() {
-        value["next"] = json!("Path addresses need LITTLEBOX_DOMAIN on this installation. Set it, then call path_set again.");
+        value["next"] = json!("Path addresses need KONAE_DOMAIN on this installation. Set it, then call path_set again.");
     } else if !record.enabled {
         value["next"] = json!("The path is off. Call path_set with enabled true to get its addresses.");
     } else {
@@ -451,7 +429,7 @@ async fn set(state: &AppState, owner: &mcp::Owner, a: &Value) -> Result<Value> {
         ensure_free(state, &deployment.id, name).await?;
     }
     if enabled {
-        let origin = state.path_origin.as_deref().context("Path addresses need LITTLEBOX_DOMAIN on this installation. Set it, then turn the path on again.")?;
+        let origin = state.path_origin.as_deref().context("Path addresses need KONAE_DOMAIN on this installation. Set it, then turn the path on again.")?;
         if has_accounts(&deployment) && !accept_shared_origin {
             return Err(shared_origin(&domain_of(origin)).into());
         }
@@ -499,7 +477,7 @@ pub(super) async fn arrive(state: &AppState, deployment: &Deployment, carried: O
         notices.push("The path stays off: the app has accounts or is private, and the package does not accept the shared origin. Call path_set with acceptSharedOrigin true to turn it on.".to_owned());
     }
     if enabled && state.path_origin.is_none() {
-        notices.push("This installation has no LITTLEBOX_DOMAIN, so the path address does not answer until it is set.".to_owned());
+        notices.push("This installation has no KONAE_DOMAIN, so the path address does not answer until it is set.".to_owned());
     }
     let record = Record { enabled, name, accept_shared_origin: carried.accept_shared_origin };
     write_record(state, &deployment.id, Some(&record)).await?;
@@ -538,11 +516,10 @@ mod tests {
             copies: Arc::new(copies::CopyStatus::default()),
             admin_key: "test-admin".into(),
             accounts: accounts::AccountSettings::local(),
-            public_origin: "https://app.littlebox.com".into(),
+            public_origin: "https://app.konae.es".into(),
             mcp_origin: None,
-            host_suffix: "littlebox.com".into(),
+            host_suffix: "konae.es".into(),
             path_origin: origin.map(str::to_owned),
-            home_deployment: None,
             guards: Arc::new(limits::Guards::new(Vec::new())),
         }
     }
@@ -561,7 +538,7 @@ mod tests {
             "visibility": "public",
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}
         });
-        let request = Request::builder().header("x-littlebox-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
+        let request = Request::builder().header("x-konae-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
         assert_eq!(deploy(State(state.clone()), request).await.status(), StatusCode::OK);
         mcp::store(state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES(?1,'o','{}')", [project]).unwrap();
         state.deployments.read().await.values().find(|d| d.project_id == project).cloned().unwrap()
@@ -580,9 +557,9 @@ mod tests {
     /// Only enabled ids and names answer, and a disabled path frees its name.
     #[tokio::test]
     async fn a_segment_answers_only_while_its_path_is_on() {
-        let root = std::env::temp_dir().join(format!("littlebox-path-segment-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-path-segment-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
-        let state = test_state(&root, Some("https://littlebox.com"));
+        let state = test_state(&root, Some("https://konae.es"));
         folder(&state, "d1").await;
         folder(&state, "d2").await;
         write_record(&state, "d1", Some(&Record { enabled: true, name: Some("spring-menu".into()), accept_shared_origin: true })).await.unwrap();
@@ -610,9 +587,9 @@ mod tests {
     /// Only a private app, one with signup not Closed, or one with a non-anonymous action has accounts.
     #[tokio::test]
     async fn an_app_has_accounts_when_it_is_private_open_or_calls_a_non_anonymous_action() {
-        let root = std::env::temp_dir().join(format!("littlebox-path-accounts-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-path-accounts-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
-        let state = test_state(&root, Some("https://littlebox.com"));
+        let state = test_state(&root, Some("https://konae.es"));
         let app = publish(&state, "plain").await;
         // Public, signup Open by default: accounts.
         assert_eq!(app.signup_policy.mode, SignupMode::Open);
@@ -646,9 +623,9 @@ mod tests {
     /// The owner's words for the path, and what each tool answers on the way.
     #[tokio::test]
     async fn path_set_checks_the_name_the_domain_and_the_shared_origin_before_it_writes() {
-        let root = std::env::temp_dir().join(format!("littlebox-path-set-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-path-set-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
-        let state = test_state(&root, Some("https://littlebox.com"));
+        let state = test_state(&root, Some("https://konae.es"));
         let notes = publish(&state, "notes").await;
         let other = publish(&state, "other").await;
 
@@ -656,14 +633,14 @@ mod tests {
         let refused = set(&state, &notes.id, json!({"enabled": true})).await.unwrap_err();
         let refusal = crate::refusal::of(&refused).expect("path_set refuses with a code");
         assert_eq!(refusal.code, "path.shared-origin");
-        assert!(refusal.message.contains("littlebox.com"));
+        assert!(refusal.message.contains("konae.es"));
         assert!(read_record(&state, &notes.id).is_none(), "a refused call writes nothing");
         assert_eq!(deployment_for_segment(&state, &notes.id), None);
 
         // Accepted, the path answers on the id and the name.
         let on = set(&state, &notes.id, json!({"enabled": true, "name": "Spring-Menu", "acceptSharedOrigin": true})).await.unwrap();
         assert_eq!(on["name"], "spring-menu");
-        assert_eq!(on["addresses"], json!([format!("https://littlebox.com/p/{}", notes.id), "https://littlebox.com/p/spring-menu"]));
+        assert_eq!(on["addresses"], json!([format!("https://konae.es/p/{}", notes.id), "https://konae.es/p/spring-menu"]));
         assert_eq!(deployment_for_segment(&state, "spring-menu").as_deref(), Some(notes.id.as_str()));
 
         // Another app cannot take the name, and the answer does not say who holds it.
@@ -692,7 +669,7 @@ mod tests {
         // A null name drops the name and leaves the path on.
         let unnamed = set(&state, &other.id, json!({"enabled": true, "name": null})).await.unwrap();
         assert_eq!((unnamed["enabled"].clone(), unnamed["name"].clone()), (json!(true), Value::Null));
-        assert_eq!(unnamed["addresses"], json!([format!("https://littlebox.com/p/{}", other.id)]));
+        assert_eq!(unnamed["addresses"], json!([format!("https://konae.es/p/{}", other.id)]));
         assert_eq!(unnamed["domainConfigured"], json!(true));
         assert_eq!(deployment_for_segment(&state, "spring-menu"), None);
 
@@ -707,27 +684,27 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// Without LITTLEBOX_DOMAIN the path has no address, so turning it on is refused.
+    /// Without KONAE_DOMAIN the path has no address, so turning it on is refused.
     #[tokio::test]
     async fn an_installation_without_a_domain_reads_the_path_but_does_not_turn_it_on() {
-        let root = std::env::temp_dir().join(format!("littlebox-path-nodomain-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-path-nodomain-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
         let state = test_state(&root, None);
         let app = publish(&state, "solo").await;
         let read = admin_call(&state, &owner(), "path_read", &json!({"deploymentId": app.id})).await.unwrap();
         assert_eq!(read["addresses"], json!([]));
-        assert_eq!(read["next"], "Path addresses need LITTLEBOX_DOMAIN on this installation. Set it, then call path_set again.");
+        assert_eq!(read["next"], "Path addresses need KONAE_DOMAIN on this installation. Set it, then call path_set again.");
         let refused = set(&state, &app.id, json!({"enabled": true, "acceptSharedOrigin": true})).await.unwrap_err();
-        assert_eq!(refused.to_string(), "Path addresses need LITTLEBOX_DOMAIN on this installation. Set it, then turn the path on again.");
+        assert_eq!(refused.to_string(), "Path addresses need KONAE_DOMAIN on this installation. Set it, then turn the path on again.");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     /// A package carries the path without the id, and the destination keeps a free name only.
     #[tokio::test]
     async fn a_package_keeps_a_free_name_and_says_what_it_dropped() {
-        let root = std::env::temp_dir().join(format!("littlebox-path-arrive-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-path-arrive-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
-        let state = test_state(&root, Some("https://littlebox.com"));
+        let state = test_state(&root, Some("https://konae.es"));
         let notes = publish(&state, "notes").await;
         set(&state, &notes.id, json!({"enabled": true, "acceptSharedOrigin": true, "name": "spring-menu"})).await.unwrap();
 
@@ -766,7 +743,7 @@ mod tests {
     }
 
     /// The host an installation's path addresses answer on.
-    const PATH_HOST: &str = "littlebox.com";
+    const PATH_HOST: &str = "konae.es";
 
     /// One request through the Kernel's stack, as `main` serves it.
     async fn call(state: &AppState, method: &str, host: &str, path: &str, headers: &[(&str, &str)], body: &str) -> Response {
@@ -788,10 +765,10 @@ mod tests {
         String::from_utf8(bytes.to_vec()).unwrap()
     }
 
-    /// A state for a Kernel on `https://littlebox.com`, with two apps whose
+    /// A state for a Kernel on `https://konae.es`, with two apps whose
     /// paths are on. The first answers as `spring-menu`, the second as `winter-menu`.
     async fn two_path_apps(root: &Path) -> (AppState, Deployment, Deployment) {
-        let state = test_state(root, Some("https://littlebox.com"));
+        let state = test_state(root, Some("https://konae.es"));
         let first = publish(&state, "spring").await;
         let second = publish(&state, "winter").await;
         set(&state, &first.id, json!({"enabled": true, "name": "spring-menu", "acceptSharedOrigin": true})).await.unwrap();
@@ -800,7 +777,7 @@ mod tests {
     }
 
     async fn scratch(label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("littlebox-path-{label}-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-path-{label}-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
         root
     }
@@ -827,7 +804,7 @@ mod tests {
             &state,
             "POST",
             PATH_HOST,
-            &format!("/p/{}/_littlebox/mcp", first.id),
+            &format!("/p/{}/_konae/mcp", first.id),
             &[("content-type", "application/json"), ("accept", "application/json, text/event-stream")],
             &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}).to_string(),
         )
@@ -842,11 +819,11 @@ mod tests {
     async fn an_unknown_segment_answers_not_found() {
         let root = scratch("unknown").await;
         let (state, _, _) = two_path_apps(&root).await;
-        for path in ["/p/missing/", "/p/missing", "/p/", "/p/missing/_littlebox/mcp"] {
+        for path in ["/p/missing/", "/p/missing", "/p/", "/p/missing/_konae/mcp"] {
             let response = get(&state, path).await;
             assert_eq!(response.status(), 404, "{path}");
             let body: Value = serde_json::from_str(&text(response).await).unwrap();
-            assert_eq!(body["error"], "Littlebox deployment not found.", "{path}");
+            assert_eq!(body["error"], "Konae deployment not found.", "{path}");
         }
         let _ = tokio::fs::remove_dir_all(root).await;
     }
@@ -866,29 +843,25 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// The home answers `/` and every other non-prefix path when
-    /// `LITTLEBOX_HOME_DEPLOYMENT` names a Deployment. Without it, `/` is a
-    /// platform page that links to the editor and no app.
+    /// The app whose path holds the name `konae-home` answers `/` and every
+    /// other non-prefix path. Without one, `/` answers the normal not-found.
     #[tokio::test]
-    async fn the_home_answers_the_root_of_the_path_host_or_a_platform_page_does() {
+    async fn the_app_named_konae_home_answers_the_root_of_the_path_host() {
         let root = scratch("home").await;
-        let (mut state, first, _) = two_path_apps(&root).await;
-        let page = get(&state, "/").await;
-        assert_eq!(page.status(), 200);
-        assert_eq!(page.headers()[header::CONTENT_TYPE], "text/html; charset=utf-8");
-        let body = text(page).await;
-        assert!(body.contains(r#"href="https://app.littlebox.com""#), "{body}");
-        assert!(!body.contains("shell"));
+        let (state, first, _) = two_path_apps(&root).await;
+        assert_eq!(get(&state, "/").await.status(), 404, "no home answers nothing");
+        assert_eq!(get(&state, "/api/count").await.status(), 404);
 
-        state.home_deployment = Some(first.id.clone());
+        set(&state, &first.id, json!({"enabled": true, "name": "konae-home"})).await.unwrap();
         let home = get(&state, "/").await;
         assert_eq!(home.status(), 200);
         assert!(text(home).await.contains("shell"));
         assert_eq!(get(&state, "/api/count").await.status(), 200, "a non-prefix path belongs to the home");
+        assert_eq!(get(&state, "/p/konae-home/").await.status(), 200, "the home keeps its path address");
 
-        // A home that no longer exists leaves `/` with the platform page.
-        state.home_deployment = Some("gone".into());
-        assert!(text(get(&state, "/").await).await.contains("Littlebox"));
+        // Turning the path off takes the home away again.
+        set(&state, &first.id, json!({"enabled": false})).await.unwrap();
+        assert_eq!(get(&state, "/").await.status(), 404);
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
@@ -905,9 +878,9 @@ mod tests {
         assert_eq!(response.headers()[header::STRICT_TRANSPORT_SECURITY], "max-age=31536000; includeSubDomains");
         assert_eq!(response.headers()[header::X_FRAME_OPTIONS], "DENY");
 
-        let refused = call(&state, "POST", PATH_HOST, "/mcp", &[("origin", "https://littlebox.com"), ("content-type", "application/json")], &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}).to_string()).await;
+        let refused = call(&state, "POST", PATH_HOST, "/mcp", &[("origin", "https://konae.es"), ("content-type", "application/json")], &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}).to_string()).await;
         assert_eq!(refused.status(), 403);
-        let owner = call(&state, "POST", PATH_HOST, "/_littlebox/owner/login", &[("origin", "https://littlebox.com"), ("content-type", "application/json")], "{}").await;
+        let owner = call(&state, "POST", PATH_HOST, "/_konae/owner/login", &[("origin", "https://konae.es"), ("content-type", "application/json")], "{}").await;
         assert_eq!(owner.status(), 403);
         let _ = tokio::fs::remove_dir_all(root).await;
     }
@@ -918,7 +891,7 @@ mod tests {
         let root = scratch("referer").await;
         let (state, first, second) = two_path_apps(&root).await;
         let call_with = |referer: &str| {
-            let path = format!("/p/{}/_littlebox/mcp", first.id);
+            let path = format!("/p/{}/_konae/mcp", first.id);
             let state = state.clone();
             let referer = referer.to_owned();
             async move {
@@ -934,10 +907,10 @@ mod tests {
                 .status()
             }
         };
-        assert_eq!(call_with(&format!("https://littlebox.com/p/{}/", first.id)).await, 200);
-        assert_eq!(call_with("https://littlebox.com/p/spring-menu/").await, 200);
-        assert_eq!(call_with(&format!("https://littlebox.com/p/{}/", second.id)).await, 403);
-        assert_eq!(call_with("https://littlebox.com/p/winter-menu/x").await, 403);
+        assert_eq!(call_with(&format!("https://konae.es/p/{}/", first.id)).await, 200);
+        assert_eq!(call_with("https://konae.es/p/spring-menu/").await, 200);
+        assert_eq!(call_with(&format!("https://konae.es/p/{}/", second.id)).await, 403);
+        assert_eq!(call_with("https://konae.es/p/winter-menu/x").await, 403);
         assert_eq!(call_with("https://example.org/p/winter-menu/").await, 200, "a Referer on another host is not this rule's");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
@@ -952,27 +925,27 @@ mod tests {
             &state,
             "POST",
             PATH_HOST,
-            &format!("/p/{}/_littlebox/auth/signup", first.id),
+            &format!("/p/{}/_konae/auth/signup", first.id),
             &[("content-type", "application/json")],
             &json!({"email": "reader@example.com", "password": "correct horse battery"}).to_string(),
         )
         .await;
         assert_eq!(signup.status(), 200);
         let cookie = signup.headers()[header::SET_COOKIE].to_str().unwrap().to_owned();
-        let name = format!("__Secure-littlebox_app_session_{}", first.id);
+        let name = format!("__Secure-konae_app_session_{}", first.id);
         assert!(cookie.starts_with(&format!("{name}=")), "{cookie}");
         assert!(cookie.contains("; Path=/;") && cookie.contains("; Secure"), "{cookie}");
 
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, PATH_HOST.parse().unwrap());
         assert_eq!(crate::app_cookie_name(&state, &first.id, &headers), name);
-        assert_eq!(crate::app_cookie_name(&state, &second.id, &headers), format!("__Secure-littlebox_app_session_{}", second.id));
+        assert_eq!(crate::app_cookie_name(&state, &second.id, &headers), format!("__Secure-konae_app_session_{}", second.id));
         let session = cookie.split(';').next().unwrap().split_once('=').unwrap().1.to_owned();
 
-        let signed_in = call(&state, "GET", PATH_HOST, &format!("/p/{}/_littlebox/login", first.id), &[("cookie", &format!("{name}={session}"))], "").await;
+        let signed_in = call(&state, "GET", PATH_HOST, &format!("/p/{}/_konae/login", first.id), &[("cookie", &format!("{name}={session}"))], "").await;
         assert_eq!(signed_in.status(), 303);
         assert_eq!(signed_in.headers()[header::LOCATION], format!("/p/{}/", first.id).as_str());
-        let other_app = call(&state, "GET", PATH_HOST, &format!("/p/{}/_littlebox/login", second.id), &[("cookie", &format!("{name}={session}"))], "").await;
+        let other_app = call(&state, "GET", PATH_HOST, &format!("/p/{}/_konae/login", second.id), &[("cookie", &format!("{name}={session}"))], "").await;
         assert_eq!(other_app.status(), 200, "the first app's session does not sign in the second");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
@@ -993,7 +966,7 @@ mod tests {
 
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, host.parse().unwrap());
-        assert_eq!(crate::app_cookie_name(&state, &first.id, &headers), "__Host-littlebox_app_session");
+        assert_eq!(crate::app_cookie_name(&state, &first.id, &headers), "__Host-konae_app_session");
         // A path address is not a path on a generated host.
         assert_ne!(call(&state, "GET", &host, "/p/spring-menu/", &[], "").await.status(), 200);
         let _ = tokio::fs::remove_dir_all(root).await;

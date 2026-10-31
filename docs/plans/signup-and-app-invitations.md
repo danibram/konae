@@ -4,27 +4,27 @@ Detalle de implementación iniciado el 5 de noviembre y revisado el 6 de noviemb
 
 ## Resultado esperado
 
-Una persona se registra en Littlebox, conecta su agente por MCP y le pide una app con usuarios. El agente crea y publica la app con su política de registro. El creador permite que cualquiera se registre o invita a personas por correo. Cada usuario entra en esa app y accede solo a los datos que sus acciones le permiten. Exportar conserva las cuentas, sus identificadores, sus contraseñas y las reglas.
+Una persona se registra en Konae, conecta su agente por MCP y le pide una app con usuarios. El agente crea y publica la app con su política de registro. El creador permite que cualquiera se registre o invita a personas por correo. Cada usuario entra en esa app y accede solo a los datos que sus acciones le permiten. Exportar conserva las cuentas, sus identificadores, sus contraseñas y las reglas.
 
 ## Decisiones propuestas
 
-- Usar Clerk con Google para registrar al creador en Littlebox alojado. Mantener el acceso local del propietario para instalaciones propias.
+- Usar Clerk con Google para registrar al creador en Konae alojado. Mantener el acceso local del propietario para instalaciones propias.
 - Conservar un ID interno para cada creador. Asociar la identidad externa por proveedor y sujeto, nunca unir cuentas por coincidencia de correo.
 - Mantener cuentas y sesiones de usuarios de apps en el Kernel, separadas por Deployment. Ser propietario del proyecto no concede una sesión de usuario de la app.
 - Usar correo y contraseña para las cuentas de apps en esta versión. Verificar el correo al registrarse; la invitación recibida por correo sirve como verificación al aceptarla.
-- Usar Resend como primer transporte de correo alojado. Littlebox configura una cuenta de envío para la instalación; cada creador no tiene que contratar ni configurar un proveedor.
+- Usar Resend como primer transporte de correo alojado. Konae configura una cuenta de envío para la instalación; cada creador no tiene que contratar ni configurar un proveedor.
 - Configurar el transporte fuera de la app y sus archivos. El Kernel debe permitir otro transporte, incluido SMTP para instalaciones propias.
 - Mantener la autorización de acciones y filas en la app. Esta entrega no añade un sistema general de roles personalizados.
 
 ## Flujo del creador
 
-1. La persona pulsa "Continuar con Google" en Littlebox. Creamos su cuenta interna una sola vez y abrimos su lista de proyectos.
-2. Conecta su cliente MCP. La autorización existente de Littlebox muestra los permisos que solicita el agente y conserva el destino al volver del registro.
+1. La persona pulsa "Continuar con Google" en Konae. Creamos su cuenta interna una sola vez y abrimos su lista de proyectos.
+2. Conecta su cliente MCP. La autorización existente de Konae muestra los permisos que solicita el agente y conserva el destino al volver del registro.
 3. Pide, por ejemplo, "Crea una app de gastos con cuentas personales. Solo pueden entrar las personas que invite. Invita a ana@example.com".
-4. El agente crea el proyecto, genera las tablas y las acciones, y usa el SDK de Littlebox para el acceso. No genera un servicio de autenticación propio ni guarda contraseñas en las tablas de negocio.
+4. El agente crea el proyecto, genera las tablas y las acciones, y usa el SDK de Konae para el acceso. No genera un servicio de autenticación propio ni guarda contraseñas en las tablas de negocio.
 5. El agente prepara la publicación con visibilidad y política de registro explícitas. El Kernel aplica ambas antes de servir la primera petición.
 6. Tras publicar y obtener una URL estable, el agente solicita el envío de las invitaciones indicadas por el creador.
-7. Littlebox devuelve la URL y el estado de cada invitación. Un correo pendiente o fallido no aparece como entregado.
+7. Konae devuelve la URL y el estado de cada invitación. Un correo pendiente o fallido no aparece como entregado.
 
 El agente puede crear la app completa desde MCP. El editor muestra y modifica los mismos datos mediante las mismas operaciones. No se exige visitar una pantalla para completar un paso que el MCP puede ejecutar con la autorización concedida.
 
@@ -42,7 +42,7 @@ El agente puede crear la app completa desde MCP. El editor muestra y modifica lo
 1. Recibe un correo con el nombre de la app, quién le invita y un enlace que caduca.
 2. Abre el enlace y ve el correo invitado, sin poder sustituirlo por otro.
 3. Establece su contraseña y acepta. El Kernel activa la cuenta y consume la invitación en una misma transacción.
-4. Entra directamente en la app. No necesita una cuenta de creador en Littlebox.
+4. Entra directamente en la app. No necesita una cuenta de creador en Konae.
 
 Una invitación pendiente no es una cuenta activa. Si el destinatario ya tiene una cuenta activa en esa app, el flujo pide iniciar sesión; la invitación no sustituye su contraseña ni restablece sus credenciales. Una cuenta suspendida no se reactiva mediante una invitación.
 
@@ -117,7 +117,7 @@ Crear o reenviar invitaciones requiere una clave de idempotencia. Los reintentos
 - Procesar una cola persistente con reintentos limitados y claves de idempotencia del proveedor. Distinguir pendiente, aceptado por el proveedor, entregado al servidor de correo y fallido.
 - Verificar la firma de los eventos del proveedor y tolerar duplicados y eventos fuera de orden. La entrega no demuestra que el usuario leyera el mensaje.
 - Limitar envíos por instalación, creador, app y destinatario. Aplicar también límites al registro, recuperación y aceptación de tokens.
-- Usar plantillas de la plataforma con nombre de app escapado, enlaces controlados y remitente de Littlebox. No permitir contenido arbitrario del agente en esta primera entrega.
+- Usar plantillas de la plataforma con nombre de app escapado, enlaces controlados y remitente de Konae. No permitir contenido arbitrario del agente en esta primera entrega.
 - Si no hay transporte configurado, explicar el error antes de activar registro abierto o enviar invitaciones. Una importación conserva la política, pero muestra que las altas y la recuperación no están disponibles hasta configurar correo. El acceso de cuentas existentes sigue funcionando si el operador activa expresamente ese modo limitado. En desarrollo, un buzón local permite probar todo el flujo sin correo externo.
 
 ## Plan de implementación
@@ -144,9 +144,9 @@ Salida comprobable: un cliente MCP crea una app, la publica con Solo invitación
 
 ### 4. Registro del creador y conexión MCP
 
-Integrar Clerk en el acceso alojado. Validar en servidor firma, emisor, vigencia y origen autorizado de la prueba de identidad. Asociar su sujeto a un propietario interno mediante una restricción única, crear la cuenta una vez y emitir la sesión propia de Littlebox. No aceptar tokens de Clerk como credenciales de usuarios de apps.
+Integrar Clerk en el acceso alojado. Validar en servidor firma, emisor, vigencia y origen autorizado de la prueba de identidad. Asociar su sujeto a un propietario interno mediante una restricción única, crear la cuenta una vez y emitir la sesión propia de Konae. No aceptar tokens de Clerk como credenciales de usuarios de apps.
 
-Definir vencimiento y revocación de la sesión de Littlebox y sus credenciales delegadas. Procesar la baja o suspensión del creador e invalidar su acceso; cerrar sesión en el navegador no revoca por sí solo todas las delegaciones MCP. Mantener la autorización OAuth existente con consentimiento y permisos del Kernel.
+Definir vencimiento y revocación de la sesión de Konae y sus credenciales delegadas. Procesar la baja o suspensión del creador e invalidar su acceso; cerrar sesión en el navegador no revoca por sí solo todas las delegaciones MCP. Mantener la autorización OAuth existente con consentimiento y permisos del Kernel.
 
 Preservar el retorno al cliente MCP después del registro. El acceso local con clave de instalación queda disponible en instalaciones propias. Vincular una cuenta local existente exige autenticar ambas identidades, sin unirlas por correo.
 
@@ -186,6 +186,6 @@ Actualizar `docs/mcp.md`, arquitectura y la decisión de identidad para document
 ## Referencias verificadas
 
 - [Verificación de tokens de sesión de Clerk](https://clerk.com/docs/guides/sessions/manual-jwt-verification). La integración debe validar la prueba en el servidor y restringir los orígenes autorizados.
-- [Claves de idempotencia de Resend](https://resend.com/changelog/idempotency-keys). Complementan la deduplicación persistente que mantiene Littlebox.
+- [Claves de idempotencia de Resend](https://resend.com/changelog/idempotency-keys). Complementan la deduplicación persistente que mantiene Konae.
 - [Estado actual del MCP](../mcp.md).
 - [Decisión actual sobre identidad](../adr/0002-kernel-owns-identity-and-visibility.md).

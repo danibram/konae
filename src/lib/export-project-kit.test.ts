@@ -28,7 +28,7 @@ const project: MiniAppProject = {
 const artifact: BuildArtifact = {
   version: 1,
   entrypoint: "index.html",
-  files: { "index.html": "<!doctype html><script data-littlebox-runtime>window.miniapp={}</script>" },
+  files: { "index.html": "<!doctype html><script data-konae-runtime>window.miniapp={}</script>" },
 };
 
 const kernelFiles: ExportFile[] = [
@@ -66,8 +66,8 @@ describe("buildProjectExport", () => {
       port: 0,
       async fetch(request) {
         const pathname = new URL(request.url).pathname;
-        if (pathname === "/_littlebox/owner/login") return Response.json({}, { headers: { "set-cookie": "owner=test; Path=/" } });
-        if (pathname === "/_littlebox/owner/logout") { calls.push("logout"); return Response.json({}); }
+        if (pathname === "/_konae/owner/login") return Response.json({}, { headers: { "set-cookie": "owner=test; Path=/" } });
+        if (pathname === "/_konae/owner/logout") { calls.push("logout"); return Response.json({}); }
         const message = await request.json() as { id?: string; method: string; params?: { name: string } };
         if (!message.id) return new Response(null, { status: 202 });
         const name = message.params?.name;
@@ -77,7 +77,7 @@ describe("buildProjectExport", () => {
         return Response.json({ jsonrpc: "2.0", id: message.id, result: { structuredContent: { result } } });
       },
     });
-    const directory = await mkdtemp(path.join(tmpdir(), "littlebox-deploy-failure-"));
+    const directory = await mkdtemp(path.join(tmpdir(), "konae-deploy-failure-"));
     try {
       const { entries } = buildProjectExport(project, artifact, bundledKernelFiles);
       for (const entry of entries) {
@@ -85,7 +85,7 @@ describe("buildProjectExport", () => {
         await mkdir(path.dirname(target), { recursive: true });
         await writeFile(target, entry.contents);
       }
-      await writeFile(path.join(directory, ".env"), `LITTLEBOX_PORT=${server.port}\nLITTLEBOX_ADMIN_KEY=test-owner-password\n`);
+      await writeFile(path.join(directory, ".env"), `KONAE_PORT=${server.port}\nKONAE_ADMIN_KEY=test-owner-password\n`);
       const deploy = Bun.spawn(["node", "scripts/deploy.mjs"], { cwd: directory, stdout: "pipe", stderr: "pipe" });
       const [exitCode, stderr] = await Promise.all([deploy.exited, new Response(deploy.stderr).text()]);
       expect(exitCode).not.toBe(0);
@@ -106,18 +106,18 @@ describe("buildProjectExport", () => {
     expect(files.get("kernel-rs/src/main.rs")).toBe("fn main() {}");
     expect(files.get("Dockerfile")).toContain("cargo build --release --locked");
     expect(files.get("Dockerfile")).toContain("useradd");
-    expect(files.get("Dockerfile")).toContain("littlebox-entrypoint");
+    expect(files.get("Dockerfile")).toContain("konae-entrypoint");
     expect(files.get("entrypoint.sh")).toContain("setpriv");
     expect(files.get("compose.yaml")).toContain("127.0.0.1:");
     expect(files.get("start.sh")).toContain("docker compose up -d --build");
     expect(files.get("scripts/deploy.mjs")).toContain("tools/call");
-    expect(files.get("scripts/deploy.mjs")).toContain("littlebox/deployment.json");
+    expect(files.get("scripts/deploy.mjs")).toContain("konae/deployment.json");
     expect(files.get("scripts/deploy.mjs")).toContain("if (!remote.deployment)");
     expect(() => new Bun.Transpiler({ loader: "js" }).transformSync(files.get("scripts/build.mjs") ?? "")).not.toThrow();
     expect(() => new Bun.Transpiler({ loader: "js" }).transformSync(files.get("scripts/deploy.mjs") ?? "")).not.toThrow();
-    const exportedProject = JSON.parse(files.get("littlebox/project.json") ?? "{}") as Record<string, unknown>;
+    const exportedProject = JSON.parse(files.get("konae/project.json") ?? "{}") as Record<string, unknown>;
     expect(exportedProject.id).toBe("app_notes");
-    expect(files.get("littlebox/deploy.json")).toBeUndefined();
+    expect(files.get("konae/deploy.json")).toBeUndefined();
     expect(entries.find((entry) => entry.path === "start.sh")?.mode).toBe(0o755);
     expect(files.get("package.json")).toContain('"start": "sh start.sh"');
   });
@@ -127,12 +127,12 @@ describe("buildProjectExport", () => {
       "notes.list": { kind: "query", access: "authenticated", statement: "SELECT id FROM notes LIMIT 20", bindings: [] },
     } }) } };
     const files = readTar(buildProjectExport(withAction, artifact, kernelFiles).archive);
-    const contract = JSON.parse(files.get("littlebox/action-contract.json")!);
-    expect(contract).toMatchObject({ format: "littlebox-action-contract", project: { id: "app_notes", name: "Private Notes" } });
+    const contract = JSON.parse(files.get("konae/action-contract.json")!);
+    expect(contract).toMatchObject({ format: "konae-action-contract", project: { id: "app_notes", name: "Private Notes" } });
     expect(contract.actions[0].output).toEqual({ kind: "rows", columns: [{ name: "id", type: "integer", nullable: false, from: { table: "notes", column: "id" } }], unnamed: [] });
-    expect(files.get("littlebox/action-contract.md")).toContain("## notes.list");
-    expect(JSON.parse(files.get("littlebox/action-contract.schema.json")!).title).toBe("Littlebox Action Contract");
-    expect(files.get("README.md")).toContain("littlebox/action-contract.json");
+    expect(files.get("konae/action-contract.md")).toContain("## notes.list");
+    expect(JSON.parse(files.get("konae/action-contract.schema.json")!).title).toBe("Konae Action Contract");
+    expect(files.get("README.md")).toContain("konae/action-contract.json");
     expect(() => buildProjectExport({ ...project, files: { ...project.files, "actions.json": "{" } }, artifact, kernelFiles))
       .toThrow("The export cannot describe its Server Actions: actions.json must contain valid JSON.");
   });
@@ -141,8 +141,8 @@ describe("buildProjectExport", () => {
     const snapshot = Uint8Array.from([0, 1, 2, 255]);
     const { archive, entries } = buildProjectExport(project, artifact, kernelFiles, snapshot);
     const files = readTar(archive);
-    const database = entries.find((entry) => entry.path === "littlebox/initial-database.sqlite")?.contents;
-    expect(files.has("littlebox/initial-database.sqlite")).toBe(true);
+    const database = entries.find((entry) => entry.path === "konae/initial-database.sqlite")?.contents;
+    expect(files.has("konae/initial-database.sqlite")).toBe(true);
     expect(database).toBeInstanceOf(Uint8Array);
     expect(database).toEqual(snapshot);
   });
@@ -152,7 +152,7 @@ describe("buildProjectExport", () => {
     const files = readTar(buildProjectExport(project, artifact, kernelFiles, {
       initialDatabase: new Uint8Array(), initialSignupPolicy: policy,
     }).archive);
-    expect(JSON.parse(files.get("littlebox/initial-signup-policy.json")!)).toEqual(policy);
+    expect(JSON.parse(files.get("konae/initial-signup-policy.json")!)).toEqual(policy);
     expect(files.get("scripts/deploy.mjs")).toContain("payload.initialSignupPolicy = JSON.parse");
   });
 
@@ -160,7 +160,7 @@ describe("buildProjectExport", () => {
     const files = readTar(buildProjectExport({ ...project, manifest: { ...project.manifest, visibility: "public" } }, artifact, kernelFiles, {
       initialDatabase: new Uint8Array(), visibility: "private",
     }).archive);
-    expect(JSON.parse(files.get("littlebox/project.json")!).manifest.visibility).toBe("private");
+    expect(JSON.parse(files.get("konae/project.json")!).manifest.visibility).toBe("private");
   });
 
   test("portable state is private after extraction and excluded from Git", async () => {
@@ -168,7 +168,7 @@ describe("buildProjectExport", () => {
       initialDatabase: new Uint8Array([1]), initialIdentity: new Uint8Array([2]), initialFiles: new Uint8Array([3]),
       initialSignupPolicy: { mode: "closed", allowlist: [] },
     });
-    const privatePaths = entries.filter((entry) => entry.path.startsWith("littlebox/initial-")).map((entry) => entry.path);
+    const privatePaths = entries.filter((entry) => entry.path.startsWith("konae/initial-")).map((entry) => entry.path);
     expect(privatePaths).toHaveLength(4);
     let offset = 0;
     while (offset + 512 <= archive.length && archive[offset] !== 0) {
@@ -177,12 +177,12 @@ describe("buildProjectExport", () => {
       if (privatePaths.includes(name)) expect(Number.parseInt(readString(archive, offset + 100, 8), 8)).toBe(0o600);
       offset += 512 + Math.ceil(size / 512) * 512;
     }
-    const directory = await mkdtemp(path.join(tmpdir(), "littlebox-export-ignore-"));
+    const directory = await mkdtemp(path.join(tmpdir(), "konae-export-ignore-"));
     try {
       await writeFile(path.join(directory, ".gitignore"), readTar(archive).get(".gitignore")!);
       const init = Bun.spawn(["git", "-c", "init.defaultBranch=main", "init", "-q", directory], { stdout: "ignore", stderr: "pipe" });
       expect(await init.exited).toBe(0);
-      const ignored = Bun.spawn(["git", "check-ignore", ...privatePaths, "littlebox/artifact.json", "app/app.js"], { cwd: directory, stdout: "pipe", stderr: "pipe" });
+      const ignored = Bun.spawn(["git", "check-ignore", ...privatePaths, "konae/artifact.json", "app/app.js"], { cwd: directory, stdout: "pipe", stderr: "pipe" });
       const names = (await new Response(ignored.stdout).text()).trim().split("\n");
       expect(await ignored.exited).toBe(0);
       expect(names).toEqual(privatePaths);
@@ -207,15 +207,15 @@ describe("buildProjectExport", () => {
 
   test("a private project exports as private, and deploys private when the manifest says nothing", () => {
     const privateExport = readTar(buildProjectExport({ ...project, manifest: { ...project.manifest, visibility: "private" } }, artifact, kernelFiles).archive);
-    const exported = JSON.parse(privateExport.get("littlebox/project.json") ?? "{}") as { manifest: { visibility: string } };
+    const exported = JSON.parse(privateExport.get("konae/project.json") ?? "{}") as { manifest: { visibility: string } };
     expect(exported.manifest.visibility).toBe("private");
-    // The same default `littlebox publish` uses.
+    // The same default `konae publish` uses.
     expect(privateExport.get("scripts/deploy.mjs")).toContain("visibility: project.manifest.visibility || 'private'");
   });
 
   test("refuses an artifact whose runtime script is not marked", () => {
     const unmarked: BuildArtifact = { ...artifact, files: { "index.html": "<!doctype html><script>window.miniapp={}</script>" } };
-    expect(() => buildProjectExport(project, unmarked, kernelFiles)).toThrow("does not mark its Littlebox runtime");
+    expect(() => buildProjectExport(project, unmarked, kernelFiles)).toThrow("does not mark its Konae runtime");
   });
 
   /**
@@ -232,7 +232,7 @@ describe("buildProjectExport", () => {
     const hosted = createHostedArtifact({ body, styles: "", script: "console.log('first build')" });
     const { entries } = buildProjectExport(source, hosted, kernelFiles);
 
-    const directory = await mkdtemp(path.join(tmpdir(), "littlebox-export-"));
+    const directory = await mkdtemp(path.join(tmpdir(), "konae-export-"));
     try {
       for (const entry of entries) {
         const target = path.join(directory, entry.path);
@@ -246,13 +246,13 @@ describe("buildProjectExport", () => {
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
 
-      const rebuilt = JSON.parse(await readFile(path.join(directory, "littlebox/artifact.json"), "utf8")) as BuildArtifact;
+      const rebuilt = JSON.parse(await readFile(path.join(directory, "konae/artifact.json"), "utf8")) as BuildArtifact;
       const html = rebuilt.files["index.html"];
       expect(html).toContain("rebuilt");
       expect(html).toContain(body);
-      const runtime = html.match(/<script data-littlebox-runtime>([\s\S]*?)<\/script>/)?.[1] ?? "";
-      expect(runtime).toContain("/_littlebox/mcp");
-      expect(html.indexOf("window.ownerInline")).toBeLessThan(html.indexOf("<script data-littlebox-runtime>"));
+      const runtime = html.match(/<script data-konae-runtime>([\s\S]*?)<\/script>/)?.[1] ?? "";
+      expect(runtime).toContain("/_konae/mcp");
+      expect(html.indexOf("window.ownerInline")).toBeLessThan(html.indexOf("<script data-konae-runtime>"));
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -277,8 +277,8 @@ describe("buildProjectExport", () => {
       runtime: "window.miniapp={};",
     });
     const { entries } = buildProjectExport({ ...project, files: sources, manifest: { ...project.manifest, routing: "pages" } }, built, kernelFiles);
-    expect(JSON.parse(entries.find((entry) => entry.path === "littlebox/artifact.json")!.contents as string).encodings).toEqual({ "logo.png": "base64" });
-    const directory = await mkdtemp(path.join(tmpdir(), "littlebox-export-pages-"));
+    expect(JSON.parse(entries.find((entry) => entry.path === "konae/artifact.json")!.contents as string).encodings).toEqual({ "logo.png": "base64" });
+    const directory = await mkdtemp(path.join(tmpdir(), "konae-export-pages-"));
     try {
       for (const entry of [...entries, { path: "app/logo.png", contents: logo }]) {
         const target = path.join(directory, entry.path);
@@ -291,7 +291,7 @@ describe("buildProjectExport", () => {
       const [exitCode, stderr] = await Promise.all([build.exited, new Response(build.stderr).text()]);
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
-      const rebuilt = JSON.parse(await readFile(path.join(directory, "littlebox/artifact.json"), "utf8")) as BuildArtifact;
+      const rebuilt = JSON.parse(await readFile(path.join(directory, "konae/artifact.json"), "utf8")) as BuildArtifact;
       expect(Object.keys(rebuilt.files).sort()).toEqual(["about.html", "app.js", "index.html", "logo.png", "robots.txt", "runtime.js"]);
       expect(rebuilt.files["about.html"]).toContain("<title>About us</title>");
       expect(rebuilt.files["about.html"]).toContain(`<head>${runtimeLoaderScript()}`);

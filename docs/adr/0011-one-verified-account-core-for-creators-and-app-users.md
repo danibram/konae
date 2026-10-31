@@ -14,7 +14,7 @@ A challenge carries a purpose (verification, invitation, recovery) and a scope. 
 
 Verification requires choosing the password on the page the link opens. Signup in required mode takes only an email and stores no password. The plan allowed a second option, binding verification to the signup attempt and its browser. We did not take it because a link opened on a phone, or by an agent acting for the person, would then fail, and because it keeps two passwords in play: the one typed at signup and the one the verifier proves. With one password chosen after proof, a password a third party typed for someone else's address cannot survive, and verification, recovery and the coming invitation acceptance share one completion step: consume a token, set a password, enter.
 
-`LITTLEBOX_ACCOUNT_VERIFICATION` chooses the mode for the installation. `local`, the default, keeps unverified signup so development without email works. `required` moves every account that never verified to pending, revokes its sessions, and keeps IDs and rows. The store records the mode it last ran under, so the move happens once per switch and again after a later local period.
+`KONAE_ACCOUNT_VERIFICATION` chooses the mode for the installation. `local`, the default, keeps unverified signup so development without email works. `required` moves every account that never verified to pending, revokes its sessions, and keeps IDs and rows. The store records the mode it last ran under, so the move happens once per switch and again after a later local period.
 
 ## Considered options
 
@@ -25,11 +25,11 @@ Verification requires choosing the password on the page the link opens. Signup i
 
 ## Consequences
 
-Required mode needs a mail transport; without one, signup and recovery answer 503 and existing active accounts still sign in. The transport is a seam (`AccountMail` in `kernel-rs/src/accounts.rs`); the only implementation today writes a development mailbox file. A full copy drops sessions and challenges, and an import deletes any it finds, so an old link never works on another machine. The operator suspends and resumes local creators with `littlebox-kernel creator-account-suspend` and `creator-account-resume`. Invitation acceptance and creator invitation codes plug into the same challenge model in later deliveries.
+Required mode needs a mail transport; without one, signup and recovery answer 503 and existing active accounts still sign in. The transport is a seam (`AccountMail` in `kernel-rs/src/accounts.rs`); the only implementation today writes a development mailbox file. A full copy drops sessions and challenges, and an import deletes any it finds, so an old link never works on another machine. The operator suspends and resumes local creators with `konae-kernel creator-account-suspend` and `creator-account-resume`. Invitation acceptance and creator invitation codes plug into the same challenge model in later deliveries.
 
 ## Note, 2026-11-06: creator admission
 
-Delivery C admits creators with invitation codes, in `kernel-rs/src/admission.rs`. The operator issues, lists and revokes them with `littlebox-kernel creator-code-create`, `creator-code-list` and `creator-code-revoke`. Codes live in `owners.sqlite` next to the accounts, as SHA-256 hashes with an expiry, a note, a revocation time, a use time and the creator they produced. `auth.rs` gained one seam: `request_signup_admitted` and `create_account_admitted` run an admission check inside the transaction that writes the account, so a code is consumed exactly when the pending creator is created, and a refusal rolls both back.
+Delivery C admits creators with invitation codes, in `kernel-rs/src/admission.rs`. The operator issues, lists and revokes them with `konae-kernel creator-code-create`, `creator-code-list` and `creator-code-revoke`. Codes live in `owners.sqlite` next to the accounts, as SHA-256 hashes with an expiry, a note, a revocation time, a use time and the creator they produced. `auth.rs` gained one seam: `request_signup_admitted` and `create_account_admitted` run an admission check inside the transaction that writes the account, so a code is consumed exactly when the pending creator is created, and a refusal rolls both back.
 
 A code is not a challenge. A challenge proves control of an address and belongs to an account; a code proves the operator chose to admit someone and belongs to no account until it is used. The account a code creates still verifies its email through the challenge model above.
 
@@ -45,7 +45,7 @@ An action's access level decides whether its HTTP binding answers. Deployment vi
 
 A route has three kinds of caller, resolved before any SQL runs: a third-party service proves itself with the binding's signature, a program the owner wrote with an API key, and a person with the app session cookie. An API key is a third kind of Runtime Actor, next to the anonymous visitor and the signed-in app user. The owner issues it for one Deployment and names the actions and file visibilities it may use. The Kernel stores the SHA-256 hash only. An `actor` binding yields the key's ID, so rows a key writes have an owner. A key belongs to the Deployment, never to the owner, and grants no administrative capability.
 
-Files gain one HTTP read path, `GET /_littlebox/files/<id>`, that accepts the session cookie or an API key and applies the file's visibility. A key that names `private` may read every private file of its Deployment, because the owner who issued it can already read them through the Admin Interface. There is still no unauthenticated object URL.
+Files gain one HTTP read path, `GET /_konae/files/<id>`, that accepts the session cookie or an API key and applies the file's visibility. A key that names `private` may read every private file of its Deployment, because the owner who issued it can already read them through the Admin Interface. There is still no unauthenticated object URL.
 
 The signing secret is set by the owner through the Admin Interface and belongs to the Project, not to the Deployment, because a first publish must find it before the Deployment exists. It never enters `actions.json`, the Build Artifact or a portable export. Keys travel with the identity file in an export, hashes included, and the import revokes them, as it deletes sessions and challenges. The owner issues new keys on the destination.
 
@@ -67,7 +67,7 @@ Account email now leaves through a persistent queue in `mail.sqlite`, recorded i
 
 ## Note, 2026-11-06: API keys on restore and on import
 
-A restore and an import treat API keys differently, and the difference follows who ends up holding the app. `littlebox-kernel restore` installs a copy of the same installation for the same owner, after a lost volume or a move to a new host. It signs out every session and agent credential because the owner can sign in again in a minute, but it keeps API keys valid, because they sit in programs and services the owner may not control and the app is still the same app. An import, through a package or the small export, puts the app in another installation, possibly under another owner, so it revokes every key: the package leaves the keys out and its import deletes any it finds, and the small format marks each one revoked.
+A restore and an import treat API keys differently, and the difference follows who ends up holding the app. `konae-kernel restore` installs a copy of the same installation for the same owner, after a lost volume or a move to a new host. It signs out every session and agent credential because the owner can sign in again in a minute, but it keeps API keys valid, because they sit in programs and services the owner may not control and the app is still the same app. An import, through a package or the small export, puts the app in another installation, possibly under another owner, so it revokes every key: the package leaves the keys out and its import deletes any it finds, and the small format marks each one revoked.
 
 A key the owner revoked after the copy was taken comes back live after a restore. The restore command says so and tells the operator to revoke it again. `a_restore_keeps_api_keys_live_and_an_import_revokes_them` in `kernel-rs/src/copies.rs` checks both paths on one accounts file, and `tests/http-routes.integration.test.ts` checks the import against a running Kernel.
 
@@ -146,7 +146,7 @@ Decisions the plan left open:
 
 ## Note, 2026-11-07: a provider's own scheme
 
-A route's signature may name a `scheme` other than Littlebox's, `hmac-body`, `timestamped` or `svix`, and a route may declare `fields` that read a nested body. [ADR-0018](0018-a-route-verifies-a-providers-own-signature.md) records the decision. Littlebox's scheme stays the default and unchanged.
+A route's signature may name a `scheme` other than Konae's, `hmac-body`, `timestamped` or `svix`, and a route may declare `fields` that read a nested body. [ADR-0018](0018-a-route-verifies-a-providers-own-signature.md) records the decision. Konae's scheme stays the default and unchanged.
 
 ## Note, 2026-11-07: a secret for calls only
 

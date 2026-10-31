@@ -1,10 +1,10 @@
-# Littlebox architecture
+# Konae architecture
 
 ## Product rule
 
-A new mini-app creates **no process, VM or container**. It is a static Build Artifact plus logical capabilities on a shared data plane. Idle apps should have effectively zero marginal compute cost.
+A new mini-app creates **no process, VM or container**. It is a static Build Artifact plus logical capabilities on a shared data plane. An idle app uses no CPU. It costs only the disk its folder takes.
 
-The **Littlebox Kernel** owns product security semantics. Infrastructure providers are adapters: they may execute code or persist sessions, databases and files, but they never decide who an actor is, whether a Deployment is public or private, or which action that actor may invoke.
+The **Konae Kernel** owns product security semantics. Infrastructure providers are adapters. They may execute code or persist sessions, databases and files, but they never decide who an actor is, whether a Deployment is public or private, or which action that actor may invoke.
 
 ## Capsule v1
 
@@ -19,11 +19,13 @@ mini-app/
 ├── app.js            # or src/main.ts
 ├── src/
 │   └── feature.ts
-├── schema.ts
+├── package.json      # optional, the npm packages the app imports
+├── schema.sql
+├── schema.ts         # optional, the Database Model of the editor's Data panel
 └── actions.json
 ```
 
-The editor stores an arbitrary source tree in one exportable JSON object, together with the Drizzle Database Model shown as `schema.ts`. The browser compiles `app.js`, or `src/main.ts` when it exists, and its relative imports with WebAssembly. The Project record also carries a versioned manifest (`CapsuleManifest` in `src/deployments/manifest.ts`) with deployment visibility, declared runtime actions and capability policies, but never SQL implementations, credentials or administrative grants. The manifest is a field of the Project, not a file in the tree. External Projects keep it in `littlebox.json`.
+[The Capsule](./capsule.md) says what each file does. The editor stores an arbitrary source tree in one exportable JSON object, together with the Drizzle Database Model shown as `schema.ts`. The browser compiles `app.js`, or `src/main.ts` when it exists, and its relative imports with WebAssembly. The Project record also carries a versioned manifest (`CapsuleManifest` in `src/deployments/manifest.ts`) with deployment visibility, declared runtime actions and capability policies, but never SQL implementations, credentials or administrative grants. The manifest is a field of the Project, not a file in the tree. External Projects keep it in `konae.json`.
 
 ## Current local topology
 
@@ -48,7 +50,7 @@ This is a development boundary, not a hardened hostile-code sandbox. The preview
 flowchart LR
   V["visitor or app user"] --> RI["Kernel runtime interface"]
   SV["service or program"] -->|"HTTP route: signature or API key"| RI
-  RI --> K["Littlebox Kernel"]
+  RI --> K["Konae Kernel"]
   K -->|"public: allow shell"| C["Build Artifact"]
   K -->|"private: require app login"| C
   C --> B["browser mini-app"]
@@ -68,12 +70,12 @@ flowchart LR
 The Kernel's data directory is the authority. A copy of a Deployment's folder, with the stores beside it, is the app. When S3 is configured, the Kernel also uploads each artifact to the artifact bucket and reads from it only when the local file is missing.
 
 ```text
-<LITTLEBOX_DATA_DIR>/
+<KONAE_DATA_DIR>/
 ├── owners.sqlite           # creator accounts, sessions, challenges and invitation codes
 ├── mcp.sqlite              # projects, saved sources, agent credentials, OAuth, signing secrets, audit
 ├── mail.sqlite             # the account email queue, ADR-0012
 ├── calls.sqlite            # the call actions' queue and outbox, ADR-0019
-├── mailbox.jsonl           # the development mailbox, only with LITTLEBOX_MAIL_TRANSPORT=development
+├── mailbox.jsonl           # the development mailbox, only with KONAE_MAIL_TRANSPORT=development
 ├── transfers/              # unfinished MCP uploads and downloads
 ├── recovery-hold.json      # only after a restore that could not read the revocation record
 └── deployments/<id>/
@@ -104,7 +106,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 | `invitations.rs` | App invitations and the owner's user tools behind `manage_users` |
 | `app_owner.rs` | The Project Owner's own app account with the role `owner`, and its one-time entry link |
 | `mail.rs` | The email queue, its worker, the Resend, SMTP and development transports, the sender preflight and the limits |
-| `http.rs` | HTTP routes, their callers and signatures, signing secrets, API keys and `GET /_littlebox/files/<id>` |
+| `http.rs` | HTTP routes, their callers and signatures, signing secrets, API keys and `GET /_konae/files/<id>` |
 | `provider.rs` | A provider's signature schemes, a route's `fields` and the memory of accepted deliveries ([ADR-0018](./adr/0018-a-route-verifies-a-providers-own-signature.md)) |
 | `calls.rs` | Call actions, their queue and worker in `calls.sqlite`, the address rules, `then` mutations, `calls_read` and the manifest's `connects` |
 | `guard.rs` | A mutation's guard |
@@ -115,9 +117,9 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 | `artifact.rs` | Which artifact file answers a path, and binary files in an artifact |
 | `security.rs` | The response headers of every host |
 | `limits.rs` | Per-client limits on unauthenticated requests |
-| `copies.rs` | Scheduled copies and `littlebox-kernel restore` |
+| `copies.rs` | Scheduled copies and `konae-kernel restore` |
 | `schedule.rs` | A mutation's schedule, the timer that runs it and the record of each run ([ADR-0017](./adr/0017-the-kernel-runs-a-declared-schedule.md)) |
-| `recovery.rs` | The revocation record and `littlebox-kernel reconcile` |
+| `recovery.rs` | The revocation record and `konae-kernel reconcile` |
 | `package.rs` | The chunked package, `package_export` and its import |
 | `migration.rs` | Migration and maintenance |
 | `eject.rs` | Eject on the server |
@@ -131,7 +133,7 @@ A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the p
 
 An artifact holds pages and the files they load. `kernel-rs/src/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page; under `spa` it serves `index.html`. The rules for which Capsule files become the artifact live in one file, `src/lib/static-artifact.js`, which the CLI, the editor and the exported kit all run. The [MCP guide](./mcp.md#what-the-build-publishes) lists both.
 
-A scheduled copy takes each Deployment's data and identity locks, snapshots its SQLite files with `VACUUM INTO`, copies the rest of its folder and writes a manifest of SHA-256 checksums last. It sends the result to a directory on another disk, an S3 prefix in the data bucket, or both, and keeps 24 recent and 30 daily copies. Copy failures are logged and reported under `copies` in `/_littlebox/health`; they never block serving. `littlebox-kernel restore` is the only way back: it installs one copy into an empty data directory, verifies every checksum, signs out every session and agent credential and ends every open email link. App API keys stay valid, because a restore brings back the same installation for the same owner; an import into another installation revokes them. Suspensions and key revocations made after the copy are written to each copy target as they happen, and restore applies them, or starts the installation in maintenance when it cannot read them ([ADR-0014](./adr/0014-an-app-migrates-with-one-writer-at-a-time.md)). With `LITTLEBOX_COPY_SECRET` the files sent to S3 are encrypted.
+A scheduled copy takes each Deployment's data and identity locks, snapshots its SQLite files with `VACUUM INTO`, copies the rest of its folder and writes a manifest of SHA-256 checksums last. It sends the result to a directory on another disk, an S3 prefix in the data bucket, or both, and keeps 24 recent and 30 daily copies. Copy failures are logged and reported under `copies` in `/_konae/health`; they never block serving. `konae-kernel restore` is the only way back: it installs one copy into an empty data directory, verifies every checksum, signs out every session and agent credential and ends every open email link. App API keys stay valid, because a restore brings back the same installation for the same owner; an import into another installation revokes them. Suspensions and key revocations made after the copy are written to each copy target as they happen, and restore applies them, or starts the installation in maintenance when it cannot read them ([ADR-0014](./adr/0014-an-app-migrates-with-one-writer-at-a-time.md)). With `KONAE_COPY_SECRET` the files sent to S3 are encrypted.
 
 A Deployment in maintenance, for a migration or after an unreconciled restore, keeps that state in `deployments/<id>/migration.json` or the data directory's `recovery-hold.json`. One middleware answers its host with a maintenance page or a 503 that names the operation, the administrative tools that would change it refuse, and the mail worker holds its email. The Kernel reads nothing from the data bucket at startup.
 
@@ -141,7 +143,7 @@ A migration moves one Deployment to another installation with one writer at a ti
 
 Every verification, recovery and invitation link leaves through the queue in `mail.sqlite` ([ADR-0012](./adr/0012-account-email-goes-through-a-persistent-queue.md)). The transaction that issues a challenge writes its email job too, and a worker inside the Kernel sends due jobs through Resend, SMTP or the development mailbox, retrying a provider outage for about two hours. The sender preflight checks that the transport may send as the configured sender, and while it refuses, signup and recovery answer 503 and nothing is queued. Limits per recipient, client address, creator, app and installation refuse a request before anything is stored. Fixed templates hold the text; only the app name, the inviter's account email and the link vary.
 
-The Docker development stack uses Nginx only for hostname routing: `app.localhost` (`LITTLEBOX_DOMAIN=localhost` derives it, ADR-0024) reaches Vite and the Kernel Admin Interface, while every other hostname, a custom domain included, reaches the Rust Kernel Runtime Interface with `Host` unchanged. MinIO provides the same S3 operations used with hosted providers. Nginx and MinIO do not make authorization decisions.
+The Docker development stack uses Nginx only for hostname routing. `app.localhost` (`KONAE_DOMAIN=localhost` derives it, ADR-0024) reaches Vite and the Kernel Admin Interface, and every other hostname, a custom domain included, reaches the Rust Kernel Runtime Interface with `Host` unchanged. MinIO provides the same S3 operations used with hosted providers. Nginx and MinIO do not make authorization decisions.
 
 ### Two independent policy axes
 
@@ -156,7 +158,7 @@ On a public Deployment a signed-out visitor may call the actions declared `anony
 
 A public deployment may contain private user records. Public means its HTML, CSS and JavaScript are public; it never means the database is public. A private deployment also protects the application shell, but still requires per-action authorization because authenticated users need not share the same data.
 
-An upload is private to the uploading app user unless the upload sets visibility to public. Another account cannot read a private file. On a public Deployment, visitors can read public files. On a private Deployment, any signed-in app user can read public files. `GET /_littlebox/files/<id>` serves a file to a caller allowed to read it: a signed-in user from the app's own origin, a visitor for a public file of a public Deployment, or an API key that names the file's visibility; `miniapp.files.url` returns that path. Only the uploader changes a file's visibility or deletes it, with `files_update` and `files_delete` in `kernel-rs/src/files.rs`, and a deleted file frees its share of the quota. There is no unauthenticated object URL, and nothing is served from the bucket.
+An upload is private to the uploading app user unless the upload sets visibility to public. Another account cannot read a private file. On a public Deployment, visitors can read public files. On a private Deployment, any signed-in app user can read public files. `GET /_konae/files/<id>` serves a file to a caller allowed to read it: a signed-in user from the app's own origin, a visitor for a public file of a public Deployment, or an API key that names the file's visibility; `miniapp.files.url` returns that path. Only the uploader changes a file's visibility or deletes it, with `files_update` and `files_delete` in `kernel-rs/src/files.rs`, and a deleted file frees its share of the quota. There is no unauthenticated object URL, and nothing is served from the bucket.
 
 ### Database boundary
 
@@ -183,7 +185,7 @@ The editor is a different trust domain. SQL Studio, schema migrations, backups a
 The seams a second adapter would implement are sketched below. They are a design, not code. The Rust Kernel implements them as modules of one process, and no adapter interface exists in the repository.
 
 ```ts
-interface LittleboxKernel {
+interface KonaeKernel {
   handleRuntime(request: RuntimeRequest): Promise<Response>;
   handleAdmin(request: AdminRequest): Promise<Response>;
 }
@@ -218,7 +220,7 @@ All adapters implement the same Kernel seams. Provider identity products may opt
 
 ## Isolation of hosted code
 
-Every app runs on its own host, `<slug>-<id>.<LITTLEBOX_HOST_SUFFIX>`, and the editor runs on a host no app shares (`app.<domain>` when `LITTLEBOX_DOMAIN` is set, ADR-0024). An app may also answer on one custom domain its owner proved with a TXT record ([ADR-0015](./adr/0015-a-deployment-answers-on-one-custom-domain.md)); the Kernel resolves it to the same Deployment, so it is that app's origin too, and no other app or the editor can take it. One layer in `kernel-rs/src/security.rs` adds the headers below to every Kernel response, so an exported Kernel sends them too.
+Every app runs on its own host, `<slug>-<id>.<KONAE_HOST_SUFFIX>`, and the editor runs on a host no app shares (`app.<domain>` when `KONAE_DOMAIN` is set, ADR-0024). An app may also answer on one custom domain its owner proved with a TXT record ([ADR-0015](./adr/0015-a-deployment-answers-on-one-custom-domain.md)); the Kernel resolves it to the same Deployment, so it is that app's origin too, and no other app or the editor can take it. One layer in `kernel-rs/src/security.rs` adds the headers below to every Kernel response, so an exported Kernel sends them too.
 
 `<domain>` is one origin that the home and every path address share ([ADR-0024](./adr/0024-an-installation-names-its-hosts-from-one-domain-and-an-app-may-answer-on-a-path.md)). An app on a path address answers its pages, routes and runtime under `<domain>/p/<id>` or `<domain>/p/<name>`, and every such app shares that origin with the others and with the home. A script of one app can therefore open another app's page in the same origin, read its DOM through `window.open`, and send another app's session cookie with a request to its runtime. The Kernel refuses a runtime call whose Referer names another app's path, but only when the browser sends a Referer, so that check is not a boundary. The owner accepts this when turning a path on for an app with accounts or a private app. The isolation this section describes holds for generated hostnames and aliases only.
 
@@ -236,14 +238,14 @@ object-src 'none'; base-uri 'none'
 A fragment page in a Build Artifact inlines the runtime and the compiled module; a page that is a whole document loads the runtime from `/runtime.js` and its modules from the app's origin, which `script-src 'self'` allows. The Kernel reads each HTML response, hashes every inline `<script>` with SHA-256 and lists those hashes, so exactly the scripts in the published file run. Inline event handler attributes, `eval`, Blob scripts and scripts from other origins do not. Any other file, such as an SVG opened directly, gets the policy with no hash. The private sign-in page uses the same mechanism for its own script.
 
 - Styles allow `'unsafe-inline'` because apps write `style="..."` attributes through `innerHTML`, as the `poll` example does, and the artifact inlines `styles.css`. A hash cannot cover a generated attribute. Google Fonts is the only foreign origin because the starter templates import it and the agent is told to keep the fonts it finds. Neither font host can read app data.
-- Images and media accept `blob:` and `data:` because `miniapp.files.read` hands a file to the app as a Blob URL and apps keep small inline copies of images, as the `portfolio` example does. `miniapp.files.url` returns `/_littlebox/files/<id>`, which `connect-src 'self'` allows a page to fetch again.
-- `connect-src 'self'` limits `fetch` to the app's origin, where the runtime reaches `/_littlebox/mcp`, plus the origins the manifest's `connects` lists, at most 10 ([ADR-0019](./adr/0019-an-app-calls-another-from-the-kernel.md)). A request that needs a secret or a key is a call action, which the Kernel sends.
+- Images and media accept `blob:` and `data:` because `miniapp.files.read` hands a file to the app as a Blob URL and apps keep small inline copies of images, as the `portfolio` example does. `miniapp.files.url` returns `/_konae/files/<id>`, which `connect-src 'self'` allows a page to fetch again.
+- `connect-src 'self'` limits `fetch` to the app's origin, where the runtime reaches `/_konae/mcp`, plus the origins the manifest's `connects` lists, at most 10 ([ADR-0019](./adr/0019-an-app-calls-another-from-the-kernel.md)). A request that needs a secret or a key is a call action, which the Kernel sends.
 
-Every host, apps included, sends `frame-ancestors 'none'` and `X-Frame-Options: DENY`. The Kernel's pages on the editor host, such as owner sign-in, get `default-src 'self'` with their script hashes; its JSON and errors get `default-src 'none'`. When `LITTLEBOX_PUBLIC_ORIGIN` or `LITTLEBOX_MCP_ORIGIN` is HTTPS, every response carries `Strict-Transport-Security: max-age=31536000; includeSubDomains`. `includeSubDomains` makes a browser that has visited the installation's host use HTTPS for app hosts beneath it before their first visit. A custom domain gets `max-age=31536000` alone, because the names under the owner's domain are not the installation's. There is no `preload`; the operator decides that.
+Every host, apps included, sends `frame-ancestors 'none'` and `X-Frame-Options: DENY`. The Kernel's pages on the editor host, such as owner sign-in, get `default-src 'self'` with their script hashes; its JSON and errors get `default-src 'none'`. When `KONAE_PUBLIC_ORIGIN` or `KONAE_MCP_ORIGIN` is HTTPS, every response carries `Strict-Transport-Security: max-age=31536000; includeSubDomains`. `includeSubDomains` makes a browser that has visited the installation's host use HTTPS for app hosts beneath it before their first visit. A custom domain gets `max-age=31536000` alone, because the names under the owner's domain are not the installation's. There is no `preload`; the operator decides that.
 
 The Kernel does not serve the editor. Vite serves it in development and in the Docker stack, and nothing in this repository serves the built `dist/` in production. Vite's dev and preview servers send `frame-ancestors 'none'` and `X-Frame-Options: DENY`. A gateway that serves `dist/` must send the same two headers. The editor has no script policy yet. The preview is a `srcdoc` iframe, which inherits the editor's policy, so a `script-src` without `'unsafe-inline'` would stop the preview. esbuild and sql.js also need `'wasm-unsafe-eval'` and a `blob:` worker, and the agent calls model providers from the browser, so `connect-src` cannot be `'self'`. A script policy for the editor waits until the preview moves to its own origin.
 
-Under HTTPS the owner cookie is `__Host-littlebox_owner_session` and the app cookie `__Host-littlebox_app_session`, both `Secure`, `Path=/` and without `Domain`. A browser refuses a `__Host-` cookie that names a domain, so an app can only plant an unprefixed name for the whole suffix, and the Kernel ignores unprefixed names under HTTPS. The app cookie is `SameSite=Lax`; the owner cookie is `SameSite=Strict`. Over plain HTTP, as in the local Docker stack, cookies keep unprefixed names and no HSTS is sent.
+Under HTTPS the owner cookie is `__Host-konae_owner_session` and the app cookie `__Host-konae_app_session`, both `Secure`, `Path=/` and without `Domain`. A browser refuses a `__Host-` cookie that names a domain, so an app can only plant an unprefixed name for the whole suffix, and the Kernel ignores unprefixed names under HTTPS. The app cookie is `SameSite=Lax`; the owner cookie is `SameSite=Strict`. Over plain HTTP, as in the local Docker stack, cookies keep unprefixed names and no HSTS is sent.
 
 Administrative MCP, owner sign-in and the OAuth routes refuse a request whose `Origin` is an app host before they read a credential. An app host is a deployment hostname, a claimed custom domain, or any host under the suffix other than the installation's public or MCP host. The runtime endpoint refuses an `Origin` that differs from its `Host`, so one app's page cannot call another app's runtime, and each Deployment keeps its own identity store, so its session means nothing to another app.
 
@@ -270,4 +272,4 @@ The editor authenticates MCP administration with an HttpOnly owner session. Exte
 
 The setup key creates the first owner and remains outside the editor bundle; every later creator needs an invitation code. The first owner claims legacy Deployments. Each later owner starts with a separate project registry. Native development binds to localhost; the Docker gateway preserves Host and routes MCP, authorization and login to the Kernel.
 
-MCP is the operation protocol under [ADR-0008](./adr/0008-authenticated-mcp-is-the-platform-operation-protocol.md). The old operation routes return HTTP 410, except `GET /_littlebox/files/<id>`, which serves a file to its allowed callers and answers 404 or 405 otherwise. File and artifact transfers use authenticated tools with bounded chunks and checksums. Login, OAuth discovery and static documents retain their HTTP routes. [The MCP guide](./mcp.md) describes the implemented tools and limits, and [the decision records](./adr/README.md) say which ADR decides what.
+MCP is the operation protocol under [ADR-0008](./adr/0008-authenticated-mcp-is-the-platform-operation-protocol.md). The old operation routes return HTTP 410, except `GET /_konae/files/<id>`, which serves a file to its allowed callers and answers 404 or 405 otherwise. File and artifact transfers use authenticated tools with bounded chunks and checksums. Login, OAuth discovery and static documents retain their HTTP routes. [The MCP guide](./mcp.md) describes the implemented tools and limits, and [the decision records](./adr/README.md) say which ADR decides what.

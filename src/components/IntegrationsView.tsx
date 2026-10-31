@@ -18,7 +18,7 @@ type Props = {
   actionsSource?: string;
 };
 
-const SIGNED_OUT = <p className="access-note">Sign in with <a href="/_littlebox/owner/login">owner sign-in</a> to manage signing secrets and API keys.</p>;
+const SIGNED_OUT = <p className="access-note">Sign in with <a href="/_konae/owner/login">owner sign-in</a> to manage signing secrets and API keys.</p>;
 
 /** Signing secrets for signed routes and API keys for programs the owner writes. */
 export function IntegrationsView({ projectId, deploymentId, deploymentUrl, actionsSource }: Props) {
@@ -129,7 +129,7 @@ function SecretsCard({ projectId, actionsSource, onSignedOut }: { projectId: str
   return (
     <Card className="access-card" role="group" aria-label="Signing secrets">
       <h3>Signing secrets</h3>
-      <p className="access-note">A sender signs each request with the secret in the header the route declares. Littlebox shows names only, never values.</p>
+      <p className="access-note">A sender signs each request with the secret in the header the route declares. Konae shows names only, never values.</p>
       {list}
       <div className="access-form-row">
         <Field label="Secret name"><Input value={name} placeholder="orders_webhook" autoComplete="off" spellCheck={false} onChange={(event) => { setName(event.target.value); setFormError(""); }} /></Field>
@@ -243,7 +243,7 @@ function ApiKeysCard({ deploymentId, deploymentUrl, routes, onSignedOut }: { dep
       </fieldset>
       {confirm.dialog}
       {created && (
-        <Dialog title="Copy this API key now" description="Littlebox stores only its hash. Once this closes, nobody can show the key again." onClose={() => setCreated(null)} footer={<Button variant="primary" onClick={() => setCreated(null)}>I copied the key</Button>}>
+        <Dialog title="Copy this API key now" description="Konae stores only its hash. Once this closes, nobody can show the key again." onClose={() => setCreated(null)} footer={<Button variant="primary" onClick={() => setCreated(null)}>I copied the key</Button>}>
           <div className="ui-dialog-body access-reveal">
             <CopyLine label="API key" text={created.key} />
             <KeyCommands keyValue={created.key} apiKey={created} routes={routes} deploymentUrl={deploymentUrl} />
@@ -263,7 +263,7 @@ function KeyCommands({ keyValue, apiKey, routes, deploymentUrl }: { keyValue?: s
       {named.map((route) => <CopyLine key={route.name} label={`${route.method} ${route.path}`} text={routeCurl(deploymentUrl, route, keyValue)} />)}
       {apiKey.files.length > 0 && <CopyLine label={`Read ${apiKey.files.join(" and ")} files`} text={fileCurl(deploymentUrl, keyValue)} />}
       {gone.length > 0 && <small>{gone.join(", ")} no longer has a route in these sources.</small>}
-      {!keyValue && (named.length > 0 || apiKey.files.length > 0) && <small>Set LITTLEBOX_API_KEY to the key you copied when you created it.</small>}
+      {!keyValue && (named.length > 0 || apiKey.files.length > 0) && <small>Set KONAE_API_KEY to the key you copied when you created it.</small>}
     </div>
   );
 }

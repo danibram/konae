@@ -105,7 +105,7 @@ async fn change(state: &AppState, headers: &HeaderMap, id: &str, change: Change<
     // even if removing them fails; `files-reconcile` removes what is left.
     if matches!(change, Change::Delete) {
         if let Err(e) = state.files.store.delete(&deployment.id, id).await {
-            eprintln!("littlebox: could not remove the bytes of deleted file {id}: {e:#}");
+            eprintln!("konae: could not remove the bytes of deleted file {id}: {e:#}");
         }
     }
     Json(json!({"result": result})).into_response()
@@ -135,7 +135,7 @@ mod tests {
     use crate::tests::{login_test_state, response_json, signed_in};
 
     /// Runs one test over the local folder and over an S3 store, the
-    /// in-process fake unless `LITTLEBOX_TEST_S3_ENDPOINT` names a server.
+    /// in-process fake unless `KONAE_TEST_S3_ENDPOINT` names a server.
     macro_rules! on_both_stores {
         ($name:ident) => {
             mod $name {
@@ -191,7 +191,7 @@ mod tests {
 
     on_both_stores!(the_uploader_publishes_a_private_file_and_takes_it_back);
     async fn the_uploader_publishes_a_private_file_and_takes_it_back(s3: bool) {
-        let root = std::env::temp_dir().join(format!("littlebox-file-update-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-file-update-{}", Uuid::new_v4()));
         let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, alice_id) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
@@ -253,7 +253,7 @@ mod tests {
 
     on_both_stores!(a_deployment_holds_a_bounded_number_of_files_with_bounded_names);
     async fn a_deployment_holds_a_bounded_number_of_files_with_bounded_names(s3: bool) {
-        let root = std::env::temp_dir().join(format!("littlebox-file-count-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-file-count-{}", Uuid::new_v4()));
         let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
@@ -271,7 +271,7 @@ mod tests {
 
     on_both_stores!(a_deleted_file_frees_its_quota_and_reads_as_missing);
     async fn a_deleted_file_frees_its_quota_and_reads_as_missing(s3: bool) {
-        let root = std::env::temp_dir().join(format!("littlebox-file-delete-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-file-delete-{}", Uuid::new_v4()));
         let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
@@ -309,7 +309,7 @@ mod tests {
     /// The operator's limits replace the defaults: a file the default per-file
     /// cap refuses is stored, and every refusal names the configured numbers.
     async fn raised_limits_admit_a_file_the_defaults_refuse(s3: bool) {
-        let root = std::env::temp_dir().join(format!("littlebox-file-limits-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-file-limits-{}", Uuid::new_v4()));
         let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
@@ -336,7 +336,7 @@ mod tests {
     on_both_stores!(the_file_path_serves_one_byte_range);
     /// A range of a file answers 206 with that part, and a range past the end 416.
     async fn the_file_path_serves_one_byte_range(s3: bool) {
-        let root = std::env::temp_dir().join(format!("littlebox-file-range-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-file-range-{}", Uuid::new_v4()));
         let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
@@ -361,7 +361,7 @@ mod tests {
 
     on_both_stores!(a_file_without_an_uploader_cannot_be_changed_from_the_app);
     async fn a_file_without_an_uploader_cannot_be_changed_from_the_app(s3: bool) {
-        let root = std::env::temp_dir().join(format!("littlebox-file-legacy-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-file-legacy-{}", Uuid::new_v4()));
         let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
@@ -390,7 +390,7 @@ mod tests {
     /// looked up; on a public Deployment a file the visitor may not read
     /// answers as a missing one. The same public file shows both.
     async fn a_visitor_is_asked_to_sign_in_on_a_private_app_and_told_not_found_on_a_public_one(s3: bool) {
-        let root = std::env::temp_dir().join(format!("littlebox-file-visitor-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-file-visitor-{}", Uuid::new_v4()));
         for (visibility, public_status) in [("private", StatusCode::UNAUTHORIZED), ("public", StatusCode::OK)] {
             let (state, visitor) = login_on(&root.join(visibility), visibility, s3).await;
             let deployment = state.deployments.read().await.values().next().cloned().unwrap();

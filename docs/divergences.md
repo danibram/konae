@@ -1,0 +1,40 @@
+# Named divergences
+
+These are known differences between the places an app runs. They are not bugs to paper over. Say them when they matter.
+
+## Preview and published app
+
+The editor preview applies no Content Security Policy. Inline handlers and other-origin fetches can still run there. A published app refuses them.
+
+Attach listeners in JavaScript, and keep scripts and fetches on the app's own origin.
+
+```html
+<!-- Runs in the preview, refused once published -->
+<button onclick="save()">Save</button>
+```
+
+## What the preview lacks
+
+The preview has no HTTP routes, schedule timer, notice email, Usage store, call outbox or owner app account. Try those on `konae dev` or on a published Deployment.
+
+## File size
+
+The editor preview refuses a file over 2 MiB. A Kernel refuses at its own `KONAE_FILE_MAX_BYTES`, 2 MiB unless the operator raised it, and names the number.
+
+## Google sign-in
+
+The editor preview has no Google sign-in, and `miniapp.auth.signInWithGoogle()` refuses there. Try it on a published Deployment once its owner has set the app's Google client and turned Google on. [Accounts and access](./accounts-and-access.md#sign-in-with-google) says how.
+
+## npm packages
+
+The editor's build reads npm packages from esm.sh. `konae build` and the export kit read them from `node_modules`. Both use the exact versions in `package.json`, but the two bundles are not byte-identical.
+
+## Gate and publish builders
+
+The Validation Gate checks schema and `actions.json`. A page that names a missing file fails at build or release, not at `validate_capsule`. Check every path you write.
+
+## Read next
+
+- [The Gate and the Kernel](./gate-and-kernel.md)
+- [The Capsule](./capsule.md)
+- [CLI](./cli.md)

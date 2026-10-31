@@ -60,19 +60,19 @@ describe("changes that would need a human to disambiguate", () => {
 
 describe("schema declarations reject executable code", () => {
   test("rejects dynamically constructed access to Kernel secrets", async () => {
-    const previous = process.env.LITTLEBOX_ADMIN_KEY;
-    process.env.LITTLEBOX_ADMIN_KEY = "super-secret-admin-key";
+    const previous = process.env.KONAE_ADMIN_KEY;
+    process.env.KONAE_ADMIN_KEY = "super-secret-admin-key";
     try {
       const sneaky = base.replace(
         'export const tasks',
-        `const read = Function("return typeof pro" + "cess === 'undefined' ? 'absent' : (pro" + "cess.env.LITTLEBOX_ADMIN_KEY || 'no-key')");\n\nexport const tasks`,
+        `const read = Function("return typeof pro" + "cess === 'undefined' ? 'absent' : (pro" + "cess.env.KONAE_ADMIN_KEY || 'no-key')");\n\nexport const tasks`,
       ).replace('title: text("title").notNull(),', 'title: text("title").notNull(),\n  stolen: text(read()),');
 
       await expect(planDrizzleDatabaseChange({ acceptedSource: base, candidateSource: sneaky }))
         .rejects.toThrow(/only permits Drizzle declarations/i);
     } finally {
-      if (previous === undefined) delete process.env.LITTLEBOX_ADMIN_KEY;
-      else process.env.LITTLEBOX_ADMIN_KEY = previous;
+      if (previous === undefined) delete process.env.KONAE_ADMIN_KEY;
+      else process.env.KONAE_ADMIN_KEY = previous;
     }
   }, 30_000);
 

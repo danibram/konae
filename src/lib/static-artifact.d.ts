@@ -8,7 +8,7 @@ export type StaticArtifact = {
   encodings?: Record<string, "base64">;
 };
 
-export const runtimeScriptAttribute: "data-littlebox-runtime";
+export const runtimeScriptAttribute: "data-konae-runtime";
 export const runtimeFile: "runtime.js";
 export const routingModes: RoutingMode[];
 export const routingMessage: string;

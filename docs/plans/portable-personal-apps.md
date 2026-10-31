@@ -4,7 +4,7 @@ Proposal revised on October 11, 2026. It does not change the accepted ADRs or im
 
 ## Goal and recommendation
 
-The user describes an app to the agent, tries the result in the browser and publishes a public URL. The app can have login, internal areas and private data. Each app has its own database, users and permissions. The creator can keep using Littlebox, self-host the same mini kernel or replace its capabilities with their own code.
+The user describes an app to the agent, tries the result in the browser and publishes a public URL. The app can have login, internal areas and private data. Each app has its own database, users and permissions. The creator can keep using Konae, self-host the same mini kernel or replace its capabilities with their own code.
 
 I recommend a shared kernel that runs actions on one active SQLite per app and environment, stored on a persistent volume. The frontend is a static artifact. Backups and export materialize the database as portable objects. The object store supports filesystem, S3 and later GCS, without taking part in each write.
 
@@ -12,7 +12,7 @@ The portable database format and how the database runs are separate decisions. A
 
 ## Critique of the options
 
-The criteria are time to the first prototype, operational load, ease of development for the agent and the cost of leaving Littlebox.
+The criteria are time to the first prototype, operational load, ease of development for the agent and the cost of leaving Konae.
 
 | Option | What it solves | What it complicates | Decision |
 | --- | --- | --- | --- |
@@ -75,7 +75,7 @@ styles.css
 app.js or src/main.ts
 schema.ts
 actions.json
-littlebox.manifest.json
+konae.manifest.json
 migrations/                # reviewable lifecycle output
 ```
 
@@ -126,27 +126,27 @@ The SDK can keep its configuration in a single app file. The example shows a fut
 
 ```ts
 // src/platform.ts
-import { createClient } from '@littlebox/sdk';
+import { createClient } from '@konae/sdk';
 
-export const app = createClient({ baseUrl: '/_littlebox' });
+export const app = createClient({ baseUrl: '/_konae' });
 ```
 
 A same-origin proxy can route that prefix to the hosted kernel or to a self-hosted one. Changing a URL across domains and assuming cookies will work is not enough; the self-hosted distribution includes that configuration.
 
 | Step | Work | What keeps working |
 | --- | --- | --- |
-| Export code | Generate a runnable project with pinned dependencies and scripts | The app can keep consuming Littlebox |
+| Export code | Generate a runnable project with pinned dependencies and scripts | The app can keep consuming Konae |
 | Self-host mini kernel | Import data, users, permissions and files; change the runtime connection | Same action names and frontend calls |
 | Replace an action | Implement its input, output and permissions in a custom handler | The frontend keeps that call |
 | Replace auth | Connect another session validation and login, keeping user IDs | Data keeps its owner if the mapping is correct |
 | Replace SQLite | Migrate data and review SQL, model and transactions | Action contracts can be kept |
-| Leave completely | Serve your own frontend and backend | No Littlebox account or connection is required |
+| Leave completely | Serve your own frontend and backend | No Konae account or connection is required |
 
 Handler replacement is a capability of the external backend. It does not authorize running arbitrary JS inside the shared kernel. A first implementation can use an external router that serves the replaced actions and forwards the rest to the mini kernel, keeping validated identity and equivalent controls. It does not accept an actor declared by the browser. If an operation needs data from two backends, no distributed transaction is promised.
 
 Switching auth requires mapping identities in a verified way. It can force users to sign in again or reset passwords. Switching to PostgreSQL can require rewriting SQL. The promise is to locate the dependencies and keep the app working where the contract still holds. It does not make every migration free.
 
-Self-hosting does not force you to replace anything. It should be the easiest exit. A Managed Project can keep being edited in Littlebox while using a compatible self-hosted mini kernel. After ejecting code authority, the repository becomes the source and Littlebox can keep publishing artifacts. There must not be two independent writers of the same code.
+Self-hosting does not force you to replace anything. It should be the easiest exit. A Managed Project can keep being edited in Konae while using a compatible self-hosted mini kernel. After ejecting code authority, the repository becomes the source and Konae can keep publishing artifacts. There must not be two independent writers of the same code.
 
 ## What to reuse from the current code
 
@@ -179,7 +179,7 @@ Update, 2026-10-23: the Bun kernel server has been removed, and the Rust Kernel 
 | 1. Publish and iterate without losing data | Stable database per app/environment, local transaction and separate backup | Creating a row, publishing v2 and restarting the kernel keeps that row; a remote backup failure does not turn its write into an error |
 | 2. Useful app with auth | Persistent user, public and internal areas, per-actor actions | Two users and two apps cannot access each other's data; login and revocation work |
 | 3. Change the model and recover | A Drizzle model, validated migration, backup and restore | A migration keeps rows; a failed one leaves a defined state; a copy restores into a clean directory |
-| 4. Run elsewhere | SDK and app package, self-hostable mini kernel and import | The app works on another installation with Littlebox unreachable and keeps users and permissions |
+| 4. Run elsewhere | SDK and app package, self-hostable mini kernel and import | The app works on another installation with Konae unreachable and keeps users and permissions |
 | 5. Replace a capability | External implementation of one action with the same contract | Replacing notes.create keeps the frontend and the access tests; the rest keeps using the kernel |
 
 The full demo starts with a request to the agent to create a notebook with a public cover page, login, private notes and a shared list. It continues with a model edit, a second publish and the export. It ends with that same notebook running on the self-hosted mini kernel. Publishing and eject are designed for that path before adding more infrastructure providers.

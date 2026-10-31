@@ -156,7 +156,7 @@
     ]
    }
   },
-  "error": "Action bookings.log is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Tables and indexes belong in schema.sql, and Littlebox runs no triggers or views.",
+  "error": "Action bookings.log is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Tables and indexes belong in schema.sql, and Konae runs no triggers or views.",
   "code": "mutation.start"
  },
  {
@@ -169,7 +169,7 @@
     "bindings": []
    }
   },
-  "error": "Action bookings.taken is a query, so it must start with SELECT. Tables and indexes belong in schema.sql, and Littlebox runs no triggers or views.",
+  "error": "Action bookings.taken is a query, so it must start with SELECT. Tables and indexes belong in schema.sql, and Konae runs no triggers or views.",
   "code": "query.start"
  },
  {

@@ -11,7 +11,16 @@ playwright-report/
 /vite.config.js
 /vite.config.d.ts
 
-.littlebox/
+.konae/
 .scratchpad/
-.littlebox-owner.env
-prototype/*/littlebox.json
+.konae-owner.env
+examples/architecture-map/konae.json
+
+# The docs site writes these from docs/ (bun run docs:site).
+examples/docs-site/index.html
+examples/docs-site/pages/
+examples/docs-site/public/content/
+examples/docs-site/public/llms.txt
+examples/docs-site/seed.sql
+examples/docs-site/konae.json
+examples/home/konae.json

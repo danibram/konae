@@ -19,14 +19,14 @@ The findings report contained a second copy of the whole report and stale conclu
 | Check | Command | Result |
 | --- | --- | --- |
 | Full Bun suite after the fixes | `bun run test` | 875 passed, 0 failed |
-| Capability probes after the fixes | `LITTLEBOX_PROBE_BASE_PORT=24600 bun run examples/probes/replay-all.ts` | All 10 passed, 61 checks |
+| Capability probes after the fixes | `KONAE_PROBE_BASE_PORT=24600 bun run examples/probes/replay-all.ts` | All 10 passed, 61 checks |
 | Kernel suite after the fixes | `cargo test --manifest-path kernel-rs/Cargo.toml` | 256 passed |
 | Parser, Gate, conformance and generated SDK readers after the fixes | `bun test src/sdk/contract.test.ts src/kernel/actions.test.ts src/agent/gate.test.ts src/lib/action-conformance.test.ts` | 230 passed |
 | Editor type check and production build after the fixes | `bun run build` | Passed; Vite retains its chunk-size warning |
 | Exported kit after the fixes | `bun run tests/smoke/portable-export.ts --port 24520` | Passed, including fresh-kit compilation and package import |
-| Local browser flows | `LITTLEBOX_EDITOR_URL=http://127.0.0.1:4398 LITTLEBOX_TEST_KERNEL_PORT=8898 bun run test:e2e:local` | 8 passed |
-| Showcase apps | `LITTLEBOX_SHOWCASE_BASE_PORT=24100 bun run examples/showcase/replay-all.ts` | All 6 passed |
-| Product-fit examples | `LITTLEBOX_PRODUCT_FIT_PORT=24310 bun run examples/product-fit/smoke.ts` | 12 scenarios passed; 175 conformance checks passed, 1 skipped guard |
+| Local browser flows | `KONAE_EDITOR_URL=http://127.0.0.1:4398 KONAE_TEST_KERNEL_PORT=8898 bun run test:e2e:local` | 8 passed |
+| Showcase apps | `KONAE_SHOWCASE_BASE_PORT=24100 bun run examples/showcase/replay-all.ts` | All 6 passed |
+| Product-fit examples | `KONAE_PRODUCT_FIT_PORT=24310 bun run examples/product-fit/smoke.ts` | 12 scenarios passed; 175 conformance checks passed, 1 skipped guard |
 | Migration and restore rehearsal | `bun run tests/smoke/migration.ts --port 24330` | Passed, including restore into an empty directory and retained revocations |
 
 The browser, showcase, product-fit and migration runs preceded the notice-runner fixes. The full Bun suite, all ten probes, Kernel suite, parser and SDK checks, and exported-kit compilation were repeated after those changes. The two added notice checks run on real Kernels with the development mail transport.

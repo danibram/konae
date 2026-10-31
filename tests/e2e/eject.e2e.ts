@@ -4,7 +4,7 @@ import { expect, test, type Page } from "playwright/test";
 // turns the project read-only, and an old tab's next edit is refused by the Kernel.
 test.beforeEach(async ({ page }) => {
   const client = `198.51.100.${1 + Math.floor(Math.random() * 254)}`;
-  const response = await page.request.post("/_littlebox/owner/signup", { headers: { "x-forwarded-for": client }, data: { email: `owner-${crypto.randomUUID()}@example.test`, password: "Owner-test-password-2026", setupKey: "local-development-key" } });
+  const response = await page.request.post("/_konae/owner/signup", { headers: { "x-forwarded-for": client }, data: { email: `owner-${crypto.randomUUID()}@example.test`, password: "Owner-test-password-2026", setupKey: "local-development-key" } });
   expect(response.ok()).toBe(true);
 });
 
@@ -72,7 +72,7 @@ test("Eject from the project list keeps the app serving and refuses the old tab'
   const frozen = await openFile(list, "app.js");
   await expect(frozen).toHaveAttribute("readonly", "");
   await expect(frozen).not.toContainText("from an old tab");
-  await expect(list.getByRole("note", { name: "This project is External" }).first()).toContainText("bun run littlebox -- publish");
+  await expect(list.getByRole("note", { name: "This project is External" }).first()).toContainText("bun run konae -- publish");
   await app.reload();
   await expect(app.getByText("Written before Eject")).toBeVisible();
 });

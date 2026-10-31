@@ -84,18 +84,18 @@ pub(super) const READ_BACK_GAPS: &[(&str, &str)] = &[];
 pub(super) fn topic(name: &str) -> Result<Value> {
     Ok(match name {
         "rules" => json!({
-            "yardstick": "Littlebox lets a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.",
+            "yardstick": "Konae lets a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.",
             "decide": "A new capability belongs in the product only when the Validation Gate and the Kernel refuse it with the same words, and a package can carry the app's accounts, data and rules. Anything else is operator work, not an App feature.",
             "sameChecks": "A query that reads rows names a LIMIT in the editor and on the Kernel that leaves with the app. Who may open the app, and who may read a row, stay decisions of the app.",
             "firstRun": {
                 "cli": [
-                    "bun run littlebox -- login --dir <folder> --url <Kernel URL>",
-                    "bun run littlebox -- init --dir <folder> --name '<name>' && bun run littlebox -- dev --dir <folder>",
-                    "bun run littlebox -- publish --dir <folder>, then open the Deployment URL and call one Server Action"
+                    "bun run konae -- login --dir <folder> --url <Kernel URL>",
+                    "bun run konae -- init --dir <folder> --name '<name>' && bun run konae -- dev --dir <folder>",
+                    "bun run konae -- publish --dir <folder>, then open the Deployment URL and call one Server Action"
                 ],
                 "mcp": [
-                    "A credential: bun run littlebox -- login, then platform_guide topics rules, pieces and credentials",
-                    "An app that runs: bun run littlebox -- init, then dev or publish; the publishing topic has the same steps as MCP calls",
+                    "A credential: bun run konae -- login, then platform_guide topics rules, pieces and credentials",
+                    "An app that runs: bun run konae -- init, then dev or publish; the publishing topic has the same steps as MCP calls",
                     "Proof: project_inspect for the Deployment URL, open it, call one Server Action with actions_invoke, and conform against action-contract.json when checking a contract"
                 ],
                 "after": "If the first run grows past these steps, the product got harder. Prefer fixing the path over adding a guide page."
@@ -109,7 +109,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "capabilities": "session_inspect answers can for the scopes this credential holds, and createTokens when it is the owner's browser session. Decide from can, not from memory of which flag login took.",
             "divergences": [
                 {"where": "editor preview vs published Deployment", "fact": "The preview applies no Content Security Policy. Inline event handlers and other-origin fetches can still run there; a published app refuses them. Attach listeners in JavaScript and keep scripts and fetches on the app's own origin."},
-                {"where": "editor preview vs Deployment", "fact": "The preview has no HTTP routes, no schedule timer, no notice email, no Usage store, no call outbox, and no owner app account. Try those on bun run littlebox -- dev or on a published Deployment."},
+                {"where": "editor preview vs Deployment", "fact": "The preview has no HTTP routes, no schedule timer, no notice email, no Usage store, no call outbox, and no owner app account. Try those on bun run konae -- dev or on a published Deployment."},
                 {"where": "editor preview vs Deployment", "fact": "The editor preview has no Google sign-in. miniapp.auth.signInWithGoogle() refuses there; try it on a published Deployment once the owner has set the app's Google client and turned Google on."},
                 {"where": "Validation Gate vs publish builders", "fact": "The Gate checks schema and actions.json. A page that names a missing file fails at build or release, not at validate_capsule. Check every path you write."}
             ]
@@ -129,14 +129,14 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 {"need": "Who may create an app account", "use": "Signup Policy and invitations", "not": "A homemade users table that bypasses Runtime Actor"},
                 {"need": "A short link on the installation's domain", "use": "path address (path_set)", "not": "A custom domain when DNS is not yours"},
                 {"need": "Take the app to another machine", "use": "package export/import or migration", "not": "Copy (that moves the whole installation)"},
-                {"need": "Debug, or try the next version, on what the published app holds", "use": "littlebox pull, then dev --reset", "not": "Publishing to find out"},
-                {"need": "See the email, calls, scheduled runs and Signals of a local run", "use": "littlebox events (--json for an agent), or the page dev serves", "not": "Reading the Kernel's files by hand"},
+                {"need": "Debug, or try the next version, on what the published app holds", "use": "konae pull, then dev --reset", "not": "Publishing to find out"},
+                {"need": "See the email, calls, scheduled runs and Signals of a local run", "use": "konae events (--json for an agent), or the page dev serves", "not": "Reading the Kernel's files by hand"},
                 {"need": "Leave managed editing for a folder on disk", "use": "Eject", "not": "Package (that moves data, not source authority)"}
             ],
             "unit": "A Deployment folder on the Kernel is the app: artifact, database, identity, files and Usage. Prefer adding a declaration inside the Capsule over adding a new platform resource."
         }),
         "credentials" => json!({
-            "login": "bun run littlebox -- login --dir <folder> --url <Kernel URL> reads LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD. Add LITTLEBOX_INVITATION_CODE, the code the operator issued with littlebox-kernel creator-code-create, to create the account, or LITTLEBOX_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.littlebox/credentials.json, which publish, pull, sql, export and eject read. LITTLEBOX_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with LITTLEBOX_PASSWORD in the same run.",
+            "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae-kernel creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql, export and eject read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
             "flags": {"--manage-users": "adds manage_users", "--export-data": "adds export_data", "--manage-lifecycle": "adds manage_lifecycle"},
             "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data or manage_lifecycle.",
             "permissions": {
@@ -151,26 +151,26 @@ pub(super) fn topic(name: &str) -> Result<Value> {
         }),
         "development" => json!({
             "commands": [
-                "bun run littlebox -- init --dir /tmp/my-app --name 'My app' [--template tasks|notes|members|form|webhook|digest|gallery]",
-                "bun run littlebox -- dev --dir /tmp/my-app [--reset]",
-                "bun run littlebox -- build --dir /tmp/my-app",
-                "bun run littlebox -- contract --dir /tmp/my-app",
-                "bun run littlebox -- login --dir /tmp/my-app --url http://localhost:4173 [--export-data]",
-                "bun run littlebox -- publish --dir /tmp/my-app",
-                "bun run littlebox -- pull --dir /tmp/my-app",
-                "bun run littlebox -- sql --dir /tmp/my-app [--prod] '<statement>'",
-                "bun run littlebox -- events --dir /tmp/my-app [--follow] [--json] [--prod]",
-                "bun run littlebox -- conform --url <app URL> --contract /tmp/my-app/action-contract.json --token <app session> --key <API key> --secret <name>=<value>"
+                "bun run konae -- init --dir /tmp/my-app --name 'My app' [--template tasks|notes|members|form|webhook|digest|gallery]",
+                "bun run konae -- dev --dir /tmp/my-app [--reset]",
+                "bun run konae -- build --dir /tmp/my-app",
+                "bun run konae -- contract --dir /tmp/my-app",
+                "bun run konae -- login --dir /tmp/my-app --url http://localhost:4173 [--export-data]",
+                "bun run konae -- publish --dir /tmp/my-app",
+                "bun run konae -- pull --dir /tmp/my-app",
+                "bun run konae -- sql --dir /tmp/my-app [--prod] '<statement>'",
+                "bun run konae -- events --dir /tmp/my-app [--follow] [--json] [--prod]",
+                "bun run konae -- conform --url <app URL> --contract /tmp/my-app/action-contract.json --token <app session> --key <API key> --secret <name>=<value>"
             ],
-            "credentials": "init, dev, build and contract need no credential. login saves the credential and the installation's address in the folder, and publish, pull and sql read it from there or from LITTLEBOX_MCP_TOKEN. The first publish registers the project with project_create. The credentials topic lists the permissions. Never put a token in app source.",
-            "liveData": "pull downloads the published app's package (database, accounts, files) into .littlebox/pull and needs export_data. A Development Kernel with no data starts from it, and dev --reset deletes .littlebox/dev-data so a copy can take effect. Nothing travels back to the published app. When the folder's actions need a column the copy lacks, dev installs the copy alone and says so; run sql with the ALTER, save a file, then repeat the statement with sql --prod on the published app before publish. sql and events reach the Development Kernel that dev is running, and the published Deployment only with --prod.",
-            "events": "events lists what the local app did besides answer its page: email with its recipient and text (nothing is sent; it lands in .littlebox/dev-data/mailbox.jsonl), calls to other services, scheduled runs, routes and Signals. dev serves the same list as a page on the port after the app's. Run events with --json after calling an action to check a notify, a call or a signal did what the Capsule declares, and with --follow to watch.",
-            "start": "In an empty folder, either run init, or call project_create with a name and an optional template and write the files it returns plus littlebox.json {url, project:{id,name,slug,manifest}}. Both give the same files. Then dev runs it locally and publish sends it to the installation.",
-            "isolation": "dev uses the same Rust Kernel with separate local identities, data and files under .littlebox/dev-data, publishes there as Open so test accounts can sign up, and does not proxy production.",
+            "credentials": "init, dev, build and contract need no credential. login saves the credential and the installation's address in the folder, and publish, pull and sql read it from there or from KONAE_MCP_TOKEN. The first publish registers the project with project_create. The credentials topic lists the permissions. Never put a token in app source.",
+            "liveData": "pull downloads the published app's package (database, accounts, files) into .konae/pull and needs export_data. A Development Kernel with no data starts from it, and dev --reset deletes .konae/dev-data so a copy can take effect. Nothing travels back to the published app. When the folder's actions need a column the copy lacks, dev installs the copy alone and says so; run sql with the ALTER, save a file, then repeat the statement with sql --prod on the published app before publish. sql and events reach the Development Kernel that dev is running, and the published Deployment only with --prod.",
+            "events": "events lists what the local app did besides answer its page: email with its recipient and text (nothing is sent; it lands in .konae/dev-data/mailbox.jsonl), calls to other services, scheduled runs, routes and Signals. dev serves the same list as a page on the port after the app's. Run events with --json after calling an action to check a notify, a call or a signal did what the Capsule declares, and with --follow to watch.",
+            "start": "In an empty folder, either run init, or call project_create with a name and an optional template and write the files it returns plus konae.json {url, project:{id,name,slug,manifest}}. Both give the same files. Then dev runs it locally and publish sends it to the installation.",
+            "isolation": "dev uses the same Rust Kernel with separate local identities, data and files under .konae/dev-data, publishes there as Open so test accounts can sign up, and does not proxy production.",
             "sourceAuthority": "Code and builds stay in your folder. Source is not synchronized to the browser editor.",
             "contract": "contract writes action-contract.json, its schema and action-contract.md from actions.json and schema.sql. conform calls every action on a Deployment and checks the answers against that file, so point it at a test Deployment. The owner reads what ran with usage_read and signals_read."
         }),
-        "actions" => json!({"filename":"actions.json","format":{"version":1,"actions":{"items.list":{"kind":"query","access":"authenticated","statement":"SELECT id,title FROM items WHERE user_id=?1 LIMIT 50","bindings":[{"source":"actor","field":"id"}]},"items.create":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO items(title,user_id) VALUES(?1,?2)","bindings":[{"source":"input","key":"title","type":"string","maxLength":200},{"source":"actor","field":"id"}]}}},"rules":"SQL and typed bindings stay server-side. Declare schema in schema.sql for artifact publication. Runtime calls only send the declared action name and input. Add nullable:true to an input binding to bind omitted values or explicit null as SQL NULL; supplied strings remain non-empty and all supplied values retain their type checks. Mutations return changes and lastInsertId, so read rows with a query instead of mutation RETURNING, which publication rejects. A query that reads rows needs a top-level LIMIT. A total with count, sum, avg, min or max and no GROUP BY does not. An anonymous action may add http:{method:'GET' for a query or 'POST' for a mutation,path,signature?:{scheme?:'littlebox'|'hmac-body'|'timestamped'|'svix',header,secret,...},fields?:{inputKey:'$.data.object.id'},callers?:['signature'|'key'|'session']} to answer on that path of its Deployment host; a provider's scheme and fields take a webhook as GitHub, Shopify, Stripe or Resend send it; an action whose route does not answer anyone answers only there, not through actions_invoke. The sdk topic's http module describes routes, callers, signatures, API keys and secret_set. A mutation may add guard:'<sentence>' so a statement that changes no row is refused with it instead of answering changes 0. A mutation may add notify:{to:'owner' or 'actor' or {column:'<name>'},changes?:['<column>'],subject,body} to queue email when it changes a row: to the Project Owner, to the calling account once it has proved its email, or to each proven account of this app whose ID a changed row holds in that column, with only its own rows. The templates take {input.<key>} for its input bindings, {actor.id}, {kernel.now}, {changes.count} and, in the body, {changes}, which lists the changed rows' changes columns; it never sends to an address from the input or a row. Usage counts each notice under notify, and the owner reads each queued notice's state with notices_read. A mutation may add signal:{name:'order.placed',properties:[input keys or 'actor']} to record a Signal when it changes a row, and kind:'signal' with access, bindings and signal but no statement records one without SQL. The owner reads them with signals_read and Usage with usage_read. kind:'call' with access, input bindings only, method:'GET'|'POST', url, body:{bodyKey:'inputKey' or {value:constant}}, auth?:{secret,header?}|{key}, then?:{action,inputs:{key:'/status'|'/body/...'|'/input/...'}} queues a request the Kernel sends from its own process and answers {callId,queued:true}; the calls module of the sdk topic gives the address rules, and the owner reads the outbox with calls_read."}),
+        "actions" => json!({"filename":"actions.json","format":{"version":1,"actions":{"items.list":{"kind":"query","access":"authenticated","statement":"SELECT id,title FROM items WHERE user_id=?1 LIMIT 50","bindings":[{"source":"actor","field":"id"}]},"items.create":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO items(title,user_id) VALUES(?1,?2)","bindings":[{"source":"input","key":"title","type":"string","maxLength":200},{"source":"actor","field":"id"}]}}},"rules":"SQL and typed bindings stay server-side. Declare schema in schema.sql for artifact publication. Runtime calls only send the declared action name and input. Add nullable:true to an input binding to bind omitted values or explicit null as SQL NULL; supplied strings remain non-empty and all supplied values retain their type checks. Mutations return changes and lastInsertId, so read rows with a query instead of mutation RETURNING, which publication rejects. A query that reads rows needs a top-level LIMIT. A total with count, sum, avg, min or max and no GROUP BY does not. An anonymous action may add http:{method:'GET' for a query or 'POST' for a mutation,path,signature?:{scheme?:'konae'|'hmac-body'|'timestamped'|'svix',header,secret,...},fields?:{inputKey:'$.data.object.id'},callers?:['signature'|'key'|'session']} to answer on that path of its Deployment host; a provider's scheme and fields take a webhook as GitHub, Shopify, Stripe or Resend send it; an action whose route does not answer anyone answers only there, not through actions_invoke. The sdk topic's http module describes routes, callers, signatures, API keys and secret_set. A mutation may add guard:'<sentence>' so a statement that changes no row is refused with it instead of answering changes 0. A mutation may add notify:{to:'owner' or 'actor' or {column:'<name>'},changes?:['<column>'],subject,body} to queue email when it changes a row: to the Project Owner, to the calling account once it has proved its email, or to each proven account of this app whose ID a changed row holds in that column, with only its own rows. The templates take {input.<key>} for its input bindings, {actor.id}, {kernel.now}, {changes.count} and, in the body, {changes}, which lists the changed rows' changes columns; it never sends to an address from the input or a row. Usage counts each notice under notify, and the owner reads each queued notice's state with notices_read. A mutation may add signal:{name:'order.placed',properties:[input keys or 'actor']} to record a Signal when it changes a row, and kind:'signal' with access, bindings and signal but no statement records one without SQL. The owner reads them with signals_read and Usage with usage_read. kind:'call' with access, input bindings only, method:'GET'|'POST', url, body:{bodyKey:'inputKey' or {value:constant}}, auth?:{secret,header?}|{key}, then?:{action,inputs:{key:'/status'|'/body/...'|'/input/...'}} queues a request the Kernel sends from its own process and answers {callId,queued:true}; the calls module of the sdk topic gives the address rules, and the owner reads the outbox with calls_read."}),
         // Rendered from src/sdk/contract.ts by `bun run sdk:render`.
         "sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,
         "publishing" => json!({
@@ -182,12 +182,12 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "Call release_plan with transferId, inspect its planId and expectedRevision, then call release_apply with planId.",
                 "Save the receipt and cancel the temporary transfer. Read the live Deployment with project_inspect."
             ],
-            "cli": "bun run littlebox -- publish --dir <folder> runs these steps with the credential from login and sends project.manifest.signupPolicy from littlebox.json as initialSignupPolicy on the first release.",
+            "cli": "bun run konae -- publish --dir <folder> runs these steps with the credential from login and sends project.manifest.signupPolicy from konae.json as initialSignupPolicy on the first release.",
             "concurrency": "An obsolete plan is rejected. Repeating an applied plan returns the same receipt.",
             "access": "A first release may add initialSignupPolicy {mode, allowlist} with mode open, invitation, closed or allowlist; the Kernel installs it before the app serves. When the owner's request leaves access open for an app with accounts, propose visibility private and mode invitation. Later changes need manage_users and signup_policy_set. Invite people with app_invitations_create only when the owner asks, because it sends email.",
             "import": "A first release may also carry initialPackage to start the Deployment with an exported app's data; the portability topic has the steps.",
-            "domain": "domain_set { deploymentId, hostname } adds a custom domain next to the generated hostname and needs publish. Its first answer names a TXT record, _littlebox.<hostname>, and the token it must hold. Once the record is at the DNS provider and the hostname points at the installation's proxy, which terminates TLS and forwards Host unchanged, call domain_set again: the Kernel looks the record up and the alias serves. domain_read shows the state and domain_clear removes it. bun run littlebox -- domain runs the same steps.",
-            "path": "path_set { deploymentId, enabled, name?, acceptSharedOrigin? } answers the app on <domain>/p/<id>, and on <domain>/p/<name> once it has a name. The domain is LITTLEBOX_DOMAIN. An app with accounts or a private app needs acceptSharedOrigin true, because every path and the home share one origin, and any other app on the domain can use the sessions of this app's users. path_read returns the state and the addresses; path_clear turns the path off and removes the name. Both need publish. Read back with path_read after a change."
+            "domain": "domain_set { deploymentId, hostname } adds a custom domain next to the generated hostname and needs publish. Its first answer names a TXT record, _konae.<hostname>, and the token it must hold. Once the record is at the DNS provider and the hostname points at the installation's proxy, which terminates TLS and forwards Host unchanged, call domain_set again: the Kernel looks the record up and the alias serves. domain_read shows the state and domain_clear removes it. bun run konae -- domain runs the same steps.",
+            "path": "path_set { deploymentId, enabled, name?, acceptSharedOrigin? } answers the app on <domain>/p/<id>, and on <domain>/p/<name> once it has a name. The domain is KONAE_DOMAIN. An app with accounts or a private app needs acceptSharedOrigin true, because every path and the home share one origin, and any other app on the domain can use the sessions of this app's users. The app whose enabled path holds the name konae-home also answers <domain>/ and every path there outside /p/; with none, <domain>/ answers not found. path_read returns the state and the addresses; path_clear turns the path off and removes the name. Both need publish. Read back with path_read after a change."
         }),
         "users" => json!({
             "permission": "manage_users, which login adds with --manage-users. signup_policy_read and sign_in_methods_read need only read.",
@@ -195,8 +195,8 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "google": "Each app has its own Google OAuth client, which the owner makes in their own Google console. sign_in_methods_read { deploymentId } returns redirectUris, the callbacks to register in that client: the app's own host, a verified custom domain, and <domain>/p/<id> while the path address is on (the name address uses the id's callback; the home address offers no Google), and googleClient { clientIdSet, clientSecretSet }. secret_set { projectId, name: \"google_client_id\" or \"google_client_secret\", value, use: \"google\" } sets each half; the value is never returned and no route or call reads it. Then sign_in_methods_set { deploymentId, methods: [\"password\", \"google\"] } adds Continue with Google to the sign-in page; [\"password\"] removes it. Password cannot be turned off. While either half is unset it refuses with \"Set this app's Google client ID and client secret before turning Google on.\", and while Google is on secret_delete refuses either half. A Google sign-in reaches the app account that holds the same email, made with a password or with Google, and Signup Policy decides whether an email without an account gets one. Google proves only an address it manages: a gmail.com address, or one whose Workspace domain the token names in hd; any other address is refused and signs in with email and password. An active account whose email nobody proved is taken back for the person Google vouches for: its password and sessions stop working. The owner's own app account is never taken back: while its email is unproven a Google sign-in for it is refused. A package carries signInMethods and the accounts, never the client: on another installation the owner sets the two secrets and registers that host's redirect URI, and until then the sign-in page offers only email and password and sign_in_methods_read returns a notice.",
             "invite": [
                 "Call mail_status: inviting needs sending true.",
-                "app_invitations_create { deploymentId, emails, idempotencyKey } emails each address a seven-day link to /_littlebox/invitation#invitation=<token> on the app's host. Call it only when the owner asked for those invitations.",
-                "The person opens the link and chooses a password; the page posts it to /_littlebox/auth/accept and signs them in.",
+                "app_invitations_create { deploymentId, emails, idempotencyKey } emails each address a seven-day link to /_konae/invitation#invitation=<token> on the app's host. Call it only when the owner asked for those invitations.",
+                "The person opens the link and chooses a password; the page posts it to /_konae/auth/accept and signs them in.",
                 "app_invitations_list shows each invitation's status; app_invitation_resend sends a new link and app_invitation_revoke ends one."
             ],
             "accounts": "app_users_list, app_user_suspend and app_user_resume. Suspension ends sessions and keeps the account's rows.",
@@ -206,7 +206,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "export": [
                 "package_export { deploymentId } needs export_data. It returns a manifest and one download per component: database, identity, files and, when the app recorded any, usage.",
                 "Read each download with transfer_read { transferId, offset } until nextOffset equals size, check its SHA-256, then transfer_cancel it.",
-                "bun run littlebox -- export --dir <folder> --with-data writes the same package into a self-hosted kit."
+                "bun run konae -- export --dir <folder> --with-data writes the same package into a self-hosted kit."
             ],
             "import": [
                 "On the destination Kernel, project_create with the same projectId, and secret_set for every secret the app's routes sign with, and, when the app offers Google sign-in, google_client_id and google_client_secret with use google. Register the destination's redirect URIs, which sign_in_methods_read lists, in that Google client.",
@@ -215,9 +215,9 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "Sessions, email links and live API keys stay behind: people sign in with their passwords, and api_keys_list shows each key revoked at import so the owner issues new ones."
             ],
             "eject": [
-                "Eject moves a Managed project, one the editor saves with project_sources_save, to its owner's folder. A project made with littlebox init is already External.",
-                "bun run littlebox -- eject --dir <empty folder> --project <id> --url <Kernel URL> calls eject_plan and eject_apply, which need manage_lifecycle, and writes the sources and a littlebox.json.",
-                "bun run littlebox -- publish --dir <that folder> publishes from it. The Deployment, its URL and its data stay."
+                "Eject moves a Managed project, one the editor saves with project_sources_save, to its owner's folder. A project made with konae init is already External.",
+                "bun run konae -- eject --dir <empty folder> --project <id> --url <Kernel URL> calls eject_plan and eject_apply, which need manage_lifecycle, and writes the sources and a konae.json.",
+                "bun run konae -- publish --dir <that folder> publishes from it. The Deployment, its URL and its data stay."
             ],
             "migration": [
                 "migration_begin { deploymentId } needs manage_lifecycle and export_data. The app pauses at once and the answer holds the package downloads and next steps.",
@@ -266,7 +266,7 @@ pub(super) fn session_can(owner: &Owner) -> Value {
     })
 }
 
-/// The flag `littlebox login` takes to add a permission, when it has one.
+/// The flag `konae login` takes to add a permission, when it has one.
 fn login_flag(scope: &str) -> Option<&'static str> {
     match scope {
         "manage_users" => Some("--manage-users"),
@@ -286,8 +286,8 @@ pub(super) fn missing_permission(name: &str, owner: &Owner) -> Option<String> {
         probe.scopes = vec![scope.to_owned()];
         if lists(&probe) {
             let how = match login_flag(scope) {
-                Some(flag) => format!("Run littlebox login with {flag}, or use a token from token_create that includes it."),
-                None => "Run littlebox login, or use a token from token_create that includes it.".to_owned(),
+                Some(flag) => format!("Run konae login with {flag}, or use a token from token_create that includes it."),
+                None => "Run konae login, or use a token from token_create that includes it.".to_owned(),
             };
             return Some(format!("{name} needs a credential with {scope}. {how}"));
         }
@@ -299,7 +299,7 @@ pub(super) fn missing_permission(name: &str, owner: &Owner) -> Option<String> {
         return Some(format!("{name} needs the owner's browser session. A delegated token cannot create or list tokens."));
     }
     if runtime_tools().iter().any(|tool| tool["name"] == name) {
-        return Some(format!("{name} runs on an app's runtime endpoint, /_littlebox/mcp on the app's host, with an app session."));
+        return Some(format!("{name} runs on an app's runtime endpoint, /_konae/mcp on the app's host, with an app session."));
     }
     None
 }
@@ -317,19 +317,19 @@ mod tests {
         let publisher = owner(&["read", "write", "publish"]);
         assert_eq!(
             missing_permission("app_invitations_create", &publisher).unwrap(),
-            "app_invitations_create needs a credential with manage_users. Run littlebox login with --manage-users, or use a token from token_create that includes it."
+            "app_invitations_create needs a credential with manage_users. Run konae login with --manage-users, or use a token from token_create that includes it."
         );
         assert_eq!(
             missing_permission("package_export", &publisher).unwrap(),
-            "package_export needs a credential with export_data. Run littlebox login with --export-data, or use a token from token_create that includes it."
+            "package_export needs a credential with export_data. Run konae login with --export-data, or use a token from token_create that includes it."
         );
         assert_eq!(
             missing_permission("eject_plan", &publisher).unwrap(),
-            "eject_plan needs a credential with manage_lifecycle. Run littlebox login with --manage-lifecycle, or use a token from token_create that includes it."
+            "eject_plan needs a credential with manage_lifecycle. Run konae login with --manage-lifecycle, or use a token from token_create that includes it."
         );
         assert_eq!(
             missing_permission("release_plan", &owner(&["read"])).unwrap(),
-            "release_plan needs a credential with publish. Run littlebox login, or use a token from token_create that includes it."
+            "release_plan needs a credential with publish. Run konae login, or use a token from token_create that includes it."
         );
         assert_eq!(
             missing_permission("token_create", &publisher).unwrap(),
@@ -337,7 +337,7 @@ mod tests {
         );
         assert_eq!(
             missing_permission("actions_invoke", &publisher).unwrap(),
-            "actions_invoke runs on an app's runtime endpoint, /_littlebox/mcp on the app's host, with an app session."
+            "actions_invoke runs on an app's runtime endpoint, /_konae/mcp on the app's host, with an app session."
         );
         assert_eq!(missing_permission("no_such_tool", &publisher), None);
     }

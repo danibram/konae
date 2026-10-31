@@ -81,13 +81,11 @@ struct AppState {
     copies: Arc<copies::CopyStatus>,
     admin_key: String,
     public_origin: String,
-    /// `LITTLEBOX_MCP_ORIGIN` or its derived value; `None` keeps the request host.
+    /// `KONAE_MCP_ORIGIN` or its derived value; `None` keeps the request host.
     mcp_origin: Option<String>,
     host_suffix: String,
-    /// `<scheme>://<domain>` where path addresses answer; `None` without `LITTLEBOX_DOMAIN`.
+    /// `<scheme>://<domain>` where path addresses answer; `None` without `KONAE_DOMAIN`.
     path_origin: Option<String>,
-    /// `LITTLEBOX_HOME_DEPLOYMENT`: the Deployment that answers `<domain>/` and every non-/p/ path there.
-    home_deployment: Option<String>,
     guards: Arc<Guards>,
     accounts: accounts::AccountSettings,
 }
@@ -436,18 +434,18 @@ async fn main() -> Result<()> {
     if recovery::operator_command().await? { return Ok(()); }
     if accounts::operator_command()? { return Ok(()); }
     if admission::operator_command()? { return Ok(()); }
-    let port = env("LITTLEBOX_KERNEL_PORT", "8787").parse::<u16>()?;
-    let bind = env("LITTLEBOX_BIND", "127.0.0.1");
+    let port = env("KONAE_KERNEL_PORT", "8787").parse::<u16>()?;
+    let bind = env("KONAE_BIND", "127.0.0.1");
     let hosts = hosts::from_env()?;
     let public_origin = hosts.public_origin.clone();
     let admin_key = admin_key_for(
         &bind,
         &public_origin,
         hosts.mcp_origin.as_deref(),
-        std::env::var("LITTLEBOX_ADMIN_KEY").ok().as_deref(),
-        std::env::var("LITTLEBOX_ALLOW_DEFAULT_KEY").as_deref() == Ok("1"),
+        std::env::var("KONAE_ADMIN_KEY").ok().as_deref(),
+        std::env::var("KONAE_ALLOW_DEFAULT_KEY").as_deref() == Ok("1"),
     )?;
-    let data_root = PathBuf::from(env("LITTLEBOX_DATA_DIR", "/data"));
+    let data_root = PathBuf::from(env("KONAE_DATA_DIR", "/data"));
     tokio::fs::create_dir_all(data_root.join("deployments")).await?;
     // Held until the process exits, so files-migrate and files-reconcile
     // refuse while this Kernel serves.
@@ -457,8 +455,8 @@ async fn main() -> Result<()> {
     }
     let account_settings = accounts::AccountSettings::from_env(&data_root, &admin_key, &public_origin)?;
     let s3 = s3_client_from_env().await;
-    let artifact_bucket = env("LITTLEBOX_ARTIFACT_BUCKET", "littlebox-apps");
-    let data_bucket = env("LITTLEBOX_DATA_BUCKET", "littlebox-data");
+    let artifact_bucket = env("KONAE_ARTIFACT_BUCKET", "konae-apps");
+    let data_bucket = env("KONAE_DATA_BUCKET", "konae-data");
     let copy_config = copies::CopyConfig::from_env(&data_root, s3.is_some())?;
     let schedule_clock = schedule::Clock::from_env(&bind)?;
     let deployments = load_deployments(&data_root, &public_origin).await?;
@@ -477,9 +475,8 @@ async fn main() -> Result<()> {
         mcp_origin: hosts.mcp_origin,
         host_suffix: hosts.host_suffix,
         path_origin: hosts.path_origin,
-        home_deployment: path::home_from_env(),
         guards: Arc::new(Guards::new(trusted_proxies(
-            &std::env::var("LITTLEBOX_TRUSTED_PROXIES").unwrap_or_default(),
+            &std::env::var("KONAE_TRUSTED_PROXIES").unwrap_or_default(),
         )?)),
         accounts: account_settings,
     };
@@ -497,7 +494,7 @@ async fn main() -> Result<()> {
     accounts::creator_store(&state)?;
 
     let listener = tokio::net::TcpListener::bind((bind.as_str(), port)).await?;
-    println!("Littlebox Rust Kernel listening on {port}");
+    println!("Konae Rust Kernel listening on {port}");
     serve(listener, state).await?;
     Ok(())
 }
@@ -509,13 +506,13 @@ async fn serve(listener: tokio::net::TcpListener, state: AppState) -> std::io::R
 
 /// The Kernel's whole stack. The isolation headers and the path router wrap
 /// the routes, so a path address is rewritten before routing and the headers
-/// cover every response, the home page and the redirects included.
+/// cover every response, the redirects included.
 fn stack(state: AppState) -> tower::util::BoxCloneService<Request, axum::response::Response, std::convert::Infallible> {
     let routes = Router::new()
-        .route("/_littlebox/health", get(health))
-        .route("/_littlebox/auth/signup", post(signup))
-        .route("/_littlebox/auth/login", post(login))
-        .route("/_littlebox/login", get(login_page))
+        .route("/_konae/health", get(health))
+        .route("/_konae/auth/signup", post(signup))
+        .route("/_konae/auth/login", post(login))
+        .route("/_konae/login", get(login_page))
         .merge(mcp::routes())
         .merge(oauth::routes())
         .merge(google::routes())
@@ -524,7 +521,7 @@ fn stack(state: AppState) -> tower::util::BoxCloneService<Request, axum::respons
         .merge(invitations::routes())
         .merge(app_owner::routes())
         .merge(mail::routes())
-        .route("/_littlebox/{*path}", axum::routing::any(|| async { error(StatusCode::GONE, "Use authenticated MCP for platform operations.") }))
+        .route("/_konae/{*path}", axum::routing::any(|| async { error(StatusCode::GONE, "Use authenticated MCP for platform operations.") }))
         .route("/{*path}", get(http::get_route).post(http::post_route))
         .route("/", get(serve_root))
         .layer(axum::middleware::from_fn_with_state(state.clone(), migration::guard))
@@ -537,7 +534,7 @@ fn stack(state: AppState) -> tower::util::BoxCloneService<Request, axum::respons
 }
 
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    Json(json!({"ok": true, "kernel": "littlebox-rust", "version": 1,
+    Json(json!({"ok": true, "kernel": "konae-rust", "version": 1,
         "artifactStore": if state.s3.is_some() { "filesystem+s3" } else { "filesystem" },
         "copies": state.copies.health(),
         "files": {"store": state.files.store.kind(), "quotaBytes": state.files.limits.quota_bytes,
@@ -545,18 +542,18 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "mail": state.accounts.queue.as_ref().map(|queue| queue.health())}))
 }
 
-/// The S3 client for artifacts and copies, or None when LITTLEBOX_S3_ENDPOINT is unset.
+/// The S3 client for artifacts and copies, or None when KONAE_S3_ENDPOINT is unset.
 async fn s3_client_from_env() -> Option<S3Client> {
-    let endpoint = std::env::var("LITTLEBOX_S3_ENDPOINT").ok()?;
+    let endpoint = std::env::var("KONAE_S3_ENDPOINT").ok()?;
     let credentials = Credentials::new(
-        env("LITTLEBOX_S3_ACCESS_KEY", "littlebox"),
-        env("LITTLEBOX_S3_SECRET_KEY", "littlebox-secret"),
+        env("KONAE_S3_ACCESS_KEY", "konae"),
+        env("KONAE_S3_SECRET_KEY", "konae-secret"),
         None,
         None,
-        "littlebox-config",
+        "konae-config",
     );
     let sdk_config = aws_config::defaults(BehaviorVersion::latest())
-        .region(Region::new(env("LITTLEBOX_S3_REGION", "us-east-1")))
+        .region(Region::new(env("KONAE_S3_REGION", "us-east-1")))
         .credentials_provider(credentials)
         .endpoint_url(endpoint)
         .load()
@@ -1570,7 +1567,7 @@ async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upload<
         Err(response) => {
             // No index names the bytes, so nothing can read them.
             if let Err(e) = state.files.store.delete(&deployment.id, &id).await {
-                eprintln!("littlebox: could not remove the bytes of refused file {id}: {e:#}");
+                eprintln!("konae: could not remove the bytes of refused file {id}: {e:#}");
             }
             response
         }
@@ -1658,7 +1655,7 @@ async fn file_response(state: &AppState, deployment: &str, metadata: &Value, hea
         Ok(Some(blob)) => blob,
         Ok(None) => return not_found(),
         Err(e) => {
-            eprintln!("littlebox: could not read file {id}: {e:#}");
+            eprintln!("konae: could not read file {id}: {e:#}");
             return not_found();
         }
     };
@@ -1711,7 +1708,7 @@ async fn serve_root(State(state): State<AppState>, headers: HeaderMap) -> Respon
 
 async fn login_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let Some(deployment) = deployment_for(&state, &headers).await else {
-        return error(StatusCode::NOT_FOUND, "Littlebox deployment not found.");
+        return error(StatusCode::NOT_FOUND, "Konae deployment not found.");
     };
     match authenticate_deployment(&state, &deployment, &headers) {
         Ok(Some(_)) => (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response(),
@@ -1740,7 +1737,7 @@ async fn serve_artifact(
 async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Response {
     let deployment = match deployment_for(&state, &headers).await {
         Some(value) => value,
-        None => return error(StatusCode::NOT_FOUND, "Littlebox deployment not found."),
+        None => return error(StatusCode::NOT_FOUND, "Konae deployment not found."),
     };
     if is_private(&deployment) {
         match authenticate_deployment(&state, &deployment, &headers) {
@@ -1877,15 +1874,15 @@ fn private_login_page(policy: &SignupPolicy, verification: auth::Verification, g
         note,
         "</p>",
         if google { google::BUTTON } else { "" },
-        r#"<form id="auth"><label>Email <input name="email" type="email" required autocomplete="email"></label><label>Password <input name="password" type="password" minlength="8" required autocomplete="current-password"></label><button formaction="/_littlebox/auth/login">Sign in</button>"#,
+        r#"<form id="auth"><label>Email <input name="email" type="email" required autocomplete="email"></label><label>Password <input name="password" type="password" minlength="8" required autocomplete="current-password"></label><button formaction="/_konae/auth/login">Sign in</button>"#,
         if create && verified {
-            r#"<button formaction="/_littlebox/auth/signup" formnovalidate>Create account</button>"#
+            r#"<button formaction="/_konae/auth/signup" formnovalidate>Create account</button>"#
         } else if create {
-            r#"<button formaction="/_littlebox/auth/signup">Create account</button>"#
+            r#"<button formaction="/_konae/auth/signup">Create account</button>"#
         } else {
             ""
         },
-        r#"<p id="error" role="alert"></p><a id="forgot" href="/_littlebox/account">Forgot your password?</a></form></main><script>{const m=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);const prefix=m?'/p/'+m[1]:'';document.querySelector('#forgot').href=prefix+'/_littlebox/account';document.querySelector('#auth').addEventListener('submit',async e=>{e.preventDefault();const path=prefix+new URL(e.submitter?.formAction||'/_littlebox/auth/login',location.href).pathname;const form=new FormData(e.currentTarget);const response=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:form.get('email'),password:form.get('password')})});const body=await response.json().catch(()=>({}));if(response.status===202){document.querySelector('#error').textContent=body.result.message;return}if(response.ok){location.replace(prefix+'/');return}document.querySelector('#error').textContent=body.error||'Sign in failed.'})}</script></html>"#,
+        r#"<p id="error" role="alert"></p><a id="forgot" href="/_konae/account">Forgot your password?</a></form></main><script>{const m=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);const prefix=m?'/p/'+m[1]:'';document.querySelector('#forgot').href=prefix+'/_konae/account';document.querySelector('#auth').addEventListener('submit',async e=>{e.preventDefault();const path=prefix+new URL(e.submitter?.formAction||'/_konae/auth/login',location.href).pathname;const form=new FormData(e.currentTarget);const response=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:form.get('email'),password:form.get('password')})});const body=await response.json().catch(()=>({}));if(response.status===202){document.querySelector('#error').textContent=body.result.message;return}if(response.ok){location.replace(prefix+'/');return}document.querySelector('#error').textContent=body.error||'Sign in failed.'})}</script></html>"#,
     ]
     .concat();
     let mut response = Response::new(Body::from(body));
@@ -2411,7 +2408,7 @@ fn browse_table(path: &Path, body: &Value) -> Result<Value> {
         "ASC"
     };
     let sql = format!(
-        "SELECT rowid AS __littlebox_rowid, * FROM {} ORDER BY {sort} {direction} LIMIT ?1 OFFSET ?2",
+        "SELECT rowid AS __konae_rowid, * FROM {} ORDER BY {sort} {direction} LIMIT ?1 OFFSET ?2",
         quote_identifier(table)
     );
     let mut statement = db.prepare(&sql)?;
@@ -2426,7 +2423,7 @@ fn browse_table(path: &Path, body: &Value) -> Result<Value> {
             let mut row_id = Value::Null;
             for (i, name) in col_names.iter().enumerate() {
                 let value = sql_json(row.get_ref(i)?);
-                if name == "__littlebox_rowid" {
+                if name == "__konae_rowid" {
                     row_id = value;
                 } else {
                     values.insert(name.clone(), value);
@@ -3520,7 +3517,7 @@ async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Result
 }
 
 /// Reads every Deployment record on the volume. A Kernel on a fresh volume
-/// starts empty; `littlebox-kernel restore` installs copied folders first.
+/// starts empty; `konae-kernel restore` installs copied folders first.
 async fn load_deployments(root: &Path, public_origin: &str) -> Result<HashMap<String, Deployment>> {
     let mut result = HashMap::new();
     let mut entries = tokio::fs::read_dir(root.join("deployments")).await?;
@@ -3616,7 +3613,7 @@ fn is_private(deployment: &Deployment) -> bool {
 
 fn is_admin(state: &AppState, headers: &HeaderMap) -> bool {
     headers
-        .get("x-littlebox-admin-key")
+        .get("x-konae-admin-key")
         .and_then(|value| value.to_str().ok())
         == Some(state.admin_key.as_str())
 }
@@ -3654,9 +3651,9 @@ fn authenticate_deployment(
 pub(crate) fn app_cookie_name(state: &AppState, deployment_id: &str, headers: &HeaderMap) -> String {
     let https = state.public_origin.starts_with("https://");
     if path::on_path_host(state, headers) {
-        return format!("{}littlebox_app_session_{deployment_id}", if https { "__Secure-" } else { "" });
+        return format!("{}konae_app_session_{deployment_id}", if https { "__Secure-" } else { "" });
     }
-    if https { "__Host-littlebox_app_session" } else { "littlebox_app_session" }.to_owned()
+    if https { "__Host-konae_app_session" } else { "konae_app_session" }.to_owned()
 }
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -3743,7 +3740,7 @@ fn restrict_database(db: &Connection) -> Result<()> {
     arm_deadline(db);
     db.authorizer(Some(|context: AuthContext<'_>| match context.action {
         AuthAction::Attach { .. } | AuthAction::Detach { .. } => Authorization::Deny,
-        // Littlebox runs no triggers or views, and Studio and migrations use
+        // Konae runs no triggers or views, and Studio and migrations use
         // this connection too, so neither can add one the Gate never saw.
         AuthAction::CreateTrigger { .. } | AuthAction::CreateTempTrigger { .. } => Authorization::Deny,
         AuthAction::CreateView { .. } | AuthAction::CreateTempView { .. } => Authorization::Deny,
@@ -3888,7 +3885,7 @@ const DEFAULT_ADMIN_KEY: &str = "local-development-key";
 
 /// Returns the installation setup key. The well-known default only works on a
 /// loopback bind with a local public origin, unless the operator opts in with
-/// LITTLEBOX_ALLOW_DEFAULT_KEY=1. A proxy can expose a loopback bind, so the
+/// KONAE_ALLOW_DEFAULT_KEY=1. A proxy can expose a loopback bind, so the
 /// public origin counts too.
 fn admin_key_for(
     bind: &str,
@@ -3905,7 +3902,7 @@ fn admin_key_for(
     }
     if !is_local_host(bind) {
         anyhow::bail!(
-            "LITTLEBOX_BIND={bind} is reachable from other machines. Set LITTLEBOX_ADMIN_KEY to a secret value before starting the Kernel."
+            "KONAE_BIND={bind} is reachable from other machines. Set KONAE_ADMIN_KEY to a secret value before starting the Kernel."
         );
     }
     let origin_host = url::Url::parse(public_origin)
@@ -3913,7 +3910,7 @@ fn admin_key_for(
         .and_then(|url| url.host_str().map(str::to_owned));
     if !origin_host.as_deref().is_some_and(is_local_host) {
         anyhow::bail!(
-            "LITTLEBOX_PUBLIC_ORIGIN={public_origin} is not a local address. Set LITTLEBOX_ADMIN_KEY to a secret value before starting the Kernel."
+            "KONAE_PUBLIC_ORIGIN={public_origin} is not a local address. Set KONAE_ADMIN_KEY to a secret value before starting the Kernel."
         );
     }
     // MCP and owner sign-in also answer on this origin's host.
@@ -3923,7 +3920,7 @@ fn admin_key_for(
             .and_then(|url| url.host_str().map(str::to_owned));
         if !mcp_host.as_deref().is_some_and(is_local_host) {
             anyhow::bail!(
-                "LITTLEBOX_MCP_ORIGIN={mcp_origin} is not a local address. Set LITTLEBOX_ADMIN_KEY to a secret value before starting the Kernel."
+                "KONAE_MCP_ORIGIN={mcp_origin} is not a local address. Set KONAE_ADMIN_KEY to a secret value before starting the Kernel."
             );
         }
     }
@@ -4039,7 +4036,6 @@ mod tests {
             public_origin: "http://localhost".into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };
@@ -4175,7 +4171,7 @@ mod tests {
     /// it with `refusal_error`, and it comes before the recovery point.
     #[tokio::test]
     async fn a_migration_that_drops_a_checked_column_refuses_with_its_code_and_no_backup() {
-        let root = std::env::temp_dir().join(format!("littlebox-carry-refusal-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-carry-refusal-{}", Uuid::new_v4()));
         let state = test_state(&root);
         let path = database_path(&state, "dep");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -4193,7 +4189,7 @@ mod tests {
     async fn login_route_is_available_for_public_and_private_apps() {
         for visibility in ["public", "private"] {
             let root = std::env::temp_dir()
-                .join(format!("littlebox-login-{visibility}-{}", Uuid::new_v4()));
+                .join(format!("konae-login-{visibility}-{}", Uuid::new_v4()));
             let (state, headers) = login_test_state(&root, visibility).await;
             let response = login_page(State(state), headers).await;
             assert_eq!(response.status(), StatusCode::OK, "visibility={visibility}");
@@ -4202,7 +4198,7 @@ mod tests {
                 .unwrap();
             let html = String::from_utf8(bytes.to_vec()).unwrap();
             assert!(html.contains("Sign in to this app"));
-            assert!(html.contains("/_littlebox/auth/signup"));
+            assert!(html.contains("/_konae/auth/signup"));
             assert!(!html.contains("Account creation is open"));
             let _ = tokio::fs::remove_dir_all(root).await;
         }
@@ -4291,7 +4287,7 @@ mod tests {
 
     #[tokio::test]
     async fn signup_follows_the_deployment_policy() {
-        let root = std::env::temp_dir().join(format!("littlebox-signup-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-signup-{}", Uuid::new_v4()));
         let (state, headers) = login_test_state(&root, "public").await;
         assert_eq!(signup_status(&state, &headers, "open@example.test").await, StatusCode::OK);
 
@@ -4314,7 +4310,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_page_hides_account_creation_when_signup_is_closed() {
-        let root = std::env::temp_dir().join(format!("littlebox-login-policy-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-login-policy-{}", Uuid::new_v4()));
         let (state, headers) = login_test_state(&root, "private").await;
         let page = |state: AppState| {
             let headers = headers.clone();
@@ -4326,22 +4322,22 @@ mod tests {
         };
         set_policy(&state, SignupMode::Closed, &[]).await;
         let html = page(state.clone()).await;
-        assert!(!html.contains("/_littlebox/auth/signup"));
+        assert!(!html.contains("/_konae/auth/signup"));
         assert!(html.contains("not accepting new accounts"));
         set_policy(&state, SignupMode::Allowlist, &["@example.test"]).await;
         let html = page(state.clone()).await;
-        assert!(html.contains("/_littlebox/auth/signup"));
+        assert!(html.contains("/_konae/auth/signup"));
         assert!(html.contains("Only invited email addresses"));
         set_policy(&state, SignupMode::Invitation, &[]).await;
         let html = page(state.clone()).await;
-        assert!(!html.contains("/_littlebox/auth/signup"));
+        assert!(!html.contains("/_konae/auth/signup"));
         assert!(html.contains("Only invited people can create an account"));
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]
     async fn private_apps_refuse_anonymous_actions_without_a_session() {
-        let root = std::env::temp_dir().join(format!("littlebox-private-action-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-private-action-{}", Uuid::new_v4()));
         let (state, headers) = login_test_state(&root, "private").await;
         let program = json!({"version": 1, "actions": {"items.count": {"kind": "query", "access": "anonymous", "statement": "SELECT 1 AS n", "bindings": []}}});
         for deployment in state.deployments.write().await.values_mut() {
@@ -4366,7 +4362,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_deployment_that_does_not_say_public_serves_no_asset_without_a_login() {
-        let root = std::env::temp_dir().join(format!("littlebox-fail-closed-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-fail-closed-{}", Uuid::new_v4()));
         let (state, headers) = login_test_state(&root, "public").await;
         let id = state.deployments.read().await.values().next().unwrap().id.clone();
         let artifact = artifact_root(&state, &id);
@@ -4395,7 +4391,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_scheduled_mutation_without_a_route_runs_only_on_its_schedule() {
-        let root = std::env::temp_dir().join(format!("littlebox-scheduled-action-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-scheduled-action-{}", Uuid::new_v4()));
         let (state, headers) = login_test_state(&root, "public").await;
         let program = json!({"version": 1, "actions": {"holds.release": {
             "kind": "mutation", "access": "anonymous", "schedule": {"every": "15m"},
@@ -4414,7 +4410,7 @@ mod tests {
 
     #[test]
     fn redeploy_adds_tables_without_losing_rows_and_rejects_destructive_schema() {
-        let root = std::env::temp_dir().join(format!("littlebox-schema-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-schema-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("database.sqlite");
         initialize_database(&path).unwrap();
@@ -4462,7 +4458,7 @@ mod tests {
 
     #[test]
     fn schemas_may_call_safe_functions_but_not_dangerous_ones() {
-        let root = std::env::temp_dir().join(format!("littlebox-schema-functions-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-schema-functions-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("database.sqlite");
         initialize_database(&path).unwrap();
@@ -4498,7 +4494,7 @@ mod tests {
 
     #[test]
     fn a_schema_value_and_an_action_pattern_are_bounded_and_no_trigger_or_view_gets_in() {
-        let root = std::env::temp_dir().join(format!("littlebox-sql-bounds-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-sql-bounds-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("database.sqlite");
         initialize_database(&path).unwrap();
@@ -4534,14 +4530,14 @@ mod tests {
         let encoded = encode_base64(&std::fs::read(&source).unwrap());
         let target = root.join("imported.sqlite");
         let refused = initialize_database_from_base64(&target, &encoded, 16 * 1024 * 1024).unwrap_err().to_string();
-        assert_eq!(refused, "The database holds CREATE TRIGGER copy, and Littlebox runs no triggers or views. Drop it before importing.");
+        assert_eq!(refused, "The database holds CREATE TRIGGER copy, and Konae runs no triggers or views. Drop it before importing.");
         assert!(!target.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
     async fn named_locks_leave_no_entry_once_released() {
-        let root = std::env::temp_dir().join(format!("littlebox-locks-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-locks-{}", Uuid::new_v4()));
         let state = test_state(&root);
         let count = |state: &AppState| state.db_locks.lock().unwrap().len();
         for i in 0..100 {
@@ -4577,7 +4573,7 @@ mod tests {
 
     #[test]
     fn redeploy_rolls_back_schema_when_an_action_does_not_prepare() {
-        let root = std::env::temp_dir().join(format!("littlebox-schema-action-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-schema-action-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("database.sqlite");
         initialize_database(&path).unwrap();
@@ -4616,7 +4612,6 @@ mod tests {
             public_origin: "http://localhost".into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         }
@@ -4671,7 +4666,7 @@ mod tests {
 
     #[test]
     fn mutation_returning_fails_schema_validation_without_executing() {
-        let root = std::env::temp_dir().join(format!("littlebox-returning-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-returning-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("database.sqlite");
         initialize_database(&path).unwrap();
@@ -4805,7 +4800,7 @@ mod tests {
             vec![SqlValue::Real(u64::MAX as f64)]
         );
 
-        let root = std::env::temp_dir().join(format!("littlebox-number-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-number-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("database.sqlite");
         Connection::open(&path)
@@ -4834,7 +4829,7 @@ mod tests {
                 "notify": {"to": {"column": "assignee"}, "changes": ["title"], "subject": "Due", "body": "{changes}"}}
         }})).unwrap();
         let definition = &program.actions["tasks.remind"];
-        let root = std::env::temp_dir().join(format!("littlebox-returning-rows-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-returning-rows-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("database.sqlite");
         Connection::open(&path).unwrap().execute_batch(
@@ -4876,7 +4871,7 @@ mod tests {
             "artifact": {"version": 1, "entrypoint": "index.html", "files": files}
         });
         let request = Request::builder()
-            .header("x-littlebox-admin-key", "test-admin")
+            .header("x-konae-admin-key", "test-admin")
             .body(Body::from(body.to_string()))
             .unwrap();
         let response = deploy(State(state.clone()), request).await;
@@ -4888,7 +4883,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_browser_navigation_to_a_page_counts_one_page_view_by_the_file_served() {
-        let root = std::env::temp_dir().join(format!("littlebox-page-views-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-page-views-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
         let state = test_state(&root);
         deploy_files(&state, json!({"index.html": "<p>home</p>", "about.html": "<p>about</p>", "app.js": "1"})).await;
@@ -4935,7 +4930,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_file_the_browser_holds_answers_304_until_the_next_publish() {
-        let root = std::env::temp_dir().join(format!("littlebox-etag-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-etag-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
         let state = test_state(&root);
         deploy_files(&state, json!({"index.html": "<p>home</p>", "app.js": "1"})).await;
@@ -4986,7 +4981,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unversioned_deployment_tags_files_by_their_bytes() {
-        let root = std::env::temp_dir().join(format!("littlebox-etag-bytes-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-etag-bytes-{}", Uuid::new_v4()));
         let (state, mut headers) = login_test_state(&root, "public").await;
         let id = state.deployments.read().await.values().next().unwrap().id.clone();
         for deployment in state.deployments.write().await.values_mut() {
@@ -5013,7 +5008,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_small_export_refuses_by_the_index_before_reading_any_bytes() {
-        let root = std::env::temp_dir().join(format!("littlebox-portable-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-portable-{}", Uuid::new_v4()));
         let (state, _) = login_test_state(&root, "public").await;
         let deployment = state.deployments.read().await.values().next().unwrap().clone();
         let files = root.join("deployments").join(&deployment.id).join("files");
@@ -5037,7 +5032,7 @@ mod tests {
 
     #[tokio::test]
     async fn republish_stops_serving_files_missing_from_the_new_artifact() {
-        let root = std::env::temp_dir().join(format!("littlebox-republish-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-republish-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
         let state = test_state(&root);
         let first = deploy_files(
@@ -5068,7 +5063,7 @@ mod tests {
     #[tokio::test]
     async fn new_deployments_pick_a_policy_from_visibility_and_redeploys_keep_it() {
         for (visibility, expected) in [("public", SignupMode::Open), ("private", SignupMode::Closed)] {
-            let root = std::env::temp_dir().join(format!("littlebox-policy-{}", Uuid::new_v4()));
+            let root = std::env::temp_dir().join(format!("konae-policy-{}", Uuid::new_v4()));
             tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
             let state = test_state(&root);
             let first = deploy_with_visibility(&state, json!({"index.html": "<p>one</p>"}), visibility).await;
@@ -5103,7 +5098,7 @@ mod tests {
             ("private", None, "public", json!({"mode": "closed", "allowlist": []})),
         ];
         for (first, chosen, second, expected) in cases {
-            let root = std::env::temp_dir().join(format!("littlebox-flip-{}", Uuid::new_v4()));
+            let root = std::env::temp_dir().join(format!("konae-flip-{}", Uuid::new_v4()));
             tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
             let state = test_state(&root);
             deploy_with_visibility(&state, json!({"index.html": "<p>one</p>"}), first).await;
@@ -5125,7 +5120,7 @@ mod tests {
 
     #[tokio::test]
     async fn signup_checks_input_first_and_gives_one_answer_for_closed_and_unlisted() {
-        let root = std::env::temp_dir().join(format!("littlebox-signup-oracle-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-signup-oracle-{}", Uuid::new_v4()));
         let (state, headers) = login_test_state(&root, "public").await;
         let attempt = |email: &'static str, password: &'static str| {
             let state = state.clone();
@@ -5155,7 +5150,7 @@ mod tests {
 
     #[test]
     fn app_databases_are_capped_in_size() {
-        let root = std::env::temp_dir().join(format!("littlebox-cap-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-cap-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("database.sqlite");
         initialize_database(&path).unwrap();
@@ -5183,7 +5178,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_record_write_removes_the_new_artifact_version() {
-        let root = std::env::temp_dir().join(format!("littlebox-orphan-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-orphan-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
         let state = test_state(&root);
         let first = deploy_files(&state, json!({"index.html": "<p>one</p>"})).await;
@@ -5200,7 +5195,7 @@ mod tests {
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>two</p>"}}
         });
         let request = Request::builder()
-            .header("x-littlebox-admin-key", "test-admin")
+            .header("x-konae-admin-key", "test-admin")
             .body(Body::from(body.to_string()))
             .unwrap();
         assert_eq!(deploy(State(state.clone()), request).await.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -5213,7 +5208,7 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_artifacts_without_a_version_are_still_served() {
-        let root = std::env::temp_dir().join(format!("littlebox-legacy-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-legacy-{}", Uuid::new_v4()));
         let (state, _) = login_test_state(&root, "public").await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let directory = root.join("deployments").join(&deployment.id).join("artifact");
@@ -5225,7 +5220,7 @@ mod tests {
 
     #[tokio::test]
     async fn restoring_a_backup_first_backs_up_the_live_database() {
-        let root = std::env::temp_dir().join(format!("littlebox-restore-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-restore-{}", Uuid::new_v4()));
         let (state, _) = login_test_state(&root, "public").await;
         let deployment_id = state.deployments.read().await.values().next().unwrap().id.clone();
         let id = deployment_id.as_str();
@@ -5278,7 +5273,7 @@ mod tests {
         let mut headers = headers.clone();
         headers.insert(
             header::COOKIE,
-            format!("littlebox_app_session={}", session.token).parse().unwrap(),
+            format!("konae_app_session={}", session.token).parse().unwrap(),
         );
         (headers, session.user.user_id)
     }
@@ -5290,7 +5285,7 @@ mod tests {
 
     #[tokio::test]
     async fn upload_refuses_to_overwrite_an_unreadable_file_index() {
-        let root = std::env::temp_dir().join(format!("littlebox-upload-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-upload-{}", Uuid::new_v4()));
         let (state, headers) = login_test_state(&root, "public").await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (headers, _) = signed_in(&state, &deployment.id, &headers, "owner@example.test");
@@ -5321,7 +5316,7 @@ mod tests {
 
     #[tokio::test]
     async fn files_are_private_to_the_uploader_unless_marked_public() {
-        let root = std::env::temp_dir().join(format!("littlebox-files-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-files-{}", Uuid::new_v4()));
         let (state, headers) = login_test_state(&root, "public").await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, alice_id) = signed_in(&state, &deployment.id, &headers, "alice@example.test");

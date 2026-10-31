@@ -110,19 +110,19 @@ async function json(response: Response) {
 let port = 0;
 
 async function startKernel() {
-  kernel = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
+  kernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
     env: {
-      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))),
-      LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_PUBLIC_ORIGIN: url,
-      LITTLEBOX_DATA_DIR: root, LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_HOST_SUFFIX: "localhost",
-      LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1",
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
+      KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
+      KONAE_DATA_DIR: root, KONAE_ADMIN_KEY: setupKey, KONAE_HOST_SUFFIX: "localhost",
+      KONAE_TRUSTED_PROXIES: "127.0.0.1",
     },
     stdout: "ignore", stderr: "inherit",
   });
   let ready = false;
   for (let attempt = 0; attempt < 100; attempt++) {
-    if (kernel.exitCode !== null) throw Error("HTTP route test Kernel stopped before startup. Set LITTLEBOX_HTTP_TEST_PORT to a free port.");
-    try { ready = (await fetch(`${url}/_littlebox/health`)).ok; } catch {}
+    if (kernel.exitCode !== null) throw Error("HTTP route test Kernel stopped before startup. Set KONAE_HTTP_TEST_PORT to a free port.");
+    try { ready = (await fetch(`${url}/_konae/health`)).ok; } catch {}
     if (ready) break;
     await Bun.sleep(100);
   }
@@ -132,11 +132,11 @@ async function startKernel() {
 beforeAll(async () => {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
   expect(await build.exited).toBe(0);
-  root = await mkdtemp(path.join(tmpdir(), "littlebox-http-routes-"));
-  port = Number(process.env.LITTLEBOX_HTTP_TEST_PORT ?? 19700 + Math.floor(Math.random() * 40));
+  root = await mkdtemp(path.join(tmpdir(), "konae-http-routes-"));
+  port = Number(process.env.KONAE_HTTP_TEST_PORT ?? 19700 + Math.floor(Math.random() * 40));
   url = `http://127.0.0.1:${port}`;
   await startKernel();
-  const response = await fetch(`${url}/_littlebox/owner/signup`, {
+  const response = await fetch(`${url}/_konae/owner/signup`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "owner@routes.test", password, setupKey }),
   });
@@ -279,7 +279,7 @@ describe("HTTP routes", () => {
     const statuses: number[] = [];
     for (let i = 0; i < 9; i++) statuses.push((await from("198.18.3.1", `lbk_wrong${i}`)).status);
     // The file read path shares the bucket.
-    statuses.push((await from("198.18.3.1", "lbk_wrong-file", `/_littlebox/files/${crypto.randomUUID()}`)).status);
+    statuses.push((await from("198.18.3.1", "lbk_wrong-file", `/_konae/files/${crypto.randomUUID()}`)).status);
     expect(statuses).toEqual(Array(10).fill(401));
     const limited = await from("198.18.3.1", "lbk_wrong-again");
     expect(await json(limited)).toEqual({ status: 429, body: { error: "rate-limited" } });
@@ -291,7 +291,7 @@ describe("HTTP routes", () => {
 
   test("a session cookie counts only from the app's own origin", async () => {
     await owner.call("signup_policy_set", { deploymentId, mode: "open" });
-    const signup = await route("/_littlebox/auth/signup", { method: "POST", body: JSON.stringify({ email: "ana@routes.test", password }) });
+    const signup = await route("/_konae/auth/signup", { method: "POST", body: JSON.stringify({ email: "ana@routes.test", password }) });
     expect(signup.status).toBe(200);
     const cookie = signup.headers.get("set-cookie")!.split(";")[0];
     const own = await json(await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "mine" }), headers: { cookie, "sec-fetch-site": "same-origin" } }));
@@ -307,9 +307,9 @@ describe("HTTP routes", () => {
   });
 
   test("an action whose route does not answer anyone answers only on its route", async () => {
-    const signup = await route("/_littlebox/auth/login", { method: "POST", body: JSON.stringify({ email: "ana@routes.test", password }) });
+    const signup = await route("/_konae/auth/login", { method: "POST", body: JSON.stringify({ email: "ana@routes.test", password }) });
     const cookie = signup.headers.get("set-cookie")!.split(";")[0];
-    const member = new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+    const member = new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
       const headers = new Headers(init?.headers); headers.set("host", host); headers.set("cookie", cookie);
       return fetch(input, { ...init, headers });
     } });
@@ -324,7 +324,7 @@ describe("HTTP routes", () => {
 
   test("the runtime endpoint refuses an API key and says where it works", async () => {
     const issued = await owner.call<{ key: string }>("api_keys_create", { deploymentId, name: "Misplaced", actions: ["orders.list"] });
-    const response = await route("/_littlebox/mcp", {
+    const response = await route("/_konae/mcp", {
       method: "POST", headers: { authorization: `Bearer ${issued.key}`, accept: "application/json, text/event-stream" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "actions_invoke", arguments: { name: "orders.list", input: {} } } }),
     });
@@ -334,12 +334,12 @@ describe("HTTP routes", () => {
   test("the file read path applies the file's visibility to each caller", async () => {
     const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8ioAAAAASUVORK5CYII="), c => c.charCodeAt(0));
     const signup = async (email: string) => {
-      const response = await route("/_littlebox/auth/signup", { method: "POST", body: JSON.stringify({ email, password }) });
+      const response = await route("/_konae/auth/signup", { method: "POST", body: JSON.stringify({ email, password }) });
       return response.headers.get("set-cookie")!.split(";")[0];
     };
     const ben = await signup("ben@routes.test");
     const cara = await signup("cara@routes.test");
-    const runtime = new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+    const runtime = new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
       const headers = new Headers(init?.headers); headers.set("host", host); headers.set("cookie", ben);
       return fetch(input, { ...init, headers });
     } });
@@ -347,7 +347,7 @@ describe("HTTP routes", () => {
     const file = await runtime.call<{ id: string }>("files_upload", { transferId: transfer.transferId, name: "badge.png", type: "image/png" });
     const reader = await owner.call<{ key: string }>("api_keys_create", { deploymentId, name: "Badge reader", files: ["private"] });
     const publicOnly = await owner.call<{ key: string }>("api_keys_create", { deploymentId, name: "Public reader", files: ["public"] });
-    const read = (headers: Record<string, string>) => route(`/_littlebox/files/${file.id}`, { headers });
+    const read = (headers: Record<string, string>) => route(`/_konae/files/${file.id}`, { headers });
 
     const byKey = await read({ authorization: `Bearer ${reader.key}` });
     expect(byKey.status).toBe(200);
@@ -361,8 +361,8 @@ describe("HTTP routes", () => {
     expect((await read({ authorization: `Bearer ${publicOnly.key}` })).status).toBe(404);
     expect((await read({ cookie: ben, "sec-fetch-site": "same-site" })).status).toBe(401);
     expect((await read({})).status).toBe(401);
-    expect((await route(`/_littlebox/files/${crypto.randomUUID()}`, { headers: { authorization: `Bearer ${reader.key}` } })).status).toBe(404);
-    expect((await route("/_littlebox/files/", { headers: { authorization: `Bearer ${reader.key}` } })).status).toBe(410);
+    expect((await route(`/_konae/files/${crypto.randomUUID()}`, { headers: { authorization: `Bearer ${reader.key}` } })).status).toBe(404);
+    expect((await route("/_konae/files/", { headers: { authorization: `Bearer ${reader.key}` } })).status).toBe(410);
   });
 
   test("a portable export carries keys and the import revokes them", async () => {
@@ -386,10 +386,10 @@ describe("HTTP routes", () => {
 
   test("a guarded mutation that changes no row is refused, counted as refused and records no Signal", async () => {
     const today = new Date().toISOString().slice(0, 10);
-    const login = await route("/_littlebox/auth/login", { method: "POST", body: JSON.stringify({ email: "ana@routes.test", password }) });
+    const login = await route("/_konae/auth/login", { method: "POST", body: JSON.stringify({ email: "ana@routes.test", password }) });
     const cookie = login.headers.get("set-cookie")!.split(";")[0];
     const ana = (await owner.call<{ users: { userId: string; email: string }[] }>("app_users_list", { deploymentId })).users.find((user) => user.email === "ana@routes.test")!.userId;
-    const member = new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+    const member = new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
       const headers = new Headers(init?.headers); headers.set("host", host); headers.set("cookie", cookie);
       return fetch(input, { ...init, headers });
     } });

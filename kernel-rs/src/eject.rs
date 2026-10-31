@@ -14,13 +14,13 @@ use super::*;
 use rusqlite::params;
 
 /// The one answer to a Managed source change after Eject.
-pub(super) const CLOSED: &str = "This project was ejected: its sources are maintained outside Littlebox, so the Kernel refuses Managed source changes. Publish a Build Artifact with release_plan and release_apply, or create a new project to edit in Littlebox.";
+pub(super) const CLOSED: &str = "This project was ejected: its sources are maintained outside Konae, so the Kernel refuses Managed source changes. Publish a Build Artifact with release_plan and release_apply, or create a new project to edit in Konae.";
 
 /** The answer to a project created External that asks to become Managed. */
-pub(super) const ALWAYS_EXTERNAL: &str = "This project is External. Littlebox does not take source authority back, so create a new project to edit in Littlebox.";
+pub(super) const ALWAYS_EXTERNAL: &str = "This project is External. Konae does not take source authority back, so create a new project to edit in Konae.";
 
 const PLAN_TTL_MS: u64 = 60 * 60 * 1000;
-const PACKAGE_FORMAT: &str = "littlebox-eject";
+const PACKAGE_FORMAT: &str = "konae-eject";
 
 pub(super) fn install(db: &Connection) -> Result<()> {
     db.execute_batch(
@@ -222,15 +222,15 @@ async fn apply(state: &AppState, owner: &Owner, a: &Value) -> Result<Value> {
 
 fn publish_commands() -> Value {
     json!([
-        "bun run littlebox -- login --dir <dir> --url <url>",
-        "bun run littlebox -- build --dir <dir>",
-        "bun run littlebox -- dev --dir <dir>",
-        "bun run littlebox -- publish --dir <dir>"
+        "bun run konae -- login --dir <dir> --url <url>",
+        "bun run konae -- build --dir <dir>",
+        "bun run konae -- dev --dir <dir>",
+        "bun run konae -- publish --dir <dir>"
     ])
 }
 
 /// The code package: the saved sources at `revision` as files, plus the
-/// `littlebox.json` of an External project and a README. It is built from the
+/// `konae.json` of an External project and a README. It is built from the
 /// stored bytes on every call and holds no clock, so each download of one
 /// revision has the same SHA-256.
 fn package(state: &AppState, db: &Connection, project: &Value, id: &str, revision: u64) -> Result<Vec<u8>> {
@@ -261,10 +261,10 @@ fn package(state: &AppState, db: &Connection, project: &Value, id: &str, revisio
         .map(|origin| origin.trim_end_matches('/').to_owned())
         .unwrap_or_else(|| state.public_origin.clone());
     let config = json!({"url": origin, "project": {"id": id, "name": name, "slug": slug, "sourceAuthority": "external", "manifest": source["manifest"]}});
-    anyhow::ensure!(!files.contains_key("littlebox.json"), "The saved sources hold a littlebox.json, which Eject writes itself. Rename that file in the editor first.");
-    files.insert("littlebox.json".into(), format!("{}\n", serde_json::to_string_pretty(&config)?));
-    let guide = if files.contains_key("README.md") { "LITTLEBOX.md" } else { "README.md" };
-    anyhow::ensure!(!files.contains_key(guide), "The saved sources hold README.md and LITTLEBOX.md. Rename one in the editor first.");
+    anyhow::ensure!(!files.contains_key("konae.json"), "The saved sources hold a konae.json, which Eject writes itself. Rename that file in the editor first.");
+    files.insert("konae.json".into(), format!("{}\n", serde_json::to_string_pretty(&config)?));
+    let guide = if files.contains_key("README.md") { "KONAE.md" } else { "README.md" };
+    anyhow::ensure!(!files.contains_key(guide), "The saved sources hold README.md and KONAE.md. Rename one in the editor first.");
     files.insert(guide.into(), readme(&name, revision, &origin));
     let contents: Vec<Value> = files
         .iter()
@@ -285,22 +285,22 @@ fn package(state: &AppState, db: &Connection, project: &Value, id: &str, revisio
 fn readme(name: &str, revision: u64, url: &str) -> String {
     format!(
         "# {name}\n\n\
-These are the sources of {name} as Littlebox saved them at revision {revision}, when the project was ejected. Littlebox no longer edits them. The editor and its agent show the project read-only, and the Kernel refuses Managed source changes from any tab or agent.\n\n\
+These are the sources of {name} as Konae saved them at revision {revision}, when the project was ejected. Konae no longer edits them. The editor and its agent show the project read-only, and the Kernel refuses Managed source changes from any tab or agent.\n\n\
 The hosted app did not change. It keeps its URL, users, sessions, data, files, invitations and email service. Publishing from this folder replaces only its Build Artifact.\n\n\
 ## Publish from this folder\n\n\
-Run these from a Littlebox checkout. `login` reads `LITTLEBOX_EMAIL` and `LITTLEBOX_PASSWORD` and saves a 24-hour credential in `.littlebox/`, which stays out of Git.\n\n\
+Run these from a Konae checkout. `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD` and saves a 24-hour credential in `.konae/`, which stays out of Git.\n\n\
 ```sh\n\
-bun run littlebox -- login --dir <this folder> --url {url}\n\
-bun run littlebox -- build --dir <this folder>\n\
-bun run littlebox -- dev --dir <this folder>\n\
-bun run littlebox -- publish --dir <this folder>\n\
+bun run konae -- login --dir <this folder> --url {url}\n\
+bun run konae -- build --dir <this folder>\n\
+bun run konae -- dev --dir <this folder>\n\
+bun run konae -- publish --dir <this folder>\n\
 ```\n\n\
 `dev` runs the same Kernel locally with its own accounts and data. `publish` sends a Build Artifact through MCP with `release_plan` and `release_apply`.\n\n\
-A publish never changes who may create an app account. That stays in the editor's Auth > Users view and `signup_policy_set`. `project.manifest.signupPolicy` in `littlebox.json` names the policy of a first release only. This app has been released, so a publish from this folder sends no policy and warns when the file names a different one.\n\n\
+A publish never changes who may create an app account. That stays in the editor's Auth > Users view and `signup_policy_set`. `project.manifest.signupPolicy` in `konae.json` names the policy of a first release only. This app has been released, so a publish from this folder sends no policy and warns when the file names a different one.\n\n\
 ## Schema\n\n\
 `schema.sql` is what the Kernel runs on every publish. It accepts additive changes only: new tables and indexes with `IF NOT EXISTS`. `schema.ts` is the Database Model the editor planned migrations from. Nothing reads it now, so the schema, its migrations and their compatibility with live data are yours. Back up the data before changing an existing table.\n\n\
 ## Going back\n\n\
-Littlebox does not take a project back into the editor. To edit in Littlebox again, create a new project. Production data does not merge into it.\n"
+Konae does not take a project back into the editor. To edit in Konae again, create a new project. Production data does not merge into it.\n"
     )
 }
 
@@ -316,7 +316,7 @@ mod tests {
     fn the_guide_lists_the_publish_commands() {
         let text = super::readme("Notes", 3, "https://example.test");
         assert!(text.contains("revision 3"));
-        assert!(text.contains("littlebox -- publish"));
+        assert!(text.contains("konae -- publish"));
         assert!(text.contains("A publish never changes who may create an app account"), "the guide says where the signup policy changes");
         assert!(text.contains("--url https://example.test"));
     }

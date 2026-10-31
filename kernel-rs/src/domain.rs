@@ -3,7 +3,7 @@
 //! The owner names a hostname with `domain_set`. The Kernel checks the name
 //! by the rules in `domain-cases.json`, which the CLI runs too, records the
 //! claim in `deployments/<id>/domain.json` with a token, and answers with the
-//! TXT record `_littlebox.<hostname>` that must hold the token. Each later
+//! TXT record `_konae.<hostname>` that must hold the token. Each later
 //! `domain_set` looks the record up through the Kernel's own DNS query; when
 //! it holds the token, the alias serves. From then on a request whose `Host`
 //! is the alias resolves to the Deployment exactly as its generated hostname
@@ -25,7 +25,7 @@ use std::sync::OnceLock;
 
 pub(crate) const RECORD_FILE: &str = "domain.json";
 /// The label under the alias that holds the token.
-pub(super) const TXT_LABEL: &str = "_littlebox";
+pub(super) const TXT_LABEL: &str = "_konae";
 const LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const LOOKUP_ATTEMPTS: usize = 2;
 
@@ -92,7 +92,7 @@ pub(super) fn check_hostname(raw: &str, rules: &Rules) -> std::result::Result<St
     }
     if !rules.suffix.is_empty() && (hostname == rules.suffix || hostname.ends_with(&format!(".{}", rules.suffix))) {
         return Err(refuse("domain.app-suffix", format!(
-            "{hostname} is under this installation's app suffix {}, where Littlebox names apps itself. Name a hostname outside it.",
+            "{hostname} is under this installation's app suffix {}, where Konae names apps itself. Name a hostname outside it.",
             rules.suffix
         )));
     }
@@ -100,7 +100,7 @@ pub(super) fn check_hostname(raw: &str, rules: &Rules) -> std::result::Result<St
         return Err(refuse("domain.local", format!("{hostname} is a local name. Name a hostname under a domain you control.")));
     }
     if rules.installation_hosts.iter().any(|host| host == &hostname) {
-        return Err(refuse("domain.installation-host", format!("{hostname} is this installation's own host. Name a hostname no Littlebox host uses.")));
+        return Err(refuse("domain.installation-host", format!("{hostname} is this installation's own host. Name a hostname no Konae host uses.")));
     }
     Ok(hostname)
 }
@@ -217,21 +217,21 @@ async fn ensure_free(state: &AppState, id: &str, hostname: &str) -> Result<()> {
 }
 
 fn new_token() -> String {
-    format!("littlebox-verify-{}", Uuid::new_v4().simple())
+    format!("konae-verify-{}", Uuid::new_v4().simple())
 }
 
 // ---------------------------------------------------------------------------
 // DNS
 
-/// The resolver the Kernel asks: `LITTLEBOX_DNS_RESOLVER` as `ip` or
+/// The resolver the Kernel asks: `KONAE_DNS_RESOLVER` as `ip` or
 /// `ip:port`, else the first `nameserver` in `/etc/resolv.conf`.
 pub(super) fn resolver() -> Result<SocketAddr> {
-    if let Ok(value) = std::env::var("LITTLEBOX_DNS_RESOLVER") {
+    if let Ok(value) = std::env::var("KONAE_DNS_RESOLVER") {
         let value = value.trim();
         return value
             .parse::<SocketAddr>()
             .or_else(|_| value.parse::<IpAddr>().map(|ip| SocketAddr::new(ip, 53)))
-            .map_err(|_| anyhow::anyhow!("LITTLEBOX_DNS_RESOLVER must be an IP address with an optional port, such as 1.1.1.1 or 127.0.0.1:5353."));
+            .map_err(|_| anyhow::anyhow!("KONAE_DNS_RESOLVER must be an IP address with an optional port, such as 1.1.1.1 or 127.0.0.1:5353."));
     }
     let conf = std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
     conf.lines()
@@ -239,7 +239,7 @@ pub(super) fn resolver() -> Result<SocketAddr> {
         .filter_map(|rest| rest.trim().split('%').next()?.parse::<IpAddr>().ok())
         .map(|ip| SocketAddr::new(ip, 53))
         .next()
-        .context("No DNS resolver: set LITTLEBOX_DNS_RESOLVER or list a nameserver in /etc/resolv.conf.")
+        .context("No DNS resolver: set KONAE_DNS_RESOLVER or list a nameserver in /etc/resolv.conf.")
 }
 
 fn query(id: u16, name: &str) -> Vec<u8> {
@@ -356,7 +356,7 @@ pub(super) fn tools() -> Vec<Value> {
     vec![
         mcp::tool(
             "domain_set",
-            "Serve a deployment from a hostname you control as well as its generated one. The first call returns a TXT record, _littlebox.<hostname>, and the token it must hold; add it at your DNS provider, point the hostname at this installation's proxy, and call domain_set again with the same hostname. The Kernel looks the record up itself and the alias serves once it holds the token. The proxy terminates TLS and must forward Host unchanged. Requires publish.",
+            "Serve a deployment from a hostname you control as well as its generated one. The first call returns a TXT record, _konae.<hostname>, and the token it must hold; add it at your DNS provider, point the hostname at this installation's proxy, and call domain_set again with the same hostname. The Kernel looks the record up itself and the alias serves once it holds the token. The proxy terminates TLS and must forward Host unchanged. Requires publish.",
             json!({"deploymentId":{"type":"string","minLength":1},"hostname":{"type":"string","minLength":1,"maxLength":260}}),
             &["deploymentId", "hostname"],
             false,
@@ -566,12 +566,12 @@ mod tests {
 
     #[tokio::test]
     async fn the_lookup_reads_txt_records_and_tells_a_missing_name_apart() {
-        let server = fake_resolver(zone(&[("_littlebox.notes.example.org", &["littlebox-verify-abc", "v=spf1 -all"])])).await;
+        let server = fake_resolver(zone(&[("_konae.notes.example.org", &["konae-verify-abc", "v=spf1 -all"])])).await;
         assert_eq!(
-            lookup_txt(server, "_littlebox.notes.example.org").await.unwrap(),
-            Some(vec!["littlebox-verify-abc".to_owned(), "v=spf1 -all".to_owned()])
+            lookup_txt(server, "_konae.notes.example.org").await.unwrap(),
+            Some(vec!["konae-verify-abc".to_owned(), "v=spf1 -all".to_owned()])
         );
-        assert_eq!(lookup_txt(server, "_littlebox.other.example.org").await.unwrap(), None);
+        assert_eq!(lookup_txt(server, "_konae.other.example.org").await.unwrap(), None);
     }
 
     fn test_state(root: &Path) -> AppState {
@@ -586,10 +586,9 @@ mod tests {
             copies: Arc::new(copies::CopyStatus::default()),
             admin_key: "test-admin".into(),
             accounts: accounts::AccountSettings::local(),
-            public_origin: "https://littlebox.example.com".into(),
+            public_origin: "https://konae.example.com".into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "apps.example.com".into(),
             guards: Arc::new(limits::Guards::new(Vec::new())),
         }
@@ -604,7 +603,7 @@ mod tests {
             "visibility": "public",
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}
         });
-        let request = Request::builder().header("x-littlebox-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
+        let request = Request::builder().header("x-konae-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
         assert_eq!(deploy(State(state.clone()), request).await.status(), StatusCode::OK);
         mcp::store(state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES(?1,'o','{}')", [project]).unwrap();
         state.deployments.read().await.values().find(|d| d.project_id == project).cloned().unwrap()
@@ -621,7 +620,7 @@ mod tests {
     /// one name serves one Deployment.
     #[tokio::test]
     async fn an_alias_serves_after_its_txt_record_and_only_for_one_deployment() {
-        let root = std::env::temp_dir().join(format!("littlebox-domain-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-domain-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
         let state = test_state(&root);
         let notes = publish(&state, "notes").await;
@@ -637,7 +636,7 @@ mod tests {
         // A name under the installation's suffix is refused before anything is stored.
         assert_eq!(
             set(&notes.id, "notes.apps.example.com").await.unwrap_err().to_string(),
-            "notes.apps.example.com is under this installation's app suffix apps.example.com, where Littlebox names apps itself. Name a hostname outside it."
+            "notes.apps.example.com is under this installation's app suffix apps.example.com, where Konae names apps itself. Name a hostname outside it."
         );
         assert!(read_record(&state, &notes.id).is_none());
         // A reader cannot set one.
@@ -648,20 +647,20 @@ mod tests {
         let pending = set(&notes.id, "Notes.Example.org.").await.unwrap();
         assert_eq!(pending["status"], "pending");
         assert_eq!(pending["hostname"], "notes.example.org");
-        assert_eq!(pending["record"]["name"], "_littlebox.notes.example.org");
-        assert_eq!(pending["dns"], "No TXT record at _littlebox.notes.example.org yet.");
+        assert_eq!(pending["record"]["name"], "_konae.notes.example.org");
+        assert_eq!(pending["dns"], "No TXT record at _konae.notes.example.org yet.");
         let token = pending["record"]["value"].as_str().unwrap().to_owned();
-        assert!(token.starts_with("littlebox-verify-"));
+        assert!(token.starts_with("konae-verify-"));
         assert!(deployment_for(&state, &host("notes.example.org")).await.is_none());
 
         // A record that holds something else is refused and serves nothing.
-        records.lock().unwrap().insert("_littlebox.notes.example.org".into(), vec!["littlebox-verify-someone-else".into()]);
+        records.lock().unwrap().insert("_konae.notes.example.org".into(), vec!["konae-verify-someone-else".into()]);
         let wrong = set(&notes.id, "notes.example.org").await.unwrap_err().to_string();
-        assert_eq!(wrong, format!("The TXT record at _littlebox.notes.example.org holds \"littlebox-verify-someone-else\", not this Deployment's token. Set it to {token} and call domain_set again."));
+        assert_eq!(wrong, format!("The TXT record at _konae.notes.example.org holds \"konae-verify-someone-else\", not this Deployment's token. Set it to {token} and call domain_set again."));
         assert!(deployment_for(&state, &host("notes.example.org")).await.is_none());
 
         // The right token makes it serve, with any port and case.
-        records.lock().unwrap().insert("_littlebox.notes.example.org".into(), vec!["v=spf1 -all".into(), token.clone()]);
+        records.lock().unwrap().insert("_konae.notes.example.org".into(), vec!["v=spf1 -all".into(), token.clone()]);
         let active = set(&notes.id, "notes.example.org").await.unwrap();
         assert_eq!(active["status"], "active");
         assert_eq!(active["url"], "https://notes.example.org");
@@ -720,10 +719,10 @@ mod tests {
         let shop = set(&notes.id, "shop.example.org").await.unwrap();
         let second = shop["record"]["value"].as_str().unwrap().to_owned();
         assert_ne!(second, token, "a cleared claim's token is gone");
-        records.lock().unwrap().insert("_littlebox.shop.example.org".into(), vec![second.clone()]);
+        records.lock().unwrap().insert("_konae.shop.example.org".into(), vec![second.clone()]);
         assert_eq!(set(&notes.id, "shop.example.org").await.unwrap()["status"], "active");
         // Switching names keeps the token, so a record added first switches at once.
-        records.lock().unwrap().insert("_littlebox.www.example.org".into(), vec![second.clone()]);
+        records.lock().unwrap().insert("_konae.www.example.org".into(), vec![second.clone()]);
         assert_eq!(set(&notes.id, "www.example.org").await.unwrap()["status"], "active");
         assert_eq!(serving(&state, "shop.example.org"), None);
         let restored = load_index(&root);
@@ -735,7 +734,7 @@ mod tests {
 
     #[test]
     fn answers_with_another_id_or_a_failure_code_are_refused() {
-        let mut packet = query(7, "_littlebox.example.org");
+        let mut packet = query(7, "_konae.example.org");
         packet[2] |= 0x80;
         assert_eq!(parse_answer(&packet, 7).unwrap(), None);
         assert!(parse_answer(&packet, 8).is_err());

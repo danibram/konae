@@ -332,14 +332,14 @@ fn fill(parts: &[Part], values: &Fill<'_>) -> String {
 /// the recipient gets it.
 fn render(declared: &Declaration, app_name: &str, values: &Fill<'_>) -> (String, String, String) {
     let app = mail::one_line(app_name, 80);
-    let app = if app.is_empty() { "Littlebox".to_owned() } else { app };
+    let app = if app.is_empty() { "Konae".to_owned() } else { app };
     let subject = mail::one_line(&fill(&declared.subject, values), MAX_RENDERED_SUBJECT_CHARS);
     let subject = if subject.is_empty() { format!("Notice from {app}") } else { subject };
     let body: String = fill(&declared.body, values).trim().chars().take(MAX_RENDERED_BODY_CHARS).collect();
     let why = match declared.to {
-        Recipient::Owner => format!("{app} sent this notice through Littlebox because you own the app."),
-        Recipient::Actor => format!("{app} sent this notice through Littlebox after something you did in the app."),
-        Recipient::Column(_) => format!("{app} sent this notice through Littlebox because a change in the app names your account."),
+        Recipient::Owner => format!("{app} sent this notice through Konae because you own the app."),
+        Recipient::Actor => format!("{app} sent this notice through Konae after something you did in the app."),
+        Recipient::Column(_) => format!("{app} sent this notice through Konae because a change in the app names your account."),
     };
     let text = format!("{body}\n\n-- \n{why}\n");
     let html = format!(
@@ -637,7 +637,7 @@ mod tests {
         assert!(subject.starts_with("Booked Oak Bcc: x@example.test <b>"));
         assert_eq!(subject.chars().count(), MAX_RENDERED_SUBJECT_CHARS);
         assert!(text.starts_with("Room Oak Bcc: x@example.test <b> for 2 h.\nBooked by user-1. Braces } stay.\n\n-- \n"));
-        assert!(text.contains("Room board sent this notice through Littlebox after something you did in the app."));
+        assert!(text.contains("Room board sent this notice through Konae after something you did in the app."));
         assert!(html.contains("Room Oak Bcc: x@example.test &lt;b&gt; for 2 h.<br>Booked by user-1.") && !html.contains("<b>"));
         // A null input and a caller without an ID fill nothing.
         let (subject, text, _) = render(&declared, "Rooms", &plain(&json!({"room": "Oak", "title": null}), None));
@@ -655,6 +655,6 @@ mod tests {
         let declared = declaration("notes.add", &program.actions["notes.add"]).unwrap().unwrap();
         let (subject, text, _) = render(&declared, "Notes", &plain(&json!({}), None));
         assert_eq!(subject, "Notice from Notes");
-        assert!(text.ends_with("Notes sent this notice through Littlebox because you own the app.\n"));
+        assert!(text.ends_with("Notes sent this notice through Konae because you own the app.\n"));
     }
 }

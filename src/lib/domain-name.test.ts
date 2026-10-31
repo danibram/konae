@@ -15,7 +15,7 @@ describe("custom domain hostnames", () => {
       else expect(outcome).toEqual({ ok: false, code: (item as { code?: string }).code ?? "the case names no code", message: item.error });
     });
   }
-  test("the proof lives under _littlebox", () => {
-    expect(domainRecordName("notes.example.org")).toBe("_littlebox.notes.example.org");
+  test("the proof lives under _konae", () => {
+    expect(domainRecordName("notes.example.org")).toBe("_konae.notes.example.org");
   });
 });

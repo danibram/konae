@@ -4,10 +4,10 @@
 // these senders) and the hub's program API.
 //
 // Each sender signs here with node:crypto, the way its own documentation
-// says, not with Littlebox's signer, so the probe checks the Kernel against
+// says, not with Konae's signer, so the probe checks the Kernel against
 // the provider and not against itself.
 //
-//   LITTLEBOX_PROBE_PORT=23010 bun run examples/probes/hub/replay.ts
+//   KONAE_PROBE_PORT=23010 bun run examples/probes/hub/replay.ts
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -83,7 +83,7 @@ await probe("hub", 23010, async (kit) => {
   const actions = JSON.parse(await readFile(path.join(here, "actions.json"), "utf8"));
   actions.actions["pushes.receive"].http.signature.scheme = "github";
   const sources = { "actions.json": JSON.stringify(actions), "schema.sql": await readFile(path.join(here, "schema.sql"), "utf8") };
-  const sentence = 'Action pushes.receive names an unknown signature scheme. Use "littlebox", "hmac-body", "timestamped" or "svix".';
+  const sentence = 'Action pushes.receive names an unknown signature scheme. Use "konae", "hmac-body", "timestamped" or "svix".';
   assert.equal(await kit.planRefusal(here, "probe_hub_scheme", sources), sentence);
   assert.equal((await kit.gateRefusal(sources)).detail, sentence);
   kit.pass("Unknown scheme at both doors", `release_plan and the Validation Gate refuse "scheme": "github" with ${JSON.stringify(sentence)}.`);

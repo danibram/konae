@@ -1424,7 +1424,7 @@
     }
    }
   },
-  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel.",
+  "error": "Action inbox.tell calls a path under /_konae, /oauth, /.well-known or /mcp, which belong to the Kernel.",
   "code": "call.path-reserved"
  },
  {
@@ -1434,7 +1434,7 @@
     "kind": "call",
     "access": "authenticated",
     "method": "POST",
-    "url": "https://inbox.example.org/_littlebox/mcp",
+    "url": "https://inbox.example.org/_konae/mcp",
     "bindings": [
      {
       "source": "input",
@@ -1454,7 +1454,7 @@
     }
    }
   },
-  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel.",
+  "error": "Action inbox.tell calls a path under /_konae, /oauth, /.well-known or /mcp, which belong to the Kernel.",
   "code": "call.path-reserved"
  },
  {
@@ -1484,7 +1484,7 @@
     }
    }
   },
-  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel.",
+  "error": "Action inbox.tell calls a path under /_konae, /oauth, /.well-known or /mcp, which belong to the Kernel.",
   "code": "call.path-reserved"
  },
  {
@@ -1514,7 +1514,7 @@
     }
    }
   },
-  "error": "Action inbox.tell calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel.",
+  "error": "Action inbox.tell calls a path under /_konae, /oauth, /.well-known or /mcp, which belong to the Kernel.",
   "code": "call.path-reserved"
  },
  {

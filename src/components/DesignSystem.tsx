@@ -4,7 +4,7 @@ import { readOwnerProjectCount } from "../lib/managed-sources";
 import { templateChoices, type TemplateId } from "../lib/templates";
 import type { OwnerSession } from "./owner-session";
 import { WorkspaceNav } from "./WorkspaceNav";
-import { Alert, Avatar, Composer, Identity, Lede, List, ListItem, Page, PageHeader, SectionHead, Tick, Tile, Tiles, Badge, BarChart, Breadcrumb, Button, Card, Checkbox, ChartLegend, Dialog, DonutChart, EmptyState, Field, IconButton, Input, Kbd, LineChart, LoadingBlock, Menu, Progress, Radio, Segmented, Select, Skeleton, Sparkline, StatStrip, Switch, Table, Tabs, Textarea, Tooltip, ToastRegion, type ToastItem } from "./ui";
+import { Actions, Steps, Alert, Avatar, Composer, Identity, Lede, List, ListItem, Page, PageHeader, SectionHead, Tick, Tile, Tiles, Badge, BarChart, Breadcrumb, Button, Card, Checkbox, ChartLegend, Dialog, DonutChart, EmptyState, Field, IconButton, Input, Kbd, LineChart, LoadingBlock, Menu, Progress, Radio, Segmented, Select, Skeleton, Sparkline, StatStrip, Switch, Table, Tabs, Textarea, Tooltip, ToastRegion, type ToastItem } from "./ui";
 
 function Sample({ id, title, note, children }: { id: string; title: string; note?: string; children: ReactNode }) {
   return <section className="ds-sample" id={id} aria-labelledby={`${id}-title`}><h2 id={`${id}-title`}>{title}</h2>{note && <p className="ds-note">{note}</p>}{children}</section>;
@@ -43,6 +43,7 @@ function TinyTasksDemo() {
   return <Page className="ds-pattern-page">
     <PageHeader eyebrow="Shared list" title="Tiny Tasks" actions={<Identity name="Ada Lovelace"><Button size="sm" variant="ghost">Sign out</Button></Identity>} />
     <Lede>Anyone with the link sees the same list.</Lede>
+    <Actions><Button variant="primary">Share the list</Button><Button>Print it</Button></Actions>
     <Composer label="New task" placeholder="Add one small thing" action="Add" value={draft} onChange={setDraft} onSubmit={add} />
     <SectionHead label="Today" meta={`${rows.length} items`} />
     <List>{rows.map((row) => <ListItem key={row.id} done={row.done} lead={<Tick pressed={row.done} label={`Toggle ${row.title}`} onToggle={() => setRows((list) => list.map((item) => item.id === row.id ? { ...item, done: !item.done } : item))} />} title={row.title} detail={`#${row.id}`} end={<Button size="sm" variant="ghost" onClick={() => setRows((list) => list.filter((item) => item.id !== row.id))}>Remove</Button>} />)}</List>
@@ -75,10 +76,10 @@ export function DesignSystem({ ownerSession }: { ownerSession: OwnerSession }) {
   const nameRef = useRef<HTMLInputElement>(null);
   const [projectCount, setProjectCount] = useState<number | undefined>();
   const [variant, setVariant] = useState<"brutal" | "clean">(() => {
-    const asked = new URLSearchParams(window.location.search).get("variant") ?? localStorage.getItem("littlebox:ds-variant");
+    const asked = new URLSearchParams(window.location.search).get("variant") ?? localStorage.getItem("konae:ds-variant");
     return asked === "clean" ? "clean" : "brutal";
   });
-  const chooseVariant = (next: "brutal" | "clean") => { setVariant(next); try { localStorage.setItem("littlebox:ds-variant", next); } catch { /* the choice lasts until reload */ } };
+  const chooseVariant = (next: "brutal" | "clean") => { setVariant(next); try { localStorage.setItem("konae:ds-variant", next); } catch { /* the choice lasts until reload */ } };
 
   useEffect(() => {
     if (ownerSession.state !== "signed-in") {
@@ -98,7 +99,7 @@ export function DesignSystem({ ownerSession }: { ownerSession: OwnerSession }) {
       <main className="account-main">
         <section className="account-content ds-workspace">
           <header className="account-hero ds-hero">
-            <p className="account-kicker"><span>◆</span> Littlebox UI</p>
+            <p className="account-kicker"><span>◆</span> Konae UI</p>
             <h1>Design system</h1>
             <p>Component examples. These controls do not change projects or upload files. Open a project to work with its files.</p>
             <div className="ds-variant"><span id="ds-variant-label">Variant</span><Segmented label="Design system variant" value={variant} onChange={chooseVariant} options={[{ value: "brutal", label: "Brutal" }, { value: "clean", label: "Clean" }]} /><small>Same components, different tokens. Clean sets <code>data-ds="clean"</code> on any element.</small></div>
@@ -190,6 +191,8 @@ export function DesignSystem({ ownerSession }: { ownerSession: OwnerSession }) {
             </Sample>
             <Sample id="patterns" title="App patterns" note="What a small app screen is made of. Published apps get the same classes in their styles.css, in whichever variant the app picked.">
               <Card className="ds-pattern-frame"><TinyTasksDemo /></Card>
+              <Card className="ds-pattern-frame"><div className="ui-page ds-pattern-page"><SectionHead label="Start" /><Steps items={[{ title: "Get an invitation", detail: "The person who runs the installation sends a code." }, { title: "Describe the app", detail: "Or write its files yourself." }, { title: "Open it and use it" }]} /></div></Card>
+              <p className="ds-note">A page that stands on its own, such as an installation's home, adds <code>ui-skip</code> for the skip link and <code>ui-bar</code> for a top bar with the name and a few links.</p>
             </Sample>
             <Sample id="surfaces" title="Surfaces and empty states"><Card><EmptyState icon={<FolderOpen size={24} />} title="No files yet" description="Add one when the app needs it. Export takes it along." action={<Button variant="primary"><Plus size={14} /> Upload file</Button>} /></Card></Sample>
             <Sample id="loading" title="Loading"><div className="ds-fields"><Card className="ui-loading-card"><LoadingBlock label="Loading example rows" rows={3} /></Card><Card className="ui-loading-card"><div className="ui-loading-shapes" aria-hidden="true"><Skeleton width={32} height={32} radius="50%" /><Skeleton width="60%" height={14} /><Skeleton height={36} /></div></Card></div><p className="ds-note">A skeleton has the size of what replaces it. It fades in after 200 ms, so a fast load shows nothing, and it stays at least 300 ms once shown. Each surface has one status label for screen readers and no changing sentence. Reduced motion stops the shimmer.</p></Sample>

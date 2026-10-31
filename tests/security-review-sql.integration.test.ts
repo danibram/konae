@@ -10,7 +10,7 @@ import { answerText, rawCall, runtimeClient, startLab, testPort, type Lab } from
 
 let lab: Lab;
 let count = 0;
-beforeAll(async () => { lab = await startLab(testPort("LITTLEBOX_REVIEW_SQL_PORT", 24000)); }, 180_000);
+beforeAll(async () => { lab = await startLab(testPort("KONAE_REVIEW_SQL_PORT", 24000)); }, 180_000);
 afterAll(async () => { await lab?.stop(); });
 
 const SCHEMA = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, owner TEXT, body TEXT);";
@@ -38,7 +38,7 @@ function gate(actions: Actions): string | null {
   try { parseServerActionSource(JSON.stringify({ version: 1, actions })); return null; } catch (error) { return (error as Error).message; }
 }
 
-const invoke = (hostname: string, name: string, input: object = {}) => rawCall(lab, "/_littlebox/mcp", hostname, "actions_invoke", { name, input });
+const invoke = (hostname: string, name: string, input: object = {}) => rawCall(lab, "/_konae/mcp", hostname, "actions_invoke", { name, input });
 
 describe("statements both doors refuse with one sentence", () => {
   const cases: [string, Actions][] = [
@@ -157,7 +157,7 @@ describe("schema.sql and imported databases", () => {
     db.exec(`${SCHEMA} CREATE TRIGGER leak AFTER INSERT ON notes BEGIN UPDATE notes SET body = 'leaked'; END;`);
     db.close();
     const refused = await publish({ "notes.list": action("SELECT id FROM notes LIMIT 5") }, SCHEMA, { initialDatabase: encodeBase64(new Uint8Array(await Bun.file(file).arrayBuffer())) });
-    expect(refused).toContain("The database holds CREATE TRIGGER leak, and Littlebox runs no triggers or views. Drop it before importing.");
+    expect(refused).toContain("The database holds CREATE TRIGGER leak, and Konae runs no triggers or views. Drop it before importing.");
     const app = await publish({ "notes.list": action("SELECT id FROM notes LIMIT 5") });
     if (typeof app === "string") throw Error(app);
     for (const sql of ["CREATE TRIGGER t AFTER INSERT ON notes BEGIN DELETE FROM notes; END", "CREATE VIEW v AS SELECT 1"]) {

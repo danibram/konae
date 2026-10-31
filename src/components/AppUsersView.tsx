@@ -28,7 +28,7 @@ type Props = {
 const PAGE = 25;
 
 
-const SIGNED_OUT = <p className="access-note">Sign in with <a href="/_littlebox/owner/login">owner sign-in</a> to manage this app's accounts.</p>;
+const SIGNED_OUT = <p className="access-note">Sign in with <a href="/_konae/owner/login">owner sign-in</a> to manage this app's accounts.</p>;
 
 /** App accounts, invitations and who may join, for the published app. Owners only. */
 export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibility }: Props) {
@@ -204,7 +204,7 @@ function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: str
       }
       saving = undefined;
       setMethods(await readSignInMethods(deploymentId));
-      setStatus("Saved. Littlebox keeps the values and never shows them again.");
+      setStatus("Saved. Konae keeps the values and never shows them again.");
     } catch (cause) {
       fail(cause, saving);
       // A client ID saved before the secret was refused still counts.

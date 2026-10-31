@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{title}} · Konae docs</title>
+  <meta name="description" content="Documentation for Konae, for people and for agents.">
+  <link rel="icon" href="data:,">
+  <link rel="alternate" type="text/markdown" href="{{root}}content/{{route}}.md" title="This page as markdown">
+  <link rel="stylesheet" href="{{root}}styles.css">
+  <link rel="stylesheet" href="{{root}}site.css">
+</head>
+<body data-root="{{root}}" data-route="{{route}}">
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <button class="menu" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">Menu</button>
+    <a class="brand" href="{{home}}">Konae <span>docs</span></a>
+    <div class="search" role="search">
+      <input id="search" type="search" placeholder="Search the docs" aria-label="Search the docs" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">/</kbd>
+      <div id="results" class="results" hidden></div>
+    </div>
+    <nav class="links" aria-label="Elsewhere"><a href="{{home}}" data-installation-home hidden>Home</a><a href="https://github.com/danibram/konae">GitHub</a><a href="{{root}}llms.txt">llms.txt</a></nav>
+  </header>
+  <div class="layout">
+    <nav id="sidebar" class="sidebar" aria-label="Documentation">
+      <a class="drawer-home" href="{{home}}" data-installation-home hidden>Konae home</a>
+{{nav}}
+    </nav>
+    <main id="main" class="main" tabindex="-1">
+      <article id="content" class="content" aria-busy="true">
+        <h1>{{title}}</h1>
+        <p class="loading">Loading <a href="{{root}}content/{{route}}.md">the markdown of this page</a>.</p>
+      </article>
+    </main>
+    <aside class="toc" aria-label="On this page"><div id="toc"></div></aside>
+  </div>
+  <div id="scrim" class="scrim" hidden></div>
+  <script type="module" src="{{root}}shell.js"></script>
+</body>
+</html>

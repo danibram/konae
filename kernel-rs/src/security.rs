@@ -5,7 +5,7 @@
 //! headers below to every response the Kernel sends.
 //!
 //! - App hosts get a Content Security Policy. A Build Artifact inlines the
-//!   Littlebox runtime and the compiled module in `index.html`, so the policy
+//!   Konae runtime and the compiled module in `index.html`, so the policy
 //!   allows those exact scripts by their SHA-256 hashes instead of allowing
 //!   inline script in general. Inline event handler attributes, `eval` and
 //!   scripts from other origins stay blocked.
@@ -189,7 +189,7 @@ pub(super) async fn from_app_origin(state: &AppState, headers: &HeaderMap) -> bo
         return false;
     }
     // The path host is `<domain>`, which holds the path addresses and the home.
-    // With `LITTLEBOX_DOMAIN=localhost` it is the bare `localhost`, so it is
+    // With `KONAE_DOMAIN=localhost` it is the bare `localhost`, so it is
     // an app origin before the local-editor names below are checked.
     if super::path::path_host(state).as_deref() == Some(host.as_str()) {
         return true;
@@ -254,7 +254,7 @@ mod tests {
     /// broke every published page on its second visit.
     #[tokio::test]
     async fn a_not_modified_answer_carries_no_policy() {
-        let root = std::env::temp_dir().join(format!("littlebox-security-304-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-security-304-{}", uuid::Uuid::new_v4()));
         let (state, visitor) = crate::tests::login_test_state(&root, "public").await;
         let app = axum::Router::new()
             .route("/fresh", axum::routing::get(|| async { ([(header::CONTENT_TYPE, "text/html")], "<script>window.a=1</script>") }))
@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn hashes_each_inline_script_and_skips_external_ones() {
-        let html = br#"<!doctype html><head><style>p{}</style></head><body><p>hi</p><script data-littlebox-runtime>window.a=1</script><script type="module">import x from './x.js'</script><script src="/runtime.js"></script></body>"#;
+        let html = br#"<!doctype html><head><style>p{}</style></head><body><p>hi</p><script data-konae-runtime>window.a=1</script><script type="module">import x from './x.js'</script><script src="/runtime.js"></script></body>"#;
         assert_eq!(
             inline_script_hashes(html),
             vec![sha("window.a=1"), sha("import x from './x.js'")]

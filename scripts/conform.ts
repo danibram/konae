@@ -1,4 +1,4 @@
-// `bun run littlebox -- conform`: runs the Action Contract's checks against a
+// `bun run konae -- conform`: runs the Action Contract's checks against a
 // running Kernel, the way a replacement backend would be held to it.
 import { readFile } from "node:fs/promises";
 import { McpClient, McpError } from "../src/mcp/client";
@@ -31,7 +31,7 @@ export function kernelTarget(options: KernelTargetOptions): ConformanceTarget {
     headers.set("host", deployment.host);
     return send(input, { ...init, headers });
   };
-  const endpoint = new URL("/_littlebox/mcp", connect).href;
+  const endpoint = new URL("/_konae/mcp", connect).href;
   const visitor = new McpClient(endpoint, { fetch: hostFetch });
   const session = options.token ? new McpClient(endpoint, { fetch: hostFetch, token: options.token }) : visitor;
   return {
@@ -52,7 +52,7 @@ export function kernelTarget(options: KernelTargetOptions): ConformanceTarget {
       const headers = new Headers(request.headers);
       if (request.session && options.token) {
         // The cookie a browser on the app's own origin would send.
-        const cookie = deployment.protocol === "https:" ? "__Host-littlebox_app_session" : "littlebox_app_session";
+        const cookie = deployment.protocol === "https:" ? "__Host-konae_app_session" : "konae_app_session";
         headers.set("cookie", `${cookie}=${options.token}`);
         headers.set("sec-fetch-site", "same-origin");
       }
@@ -68,7 +68,7 @@ export function kernelTarget(options: KernelTargetOptions): ConformanceTarget {
 /** Signs in to the Deployment and returns the app session token from its cookie. */
 async function appSession(url: string, email: string, password: string): Promise<string> {
   const deployment = new URL(url);
-  const connect = new URL("/_littlebox/auth/login", deployment);
+  const connect = new URL("/_konae/auth/login", deployment);
   if (deployment.hostname.endsWith(".localhost")) connect.hostname = "127.0.0.1";
   const response = await fetch(connect, {
     method: "POST", headers: { host: deployment.host, "content-type": "application/json" }, body: JSON.stringify({ email, password }),
@@ -95,13 +95,13 @@ export async function conformFromCli(args: string[]): Promise<number> {
     if (at < 1) throw Error("--secret takes <name>=<value>.");
     secrets[pair.slice(0, at)] = pair.slice(at + 1);
   }
-  let token = one("token") ?? process.env.LITTLEBOX_APP_TOKEN;
-  if (!token && process.env.LITTLEBOX_APP_EMAIL && process.env.LITTLEBOX_APP_PASSWORD) {
-    token = await appSession(url, process.env.LITTLEBOX_APP_EMAIL, process.env.LITTLEBOX_APP_PASSWORD);
+  let token = one("token") ?? process.env.KONAE_APP_TOKEN;
+  if (!token && process.env.KONAE_APP_EMAIL && process.env.KONAE_APP_PASSWORD) {
+    token = await appSession(url, process.env.KONAE_APP_EMAIL, process.env.KONAE_APP_PASSWORD);
   }
   const inputsFile = one("inputs");
   const inputs = inputsFile ? JSON.parse(await readFile(inputsFile, "utf8")) as Record<string, Record<string, unknown>> : undefined;
-  const report = await runConformance(contract, kernelTarget({ url, token, key: one("key") ?? process.env.LITTLEBOX_API_KEY, secrets }), { inputs });
+  const report = await runConformance(contract, kernelTarget({ url, token, key: one("key") ?? process.env.KONAE_API_KEY, secrets }), { inputs });
   console.log(formatConformanceReport(report));
   return report.failed > 0 ? 1 : 0;
 }

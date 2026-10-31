@@ -5,14 +5,14 @@ import path from "node:path";
 import { chromium } from "playwright";
 import { McpClient } from "../../src/mcp/client";
 import { signRoute } from "../../src/lib/route-signature";
-import { buildLocal, publishLocal } from "../../scripts/littlebox";
+import { buildLocal, publishLocal } from "../../scripts/konae";
 import { kernelTarget } from "../../scripts/conform";
 import { generateActionContract } from "../../src/lib/action-contract";
 import { formatConformanceReport, runConformance } from "../../src/lib/action-conformance";
 
 const repo = path.resolve(import.meta.dir, "../..");
-const scratch = await mkdtemp(path.join(tmpdir(), "littlebox-product-fit-"));
-const port = Number(process.env.LITTLEBOX_PRODUCT_FIT_PORT ?? 19410);
+const scratch = await mkdtemp(path.join(tmpdir(), "konae-product-fit-"));
+const port = Number(process.env.KONAE_PRODUCT_FIT_PORT ?? 19410);
 assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Choose a valid local port.");
 const url = `http://127.0.0.1:${port}`;
 const setupKey = crypto.randomUUID();
@@ -33,26 +33,26 @@ function check(scenario: string, result: string) {
 try {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
   assert.equal(await build.exited, 0, "The Kernel must compile.");
-  kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/littlebox-kernel")], {
+  kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/konae-kernel")], {
     cwd: repo,
     env: {
-      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))),
-      LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_PUBLIC_ORIGIN: url,
-      LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: path.join(scratch, "data"),
-      LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: repo,
-      LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1",
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
+      KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
+      KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: path.join(scratch, "data"),
+      KONAE_ADMIN_KEY: setupKey, KONAE_BUN_PATH: process.execPath, KONAE_SOURCE_ROOT: repo,
+      KONAE_TRUSTED_PROXIES: "127.0.0.1",
     },
     stdout: "ignore", stderr: "inherit",
   });
   let ready = false;
   for (let attempt = 0; attempt < 100; attempt++) {
     assert.equal(kernel.exitCode, null, "The isolated Kernel stopped before startup.");
-    try { ready = (await fetch(`${url}/_littlebox/health`)).ok; } catch {}
+    try { ready = (await fetch(`${url}/_konae/health`)).ok; } catch {}
     if (ready) break;
     await Bun.sleep(100);
   }
   assert(ready, "The isolated Kernel did not start.");
-  const signup = await fetch(`${url}/_littlebox/owner/signup`, {
+  const signup = await fetch(`${url}/_konae/owner/signup`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "owner@example.test", password, setupKey }),
   });
@@ -79,13 +79,13 @@ try {
   check("Publish eight examples", "All builds pass MCP release planning and apply on an empty Kernel.");
   // The feed embeds a badge from the file read path. A reporter uploads it as
   // public and the owner points the page at it, before the browser pass loads it.
-  const reporterSignup = await fetch(`${url}/_littlebox/auth/signup`, {
+  const reporterSignup = await fetch(`${url}/_konae/auth/signup`, {
     method: "POST", headers: { host: receipts.feed.hostname, "content-type": "application/json", "x-forwarded-for": freshAddress() },
     body: JSON.stringify({ email: "reporter@example.test", password }),
   });
   assert.equal(reporterSignup.status, 200, await reporterSignup.clone().text());
   const reporterCookie = reporterSignup.headers.get("set-cookie")!.split(";")[0];
-  const reporter = new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+  const reporter = new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
     const headers = new Headers(init?.headers); headers.set("host", receipts.feed.hostname); headers.set("cookie", reporterCookie);
     return fetch(input, { ...init, headers });
   } });
@@ -98,7 +98,7 @@ try {
   const privateBadge = await uploadFile("private");
   await owner.call("database_execute", { deploymentId: receipts.feed.id, operation: "sql", input: { sql: `INSERT INTO badge(file_id) VALUES('${publicBadge.id}')` } });
 
-  if (process.env.LITTLEBOX_PRODUCT_FIT_BROWSER !== "0") {
+  if (process.env.KONAE_PRODUCT_FIT_BROWSER !== "0") {
     // Each published page runs in Chrome under the Kernel's Content Security
     // Policy. A blocked script, style, image or request fails the replay.
     const browser = await chromium.launch({ channel: "chrome" });
@@ -127,7 +127,7 @@ try {
           await page.waitForTimeout(1_500);
         }
         if (name === "feed") {
-          // The image comes from GET /_littlebox/files/<id> under the app's own policy.
+          // The image comes from GET /_konae/files/<id> under the app's own policy.
           await page.waitForFunction(() => { const img = document.querySelector<HTMLImageElement>("#badge img"); return !!img && img.complete && img.naturalWidth > 0; }, undefined, { timeout: 10_000 });
         }
         assert.deepEqual(violations, [], `${name}${route} broke under the Content Security Policy.`);
@@ -139,14 +139,14 @@ try {
 
 
   function runtime(name: string, cookie?: string) {
-    return new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+    return new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
       const headers = new Headers(init?.headers); headers.set("host", receipts[name].hostname);
       if (cookie) headers.set("cookie", cookie);
       return fetch(input, { ...init, headers });
     } });
   }
   async function signupApp(name: string, email: string, expected = 200) {
-    const response = await fetch(`${url}/_littlebox/auth/signup`, {
+    const response = await fetch(`${url}/_konae/auth/signup`, {
       method: "POST", headers: { host: receipts[name].hostname, "content-type": "application/json", "x-forwarded-for": freshAddress() },
       body: JSON.stringify({ email, password }),
     });
@@ -278,11 +278,11 @@ try {
   assert.equal((await incidents.json()).result[0].title, "Maintenance");
   // A program reads the private badge with a key; a visitor gets nothing.
   const reader = await owner.call<{ key: string }>("api_keys_create", { deploymentId: receipts.feed.id, name: "Badge mirror", files: ["private"] });
-  const byKey = await fetch(`${url}/_littlebox/files/${privateBadge.id}`, { headers: { host: receipts.feed.hostname, authorization: `Bearer ${reader.key}` } });
+  const byKey = await fetch(`${url}/_konae/files/${privateBadge.id}`, { headers: { host: receipts.feed.hostname, authorization: `Bearer ${reader.key}` } });
   assert.equal(byKey.status, 200);
   assert.equal(byKey.headers.get("content-type"), "image/png");
   assert.deepEqual(new Uint8Array(await byKey.arrayBuffer()), badgePng);
-  assert.equal((await fetch(`${url}/_littlebox/files/${privateBadge.id}`, { headers: { host: receipts.feed.hostname } })).status, 404);
+  assert.equal((await fetch(`${url}/_konae/files/${privateBadge.id}`, { headers: { host: receipts.feed.hostname } })).status, 404);
   let refused = 0;
   for (let i = 0; i < 35; i++) {
     try { await action(feed, "incidents.recent"); } catch (error) { assert.match(String(error), /rate-limited/); refused++; }
@@ -302,7 +302,7 @@ try {
   const sitemap = await getPage("docs", "/sitemap.xml");
   assert.equal(sitemap.headers.get("content-type"), "application/xml; charset=utf-8");
   assert.equal((await getPage("docs", "/robots.txt")).status, 200);
-  check("Static docs", `littlebox build publishes the pages, pages/guide/ at /guide/ and public/; search works. Missing route status ${missing.status}; /guide/install serves the install page; sitemap type=${sitemap.headers.get("content-type")}.`);
+  check("Static docs", `konae build publishes the pages, pages/guide/ at /guide/ and public/; search works. Missing route status ${missing.status}; /guide/install serves the install page; sitemap type=${sitemap.headers.get("content-type")}.`);
 
   const retryRoot = path.join(scratch, "retry");
   await cp(path.join(import.meta.dir, "launch"), retryRoot, { recursive: true });
@@ -333,7 +333,7 @@ try {
   // replacement backend would run the same checks. Every request comes from
   // its own address, so the anonymous rate limit does not slow the run.
   const sessionToken = async (name: string, email: string) => {
-    const response = await fetch(`${url}/_littlebox/auth/login`, {
+    const response = await fetch(`${url}/_konae/auth/login`, {
       method: "POST", headers: { host: receipts[name].hostname, "content-type": "application/json", "x-forwarded-for": freshAddress() },
       body: JSON.stringify({ email, password }),
     });
@@ -374,7 +374,7 @@ try {
   // The CLI, from a contract file on disk, with no proxy header and no session.
   const contractDir = path.join(scratch, "contract-launch");
   await cp(path.join(import.meta.dir, "launch"), contractDir, { recursive: true });
-  const cli = (args: string[]) => Bun.spawn(["bun", "run", path.join(repo, "scripts/littlebox.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+  const cli = (args: string[]) => Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
   const written = cli(["contract", "--dir", contractDir]);
   assert.equal(await written.exited, 0, await new Response(written.stderr).text());
   const conformCli = cli(["conform", "--url", receipts.launch.url, "--contract", path.join(contractDir, "action-contract.json")]);

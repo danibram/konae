@@ -4,13 +4,13 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { cp } from "node:fs/promises";
 import path from "node:path";
-import { buildLocal } from "../scripts/littlebox";
+import { buildLocal } from "../scripts/konae";
 import { signRoute } from "../src/lib/route-signature";
 import { release } from "./migration-kernel";
 import { answerText, appUser, freshClient, hostFetch, rawCall, runtimeClient, startLab, testPort, type Lab } from "./security-review-kernel";
 
 let lab: Lab;
-beforeAll(async () => { lab = await startLab(testPort("LITTLEBOX_REVIEW_ROUTES_PORT", 23800)); }, 180_000);
+beforeAll(async () => { lab = await startLab(testPort("KONAE_REVIEW_ROUTES_PORT", 23800)); }, 180_000);
 afterAll(async () => { await lab?.stop(); });
 
 const day = () => new Date().toISOString().slice(0, 10);
@@ -111,11 +111,11 @@ describe("route signatures", () => {
 describe("route-only actions and API keys", () => {
   test("a signed or key-only action is unreachable through actions_invoke, with or without a session", async () => {
     const { booking, inbox } = lab.apps;
-    const visitor = await rawCall(lab, "/_littlebox/mcp", booking.hostname, "actions_invoke", { name: "panel.checkin", input: { room: "x", day: day(), hour: 9 } });
+    const visitor = await rawCall(lab, "/_konae/mcp", booking.hostname, "actions_invoke", { name: "panel.checkin", input: { room: "x", day: day(), hour: 9 } });
     expect(answerText(visitor.body)).toBe("Action panel.checkin answers only on its HTTP route, POST /api/checkin.");
     const member = await appUser(lab, inbox);
     for (const name of ["events.receive", "events.feed"]) {
-      const answer = await rawCall(lab, "/_littlebox/mcp", inbox.hostname, "actions_invoke", { name, input: {} }, { cookie: member.cookie });
+      const answer = await rawCall(lab, "/_konae/mcp", inbox.hostname, "actions_invoke", { name, input: {} }, { cookie: member.cookie });
       expect(answerText(answer.body)).toContain(`Action ${name} answers only on its HTTP route`);
     }
     // A session does not replace the key the feed asks for.
@@ -129,11 +129,11 @@ describe("route-only actions and API keys", () => {
     expect((await hostFetch(lab, inbox.hostname, "/api/events", { headers: bearer })).status).toBe(200);
     expect(await (await hostFetch(lab, inbox.hostname, "/hooks/events", { method: "POST", headers: bearer, body: "{}" })).json())
       .toEqual({ error: "This API key may not call events.receive." });
-    expect((await hostFetch(lab, inbox.hostname, `/_littlebox/files/${crypto.randomUUID()}`, { headers: bearer })).status).toBe(404);
+    expect((await hostFetch(lab, inbox.hostname, `/_konae/files/${crypto.randomUUID()}`, { headers: bearer })).status).toBe(404);
     for (const app of [habits, gallery]) {
       expect(await (await hostFetch(lab, app.hostname, app === habits ? "/api/habits" : "/feed.json", { headers: bearer })).json()).toEqual({ error: "invalid-api-key" });
     }
-    const runtime = await rawCall(lab, "/_littlebox/mcp", inbox.hostname, "actions_invoke", { name: "events.list", input: {} }, bearer);
+    const runtime = await rawCall(lab, "/_konae/mcp", inbox.hostname, "actions_invoke", { name: "events.list", input: {} }, bearer);
     expect(runtime.status).toBe(403);
     expect(await lab.kernel.owner.call("api_keys_list", { deploymentId: inbox.id }).then(JSON.stringify)).not.toContain(feed.key);
     // An owner credential is not a key either.
@@ -168,7 +168,7 @@ describe("the file read path", () => {
       "..%2F..%2Fdatabase.sqlite", "..%2Fidentity.sqlite", "%2e%2e%2f%2e%2e%2fmcp.sqlite", "index.json", "%2Fetc%2Fpasswd",
       "..%5C..%5Cdatabase.sqlite", `${galleryFile.id}.blob`, `${galleryFile.id}%00`, galleryFile.id,
     ]) {
-      const response = await hostFetch(lab, club.hostname, `/_littlebox/files/${id}`, { headers: { cookie: member.cookie } });
+      const response = await hostFetch(lab, club.hostname, `/_konae/files/${id}`, { headers: { cookie: member.cookie } });
       expect(response.status, id).toBe(404);
       await response.arrayBuffer();
     }
@@ -186,7 +186,7 @@ describe("the file read path", () => {
       const file = await client.call<{ id: string; type: string }>("files_upload", { transferId: transfer.transferId, name: "x", type, visibility: "public" });
       await client.cancel(transfer.transferId);
       expect(file.type).toBe(type);
-      const response = await hostFetch(lab, gallery.hostname, `/_littlebox/files/${file.id}`);
+      const response = await hostFetch(lab, gallery.hostname, `/_konae/files/${file.id}`);
       expect(response.headers.get("content-type"), type).toBe("application/octet-stream");
       expect(response.headers.get("x-content-type-options")).toBe("nosniff");
       expect(response.headers.get("content-disposition")).toBe("attachment");
@@ -194,7 +194,7 @@ describe("the file read path", () => {
     }
     const transfer = await client.upload(new Uint8Array([137, 80, 78, 71]));
     const image = await client.call<{ id: string }>("files_upload", { transferId: transfer.transferId, name: "p.png", type: "image/png", visibility: "public" });
-    expect((await hostFetch(lab, gallery.hostname, `/_littlebox/files/${image.id}`)).headers.get("content-type")).toBe("image/png");
+    expect((await hostFetch(lab, gallery.hostname, `/_konae/files/${image.id}`)).headers.get("content-type")).toBe("image/png");
   });
 
   test("a transfer of another user, or of another app, cannot become my upload, and control characters leave the name", async () => {
@@ -232,7 +232,7 @@ describe("quotas a visitor can reach", () => {
     const { booking } = lab.apps;
     const client = freshClient();
     const answers: string[] = [];
-    for (let call = 0; call < 32; call++) answers.push(answerText((await rawCall(lab, "/_littlebox/mcp", booking.hostname, "actions_invoke", { name: "rooms.list", input: {} }, { "x-forwarded-for": client })).body));
+    for (let call = 0; call < 32; call++) answers.push(answerText((await rawCall(lab, "/_konae/mcp", booking.hostname, "actions_invoke", { name: "rooms.list", input: {} }, { "x-forwarded-for": client })).body));
     expect(answers.slice(0, 30).every((text) => text !== "rate-limited")).toBe(true);
     expect(answers.slice(30)).toEqual(["rate-limited", "rate-limited"]);
   });

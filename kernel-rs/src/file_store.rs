@@ -6,8 +6,8 @@
 //! keeps them next to the index as `<file id>.blob`, which is what every
 //! Kernel did before stores existed.
 //!
-//! The operator sets the limits with `LITTLEBOX_FILES_QUOTA_BYTES` (all files
-//! of one Deployment together, 20 MiB by default) and `LITTLEBOX_FILE_MAX_BYTES`
+//! The operator sets the limits with `KONAE_FILES_QUOTA_BYTES` (all files
+//! of one Deployment together, 20 MiB by default) and `KONAE_FILE_MAX_BYTES`
 //! (one file, 2 MiB by default). Every refusal names the configured number.
 
 use std::{
@@ -189,7 +189,7 @@ pub(crate) struct S3Store {
     pub(crate) settings: S3Settings,
 }
 
-/// `LITTLEBOX_FILES_S3_*`.
+/// `KONAE_FILES_S3_*`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct S3Settings {
     pub(crate) endpoint: String,
@@ -203,28 +203,28 @@ pub(crate) struct S3Settings {
 }
 
 impl S3Settings {
-    /// `None` when `LITTLEBOX_FILES_S3_BUCKET` is unset: the files stay in the folder.
+    /// `None` when `KONAE_FILES_S3_BUCKET` is unset: the files stay in the folder.
     pub(crate) fn from_env() -> Result<Option<Self>> {
         let get = |name: &str| std::env::var(name).ok().map(|value| value.trim().to_owned()).filter(|value| !value.is_empty());
-        let Some(bucket) = get("LITTLEBOX_FILES_S3_BUCKET") else {
-            for name in ["LITTLEBOX_FILES_S3_ENDPOINT", "LITTLEBOX_FILES_S3_ACCESS_KEY", "LITTLEBOX_FILES_S3_SECRET_KEY", "LITTLEBOX_FILES_S3_PREFIX"] {
-                ensure!(get(name).is_none(), "{name} is set but LITTLEBOX_FILES_S3_BUCKET is not. Set the bucket, or unset the other LITTLEBOX_FILES_S3_ settings to keep files in the data directory.");
+        let Some(bucket) = get("KONAE_FILES_S3_BUCKET") else {
+            for name in ["KONAE_FILES_S3_ENDPOINT", "KONAE_FILES_S3_ACCESS_KEY", "KONAE_FILES_S3_SECRET_KEY", "KONAE_FILES_S3_PREFIX"] {
+                ensure!(get(name).is_none(), "{name} is set but KONAE_FILES_S3_BUCKET is not. Set the bucket, or unset the other KONAE_FILES_S3_ settings to keep files in the data directory.");
             }
             return Ok(None);
         };
-        let required = |name: &str| get(name).with_context(|| format!("LITTLEBOX_FILES_S3_BUCKET is set, so {name} is required."));
-        let path_style = match get("LITTLEBOX_FILES_S3_PATH_STYLE").as_deref() {
+        let required = |name: &str| get(name).with_context(|| format!("KONAE_FILES_S3_BUCKET is set, so {name} is required."));
+        let path_style = match get("KONAE_FILES_S3_PATH_STYLE").as_deref() {
             None | Some("1") | Some("true") => true,
             Some("0") | Some("false") => false,
-            Some(other) => bail!("LITTLEBOX_FILES_S3_PATH_STYLE must be 1 or 0, not {other:?}."),
+            Some(other) => bail!("KONAE_FILES_S3_PATH_STYLE must be 1 or 0, not {other:?}."),
         };
         Ok(Some(Self {
-            endpoint: required("LITTLEBOX_FILES_S3_ENDPOINT")?,
-            region: get("LITTLEBOX_FILES_S3_REGION").unwrap_or_else(|| "us-east-1".into()),
+            endpoint: required("KONAE_FILES_S3_ENDPOINT")?,
+            region: get("KONAE_FILES_S3_REGION").unwrap_or_else(|| "us-east-1".into()),
             bucket,
-            prefix: normalize_prefix(&get("LITTLEBOX_FILES_S3_PREFIX").unwrap_or_default()),
-            access_key: required("LITTLEBOX_FILES_S3_ACCESS_KEY")?,
-            secret_key: required("LITTLEBOX_FILES_S3_SECRET_KEY")?,
+            prefix: normalize_prefix(&get("KONAE_FILES_S3_PREFIX").unwrap_or_default()),
+            access_key: required("KONAE_FILES_S3_ACCESS_KEY")?,
+            secret_key: required("KONAE_FILES_S3_SECRET_KEY")?,
             path_style,
         }))
     }
@@ -237,7 +237,7 @@ fn normalize_prefix(prefix: &str) -> String {
 
 impl S3Store {
     pub(crate) fn new(settings: S3Settings) -> Self {
-        let credentials = aws_credential_types::Credentials::new(&settings.access_key, &settings.secret_key, None, None, "littlebox-files");
+        let credentials = aws_credential_types::Credentials::new(&settings.access_key, &settings.secret_key, None, None, "konae-files");
         let config = aws_sdk_s3::config::Builder::new()
             .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
             .region(aws_sdk_s3::config::Region::new(settings.region.clone()))
@@ -393,11 +393,11 @@ impl Default for FileLimits {
 }
 
 impl FileLimits {
-    /// Reads `LITTLEBOX_FILES_QUOTA_BYTES` and `LITTLEBOX_FILE_MAX_BYTES`.
+    /// Reads `KONAE_FILES_QUOTA_BYTES` and `KONAE_FILE_MAX_BYTES`.
     pub(crate) fn from_env() -> Result<Self> {
         Self::parse(
-            std::env::var("LITTLEBOX_FILES_QUOTA_BYTES").ok().as_deref(),
-            std::env::var("LITTLEBOX_FILE_MAX_BYTES").ok().as_deref(),
+            std::env::var("KONAE_FILES_QUOTA_BYTES").ok().as_deref(),
+            std::env::var("KONAE_FILE_MAX_BYTES").ok().as_deref(),
         )
     }
 
@@ -412,12 +412,12 @@ impl FileLimits {
             }
         };
         let limits = Self {
-            quota_bytes: number("LITTLEBOX_FILES_QUOTA_BYTES", quota, DEFAULT_QUOTA_BYTES)?,
-            max_file_bytes: number("LITTLEBOX_FILE_MAX_BYTES", max_file, DEFAULT_FILE_MAX_BYTES)?,
+            quota_bytes: number("KONAE_FILES_QUOTA_BYTES", quota, DEFAULT_QUOTA_BYTES)?,
+            max_file_bytes: number("KONAE_FILE_MAX_BYTES", max_file, DEFAULT_FILE_MAX_BYTES)?,
         };
         ensure!(
             limits.max_file_bytes <= limits.quota_bytes,
-            "LITTLEBOX_FILE_MAX_BYTES ({}) is larger than LITTLEBOX_FILES_QUOTA_BYTES ({}), so no file that size could be stored.",
+            "KONAE_FILE_MAX_BYTES ({}) is larger than KONAE_FILES_QUOTA_BYTES ({}), so no file that size could be stored.",
             human_bytes(limits.max_file_bytes),
             human_bytes(limits.quota_bytes)
         );
@@ -576,15 +576,15 @@ impl Files {
             Some(recorded) if recorded == wanted => {}
             Some(recorded) => {
                 let command = match (recorded["store"].as_str(), settings.is_some()) {
-                    (Some("s3"), false) => "Set the LITTLEBOX_FILES_S3_ settings it was started with again, or run littlebox-kernel files-migrate --to local with them set.".to_owned(),
-                    (Some("s3"), true) => "Set the LITTLEBOX_FILES_S3_ settings it was started with again; files-migrate moves files between the data directory and one bucket only.".to_owned(),
-                    _ => "Stop the Kernel and run littlebox-kernel files-migrate --to s3 with these settings first.".to_owned(),
+                    (Some("s3"), false) => "Set the KONAE_FILES_S3_ settings it was started with again, or run konae-kernel files-migrate --to local with them set.".to_owned(),
+                    (Some("s3"), true) => "Set the KONAE_FILES_S3_ settings it was started with again; files-migrate moves files between the data directory and one bucket only.".to_owned(),
+                    _ => "Stop the Kernel and run konae-kernel files-migrate --to s3 with these settings first.".to_owned(),
                 };
                 bail!("The files of this installation are in {}, but the settings name {}. {command}", spoken(&recorded), spoken(&wanted));
             }
             None => {
                 if settings.is_some() && local_bytes_remain(data_root).await? {
-                    bail!("The settings name {}, but the files of this installation are in the data directory. Stop the Kernel and run littlebox-kernel files-migrate --to s3 first.", spoken(&wanted));
+                    bail!("The settings name {}, but the files of this installation are in the data directory. Stop the Kernel and run konae-kernel files-migrate --to s3 first.", spoken(&wanted));
                 }
                 write_marker(data_root, &wanted).await?;
             }
@@ -622,11 +622,11 @@ pub(crate) async fn forget_deployment(store: &dyn FileStore, deployment: &str) {
         Ok(ids) => {
             for id in ids {
                 if let Err(error) = store.delete(deployment, &id).await {
-                    eprintln!("littlebox: could not remove file {id} of Deployment {deployment}: {error:#}");
+                    eprintln!("konae: could not remove file {id} of Deployment {deployment}: {error:#}");
                 }
             }
         }
-        Err(error) => eprintln!("littlebox: could not list the files of Deployment {deployment}: {error:#}"),
+        Err(error) => eprintln!("konae: could not list the files of Deployment {deployment}: {error:#}"),
     }
 }
 
@@ -714,7 +714,7 @@ pub(crate) async fn migrate(data_root: &Path, source: &dyn FileStore, target: &d
     write_marker(data_root, target_marker).await?;
     for (deployment, id) in moved {
         if let Err(error) = source.delete(&deployment, &id).await {
-            eprintln!("littlebox: file {id} of Deployment {deployment} is in {} now; removing the old copy failed: {error:#}", target.kind());
+            eprintln!("konae: file {id} of Deployment {deployment} is in {} now; removing the old copy failed: {error:#}", target.kind());
         }
     }
     Ok(summary)
@@ -801,14 +801,14 @@ pub(crate) fn hold_while_stopped(data_root: &Path, command: &str) -> Result<std:
     }
 }
 
-const MIGRATE_USAGE: &str = "Usage: littlebox-kernel files-migrate --to s3|local";
-const RECONCILE_USAGE: &str = "Usage: littlebox-kernel files-reconcile [--dry-run]";
+const MIGRATE_USAGE: &str = "Usage: konae-kernel files-migrate --to s3|local";
+const RECONCILE_USAGE: &str = "Usage: konae-kernel files-reconcile [--dry-run]";
 
-/// `files-migrate` and `files-reconcile`. Both read `LITTLEBOX_DATA_DIR`
-/// and the `LITTLEBOX_FILES_S3_` settings.
+/// `files-migrate` and `files-reconcile`. Both read `KONAE_DATA_DIR`
+/// and the `KONAE_FILES_S3_` settings.
 pub(crate) async fn operator_command() -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let data_root = PathBuf::from(std::env::var("LITTLEBOX_DATA_DIR").unwrap_or_else(|_| "/data".into()));
+    let data_root = PathBuf::from(std::env::var("KONAE_DATA_DIR").unwrap_or_else(|_| "/data".into()));
     match args.first().map(String::as_str) {
         Some("files-migrate") => {
             let to = match args.get(1..).unwrap_or_default() {
@@ -816,7 +816,7 @@ pub(crate) async fn operator_command() -> Result<bool> {
                 _ => bail!("{MIGRATE_USAGE}"),
             };
             let _stopped = hold_while_stopped(&data_root, "files-migrate")?;
-            let settings = S3Settings::from_env()?.context("files-migrate needs the LITTLEBOX_FILES_S3_ settings of the bucket, in both directions.")?;
+            let settings = S3Settings::from_env()?.context("files-migrate needs the KONAE_FILES_S3_ settings of the bucket, in both directions.")?;
             let recorded = read_marker(&data_root).await?.unwrap_or_else(|| describe(None));
             let bucket = describe(Some(&settings));
             let local = LocalFolder::new(&data_root);
@@ -841,7 +841,7 @@ pub(crate) async fn operator_command() -> Result<bool> {
                 summary.bytes,
                 summary.deployments,
                 spoken(&marker),
-                if to == "s3" { "the same LITTLEBOX_FILES_S3_ settings" } else { "LITTLEBOX_FILES_S3_BUCKET unset" }
+                if to == "s3" { "the same KONAE_FILES_S3_ settings" } else { "KONAE_FILES_S3_BUCKET unset" }
             );
             Ok(true)
         }
@@ -891,10 +891,10 @@ pub(crate) mod tests {
         assert_eq!(raised.file_size_refused(), "Files must be between 1 byte and 25 MiB.");
         for bad in ["0", "-1", "20MiB", "1.5"] {
             let refused = FileLimits::parse(Some(bad), None).unwrap_err().to_string();
-            assert!(refused.contains("LITTLEBOX_FILES_QUOTA_BYTES must be a whole number"), "{refused}");
+            assert!(refused.contains("KONAE_FILES_QUOTA_BYTES must be a whole number"), "{refused}");
         }
         let inverted = FileLimits::parse(Some("1048576"), Some("2097152")).unwrap_err().to_string();
-        assert!(inverted.contains("(2 MiB) is larger than LITTLEBOX_FILES_QUOTA_BYTES (1 MiB)"), "{inverted}");
+        assert!(inverted.contains("(2 MiB) is larger than KONAE_FILES_QUOTA_BYTES (1 MiB)"), "{inverted}");
         assert_eq!(human_bytes(1500), "1500 bytes");
         assert_eq!(human_bytes(65536), "64 KiB");
     }
@@ -934,7 +934,7 @@ pub(crate) mod tests {
     /// An in-process S3 server for tests: path-style PutObject, GetObject with
     /// one range, DeleteObject and ListObjectsV2 with prefix, delimiter and
     /// two keys per page, so paging runs. It checks no signature. Set
-    /// `LITTLEBOX_TEST_S3_ENDPOINT` (and `LITTLEBOX_TEST_S3_BUCKET`) to run the
+    /// `KONAE_TEST_S3_ENDPOINT` (and `KONAE_TEST_S3_BUCKET`) to run the
     /// same tests against a real S3-compatible server instead.
     pub(crate) async fn fake_s3() -> String {
         use axum::{
@@ -1033,27 +1033,27 @@ pub(crate) mod tests {
         format!("http://{address}")
     }
 
-    /// An `S3Store` on `LITTLEBOX_TEST_S3_ENDPOINT` when it is set, on the
+    /// An `S3Store` on `KONAE_TEST_S3_ENDPOINT` when it is set, on the
     /// in-process fake otherwise, under a fresh prefix.
     pub(crate) async fn test_s3_store() -> S3Store {
-        let endpoint = match std::env::var("LITTLEBOX_TEST_S3_ENDPOINT") {
+        let endpoint = match std::env::var("KONAE_TEST_S3_ENDPOINT") {
             Ok(endpoint) if !endpoint.is_empty() => endpoint,
             _ => fake_s3().await,
         };
         S3Store::new(S3Settings {
             endpoint,
             region: "us-east-1".into(),
-            bucket: std::env::var("LITTLEBOX_TEST_S3_BUCKET").unwrap_or_else(|_| "littlebox-files".into()),
+            bucket: std::env::var("KONAE_TEST_S3_BUCKET").unwrap_or_else(|_| "konae-files".into()),
             prefix: format!("test-{}/", uuid::Uuid::new_v4().simple()),
-            access_key: "littlebox".into(),
-            secret_key: "littlebox-secret".into(),
+            access_key: "konae".into(),
+            secret_key: "konae-secret".into(),
             path_style: true,
         })
     }
 
     #[tokio::test]
     async fn the_s3_store_keeps_the_store_contract() {
-        let root = std::env::temp_dir().join(format!("littlebox-s3-store-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-s3-store-{}", uuid::Uuid::new_v4()));
         let store = test_s3_store().await;
         store_contract(&store, &root).await;
         // Five Deployments list across pages of two.
@@ -1099,7 +1099,7 @@ pub(crate) mod tests {
     /// same bytes, records the store, and leaves no copy in the old one.
     #[test]
     fn files_commands_refuse_while_a_kernel_holds_the_data_directory() {
-        let root = std::env::temp_dir().join(format!("littlebox-kernel-lock-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-kernel-lock-{}", uuid::Uuid::new_v4()));
         let kernel = hold_kernel_lock(&root).unwrap();
         for command in ["files-migrate", "files-reconcile"] {
             let refused = hold_while_stopped(&root, command).unwrap_err().to_string();
@@ -1117,7 +1117,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn files_migrate_moves_every_indexed_file_and_switches_the_record() {
-        let root = std::env::temp_dir().join(format!("littlebox-files-migrate-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-files-migrate-{}", uuid::Uuid::new_v4()));
         let local = LocalFolder::new(&root);
         let s3 = test_s3_store().await;
         let bucket = describe(Some(&s3.settings));
@@ -1128,7 +1128,7 @@ pub(crate) mod tests {
 
         // A Kernel started with the bucket while the bytes are in the folder refuses.
         let refused = Files::open(&root, FileLimits::default(), Some(s3.settings.clone())).await.err().unwrap().to_string();
-        assert!(refused.contains("run littlebox-kernel files-migrate --to s3 first"), "{refused}");
+        assert!(refused.contains("run konae-kernel files-migrate --to s3 first"), "{refused}");
 
         let moved = migrate(&root, &local, &s3, &bucket).await.unwrap();
         assert_eq!(moved, Migrated { deployments: 1, files: 2, bytes: 150_005 });
@@ -1137,7 +1137,7 @@ pub(crate) mod tests {
         assert_eq!(read_marker(&root).await.unwrap().unwrap(), bucket);
         assert_eq!(Files::open(&root, FileLimits::default(), Some(s3.settings.clone())).await.unwrap().store.kind(), "s3");
         let local_refused = Files::open(&root, FileLimits::default(), None).await.err().unwrap().to_string();
-        assert!(local_refused.contains("Set the LITTLEBOX_FILES_S3_ settings it was started with again"), "{local_refused}");
+        assert!(local_refused.contains("Set the KONAE_FILES_S3_ settings it was started with again"), "{local_refused}");
 
         migrate(&root, &s3, &local, &describe(None)).await.unwrap();
         assert_eq!(read_all(&local, &deployment, &b).await.unwrap().unwrap(), vec![3u8; 150_000]);
@@ -1157,7 +1157,7 @@ pub(crate) mod tests {
     /// and everything of a Deployment whose folder is gone.
     #[tokio::test]
     async fn files_reconcile_removes_old_objects_no_index_names() {
-        let root = std::env::temp_dir().join(format!("littlebox-files-reconcile-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-files-reconcile-{}", uuid::Uuid::new_v4()));
         let s3 = test_s3_store().await;
         let (live, gone) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
         let (kept, orphan, stray) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
@@ -1178,7 +1178,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn the_local_folder_keeps_the_store_contract() {
-        let root = std::env::temp_dir().join(format!("littlebox-local-store-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-local-store-{}", uuid::Uuid::new_v4()));
         store_contract(&LocalFolder::new(&root), &root.join("scratch")).await;
         let _ = std::fs::remove_dir_all(root);
     }

@@ -2,17 +2,17 @@
 // to happen when nobody asks. A reminder app surfaces due notes from a
 // "schedule" on a mutation; the Kernel's timer runs it with no caller.
 //
-// The probe starts its Kernel with LITTLEBOX_SCHEDULE_MIN_SECONDS=2, so a
+// The probe starts its Kernel with KONAE_SCHEDULE_MIN_SECONDS=2, so a
 // schedule declared "every": "5m" runs every 2 seconds and the probe waits
 // for runs instead of minutes.
 //
-//   LITTLEBOX_PROBE_PORT=23060 bun run examples/probes/schedule/replay.ts
+//   KONAE_PROBE_PORT=23060 bun run examples/probes/schedule/replay.ts
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { probe } from "../_kit";
 
-process.env.LITTLEBOX_SCHEDULE_MIN_SECONDS = "2";
+process.env.KONAE_SCHEDULE_MIN_SECONDS = "2";
 const here = import.meta.dir;
 type Run = { action: string; at: number; outcome: "ok" | "failed"; changes: number; error?: string };
 type Usage = { totals: { kind: string; name: string; count: number }[]; scheduled: Run[] };

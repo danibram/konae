@@ -268,6 +268,16 @@ export function Lede({ children }: { children: ReactNode }) {
   return <p className="ui-lede">{children}</p>;
 }
 
+/** A row of actions under a lede: the primary one first. It wraps on a narrow screen. */
+export function Actions({ children }: { children: ReactNode }) {
+  return <div className="ui-actions">{children}</div>;
+}
+
+/** Numbered steps: an ordered list whose numbers sit in accent squares. Screen readers hear each number once. */
+export function Steps({ items }: { items: { title: string; detail?: ReactNode }[] }) {
+  return <ol className="ui-list ui-steps">{items.map((item, index) => <li className="ui-list-item" key={item.title}><span className="ui-list-lead" aria-hidden="true">{index + 1}</span><div className="ui-list-main"><p>{item.title}</p>{item.detail && <small>{item.detail}</small>}</div></li>)}</ol>;
+}
+
 /** Who is using the app, with the one button that changes it. */
 export function Identity({ name, children }: { name?: string; children?: ReactNode }) {
   return <div className="ui-identity">{name && <><Avatar name={name} size={26} /><span>{name}</span></>}{children}</div>;

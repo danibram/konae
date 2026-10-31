@@ -35,7 +35,7 @@ export function PlatformAccess() {
   // A check that took long enough to show its skeleton keeps it for a moment, so the card never flashes.
   const waiting = useLoadingHold(liveSession.state === "checking" || (liveSession.state === "signed-out" && !config && !error), { sinceNavigation: true });
   const session: OwnerSession = waiting && liveSession.state !== "checking" ? { state: "checking" } : liveSession;
-  useEffect(() => { void fetch("/_littlebox/owner/config").then(async (response) => {
+  useEffect(() => { void fetch("/_konae/owner/config").then(async (response) => {
     if (!response.ok) throw new Error("Could not load sign-in settings.");
     setConfig(await response.json());
   }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }, []);
@@ -53,7 +53,7 @@ export function PlatformAccess() {
     setError("");
     setNotice("");
     try {
-      const response = await fetch(`/_littlebox/owner/${action}`, {
+      const response = await fetch(`/_konae/owner/${action}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(action === "signup"
@@ -93,7 +93,7 @@ export function PlatformAccess() {
     setBusy(true);
     setError("");
     try {
-      const response = await fetch("/_littlebox/owner/recover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: pendingEmail }) });
+      const response = await fetch("/_konae/owner/recover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: pendingEmail }) });
       const body = await response.json().catch(() => ({})) as { error?: string; result?: { message?: string } };
       if (!response.ok) throw new Error(body.error || "Could not send the link.");
       setNotice("We sent a new link. Only the newest link works.");
@@ -105,7 +105,7 @@ export function PlatformAccess() {
   };
 
   const signOut = async () => {
-    await fetch("/_littlebox/owner/logout", { method: "POST" }).catch(() => undefined);
+    await fetch("/_konae/owner/logout", { method: "POST" }).catch(() => undefined);
     if (config?.mode === "clerk") await window.Clerk?.signOut().catch(() => undefined);
     rememberOwnerEmail(null);
     refresh();
@@ -114,7 +114,7 @@ export function PlatformAccess() {
   return (
     <div className="platform-page">
       <header className="platform-header">
-        <a className="platform-brand" href="/"><span><Box size={16} /></span>littlebox</a>
+        <a className="platform-brand" href="/"><span><Box size={16} /></span>konae</a>
         {/* Signed out, every address redirects back here, so a link out would only loop. */}
         {session.state === "signed-in" && <a className="ui-button ui-button-sm platform-back" href={backHref}><ArrowLeft size={14} /> {backLabel}</a>}
       </header>
@@ -152,7 +152,7 @@ export function PlatformAccess() {
               <Field label="Email" help={error === "Add an email." ? error : undefined}><Input type="email" autoComplete="email" aria-invalid={error === "Add an email." || undefined} value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
               <Field label="Password" help={error === "Use at least 8 characters." ? error : undefined}><Input type="password" autoComplete="current-password" aria-invalid={error === "Use at least 8 characters." || undefined} value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
               {creatingAccount && usesSetupKey && (
-                <Field label="This computer's setup key" help="Creates the first owner. Filled in for this computer; a hosted install prints its own key where Littlebox starts.">
+                <Field label="This computer's setup key" help="Creates the first owner. Filled in for this computer; a hosted install prints its own key where Konae starts.">
                   <Input type="password" autoComplete="off" required value={setupKey} onChange={(event) => setSetupKey(event.target.value)} />
                 </Field>
               )}
@@ -231,7 +231,7 @@ function ClerkSignIn({ publishableKey, returnTo, onError, onComplete }: { publis
         try {
           const token = await clerk.session.getToken();
           if (!token) throw new Error("Could not obtain a sign-in token.");
-          const response = await fetch("/_littlebox/owner/clerk", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) });
+          const response = await fetch("/_konae/owner/clerk", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) });
           const body = await response.json().catch(() => ({})) as { error?: string };
           if (!response.ok) throw new Error(body.error ?? "Sign-in failed.");
           if (!active) return;

@@ -1,12 +1,12 @@
 // Probe: a scheduled notice that reaches the people its rows name (ADR-0021),
-// run on `littlebox dev`, the Development Kernel a person uses on their own
+// run on `konae dev`, the Development Kernel a person uses on their own
 // machine. Ana and Ben accept invitations, which proves their addresses. Ana
 // assigns chores to herself, to Ben, to an email address and to an ID that is
 // no account. The hourly chores.remind runs every 2 seconds here
-// (LITTLEBOX_SCHEDULE_MIN_SECONDS), and the development mailbox shows one
+// (KONAE_SCHEDULE_MIN_SECONDS), and the development mailbox shows one
 // notice to Ana and one to Ben, each listing only their own chores.
 //
-//   LITTLEBOX_PROBE_PORT=20010 bun run examples/probes/notify-rows/replay.ts [--keep <folder>]
+//   KONAE_PROBE_PORT=20010 bun run examples/probes/notify-rows/replay.ts [--keep <folder>]
 //
 // --keep copies the mailbox file to <folder>/mailbox.jsonl as evidence.
 import assert from "node:assert/strict";
@@ -16,11 +16,11 @@ import path from "node:path";
 import { McpClient } from "../../../src/mcp/client";
 
 const repo = path.resolve(import.meta.dir, "../../..");
-const port = Number(process.env.LITTLEBOX_PROBE_PORT ?? 20010);
+const port = Number(process.env.KONAE_PROBE_PORT ?? 20010);
 const url = `http://127.0.0.1:${port}`;
 const keep = process.argv.includes("--keep") ? process.argv[process.argv.indexOf("--keep") + 1] : undefined;
-const scratch = await mkdtemp(path.join(tmpdir(), "littlebox-notify-rows-"));
-const mailboxFile = path.join(scratch, ".littlebox/dev-data/mailbox.jsonl");
+const scratch = await mkdtemp(path.join(tmpdir(), "konae-notify-rows-"));
+const mailboxFile = path.join(scratch, ".konae/dev-data/mailbox.jsonl");
 type Mail = { purpose: string; to: string; subject?: string; text?: string; link?: string; action?: string };
 const mailbox = async (): Promise<Mail[]> => (await readFile(mailboxFile, "utf8").catch(() => ""))
   .trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -34,31 +34,31 @@ const waitFor = async <T>(what: string, find: () => Promise<T | undefined>, seco
 
 let dev: ReturnType<typeof Bun.spawn> | undefined;
 try {
-  try { await fetch(`${url}/_littlebox/health`); throw Error(`Something already answers on port ${port}. Set LITTLEBOX_PROBE_PORT.`); }
+  try { await fetch(`${url}/_konae/health`); throw Error(`Something already answers on port ${port}. Set KONAE_PROBE_PORT.`); }
   catch (error) { if (error instanceof Error && error.message.startsWith("Something")) throw error; }
   for (const file of ["index.html", "schema.sql", "actions.json"]) await cp(path.join(import.meta.dir, file), path.join(scratch, file));
-  await writeFile(path.join(scratch, "littlebox.json"), JSON.stringify({ url, project: {
+  await writeFile(path.join(scratch, "konae.json"), JSON.stringify({ url, project: {
     id: "probe_notify_rows", name: "Chores", slug: "chores", manifest: { version: 1, visibility: "private" },
   } }));
 
-  dev = Bun.spawn(["bun", "run", path.join(repo, "scripts/littlebox.ts"), "dev", "--dir", scratch, "--port", String(port)], {
+  dev = Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), "dev", "--dir", scratch, "--port", String(port)], {
     cwd: repo, stdout: "pipe", stderr: "inherit",
-    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_"))), LITTLEBOX_SCHEDULE_MIN_SECONDS: "2" },
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_SCHEDULE_MIN_SECONDS: "2" },
   });
   const output = dev.stdout.getReader();
   let printed = "";
-  const appUrl = await waitFor("app URL from littlebox dev", async () => {
+  const appUrl = await waitFor("app URL from konae dev", async () => {
     const { value, done } = await output.read();
-    if (done) throw Error(`littlebox dev stopped:\n${printed}`);
+    if (done) throw Error(`konae dev stopped:\n${printed}`);
     printed += new TextDecoder().decode(value);
     return printed.match(/^(http:\/\/\S+)$/m)?.[1];
   }, 300);
   const host = new URL(appUrl).host;
 
   // The owner of the Development Kernel signs in with the folder's dev secret.
-  const secret = await readFile(path.join(scratch, ".littlebox/dev-secret"), "utf8");
-  const signedIn = await fetch(`${url}/_littlebox/owner/login`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "local-owner@littlebox.test", password: secret }),
+  const secret = await readFile(path.join(scratch, ".konae/dev-secret"), "utf8");
+  const signedIn = await fetch(`${url}/_konae/owner/login`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "local-owner@konae.test", password: secret }),
   });
   assert.equal(signedIn.status, 200, await signedIn.clone().text());
   const ownerCookie = signedIn.headers.get("set-cookie")!.split(";")[0];
@@ -81,12 +81,12 @@ try {
     const invited = await owner.call<{ results: { status: string }[] }>("app_invitations_create", { deploymentId, emails: [email], idempotencyKey: `invite-${email}` });
     assert.equal(invited.results[0].status, "invited");
     const invitation = await waitFor(`invitation for ${email}`, async () => (await mailbox()).find((mail) => mail.purpose === "invitation" && mail.to === email));
-    const accepted = await appFetch()(`${url}/_littlebox/auth/accept`, {
+    const accepted = await appFetch()(`${url}/_konae/auth/accept`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ token: new URL(invitation.link!).hash.slice("#invitation=".length), password: crypto.randomUUID() }),
     });
     assert.equal(accepted.status, 200, await accepted.clone().text());
-    const app = new McpClient(`${url}/_littlebox/mcp`, { fetch: appFetch(accepted.headers.get("set-cookie")!.split(";")[0]) });
+    const app = new McpClient(`${url}/_konae/mcp`, { fetch: appFetch(accepted.headers.get("set-cookie")!.split(";")[0]) });
     const session = await app.call<{ userId: string }>("auth_session");
     return { app, id: session.userId };
   };
@@ -125,7 +125,7 @@ try {
   assert.deepEqual(mine.map((chore) => [chore.title, chore.reminded_at !== null]), [["Water the plants", true], ["Paint the fence", false]]);
 
   if (keep) await copyFile(mailboxFile, path.join(keep, "mailbox.jsonl"));
-  console.log(`PASS A scheduled notice reaches the members its rows name. On littlebox dev, chores.remind ran with nobody calling and wrote two notices to ${mailboxFile}: "${to("ana@chores.test").subject}" to ana@chores.test and "${to("ben@chores.test").subject}" to ben@chores.test, each listing only that member's chores. The chores assigned to cy@chores.test and to an ID that is no account sent nothing, and usage_read says ${JSON.stringify(lines)}.`);
+  console.log(`PASS A scheduled notice reaches the members its rows name. On konae dev, chores.remind ran with nobody calling and wrote two notices to ${mailboxFile}: "${to("ana@chores.test").subject}" to ana@chores.test and "${to("ben@chores.test").subject}" to ben@chores.test, each listing only that member's chores. The chores assigned to cy@chores.test and to an ID that is no account sent nothing, and usage_read says ${JSON.stringify(lines)}.`);
 } catch (error) {
   console.error(error);
   process.exitCode = 1;

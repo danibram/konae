@@ -77,8 +77,8 @@ async function drop(begun: Begun) {
 
 beforeAll(async () => {
   await buildKernel();
-  root = await mkdtemp(path.join(tmpdir(), "littlebox-migration-"));
-  const port = Number(process.env.LITTLEBOX_MIGRATION_TEST_PORT) || 19700 + Math.floor(Math.random() * 90);
+  root = await mkdtemp(path.join(tmpdir(), "konae-migration-"));
+  const port = Number(process.env.KONAE_MIGRATION_TEST_PORT) || 19700 + Math.floor(Math.random() * 90);
   kernel = await startKernel({ port, data: path.join(root, "data"), setupKey: "migration-integration-setup-secret", ownerEmail: "owner@migration.test" });
   owner = kernel.owner;
 }, 300_000);
@@ -121,21 +121,21 @@ describe("migration", () => {
     expect(shell.body).toContain("is in maintenance");
     expect(shell.body).toContain(op);
     // Every write path answers with the operation, and nothing is redirected.
-    const mcp = (name: string, args: object) => appFetch(kernel, app.hostname, "/_littlebox/mcp", {
+    const mcp = (name: string, args: object) => appFetch(kernel, app.hostname, "/_konae/mcp", {
       method: "POST", headers: { cookie }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
     });
     expect(await refusedWith(await mcp("actions_invoke", { name: "notes.add", input: { body: "during the pause" } }), op)).toContain(`paused for migration ${op}`);
     await refusedWith(await mcp("actions_invoke", { name: "notes.list", input: {} }), op);
     for (const [route, body] of [
-      ["/_littlebox/auth/signup", { email: "new@pause.test", password: "a long enough password" }],
-      ["/_littlebox/auth/login", { email: "ana@pause.test", password: "migration-test-password" }],
-      ["/_littlebox/auth/recover", { email: "ana@pause.test" }],
-      ["/_littlebox/auth/accept", { token: "x", password: "a long enough password" }],
+      ["/_konae/auth/signup", { email: "new@pause.test", password: "a long enough password" }],
+      ["/_konae/auth/login", { email: "ana@pause.test", password: "migration-test-password" }],
+      ["/_konae/auth/recover", { email: "ana@pause.test" }],
+      ["/_konae/auth/accept", { token: "x", password: "a long enough password" }],
       ["/hooks/note", { body: "from a webhook" }],
     ] as const) {
       await refusedWith(await appFetch(kernel, app.hostname, route, { method: "POST", body: JSON.stringify(body) }), op);
     }
-    await refusedWith(await appFetch(kernel, app.hostname, `/_littlebox/files/${crypto.randomUUID()}`), op);
+    await refusedWith(await appFetch(kernel, app.hostname, `/_konae/files/${crypto.randomUUID()}`), op);
 
     const paused = `paused for migration ${op}`;
     await expect(owner.call("signup_policy_set", { deploymentId: app.id, mode: "closed" })).rejects.toThrow(paused);
@@ -182,7 +182,7 @@ describe("migration", () => {
     const shell = await page(copy);
     expect(shell.status).toBe(503);
     expect(shell.body).toContain("migration_activate");
-    await refusedWith(await appFetch(kernel, copy.hostname, "/_littlebox/auth/login", { method: "POST", body: JSON.stringify({ email: "ana@move.test", password: "migration-test-password" }) }), begun.operationId);
+    await refusedWith(await appFetch(kernel, copy.hostname, "/_konae/auth/login", { method: "POST", body: JSON.stringify({ email: "ana@move.test", password: "migration-test-password" }) }), begun.operationId);
     expect(await owner.call("migration_status", { deploymentId: copy.id })).toMatchObject({ role: "destination", phase: "imported", paused: true });
     await expect(owner.call("migration_begin", { deploymentId: copy.id })).rejects.toThrow("not active yet");
     // Before the origin confirms there is no confirmation to give.
@@ -211,7 +211,7 @@ describe("migration", () => {
     expect(retired.body).toContain('href="https://notes.example.org/"');
     expect(retired.body).toContain("moved to another server");
     // POST and auth routes are refused, never redirected.
-    expect((await appFetch(kernel, app.hostname, "/_littlebox/auth/login", { method: "POST", body: "{}" })).status).toBe(503);
+    expect((await appFetch(kernel, app.hostname, "/_konae/auth/login", { method: "POST", body: "{}" })).status).toBe(503);
 
     await expect(owner.call("migration_activate", { deploymentId: copy.id, confirmation: confirmed.confirmation.replace(/.$/, (last) => (last === "0" ? "1" : "0")) })).rejects.toThrow("does not belong");
     const activated = await owner.call<{ operationId: string; url: string }>("migration_activate", { deploymentId: copy.id, confirmation: confirmed.confirmation });

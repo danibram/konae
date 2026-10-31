@@ -53,14 +53,14 @@ function draftSignature(project: MiniAppProject): string {
   return JSON.stringify(canonical({ name: repaired.name, slug: repaired.slug, files: repaired.files, directories: [...(repaired.directories ?? [])].sort(), model: repaired.databaseModel?.source, manifest: repaired.manifest }));
 }
 
-const projectsKey = "littlebox:projects";
-const activeProjectKey = "littlebox:active-project";
-const deploymentsKey = "littlebox:deployments";
+const projectsKey = "konae:projects";
+const activeProjectKey = "konae:active-project";
+const deploymentsKey = "konae:deployments";
 
 export function loadWorkspaceState(storage: Pick<Storage, "getItem"> = localStorage): WorkspaceState {
   // One-way migration: the pre-workspace single-project key is read for owners
-  // whose last save predates `littlebox:projects`, and is never written again.
-  const legacyProject = readJson<MiniAppProject>(storage.getItem("littlebox:project"));
+  // whose last save predates `konae:projects`, and is never written again.
+  const legacyProject = readJson<MiniAppProject>(storage.getItem("konae:project"));
   const storedProjects = readJson<MiniAppProject[]>(storage.getItem(projectsKey));
   const projects = withoutArchitecture(normalizeProjects(Array.isArray(storedProjects) && storedProjects.length > 0
     ? storedProjects
@@ -71,7 +71,7 @@ export function loadWorkspaceState(storage: Pick<Storage, "getItem"> = localStor
     : projects[0].id;
 
   const deployments = readJson<DeploymentIndex>(storage.getItem(deploymentsKey)) ?? {};
-  const legacyDeployment = readJson<DeploymentReceipt>(storage.getItem("littlebox:active-deployment"));
+  const legacyDeployment = readJson<DeploymentReceipt>(storage.getItem("konae:active-deployment"));
   if (legacyDeployment?.projectId && !deployments[legacyDeployment.projectId]) {
     deployments[legacyDeployment.projectId] = withoutAccessCode(legacyDeployment);
   }
@@ -85,7 +85,7 @@ export function loadWorkspaceState(storage: Pick<Storage, "getItem"> = localStor
  * for an empty store, and offering those would list apps the owner never made.
  */
 export function storedLocalProjects(storage: Pick<Storage, "getItem"> = localStorage): MiniAppProject[] {
-  const legacyProject = readJson<MiniAppProject>(storage.getItem("littlebox:project"));
+  const legacyProject = readJson<MiniAppProject>(storage.getItem("konae:project"));
   const storedProjects = readJson<MiniAppProject[]>(storage.getItem(projectsKey));
   const stored = Array.isArray(storedProjects) && storedProjects.length > 0 ? storedProjects : legacyProject ? [legacyProject] : [];
   return normalizeProjects(stored).filter((project) => project.id !== architectureProjectId);

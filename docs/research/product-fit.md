@@ -2,7 +2,7 @@
 
 Date: 2026-10-24.
 
-Littlebox can support small applications built from a static frontend, named SQL actions, app accounts and shared attachments. The strongest cases are private trackers, small team tools, forms, polls and dashboards. It is not yet a general backend for websites and APIs. Public media, conventional webhooks, account recovery and replacing app authentication remain missing capabilities.
+Konae can support small applications built from a static frontend, named SQL actions, app accounts and shared attachments. The strongest cases are private trackers, small team tools, forms, polls and dashboards. It is not yet a general backend for websites and APIs. Public media, conventional webhooks, account recovery and replacing app authentication remain missing capabilities.
 
 [The capability matrix](./capability-matrix.md) of 2026-11-07 repeats this assessment for ten app shapes and 24 features against the current Kernel.
 
@@ -32,8 +32,8 @@ The self-hosted archive now includes `kernel-rs/src/limits.rs`. Without it, the 
 External projects now have a CLI export path. Source-only export works offline; `--with-data` explicitly requests the deployed database, accounts and attachments through MCP. The command refuses to overwrite an existing archive and creates it with owner-only filesystem permissions.
 
 ```sh
-bun run littlebox -- export --dir /tmp/my-app --out /tmp/my-app-selfhost.tar
-bun run littlebox -- export --dir /tmp/my-app --out /tmp/my-app-with-data.tar --with-data
+bun run konae -- export --dir /tmp/my-app --out /tmp/my-app-selfhost.tar
+bun run konae -- export --dir /tmp/my-app --out /tmp/my-app-with-data.tar --with-data
 ```
 
 Live-state exports also carry the app's signup policy. A fresh Kernel imports it with the first deployment, so a public app whose signup was Closed or Allowlist does not start Open. Existing deployments refuse initial-state imports; later releases retain their current policy.
@@ -46,7 +46,7 @@ Mutation actions still return `{changes, lastInsertId}`. A mutation with SQL `RE
 
 ## Portability and replacement
 
-Downloading runnable code and replacing individual capabilities are different tests. A self-hosted copy still uses the Littlebox Kernel. It proves independence from the original installation, not independence from every Littlebox interface.
+Downloading runnable code and replacing individual capabilities are different tests. A self-hosted copy still uses the Konae Kernel. It proves independence from the original installation, not independence from every Konae interface.
 
 | Capability | Exit available today | Missing interface |
 | --- | --- | --- |
@@ -82,7 +82,7 @@ The next additions should remove repeated work across these examples.
 2. Define file visibility separately from the public shell. A public image needs an explicit publication decision; a private attachment needs authorization. Preserve the current authenticated-file default. Add download/delete to the editor and test access across users and Deployments.
 3. Offer a conventional HTTP adapter for selected actions. Declare method, path and input mapping, preserve the action's authorization and rate limits, and add replay protection/signature verification for webhooks. Secret provider requests belong on the server.
 4. Make state recoverable. Replicate databases, accounts and files together and restore them into a clean Kernel in a repeatable check. S3 currently holds records and artifacts, so losing the Kernel volume loses application state.
-5. Finish the static publishing contract. Provide head metadata, text/binary assets, explicit SPA versus document routing, correct 404s and content types. Keep this independent of the database and login choices. Done on 2026-11-06 except head metadata beyond what a whole-document page writes itself: pages, `public/`, binary assets, `"routing": "pages"` or `"spa"`, 404 with `404.html` and the content types are in [the MCP guide](../mcp.md#what-the-build-publishes), and the `docs` example now publishes with `littlebox build`.
+5. Finish the static publishing contract. Provide head metadata, text/binary assets, explicit SPA versus document routing, correct 404s and content types. Keep this independent of the database and login choices. Done on 2026-11-06 except head metadata beyond what a whole-document page writes itself: pages, `public/`, binary assets, `"routing": "pages"` or `"spa"`, 404 with `404.html` and the content types are in [the MCP guide](../mcp.md#what-the-build-publishes), and the `docs` example now publishes with `konae build`.
 6. Generate a portable action contract. Inputs, output shapes and errors should let a replacement backend run the same conformance checks. Add client configuration for deployment origin and capability adapters only when a second implementation can pass those checks.
 
 These are proposed changes. This iteration does not open file access, introduce CORS, change signup defaults, add webhook routes or trust external identities.

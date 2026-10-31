@@ -103,32 +103,32 @@ impl Limits {
             }
         };
         Ok(Self {
-            recipient_per_minute: read("LITTLEBOX_MAIL_LIMIT_RECIPIENT_PER_MINUTE", defaults.recipient_per_minute)?,
-            recipient_per_day: read("LITTLEBOX_MAIL_LIMIT_RECIPIENT_PER_DAY", defaults.recipient_per_day)?,
-            creator_per_day: read("LITTLEBOX_MAIL_LIMIT_CREATOR_PER_DAY", defaults.creator_per_day)?,
-            app_per_day: read("LITTLEBOX_MAIL_LIMIT_APP_PER_DAY", defaults.app_per_day)?,
-            installation_per_day: read("LITTLEBOX_MAIL_LIMIT_INSTALLATION_PER_DAY", defaults.installation_per_day)?,
-            client_per_hour: read("LITTLEBOX_MAIL_LIMIT_CLIENT_PER_HOUR", defaults.client_per_hour)?,
-            notify_app_per_day: read("LITTLEBOX_MAIL_LIMIT_NOTIFY_APP_PER_DAY", defaults.notify_app_per_day)?,
-            notify_creator_per_day: read("LITTLEBOX_MAIL_LIMIT_NOTIFY_CREATOR_PER_DAY", defaults.notify_creator_per_day)?,
-            notify_recipient_per_day: read("LITTLEBOX_MAIL_LIMIT_NOTIFY_RECIPIENT_PER_DAY", defaults.notify_recipient_per_day)?,
+            recipient_per_minute: read("KONAE_MAIL_LIMIT_RECIPIENT_PER_MINUTE", defaults.recipient_per_minute)?,
+            recipient_per_day: read("KONAE_MAIL_LIMIT_RECIPIENT_PER_DAY", defaults.recipient_per_day)?,
+            creator_per_day: read("KONAE_MAIL_LIMIT_CREATOR_PER_DAY", defaults.creator_per_day)?,
+            app_per_day: read("KONAE_MAIL_LIMIT_APP_PER_DAY", defaults.app_per_day)?,
+            installation_per_day: read("KONAE_MAIL_LIMIT_INSTALLATION_PER_DAY", defaults.installation_per_day)?,
+            client_per_hour: read("KONAE_MAIL_LIMIT_CLIENT_PER_HOUR", defaults.client_per_hour)?,
+            notify_app_per_day: read("KONAE_MAIL_LIMIT_NOTIFY_APP_PER_DAY", defaults.notify_app_per_day)?,
+            notify_creator_per_day: read("KONAE_MAIL_LIMIT_NOTIFY_CREATOR_PER_DAY", defaults.notify_creator_per_day)?,
+            notify_recipient_per_day: read("KONAE_MAIL_LIMIT_NOTIFY_RECIPIENT_PER_DAY", defaults.notify_recipient_per_day)?,
         })
     }
 }
 
-/// The key that seals links at rest. `LITTLEBOX_MAIL_SECRET` when set;
-/// otherwise derived from `LITTLEBOX_ADMIN_KEY`, which every installation
+/// The key that seals links at rest. `KONAE_MAIL_SECRET` when set;
+/// otherwise derived from `KONAE_ADMIN_KEY`, which every installation
 /// reachable from another machine already keeps secret. The development
 /// default key is public, so it seals nothing for a real provider; the
 /// development mailbox writes its links in clear anyway and may use it.
 fn mail_secret(admin_key: &str, development: bool) -> Result<String> {
-    if let Some(secret) = std::env::var("LITTLEBOX_MAIL_SECRET").ok().filter(|value| !value.is_empty()) {
-        anyhow::ensure!(secret.len() >= 32, "LITTLEBOX_MAIL_SECRET must be at least 32 characters.");
+    if let Some(secret) = std::env::var("KONAE_MAIL_SECRET").ok().filter(|value| !value.is_empty()) {
+        anyhow::ensure!(secret.len() >= 32, "KONAE_MAIL_SECRET must be at least 32 characters.");
         return Ok(secret);
     }
     anyhow::ensure!(
         development || admin_key != DEFAULT_ADMIN_KEY,
-        "Email needs a secret to encrypt queued links. Set LITTLEBOX_MAIL_SECRET, or set LITTLEBOX_ADMIN_KEY to a secret value."
+        "Email needs a secret to encrypt queued links. Set KONAE_MAIL_SECRET, or set KONAE_ADMIN_KEY to a secret value."
     );
     Ok(admin_key.to_owned())
 }
@@ -139,7 +139,7 @@ impl LinkKey {
     /// HKDF-SHA256 with a fixed salt and label, so the admin key itself
     /// never encrypts anything and rotating either secret is one variable.
     fn derive(secret: &str) -> Self {
-        let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, b"littlebox-mail-v1").extract(secret.as_bytes());
+        let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, b"konae-mail-v1").extract(secret.as_bytes());
         let okm = prk.expand(&[b"account link"], &AES_256_GCM).expect("HKDF output fits AES-256");
         Self(LessSafeKey::new(UnboundKey::from(okm)))
     }
@@ -346,11 +346,11 @@ impl Transport for ResendTransport {
 
     /// Passes when the sender's domain is `verified` in this Resend account.
     /// A key with `sending_access` cannot list domains, so it cannot pass on
-    /// its own; `LITTLEBOX_RESEND_DOMAINS_KEY` supplies one that can.
+    /// its own; `KONAE_RESEND_DOMAINS_KEY` supplies one that can.
     fn preflight<'a>(&'a self, sender: &'a str) -> BoxFuture<'a, PreflightResult> {
         Box::pin(async move {
             let Some(domain) = sender_domain(sender) else {
-                return PreflightResult::Refused("LITTLEBOX_MAIL_FROM has no domain.".into());
+                return PreflightResult::Refused("KONAE_MAIL_FROM has no domain.".into());
             };
             let key = self.domains_key.as_deref().unwrap_or(&self.api_key);
             let response = match self.client.get(format!("{}/domains", self.api_url)).bearer_auth(key).send().await {
@@ -366,7 +366,7 @@ impl Transport for ResendTransport {
             let text = response.text().await.unwrap_or_default();
             if status == 401 || status == 403 {
                 return PreflightResult::Refused(
-                    "The Resend key cannot read domains, so the sender domain cannot be checked. Set LITTLEBOX_RESEND_DOMAINS_KEY to a full-access key.".into(),
+                    "The Resend key cannot read domains, so the sender domain cannot be checked. Set KONAE_RESEND_DOMAINS_KEY to a full-access key.".into(),
                 );
             }
             if !(200..300).contains(&status) {
@@ -420,7 +420,7 @@ impl SmtpTransport {
             SmtpTls::None => {
                 anyhow::ensure!(
                     host == "localhost" || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()),
-                    "LITTLEBOX_SMTP_TLS=none is only accepted for a loopback host."
+                    "KONAE_SMTP_TLS=none is only accepted for a loopback host."
                 );
                 AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host)
             }
@@ -441,7 +441,7 @@ impl Transport for SmtpTransport {
     fn send<'a>(&'a self, email: &'a OutgoingEmail) -> BoxFuture<'a, SendOutcome> {
         use lettre::{AsyncTransport, Message, message::MultiPart};
         Box::pin(async move {
-            let domain = sender_domain(&email.from).unwrap_or_else(|| "littlebox.invalid".into());
+            let domain = sender_domain(&email.from).unwrap_or_else(|| "konae.invalid".into());
             let (Ok(from), Ok(to)) = (email.from.parse(), email.to.parse()) else {
                 return SendOutcome::Rejected("an address is not valid for SMTP".into());
             };
@@ -494,7 +494,7 @@ fn sender_domain(sender: &str) -> Option<String> {
     (!domain.is_empty()).then_some(domain)
 }
 
-/// Reads `LITTLEBOX_MAIL_TRANSPORT` and the variables of the chosen
+/// Reads `KONAE_MAIL_TRANSPORT` and the variables of the chosen
 /// transport. Unset means no transport.
 fn transport_from_env(data_root: &Path) -> Result<Option<(Arc<dyn Transport>, String)>> {
     let required = |name: &str| -> Result<String> {
@@ -504,50 +504,50 @@ fn transport_from_env(data_root: &Path) -> Result<Option<(Arc<dyn Transport>, St
             .ok_or_else(|| anyhow::anyhow!("{name} is required for this mail transport."))
     };
     let optional = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
-    let transport: Arc<dyn Transport> = match std::env::var("LITTLEBOX_MAIL_TRANSPORT").as_deref() {
+    let transport: Arc<dyn Transport> = match std::env::var("KONAE_MAIL_TRANSPORT").as_deref() {
         Err(_) | Ok("") => return Ok(None),
         Ok("development") => Arc::new(DevelopmentTransport(DevelopmentMailbox::new(data_root.join("mailbox.jsonl")))),
         Ok("resend") => {
-            let secret = match optional("LITTLEBOX_RESEND_WEBHOOK_SECRET") {
+            let secret = match optional("KONAE_RESEND_WEBHOOK_SECRET") {
                 Some(value) => Some(webhook_key(&value)?),
                 None => None,
             };
             Arc::new(ResendTransport::new(
-                &optional("LITTLEBOX_RESEND_API_URL").unwrap_or_else(|| DEFAULT_RESEND_API.into()),
-                &required("LITTLEBOX_RESEND_API_KEY")?,
-                optional("LITTLEBOX_RESEND_DOMAINS_KEY"),
+                &optional("KONAE_RESEND_API_URL").unwrap_or_else(|| DEFAULT_RESEND_API.into()),
+                &required("KONAE_RESEND_API_KEY")?,
+                optional("KONAE_RESEND_DOMAINS_KEY"),
                 secret,
             )?)
         }
         Ok("smtp") => {
-            let tls = match optional("LITTLEBOX_SMTP_TLS").as_deref() {
+            let tls = match optional("KONAE_SMTP_TLS").as_deref() {
                 None | Some("starttls") => SmtpTls::StartTls,
                 Some("implicit") => SmtpTls::Implicit,
                 Some("none") => SmtpTls::None,
-                Some(other) => anyhow::bail!("LITTLEBOX_SMTP_TLS={other} is not valid. Use starttls or implicit."),
+                Some(other) => anyhow::bail!("KONAE_SMTP_TLS={other} is not valid. Use starttls or implicit."),
             };
             let default_port = match tls {
                 SmtpTls::Implicit => "465",
                 SmtpTls::StartTls => "587",
                 SmtpTls::None => "25",
             };
-            let port = optional("LITTLEBOX_SMTP_PORT").unwrap_or_else(|| default_port.into()).parse::<u16>()?;
-            let credentials = match (optional("LITTLEBOX_SMTP_USERNAME"), optional("LITTLEBOX_SMTP_PASSWORD")) {
+            let port = optional("KONAE_SMTP_PORT").unwrap_or_else(|| default_port.into()).parse::<u16>()?;
+            let credentials = match (optional("KONAE_SMTP_USERNAME"), optional("KONAE_SMTP_PASSWORD")) {
                 (Some(user), Some(password)) => Some((user, password)),
                 (None, None) => None,
-                _ => anyhow::bail!("Set both LITTLEBOX_SMTP_USERNAME and LITTLEBOX_SMTP_PASSWORD, or neither."),
+                _ => anyhow::bail!("Set both KONAE_SMTP_USERNAME and KONAE_SMTP_PASSWORD, or neither."),
             };
-            Arc::new(SmtpTransport::new(&required("LITTLEBOX_SMTP_HOST")?, port, tls, credentials)?)
+            Arc::new(SmtpTransport::new(&required("KONAE_SMTP_HOST")?, port, tls, credentials)?)
         }
-        Ok(other) => anyhow::bail!("LITTLEBOX_MAIL_TRANSPORT={other} is not a known transport. Use resend, smtp or development."),
+        Ok(other) => anyhow::bail!("KONAE_MAIL_TRANSPORT={other} is not a known transport. Use resend, smtp or development."),
     };
     let from = match transport.name() {
-        "development" => optional("LITTLEBOX_MAIL_FROM").unwrap_or_else(|| "Littlebox <littlebox@localhost>".into()),
-        _ => required("LITTLEBOX_MAIL_FROM")?,
+        "development" => optional("KONAE_MAIL_FROM").unwrap_or_else(|| "Konae <konae@localhost>".into()),
+        _ => required("KONAE_MAIL_FROM")?,
     };
     anyhow::ensure!(
         sender_domain(&from).is_some() && !from.contains(['\r', '\n']),
-        "LITTLEBOX_MAIL_FROM must be an address such as 'Littlebox <no-reply@example.com>'."
+        "KONAE_MAIL_FROM must be an address such as 'Konae <no-reply@example.com>'."
     );
     Ok(Some((transport, from)))
 }
@@ -559,7 +559,7 @@ fn webhook_key(secret: &str) -> Result<Vec<u8>> {
     let encoded = secret.strip_prefix("whsec_").unwrap_or(secret);
     base64::engine::general_purpose::STANDARD
         .decode(encoded)
-        .map_err(|_| anyhow::anyhow!("LITTLEBOX_RESEND_WEBHOOK_SECRET is not a whsec_ signing secret."))
+        .map_err(|_| anyhow::anyhow!("KONAE_RESEND_WEBHOOK_SECRET is not a whsec_ signing secret."))
 }
 
 // ---------------------------------------------------------------------------
@@ -572,7 +572,7 @@ fn webhook_key(secret: &str) -> Result<Vec<u8>> {
 /// Deployment's validated origin. No agent-supplied text reaches a message.
 pub(crate) fn render(purpose: Purpose, app_name: &str, inviter: Option<&str>, link: &str) -> (String, String, String) {
     let name = one_line(app_name, 80);
-    let name = if name.is_empty() { "Littlebox".to_owned() } else { name };
+    let name = if name.is_empty() { "Konae".to_owned() } else { name };
     let inviter = inviter.map(|value| one_line(value, 254)).filter(|value| !value.is_empty());
     let (subject, lead, action, expiry, ignore) = match purpose {
         Purpose::Verification => (
@@ -769,7 +769,7 @@ impl MailQueue {
             return Ok(None);
         };
         let secret = mail_secret(admin_key, transport.name() == "development")?;
-        let interval = std::env::var("LITTLEBOX_MAIL_WORKER_INTERVAL_MS")
+        let interval = std::env::var("KONAE_MAIL_WORKER_INTERVAL_MS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(5000);
@@ -1239,7 +1239,7 @@ impl MailQueue {
         }))
     }
 
-    /// The unauthenticated summary on `/_littlebox/health`: no address, no
+    /// The unauthenticated summary on `/_konae/health`: no address, no
     /// provider text.
     pub(crate) fn health(&self) -> Value {
         let preflight = self.preflight();
@@ -1276,7 +1276,7 @@ pub(crate) async fn status_tool(state: &AppState, refresh: bool) -> Result<Value
         return Ok(json!({
             "transport": null,
             "sending": false,
-            "reason": "No mail transport is configured. Set LITTLEBOX_MAIL_TRANSPORT to resend, smtp or development.",
+            "reason": "No mail transport is configured. Set KONAE_MAIL_TRANSPORT to resend, smtp or development.",
         }));
     };
     if refresh {
@@ -1628,7 +1628,7 @@ pub(crate) fn end_pending_after_restore(path: &Path) -> Result<usize> {
 // Provider events
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/_littlebox/mail/resend-events", post(resend_events))
+    Router::new().route("/_konae/mail/resend-events", post(resend_events))
 }
 
 /// Checks a Svix signature: HMAC-SHA256 over `{id}.{timestamp}.{body}` with
@@ -1792,11 +1792,11 @@ mod tests {
     }
 
     fn queue_in(root: &Path, transport: Arc<dyn Transport>, limits: Limits) -> Arc<MailQueue> {
-        Arc::new(MailQueue::open(root, transport, "Littlebox <no-reply@mail.example.test>", SECRET, limits, Duration::from_millis(50)).unwrap())
+        Arc::new(MailQueue::open(root, transport, "Konae <no-reply@mail.example.test>", SECRET, limits, Duration::from_millis(50)).unwrap())
     }
 
     async fn fixture_with(transport: Arc<dyn Transport>, limits: Limits) -> Fixture {
-        let root = std::env::temp_dir().join(format!("littlebox-mail-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-mail-{}", Uuid::new_v4()));
         let app = deployment("tasks.localhost", "project-a");
         let other = deployment("notes.localhost", "project-b");
         let mut deployments = HashMap::new();
@@ -1833,7 +1833,6 @@ mod tests {
             public_origin: "http://localhost".into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(limits::Guards::new(Vec::new())),
         };
@@ -1905,7 +1904,7 @@ mod tests {
         assert_eq!(sent.len(), 1);
         let token = token_of(&sent[0]);
         assert!(!raw.windows(token.len()).any(|window| window == token.as_bytes()), "the token is not stored in clear");
-        assert!(sent[0].account.as_ref().unwrap().link.starts_with("http://tasks.localhost/_littlebox/account#verification="));
+        assert!(sent[0].account.as_ref().unwrap().link.starts_with("http://tasks.localhost/_konae/account#verification="));
         assert_eq!(sent[0].id, jobs[0].0, "the job ID is the idempotency key");
         assert_eq!(sent[0].subject, "Confirm your email for Tasks <b>& co</b>");
         assert!(sent[0].html.contains("Tasks &lt;b&gt;&amp; co&lt;/b&gt;") && !sent[0].html.contains("<b>"));
@@ -1950,7 +1949,7 @@ mod tests {
         let queue = fixture.queue();
         let auth = accounts::app_store(&fixture.state, &fixture.app).unwrap();
         let scope = auth::deployment_scope(&fixture.app.id);
-        let outbox = queue.outbox(&scope, Some("creator-1"), "Tasks", None, "http://tasks.localhost/_littlebox/account");
+        let outbox = queue.outbox(&scope, Some("creator-1"), "Tasks", None, "http://tasks.localhost/_konae/account");
         let refused = auth.request_signup_with("second@example.test", Some(&outbox), |_, _| Ok(()));
         assert!(matches!(refused, Err(AuthError::MailLimit(_))));
         assert_eq!(fixture.account_state(&fixture.app, "second@example.test"), None);
@@ -2351,14 +2350,14 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].0, id);
         assert_eq!(requests[0].1["to"], json!(["person@example.test"]));
-        assert_eq!(requests[0].1["from"], "Littlebox <no-reply@mail.example.test>");
-        assert!(requests[0].1["text"].as_str().unwrap().contains("http://tasks.localhost/_littlebox/account#verification="));
+        assert_eq!(requests[0].1["from"], "Konae <no-reply@mail.example.test>");
+        assert!(requests[0].1["text"].as_str().unwrap().contains("http://tasks.localhost/_konae/account#verification="));
         assert_eq!(provider_id.as_deref(), fake.emails.lock().unwrap().get(&id).map(String::as_str));
 
         // The Kernel stopped after Resend accepted the email and before the
         // queue recorded it. The restarted worker repeats the request with
         // the same key, and Resend answers with the same email.
-        let (nonce, sealed) = fixture.queue().key.seal(&id, "http://tasks.localhost/_littlebox/account#verification=x").unwrap();
+        let (nonce, sealed) = fixture.queue().key.seal(&id, "http://tasks.localhost/_konae/account#verification=x").unwrap();
         fixture
             .db()
             .execute(
@@ -2380,14 +2379,14 @@ mod tests {
     async fn resend_preflight_needs_a_verified_domain_and_a_key_that_can_read_it() {
         let (fake, url) = fake_resend().await;
         let transport = ResendTransport::new(&url, "re_test_key", None, None).unwrap();
-        assert_eq!(transport.preflight("Littlebox <no-reply@mail.example.test>").await, PreflightResult::Ready);
+        assert_eq!(transport.preflight("Konae <no-reply@mail.example.test>").await, PreflightResult::Ready);
         *fake.domain_status.lock().unwrap() = "pending".into();
         let pending = transport.preflight("no-reply@mail.example.test").await;
         assert!(matches!(&pending, PreflightResult::Refused(reason) if reason.contains("is pending")), "{pending:?}");
         assert!(matches!(transport.preflight("no-reply@other.example.test").await, PreflightResult::Refused(reason) if reason.contains("not a domain")));
         *fake.domain_status.lock().unwrap() = "verified".into();
         fake.domains_auth.store(401, Ordering::SeqCst);
-        assert!(matches!(transport.preflight("no-reply@mail.example.test").await, PreflightResult::Refused(reason) if reason.contains("LITTLEBOX_RESEND_DOMAINS_KEY")));
+        assert!(matches!(transport.preflight("no-reply@mail.example.test").await, PreflightResult::Refused(reason) if reason.contains("KONAE_RESEND_DOMAINS_KEY")));
         let unreachable = ResendTransport::new("http://127.0.0.1:9", "re_test_key", None, None).unwrap();
         assert!(matches!(unreachable.preflight("no-reply@mail.example.test").await, PreflightResult::Refused(_)));
     }
@@ -2493,13 +2492,13 @@ mod tests {
 
     #[test]
     fn templates_escape_the_app_name_and_strip_line_breaks() {
-        let (subject, text, html) = render(Purpose::Invitation, "Evil\r\nBcc: x@example.test <img src=x>", None, "http://app.localhost/_littlebox/account#invitation=abc");
+        let (subject, text, html) = render(Purpose::Invitation, "Evil\r\nBcc: x@example.test <img src=x>", None, "http://app.localhost/_konae/account#invitation=abc");
         assert_eq!(subject, "You are invited to Evil Bcc: x@example.test <img src=x>");
         assert!(!subject.contains(['\r', '\n']));
-        assert!(text.contains("http://app.localhost/_littlebox/account#invitation=abc"));
+        assert!(text.contains("http://app.localhost/_konae/account#invitation=abc"));
         assert!(html.contains("&lt;img src=x&gt;") && !html.contains("<img"));
         let (subject, _, _) = render(Purpose::Recovery, "  ", None, "l");
-        assert_eq!(subject, "Reset your password for Littlebox");
+        assert_eq!(subject, "Reset your password for Konae");
     }
 
     #[test]
@@ -2523,7 +2522,7 @@ mod tests {
 
     #[test]
     fn an_invitation_names_its_inviter_escaped_and_on_one_line() {
-        let link = "http://app.localhost/_littlebox/invitation#invitation=abc";
+        let link = "http://app.localhost/_konae/invitation#invitation=abc";
         let (subject, text, html) = render(Purpose::Invitation, "Tasks", Some("owner@example.test"), link);
         assert_eq!(subject, "owner@example.test invited you to Tasks");
         assert_eq!(
@@ -2555,7 +2554,7 @@ mod tests {
 
     #[test]
     fn the_mail_secret_falls_back_to_the_admin_key_but_never_the_public_default() {
-        assert!(std::env::var("LITTLEBOX_MAIL_SECRET").is_err());
+        assert!(std::env::var("KONAE_MAIL_SECRET").is_err());
         assert_eq!(mail_secret("an operator admin key", false).unwrap(), "an operator admin key");
         assert!(mail_secret(DEFAULT_ADMIN_KEY, false).is_err(), "a real provider needs a real secret");
         assert!(mail_secret(DEFAULT_ADMIN_KEY, true).is_ok(), "the development mailbox keeps working locally");
@@ -2574,7 +2573,7 @@ mod tests {
         let request = |email: &str| {
             Request::builder()
                 .method("POST")
-                .uri("/_littlebox/auth/signup")
+                .uri("/_konae/auth/signup")
                 .header(header::HOST, "tasks.localhost")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(json!({"email": email, "password": "correct horse battery"}).to_string()))

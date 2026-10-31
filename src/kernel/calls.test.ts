@@ -48,7 +48,7 @@ describe("calls between apps at the editor's door", () => {
     } }));
     expect(program.actions["inbox.tell"].call).toEqual({
       url: "https://inbox.example.org/hooks/events", method: "POST", body: { id: "taskId", title: "title" },
-      auth: { secret: "inbox_events", header: "X-Littlebox-Signature" },
+      auth: { secret: "inbox_events", header: "X-Konae-Signature" },
       then: { action: "tasks.noted", inputs: { id: "/input/taskId", notice: "/body/error" } },
     });
     expect(resolveServerAction(program, "inbox.tell", { title: "Down", taskId: 3 }, { actorId: "u" }).params).toEqual(["Down", 3]);

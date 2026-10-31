@@ -9,7 +9,7 @@ const root = path.resolve(import.meta.dir, "..");
 const read = (file: string) => readFileSync(path.join(root, file), "utf8");
 
 /** The components an app screen can use. Charts, menus, tabs, dialogs and toasts stay in the editor. */
-const kept = /^\.(ui-(button|input|select|textarea|field|badge|card|empty|skeleton|loading|alert|check|radio|avatar|progress|table|stats|spark|disclosure|list|composer|form|tile|tiles|page|eyebrow|title|lede|identity|status|section-head|code|kbd|tick)\b)/;
+const kept = /^\.(ui-(button|input|select|textarea|field|badge|card|empty|skeleton|loading|alert|check|radio|avatar|progress|table|stats|spark|disclosure|list|composer|form|actions|skip|bar|steps|pre|tile|tiles|page|eyebrow|title|lede|identity|status|section-head|code|kbd|tick)\b)/;
 const keptKeyframes = new Set(["ui-skeleton-shimmer", "ui-loading-in"]);
 
 type Block = { head: string; body: string | null; text: string };
@@ -98,7 +98,7 @@ export function renderBundles() {
   ].join("\n");
   const cleanOnly = filter([section(clean, "[data-ds=\"clean\"] {", "/* Workspace chrome"), section(clean, "/* App patterns */")].join("\n").replaceAll('[data-ds="clean"]', ":root"));
   const brutalFonts = ":root { --ds-font: \"Bricolage Grotesque\", ui-sans-serif, system-ui, sans-serif; --ds-mono: \"JetBrains Mono\", ui-monospace, \"SF Mono\", Menlo, monospace; }";
-  const header = (fonts: string) => `@import url('https://fonts.googleapis.com/css2?${fonts}&display=swap');\n/* Littlebox design system. Change a token on :root to restyle the app. */\n`;
+  const header = (fonts: string) => `@import url('https://fonts.googleapis.com/css2?${fonts}&display=swap');\n/* Konae design system. Change a token on :root to restyle the app. */\n`;
   return {
     brutal: `${header("family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=JetBrains+Mono:wght@400..700")}${common}\n${brutalFonts}\n${base}\n`,
     clean: `${header("family=Inter:wght@400..700")}${common}\n${cleanOnly}\n${base}\n`,

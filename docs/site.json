@@ -1,0 +1,44 @@
+{
+  "title": "Konae docs",
+  "summary": "Konae lets a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged. These docs cover the Capsule's files, Server Actions, the Validation Gate and Kernel, accounts, the CLI and MCP tools, with task guides. Start with the overview, then the rules and pieces topics of the MCP tool platform_guide.",
+  "repository": "https://github.com/danibram/konae",
+  "nav": [
+    { "section": "Start", "pages": [{ "page": "README.md", "label": "Overview" }, "concepts.md"] },
+    { "section": "Build", "pages": ["capsule.md", "server-actions.md", "gate-and-kernel.md", "accounts-and-access.md"] },
+    { "section": "Guides", "pages": [
+      "guides/first-app-from-the-editor.md",
+      "guides/edit-files-with-the-cli.md",
+      "guides/add-a-server-action.md",
+      "guides/refuse-a-write-with-guard.md",
+      "guides/email-when-a-row-changes.md",
+      "guides/run-work-on-a-schedule.md",
+      "guides/receive-a-webhook.md",
+      "guides/call-another-service.md",
+      "guides/upload-files.md",
+      "guides/invite-people.md",
+      "guides/give-the-app-an-address.md",
+      "guides/take-the-app-elsewhere.md",
+      "guides/eject.md"
+    ] },
+    { "section": "Reference", "pages": [
+      "cli.md",
+      { "page": "mcp-tools.md", "label": "MCP tools and guide topics" },
+      { "page": "mcp.md", "label": "MCP guide" },
+      { "page": "mcp-walkthrough.md", "label": "MCP walkthrough" },
+      { "page": "sdk.md", "label": "SDK" },
+      "pieces.md",
+      "limits.md",
+      "divergences.md",
+      "design-system.md"
+    ] },
+    { "section": "Operate", "pages": [
+      "operate.md",
+      { "page": "architecture.md", "label": "Architecture" },
+      "clerk-creator-access.md",
+      { "page": "adr/README.md", "label": "Decision records" }
+    ] },
+    { "section": "Examples", "pages": ["examples.md"] }
+  ],
+  "include": ["adr"],
+  "routes": { "mcp.md": "mcp-guide" }
+}

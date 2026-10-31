@@ -2,7 +2,7 @@
 // Decides the matrix cells for search, pagination and sorting, counters and
 // aggregates, the public read API from another origin, and the keyed write API.
 //
-//   LITTLEBOX_PROBE_PORT=23000 bun run examples/probes/dataset/replay.ts
+//   KONAE_PROBE_PORT=23000 bun run examples/probes/dataset/replay.ts
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";

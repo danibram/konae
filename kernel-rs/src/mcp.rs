@@ -9,9 +9,9 @@ const MAX_TRANSFER: usize = 32 * 1024 * 1024;
 pub(super) fn owner_cookie_name(state: &AppState) -> &'static str {
     let mcp_https = state.mcp_origin.as_deref().is_some_and(|origin| origin.starts_with("https://"));
     if state.public_origin.starts_with("https://") || mcp_https {
-        "__Host-littlebox_owner_session"
+        "__Host-konae_owner_session"
     } else {
-        "littlebox_owner_session"
+        "konae_owner_session"
     }
 }
 const MAX_OWNER_TRANSFERS: usize = 128;
@@ -34,13 +34,13 @@ const AUDIT_TEXT_CHARACTERS: usize = 128;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/mcp", post(admin))
-        .route("/_littlebox/mcp", post(runtime))
-        .route("/_littlebox/owner/login", get(owner_page).post(owner_login))
-        .route("/_littlebox/owner/signup", post(owner_signup))
-        .route("/_littlebox/owner/logout", post(owner_logout))
-        .route("/_littlebox/owner/config", get(owner_config))
-        .route("/_littlebox/owner/session", get(owner_session))
-        .route("/_littlebox/owner/clerk", post(owner_clerk))
+        .route("/_konae/mcp", post(runtime))
+        .route("/_konae/owner/login", get(owner_page).post(owner_login))
+        .route("/_konae/owner/signup", post(owner_signup))
+        .route("/_konae/owner/logout", post(owner_logout))
+        .route("/_konae/owner/config", get(owner_config))
+        .route("/_konae/owner/session", get(owner_session))
+        .route("/_konae/owner/clerk", post(owner_clerk))
 }
 
 pub(super) fn store(state: &AppState) -> Result<Connection> {
@@ -331,7 +331,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     let mut tools = vec![
         tool(
             "platform_describe",
-            "Read Littlebox capabilities and local development instructions.",
+            "Read Konae capabilities and local development instructions.",
             json!({}),
             &[],
             true,
@@ -389,7 +389,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     ];
     if owner.scopes.iter().any(|s| s == "write") {
         tools.extend([
-            tool("project_create", "Register a project and return a template's files, the ones littlebox init writes: template is tasks, notes (the default), members, form, webhook, digest or gallery, and without a manifest the project takes the template's visibility. Write the files into the folder and keep id, slug and manifest in littlebox.json. For an editor project, upload its JSON without a projectId and pass sourcesTransferId to create the project and its files atomically. Repeating the same initial files is safe; existing saved files cannot be replaced here.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourceAuthority":{"type":"string","enum":["managed","external"]},"sourcesTransferId":text,"template":{"type":"string","enum":["tasks","notes","members","form","webhook","digest","gallery"]}}), &["name"], false),
+            tool("project_create", "Register a project and return a template's files, the ones konae init writes: template is tasks, notes (the default), members, form, webhook, digest or gallery, and without a manifest the project takes the template's visibility. Write the files into the folder and keep id, slug and manifest in konae.json. For an editor project, upload its JSON without a projectId and pass sourcesTransferId to create the project and its files atomically. Repeating the same initial files is safe; existing saved files cannot be replaced here.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourceAuthority":{"type":"string","enum":["managed","external"]},"sourcesTransferId":text,"template":{"type":"string","enum":["tasks","notes","members","form","webhook","digest","gallery"]}}), &["name"], false),
             tool("project_sources_save", "Save Managed project sources if the expected source revision still matches. Upload the project JSON first: { id, name, slug, files: { path: text }, directories, databaseModel: { source, acceptedSource, revision }, manifest, updatedAt }, the format the editor saves and docs/mcp.md describes under Eject.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
             tool("project_delete", "Delete a project for good: its registry entry, saved editor files and secrets, and, when it is published, its Deployment with the database, app accounts, uploaded files, backups and custom domain. The address stops answering at once. name must equal the project's name. Read back with projects_list.", json!({"projectId":text,"name":text}), &["projectId","name"], false),
             tool("schema_plan", "Derive and validate SQL from two Drizzle models in an isolated subprocess.", json!({"acceptedSource":text,"candidateSource":text,"projectId":text}), &["acceptedSource","candidateSource"], false),
@@ -771,7 +771,7 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
             Ok(Some(owner)) => owner,
             _ => return unauthorized(&state, &headers),
         };
-        if headers.get("x-littlebox-owner-id").is_some_and(|expected| expected.as_bytes() != authenticated.id.as_bytes()) {
+        if headers.get("x-konae-owner-id").is_some_and(|expected| expected.as_bytes() != authenticated.id.as_bytes()) {
             return error(StatusCode::CONFLICT, "The signed-in owner changed. Reload before continuing.");
         }
         principal = format!("owner:{}", authenticated.id);
@@ -816,7 +816,7 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
     let mut session_cookie: Option<HeaderValue> = None;
     let result = match method {
         "initialize" => Ok(
-            json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"littlebox","version":"0.1.0"},"instructions":"Use project-scoped credentials. Source and builds stay on your computer. Call platform_describe, then platform_guide topics rules and pieces before building. After every write, use the read-back that rules names."}),
+            json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"konae","version":"0.1.0"},"instructions":"Use project-scoped credentials. Source and builds stay on your computer. Call platform_describe, then platform_guide topics rules and pieces before building. After every write, use the read-back that rules names."}),
         ),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools":tools})),
@@ -1096,7 +1096,7 @@ fn audit_partition(actor: &str) -> (String, String) {
 }
 
 fn unauthorized(state: &AppState, headers: &HeaderMap) -> Response {
-    let mut response = error(StatusCode::UNAUTHORIZED, "Sign in to use Littlebox MCP.");
+    let mut response = error(StatusCode::UNAUTHORIZED, "Sign in to use Konae MCP.");
     let metadata = format!(
         "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"",
         super::oauth::origin(state, headers)
@@ -1181,7 +1181,7 @@ fn validate_arguments(value: &Value, schema: &Value) -> Result<()> {
 
 fn internal_request(state: &AppState, body: Value) -> Request {
     Request::builder()
-        .header("x-littlebox-admin-key", &state.admin_key)
+        .header("x-konae-admin-key", &state.admin_key)
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
         .unwrap()
@@ -1217,15 +1217,15 @@ async fn admin_call(
         "platform_guide" => super::guide::topic(a["topic"].as_str().unwrap()),
         "platform_describe" => Ok(
             json!({
-                "name":"Littlebox",
+                "name":"Konae",
                 "protocolVersion":VERSION,
                 "sourceAuthority":"external",
-                "runtimeEndpoint":"/_littlebox/mcp",
+                "runtimeEndpoint":"/_konae/mcp",
                 "chunkBytes":CHUNK,
                 "maxTransferBytes":MAX_TRANSFER,
                 "files":{"quotaBytes":state.files.limits.quota_bytes,"maxFileBytes":state.files.limits.max_file_bytes},
                 "yardstick":"A person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.",
-                "firstRun":"platform_guide topic rules, then pieces, then credentials. Publish with the publishing topic or bun run littlebox -- publish, then project_inspect and one actions_invoke.",
+                "firstRun":"platform_guide topic rules, then pieces, then credentials. Publish with the publishing topic or bun run konae -- publish, then project_inspect and one actions_invoke.",
                 "workflow":[
                     "platform_guide topic rules",
                     "platform_guide topic pieces",
@@ -1240,7 +1240,7 @@ async fn admin_call(
                 ],
                 "guideTopics":super::guide::TOPICS,
                 "runtimeTools":["auth_session","actions_invoke","files_list","files_read","files_upload","files_update","files_delete"],
-                "localDevelopment":"Use bun run littlebox -- init, dev, build, contract, login, publish, pull, sql, conform, export or eject; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything."
+                "localDevelopment":"Use bun run konae -- init, dev, build, contract, login, publish, pull, sql, conform, export or eject; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything."
             }),
         ),
         "mail_status" => super::mail::status_tool(state, a["refresh"].as_bool().unwrap_or(false)).await,
@@ -1773,7 +1773,7 @@ fn signup_policy_value(deployment: &Deployment) -> Value {
 
 /// The Capsule a project is born as: one of the templates in
 /// project-templates.json, which `bun run templates:render` writes from the
-/// editor's templates and `littlebox init` reads too.
+/// editor's templates and `konae init` reads too.
 fn project_template(id: Option<&str>) -> Result<Value> {
     let all: Value = serde_json::from_str(include_str!("project-templates.json"))?;
     let id = id.or(all["default"].as_str()).unwrap_or_default();
@@ -1812,13 +1812,13 @@ pub(super) async fn model_schema(source: &str) -> Result<Connection> {
     let expected = Connection::open_in_memory()?;
     if source.trim().is_empty() { return Ok(expected); }
     // The temporary table lets Drizzle derive additions from a valid model.
-    let baseline = "import { sqliteTable as lbProofTable, integer as lbProofInteger } from \"drizzle-orm/sqlite-core\"; export const lbSchemaProof = lbProofTable(\"__littlebox_schema_proof\", { id: lbProofInteger(\"id\") });";
+    let baseline = "import { sqliteTable as lbProofTable, integer as lbProofInteger } from \"drizzle-orm/sqlite-core\"; export const lbSchemaProof = lbProofTable(\"__konae_schema_proof\", { id: lbProofInteger(\"id\") });";
     let plan = schema_plan(json!({"acceptedSource":baseline,"candidateSource":format!("{source}\n{baseline}")})).await?;
-    expected.execute_batch("CREATE TABLE __littlebox_schema_proof(id INTEGER)")?;
+    expected.execute_batch("CREATE TABLE __konae_schema_proof(id INTEGER)")?;
     for sql in plan["statements"].as_array().into_iter().flatten() {
         expected.execute_batch(sql.as_str().unwrap_or_default())?;
     }
-    expected.execute_batch("DROP TABLE __littlebox_schema_proof")?;
+    expected.execute_batch("DROP TABLE __konae_schema_proof")?;
     Ok(expected)
 }
 
@@ -1987,7 +1987,7 @@ pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> R
     for path in input.artifact.files.keys() {
         anyhow::ensure!(
             safe_relative_path(path)
-                && !path.starts_with("_littlebox/")
+                && !path.starts_with("_konae/")
                 && !path.starts_with("oauth/")
                 && !path.starts_with(".well-known/")
                 && path != "mcp",
@@ -2448,19 +2448,19 @@ async fn transfer_call(
 }
 
 pub(super) async fn schema_plan(input: Value) -> Result<Value> {
-    let root = std::env::var("LITTLEBOX_SOURCE_ROOT")
+    let root = std::env::var("KONAE_SOURCE_ROOT")
         .map(PathBuf::from)
         .unwrap_or(std::env::current_dir()?);
-    let helper = std::env::var("LITTLEBOX_DERIVE_HELPER")
+    let helper = std::env::var("KONAE_DERIVE_HELPER")
         .ok()
         .filter(|value| !value.is_empty());
-    let bind = std::env::var("LITTLEBOX_BIND").unwrap_or_else(|_| "127.0.0.1".into());
+    let bind = std::env::var("KONAE_BIND").unwrap_or_else(|_| "127.0.0.1".into());
     let hosts = super::hosts::from_env()?;
     let public_origin = hosts.public_origin;
     let mcp_origin = hosts.mcp_origin.unwrap_or_default();
     if helper.is_none() && super::derive_must_isolate(&bind, &public_origin, &mcp_origin) {
         anyhow::bail!(
-            "Schema derivation needs LITTLEBOX_DERIVE_HELPER on a Kernel that is not loopback-only."
+            "Schema derivation needs KONAE_DERIVE_HELPER on a Kernel that is not loopback-only."
         );
     }
     let mut command = if let Some(helper) = helper {
@@ -2468,7 +2468,7 @@ pub(super) async fn schema_plan(input: Value) -> Result<Value> {
         command.current_dir("/tmp");
         command
     } else {
-        let bun = std::env::var("LITTLEBOX_BUN_PATH").unwrap_or_else(|_| "bun".into());
+        let bun = std::env::var("KONAE_BUN_PATH").unwrap_or_else(|_| "bun".into());
         let mut command = tokio::process::Command::new(bun);
         command
             .arg("run")
@@ -2504,7 +2504,7 @@ pub(super) async fn schema_plan(input: Value) -> Result<Value> {
     let output = String::from_utf8(output)?;
     let reply: Value = serde_json::from_str(
         output
-            .rsplit("<<littlebox-schema-reply>>")
+            .rsplit("<<konae-schema-reply>>")
             .next()
             .unwrap_or(""),
     )?;
@@ -2826,7 +2826,7 @@ mod tests {
 
     #[tokio::test]
     async fn visitors_cannot_hold_the_transfers_signed_in_users_need() {
-        let root = std::env::temp_dir().join(format!("littlebox-visitor-transfers-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-visitor-transfers-{}", Uuid::new_v4()));
         let (state, _) = crate::tests::login_test_state(&root, "public").await;
         let begin = |principal: String| { let state = state.clone(); async move { new_transfer(&state, &principal, json!({"direction": "download", "size": 1})).await } };
         for client in 0..MAX_VISITOR_TRANSFERS / MAX_RUNTIME_PRINCIPAL_TRANSFERS {
@@ -2850,7 +2850,7 @@ mod tests {
     /// the installation's per-file limit and names it.
     #[tokio::test]
     async fn a_runtime_upload_is_bounded_by_the_configured_per_file_limit() {
-        let root = std::env::temp_dir().join(format!("littlebox-runtime-limit-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-runtime-limit-{}", Uuid::new_v4()));
         let (mut state, _) = crate::tests::login_test_state(&root, "public").await;
         state.files.limits = crate::file_store::FileLimits::parse(Some("10485760"), Some("5242880")).unwrap();
         let schema = transfer_tools(true).into_iter().find(|tool| tool["name"] == "transfer_begin").unwrap()["inputSchema"].clone();
@@ -2867,7 +2867,7 @@ mod tests {
 
     #[tokio::test]
     async fn deleting_a_project_takes_its_deployment_files_and_address_with_it() {
-        let root = std::env::temp_dir().join(format!("littlebox-delete-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-delete-{}", Uuid::new_v4()));
         let (state, _) = crate::tests::login_test_state(&root, "public").await;
         let deployment = state.deployments.read().await.values().next().unwrap().clone();
         persist_deployment(&state, &deployment).await.unwrap();
@@ -2905,7 +2905,7 @@ mod tests {
 
     #[tokio::test]
     async fn app_users_cannot_push_an_owners_rows_out_of_the_audit_log() {
-        let root = std::env::temp_dir().join(format!("littlebox-audit-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-audit-{}", Uuid::new_v4()));
         let (state, _) = crate::tests::login_test_state(&root, "public").await;
         let ok: Result<Value> = Ok(json!({}));
         audit(&state, "owner:ana", "project_create", &json!({"projectId": "p1"}), None, None, &ok);
@@ -2982,7 +2982,7 @@ mod tests {
         let (client_id, client_secret) = (file["context"]["clientId"].as_str().unwrap(), file["context"]["clientSecret"].as_str().unwrap());
         for case in file["cases"].as_array().unwrap() {
             let name = case["case"].as_str().unwrap();
-            let root = std::env::temp_dir().join(format!("littlebox-google-cases-{}", Uuid::new_v4()));
+            let root = std::env::temp_dir().join(format!("konae-google-cases-{}", Uuid::new_v4()));
             std::fs::create_dir_all(&root).unwrap();
             let state = AppState {
                 deployments: Arc::new(RwLock::new(HashMap::new())),
@@ -2998,7 +2998,6 @@ mod tests {
                 public_origin: "http://localhost:8790".into(),
                 mcp_origin: None,
                 path_origin: None,
-                home_deployment: None,
                 host_suffix: "localhost".into(),
                 guards: Arc::new(Guards::new(Vec::new())),
             };
@@ -3036,7 +3035,7 @@ mod tests {
 
     #[test]
     fn sign_in_methods_set_keeps_password_and_refuses_google_without_the_apps_client() {
-        let root = std::env::temp_dir().join(format!("littlebox-methods-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-methods-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let state = AppState {
             deployments: Arc::new(RwLock::new(HashMap::new())),
@@ -3052,7 +3051,6 @@ mod tests {
             public_origin: "http://localhost:8790".into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };
@@ -3080,7 +3078,7 @@ mod tests {
         let value = sign_in_methods_value(&state, &deployment);
         assert_eq!(value["googleClient"], json!({"clientIdSet": true, "clientSecretSet": true}));
         assert_eq!(value["offered"], json!(["password", "google"]));
-        assert_eq!(value["redirectUris"], json!(["http://practice.localhost:8790/_littlebox/auth/google/callback"]));
+        assert_eq!(value["redirectUris"], json!(["http://practice.localhost:8790/_konae/auth/google/callback"]));
         assert!(!value.to_string().contains("GOCSPX"));
         // Deleting a Google secret while Google is on is refused.
         let deleted = super::super::http::secrets_call(&db, "p1", Some(&deployment), "secret_delete", &json!({"name": "google_client_secret"}));
@@ -3095,7 +3093,7 @@ mod tests {
 
     #[tokio::test]
     async fn app_users_cannot_take_the_transfer_slots_owners_need() {
-        let root = std::env::temp_dir().join(format!("littlebox-quota-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-quota-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&root).await.unwrap();
         let state = AppState {
             deployments: Arc::new(RwLock::new(HashMap::new())),
@@ -3111,7 +3109,6 @@ mod tests {
             public_origin: "http://localhost".into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };
@@ -3161,7 +3158,7 @@ mod tests {
     /// contract opens to signed-out visitors must use only the tools they get.
     #[tokio::test]
     async fn platform_guide_sdk_topic_is_the_rendered_contract() {
-        let root = std::env::temp_dir().join(format!("littlebox-guide-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-guide-{}", Uuid::new_v4()));
         let state = AppState {
             deployments: Arc::new(RwLock::new(HashMap::new())),
             db_locks: LockMap::default(),
@@ -3176,7 +3173,6 @@ mod tests {
             public_origin: "http://localhost".into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };

@@ -438,7 +438,7 @@ function parseSignal(name: string, kind: "query" | "mutation" | "signal", bindin
 // kernel-rs/src/http.rs `binding`. kernel-rs/src/http-binding-cases.json
 // holds the cases both test suites run.
 const HTTP_PATH = /^(\/[A-Za-z0-9._~-]+)+$/;
-const RESERVED_SEGMENTS = new Set(["_littlebox", "oauth", ".well-known", "mcp"]);
+const RESERVED_SEGMENTS = new Set(["_konae", "oauth", ".well-known", "mcp"]);
 
 function parseHttpBinding(name: string, kind: "query" | "mutation" | "signal", access: "anonymous" | "authenticated", value: unknown, bindings: ActionBinding[]): HttpBinding {
   if (kind === "signal") {
@@ -461,7 +461,7 @@ function parseHttpBinding(name: string, kind: "query" | "mutation" | "signal", a
     throw refusal("route.path-invalid", `Action ${name} has an invalid http path. Use a leading "/" and segments of letters, digits, ".", "_", "~" or "-", up to 200 characters.`);
   }
   if (RESERVED_SEGMENTS.has(segments[0].toLowerCase())) {
-    throw refusal("route.path-reserved", `Action ${name} binds the reserved path ${path}. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel.`);
+    throw refusal("route.path-reserved", `Action ${name} binds the reserved path ${path}. Paths under /_konae, /oauth, /.well-known and /mcp belong to the Kernel.`);
   }
   const binding: HttpBinding = { method: record.method, path };
   if (record.signature !== undefined) binding.signature = parseRouteSignature(name, record.method, record.signature);

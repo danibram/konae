@@ -6,7 +6,7 @@ import { setDefaultTimeout } from "bun:test";
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildLocal } from "../scripts/littlebox";
+import { buildLocal } from "../scripts/konae";
 import { McpClient } from "../src/mcp/client";
 import { buildKernel, freshClient, password, release, startKernel, type Kernel } from "./migration-kernel";
 
@@ -45,7 +45,7 @@ export function testPort(variable: string, base: number) {
 
 export async function startLab(port: number, env: Record<string, string> = {}): Promise<Lab> {
   await buildKernel();
-  const root = await mkdtemp(path.join(tmpdir(), "littlebox-security-review-"));
+  const root = await mkdtemp(path.join(tmpdir(), "konae-security-review-"));
   const kernel = await startKernel({ port, data: path.join(root, "data"), setupKey: crypto.randomUUID(), ownerEmail: "owner@review.test", env });
   const apps = {} as Lab["apps"];
   const secrets: Record<string, string> = {};
@@ -88,14 +88,14 @@ export function hostFetch(lab: Lab, hostname: string, route: string, init: Reque
 
 /** Signs a new app user up on an Open app and returns the session cookie. */
 export async function appUser(lab: Lab, app: App, email = `${crypto.randomUUID().slice(0, 8)}@review.test`) {
-  const response = await hostFetch(lab, app.hostname, "/_littlebox/auth/signup", { method: "POST", body: JSON.stringify({ email, password }) });
+  const response = await hostFetch(lab, app.hostname, "/_konae/auth/signup", { method: "POST", body: JSON.stringify({ email, password }) });
   if (response.status !== 200) throw Error(`Signup for ${email} answered ${response.status}: ${await response.text()}`);
   return { email, cookie: response.headers.get("set-cookie")!.split(";")[0], token: response.headers.get("set-cookie")!.split(";")[0].split("=")[1] };
 }
 
 /** A runtime MCP client on an app host, with a session cookie or none. */
 export function runtimeClient(lab: Lab, hostname: string, cookie?: string, client = freshClient()) {
-  return new McpClient(`${lab.kernel.url}/_littlebox/mcp`, { fetch: (input, init) => {
+  return new McpClient(`${lab.kernel.url}/_konae/mcp`, { fetch: (input, init) => {
     const headers = new Headers(init?.headers);
     headers.set("host", hostname);
     headers.set("x-forwarded-for", client);
@@ -105,7 +105,7 @@ export function runtimeClient(lab: Lab, hostname: string, cookie?: string, clien
 }
 
 /** One raw JSON-RPC tools/call to an MCP endpoint, returning status and parsed body. */
-export async function rawCall(lab: Lab, route: "/mcp" | "/_littlebox/mcp", hostname: string, name: string, args: object, headers: Record<string, string> = {}) {
+export async function rawCall(lab: Lab, route: "/mcp" | "/_konae/mcp", hostname: string, name: string, args: object, headers: Record<string, string> = {}) {
   const response = await hostFetch(lab, hostname, route, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...headers },

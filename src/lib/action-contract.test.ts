@@ -149,7 +149,7 @@ describe("action contract for the product-fit examples", () => {
     expect(mine.errors.map((error) => error.message)).toContain("authentication-required");
     const add = contract.actions.find((action) => action.name === "items.add")!;
     expect(add.errors.map((error) => error.message)).toEqual([
-      "Sign in to use Littlebox MCP.",
+      "Sign in to use Konae MCP.",
       "Unexpected action input: <key>",
       "Missing action input: title",
       "title must be a non-empty string.",

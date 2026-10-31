@@ -79,14 +79,14 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
           </div>
           {external.length > 0 && <section className="dashboard-app-group" aria-label="External projects">
             <h2>External projects <small>{external.length}</small></h2>
-            <p>These projects keep their sources on their owner's computer. Publish them with the Littlebox command line.</p>
+            <p>These projects keep their sources on their owner's computer. Publish them with the Konae command line.</p>
             <div className="project-grid">
               {external.map((item) => {
                 const deployment = deployments[item.id];
                 return <Card key={item.id} className="project-card">
                   <div className="project-card-body">
                     <div className="project-card-title"><h2>{item.name}</h2><Badge>External</Badge></div>
-                    <p>{deployment ? "Published. Its sources are edited outside Littlebox." : "Not published yet."}</p>
+                    <p>{deployment ? "Published. Its sources are edited outside Konae." : "Not published yet."}</p>
                     {deployment && <footer>
                       <a href={deployment.url} target="_blank" rel="noopener"><ExternalLink size={13} /> Open published app</a>
                       <a href={`/usage?deployment=${encodeURIComponent(deployment.id)}`}>Usage</a>
@@ -96,7 +96,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
               })}
             </div>
           </section>}
-          {drafts.some((draft) => !missing.some((item) => item.id === draft.id)) && <details className="local-copies"><summary>Copies saved in this browser</summary><p>Earlier versions of Littlebox kept apps in the browser. These copies are not in your account. Import one to edit it here, or remove it from this browser.</p><ul>{drafts.map((draft, index) => !missing.some((item) => item.id === draft.id) && <li key={`${draft.id}-${index}`}><span>{draft.name}</span> <Button size="sm" onClick={() => onImportDraft(index)}>Import as new</Button> <Button size="sm" variant="ghost" onClick={() => onDismissDraft(index)}>Remove from this browser</Button></li>)}</ul></details>}
+          {drafts.some((draft) => !missing.some((item) => item.id === draft.id)) && <details className="local-copies"><summary>Copies saved in this browser</summary><p>Earlier versions of Konae kept apps in the browser. These copies are not in your account. Import one to edit it here, or remove it from this browser.</p><ul>{drafts.map((draft, index) => !missing.some((item) => item.id === draft.id) && <li key={`${draft.id}-${index}`}><span>{draft.name}</span> <Button size="sm" onClick={() => onImportDraft(index)}>Import as new</Button> <Button size="sm" variant="ghost" onClick={() => onDismissDraft(index)}>Remove from this browser</Button></li>)}</ul></details>}
 
           <div className="project-list-heading">
             <div><p>All projects</p><strong>{projectCount} project{projectCount === 1 ? "" : "s"}</strong>{interrupted.length > 0 && <p>{projects.length} editable · {interrupted.length} without editor files{external.length > 0 ? ` · ${external.length} external` : ""}</p>}</div>
@@ -131,7 +131,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
           })}
           {interrupted.length > 0 && <section className="dashboard-app-group dashboard-recovery" aria-label="Apps without editor files">
             <h2>Apps without editor files <small>{interrupted.length}</small></h2>
-            <p>Your account has these apps, but the files the editor needs were never saved with them, so they cannot open here. A published app keeps running and keeps its data. An older version of Littlebox could leave an app like this when a save was cut off.</p>
+            <p>Your account has these apps, but the files the editor needs were never saved with them, so they cannot open here. A published app keeps running and keeps its data. An older version of Konae could leave an app like this when a save was cut off.</p>
             <div className="project-grid">
             {interrupted.map((item) => {
               const draftIndex = drafts.findIndex((draft) => draft.id === item.id);
@@ -141,7 +141,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
                   <div className="project-card-title"><h2>{item.name}</h2><Badge tone="warning">No editor files</Badge></div>
                   {draftIndex >= 0
                     ? <p>This browser holds a copy of its files. Restore it to edit the app here.</p>
-                    : <p>This browser holds no copy. If you edited it in another browser, open Littlebox there. If you do not need it, delete it.</p>}
+                    : <p>This browser holds no copy. If you edited it in another browser, open Konae there. If you do not need it, delete it.</p>}
                   <footer>
                     {draftIndex >= 0 && <Button size="sm" onClick={() => onImportDraft(draftIndex)}>Restore editor files</Button>}
                     {deployment && <a href={deployment.url} target="_blank" rel="noopener"><ExternalLink size={13} /> Open published app</a>}
@@ -155,7 +155,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, external
           {projectCount === 0 && <div className="projects-empty"><strong>No projects yet</strong><p>Create one and describe what it should do.</p></div>}
           <section className="take-it-group" aria-labelledby="take-it-heading">
             <h2 id="take-it-heading">Take it with you</h2>
-            <p>Open a project, then Export or Deploy. To edit a project's code outside Littlebox, Eject it. Its hosted app keeps running.</p>
+            <p>Open a project, then Export or Deploy. To edit a project's code outside Konae, Eject it. Its hosted app keeps running.</p>
             {managed.length > 0 && <ul>{managed.map((project) => <li key={project.id}><span>{project.name}</span><Button size="sm" onClick={() => setEjecting(project)}>Eject…</Button></li>)}</ul>}
           </section>
         </section>
@@ -289,7 +289,7 @@ function ProjectCard({ project, deployment, external, index, onOpen }: {
 
 function posterLines(project: MiniAppProject): string[] {
   const html = project.files["index.html"] ?? "";
-  if (project.id === "app_littlebox_architecture" || html.includes("data-map=\"leaves\"")) {
+  if (project.id === "app_konae_architecture" || html.includes("data-map=\"leaves\"")) {
     return ["Export and Deploy", "Accounts, rows, and rules leave together."];
   }
   if (html.includes("Add one small thing")) return ["Add one small thing…", "The list stops at 100 rows."];

@@ -1,6 +1,6 @@
 # Probes
 
-Small Capsules that decide the cells of the [capability matrix](../../docs/research/capability-matrix.md) no [showcase](../showcase/README.md) replay proves. Each folder holds a Capsule (`index.html`, `app.js`, `schema.sql`, `actions.json`), or one per app in its own subfolder, and a `replay.ts` that publishes it on its own Kernel, asserts every answer the matrix quotes, and removes the Kernel and its data when it exits. `_kit.ts` is the harness they share, and `_dns.ts` is a fake DNS resolver on a local UDP port that the custom domain replays hand to the Kernel as `LITTLEBOX_DNS_RESOLVER`.
+Small Capsules that decide the cells of the [capability matrix](../../docs/research/capability-matrix.md) no [showcase](../showcase/README.md) replay proves. Each folder holds a Capsule (`index.html`, `app.js`, `schema.sql`, `actions.json`), or one per app in its own subfolder, and a `replay.ts` that publishes it on its own Kernel, asserts every answer the matrix quotes, and removes the Kernel and its data when it exits. `_kit.ts` is the harness they share, and `_dns.ts` is a fake DNS resolver on a local UDP port that the custom domain replays hand to the Kernel as `KONAE_DNS_RESOLVER`.
 
 | Probe | What it is | Cells |
 | --- | --- | --- |
@@ -19,9 +19,9 @@ Run them all, each on its own port from 23000:
 
 ```sh
 bun run examples/probes/replay-all.ts
-LITTLEBOX_PROBE_BASE_PORT=23100 bun run examples/probes/replay-all.ts
+KONAE_PROBE_BASE_PORT=23100 bun run examples/probes/replay-all.ts
 ```
 
-Run one with `LITTLEBOX_PROBE_PORT=23000 bun run examples/probes/dataset/replay.ts`. Each replay compiles the Kernel with `cargo build --offline` unless `LITTLEBOX_KERNEL_BIN` names a Kernel binary already built from the same sources. The probes do not open Chrome. The schedule probe starts its Kernel with `LITTLEBOX_SCHEDULE_MIN_SECONDS=2`, which `_kit.ts` passes through, so a schedule declared every 5 minutes runs every 2 seconds.
+Run one with `KONAE_PROBE_PORT=23000 bun run examples/probes/dataset/replay.ts`. Each replay compiles the Kernel with `cargo build --offline` unless `KONAE_KERNEL_BIN` names a Kernel binary already built from the same sources. The probes do not open Chrome. The schedule probe starts its Kernel with `KONAE_SCHEDULE_MIN_SECONDS=2`, which `_kit.ts` passes through, so a schedule declared every 5 minutes runs every 2 seconds.
 
 A probe asserts what the Kernel answers today, refusals included. Where a probe pins an answer the matrix calls a gap, fixing the gap fails the probe on purpose; update the probe and the matrix cell together. The platform probe asserted until 2026-11-07 that both doors accepted and ignored a `"schedule"` and a `"subscribe"` key; it now asserts the refusals both doors give.

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { checkPackageManifest, packageComponentLimits } from "./portable-package";
 
 const manifest = () => ({
-  format: "littlebox-package", version: 1, packageId: "p", createdAt: 1, deploymentId: "d", projectId: "app",
+  format: "konae-package", version: 1, packageId: "p", createdAt: 1, deploymentId: "d", projectId: "app",
   visibility: "private", publishedRevision: 1, excluded: [],
   contents: [{ name: "database", size: 4096, sha256: "a".repeat(64) }],
 });
@@ -25,7 +25,7 @@ describe("package manifests", () => {
       ["Only a version 2 package", (value) => ({ ...value, migration: { operationId: "op", confirmationHash: "c".repeat(64) } })],
       ["no valid operation ID", (value) => ({ ...value, version: 2, migration: { operationId: "../x", confirmationHash: "c".repeat(64) } })],
       ["no valid confirmation hash", (value) => ({ ...value, version: 2, migration: { operationId: "op", confirmationHash: "not a hash" } })],
-      ["not a Littlebox package manifest", (value) => ({ ...value, format: "zip" })],
+      ["not a Konae package manifest", (value) => ({ ...value, format: "zip" })],
       ["Unknown package component secrets", (value) => ({ ...value, contents: [...value.contents, { name: "secrets", size: 1, sha256: "a".repeat(64) }] })],
       ["twice", (value) => ({ ...value, contents: [...value.contents, value.contents[0]] })],
       ["its limit is", (value) => ({ ...value, contents: [{ ...value.contents[0], size: packageComponentLimits.database + 1 }] })],

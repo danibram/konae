@@ -17,7 +17,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
   }
 
   componentDidCatch(error: unknown, info: ErrorInfo) {
-    console.error("Littlebox editor crashed", error, info.componentStack);
+    console.error("Konae editor crashed", error, info.componentStack);
   }
 
   render() {

@@ -6,4 +6,4 @@ document.querySelector('#list').innerHTML = rows.map(r => `<li class="${r.resolv
 // The badge is an uploaded file. The page embeds it from the Kernel's file
 // read path with its own session or, on this public app, as a visitor.
 const [badge] = await miniapp.actions.call('badge.current');
-if (badge) { const img = document.createElement('img'); img.src = `/_littlebox/files/${encodeURIComponent(badge.file_id)}`; img.alt = 'Status badge'; img.width = 32; img.height = 32; document.querySelector('#badge').append(img); }
+if (badge) { const img = document.createElement('img'); img.src = `/_konae/files/${encodeURIComponent(badge.file_id)}`; img.alt = 'Status badge'; img.width = 32; img.height = 32; document.querySelector('#badge').append(img); }

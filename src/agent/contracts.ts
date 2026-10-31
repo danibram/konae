@@ -166,7 +166,7 @@ export type ApplyGateStatus =
   | { state: "blocked"; changedFiles: ProjectFile[]; result: ValidationResult }
   | { state: "ready"; changedFiles: ProjectFile[]; result: ValidationResult };
 
-export interface LittleboxAgent {
+export interface KonaeAgent {
   /** Resolves when the run settles; failures arrive as an "error" event, not a rejection. */
   send(prompt: string): Promise<void>;
   interrupt(): void;

@@ -21,7 +21,7 @@ export function bootKindFor(pathname: string): BootKind {
   return "projects";
 }
 
-export function BootShell({ kind = bootKindFor(window.location.pathname), ownerSession, label = "Loading Littlebox" }: { kind?: BootKind; ownerSession: OwnerSession; label?: string }) {
+export function BootShell({ kind = bootKindFor(window.location.pathname), ownerSession, label = "Loading Konae" }: { kind?: BootKind; ownerSession: OwnerSession; label?: string }) {
   if (kind === "editor") return <EditorBoot label={label} />;
   return <div className="account-home">
     <WorkspaceNav active={kind} ownerSession={ownerSession} />
@@ -84,7 +84,7 @@ export function UsageLoadingShapes() {
 function DesignSystemBoot({ label }: { label: string }) {
   return <section className="account-content ds-workspace">
     <header className="account-hero ds-hero">
-      <p className="account-kicker"><span>◆</span> Littlebox UI</p>
+      <p className="account-kicker"><span>◆</span> Konae UI</p>
       <h1>Design system</h1>
       <p>Component examples. These controls do not change projects or upload files. Open a project to work with its files.</p>
     </header>
@@ -103,7 +103,7 @@ function EditorBoot({ label }: { label: string }): ReactNode {
     <header className="topbar">
       <span className="brand">
         <span className="brand-mark"><Box size={17} strokeWidth={2.4} /></span>
-        <span>littlebox</span>
+        <span>konae</span>
       </span>
       <div className="project-switcher"><Skeleton width={107} height={17} /></div>
       <div className="top-actions"><Skeleton width={100} height={31} radius={0} className="boot-wide" /><Skeleton width={100} height={31} radius={0} className="boot-wide" /><Skeleton width={32} height={31} radius={0} /></div>

@@ -2,10 +2,10 @@ import type { AgentKeyStore, ProviderId } from "./contracts";
 
 /**
  * Provider keys live under their own localStorage namespace, separate from
- * `littlebox:projects` / `littlebox:deployments`, so no Project, Capsule file,
+ * `konae:projects` / `konae:deployments`, so no Project, Capsule file,
  * Deployment or export can carry one. Keys are never logged.
  */
-const keyNamespace = "littlebox:agent-key:";
+const keyNamespace = "konae:agent-key:";
 
 export type KeyStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 

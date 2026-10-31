@@ -21,7 +21,7 @@ const portIndex = process.argv.indexOf("--port");
 const port = portIndex < 0 ? 19460 : Number(process.argv[portIndex + 1]);
 if (!Number.isInteger(port) || port < 1024 || port > 65530) throw Error("Choose a port between 1024 and 65530. The rehearsal uses it and the next four.");
 
-const root = await mkdtemp(path.join(tmpdir(), "littlebox-migration-rehearsal-"));
+const root = await mkdtemp(path.join(tmpdir(), "konae-migration-rehearsal-"));
 const setupKey = crypto.randomUUID() + crypto.randomUUID();
 const kernels: Kernel[] = [];
 const step = (text: string) => console.log(`- ${text}`);
@@ -78,7 +78,7 @@ async function hit(target: Kernel, hostname: string, route: string, init: Reques
 
 async function waitForCopy(target: Kernel, after: number) {
   for (const deadline = Date.now() + 30_000; Date.now() < deadline; await Bun.sleep(200)) {
-    const health = await (await fetch(`${target.url}/_littlebox/health`)).json() as { copies: { targets: { lastSuccessAt?: number; lastError?: string }[] } };
+    const health = await (await fetch(`${target.url}/_konae/health`)).json() as { copies: { targets: { lastSuccessAt?: number; lastError?: string }[] } };
     const report = health.copies.targets[0];
     if (report?.lastSuccessAt && report.lastSuccessAt >= after) return;
     if (report?.lastError) throw Error(`The copy failed: ${report.lastError}`);
@@ -158,7 +158,7 @@ try {
   assert.equal((await hit(destination, copy.hostname, "/", { headers: { accept: "text/html" } })).status, 503, "a restart keeps the import paused");
   // Neither installation takes writes now.
   for (const [target, hostname] of [[origin, app.hostname], [destination, copy.hostname]] as const) {
-    assert.equal((await hit(target, hostname, "/_littlebox/auth/login", { method: "POST", body: JSON.stringify({ email: "ana@rehearsal.test", password: "migration-test-password" }) })).status, 503);
+    assert.equal((await hit(target, hostname, "/_konae/auth/login", { method: "POST", body: JSON.stringify({ email: "ana@rehearsal.test", password: "migration-test-password" }) })).status, 503);
   }
   step(`the retry imported ${copy.hostname} paused on ${destination.url}; a repeat returned the same Deployment; a restart kept it paused; no Kernel takes writes`);
 
@@ -178,7 +178,7 @@ try {
     users.map((user) => [user.userId, user.email === "bo@rehearsal.test" ? "suspended" : user.state]).sort(),
     "IDs and states carry over",
   );
-  assert.equal((await hit(destination, copy.hostname, "/_littlebox/auth/login", { method: "POST", body: JSON.stringify({ email: "bo@rehearsal.test", password: "migration-test-password" }) })).status >= 400, true, "bo stays suspended");
+  assert.equal((await hit(destination, copy.hostname, "/_konae/auth/login", { method: "POST", body: JSON.stringify({ email: "bo@rehearsal.test", password: "migration-test-password" }) })).status >= 400, true, "bo stays suspended");
   const anaAgain = await account(destination, copy.hostname, "login", "ana@rehearsal.test");
   const moved = runtime(destination, copy.hostname, anaAgain);
   assert.deepEqual(await moved.call("actions_invoke", { name: "notes.list", input: {} }), [{ body: "first note" }, { body: "second note" }]);
@@ -194,18 +194,18 @@ try {
   assert.equal((await runtime(destination, copy.hostname, anaCookie).call<{ user: unknown }>("auth_session")).user ?? null, null, "the origin's session does not open the copy");
   assert.equal((await hit(destination, copy.hostname, "/hooks/note", { method: "POST", body: JSON.stringify({ body: "old key" }), headers: { authorization: `Bearer ${key.key}` } })).status, 401, "the origin's API key fails");
   const oldToken = new URL(originLinks[0]).hash.slice("#invitation=".length);
-  assert.notEqual((await hit(destination, copy.hostname, "/_littlebox/auth/accept", { method: "POST", body: JSON.stringify({ token: oldToken, password: "a password for cy" }) })).status, 200, "the origin's invitation link fails");
+  assert.notEqual((await hit(destination, copy.hostname, "/_konae/auth/accept", { method: "POST", body: JSON.stringify({ token: oldToken, password: "a password for cy" }) })).status, 200, "the origin's invitation link fails");
   let newLinks: string[] = [];
   for (const deadline = Date.now() + 10_000; newLinks.length === 0 && Date.now() < deadline; await Bun.sleep(100)) {
     newLinks = (await destination.mailbox()).filter((mail) => mail.purpose === "invitation").map((mail) => mail.link);
   }
   assert.ok(newLinks[0]?.startsWith(copy.url), `the resent invitation links to the new host: ${newLinks[0]}`);
   const newToken = new URL(newLinks[0]).hash.slice("#invitation=".length);
-  assert.equal((await hit(destination, copy.hostname, "/_littlebox/auth/accept", { method: "POST", body: JSON.stringify({ token: newToken, password: "a password for cy" }) })).status, 200, "the resent link works");
+  assert.equal((await hit(destination, copy.hostname, "/_konae/auth/accept", { method: "POST", body: JSON.stringify({ token: newToken, password: "a password for cy" }) })).status, 200, "the resent link works");
   const retiredPage = await hit(origin, app.hostname, "/", { headers: { accept: "text/html" } });
   assert.equal(retiredPage.status, 503);
   assert.ok(retiredPage.text.includes(`href="${copy.url}/"`) || retiredPage.text.includes(`href="${copy.url}"`), "the origin's page links to the new address");
-  assert.equal((await hit(origin, app.hostname, "/_littlebox/auth/login", { method: "POST", body: "{}" })).status, 503, "the origin refuses writes and sign-in, without a redirect");
+  assert.equal((await hit(origin, app.hostname, "/_konae/auth/login", { method: "POST", body: "{}" })).status, 503, "the origin refuses writes and sign-in, without a redirect");
   step("old sessions, the old API key and the old invitation link fail; the resent link works on the new host; the origin shows the new address and refuses writes");
 
   // Cancel before confirm resumes the origin.
@@ -219,7 +219,7 @@ try {
   // -------------------------------------------------------------------------
   // Part two: restore a copy and keep the revocation record.
   const copies = path.join(root, "copies");
-  const source = await kernel(2, "restore-source", { LITTLEBOX_COPY_DIR: copies });
+  const source = await kernel(2, "restore-source", { KONAE_COPY_DIR: copies });
   const kept = await publish(source, "rehearsal_restore", "Restored app");
   await account(source, kept.hostname, "signup", "eve@rehearsal.test");
   await account(source, kept.hostname, "signup", "fay@rehearsal.test");
@@ -237,13 +237,13 @@ try {
 
   const restoredData = path.join(root, "restored");
   const startedRestore = Date.now();
-  const output = await command(["restore", "--from", copies], { ...source.env, LITTLEBOX_DATA_DIR: restoredData });
+  const output = await command(["restore", "--from", copies], { ...source.env, KONAE_DATA_DIR: restoredData });
   assert.match(output, /Applied the revocation record/);
   const restoreSeconds = (Date.now() - startedRestore) / 1000;
   const restored = await startKernel({ port: port + 3, data: restoredData, setupKey, ownerEmail: "owner@restore-source.test", signIn: true });
   kernels.push(restored);
   assert.equal((await hit(restored, kept.hostname, "/", { headers: { accept: "text/html" } })).status, 200, "the restored app serves");
-  assert.equal((await hit(restored, kept.hostname, "/_littlebox/auth/login", { method: "POST", body: JSON.stringify({ email: "eve@rehearsal.test", password: "migration-test-password" }) })).status >= 400, true, "eve stays suspended");
+  assert.equal((await hit(restored, kept.hostname, "/_konae/auth/login", { method: "POST", body: JSON.stringify({ email: "eve@rehearsal.test", password: "migration-test-password" }) })).status >= 400, true, "eve stays suspended");
   await account(restored, kept.hostname, "login", "fay@rehearsal.test");
   assert.equal((await hit(restored, kept.hostname, "/hooks/note", { method: "POST", body: JSON.stringify({ body: "revived?" }), headers: { authorization: `Bearer ${restoredKey.key}` } })).status, 401, "the revoked key stays revoked");
   step(`restored into an empty data directory in ${restoreSeconds.toFixed(1)} s; eve stays suspended, the revoked key fails, fay signs in`);
@@ -251,7 +251,7 @@ try {
   // Without a readable record the installation stays in maintenance.
   await rm(path.join(copies, "revocations", "started.json"));
   const heldData = path.join(root, "held");
-  const heldOutput = await command(["restore", "--from", copies], { ...source.env, LITTLEBOX_DATA_DIR: heldData });
+  const heldOutput = await command(["restore", "--from", copies], { ...source.env, KONAE_DATA_DIR: heldData });
   assert.match(heldOutput, /starts in maintenance/);
   const held = await startKernel({ port: port + 4, data: heldData, setupKey, ownerEmail: "owner@restore-source.test", signIn: true });
   kernels.push(held);

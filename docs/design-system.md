@@ -1,6 +1,6 @@
-# Littlebox design system
+# Konae design system
 
-The workspace uses a restrained interface. Neutral surfaces, a system sans serif and one indigo accent keep attention on projects and their tools.
+The workspace uses a restrained interface. Warm neutral surfaces, Bricolage Grotesque and one lime accent keep attention on projects and their tools. The clean variant swaps in Inter and thinner borders on the same tokens.
 
 ## Foundations
 
@@ -24,7 +24,7 @@ The workspace uses a restrained interface. Neutral surfaces, a system sans serif
 
 Body text is 14px. Controls use 13px, secondary text uses 12px and compact metadata uses 10 or 11px. Source code uses JetBrains Mono. The spacing scale is 4, 8, 12, 16, 24 and 32px. Corners are 4, 6 and 10px.
 
-Use indigo for primary actions, selection and focus. Status colors describe an actual state. Keep decorative color off toolbars and table controls. Code editors keep their dark reading surface inside the light workspace.
+Use the lime accent for primary actions and selection, and blue for the focus outline. Status colors describe an actual state. Keep decorative color off toolbars and table controls. Code editors keep their dark reading surface inside the light workspace.
 
 ## Components
 
@@ -43,6 +43,8 @@ Import shared controls from `src/components/ui`.
 | `EmptyState` | Icon, title, description and optional action. |
 | `Skeleton` | A quiet placeholder shape. Give it the width and height of the content that replaces it. Hidden from assistive technology. |
 | `LoadingBlock` | One loading surface. `role="status"` with one label for screen readers and skeleton shapes (`rows`, or your own children) that hold the layout. Fades in after 200 ms; `sinceNavigation` counts that from the page load for boot stages. |
+| `Actions` | A row of buttons or links under a lede, primary first. Wraps on a narrow screen. Published apps get it as `.ui-actions`. |
+| `Steps` | Numbered steps as an ordered list, the numbers in accent squares and hidden from screen readers, which read the list's own numbers. Published apps get it as `.ui-list.ui-steps`. |
 | `Dialog` | Title, optional description and footer, `open`, `onClose`, optional `initialFocus`. Traps focus, handles Escape and restores focus when closed. |
 
 ```tsx
@@ -61,6 +63,8 @@ import { Button, Dialog, Field, Input } from "./components/ui";
   </div>
 </Dialog>
 ```
+
+A page that stands on its own, such as the installation's home in `examples/home`, also uses `.ui-skip` for its skip link, `.ui-bar` for a top bar that holds the name and a few links, `.ui-page-wide` on the bar and the page when it needs room beside its text, and `.ui-pre`, a `figure` with an optional `figcaption` and a `pre`, for code or a message the reader should see whole.
 
 Use links for navigation and buttons for actions. Set `type="submit"` explicitly for form submission. Icon-only actions need `IconButton` or an accessible name. Give error fields `aria-invalid="true"` and explain the error in the field help.
 

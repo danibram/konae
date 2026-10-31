@@ -387,7 +387,7 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
         return err<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>(
           new ExecutionError(
             "shell_unavailable",
-            "There is no shell in Littlebox. Edit the Capsule files and run validate_capsule instead.",
+            "There is no shell in Konae. Edit the Capsule files and run validate_capsule instead.",
           ),
         );
       },

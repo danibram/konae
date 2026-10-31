@@ -19,7 +19,7 @@ export class McpClient {
     if (!this.connecting) {
       this.connecting = (async () => {
         const result = await this.request("initialize", {
-          protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "littlebox", version: "0.1.0" },
+          protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "konae", version: "0.1.0" },
         });
         if (result.protocolVersion !== "2025-11-25") throw new McpError("Unsupported MCP protocol version.");
         await this.request("notifications/initialized", undefined, true);
@@ -92,7 +92,7 @@ export class McpClient {
       headers: {
         "content-type": "application/json", accept: "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25",
         ...(this.options.token ? { authorization: `Bearer ${this.options.token}` } : {}),
-        ...(this.options.ownerId ? { "x-littlebox-owner-id": this.options.ownerId } : {}),
+        ...(this.options.ownerId ? { "x-konae-owner-id": this.options.ownerId } : {}),
       },
       body: JSON.stringify({ jsonrpc: "2.0", ...(!notification ? { id } : {}), method, ...(params ? { params } : {}) }),
     });

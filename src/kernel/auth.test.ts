@@ -11,7 +11,7 @@ class RecordingStore implements KernelIdentityStore {
   async readGrants(actorId: string) { return this.grants.get(actorId) ?? []; }
 }
 
-describe("Littlebox Kernel identity", () => {
+describe("Konae Kernel identity", () => {
   test("issues opaque sessions and stores only a token hash", async () => {
     const store = new RecordingStore();
     store.grants.set("user_1", [{ type: "deployment", deploymentId: "deploy_1" }]);

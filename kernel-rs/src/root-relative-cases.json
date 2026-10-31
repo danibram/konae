@@ -36,9 +36,9 @@
       "warnings": ["index.html links to /?q=1, which leaves the app's path address. Write ./?q=1 instead."]
     },
     {
-      "case": "a path under /_littlebox is not prefixed by the app",
-      "files": { "index.html": "<a href=\"/_littlebox/files/x\">File</a>" },
-      "warnings": ["index.html links to /_littlebox/files/x, which leaves the app's path address. Write _littlebox/files/x instead."]
+      "case": "a path under /_konae is not prefixed by the app",
+      "files": { "index.html": "<a href=\"/_konae/files/x\">File</a>" },
+      "warnings": ["index.html links to /_konae/files/x, which leaves the app's path address. Write _konae/files/x instead."]
     },
     {
       "case": "a srcset with two root-relative candidates",

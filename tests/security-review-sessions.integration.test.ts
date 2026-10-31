@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { answerText, appUser, hostFetch, rawCall, runtimeClient, startLab, testPort, type Lab } from "./security-review-kernel";
 
 let lab: Lab;
-beforeAll(async () => { lab = await startLab(testPort("LITTLEBOX_REVIEW_SESSIONS_PORT", 23600)); }, 180_000);
+beforeAll(async () => { lab = await startLab(testPort("KONAE_REVIEW_SESSIONS_PORT", 23600)); }, 180_000);
 afterAll(async () => { await lab?.stop(); });
 
 const invoke = (client: ReturnType<typeof runtimeClient>, name: string, input: object = {}) => client.call<any>("actions_invoke", { name, input });
@@ -69,11 +69,11 @@ describe("cross-user", () => {
     await invoke(thiefClient, "me.join", { display: "Thief" });
     const book = await invoke(thiefClient, "books.propose", { title: "Bait", author: "X", coverFileId: file.id });
     expect(book.changes).toBe(1);
-    expect((await hostFetch(lab, club.hostname, `/_littlebox/files/${file.id}`, { headers: { cookie: thief.cookie } })).status).toBe(404);
+    expect((await hostFetch(lab, club.hostname, `/_konae/files/${file.id}`, { headers: { cookie: thief.cookie } })).status).toBe(404);
     await expect(thiefClient.call("files_read", { fileId: file.id })).rejects.toThrow("File not found.");
     await expect(thiefClient.call("files_update", { fileId: file.id, visibility: "public" })).rejects.toThrow("File not found.");
     await expect(thiefClient.call("files_delete", { fileId: file.id })).rejects.toThrow("File not found.");
-    expect((await hostFetch(lab, club.hostname, `/_littlebox/files/${file.id}`, { headers: { cookie: owner.cookie } })).status).toBe(200);
+    expect((await hostFetch(lab, club.hostname, `/_konae/files/${file.id}`, { headers: { cookie: owner.cookie } })).status).toBe(200);
   });
 
   test("a suspended user's open session is refused on the runtime, on a route and on the file path", async () => {
@@ -87,7 +87,7 @@ describe("cross-user", () => {
     await lab.kernel.owner.call("app_user_suspend", { deploymentId: habits.id, userId: users.find((row) => row.email === user.email)!.userId });
     await expect(invoke(client, "habits.list")).rejects.toThrow();
     expect((await hostFetch(lab, habits.hostname, "/api/habits", { headers: { cookie: user.cookie } })).status).toBe(401);
-    expect((await hostFetch(lab, habits.hostname, `/_littlebox/files/${file.id}`, { headers: { cookie: user.cookie } })).status).toBe(401);
+    expect((await hostFetch(lab, habits.hostname, `/_konae/files/${file.id}`, { headers: { cookie: user.cookie } })).status).toBe(401);
     // A bearer copy of the same session token is the same session.
     expect((await hostFetch(lab, habits.hostname, "/api/habits", { headers: { authorization: `Bearer ${user.token}` } })).status).toBe(401);
   });
@@ -99,7 +99,7 @@ describe("sessions across Deployments and hosts", () => {
     const member = await appUser(lab, club);
     for (const app of [habits, gallery]) {
       for (const headers of [{ cookie: member.cookie }, { authorization: `Bearer ${member.token}` }]) {
-        const answer = await rawCall(lab, "/_littlebox/mcp", app.hostname, "auth_session", {}, headers);
+        const answer = await rawCall(lab, "/_konae/mcp", app.hostname, "auth_session", {}, headers);
         expect(answerText(answer.body)).not.toContain(member.email);
       }
     }
@@ -111,12 +111,12 @@ describe("sessions across Deployments and hosts", () => {
     const { club } = lab.apps;
     const member = await appUser(lab, club);
     const editor = new URL(lab.kernel.url).host;
-    for (const cookie of [member.cookie, `littlebox_owner_session=${member.token}`]) {
+    for (const cookie of [member.cookie, `konae_owner_session=${member.token}`]) {
       expect((await rawCall(lab, "/mcp", editor, "projects_list", {}, { cookie })).status).toBe(401);
     }
     const ownerToken = lab.kernel.ownerCookie.split("=")[1];
-    for (const headers of [{ cookie: lab.kernel.ownerCookie }, { cookie: `littlebox_app_session=${ownerToken}` }, { authorization: `Bearer ${ownerToken}` }]) {
-      expect(answerText((await rawCall(lab, "/_littlebox/mcp", club.hostname, "actions_invoke", { name: "me.get", input: {} }, headers)).body)).not.toContain("result");
+    for (const headers of [{ cookie: lab.kernel.ownerCookie }, { cookie: `konae_app_session=${ownerToken}` }, { authorization: `Bearer ${ownerToken}` }]) {
+      expect(answerText((await rawCall(lab, "/_konae/mcp", club.hostname, "actions_invoke", { name: "me.get", input: {} }, headers)).body)).not.toContain("result");
     }
   });
 
@@ -125,11 +125,11 @@ describe("sessions across Deployments and hosts", () => {
     const member = await appUser(lab, club);
     // Upper case, a trailing dot and a sub-host are not the Deployment's hostname.
     for (const host of [club.hostname.toUpperCase(), `${club.hostname}.`, `x.${club.hostname}`, `${club.hostname}@${gallery.hostname}`]) {
-      const answer = await rawCall(lab, "/_littlebox/mcp", host, "auth_session", {}, { cookie: member.cookie });
+      const answer = await rawCall(lab, "/_konae/mcp", host, "auth_session", {}, { cookie: member.cookie });
       expect([403, 404]).toContain(answer.status);
     }
     // X-Forwarded-Host is not read: the request stays on the gallery, where the club session means nothing.
-    const forwarded = await rawCall(lab, "/_littlebox/mcp", gallery.hostname, "auth_session", {}, { cookie: member.cookie, "x-forwarded-host": club.hostname });
+    const forwarded = await rawCall(lab, "/_konae/mcp", gallery.hostname, "auth_session", {}, { cookie: member.cookie, "x-forwarded-host": club.hostname });
     expect(answerText(forwarded.body)).toContain("anonymous");
   });
 
@@ -137,7 +137,7 @@ describe("sessions across Deployments and hosts", () => {
     const { club, gallery, habits } = lab.apps;
     const member = await appUser(lab, habits);
     for (const origin of [`http://${gallery.hostname}`, `http://${club.hostname}:1`, "null"]) {
-      const runtime = await rawCall(lab, "/_littlebox/mcp", habits.hostname, "actions_invoke", { name: "habits.list", input: {} }, { cookie: member.cookie, origin });
+      const runtime = await rawCall(lab, "/_konae/mcp", habits.hostname, "actions_invoke", { name: "habits.list", input: {} }, { cookie: member.cookie, origin });
       expect(runtime.status).toBe(403);
       // On a route the session is dropped and the caller is a visitor, which a private app refuses.
       const route = await hostFetch(lab, habits.hostname, "/api/habits", { method: "POST", headers: { cookie: member.cookie, origin }, body: JSON.stringify({ name: "csrf" }) });

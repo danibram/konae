@@ -190,7 +190,7 @@ export type ContractAction = {
 };
 
 export type ActionContract = {
-  format: "littlebox-action-contract";
+  format: "konae-action-contract";
   version: 1;
   project?: { id: string; name: string };
   /** Refusals any action can return, and the one for a name no action declares. */
@@ -214,7 +214,7 @@ const STATEMENT_SECONDS = 2;
 const MAX_ROUTE_BODY = 64 * 1024;
 const SIGNATURE_WINDOW = 300;
 
-const RUNTIME = { endpoint: "/_littlebox/mcp", tool: "actions_invoke", sdk: "miniapp.actions.call" };
+const RUNTIME = { endpoint: "/_konae/mcp", tool: "actions_invoke", sdk: "miniapp.actions.call" };
 const SIGNATURE_SCHEME = "t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256, keyed with the secret, of t, n, the method, the path, the canonical query string and the raw body, joined by newlines>";
 const SVIX_WINDOW = 300;
 const FAILED_DELIVERY = "a delivery whose action fails is not remembered, so the provider's retry runs";
@@ -247,7 +247,7 @@ function contractSignature(signature: RouteSignature): ContractSignature {
       windowSeconds: SVIX_WINDOW, replay: `each svix-id is accepted once in 72 hours; ${FAILED_DELIVERY}`,
     };
   }
-  return { scheme: "littlebox", ...base, headers: [signature.header], format: SIGNATURE_SCHEME, windowSeconds: SIGNATURE_WINDOW, replay: "each signature is accepted once" };
+  return { scheme: "konae", ...base, headers: [signature.header], format: SIGNATURE_SCHEME, windowSeconds: SIGNATURE_WINDOW, replay: "each signature is accepted once" };
 }
 
 /** The route signature a contract's signature describes: the inverse of contractSignature. */
@@ -288,12 +288,12 @@ export function contractFromProgram(program: ServerActionProgram, schemaSource: 
     return action;
   });
   const contract: ActionContract = {
-    format: "littlebox-action-contract",
+    format: "konae-action-contract",
     version: 1,
     ...(project ? { project: { id: project.id, name: project.name } } : {}),
     errors: [
       fromSdk("Server action not declared.", "runtime"),
-      { ...fromSdk("Sign in to use Littlebox MCP.", "runtime"), when: "the Deployment is private and the caller has no session, whatever the action's name" },
+      { ...fromSdk("Sign in to use Konae MCP.", "runtime"), when: "the Deployment is private and the caller has no session, whatever the action's name" },
       fromSdk("Arguments must be an object.", "runtime"),
       fromSdk("No route accepts POST on this path.", "http"),
     ],
@@ -453,7 +453,7 @@ function actionErrors(action: ServerActionDefinition, inputs: ContractInput[], a
     });
   }
   if (action.access === "authenticated") errors.push(fromSdk("authentication-required", "runtime"));
-  errors.push({ ...fromSdk("Sign in to use Littlebox MCP.", "runtime"), when: "the Deployment is private and the caller has no session" });
+  errors.push({ ...fromSdk("Sign in to use Konae MCP.", "runtime"), when: "the Deployment is private and the caller has no session" });
   if (actorBound && action.access === "anonymous") errors.push(fromSdk("This action requires an authenticated actor.", both));
   // A route with fields leaves undeclared body keys out, so only the runtime endpoint refuses them.
   const unexpected = http?.fields ? (onlyDoor ? null : "runtime") : both;

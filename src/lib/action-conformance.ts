@@ -166,7 +166,7 @@ export async function runConformance(contract: ActionContract, target: Conforman
   }
 
   // The name no action declares.
-  await expectRefusal(null, "refuses an undeclared action", ["Server action not declared.", "Sign in to use Littlebox MCP."],
+  await expectRefusal(null, "refuses an undeclared action", ["Server action not declared.", "Sign in to use Konae MCP."],
     () => invoke(UNDECLARED_ACTION, {}, target.hasSession ? "session" : "visitor"));
 
   for (const action of contract.actions) {
@@ -174,13 +174,13 @@ export async function runConformance(contract: ActionContract, target: Conforman
     const valid = minimal(action);
     // A call's then mutation runs only after its call ends; the runtime endpoint refuses it (ADR-0019).
     if (action.thenOf) {
-      await expectRefusal(action, "runs only after its call", [`Action ${name} runs only after the call ${action.thenOf} answers.`, "Sign in to use Littlebox MCP."],
+      await expectRefusal(action, "runs only after its call", [`Action ${name} runs only after the call ${action.thenOf} answers.`, "Sign in to use Konae MCP."],
         () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
       continue;
     }
     // A scheduled mutation with no route runs only on the Kernel's timer (ADR-0017, update of 2026-11-08).
     if (action.schedule && !action.http) {
-      await expectRefusal(action, "runs only on its schedule", [`Action ${name} runs only on its schedule.`, "Sign in to use Littlebox MCP."],
+      await expectRefusal(action, "runs only on its schedule", [`Action ${name} runs only on its schedule.`, "Sign in to use Konae MCP."],
         () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
       continue;
     }
@@ -188,7 +188,7 @@ export async function runConformance(contract: ActionContract, target: Conforman
     if (action.http?.onlyDoor === "always") {
       // The runtime endpoint refuses the action; its bindings are probed on the route.
       // A visitor of a private Deployment is stopped before the action, with "Sign in".
-      await expectRefusal(action, "answers only on its route", [routeOnly!, "Sign in to use Littlebox MCP."], () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
+      await expectRefusal(action, "answers only on its route", [routeOnly!, "Sign in to use Konae MCP."], () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
       await checkRoute(action, valid);
       continue;
     }
@@ -214,7 +214,7 @@ export async function runConformance(contract: ActionContract, target: Conforman
         record(name, "answers a valid call", "pass", "Refused with its guard: the generated input changed no row.");
         await checkGuard(action, undefined, answer.message, async () => ({}));
       } else if (!answer.ok) {
-        const advice = answer.message === "Sign in to use Littlebox MCP." ? " The Deployment is private; pass --token."
+        const advice = answer.message === "Sign in to use Konae MCP." ? " The Deployment is private; pass --token."
           : listedIn([...action.errors, ...contract.errors], answer.message) ? ""
           : " The contract lists no such refusal, so the statement itself failed. If an input needs a particular form, such as JSON, give one with --inputs.";
         record(name, "answers a valid call", "fail", `Refused with "${answer.message}".${advice}`);
@@ -237,9 +237,9 @@ export async function runConformance(contract: ActionContract, target: Conforman
 
     // Who may call.
     if (action.access === "authenticated") {
-      await expectRefusal(action, "refuses a caller without a session", ["authentication-required", "Sign in to use Littlebox MCP."], () => invoke(name, valid, "visitor"));
+      await expectRefusal(action, "refuses a caller without a session", ["authentication-required", "Sign in to use Konae MCP."], () => invoke(name, valid, "visitor"));
     } else if (action.actorBound) {
-      await expectRefusal(action, "refuses a caller without an ID", ["This action requires an authenticated actor.", "Sign in to use Littlebox MCP."], () => invoke(name, valid, "visitor"));
+      await expectRefusal(action, "refuses a caller without an ID", ["This action requires an authenticated actor.", "Sign in to use Konae MCP."], () => invoke(name, valid, "visitor"));
     }
 
     // What the bindings refuse.
@@ -292,7 +292,7 @@ export async function runConformance(contract: ActionContract, target: Conforman
     let resends = 0;
     const sign = async (base: RouteRequest, at = now()): Promise<RouteRequest> => {
       const signature = http.signature!;
-      if (signature.scheme === "littlebox") {
+      if (signature.scheme === "konae") {
         const query = new URLSearchParams(base.query ?? {}).toString();
         const header = await signRoute(secret!, { method: http.method, path: base.path, query, body: base.body ?? "" }, at);
         return { ...base, headers: { ...base.headers, [signature.header]: header } };

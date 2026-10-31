@@ -73,7 +73,7 @@ describe("signup policy copy", () => {
   test("speaks of app accounts and never of creating an app when it means joining one", () => {
     for (const sentence of allCopy()) {
       expect(sentence).not.toMatch(/create (an|the|your) app\b(?! account)/i);
-      expect(sentence).not.toMatch(/\bsign up for Littlebox\b/i);
+      expect(sentence).not.toMatch(/\bsign up for Konae\b/i);
       // A person who uses the app has an app account; "account" alone could mean the owner's.
       if (/\baccount\b/.test(sentence)) expect(sentence).toMatch(/app account/);
     }
@@ -153,7 +153,7 @@ describe("mail readiness", () => {
   });
 
   test("no transport, a refused sender and a running check each give their reason", () => {
-    expect(mailReadiness({ transport: null, sending: false, reason: "No mail transport is configured." }).reason).toContain("LITTLEBOX_MAIL_TRANSPORT");
+    expect(mailReadiness({ transport: null, sending: false, reason: "No mail transport is configured." }).reason).toContain("KONAE_MAIL_TRANSPORT");
     const refused = mailReadiness({ transport: "resend", sending: false, preflight: { state: "refused", reason: "Domain example.com is not verified" } });
     expect(refused.ready).toBe(false);
     expect(refused.reason).toContain("Domain example.com is not verified.");
@@ -196,8 +196,8 @@ describe("integrations", () => {
     const [list, receive] = routeActions(routes);
     expect(routeCurl("https://orders-1a2b.example.net/", list, "lbk_test")).toBe('curl -H "Authorization: Bearer lbk_test" "https://orders-1a2b.example.net/api/orders?min=1"');
     expect(routeCurl("https://orders-1a2b.example.net", receive, "lbk_test")).toBe(`curl -X POST -H "Authorization: Bearer lbk_test" -H 'Content-Type: application/json' --data '{"id":"text","total":1}' "https://orders-1a2b.example.net/hooks/orders"`);
-    expect(routeCurl("https://orders-1a2b.example.net", receive)).toContain("Bearer $LITTLEBOX_API_KEY");
-    expect(fileCurl("https://orders-1a2b.example.net", "lbk_test")).toBe('curl -OJ -H "Authorization: Bearer lbk_test" "https://orders-1a2b.example.net/_littlebox/files/<file id>"');
+    expect(routeCurl("https://orders-1a2b.example.net", receive)).toContain("Bearer $KONAE_API_KEY");
+    expect(fileCurl("https://orders-1a2b.example.net", "lbk_test")).toBe('curl -OJ -H "Authorization: Bearer lbk_test" "https://orders-1a2b.example.net/_konae/files/<file id>"');
   });
 
   test("a route with fields gets a curl whose body nests each input at its path", () => {
@@ -232,8 +232,8 @@ describe("googleRefusal", () => {
 
 describe("redirectUriLabel", () => {
   test("names the host, the custom domain and the path address", () => {
-    expect(redirectUriLabel("https://notes-1.littlebox.com/_littlebox/auth/google/callback", 0)).toBe("Redirect URI");
-    expect(redirectUriLabel("https://notes.example.org/_littlebox/auth/google/callback", 1)).toBe("Redirect URI for your custom domain");
-    expect(redirectUriLabel("https://littlebox.com/p/0b6c/_littlebox/auth/google/callback", 1)).toBe("Redirect URI for the path address");
+    expect(redirectUriLabel("https://notes-1.konae.es/_konae/auth/google/callback", 0)).toBe("Redirect URI");
+    expect(redirectUriLabel("https://notes.example.org/_konae/auth/google/callback", 1)).toBe("Redirect URI for your custom domain");
+    expect(redirectUriLabel("https://konae.es/p/0b6c/_konae/auth/google/callback", 1)).toBe("Redirect URI for the path address");
   });
 });

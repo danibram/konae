@@ -10,9 +10,9 @@ test("a hosted artifact contains compiled code and the named-action SDK without 
   });
 
   expect(artifact.files["index.html"]).toContain("compiled nested module");
-  expect(artifact.files["index.html"]).toContain("/_littlebox/mcp");
+  expect(artifact.files["index.html"]).toContain("/_konae/mcp");
   expect(artifact.files["index.html"]).not.toContain("SELECT ");
   expect(artifact.files["index.html"]).toContain("tools/call");
-  expect(artifact.files["index.html"]).not.toContain("x-littlebox-admin-key");
+  expect(artifact.files["index.html"]).not.toContain("x-konae-admin-key");
   expect(artifact.entrypoint).toBe("index.html");
 });

@@ -11,7 +11,7 @@
       "kind": "query",
       "access": "anonymous",
       "http": { "method": "GET", "path": "/feed.json" },
-      "statement": "SELECT id, title, caption, '/_littlebox/files/' || file_id AS image, published_at FROM photos WHERE status = 'published' ORDER BY published_at DESC, id DESC LIMIT 20",
+      "statement": "SELECT id, title, caption, '/_konae/files/' || file_id AS image, published_at FROM photos WHERE status = 'published' ORDER BY published_at DESC, id DESC LIMIT 20",
       "bindings": []
     },
     "studio.photos": {

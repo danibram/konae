@@ -2,7 +2,7 @@
 
 Status: accepted, 2026-11-07. Amended by [ADR-0021](0021-a-notice-lists-its-rows-and-reaches-the-accounts-they-name.md): a scheduled notice can list the rows a run changed and reach the accounts they name. Builds on [ADR-0010](0010-kernel-owns-usage-and-signals.md): a run is recorded in the Usage store, and the store carries the state that keeps a run from repeating.
 
-The capability matrix found that nothing in Littlebox runs without a caller (feature F18 in `docs/research/capability-matrix.md`). Work that only has to look done when someone asks can compare a stored time with `kernel.now`, but a hold that lapsed still blocks the hour in every count that does not repeat the comparison, and a personal tracker cannot close a day nobody opened. A `"schedule"` key passed both doors and ran nothing, so an agent could write one and see it accepted.
+The capability matrix found that nothing in Konae runs without a caller (feature F18 in `docs/research/capability-matrix.md`). Work that only has to look done when someone asks can compare a stored time with `kernel.now`, but a hold that lapsed still blocks the hour in every count that does not repeat the comparison, and a personal tracker cannot close a day nobody opened. A `"schedule"` key passed both doors and ran nothing, so an agent could write one and see it accepted.
 
 ## Decision
 
@@ -18,7 +18,7 @@ The Kernel runs every schedule from one timer task in its one process, as `copie
 
 A run that fails leaves its slot open, so the next look tries again. The first slot an action is seen in counts as done, so publishing never runs it, and a republish that changes the declaration starts again from the next slot. Because the slot travels in `usage.sqlite`, a restart, a scheduled copy, a package and a migration resume where the app was: a daily job that ran today does not run again today on the new machine. The owner reads runs with `usage_read`, which now returns the newest 500 runs in its range next to the totals. The store keeps the newest 10,000 runs.
 
-The editor preview runs no schedule. The Development Kernel is the same binary and runs them. `LITTLEBOX_SCHEDULE_MIN_SECONDS`, from 1 to 300, makes every schedule run once every that many seconds so a replay can watch a run; the Kernel refuses to start with it unless `LITTLEBOX_BIND` is a loopback address, and it keys the store's slots apart from the real clock's, so a Kernel started later without it starts each schedule afresh.
+The editor preview runs no schedule. The Development Kernel is the same binary and runs them. `KONAE_SCHEDULE_MIN_SECONDS`, from 1 to 300, makes every schedule run once every that many seconds so a replay can watch a run; the Kernel refuses to start with it unless `KONAE_BIND` is a loopback address, and it keys the store's slots apart from the real clock's, so a Kernel started later without it starts each schedule afresh.
 
 ## Considered options
 
@@ -41,6 +41,6 @@ The schedule runner accepted `notify` but did not process it. It now calls the s
 
 ## Update, 2026-11-08: only the timer runs a scheduled mutation
 
-A scheduled mutation with no `http` route now answers only to the Kernel's timer. `actions_invoke`, the page bridge and the editor preview refuse every caller with `Action <name> runs only on its schedule.`, beside the refusals for a route-only action and a call's then mutation. `littlebox conform` expects the refusal, and the Action Contract lists no runtime caller for the action.
+A scheduled mutation with no `http` route now answers only to the Kernel's timer. `actions_invoke`, the page bridge and the editor preview refuse every caller with `Action <name> runs only on its schedule.`, beside the refusals for a route-only action and a call's then mutation. `konae conform` expects the refusal, and the Action Contract lists no runtime caller for the action.
 
 Before, the action answered callers as its `access` said. Every app that had a schedule wanted the opposite, so each statement added `AND ?2 IS NULL` on an actor binding, which only the timer leaves null: the schedule probe, the habits showcase and the booking showcase all did. An author who forgot the clause let any member run the release or the close on demand. The rule now lives in the Kernel, and those statements dropped the clause and the actor binding. A mutation that must run on a schedule and on demand declares an `http` route, whose callers decide who may call it, or is written as two actions over the same statement.

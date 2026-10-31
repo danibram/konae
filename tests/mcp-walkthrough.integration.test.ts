@@ -8,13 +8,13 @@ import { Recorder, callTool, cli, renderDocument, startKernel, type KernelProces
 
 // Follows docs/mcp-walkthrough.md step by step on two Kernels and fails when
 // the document does not show exactly the commands and answers this run got.
-// LITTLEBOX_WALKTHROUGH_WRITE=1 rewrites the document's recorded blocks.
-// LITTLEBOX_WALKTHROUGH_PORT sets the first of three ports: Kernel A, Kernel B
+// KONAE_WALKTHROUGH_WRITE=1 rewrites the document's recorded blocks.
+// KONAE_WALKTHROUGH_PORT sets the first of three ports: Kernel A, Kernel B
 // and the Development Kernel.
 
 const repo = path.resolve(import.meta.dir, "..");
 const docPath = path.join(repo, "docs/mcp-walkthrough.md");
-const base = Number(process.env.LITTLEBOX_WALKTHROUGH_PORT) || 19300 + Math.floor(Math.random() * 300) * 3;
+const base = Number(process.env.KONAE_WALKTHROUGH_PORT) || 19300 + Math.floor(Math.random() * 300) * 3;
 const ports = { a: base, b: base + 1, dev: base + 2 };
 const setupKey = "walkthrough-installation-key";
 const setupKeyB = "walkthrough-second-installation-key";
@@ -117,7 +117,7 @@ const app = () => path.join(root, "orders");
 const shownPort: Record<number, number> = {};
 
 function shownCommand(args: string[], env: Record<string, string> = {}) {
-  return [...Object.entries(env).map(([key, value]) => `${key}=${value}`), "bun run littlebox --", ...args].join(" ");
+  return [...Object.entries(env).map(([key, value]) => `${key}=${value}`), "bun run konae --", ...args].join(" ");
 }
 
 async function run(args: string[], env: Record<string, string> = {}, shownEnv = env) {
@@ -140,7 +140,7 @@ async function tool(name: string, args: object = {}, options: { token?: string; 
 }
 
 async function runtimeTool(hostname: string, cookie: string | undefined, name: string, args: object = {}, kernel = a) {
-  const answer = await callTool(`${kernel.url}/_littlebox/mcp`, { host: hostname, ...(cookie ? { cookie } : {}) }, name, args);
+  const answer = await callTool(`${kernel.url}/_konae/mcp`, { host: hostname, ...(cookie ? { cookie } : {}) }, name, args);
   r.json({ name, arguments: args });
   r.json(answerBlock(answer));
   return answer;
@@ -164,7 +164,7 @@ async function http(method: string, kernel: { url: string; port: number }, route
 beforeAll(async () => {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", path.join(repo, "kernel-rs/Cargo.toml")], { stdout: "ignore", stderr: "inherit" });
   expect(await build.exited).toBe(0);
-  root = await mkdtemp(path.join(tmpdir(), "littlebox-walkthrough-"));
+  root = await mkdtemp(path.join(tmpdir(), "konae-walkthrough-"));
   await mkdir(app());
   a = await startKernel(ports.a, path.join(root, "kernel-a"), setupKey);
   Object.assign(shownPort, { [ports.a]: 4173, [ports.b]: 4174, [ports.dev]: 8796 });
@@ -185,21 +185,21 @@ afterAll(async () => {
 describe("the MCP walkthrough", () => {
   test("1. an Agent Credential from an invitation code", async () => {
     r.step("operator");
-    const first = await cli(["login", "--dir", path.join(root, "operator"), "--url", a.url], { LITTLEBOX_EMAIL: "operator@walkthrough.test", LITTLEBOX_PASSWORD: password, LITTLEBOX_SETUP_KEY: setupKey });
+    const first = await cli(["login", "--dir", path.join(root, "operator"), "--url", a.url], { KONAE_EMAIL: "operator@walkthrough.test", KONAE_PASSWORD: password, KONAE_SETUP_KEY: setupKey });
     expect(first.code).toBe(0);
-    const issued = Bun.spawnSync([path.join(repo, "kernel-rs/target/debug/littlebox-kernel"), "creator-code-create", "--note", "Walkthrough agent"], { env: { PATH: process.env.PATH ?? "", LITTLEBOX_DATA_DIR: a.data } });
+    const issued = Bun.spawnSync([path.join(repo, "kernel-rs/target/debug/konae-kernel"), "creator-code-create", "--note", "Walkthrough agent"], { env: { PATH: process.env.PATH ?? "", KONAE_DATA_DIR: a.data } });
     const printed = issued.stdout.toString().trim();
     s.code = printed.match(/shown once: (\S+)/)![1];
     r.name(s.code, "<invitation code>");
     r.name(printed.match(/ID: (\S+)/)![1], "<code id>");
     r.name(printed.match(/Expires: (.+)/)![1], "<expiry>");
-    r.add("sh", "littlebox-kernel creator-code-create --note 'Walkthrough agent'");
+    r.add("sh", "konae-kernel creator-code-create --note 'Walkthrough agent'");
     r.add("text", printed);
 
     r.step("login");
-    const login = await run(["login", "--dir", app(), "--url", a.url, "--manage-users", "--export-data", "--manage-lifecycle"], { LITTLEBOX_EMAIL: "agent@walkthrough.test", LITTLEBOX_PASSWORD: password, LITTLEBOX_INVITATION_CODE: s.code });
+    const login = await run(["login", "--dir", app(), "--url", a.url, "--manage-users", "--export-data", "--manage-lifecycle"], { KONAE_EMAIL: "agent@walkthrough.test", KONAE_PASSWORD: password, KONAE_INVITATION_CODE: s.code });
     expect(login.code).toBe(0);
-    s.token = JSON.parse(await readFile(path.join(app(), ".littlebox/credentials.json"), "utf8")).token;
+    s.token = JSON.parse(await readFile(path.join(app(), ".konae/credentials.json"), "utf8")).token;
 
     r.step("session");
     const session = await tool("session_inspect");
@@ -240,7 +240,7 @@ describe("the MCP walkthrough", () => {
 
     r.step("oauth-authorize");
     await http("GET", a, `/oauth/authorize?${new URLSearchParams(args)}`);
-    const signIn = await fetch(`${a.url}/_littlebox/owner/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "agent@walkthrough.test", password }) });
+    const signIn = await fetch(`${a.url}/_konae/owner/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "agent@walkthrough.test", password }) });
     const cookie = signIn.headers.get("set-cookie")!.split(";")[0];
     r.name(cookie.split("=")[1], "<owner session>");
     const page = await (await fetch(`${a.url}/oauth/authorize?${new URLSearchParams(args)}`, { headers: { cookie } })).text();
@@ -250,7 +250,7 @@ describe("the MCP walkthrough", () => {
     const approved = await fetch(`${a.url}/oauth/authorize`, { method: "POST", redirect: "manual", headers: { cookie, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ ...args, csrf }) });
     const back = new URL(approved.headers.get("location")!);
     r.name(back.searchParams.get("code"), "<authorization code>");
-    r.add("sh", "curl -i -X POST 'http://localhost:4173/oauth/authorize' -H 'cookie: littlebox_owner_session=<owner session>' --data '<the same parameters>&csrf=<csrf>'");
+    r.add("sh", "curl -i -X POST 'http://localhost:4173/oauth/authorize' -H 'cookie: konae_owner_session=<owner session>' --data '<the same parameters>&csrf=<csrf>'");
     r.add("text", `HTTP ${approved.status}\nlocation: ${approved.headers.get("location")}`);
 
     r.step("oauth-token");
@@ -260,20 +260,20 @@ describe("the MCP walkthrough", () => {
     expect((session.result as any).scopes).toEqual(["read", "write", "publish", "manage_users"]);
 
     r.step("oauth-scope");
-    const refused = await http("GET", a, `/oauth/authorize?${new URLSearchParams({ ...args, scope: "read export_data" })}`, { headers: { cookie }, shownHeaders: { cookie: "littlebox_owner_session=<owner session>" } });
-    expect(JSON.parse(refused.text).error_description).toBe("Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data or manage_lifecycle; run littlebox login with --export-data or --manage-lifecycle for a token that holds them.");
+    const refused = await http("GET", a, `/oauth/authorize?${new URLSearchParams({ ...args, scope: "read export_data" })}`, { headers: { cookie }, shownHeaders: { cookie: "konae_owner_session=<owner session>" } });
+    expect(JSON.parse(refused.text).error_description).toBe("Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data or manage_lifecycle; run konae login with --export-data or --manage-lifecycle for a token that holds them.");
   }, 60_000);
 
   test("4. init", async () => {
     r.step("init");
-    const config = async () => JSON.parse(await readFile(path.join(app(), "littlebox.json"), "utf8"));
+    const config = async () => JSON.parse(await readFile(path.join(app(), "konae.json"), "utf8"));
     const init = await cli(["init", "--dir", app(), "--name", "Orders", "--url", a.url]);
     expect(init.code).toBe(0);
     s.projectId = (await config()).project.id;
     r.name(s.projectId, "<project id>");
     r.add("sh", shownCommand(["init", "--dir", app(), "--name", "Orders", "--url", a.url]));
     r.add("text", init.output);
-    r.add("sh", "cat /tmp/orders/littlebox.json");
+    r.add("sh", "cat /tmp/orders/konae.json");
     r.add("json", JSON.stringify(await config(), null, 2));
     r.add("sh", "ls /tmp/orders");
     r.add("text", (await readdir(app())).filter((name) => !name.startsWith(".")).sort().join("\n"));
@@ -281,8 +281,8 @@ describe("the MCP walkthrough", () => {
 
   test("5. dev", async () => {
     r.step("dev");
-    const child = Bun.spawn([process.execPath, path.join(repo, "scripts/littlebox.ts"), "dev", "--dir", app(), "--port", String(ports.dev)], {
-      cwd: repo, env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_"))) as Record<string, string>, stdout: "pipe", stderr: "ignore",
+    const child = Bun.spawn([process.execPath, path.join(repo, "scripts/konae.ts"), "dev", "--dir", app(), "--port", String(ports.dev)], {
+      cwd: repo, env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))) as Record<string, string>, stdout: "pipe", stderr: "ignore",
     });
     try {
       const reader = child.stdout.getReader();
@@ -318,7 +318,7 @@ describe("the MCP walkthrough", () => {
     expect((await run(["contract", "--dir", app()])).code).toBe(0);
   });
 
-  test("7. a signing secret, then publish with the policy littlebox.json names", async () => {
+  test("7. a signing secret, then publish with the policy konae.json names", async () => {
     r.step("publish-refused");
     const refused = await run(["publish", "--dir", app()]);
     expect(refused.code).toBe(1);
@@ -329,7 +329,7 @@ describe("the MCP walkthrough", () => {
 
     r.step("publish");
     expect((await run(["publish", "--dir", app()])).code).toBe(0);
-    const receipt = JSON.parse(await readFile(path.join(app(), ".littlebox/deployment.json"), "utf8"));
+    const receipt = JSON.parse(await readFile(path.join(app(), ".konae/deployment.json"), "utf8"));
     Object.assign(s, { deploymentId: receipt.id, hostname: receipt.hostname });
     r.name(receipt.id, "<deployment id>");
     r.name(receipt.hostname.split(".")[0], "orders-<suffix>");
@@ -340,11 +340,11 @@ describe("the MCP walkthrough", () => {
 
   test("8. invite a member through MCP", async () => {
     r.step("invite-refused");
-    const publisher = await run(["login", "--dir", path.join(root, "publisher"), "--url", a.url], { LITTLEBOX_EMAIL: "agent@walkthrough.test", LITTLEBOX_PASSWORD: password });
+    const publisher = await run(["login", "--dir", path.join(root, "publisher"), "--url", a.url], { KONAE_EMAIL: "agent@walkthrough.test", KONAE_PASSWORD: password });
     expect(publisher.code).toBe(0);
-    const publishOnly = JSON.parse(await readFile(path.join(root, "publisher/.littlebox/credentials.json"), "utf8")).token;
+    const publishOnly = JSON.parse(await readFile(path.join(root, "publisher/.konae/credentials.json"), "utf8")).token;
     const refused = await tool("app_invitations_create", { deploymentId: s.deploymentId, emails: ["member@walkthrough.test"], idempotencyKey: "walkthrough-invite-1" }, { token: publishOnly });
-    expect(refused.error).toBe("Unknown tool or insufficient permission. app_invitations_create needs a credential with manage_users. Run littlebox login with --manage-users, or use a token from token_create that includes it.");
+    expect(refused.error).toBe("Unknown tool or insufficient permission. app_invitations_create needs a credential with manage_users. Run konae login with --manage-users, or use a token from token_create that includes it.");
 
     r.step("invite");
     await tool("mail_status", {}, { pick: (value) => ({ transport: value.transport, sending: value.sending }) });
@@ -359,8 +359,8 @@ describe("the MCP walkthrough", () => {
     r.name(a.data, "/tmp/kernel-a");
     r.add("sh", "tail -n 1 /tmp/kernel-a/mailbox.jsonl");
     r.add("json", JSON.stringify(message));
-    await http("POST", a, "/_littlebox/auth/invitation", { host: s.hostname, headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) });
-    const accepted = await http("POST", a, "/_littlebox/auth/accept", { host: s.hostname, headers: { "content-type": "application/json" }, body: JSON.stringify({ token, password: memberPassword }) });
+    await http("POST", a, "/_konae/auth/invitation", { host: s.hostname, headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) });
+    const accepted = await http("POST", a, "/_konae/auth/accept", { host: s.hostname, headers: { "content-type": "application/json" }, body: JSON.stringify({ token, password: memberPassword }) });
     expect(accepted.response.status).toBe(200);
     s.cookie = accepted.response.headers.get("set-cookie")!.split(";")[0];
     s.session = s.cookie.split("=")[1];
@@ -373,7 +373,7 @@ describe("the MCP walkthrough", () => {
     r.step("runtime");
     await runtimeTool(s.hostname, s.cookie, "auth_session");
     await runtimeTool(s.hostname, s.cookie, "actions_invoke", { name: "orders.list" });
-    const shownCookie = { cookie: "littlebox_app_session=<app session>" };
+    const shownCookie = { cookie: "konae_app_session=<app session>" };
     expect((await http("GET", a, "/about", { host: s.hostname, headers: { cookie: s.cookie }, shownHeaders: shownCookie })).response.status).toBe(200);
     expect((await http("GET", a, "/missing", { host: s.hostname, headers: { cookie: s.cookie }, shownHeaders: shownCookie })).response.status).toBe(404);
 
@@ -401,8 +401,8 @@ describe("the MCP walkthrough", () => {
     const stored = await runtimeTool(s.hostname, s.cookie, "files_upload", { transferId, name: "invoice-a1.txt", type: "text/plain" });
     s.fileId = (stored.result as any).id;
     r.name(s.fileId, "<file id>");
-    expect((await http("GET", a, `/_littlebox/files/${s.fileId}`, { host: s.hostname, headers: { cookie: s.cookie }, shownHeaders: shownCookie })).response.status).toBe(200);
-    expect((await http("GET", a, `/_littlebox/files/${s.fileId}`, { host: s.hostname })).response.status).toBe(401);
+    expect((await http("GET", a, `/_konae/files/${s.fileId}`, { host: s.hostname, headers: { cookie: s.cookie }, shownHeaders: shownCookie })).response.status).toBe(200);
+    expect((await http("GET", a, `/_konae/files/${s.fileId}`, { host: s.hostname })).response.status).toBe(401);
   }, 60_000);
 
   test("10. an API key for the feed route", async () => {
@@ -412,7 +412,7 @@ describe("the MCP walkthrough", () => {
     r.name((created.result as any).keyId, "<key id>");
     expect((await http("GET", a, "/api/orders", { host: s.hostname, headers: { authorization: `Bearer ${s.key}` }, shownHeaders: { authorization: "Bearer <api key>" } })).response.status).toBe(200);
     expect((await http("GET", a, "/api/orders", { host: s.hostname })).response.status).toBe(401);
-    expect((await http("GET", a, `/_littlebox/files/${s.fileId}`, { host: s.hostname, headers: { authorization: `Bearer ${s.key}` }, shownHeaders: { authorization: "Bearer <api key>" } })).response.status).toBe(404);
+    expect((await http("GET", a, `/_konae/files/${s.fileId}`, { host: s.hostname, headers: { authorization: `Bearer ${s.key}` }, shownHeaders: { authorization: "Bearer <api key>" } })).response.status).toBe(404);
   }, 60_000);
 
   test("11. conform", async () => {
@@ -436,7 +436,7 @@ describe("the MCP walkthrough", () => {
   test("13. export the package, import it on a second Kernel", async () => {
     r.step("export-refused");
     const refused = await tool("package_export", { deploymentId: s.deploymentId }, { token: s.oauth });
-    expect(refused.error).toBe("Unknown tool or insufficient permission. package_export needs a credential with export_data. Run littlebox login with --export-data, or use a token from token_create that includes it.");
+    expect(refused.error).toBe("Unknown tool or insufficient permission. package_export needs a credential with export_data. Run konae login with --export-data, or use a token from token_create that includes it.");
 
     r.step("export");
     const exported = await tool("package_export", { deploymentId: s.deploymentId });
@@ -454,8 +454,8 @@ describe("the MCP walkthrough", () => {
     r.step("second-kernel");
     b = await startKernel(ports.b, path.join(root, "kernel-b"), setupKeyB);
     const destination = path.join(root, "orders-b");
-    expect((await run(["login", "--dir", destination, "--url", b.url, "--manage-users"], { LITTLEBOX_EMAIL: "agent@walkthrough.test", LITTLEBOX_PASSWORD: password, LITTLEBOX_SETUP_KEY: setupKeyB })).code).toBe(0);
-    s.tokenB = JSON.parse(await readFile(path.join(destination, ".littlebox/credentials.json"), "utf8")).token;
+    expect((await run(["login", "--dir", destination, "--url", b.url, "--manage-users"], { KONAE_EMAIL: "agent@walkthrough.test", KONAE_PASSWORD: password, KONAE_SETUP_KEY: setupKeyB })).code).toBe(0);
+    s.tokenB = JSON.parse(await readFile(path.join(destination, ".konae/credentials.json"), "utf8")).token;
     const manifest = { version: 1, visibility: "private" };
     await tool("project_create", { projectId: s.projectId, name: "Orders", slug: "orders", manifest }, { token: s.tokenB, kernel: b, pick: (value) => ({ id: value.id, name: value.name, slug: value.slug, sourceAuthority: value.sourceAuthority }) });
     await tool("secret_set", { projectId: s.projectId, name: "orders_webhook", value: secret }, { token: s.tokenB, kernel: b });
@@ -486,9 +486,9 @@ describe("the MCP walkthrough", () => {
 
     r.step("import-release");
     expect((await run(["build", "--dir", app()])).code).toBe(0);
-    const artifact = JSON.parse(await readFile(path.join(app(), ".littlebox/artifact.json"), "utf8"));
+    const artifact = JSON.parse(await readFile(path.join(app(), ".konae/artifact.json"), "utf8"));
     const payload = { project: { id: s.projectId, name: "Orders", slug: "orders", manifest, files: APP_FILES }, visibility: "private", artifact, initialPackage: { manifest: result.manifest, components: uploads } };
-    r.add("json", JSON.stringify({ ...payload, project: { ...payload.project, files: "<path: text of every source file>" }, artifact: "<the JSON in .littlebox/artifact.json>", initialPackage: { manifest: "<the manifest package_export returned>", components: uploads } }, null, 2));
+    r.add("json", JSON.stringify({ ...payload, project: { ...payload.project, files: "<path: text of every source file>" }, artifact: "<the JSON in .konae/artifact.json>", initialPackage: { manifest: "<the manifest package_export returned>", components: uploads } }, null, 2));
     const release = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), s.projectId);
     r.name(release.transferId, "<release upload>");
     const plan = await tool("release_plan", { transferId: release.transferId }, { token: s.tokenB, kernel: b });
@@ -500,7 +500,7 @@ describe("the MCP walkthrough", () => {
     for (const id of [...Object.values(uploads), release.transferId]) await client.cancel(id).catch(() => {});
 
     r.step("import-check");
-    const signIn = await http("POST", b, "/_littlebox/auth/login", { host: s.hostnameB, headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "member@walkthrough.test", password: memberPassword }) });
+    const signIn = await http("POST", b, "/_konae/auth/login", { host: s.hostnameB, headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "member@walkthrough.test", password: memberPassword }) });
     expect(signIn.response.status).toBe(200);
     const cookie = signIn.response.headers.get("set-cookie")!.split(";")[0];
     r.name(cookie.split("=")[1], "<destination app session>");
@@ -523,14 +523,14 @@ describe("the MCP walkthrough", () => {
 
     r.step("eject");
     const folder = path.join(root, "notes");
-    const ejected = await run(["eject", "--dir", folder, "--project", NOTES.id, "--url", a.url], { LITTLEBOX_MCP_TOKEN: s.token }, { LITTLEBOX_MCP_TOKEN: "<token>" });
+    const ejected = await run(["eject", "--dir", folder, "--project", NOTES.id, "--url", a.url], { KONAE_MCP_TOKEN: s.token }, { KONAE_MCP_TOKEN: "<token>" });
     expect(ejected.code).toBe(0);
     r.add("sh", "ls /tmp/notes");
     r.add("text", (await readdir(folder)).filter((name) => !name.startsWith(".")).sort().join("\n"));
 
     r.step("eject-publish");
-    expect((await run(["publish", "--dir", folder], { LITTLEBOX_MCP_TOKEN: s.token }, { LITTLEBOX_MCP_TOKEN: "<token>" })).code).toBe(0);
-    const receipt = JSON.parse(await readFile(path.join(folder, ".littlebox/deployment.json"), "utf8"));
+    expect((await run(["publish", "--dir", folder], { KONAE_MCP_TOKEN: s.token }, { KONAE_MCP_TOKEN: "<token>" })).code).toBe(0);
+    const receipt = JSON.parse(await readFile(path.join(folder, ".konae/deployment.json"), "utf8"));
     r.name(receipt.hostname.split(".")[0], "notes-<suffix>");
     const change = await new McpClient(`${a.url}/mcp`, { token: s.token }).upload(new TextEncoder().encode(JSON.stringify({ ...NOTES, updatedAt: NOTES.updatedAt + 1 })), NOTES.id);
     r.name(change.transferId, "<another sources upload>");
@@ -562,7 +562,7 @@ describe("the MCP walkthrough", () => {
   test("docs/mcp-walkthrough.md shows what this run recorded", async () => {
     const document = await readFile(docPath, "utf8");
     const rendered = renderDocument(document, r);
-    if (process.env.LITTLEBOX_WALKTHROUGH_WRITE) await writeFile(docPath, rendered);
-    else expect(rendered, "Run with LITTLEBOX_WALKTHROUGH_WRITE=1 to record the new answers, then review the diff.").toBe(document);
+    if (process.env.KONAE_WALKTHROUGH_WRITE) await writeFile(docPath, rendered);
+    else expect(rendered, "Run with KONAE_WALKTHROUGH_WRITE=1 to record the new answers, then review the diff.").toBe(document);
   });
 });

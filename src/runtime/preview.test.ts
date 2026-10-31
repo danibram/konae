@@ -11,7 +11,7 @@ const project = cloneStarter();
  * compare what a Capsule can actually call in each place.
  */
 function sdkSurfaceOf(html: string): string[] {
-  const source = html.match(/<script data-littlebox-runtime>([\s\S]*?)<\/script>/)?.[1];
+  const source = html.match(/<script data-konae-runtime>([\s\S]*?)<\/script>/)?.[1];
   if (!source) throw new Error("no bootstrap script in the document");
 
   const host: Record<string, any> = {};
@@ -91,7 +91,7 @@ describe("preview document", () => {
     expect(moduleOf(preview)).toBe(script);
     expect(moduleOf(deployed)).toBe(script);
     expect(() => new Bun.Transpiler({ loader: "js" }).transformSync(moduleOf(preview)!)).not.toThrow();
-    const withoutRuntime = (html: string) => html.replace(/<script data-littlebox-runtime>[\s\S]*?<\/script>/, "");
+    const withoutRuntime = (html: string) => html.replace(/<script data-konae-runtime>[\s\S]*?<\/script>/, "");
     expect(withoutRuntime(preview)).toBe(withoutRuntime(deployed));
   });
 });

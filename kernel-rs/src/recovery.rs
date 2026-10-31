@@ -7,7 +7,7 @@
 //! record from the same place it reads the copy and applies it before the
 //! Kernel serves. When the record cannot be read, the restored installation
 //! starts in maintenance: every app serves its maintenance page and
-//! administrative changes are refused, until `littlebox-kernel reconcile`
+//! administrative changes are refused, until `konae-kernel reconcile`
 //! applies the record or the operator reopens without it.
 //!
 //! The first copy writes `revocations/started.json`, so a target without it
@@ -27,7 +27,7 @@ pub(crate) const LEDGER_START: &str = "started.json";
 /// In the data directory: the restore could not apply the record.
 pub(crate) const HOLD_FILE: &str = "recovery-hold.json";
 
-const RECONCILE_USAGE: &str = "Usage: littlebox-kernel reconcile --from <copy directory | s3://bucket/prefix> | --without-record";
+const RECONCILE_USAGE: &str = "Usage: konae-kernel reconcile --from <copy directory | s3://bucket/prefix> | --without-record";
 
 /// One suspension or revocation.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -76,7 +76,7 @@ pub(crate) fn hold(data_root: &Path) -> Option<String> {
         Ok(bytes) => {
             let reason = serde_json::from_slice::<Value>(&bytes).ok().and_then(|v| v["reason"].as_str().map(str::to_owned)).unwrap_or_default();
             Some(format!(
-                "This installation was restored from a copy and stays in maintenance until its record of suspensions and revocations is applied. {reason} The operator runs littlebox-kernel reconcile."
+                "This installation was restored from a copy and stays in maintenance until its record of suspensions and revocations is applied. {reason} The operator runs konae-kernel reconcile."
             ))
         }
         Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => None,
@@ -159,13 +159,13 @@ pub(crate) async fn record(state: &AppState, entry: Entry) -> Result<()> {
 /// Kernel. Reads the copy settings from the environment.
 pub(crate) fn record_offline(data_root: &Path, entry: Entry) -> Result<()> {
     let read = |name: &str| std::env::var(name).ok().filter(|value| !value.trim().is_empty());
-    if read("LITTLEBOX_COPY_DIR").is_none() && read("LITTLEBOX_COPY_S3_PREFIX").is_none() {
+    if read("KONAE_COPY_DIR").is_none() && read("KONAE_COPY_S3_PREFIX").is_none() {
         return Ok(());
     }
     let run = async {
         let s3 = s3_client_from_env().await;
         let Some(config) = copies::CopyConfig::from_env(data_root, s3.is_some())? else { return Ok(()) };
-        let bucket = env("LITTLEBOX_DATA_BUCKET", "littlebox-data");
+        let bucket = env("KONAE_DATA_BUCKET", "konae-data");
         write(&config.targets, s3.as_ref(), &bucket, &entry).await
     };
     let result = match tokio::runtime::Handle::try_current() {
@@ -268,13 +268,13 @@ pub(crate) fn apply_or_hold(root: &Path, record: Result<Option<Vec<Vec<u8>>>>) -
     Ok(Err(reason))
 }
 
-/// `littlebox-kernel reconcile`. Returns false for any other command.
+/// `konae-kernel reconcile`. Returns false for any other command.
 pub async fn operator_command() -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) != Some("reconcile") {
         return Ok(false);
     }
-    let root = PathBuf::from(std::env::var("LITTLEBOX_DATA_DIR").unwrap_or_else(|_| "/data".into()));
+    let root = PathBuf::from(std::env::var("KONAE_DATA_DIR").unwrap_or_else(|_| "/data".into()));
     match args.get(1).map(String::as_str) {
         Some("--without-record") if args.len() == 2 => {
             clear_hold(&root)?;
@@ -307,7 +307,7 @@ mod tests {
     use crate::auth::AuthService;
 
     fn scratch() -> PathBuf {
-        std::env::temp_dir().join(format!("littlebox-recovery-{}", Uuid::new_v4()))
+        std::env::temp_dir().join(format!("konae-recovery-{}", Uuid::new_v4()))
     }
 
     #[tokio::test]
@@ -344,7 +344,6 @@ mod tests {
             public_origin: "http://localhost".into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(limits::Guards::new(Vec::new())),
         }

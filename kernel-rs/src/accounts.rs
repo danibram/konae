@@ -38,7 +38,7 @@ impl AccountSettings {
         }
     }
 
-    /// Reads `LITTLEBOX_ACCOUNT_VERIFICATION` and the mail transport
+    /// Reads `KONAE_ACCOUNT_VERIFICATION` and the mail transport
     /// (`mail::MailQueue::from_env`). Every transport, including
     /// `development`, sends through the queue.
     pub(crate) fn from_env(data_root: &Path, admin_key: &str, public_origin: &str) -> Result<Self> {
@@ -120,13 +120,13 @@ impl AccountMail for MemoryMailbox {
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/_littlebox/account", get(app_account_page))
-        .route("/_littlebox/auth/verify", post(app_verify))
-        .route("/_littlebox/auth/reset", post(app_reset))
-        .route("/_littlebox/auth/recover", post(app_recover))
-        .route("/_littlebox/owner/verify", post(creator_verify))
-        .route("/_littlebox/owner/reset", post(creator_reset))
-        .route("/_littlebox/owner/recover", post(creator_recover))
+        .route("/_konae/account", get(app_account_page))
+        .route("/_konae/auth/verify", post(app_verify))
+        .route("/_konae/auth/reset", post(app_reset))
+        .route("/_konae/auth/recover", post(app_recover))
+        .route("/_konae/owner/verify", post(creator_verify))
+        .route("/_konae/owner/reset", post(creator_reset))
+        .route("/_konae/owner/recover", post(creator_recover))
 }
 
 /// The answer to a signup or recovery request, the same whether or not an
@@ -141,7 +141,7 @@ pub(crate) const SIGNUP_HINT: &str = "Email or password is incorrect. If you sig
 /// that fails before the link is opened can say why. It holds a hash of the
 /// Deployment and the email the person typed, never the email.
 fn signup_hint_name(state: &AppState) -> &'static str {
-    if state.public_origin.starts_with("https://") { "__Host-littlebox_signup" } else { "littlebox_signup" }
+    if state.public_origin.starts_with("https://") { "__Host-konae_signup" } else { "konae_signup" }
 }
 
 fn signup_hint_value(deployment: &Deployment, email: &str) -> Option<String> {
@@ -297,7 +297,7 @@ fn app_delivery(state: &AppState, deployment: &Deployment, email: &str, client: 
         creator: Some(project_creator(state, &deployment.project_id).unwrap_or_else(|| "operator".into())),
         app_name: deployment.project_name.clone(),
         inviter: None,
-        page: format!("{}/_littlebox/account", super::domain::app_url(state, deployment)),
+        page: format!("{}/_konae/account", super::domain::app_url(state, deployment)),
     }
 }
 
@@ -307,7 +307,7 @@ fn creator_delivery(email: &str, client: std::net::IpAddr, page: &str) -> Delive
         client: Some(client),
         scope: CREATOR_SCOPE.to_owned(),
         creator: None,
-        app_name: "Littlebox".into(),
+        app_name: "Konae".into(),
         inviter: None,
         page: page.to_owned(),
     }
@@ -618,7 +618,7 @@ async fn signup_app_unverified(
 
 async fn app_account_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if deployment_for(&state, &headers).await.is_none() {
-        return error(StatusCode::NOT_FOUND, "Littlebox deployment not found.");
+        return error(StatusCode::NOT_FOUND, "Konae deployment not found.");
     }
     html_page(APP_ACCOUNT_PAGE)
 }
@@ -733,21 +733,21 @@ const APP_ACCOUNT_PAGE: &str = r#"<!doctype html><html lang="en"><meta charset="
 <main><h1 id="title">Reset your password</h1><p id="note">Enter the email of your account. If it can use this app, we send a link to choose a new password.</p>
 <form id="recover"><label>Email <input name="email" type="email" required autocomplete="email"></label><button>Send link</button></form>
 <form id="answer" hidden><label>New password <input name="password" type="password" minlength="8" required autocomplete="new-password"></label><button id="confirm">Confirm</button></form>
-<p id="error" role="alert"></p><p><a id="login" href="/_littlebox/login">Back to sign in</a></p></main>
+<p id="error" role="alert"></p><p><a id="login" href="/_konae/login">Back to sign in</a></p></main>
 <script>
-const match=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);const prefix=match?'/p/'+match[1]:'';const at=path=>prefix+path;document.querySelector('#login').href=at('/_littlebox/login');
+const match=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);const prefix=match?'/p/'+match[1]:'';const at=path=>prefix+path;document.querySelector('#login').href=at('/_konae/login');
 const params=new URLSearchParams(location.hash.slice(1));const purpose=params.has('verification')?'verification':params.has('recovery')?'recovery':null;const token=purpose&&params.get(purpose);
 const $=s=>document.querySelector(s);
 if(token){history.replaceState(null,'',location.pathname);$('#recover').hidden=true;$('#answer').hidden=false;$('#title').textContent=purpose==='verification'?'Confirm your email':'Choose a new password';$('#note').textContent=purpose==='verification'?'Choose the password for your account. Confirming activates it.':'Your other sessions end when you confirm.';}
 async function post(path,body){const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const b=await r.json().catch(()=>({}));if(!r.ok)throw Error(b.error||'Request failed.');return {status:r.status,body:b};}
-$('#recover').addEventListener('submit',async e=>{e.preventDefault();try{const r=await post(at('/_littlebox/auth/recover'),{email:new FormData(e.currentTarget).get('email')});$('#note').textContent=r.body.result.message;$('#error').textContent='';}catch(x){$('#error').textContent=x.message}});
-$('#answer').addEventListener('submit',async e=>{e.preventDefault();try{await post(at(purpose==='verification'?'/_littlebox/auth/verify':'/_littlebox/auth/reset'),{token,password:new FormData(e.currentTarget).get('password')});location.replace(at('/'));}catch(x){$('#error').textContent=x.message}});
+$('#recover').addEventListener('submit',async e=>{e.preventDefault();try{const r=await post(at('/_konae/auth/recover'),{email:new FormData(e.currentTarget).get('email')});$('#note').textContent=r.body.result.message;$('#error').textContent='';}catch(x){$('#error').textContent=x.message}});
+$('#answer').addEventListener('submit',async e=>{e.preventDefault();try{await post(at(purpose==='verification'?'/_konae/auth/verify':'/_konae/auth/reset'),{token,password:new FormData(e.currentTarget).get('password')});location.replace(at('/'));}catch(x){$('#error').textContent=x.message}});
 </script></html>"#;
 
 /// Suspends or resumes a local creator account from the server, before the
 /// Kernel starts listening:
-/// `littlebox-kernel creator-account-suspend <email>` and
-/// `littlebox-kernel creator-account-resume <email>`. Suspension ends the
+/// `konae-kernel creator-account-suspend <email>` and
+/// `konae-kernel creator-account-resume <email>`. Suspension ends the
 /// creator's sessions, open links and MCP credentials; projects and app
 /// accounts stay. Returns false when the arguments name another command.
 pub fn operator_command() -> Result<bool> {
@@ -759,9 +759,9 @@ pub fn operator_command() -> Result<bool> {
     };
     anyhow::ensure!(
         args.len() == 2,
-        "Usage: littlebox-kernel creator-account-suspend <email> | creator-account-resume <email>"
+        "Usage: konae-kernel creator-account-suspend <email> | creator-account-resume <email>"
     );
-    let root = PathBuf::from(env("LITTLEBOX_DATA_DIR", "/data"));
+    let root = PathBuf::from(env("KONAE_DATA_DIR", "/data"));
     println!("{}", run_operator_command(&root, suspend, &args[1])?);
     Ok(true)
 }
@@ -839,7 +839,7 @@ mod tests {
     }
 
     fn fixture(verification: Verification, with_mail: bool) -> Fixture {
-        let root = std::env::temp_dir().join(format!("littlebox-accounts-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-accounts-{}", Uuid::new_v4()));
         let mut deployments = HashMap::new();
         for host in [APP_HOST, OTHER_HOST] {
             let item = deployment(host);
@@ -866,7 +866,6 @@ mod tests {
             public_origin: "http://localhost".into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };
@@ -930,12 +929,12 @@ mod tests {
 
     async fn app_signup(fixture: &Fixture, host: &str, email: &str) -> Response {
         let body = json!({"email": email, "password": PASSWORD});
-        super::super::signup(State(fixture.state.clone()), host_headers(host), request("POST", host, "/_littlebox/auth/signup", body)).await
+        super::super::signup(State(fixture.state.clone()), host_headers(host), request("POST", host, "/_konae/auth/signup", body)).await
     }
 
     async fn app_login(fixture: &Fixture, host: &str, email: &str, password: &str) -> Response {
         let body = json!({"email": email, "password": password});
-        super::super::login(State(fixture.state.clone()), host_headers(host), request("POST", host, "/_littlebox/auth/login", body)).await
+        super::super::login(State(fixture.state.clone()), host_headers(host), request("POST", host, "/_konae/auth/login", body)).await
     }
 
     async fn app_answer(fixture: &Fixture, host: &str, path: &str, token: &str, password: &str) -> Response {
@@ -963,11 +962,11 @@ mod tests {
         assert!(login.contains("formnovalidate") && login.contains("a link to choose your password"));
         let response = app_signup(&fixture, APP_HOST, "person@example.test").await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        assert!(cookie_of(&response).is_some_and(|cookie| cookie.starts_with("littlebox_signup=")), "a pending account gets no session, only the signup hint");
+        assert!(cookie_of(&response).is_some_and(|cookie| cookie.starts_with("konae_signup=")), "a pending account gets no session, only the signup hint");
         let (purpose, token) = fixture.last_link();
         assert_eq!(purpose, Purpose::Verification);
         let link = fixture.mailbox.0.lock().unwrap()[0].link.clone();
-        assert!(link.starts_with(&format!("http://{APP_HOST}/_littlebox/account#verification=")));
+        assert!(link.starts_with(&format!("http://{APP_HOST}/_konae/account#verification=")));
         assert_eq!(fixture.app_state_of(APP_HOST, "person@example.test").await, "pending");
         // The signup password was not stored, and the pending account cannot sign in.
         assert_eq!(app_login(&fixture, APP_HOST, "person@example.test", PASSWORD).await.status(), StatusCode::UNAUTHORIZED);
@@ -982,12 +981,12 @@ mod tests {
         assert!(body.contains("method:'POST'") && !body.contains(&token));
         assert_eq!(fixture.app_state_of(APP_HOST, "person@example.test").await, "pending");
 
-        let verified = app_answer(&fixture, APP_HOST, "/_littlebox/auth/verify", &token, "the chosen password").await;
+        let verified = app_answer(&fixture, APP_HOST, "/_konae/auth/verify", &token, "the chosen password").await;
         assert_eq!(verified.status(), StatusCode::OK);
         let cookie = cookie_of(&verified).unwrap();
         assert_eq!(session_user(&fixture, APP_HOST, &cookie).await.unwrap().name, "person@example.test");
         assert_eq!(fixture.app_state_of(APP_HOST, "person@example.test").await, "active");
-        let again = app_answer(&fixture, APP_HOST, "/_littlebox/auth/verify", &token, "another password").await;
+        let again = app_answer(&fixture, APP_HOST, "/_konae/auth/verify", &token, "another password").await;
         assert_eq!(again.status(), StatusCode::GONE, "a link works once");
         assert_eq!(app_login(&fixture, APP_HOST, "person@example.test", "the chosen password").await.status(), StatusCode::OK);
 
@@ -1001,7 +1000,7 @@ mod tests {
         let mut headers = host_headers(host);
         headers.insert(header::COOKIE, HeaderValue::from_str(cookie).unwrap());
         let body = json!({"email": email, "password": password});
-        let response = super::super::login(State(fixture.state.clone()), headers, request("POST", host, "/_littlebox/auth/login", body)).await;
+        let response = super::super::login(State(fixture.state.clone()), headers, request("POST", host, "/_konae/auth/login", body)).await;
         let status = response.status();
         let body: Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 1 << 16).await.unwrap()).unwrap();
         (status, body["error"].as_str().unwrap_or_default().to_owned())
@@ -1036,7 +1035,7 @@ mod tests {
         fixture.state.guards = Arc::new(Guards::new(Vec::new()));
         let first = app_signup(&fixture, APP_HOST, "dora@example.test").await;
         let token = fixture.last_link().1;
-        assert_eq!(app_answer(&fixture, APP_HOST, "/_littlebox/auth/verify", &token, "dora's real password").await.status(), StatusCode::OK);
+        assert_eq!(app_answer(&fixture, APP_HOST, "/_konae/auth/verify", &token, "dora's real password").await.status(), StatusCode::OK);
         let probe = app_signup(&fixture, APP_HOST, "dora@example.test").await;
         assert_eq!(probe.status(), StatusCode::ACCEPTED);
         let probe_cookie = cookie_of(&probe).unwrap();
@@ -1051,7 +1050,7 @@ mod tests {
         fixture.state.guards = Arc::new(Guards::new(Vec::new()));
         let over_mcp = rpc(&fixture, APP_HOST, None, "tools/call", json!({"name": "auth_signup", "arguments": {"email": "cara@example.test"}})).await;
         let cara = cookie_of(&over_mcp).unwrap();
-        assert!(cara.starts_with("littlebox_signup="));
+        assert!(cara.starts_with("konae_signup="));
         assert_eq!(app_login_with(&fixture, APP_HOST, &cara, "cara@example.test", PASSWORD).await, hinted);
     }
 
@@ -1061,12 +1060,12 @@ mod tests {
         assert_eq!(app_signup(&fixture, APP_HOST, "person@example.test").await.status(), StatusCode::ACCEPTED);
         let (_, token) = fixture.last_link();
         fixture.set_policy(SignupMode::Closed).await;
-        let closed = app_answer(&fixture, APP_HOST, "/_littlebox/auth/verify", &token, PASSWORD).await;
+        let closed = app_answer(&fixture, APP_HOST, "/_konae/auth/verify", &token, PASSWORD).await;
         assert_eq!(closed.status(), StatusCode::FORBIDDEN);
         assert!(cookie_of(&closed).is_none());
         assert_eq!(app_signup(&fixture, APP_HOST, "late@example.test").await.status(), StatusCode::FORBIDDEN);
         fixture.set_policy(SignupMode::Open).await;
-        assert_eq!(app_answer(&fixture, APP_HOST, "/_littlebox/auth/verify", &token, PASSWORD).await.status(), StatusCode::OK);
+        assert_eq!(app_answer(&fixture, APP_HOST, "/_konae/auth/verify", &token, PASSWORD).await.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -1074,18 +1073,18 @@ mod tests {
         let fixture = fixture(Verification::Required, true);
         app_signup(&fixture, APP_HOST, "person@example.test").await;
         let (_, token) = fixture.last_link();
-        assert_eq!(app_answer(&fixture, OTHER_HOST, "/_littlebox/auth/verify", &token, PASSWORD).await.status(), StatusCode::GONE);
-        assert_eq!(app_answer(&fixture, APP_HOST, "/_littlebox/auth/reset", &token, PASSWORD).await.status(), StatusCode::GONE);
+        assert_eq!(app_answer(&fixture, OTHER_HOST, "/_konae/auth/verify", &token, PASSWORD).await.status(), StatusCode::GONE);
+        assert_eq!(app_answer(&fixture, APP_HOST, "/_konae/auth/reset", &token, PASSWORD).await.status(), StatusCode::GONE);
         let creator = creator_verify(
             State(fixture.state.clone()),
-            request("POST", "localhost", "/_littlebox/owner/verify", json!({"token": token, "password": PASSWORD})),
+            request("POST", "localhost", "/_konae/owner/verify", json!({"token": token, "password": PASSWORD})),
         )
         .await;
         assert_eq!(creator.status(), StatusCode::GONE);
         assert_eq!(fixture.app_state_of(APP_HOST, "person@example.test").await, "pending");
         // A weak password is refused before the token is touched.
-        assert_eq!(app_answer(&fixture, APP_HOST, "/_littlebox/auth/verify", &token, "short").await.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(app_answer(&fixture, APP_HOST, "/_littlebox/auth/verify", &token, PASSWORD).await.status(), StatusCode::OK);
+        assert_eq!(app_answer(&fixture, APP_HOST, "/_konae/auth/verify", &token, "short").await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(app_answer(&fixture, APP_HOST, "/_konae/auth/verify", &token, PASSWORD).await.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -1093,11 +1092,11 @@ mod tests {
         let fixture = fixture(Verification::Required, true);
         app_signup(&fixture, APP_HOST, "person@example.test").await;
         let (_, token) = fixture.last_link();
-        let first = cookie_of(&app_answer(&fixture, APP_HOST, "/_littlebox/auth/verify", &token, PASSWORD).await).unwrap();
+        let first = cookie_of(&app_answer(&fixture, APP_HOST, "/_konae/auth/verify", &token, PASSWORD).await).unwrap();
         let recover = |email: &'static str| {
             let state = fixture.state.clone();
             async move {
-                let response = app_recover(State(state), request("POST", APP_HOST, "/_littlebox/auth/recover", json!({"email": email}))).await;
+                let response = app_recover(State(state), request("POST", APP_HOST, "/_konae/auth/recover", json!({"email": email}))).await;
                 let status = response.status();
                 let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
                 (status, body)
@@ -1110,12 +1109,12 @@ mod tests {
         assert_eq!(known.0, StatusCode::ACCEPTED);
         let (purpose, token) = fixture.last_link();
         assert_eq!(purpose, Purpose::Recovery);
-        let reset = app_answer(&fixture, APP_HOST, "/_littlebox/auth/reset", &token, "a new password").await;
+        let reset = app_answer(&fixture, APP_HOST, "/_konae/auth/reset", &token, "a new password").await;
         assert_eq!(reset.status(), StatusCode::OK);
         let fresh = cookie_of(&reset).unwrap();
         assert!(session_user(&fixture, APP_HOST, &first).await.is_none());
         assert!(session_user(&fixture, APP_HOST, &fresh).await.is_some());
-        assert_eq!(app_answer(&fixture, APP_HOST, "/_littlebox/auth/reset", &token, "third password").await.status(), StatusCode::GONE);
+        assert_eq!(app_answer(&fixture, APP_HOST, "/_konae/auth/reset", &token, "third password").await.status(), StatusCode::GONE);
         assert_eq!(app_login(&fixture, APP_HOST, "person@example.test", PASSWORD).await.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -1124,13 +1123,13 @@ mod tests {
         let fixture = fixture(Verification::Required, true);
         app_signup(&fixture, APP_HOST, "person@example.test").await;
         let (_, token) = fixture.last_link();
-        let cookie = cookie_of(&app_answer(&fixture, APP_HOST, "/_littlebox/auth/verify", &token, PASSWORD).await).unwrap();
+        let cookie = cookie_of(&app_answer(&fixture, APP_HOST, "/_konae/auth/verify", &token, PASSWORD).await).unwrap();
         let app = fixture.app(APP_HOST).await;
         app_store(&fixture.state, &app).unwrap().suspend("person@example.test").unwrap();
         assert!(session_user(&fixture, APP_HOST, &cookie).await.is_none());
         assert_eq!(app_login(&fixture, APP_HOST, "person@example.test", PASSWORD).await.status(), StatusCode::FORBIDDEN);
         let sent = fixture.sent();
-        app_recover(State(fixture.state.clone()), request("POST", APP_HOST, "/_littlebox/auth/recover", json!({"email": "person@example.test"}))).await;
+        app_recover(State(fixture.state.clone()), request("POST", APP_HOST, "/_konae/auth/recover", json!({"email": "person@example.test"}))).await;
         assert_eq!(fixture.sent(), sent, "a suspended account gets no recovery link");
     }
 
@@ -1142,9 +1141,9 @@ mod tests {
         let app = local.app(APP_HOST).await;
         let mut state = local.state.clone();
         state.accounts = AccountSettings { verification: Verification::Required, mail: None, queue: None, google: Arc::new(google::Google::real()) };
-        let required = Fixture { state, mailbox: local.mailbox.clone(), root: std::env::temp_dir().join("littlebox-accounts-unused") };
+        let required = Fixture { state, mailbox: local.mailbox.clone(), root: std::env::temp_dir().join("konae-accounts-unused") };
         assert_eq!(app_signup(&required, APP_HOST, "new@example.test").await.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let recover = app_recover(State(required.state.clone()), request("POST", APP_HOST, "/_littlebox/auth/recover", json!({"email": "person@example.test"}))).await;
+        let recover = app_recover(State(required.state.clone()), request("POST", APP_HOST, "/_konae/auth/recover", json!({"email": "person@example.test"}))).await;
         assert_eq!(recover.status(), StatusCode::SERVICE_UNAVAILABLE);
         // The local account never verified, so required mode moved it to pending.
         assert_eq!(app_login(&required, APP_HOST, "person@example.test", PASSWORD).await.status(), StatusCode::FORBIDDEN);
@@ -1155,7 +1154,7 @@ mod tests {
     async fn rpc(fixture: &Fixture, host: &str, cookie: Option<&str>, method: &str, params: Value) -> Response {
         let mut builder = Request::builder()
             .method("POST")
-            .uri("/_littlebox/mcp")
+            .uri("/_konae/mcp")
             .header(header::HOST, host)
             .header(header::CONTENT_TYPE, "application/json");
         if let Some(cookie) = cookie {
@@ -1181,7 +1180,7 @@ mod tests {
         assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
 
         let signup = rpc(&fixture, APP_HOST, None, "tools/call", json!({"name": "auth_signup", "arguments": {"email": "person@example.test"}})).await;
-        assert!(cookie_of(&signup).is_some_and(|cookie| cookie.starts_with("littlebox_signup=")), "no session, only the signup hint");
+        assert!(cookie_of(&signup).is_some_and(|cookie| cookie.starts_with("konae_signup=")), "no session, only the signup hint");
         let body = rpc_json(signup).await;
         assert_eq!(body["result"]["structuredContent"]["result"]["status"], "link-sent", "{body}");
         assert!(!body.to_string().contains(&fixture.last_link().1), "no tool returns a token");
@@ -1207,11 +1206,11 @@ mod tests {
     async fn owner(fixture: &Fixture, path: &str, body: Value) -> Response {
         let request = request("POST", "localhost", path, body);
         match path {
-            "/_littlebox/owner/signup" => mcp::owner_signup(State(fixture.state.clone()), request).await,
-            "/_littlebox/owner/login" => mcp::owner_login(State(fixture.state.clone()), request).await,
-            "/_littlebox/owner/verify" => creator_verify(State(fixture.state.clone()), request).await,
-            "/_littlebox/owner/reset" => creator_reset(State(fixture.state.clone()), request).await,
-            "/_littlebox/owner/recover" => creator_recover(State(fixture.state.clone()), request).await,
+            "/_konae/owner/signup" => mcp::owner_signup(State(fixture.state.clone()), request).await,
+            "/_konae/owner/login" => mcp::owner_login(State(fixture.state.clone()), request).await,
+            "/_konae/owner/verify" => creator_verify(State(fixture.state.clone()), request).await,
+            "/_konae/owner/reset" => creator_reset(State(fixture.state.clone()), request).await,
+            "/_konae/owner/recover" => creator_recover(State(fixture.state.clone()), request).await,
             _ => unreachable!(),
         }
     }
@@ -1231,19 +1230,19 @@ mod tests {
     async fn a_creator_signs_up_verifies_enters_and_a_suspended_one_cannot() {
         let mut fixture = fixture(Verification::Required, true);
         let login = json!({"email": "creator@example.test", "password": PASSWORD});
-        let refused = owner(&fixture, "/_littlebox/owner/signup", json!({"email": "creator@example.test", "setupKey": "wrong"})).await;
+        let refused = owner(&fixture, "/_konae/owner/signup", json!({"email": "creator@example.test", "setupKey": "wrong"})).await;
         assert_eq!(refused.status(), StatusCode::FORBIDDEN);
-        let signup = owner(&fixture, "/_littlebox/owner/signup", json!({"email": "creator@example.test", "setupKey": "test-admin"})).await;
+        let signup = owner(&fixture, "/_konae/owner/signup", json!({"email": "creator@example.test", "setupKey": "test-admin"})).await;
         assert_eq!(signup.status(), StatusCode::ACCEPTED);
         assert!(cookie_of(&signup).is_none());
         let link = fixture.mailbox.0.lock().unwrap()[0].clone();
         assert_eq!(link.scope, CREATOR_SCOPE);
-        assert!(link.link.starts_with("http://localhost/_littlebox/owner/login#verification="));
-        assert_eq!(owner(&fixture, "/_littlebox/owner/login", login.clone()).await.status(), StatusCode::UNAUTHORIZED);
+        assert!(link.link.starts_with("http://localhost/_konae/owner/login#verification="));
+        assert_eq!(owner(&fixture, "/_konae/owner/login", login.clone()).await.status(), StatusCode::UNAUTHORIZED);
         let (_, token) = fixture.last_link();
         // A creator token does nothing on an app.
-        assert_eq!(app_answer(&fixture, APP_HOST, "/_littlebox/auth/verify", &token, PASSWORD).await.status(), StatusCode::GONE);
-        let verified = owner(&fixture, "/_littlebox/owner/verify", json!({"token": token, "password": PASSWORD})).await;
+        assert_eq!(app_answer(&fixture, APP_HOST, "/_konae/auth/verify", &token, PASSWORD).await.status(), StatusCode::GONE);
+        let verified = owner(&fixture, "/_konae/owner/verify", json!({"token": token, "password": PASSWORD})).await;
         assert_eq!(verified.status(), StatusCode::OK);
         let cookie = cookie_of(&verified).unwrap();
         let session = mcp::authenticate_owner(&fixture.state, &owner_headers(Some(&cookie), None)).unwrap().unwrap();
@@ -1254,7 +1253,7 @@ mod tests {
         let signed_in = mcp::owner_session(State(fixture.state.clone()), owner_headers(Some(&cookie), None)).await;
         assert_eq!(signed_in.status(), StatusCode::OK);
         assert_eq!(rpc_json(signed_in).await, json!({"signedIn": true, "ownerId": session.id, "displayName": "creator@example.test"}));
-        assert_eq!(owner(&fixture, "/_littlebox/owner/login", login.clone()).await.status(), StatusCode::OK);
+        assert_eq!(owner(&fixture, "/_konae/owner/login", login.clone()).await.status(), StatusCode::OK);
 
         // A delegated MCP credential for this creator.
         let bearer = "creator-bearer-token";
@@ -1280,44 +1279,44 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM credentials WHERE owner = ?1", [&session.id], |row| row.get(0))
             .unwrap();
         assert_eq!(credentials, 0);
-        assert_eq!(owner(&fixture, "/_littlebox/owner/login", login.clone()).await.status(), StatusCode::FORBIDDEN);
+        assert_eq!(owner(&fixture, "/_konae/owner/login", login.clone()).await.status(), StatusCode::FORBIDDEN);
         let sent = fixture.sent();
-        owner(&fixture, "/_littlebox/owner/recover", json!({"email": "creator@example.test"})).await;
+        owner(&fixture, "/_konae/owner/recover", json!({"email": "creator@example.test"})).await;
         assert_eq!(fixture.sent(), sent, "a suspended creator gets no recovery link");
 
         assert!(run_operator_command(&fixture.root, false, "nobody@example.test").is_err());
         run_operator_command(&fixture.root, false, "creator@example.test").unwrap();
         // This test has used up the per-email sign-in limit; start a fresh window.
         fixture.state.guards = Arc::new(Guards::new(Vec::new()));
-        assert_eq!(owner(&fixture, "/_littlebox/owner/login", login).await.status(), StatusCode::OK);
+        assert_eq!(owner(&fixture, "/_konae/owner/login", login).await.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn creator_recovery_resets_the_password_and_ends_earlier_sessions() {
         let fixture = fixture(Verification::Required, true);
-        owner(&fixture, "/_littlebox/owner/signup", json!({"email": "creator@example.test", "setupKey": "test-admin"})).await;
+        owner(&fixture, "/_konae/owner/signup", json!({"email": "creator@example.test", "setupKey": "test-admin"})).await;
         let (_, token) = fixture.last_link();
-        let first = cookie_of(&owner(&fixture, "/_littlebox/owner/verify", json!({"token": token, "password": PASSWORD})).await).unwrap();
-        let unknown = owner(&fixture, "/_littlebox/owner/recover", json!({"email": "nobody@example.test"})).await.status();
-        let known = owner(&fixture, "/_littlebox/owner/recover", json!({"email": "creator@example.test"})).await.status();
+        let first = cookie_of(&owner(&fixture, "/_konae/owner/verify", json!({"token": token, "password": PASSWORD})).await).unwrap();
+        let unknown = owner(&fixture, "/_konae/owner/recover", json!({"email": "nobody@example.test"})).await.status();
+        let known = owner(&fixture, "/_konae/owner/recover", json!({"email": "creator@example.test"})).await.status();
         assert_eq!((unknown, known), (StatusCode::ACCEPTED, StatusCode::ACCEPTED));
         let (purpose, token) = fixture.last_link();
         assert_eq!(purpose, Purpose::Recovery);
-        assert_eq!(owner(&fixture, "/_littlebox/owner/verify", json!({"token": token, "password": PASSWORD})).await.status(), StatusCode::GONE);
-        assert_eq!(owner(&fixture, "/_littlebox/owner/reset", json!({"token": token, "password": "a new password"})).await.status(), StatusCode::OK);
+        assert_eq!(owner(&fixture, "/_konae/owner/verify", json!({"token": token, "password": PASSWORD})).await.status(), StatusCode::GONE);
+        assert_eq!(owner(&fixture, "/_konae/owner/reset", json!({"token": token, "password": "a new password"})).await.status(), StatusCode::OK);
         assert!(mcp::authenticate_owner(&fixture.state, &owner_headers(Some(&first), None)).unwrap().is_none());
-        assert_eq!(owner(&fixture, "/_littlebox/owner/reset", json!({"token": token, "password": "third password"})).await.status(), StatusCode::GONE);
+        assert_eq!(owner(&fixture, "/_konae/owner/reset", json!({"token": token, "password": "third password"})).await.status(), StatusCode::GONE);
     }
 
     #[test]
     fn the_development_mailbox_appends_one_line_per_message() {
-        let path = std::env::temp_dir().join(format!("littlebox-mailbox-{}.jsonl", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("konae-mailbox-{}.jsonl", Uuid::new_v4()));
         let mailbox = DevelopmentMailbox::new(path.clone());
         let message = AccountMessage {
             to: "person@example.test".into(),
             purpose: Purpose::Recovery,
             scope: CREATOR_SCOPE.into(),
-            link: "http://localhost/_littlebox/owner/login#recovery=abc".into(),
+            link: "http://localhost/_konae/owner/login#recovery=abc".into(),
             expires_at: 1,
         };
         mailbox.deliver(&message).unwrap();

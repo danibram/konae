@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { exportLocal, publishLocal } from "../../scripts/littlebox";
+import { exportLocal, publishLocal } from "../../scripts/konae";
 import { McpClient, type Transfer } from "../../src/mcp/client";
 
 // Run manually with `bun run tests/smoke/portable-export.ts --port 19450`.
@@ -10,12 +10,12 @@ const portIndex = process.argv.indexOf("--port");
 const port = portIndex < 0 ? 19450 : Number(process.argv[portIndex + 1]);
 if (!Number.isInteger(port) || port < 1024 || port > 65534) throw Error("Choose a source port between 1024 and 65534. The target uses the next port.");
 const repo = path.resolve(import.meta.dir, "../..");
-const root = await mkdtemp(path.join(tmpdir(), "littlebox-portable-proof-"));
+const root = await mkdtemp(path.join(tmpdir(), "konae-portable-proof-"));
 const key = crypto.randomUUID() + crypto.randomUUID();
 const password = crypto.randomUUID();
 const sourceUrl = `http://127.0.0.1:${port}`;
 const targetUrl = `http://127.0.0.1:${port + 1}`;
-const binary = path.join(repo, "kernel-rs/target/debug/littlebox-kernel");
+const binary = path.join(repo, "kernel-rs/target/debug/konae-kernel");
 const processes: ReturnType<typeof Bun.spawn>[] = [];
 const attachment = new TextEncoder().encode("Attachment survives export");
 const sources = {
@@ -45,18 +45,18 @@ async function command(args: string[], cwd = repo) {
 
 async function startKernel(url: string, dataDirectory: string) {
   const logPath = path.join(root, `kernel-${new URL(url).port}.log`);
-  const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("LITTLEBOX_") && !name.startsWith("VITE_")));
+  const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("KONAE_") && !name.startsWith("VITE_")));
   const child = Bun.spawn([binary], {
     env: {
-      ...environment, LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: new URL(url).port,
-      LITTLEBOX_PUBLIC_ORIGIN: url, LITTLEBOX_HOST_SUFFIX: "localhost",
-      LITTLEBOX_DATA_DIR: dataDirectory, LITTLEBOX_ADMIN_KEY: key,
+      ...environment, KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: new URL(url).port,
+      KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost",
+      KONAE_DATA_DIR: dataDirectory, KONAE_ADMIN_KEY: key,
     },
     stdout: "ignore", stderr: Bun.file(logPath),
   });
   processes.push(child);
   for (let attempt = 0; attempt < 100; attempt++) {
-    try { if ((await fetch(`${url}/_littlebox/health`)).ok) return child; } catch {}
+    try { if ((await fetch(`${url}/_konae/health`)).ok) return child; } catch {}
     if (child.exitCode !== null) throw Error(`Kernel stopped before startup.\n${await readFile(logPath, "utf8")}`);
     await Bun.sleep(100);
   }
@@ -64,7 +64,7 @@ async function startKernel(url: string, dataDirectory: string) {
 }
 
 async function owner(url: string) {
-  const response = await fetch(`${url}/_littlebox/owner/signup`, {
+  const response = await fetch(`${url}/_konae/owner/signup`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "owner@proof.test", password: key, setupKey: key }),
   });
@@ -78,7 +78,7 @@ async function owner(url: string) {
 }
 
 function runtime(url: string, hostname: string, cookie?: string) {
-  return new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+  return new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
     const headers = new Headers(init?.headers);
     headers.set("host", hostname);
     if (cookie) headers.set("cookie", cookie);
@@ -87,7 +87,7 @@ function runtime(url: string, hostname: string, cookie?: string) {
 }
 
 async function sign(url: string, hostname: string, operation: "signup" | "login", email = "writer@proof.test", expected = 200) {
-  const response = await fetch(`${url}/_littlebox/auth/${operation}`, {
+  const response = await fetch(`${url}/_konae/auth/${operation}`, {
     method: "POST", headers: { host: hostname, "content-type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
@@ -99,7 +99,7 @@ async function sourceProject(name: string) {
   const directory = path.join(root, name);
   await mkdir(directory);
   const config = { url: sourceUrl, project: { id: name, name, slug: name, manifest: { version: 1, visibility: "public" } } };
-  for (const [filename, contents] of Object.entries({ ...sources, "littlebox.json": JSON.stringify(config) })) {
+  for (const [filename, contents] of Object.entries({ ...sources, "konae.json": JSON.stringify(config) })) {
     await writeFile(path.join(directory, filename), contents);
   }
   return { directory, config };
@@ -109,11 +109,11 @@ async function unpack(archive: string, directory: string) {
   await mkdir(directory);
   await command(["tar", "-xf", archive, "-C", directory]);
   await symlink(path.join(repo, "node_modules"), path.join(directory, "node_modules"), "dir");
-  await writeFile(path.join(directory, ".env"), `LITTLEBOX_PORT=${port + 1}\nLITTLEBOX_ADMIN_KEY=${key}\n`, { mode: 0o600 });
+  await writeFile(path.join(directory, ".env"), `KONAE_PORT=${port + 1}\nKONAE_ADMIN_KEY=${key}\n`, { mode: 0o600 });
 }
 
 async function deployment(directory: string, dataDirectory: string): Promise<Deployment> {
-  const marker = JSON.parse(await readFile(path.join(directory, "littlebox/deployment.json"), "utf8"));
+  const marker = JSON.parse(await readFile(path.join(directory, "konae/deployment.json"), "utf8"));
   return JSON.parse(await readFile(path.join(dataDirectory, "deployments", marker.deploymentId, "deployment.json"), "utf8"));
 }
 
@@ -154,7 +154,7 @@ try {
   await command(["cargo", "build", "--offline", "--locked", "--manifest-path", "kernel-rs/Cargo.toml", "--target-dir", path.join(repo, "kernel-rs/target")], kit);
   await startKernel(targetUrl, targetData);
   await command(["node", "scripts/deploy.mjs"], kit);
-  await assert.rejects(readFile(path.join(kit, "littlebox/import-state.json")), { code: "ENOENT" });
+  await assert.rejects(readFile(path.join(kit, "konae/import-state.json")), { code: "ENOENT" });
   const moved = await deployment(kit, targetData);
   assert.deepEqual(moved.signupPolicy, { mode: "closed", allowlist: [] });
   await sign(targetUrl, moved.hostname, "signup", "stranger@proof.test", 403);

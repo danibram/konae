@@ -5,7 +5,7 @@ import path from "node:path";
 import type { UsageOverview, UsageSummary } from "../src/lib/usage";
 import { McpClient } from "../src/mcp/client";
 
-// ADR-0010 against a real Kernel, the same binary `bun run littlebox -- dev`
+// ADR-0010 against a real Kernel, the same binary `bun run konae -- dev`
 // starts: Usage counts what the Kernel allowed and nothing it refused, a
 // Signal is recorded from the action's inputs, and only the owner reads them.
 
@@ -71,7 +71,7 @@ async function release(id: string, files: Record<string, string>) {
 }
 
 function runtime(cookie?: string) {
-  return new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+  return new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
     const headers = new Headers(init?.headers); headers.set("host", host); headers.set("x-forwarded-for", freshAddress());
     if (cookie) headers.set("cookie", cookie);
     return fetch(input, { ...init, headers });
@@ -94,27 +94,27 @@ async function totals() {
 beforeAll(async () => {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
   expect(await build.exited).toBe(0);
-  root = await mkdtemp(path.join(tmpdir(), "littlebox-usage-"));
-  const port = Number(process.env.LITTLEBOX_USAGE_TEST_PORT ?? 19950 + Math.floor(Math.random() * 40));
+  root = await mkdtemp(path.join(tmpdir(), "konae-usage-"));
+  const port = Number(process.env.KONAE_USAGE_TEST_PORT ?? 19950 + Math.floor(Math.random() * 40));
   url = `http://127.0.0.1:${port}`;
-  kernel = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
+  kernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
     env: {
-      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))),
-      LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_PUBLIC_ORIGIN: url,
-      LITTLEBOX_DATA_DIR: root, LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_HOST_SUFFIX: "localhost",
-      LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1",
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
+      KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
+      KONAE_DATA_DIR: root, KONAE_ADMIN_KEY: setupKey, KONAE_HOST_SUFFIX: "localhost",
+      KONAE_TRUSTED_PROXIES: "127.0.0.1",
     },
     stdout: "ignore", stderr: "inherit",
   });
   let ready = false;
   for (let attempt = 0; attempt < 100; attempt++) {
-    if (kernel.exitCode !== null) throw Error("Usage test Kernel stopped before startup. Set LITTLEBOX_USAGE_TEST_PORT to a free port.");
-    try { ready = (await fetch(`${url}/_littlebox/health`)).ok; } catch {}
+    if (kernel.exitCode !== null) throw Error("Usage test Kernel stopped before startup. Set KONAE_USAGE_TEST_PORT to a free port.");
+    try { ready = (await fetch(`${url}/_konae/health`)).ok; } catch {}
     if (ready) break;
     await Bun.sleep(100);
   }
   expect(ready).toBe(true);
-  const response = await fetch(`${url}/_littlebox/owner/signup`, {
+  const response = await fetch(`${url}/_konae/owner/signup`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "owner@usage.test", password, setupKey }),
   });
@@ -151,16 +151,16 @@ describe("Usage and Signals", () => {
     await visitor.call("actions_invoke", { name: "notes.list" });
     const routed = await post("/hooks/orders", { id: "A-1" });
     expect(routed.status).toBe(200);
-    const signup = await post("/_littlebox/auth/signup", { email: "ana@usage.test", password });
+    const signup = await post("/_konae/auth/signup", { email: "ana@usage.test", password });
     expect(signup.status).toBe(200);
-    const login = await post("/_littlebox/auth/login", { email: "ana@usage.test", password });
+    const login = await post("/_konae/auth/login", { email: "ana@usage.test", password });
     expect(login.status).toBe(200);
     const ana = runtime(login.headers.get("set-cookie")!.split(";")[0]);
     const upload = await ana.upload(new TextEncoder().encode("attachment"));
     const file = await ana.call<{ id: string }>("files_upload", { transferId: upload.transferId, name: "note.txt", type: "text/plain" });
     await ana.cancel(upload.transferId);
     await ana.download(await ana.call("files_read", { fileId: file.id }));
-    const read = await fetch(`${url}/_littlebox/files/${file.id}`, { headers: { host, cookie: login.headers.get("set-cookie")!.split(";")[0], "sec-fetch-site": "same-origin" } });
+    const read = await fetch(`${url}/_konae/files/${file.id}`, { headers: { host, cookie: login.headers.get("set-cookie")!.split(";")[0], "sec-fetch-site": "same-origin" } });
     expect(read.status).toBe(200);
 
     expect(await totals()).toEqual({
@@ -193,10 +193,10 @@ describe("Usage and Signals", () => {
     // A route with a missing input.
     expect((await post("/hooks/orders", {})).status).toBe(400);
     // A wrong password and a repeated signup.
-    expect((await post("/_littlebox/auth/login", { email: "ana@usage.test", password: "wrong-password-123" })).status).toBe(401);
-    expect((await post("/_littlebox/auth/signup", { email: "ana@usage.test", password })).status).not.toBe(200);
+    expect((await post("/_konae/auth/login", { email: "ana@usage.test", password: "wrong-password-123" })).status).toBe(401);
+    expect((await post("/_konae/auth/signup", { email: "ana@usage.test", password })).status).not.toBe(200);
     // A file another caller may not read.
-    expect((await fetch(`${url}/_littlebox/files/${crypto.randomUUID()}`, { headers: { host } })).status).toBe(404);
+    expect((await fetch(`${url}/_konae/files/${crypto.randomUUID()}`, { headers: { host } })).status).toBe(404);
     expect(await totals()).toEqual(before);
     expect((await owner.call<{ signals: unknown[] }>("signals_read", { deploymentId })).signals).toHaveLength(signalsBefore);
   });

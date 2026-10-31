@@ -455,15 +455,15 @@ export class MiniAppRuntimeHost {
       : null;
     const order = sortColumn ? ` ORDER BY ${sortColumn} ${options.sortDirection === "DESC" ? "DESC" : "ASC"}` : "";
     const statement = db.prepare(
-      `SELECT rowid AS __littlebox_rowid, * FROM ${quotedTable}${order} LIMIT ? OFFSET ?`,
+      `SELECT rowid AS __konae_rowid, * FROM ${quotedTable}${order} LIMIT ? OFFSET ?`,
     );
     const rows: DatabasePage["rows"] = [];
     try {
       statement.bind([pageSize, page * pageSize]);
       while (statement.step()) {
         const record = statement.getAsObject();
-        const rowId = record.__littlebox_rowid ?? null;
-        delete record.__littlebox_rowid;
+        const rowId = record.__konae_rowid ?? null;
+        delete record.__konae_rowid;
         rows.push({ rowId, values: record });
       }
     } finally {
@@ -648,7 +648,7 @@ export class MiniAppRuntimeHost {
     const { sql, params } = this.parseSqlPayload(payload, "execute");
     const db = await this.dbPromise;
     this.assertSingleRuntimeStatement(db, sql);
-    db.run("SAVEPOINT littlebox_runtime_write");
+    db.run("SAVEPOINT konae_runtime_write");
     let released = false;
     try {
       db.run(sql, params);
@@ -656,14 +656,14 @@ export class MiniAppRuntimeHost {
       const lastIdResult = db.exec("SELECT last_insert_rowid() AS id");
       const lastInsertId = lastIdResult[0]?.values[0]?.[0] ?? null;
       assertRuntimeDatabaseWithinLimits(this.databaseAllocatedBytes(db));
-      db.run("RELEASE littlebox_runtime_write");
+      db.run("RELEASE konae_runtime_write");
       released = true;
       await this.persistOrRevert(db);
       return { changes, lastInsertId };
     } catch (error) {
       if (!released) {
-        db.run("ROLLBACK TO littlebox_runtime_write");
-        db.run("RELEASE littlebox_runtime_write");
+        db.run("ROLLBACK TO konae_runtime_write");
+        db.run("RELEASE konae_runtime_write");
       }
       throw error;
     }
@@ -853,15 +853,15 @@ export class MiniAppRuntimeHost {
   }
 
   private get databaseKey() {
-    return `littlebox:database:${this.appId}`;
+    return `konae:database:${this.appId}`;
   }
 
   private get filesKey() {
-    return `littlebox:files:${this.appId}`;
+    return `konae:files:${this.appId}`;
   }
 
   private get databaseBackupsKey() {
-    return `littlebox:database-backups:${this.appId}`;
+    return `konae:database-backups:${this.appId}`;
   }
 }
 

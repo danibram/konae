@@ -5,16 +5,16 @@
 import type { RefusalCode } from "../kernel/refusal";
 
 export type DomainRules = {
-  /** The installation's app suffix, LITTLEBOX_HOST_SUFFIX. */
+  /** The installation's app suffix, KONAE_HOST_SUFFIX. */
   suffix: string;
-  /** The hosts of LITTLEBOX_PUBLIC_ORIGIN and LITTLEBOX_MCP_ORIGIN. */
+  /** The hosts of KONAE_PUBLIC_ORIGIN and KONAE_MCP_ORIGIN. */
   installationHosts: string[];
 };
 
 export type HostnameCheck = { ok: true; hostname: string } | { ok: false; code: RefusalCode; message: string };
 
 /** The TXT record name that proves control of a hostname. */
-export const domainRecordName = (hostname: string) => `_littlebox.${hostname}`;
+export const domainRecordName = (hostname: string) => `_konae.${hostname}`;
 
 export function checkHostname(raw: string, rules: DomainRules): HostnameCheck {
   const trimmed = raw.trim();
@@ -32,11 +32,11 @@ export function checkHostname(raw: string, rules: DomainRules): HostnameCheck {
   if (/^[0-9]+$/.test(labels[labels.length - 1])) return refuse("domain.ip", `${hostname} is an IP address. Name a hostname under a domain you control.`);
   const suffix = rules.suffix.replace(/^\.+/, "").toLowerCase();
   if (suffix && (hostname === suffix || hostname.endsWith(`.${suffix}`))) {
-    return refuse("domain.app-suffix", `${hostname} is under this installation's app suffix ${suffix}, where Littlebox names apps itself. Name a hostname outside it.`);
+    return refuse("domain.app-suffix", `${hostname} is under this installation's app suffix ${suffix}, where Konae names apps itself. Name a hostname outside it.`);
   }
   if (hostname === "localhost" || hostname.endsWith(".localhost")) return refuse("domain.local", `${hostname} is a local name. Name a hostname under a domain you control.`);
   if (rules.installationHosts.some((host) => host.toLowerCase() === hostname)) {
-    return refuse("domain.installation-host", `${hostname} is this installation's own host. Name a hostname no Littlebox host uses.`);
+    return refuse("domain.installation-host", `${hostname} is this installation's own host. Name a hostname no Konae host uses.`);
   }
   return { ok: true, hostname };
 }

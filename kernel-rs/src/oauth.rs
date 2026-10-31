@@ -284,7 +284,7 @@ fn authorization(
             && scopes
                 .iter()
                 .all(|s| ["read", "write", "publish", "manage_users"].contains(s)),
-        "Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data or manage_lifecycle; run littlebox login with --export-data or --manage-lifecycle for a token that holds them."
+        "Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data or manage_lifecycle; run konae login with --export-data or --manage-lifecycle for a token that holds them."
     );
     anyhow::ensure!(get("state").len() <= 2048, "State is too large.");
     Ok(client)
@@ -312,7 +312,7 @@ async fn authorize_page(
             let query = url::form_urlencoded::Serializer::new(String::new())
                 .append_pair("returnTo", &target)
                 .finish();
-            let login = if super::clerk::ClerkConfig::from_env().ok().flatten().is_some() { "/platform-access" } else { "/_littlebox/owner/login" };
+            let login = if super::clerk::ClerkConfig::from_env().ok().flatten().is_some() { "/platform-access" } else { "/_konae/owner/login" };
             return (
                 StatusCode::SEE_OTHER,
                 [(header::LOCATION, format!("{login}?{query}"))],
@@ -342,7 +342,7 @@ async fn authorize_page(
         })
         .unwrap_or_default();
     let body = format!(
-        "<!doctype html><html lang=en><meta charset=utf-8><title>Authorize Littlebox access</title><main><h1>Allow access for {destination}?</h1><p>Approving sends an access token to <strong>{destination}</strong>. Only continue if you started this sign-in from an app you trust at that address.</p><p>The client calls itself \"{}\". Clients register themselves, so Littlebox has not verified this name.</p><p>The token grants {} access to <strong>all of your projects</strong> for one hour. You can revoke it from Platform access.</p><form method=post action=/oauth/authorize>{fields}<input type=hidden name=csrf value=\"{csrf}\"><button>Allow access</button></form><a href=/_littlebox/owner/login>Cancel</a></main></html>",
+        "<!doctype html><html lang=en><meta charset=utf-8><title>Authorize Konae access</title><main><h1>Allow access for {destination}?</h1><p>Approving sends an access token to <strong>{destination}</strong>. Only continue if you started this sign-in from an app you trust at that address.</p><p>The client calls itself \"{}\". Clients register themselves, so Konae has not verified this name.</p><p>The token grants {} access to <strong>all of your projects</strong> for one hour. You can revoke it from Platform access.</p><form method=post action=/oauth/authorize>{fields}<input type=hidden name=csrf value=\"{csrf}\"><button>Allow access</button></form><a href=/_konae/owner/login>Cancel</a></main></html>",
         escape(client["client_name"].as_str().unwrap()),
         escape(a.get("scope").unwrap()),
         destination = escape(&destination),
@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn unused_clients_expire_so_registration_never_locks_out() {
-        let path = std::env::temp_dir().join(format!("littlebox-oauth-{}.sqlite", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("konae-oauth-{}.sqlite", Uuid::new_v4()));
         let db = Connection::open(&path).unwrap();
         db.execute_batch("CREATE TABLE credentials(hash TEXT PRIMARY KEY, owner TEXT NOT NULL, scopes TEXT NOT NULL, projects TEXT NOT NULL, expires INTEGER NOT NULL, audience TEXT);
             CREATE TABLE oauth_clients(id TEXT PRIMARY KEY, body TEXT NOT NULL); INSERT INTO oauth_clients VALUES ('legacy','{}');").unwrap();
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn consented_clients_expire_after_30_idle_days_without_live_credentials() {
-        let path = std::env::temp_dir().join(format!("littlebox-oauth-idle-{}.sqlite", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("konae-oauth-idle-{}.sqlite", Uuid::new_v4()));
         let db = Connection::open(&path).unwrap();
         db.execute_batch("CREATE TABLE credentials(hash TEXT PRIMARY KEY, owner TEXT NOT NULL, scopes TEXT NOT NULL, projects TEXT NOT NULL, expires INTEGER NOT NULL, audience TEXT);").unwrap();
         install(&db).unwrap();
@@ -591,7 +591,7 @@ mod tests {
 
     #[test]
     fn a_full_registry_evicts_the_oldest_unconsented_client() {
-        let path = std::env::temp_dir().join(format!("littlebox-oauth-cap-{}.sqlite", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("konae-oauth-cap-{}.sqlite", Uuid::new_v4()));
         let db = Connection::open(&path).unwrap();
         db.execute_batch("CREATE TABLE credentials(hash TEXT PRIMARY KEY, owner TEXT NOT NULL, scopes TEXT NOT NULL, projects TEXT NOT NULL, expires INTEGER NOT NULL, audience TEXT);").unwrap();
         install(&db).unwrap();
@@ -628,7 +628,7 @@ mod tests {
 
     #[test]
     fn consent_for_an_expired_client_issues_no_code() {
-        let path = std::env::temp_dir().join(format!("littlebox-oauth-code-{}.sqlite", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("konae-oauth-code-{}.sqlite", Uuid::new_v4()));
         let mut db = Connection::open(&path).unwrap();
         db.execute_batch("CREATE TABLE credentials(hash TEXT PRIMARY KEY, owner TEXT NOT NULL, scopes TEXT NOT NULL, projects TEXT NOT NULL, expires INTEGER NOT NULL, audience TEXT);").unwrap();
         install(&db).unwrap();

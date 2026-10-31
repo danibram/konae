@@ -2,7 +2,7 @@
 
 A room booking board for a small office. Anyone with the link sees which rooms are free each hour from 08:00 to 18:00. Staff sign in with an address at the office's domain, book one to four hours, cancel their own bookings and see who holds a room. A booker whose account has proved its address gets a confirmation by email. A door panel checks a booking in over a signed HTTP route.
 
-This app is a product probe. It uses Littlebox the way a creator would and records what the platform let it do and what it refused. It changes nothing in the Kernel, the Validation Gate, the SDK or the editor.
+This app is a product probe. It uses Konae the way a creator would and records what the platform let it do and what it refused. It changes nothing in the Kernel, the Validation Gate, the SDK or the editor.
 
 ## Primitives it uses
 
@@ -10,7 +10,7 @@ This app is a product probe. It uses Littlebox the way a creator would and recor
 | --- | --- |
 | Public Deployment with anonymous queries | `rooms.list` and `availability.day` answer a signed-out visitor with `{ room, hour }` only, no titles and no names |
 | Authenticated mutations | `bookings.create`, `bookings.cancel` and `staff.name` bind the caller with `{ "source": "actor", "field": "id" }` |
-| Allowlist signup by `@domain` | `littlebox.json` names `signupPolicy: { mode: "allowlist", allowlist: ["@office.example"] }` and `littlebox publish` installs it on the first release |
+| Allowlist signup by `@domain` | `konae.json` names `signupPolicy: { mode: "allowlist", allowlist: ["@office.example"] }` and `konae publish` installs it on the first release |
 | One SQL statement per action | `bookings.create` is one `INSERT ... WITH RECURSIVE ... SELECT` that writes every hour of the span or none |
 | CHECK constraints and a partial unique index | `schema.sql` refuses a fractional hour, an hour outside 08 to 17, an invalid date and a second holder of an hour |
 | HTTP route, unsigned | `GET /api/availability?day=YYYY-MM-DD` for a lobby screen |
@@ -28,16 +28,16 @@ The owner adds rooms with `database_execute`, because `schema.sql` may only crea
 From the repository root, with Bun, Cargo and Google Chrome installed:
 
 ```sh
-LITTLEBOX_SHOWCASE_PORT=19473 bun run examples/showcase/booking/replay.ts
+KONAE_SHOWCASE_PORT=19473 bun run examples/showcase/booking/replay.ts
 ```
 
-The replay builds the Kernel offline, starts it on `LITTLEBOX_SHOWCASE_PORT` (default 19470) with a random setup key and a data directory under the system temp folder, and deletes both on exit. It refuses to start when something already answers on the port. `LITTLEBOX_SHOWCASE_BROWSER=0` skips Chrome. `LITTLEBOX_SHOWCASE_SCREENSHOTS=<dir>` writes `booking-visitor-light.png`, `booking-staff-light.png` and `booking-staff-dark.png` there.
+The replay builds the Kernel offline, starts it on `KONAE_SHOWCASE_PORT` (default 19470) with a random setup key and a data directory under the system temp folder, and deletes both on exit. It refuses to start when something already answers on the port. `KONAE_SHOWCASE_BROWSER=0` skips Chrome. `KONAE_SHOWCASE_SCREENSHOTS=<dir>` writes `booking-visitor-light.png`, `booking-staff-light.png` and `booking-staff-dark.png` there.
 
 It prints one `PASS` line per group and a JSON report, and exits 0 when all eleven hold. The replay's Kernel uses the development mail transport, so email lands in `mailbox.jsonl` in its data directory. The last run, on 2026-11-07 after notices and scheduled work landed, printed these lines, trimmed where marked `[...]`:
 
 ```text
 PASS Validation Gate and Kernel. Both pass the Capsule and both refuse a trigger that writes the booking log, a mutation that starts with WITH, two statements in one action, a view of free hours with the same sentence. [...]
-PASS Publish. Refused first with "Action panel.checkin signs with the secret panel_hook, which is not set for this project. Set it with secret_set before publishing."; published public with littlebox publish at [...] after secret_set, with littlebox.json's signupPolicy allowlist @office.example installed on the first release.
+PASS Publish. Refused first with "Action panel.checkin signs with the secret panel_hook, which is not set for this project. Set it with secret_set before publishing."; published public with konae publish at [...] after secret_set, with konae.json's signupPolicy allowlist @office.example installed on the first release.
 PASS Allowlist signup. @office.example signs up. pat@elsewhere.example, sam@sub.office.example and, under Closed, cara@office.example all get 403 {"error":"This app is not accepting new accounts for this email address."}. Existing staff still sign in under Closed.
 PASS One-statement booking. A two-hour booking writes two rows in one INSERT ... WITH RECURSIVE ... SELECT. An overlap and a fractional hour, five hours, a span past 18:00, a past day, an impossible date, text that is not a date, an unknown room each are refused with the guard "Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours."; the statement still cannot say which rule failed. [...]
 PASS Public and staff views. A visitor and GET /api/availability get only { room, hour }; titles and names need a session, and authenticated actions answer authentication-required. Ben sees Ana's title, is refused with the cancel guard on her booking, and books the hours she freed. [...]
@@ -53,20 +53,20 @@ PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no
 ## What worked
 
 - **Allowlist by domain.** `ana@office.example` signs up. `pat@elsewhere.example` and `sam@sub.office.example` get exactly the answer a listed address gets under Closed: status 403 and `{"error":"This app is not accepting new accounts for this email address."}`. The replay compares the two bodies with `deepEqual`, so the refusal does not tell a stranger whether the domain or the policy stopped them. A domain entry does not match its subdomains. Closing signup does not sign out existing staff.
-- **The policy is in place before the first request.** `littlebox publish` sends littlebox.json's `signupPolicy` as `initialSignupPolicy`, so the public app never runs Open.
+- **The policy is in place before the first request.** `konae publish` sends konae.json's `signupPolicy` as `initialSignupPolicy`, so the public app never runs Open.
 - **Public reads stay narrow.** The anonymous query projects `room` and `hour` and nothing else; titles and names come only from `bookings.day`, which needs a session. A visitor calling `bookings.day`, `bookings.create` or `bookings.recent` gets `authentication-required`.
 - **A span of hours in one statement.** `bookings.create` generates the hours with a recursive CTE inside the `INSERT`'s `SELECT`, guards them with `WHERE`, and writes every hour or none. Cancelling is one `UPDATE ... WHERE booking_ref = ? AND user_id = ?` over all the rows of a booking. Another member's cancel changes 0 rows and is refused with the cancel guard.
 - **No double booking.** Twenty rounds of two overlapping requests sent at once, and one round of ten requests for the same hour, each end with exactly one holder. The loser always gets the create guard, never SQLite's text.
 - **Backstops in the schema.** Owner SQL that skips the action's `WHERE` still meets `UNIQUE constraint failed: bookings.room_id, bookings.day, bookings.slot` and `CHECK constraint failed: typeof(slot) = 'integer' AND slot BETWEEN 8 AND 17`.
 - **Routes.** `GET /api/availability` returns the visitor's rows as JSON. `POST /api/checkin` refuses an unsigned body with 401 `invalid-signature`, a stale `t` with 401 `stale-timestamp`, and accepts a signature or the panel's API key. A second check-in for the same hour, or one for an hour nobody booked, gets 403 with the guard `No booking holds this room at this hour, or it is already checked in.` instead of `{ changes: 0 }`. A staff session cookie sent without a signature gets 401 too, and `panel.checkin` answers only on its route.
-- **A confirmation by email.** `bookings.create` declares `"notify": { "to": "actor", "subject": "Booked: {input.room} on {input.day} at {input.start}:00", ... }`. Cara, who joined by invitation, books two hours and gets one email with that subject; her overlapping attempt is refused with the guard and sends nothing. Ana and Ben signed up under the Allowlist in local mode, where nothing proves an address, so their 25 bookings succeeded and sent nothing; `usage_read` lists `bookings.create: unverified-email` 25 times beside `bookings.create: queued` once. On an installation with `LITTLEBOX_ACCOUNT_VERIFICATION=required` every booker has answered a link and gets the email.
-- **Releasing a booking nobody claimed.** A booking that nobody checked in within 15 minutes of its first hour holds the room for no one. `bookings.release` is one `UPDATE` over every hour of such a booking, and its `"schedule": { "every": "15m" }` has the Kernel run it with nobody calling. The replay's Kernel sets `LITTLEBOX_SCHEDULE_MIN_SECONDS=2`, so it runs every 2 seconds: Ana's booking for 09:00 the day before is released, the one the panel checked in at 10:00 stays, and no booking from today on is touched. A scheduled mutation with no route answers only to the timer, so Ben calling the action himself is refused with `Action bookings.release runs only on its schedule.` `usage_read` lists each run with its outcome and changes, and one `booking.released` Signal records the run that released a row.
+- **A confirmation by email.** `bookings.create` declares `"notify": { "to": "actor", "subject": "Booked: {input.room} on {input.day} at {input.start}:00", ... }`. Cara, who joined by invitation, books two hours and gets one email with that subject; her overlapping attempt is refused with the guard and sends nothing. Ana and Ben signed up under the Allowlist in local mode, where nothing proves an address, so their 25 bookings succeeded and sent nothing; `usage_read` lists `bookings.create: unverified-email` 25 times beside `bookings.create: queued` once. On an installation with `KONAE_ACCOUNT_VERIFICATION=required` every booker has answered a link and gets the email.
+- **Releasing a booking nobody claimed.** A booking that nobody checked in within 15 minutes of its first hour holds the room for no one. `bookings.release` is one `UPDATE` over every hour of such a booking, and its `"schedule": { "every": "15m" }` has the Kernel run it with nobody calling. The replay's Kernel sets `KONAE_SCHEDULE_MIN_SECONDS=2`, so it runs every 2 seconds: Ana's booking for 09:00 the day before is released, the one the panel checked in at 10:00 stays, and no booking from today on is touched. A scheduled mutation with no route answers only to the timer, so Ben calling the action himself is refused with `Action bookings.release runs only on its schedule.` `usage_read` lists each run with its outcome and changes, and one `booking.released` Signal records the run that released a row.
 - **Content Security Policy.** The visitor page and the staff page load in Chrome under the Kernel's policy with no violation and no page error, and a staff member books two hours by clicking the grid.
 - **Errors on the page.** Every status line reads a failure through one `reason(error)` helper, the same in all five showcase apps. A refusal shows its own sentence, `rate-limited` becomes "Too many requests just now. Wait a few seconds and try again.", and a Kernel the browser cannot reach becomes "The board could not reach its server. Check the connection and try again." The replay takes the page offline and moves to the next day to prove the last one.
 
 ## Atomic booking and the one-statement rule
 
-The obvious model has two tables: a `slots` table that holds one row per room and hour, and a `bookings` table that records who booked what, plus a log of changes. A booking writes one `bookings` row and N `slots` rows, and a cancel deletes the slots and writes a log row. Littlebox runs exactly one SQL statement per action, so none of those pairs can be one action:
+The obvious model has two tables: a `slots` table that holds one row per room and hour, and a `bookings` table that records who booked what, plus a log of changes. A booking writes one `bookings` row and N `slots` rows, and a cancel deletes the slots and writes a log row. Konae runs exactly one SQL statement per action, so none of those pairs can be one action:
 
 - A second statement in the same action is refused: `Action bookings.cancel must contain one statement.`
 - A trigger that writes the second table is refused, since 2026-11-06 at both doors with `schema.sql may only create tables and indexes, but it contains CREATE TRIGGER.`
@@ -131,7 +131,7 @@ Messages are quoted exactly as the replay received them. "Gate" is the editor's 
 | A webhook out to notify staff | none | No primitive exists | See [Notifying staff](#notifying-staff) |
 | A confirmation email to the booker | Kernel | Since 2026-11-07, `"notify": { "to": "actor" }` on `bookings.create`. A booker who signed up in local mode has proved no address, so the booking succeeds and Usage counts `bookings.create: unverified-email` | Cara, invited, gets the email; Ana and Ben do not until they answer a link |
 | Seeding rooms from `schema.sql` | Kernel | `schema.sql` may only create tables and indexes (docs/mcp.md; not run by the replay) | The owner inserts rooms with `database_execute` after the first publish |
-| `bun run littlebox -- publish` with an Allowlist | CLI | Fixed on 2026-11-06. `publishLocal` sent no `initialSignupPolicy`, so a public app published with the CLI started Open until the owner called `signup_policy_set`, and the replay published over MCP to avoid that window | `littlebox.json` now names `project.manifest.signupPolicy` and the replay publishes with `publishLocal` on a token without `manage_users`; the Allowlist is in place before the first request |
+| `bun run konae -- publish` with an Allowlist | CLI | Fixed on 2026-11-06. `publishLocal` sent no `initialSignupPolicy`, so a public app published with the CLI started Open until the owner called `signup_policy_set`, and the replay published over MCP to avoid that window | `konae.json` now names `project.manifest.signupPolicy` and the replay publishes with `publishLocal` on a token without `manage_users`; the Allowlist is in place before the first request |
 | A whole-hour input | Kernel | No integer input type; `"type": "number"` accepts `13.5` | The statement checks `?4 = CAST(?4 AS INTEGER)`, and a CHECK on `typeof(slot)` backs it |
 | "Not in the past" in the office's time | Kernel | The `now` binding is UTC milliseconds; there is no time zone | Changed on 2026-11-07. The check compared with the UTC date, so in the evening west of UTC it refused the person's own today: at 21:00 in New York the UTC date is already tomorrow. It now accepts the UTC day before today, and the replay books it. The cost is the other side: east of UTC, just after midnight, yesterday is still accepted for a few hours. The page offers no past day and sends the browser's local date for its own lists |
 | The booker's name | Kernel | The `actor` binding has only `id` | The app keeps a `staff` table of display names each person sets for themselves. A name is not verified |
@@ -140,7 +140,7 @@ Messages are quoted exactly as the replay received them. "Gate" is the editor's 
 
 ## Action Contract and conform
 
-`bun run littlebox -- contract --dir <copy of this folder>` writes the contract below. The replay runs `conform` three times against the published app with the CLI, from a contract file on disk:
+`bun run konae -- contract --dir <copy of this folder>` writes the contract below. The replay runs `conform` three times against the published app with the CLI, from a contract file on disk:
 
 | Run | Result |
 | --- | --- |
@@ -156,7 +156,7 @@ Every expression the queries return carries an `AS` alias, so the contract names
 
 ## Screenshots
 
-The replay with `LITTLEBOX_SHOWCASE_SCREENSHOTS` set writes the visitor's grid in light mode and the staff view in light and dark mode, after the staff member booked Birch from 14:00 to 16:00 from the grid.
+The replay with `KONAE_SHOWCASE_SCREENSHOTS` set writes the visitor's grid in light mode and the staff view in light and dark mode, after the staff member booked Birch from 14:00 to 16:00 from the grid.
 
 <details>
 <summary>The Markdown Action Contract</summary>
@@ -165,7 +165,7 @@ The replay with `LITTLEBOX_SHOWCASE_SCREENSHOTS` set writes the visitor's grid i
 
 Generated from actions.json and schema.sql. action-contract.json is the machine-readable form and action-contract.schema.json its schema. Do not edit either; change the Capsule and generate them again.
 
-11 actions. Every action runs on the runtime endpoint `/_littlebox/mcp` as the `actions_invoke` tool, which `miniapp.actions.call(name, input)` calls.
+11 actions. Every action runs on the runtime endpoint `/_konae/mcp` as the `actions_invoke` tool, which `miniapp.actions.call(name, input)` calls.
 
 - A query answers an array of row objects keyed by the column names listed. A mutation answers { changes, lastInsertId }.
 - Column types are SQLite affinities read from schema.sql. SQLite does not enforce them, so a value can still arrive as another JSON type when it was stored as one.
@@ -225,7 +225,7 @@ On a private Deployment the route takes an API key or a session and is the actio
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
 | `Action availability.day answers only on its HTTP route, GET /api/availability.` |  | runtime | the Deployment is private and the route has no signature |
-| `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session |
+| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
 | `Unexpected action input: <key>` | 400 | both | input has a key no input binding declares |
 | `Missing action input: day` | 400 | both | a required input is omitted |
 | `day must be a non-empty string.` | 400 | both | a string input is not a string, or is empty or only whitespace |
@@ -273,8 +273,8 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_littlebox/login |
-| `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session |
+| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
+| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
 | `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
 | `Missing action input: ref` |  | runtime | a required input is omitted |
 | `ref must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
@@ -328,8 +328,8 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_littlebox/login |
-| `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session |
+| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
+| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
 | `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
 | `Missing action input: room` |  | runtime | a required input is omitted |
 | `room must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
@@ -389,8 +389,8 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_littlebox/login |
-| `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session |
+| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
+| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
 | `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
 | `Missing action input: day` |  | runtime | a required input is omitted |
 | `day must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
@@ -440,8 +440,8 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_littlebox/login |
-| `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session |
+| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
+| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
 | `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
 | `Missing action input: from` |  | runtime | a required input is omitted |
 | `from must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
@@ -492,8 +492,8 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_littlebox/login |
-| `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session |
+| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
+| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
 | `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
 | `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
@@ -582,7 +582,7 @@ The route is the action's only door: the runtime endpoint refuses it.
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
 | `Action panel.checkin answers only on its HTTP route, POST /api/checkin.` |  | runtime | always: the route declares a signature or callers |
-| `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session |
+| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
 | `Unexpected action input: <key>` | 400 | http | input has a key no input binding declares |
 | `Missing action input: room` | 400 | http | a required input is omitted |
 | `room must be a non-empty string.` | 400 | http | a string input is not a string, or is empty or only whitespace |
@@ -640,7 +640,7 @@ Runtime endpoint: visitor (none; a public Deployment only; actor none); person (
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
-| `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session |
+| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
 | `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
 | `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
@@ -680,8 +680,8 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_littlebox/login |
-| `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session |
+| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
+| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
 | `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
 | `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
 | `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
@@ -719,8 +719,8 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_littlebox/login |
-| `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session |
+| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
+| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
 | `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
 | `Missing action input: display` |  | runtime | a required input is omitted |
 | `display must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
@@ -738,7 +738,7 @@ Runtime endpoint: person (the app session, as a cookie from the app's own origin
 | Message | Status | Seen on | When |
 | --- | --- | --- | --- |
 | `Server action not declared.` |  | runtime | actions.json declares no action with that name |
-| `Sign in to use Littlebox MCP.` |  | runtime | the Deployment is private and the caller has no session, whatever the action's name |
+| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session, whatever the action's name |
 | `Arguments must be an object.` |  | runtime | input is not an object, e.g. null |
 | `No route accepts POST on this path.` | 405 | http | a POST reaches a path no action binds (405) |
 

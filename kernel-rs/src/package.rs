@@ -30,7 +30,7 @@ use super::mcp::{
 };
 use super::*;
 
-pub(super) const PACKAGE_FORMAT: &str = "littlebox-package";
+pub(super) const PACKAGE_FORMAT: &str = "konae-package";
 pub(super) const PACKAGE_VERSION: u64 = 1;
 /// A migration package: version 1 plus a `migration` stamp. A Kernel that
 /// reads only version 1 refuses it instead of serving it at once.
@@ -142,7 +142,7 @@ pub(super) fn component_limit(name: &str, files: &file_store::FileLimits) -> Res
 
 /// Checks what the manifest itself says, before any component is read.
 pub(super) fn check_manifest(manifest: &Manifest, files: &file_store::FileLimits) -> Result<()> {
-    ensure!(manifest.format == PACKAGE_FORMAT, "This is not a Littlebox package manifest.");
+    ensure!(manifest.format == PACKAGE_FORMAT, "This is not a Konae package manifest.");
     ensure!(
         manifest.version == PACKAGE_VERSION || manifest.version == MIGRATION_PACKAGE_VERSION,
         "Package version {} is not supported. This Kernel reads versions {PACKAGE_VERSION} and {MIGRATION_PACKAGE_VERSION}.",
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn identity_copies_lose_sessions_and_links_and_carry_keys_revoked() {
-        let root = std::env::temp_dir().join(format!("littlebox-package-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("identity.sqlite");
         let db = Connection::open(&path).unwrap();
@@ -963,7 +963,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn files_travel_between_an_s3_and_a_local_installation_with_the_same_bytes() {
-        let root = std::env::temp_dir().join(format!("littlebox-package-stores-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-package-stores-{}", Uuid::new_v4()));
         let local: Arc<dyn file_store::FileStore> = Arc::new(file_store::LocalFolder::new(&root));
         let s3: Arc<dyn file_store::FileStore> = Arc::new(file_store::tests::test_s3_store().await);
         round_trip(s3.clone(), local.clone(), &root).await;
@@ -974,7 +974,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn files_refuse_foreign_owners_extra_data_and_more_than_the_quota() {
-        let root = std::env::temp_dir().join(format!("littlebox-package-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
         let store: Arc<dyn file_store::FileStore> = Arc::new(file_store::LocalFolder::new(&root));
         let deployment = "source";
         let source = root.join("deployments").join(deployment).join("files");

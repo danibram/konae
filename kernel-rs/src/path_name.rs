@@ -7,10 +7,10 @@
 
 use super::refusal::{refuse, Refusal};
 
-/// Names Littlebox serves on its own paths, or that would read as one of its
+/// Names Konae serves on its own paths, or that would read as one of its
 /// own addresses. A reserved name is refused before its length or characters
 /// are checked, so `p` and `runtime.js` say why they are refused.
-const RESERVED: &[&str] = &["_littlebox", "p", "app", "mcp", "www", "api", "admin", "runtime.js"];
+const RESERVED: &[&str] = &["_konae", "p", "app", "mcp", "www", "api", "admin", "runtime.js"];
 
 const MIN_LENGTH: usize = 3;
 const MAX_LENGTH: usize = 40;
@@ -25,7 +25,7 @@ pub(crate) fn check_name(raw: &str) -> Result<String, Refusal> {
     if RESERVED.contains(&name.as_str()) {
         return Err(refuse(
             "path.reserved",
-            format!("{name} is reserved for Littlebox's own addresses. Choose another name, such as spring-menu."),
+            format!("{name} is reserved for Konae's own addresses. Choose another name, such as spring-menu."),
         ));
     }
     let length = name.chars().count();

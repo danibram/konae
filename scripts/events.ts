@@ -1,4 +1,4 @@
-// `littlebox events`: what an app did besides answer its page. Email, calls
+// `konae events`: what an app did besides answer its page. Email, calls
 // to other services, scheduled runs, routes and Signals, newest last, from
 // the Development Kernel `dev` is running or, with --prod, from the published
 // Deployment. The entries are the editor's What happened list
@@ -164,7 +164,7 @@ export const EVENTS_PAGE = `<!doctype html>
 /**
  * Serves the page and `events.json` on this machine only. It stamps each
  * mailbox line once a second, so a mail's time is when it was written to
- * within a second, also for a later `littlebox events`, which reads from here.
+ * within a second, also for a later `konae events`, which reads from here.
  */
 export function serveEvents(client: Pick<McpClient, "call">, deploymentId: string, mailbox: string, port: number) {
   const seen = new Map<number, number>();

@@ -21,5 +21,5 @@ export async function createProjectExport(
 
 function safeFilename(value: string) {
   const filename = value.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
-  return filename || "littlebox-app";
+  return filename || "konae-app";
 }

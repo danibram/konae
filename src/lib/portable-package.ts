@@ -2,7 +2,7 @@
 // as `initialPackage`. kernel-rs/src/package.rs checks the same manifest with
 // the same limits; a change here lands there too.
 
-export const packageFormat = "littlebox-package";
+export const packageFormat = "konae-package";
 export const packageVersion = 1;
 /** A migration package: version 1 plus a `migration` stamp, so a Kernel that reads only version 1 refuses it. */
 export const migrationPackageVersion = 2;
@@ -20,7 +20,7 @@ export const packageComponentLimits = {
 
 export type PackageComponentName = keyof typeof packageComponentLimits;
 
-/** Where each component sits inside an exported kit, under `littlebox/package/`. */
+/** Where each component sits inside an exported kit, under `konae/package/`. */
 export const packageComponentFiles: Record<PackageComponentName, string> = {
   database: "database.sqlite",
   identity: "identity.sqlite",
@@ -62,9 +62,9 @@ export type PackageManifest = {
 
 /** Refuses a manifest the Kernel would refuse, with the Kernel's reason. */
 export function checkPackageManifest(value: unknown): PackageManifest {
-  if (!value || typeof value !== "object") throw new Error("This is not a Littlebox package manifest.");
+  if (!value || typeof value !== "object") throw new Error("This is not a Konae package manifest.");
   const manifest = value as Partial<PackageManifest> & Record<string, unknown>;
-  if (manifest.format !== packageFormat) throw new Error("This is not a Littlebox package manifest.");
+  if (manifest.format !== packageFormat) throw new Error("This is not a Konae package manifest.");
   if (manifest.version !== packageVersion && manifest.version !== migrationPackageVersion) {
     throw new Error(`Package version ${String(manifest.version)} is not supported. This Kernel reads versions ${packageVersion} and ${migrationPackageVersion}.`);
   }

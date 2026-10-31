@@ -105,8 +105,8 @@ const fileShape = "{ id, name, type, size, visibility, createdAt, ownerId, url }
 export const sdkContract = {
   version: 1,
   global: "miniapp",
-  endpoint: "/_littlebox/mcp",
-  summary: "window.miniapp is the only host surface a Capsule has, in the editor preview and on every Deployment. Each module is a namespace on it. A published call is one or more MCP tool calls to the runtime endpoint, /_littlebox/mcp under the page's base path, on the host the page loaded from, the Deployment's generated hostname or its custom domain, with that host's app session cookie. The base path is /p/<id-or-name> when the page's address starts with /p/<segment>, and empty otherwise.",
+  endpoint: "/_konae/mcp",
+  summary: "window.miniapp is the only host surface a Capsule has, in the editor preview and on every Deployment. Each module is a namespace on it. A published call is one or more MCP tool calls to the runtime endpoint, /_konae/mcp under the page's base path, on the host the page loaded from, the Deployment's generated hostname or its custom domain, with that host's app session cookie. The base path is /p/<id-or-name> when the page's address starts with /p/<segment>, and empty otherwise.",
   absent: [
     "no fetch to other origins",
     "no localStorage contract",
@@ -114,7 +114,7 @@ export const sdkContract = {
     "no miniapp.track and no analytics call: a Signal is declared on a Server Action and recorded when miniapp.actions.call runs it",
   ],
   errors: [
-    { message: "Sign in to use Littlebox MCP.", when: "the Deployment is private and the visitor has no session; actions.call then sends the browser to /_littlebox/login and auth.session returns the anonymous state instead", source: "kernel", preview: null },
+    { message: "Sign in to use Konae MCP.", when: "the Deployment is private and the visitor has no session; actions.call then sends the browser to /_konae/login and auth.session returns the anonymous state instead", source: "kernel", preview: null },
     { message: "Deployment not found.", when: "the host name matches no Deployment", source: "kernel", preview: null },
     { message: "Cross-origin or unrecognized-host MCP request rejected.", when: "the request does not come from the origin of the host it is sent to, or that host is neither the Deployment's generated hostname nor its verified custom domain, such as a custom domain whose TXT record domain_set has not found yet", source: "kernel", preview: null },
     { message: "MCP request exceeds 200 KB.", when: "one request body is larger than 200,000 bytes", source: "kernel", preview: null },
@@ -128,7 +128,7 @@ export const sdkContract = {
       notes: [
         "Visibility decides who may open the app shell. It never grants data access on its own.",
         "The Project Owner's own account on an app has the role \"owner\". The owner opens it with Open as owner in the editor's Users view, or app_owner_enter with the owner's browser session, or by accepting an invitation they sent to their own email. No signup, recovery or input gives the role. A Google sign-in with the owner's email reaches that account only once its email is proven, and gives the role to no other account; while the email is unproven it is refused with \"This email belongs to the app owner's account. The owner opens it with Open as owner in the editor, not with Google.\" An action checks it with the binding { \"source\": \"actor\", \"field\": \"role\" } and a guard, so the app needs no key-only route to recognise its owner.",
-        "The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_littlebox/invitation.",
+        "The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_konae/invitation.",
         "The owner may add Continue with Google to the sign-in page in the editor's Users view or with sign_in_methods_set, once the app's own Google client ID and secret are set. A Google sign-in reaches the app account that holds the same email, with the same actor.id and role as the password, and the Signup Policy decides whether an email without an account gets one. Google proves only Gmail addresses and addresses of a Google Workspace domain; any other address signs in with email and password. Password sign-in stays on.",
       ],
       calls: [
@@ -148,7 +148,7 @@ export const sdkContract = {
         {
           name: "signIn",
           signature: "miniapp.auth.signIn()",
-          summary: "Send the visitor to the Deployment's login page at /_littlebox/login, under the page's base path.",
+          summary: "Send the visitor to the Deployment's login page at /_konae/login, under the page's base path.",
           signedOut: true,
           tools: [],
           args: [],
@@ -161,7 +161,7 @@ export const sdkContract = {
         {
           name: "signInWithGoogle",
           signature: "miniapp.auth.signInWithGoogle()",
-          summary: "Send the visitor to Google through /_littlebox/auth/google/start. It is a navigation, so connect-src does not apply; Google returns the person to the app signed in, or to a page that says why not.",
+          summary: "Send the visitor to Google through /_konae/auth/google/start. It is a navigation, so connect-src does not apply; Google returns the person to the app signed in, or to a page that says why not.",
           signedOut: true,
           tools: [],
           args: [],
@@ -297,7 +297,7 @@ export const sdkContract = {
         "A binding passes who calls: { \"source\": \"actor\", \"field\": \"id\" } is the signed-in person's ID or the API key's ID, and refuses a caller without one; { \"source\": \"actor\", \"field\": \"role\" } is the person's role on this app, \"owner\" or \"member\", and null for a visitor, an API key or a signed request. Neither can come from the input.",
         "A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.",
         "A mutation action returns { changes, lastInsertId }. Read changed rows with a separate query. A mutation that declares a guard and changes no row is refused with the guard instead.",
-        "The Action Contract, action-contract.json, lists every action with its inputs, the columns it returns, its errors and limits. It is written from actions.json and schema.sql by littlebox contract and carried in the export; an expression the SELECT returns without AS has no name in it, and the Validation Gate warns.",
+        "The Action Contract, action-contract.json, lists every action with its inputs, the columns it returns, its errors and limits. It is written from actions.json and schema.sql by konae contract and carried in the export; an expression the SELECT returns without AS has no name in it, and the Validation Gate warns.",
         "To record that something happened, such as a signup to a newsletter or a finished lesson, declare a signal on the mutation that does it, or add an action of kind signal and call it with miniapp.actions.call. There is no other tracking call.",
         "A call the Kernel refuses records no Signal and counts in no Usage total, except a guard's refusal, which Usage counts under refused.",
         "To email someone when something happens, such as a booking or an alert, declare notify on the mutation that does it. It reaches the owner, the person who called the action, or the verified accounts a column of the changed rows names, nobody else.",
@@ -356,7 +356,7 @@ export const sdkContract = {
       notes: [
         "Only the uploader can list or read a private file.",
         "On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.",
-        "files.list and files.upload download over MCP, check the SHA-256 and return a Blob URL. The page's policy allows connect-src 'self' only, so fetch cannot read a Blob URL again. To fetch a file, or to show one without downloading every file, use files.url. It returns the file's path GET /_littlebox/files/<id>, under the page's base path, on the app's own origin, which img, fetch and a link all reach.",
+        "files.list and files.upload download over MCP, check the SHA-256 and return a Blob URL. The page's policy allows connect-src 'self' only, so fetch cannot read a Blob URL again. To fetch a file, or to show one without downloading every file, use files.url. It returns the file's path GET /_konae/files/<id>, under the page's base path, on the app's own origin, which img, fetch and a link all reach.",
         "The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the Deployment's file quota and its ID answers File not found from then on, through every door.",
         "The operator of the installation sets the per-file limit and the Deployment's file quota. The defaults are 2 MiB per file and 20 MiB per Deployment, and a refusal names the limits in force. Do not promise the defaults in an app's text.",
         "A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.",
@@ -415,7 +415,7 @@ export const sdkContract = {
           signedOut: true,
           tools: [],
           args: [{ name: "fileId", type: "string", required: true, description: "The id of a file from files.list or files.upload, or one an action returned" }],
-          returns: "a Promise of the path \"<base>/_littlebox/files/<id>\", where <base> is the page's base path: empty, or /p/<id-or-name> on a path address. Reading it answers the file's bytes with its own type when the caller may read it, 404 File not found when the file is missing, deleted or not theirs, and 401 authentication-required to a visitor of a private Deployment",
+          returns: "a Promise of the path \"<base>/_konae/files/<id>\", where <base> is the page's base path: empty, or /p/<id-or-name> on a path address. Reading it answers the file's bytes with its own type when the caller may read it, 404 File not found when the file is missing, deleted or not theirs, and 401 authentication-required to a visitor of a private Deployment",
           errors: [
             noFileId,
             { ...unreadable, when: "reading the path, when the file does not exist, was deleted, or the caller may not read it (404)", status: 404 },
@@ -426,7 +426,7 @@ export const sdkContract = {
             "PNG, JPEG, GIF, WebP and AVIF answer inline; every other type downloads as an attachment",
           ],
           examples: [
-            { code: "image.src = await miniapp.files.url(photo.file_id);", comment: "\"/_littlebox/files/<id>\", with the base path in front on a path address" },
+            { code: "image.src = await miniapp.files.url(photo.file_id);", comment: "\"/_konae/files/<id>\", with the base path in front on a path address" },
             { code: "const text = await (await fetch(await miniapp.files.url(note.id))).text();" },
           ],
           preview: "Returns the file's data URL from browser storage, and refuses at the call with File not found when the preview actor may not read the file.",
@@ -479,7 +479,7 @@ export const sdkContract = {
         {
           file: "actions.json",
           key: "kind: call",
-          summary: "{ \"kind\": \"call\", \"access\", \"bindings\": [input bindings only], \"method\": \"GET\" | \"POST\", \"url\": \"https://inbox-2.apps.example.org/hooks/events\", \"body\"?: { \"<body key>\": \"<input key>\" | { \"value\": <constant> } }, \"headers\"?: { \"Idempotency-Key\": \"<input key>\" | { \"value\": <constant> } }, \"auth\"?: { \"secret\": \"<name>\", \"header\"?: \"X-Inbox-Signature\" } | { \"key\": \"<name>\" }, \"then\"?: { \"action\": \"<mutation>\", \"inputs\": { \"<input key>\": \"<JSON pointer>\" } } }. A POST sends the body keys as a JSON object and a GET as query parameters after the URL's own; a null or missing input leaves its key out, and a constant, a string of at most 1000 characters, a number, a boolean or null, is sent as actions.json writes it, so the caller cannot change it. On POST, a body key with dotted segments such as line_items.0.price expands into nested JSON, so a Checkout Session can name line items without a free-form object. headers may set only Idempotency-Key, from an input or a constant, for providers that require it. auth.secret signs the request with Littlebox's route scheme in the header, X-Littlebox-Signature unless header names another; auth.key sends the secret's value, an API key, as Authorization: Bearer. The secret's value stays in the Kernel; it never reaches the browser, the artifact or an export. When the call ends, delivered or failed, the then mutation runs once with no actor, its inputs read by JSON pointers from { ok, status, error, body, input }: ok is true for a 2xx answer, status the HTTP status or null, error the Kernel's error kind or null, body the answer parsed as JSON or null, and input the call's own inputs. A then mutation runs only after its call. A URL whose host is an app of this installation goes through that app's route code in the Kernel's process, with the same callers check, signature check, guard, Usage and Signal. The owner reads every call with calls_read. The Validation Gate and the Kernel refuse the same declarations with the same messages, except the three marked as the Kernel's alone.",
+          summary: "{ \"kind\": \"call\", \"access\", \"bindings\": [input bindings only], \"method\": \"GET\" | \"POST\", \"url\": \"https://inbox-2.apps.example.org/hooks/events\", \"body\"?: { \"<body key>\": \"<input key>\" | { \"value\": <constant> } }, \"headers\"?: { \"Idempotency-Key\": \"<input key>\" | { \"value\": <constant> } }, \"auth\"?: { \"secret\": \"<name>\", \"header\"?: \"X-Inbox-Signature\" } | { \"key\": \"<name>\" }, \"then\"?: { \"action\": \"<mutation>\", \"inputs\": { \"<input key>\": \"<JSON pointer>\" } } }. A POST sends the body keys as a JSON object and a GET as query parameters after the URL's own; a null or missing input leaves its key out, and a constant, a string of at most 1000 characters, a number, a boolean or null, is sent as actions.json writes it, so the caller cannot change it. On POST, a body key with dotted segments such as line_items.0.price expands into nested JSON, so a Checkout Session can name line items without a free-form object. headers may set only Idempotency-Key, from an input or a constant, for providers that require it. auth.secret signs the request with Konae's route scheme in the header, X-Konae-Signature unless header names another; auth.key sends the secret's value, an API key, as Authorization: Bearer. The secret's value stays in the Kernel; it never reaches the browser, the artifact or an export. When the call ends, delivered or failed, the then mutation runs once with no actor, its inputs read by JSON pointers from { ok, status, error, body, input }: ok is true for a 2xx answer, status the HTTP status or null, error the Kernel's error kind or null, body the answer parsed as JSON or null, and input the call's own inputs. A then mutation runs only after its call. A URL whose host is an app of this installation goes through that app's route code in the Kernel's process, with the same callers check, signature check, guard, Usage and Signal. The owner reads every call with calls_read. The Validation Gate and the Kernel refuse the same declarations with the same messages, except the three marked as the Kernel's alone.",
           errors: [
             { message: "Action <name> is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route.", when: "a call declares a statement, signal, guard or http", source: "kernel" },
             { message: "Action <name> is a <key>, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of \"kind\": \"call\".", when: "a query, mutation or signal action declares a call's keys", source: "kernel" },
@@ -488,7 +488,7 @@ export const sdkContract = {
             { message: "Action <name> has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.", when: "url is missing, relative, not http or https, carries a user or password, a fragment, a space or a control character, or is longer than 2048 characters", source: "kernel" },
             { message: "Action <name> calls the IP address <key>. Name a host instead.", when: "the host is an IPv4 or IPv6 address, in any notation", source: "kernel" },
             { message: "Action <name> calls <key>, which names this machine or a cloud metadata service.", when: "the host is localhost, metadata, instance-data or a name under .internal", source: "kernel" },
-            { message: "Action <name> calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel.", when: "the URL's first path segment is reserved, in any letter case", source: "kernel" },
+            { message: "Action <name> calls a path under /_konae, /oauth, /.well-known or /mcp, which belong to the Kernel.", when: "the URL's first path segment is reserved, in any letter case", source: "kernel" },
             { message: "Action <name> has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with \"value\", at most 32.", when: "body is not an object, has more than 32 keys, a key that is not a dotted path of letters, digits, _ and -, or a value that is neither a string nor { \"value\": <string of at most 1000 characters, number, boolean or null> }", source: "kernel" },
             { message: "Action <name> sends body key <key> with a path. Nested body keys belong on POST.", when: "a GET call names a body key that contains a dot", source: "kernel" },
             { message: "Action <name> has body keys <key> and <key>, which overlap. Use one path or the other.", when: "one body key is a dotted prefix of another", source: "kernel" },
@@ -513,7 +513,7 @@ export const sdkContract = {
             { message: "Action <name> signs its route with the secret <name>, which is set for calls only. Set a route secret with a value of its own.", when: "publishing a route whose signature names a secret set with use call", source: "kernel", preview: null },
           ],
           limits: [
-            "20 calls queued per app in any 60 seconds, unless the installation sets LITTLEBOX_CALLS_PER_MINUTE",
+            "20 calls queued per app in any 60 seconds, unless the installation sets KONAE_CALLS_PER_MINUTE",
             "10 seconds per attempt, from connecting to the last byte of the answer",
             "64 KiB per answer; a larger one ends the call as failed with answer-too-large",
             "5 attempts for a network failure, a timeout, 408, 425, 429 or a 5xx, waiting 30 seconds, then 1, 2 and 4 minutes; any other answer is final",
@@ -524,7 +524,7 @@ export const sdkContract = {
         {
           file: "manifest",
           key: "connects",
-          summary: "\"connects\": [\"https://api.example.com\"] in the project manifest, or project.manifest.connects in littlebox.json. Each origin is added to the page's connect-src, so the page may fetch it directly: another app's public GET route, which answers with Access-Control-Allow-Origin: *, or an outside API that allows the app's origin. Nothing else is loosened. A key or a secret never goes to the browser: a request that needs one is a call action, which the Kernel sends.",
+          summary: "\"connects\": [\"https://api.example.com\"] in the project manifest, or project.manifest.connects in konae.json. Each origin is added to the page's connect-src, so the page may fetch it directly: another app's public GET route, which answers with Access-Control-Allow-Origin: *, or an outside API that allows the app's origin. Nothing else is loosened. A key or a secret never goes to the browser: a request that needs one is a call action, which the Kernel sends.",
           errors: [
             { message: "connects must be a list of at most 10 origins, such as [\"https://api.example.com\"].", when: "connects is not a list of strings or lists more than 10", source: "kernel" },
             { message: "connects lists <key>, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost.", when: "an entry is not exactly an origin: http to a host outside localhost, a path or trailing slash, a wildcard, capitals, or the default port written out", source: "kernel" },
@@ -541,7 +541,7 @@ export const sdkContract = {
         "Each attempt of a signed call signs again with a new nonce, so a retry is never refused as a replay.",
         "A paused app sends no call and runs no then mutation until its pause ends.",
         "Usage counts each queued call under call, by action. The then mutation counts as an action, or under refused when its guard refuses, and records its Signal with actor null.",
-        "The editor preview answers { callId, queued: true } and sends nothing. Run calls on a Development Kernel with littlebox dev, or on a Deployment.",
+        "The editor preview answers { callId, queued: true } and sends nothing. Run calls on a Development Kernel with konae dev, or on a Deployment.",
       ],
     },
     {
@@ -552,20 +552,20 @@ export const sdkContract = {
         {
           file: "actions.json",
           key: "http",
-          summary: "{ \"method\": \"GET\" | \"POST\", \"path\": \"/api/items\", \"signature\"?: { \"scheme\"?: \"littlebox\" | \"hmac-body\" | \"timestamped\" | \"svix\", \"header\": \"X-Signature\", \"secret\": \"items_webhook\", ... }, \"callers\"?: [\"signature\" | \"key\" | \"session\"], \"fields\"?: { \"<input key>\": \"$.data.object.id\" } } on an action declared anonymous. GET binds a query and maps the query string onto its input bindings by type; POST binds a mutation and reads a JSON object body. A signature's scheme is littlebox by default; hmac-body, timestamped and svix verify a provider's own webhook, such as GitHub's, Shopify's, Stripe's or Resend's. fields reads each named input from a JSON path into the body, and with it the route leaves out body keys no input names. callers names who may call the route; without it a signed route takes the signature or an API key, an unsigned route on a private Deployment an API key or a session, and an unsigned route on a public Deployment anyone. An action whose route does not answer anyone answers only on that route, never through miniapp.actions.call. The route answers { result } with the rows or { changes, lastInsertId }, and { error } with a status code. The Validation Gate and the Kernel refuse the same declarations with the same messages.",
+          summary: "{ \"method\": \"GET\" | \"POST\", \"path\": \"/api/items\", \"signature\"?: { \"scheme\"?: \"konae\" | \"hmac-body\" | \"timestamped\" | \"svix\", \"header\": \"X-Signature\", \"secret\": \"items_webhook\", ... }, \"callers\"?: [\"signature\" | \"key\" | \"session\"], \"fields\"?: { \"<input key>\": \"$.data.object.id\" } } on an action declared anonymous. GET binds a query and maps the query string onto its input bindings by type; POST binds a mutation and reads a JSON object body. A signature's scheme is konae by default; hmac-body, timestamped and svix verify a provider's own webhook, such as GitHub's, Shopify's, Stripe's or Resend's. fields reads each named input from a JSON path into the body, and with it the route leaves out body keys no input names. callers names who may call the route; without it a signed route takes the signature or an API key, an unsigned route on a private Deployment an API key or a session, and an unsigned route on a public Deployment anyone. An action whose route does not answer anyone answers only on that route, never through miniapp.actions.call. The route answers { result } with the rows or { changes, lastInsertId }, and { error } with a status code. The Validation Gate and the Kernel refuse the same declarations with the same messages.",
           errors: [
             { message: "Action <name> is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route.", when: "a signal action declares http", source: "kernel" },
             { message: "Action <name> must bind GET for a query and POST for a mutation.", when: "the method does not match the action's kind, or is neither GET nor POST", source: "kernel" },
             { message: "Action <name> is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route.", when: "the action's access is authenticated", source: "kernel" },
             { message: "Action <name> has an invalid http path. Use a leading \"/\" and segments of letters, digits, \".\", \"_\", \"~\" or \"-\", up to 200 characters.", when: "the path is \"/\", ends with \"/\", climbs with \"..\", or carries a query string", source: "kernel" },
-            { message: "Action <name> binds the reserved path <key>. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel.", when: "the first segment is reserved, in any letter case", source: "kernel" },
+            { message: "Action <name> binds the reserved path <key>. Paths under /_konae, /oauth, /.well-known and /mcp belong to the Kernel.", when: "the first segment is reserved, in any letter case", source: "kernel" },
             { message: "Actions <name> and <name> both bind <key>.", when: "two actions declare the same method and path", source: "kernel" },
             { message: "Action <name> has an invalid signature header.", when: "the header is not 1 to 64 letters, digits and -, or is Authorization, Cookie, Host, Content-Type or Content-Length", source: "kernel" },
             { message: "Action <name> names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter.", when: "the secret is not a secret name", source: "kernel" },
             { message: "Action <name> has an invalid http binding.", when: "http is not an object, has another key, or its signature has a key other than header and secret", source: "kernel" },
-            { message: "Action <name> names an unknown signature scheme. Use \"littlebox\", \"hmac-body\", \"timestamped\" or \"svix\".", when: "the signature's scheme is another word, or not text", source: "kernel" },
+            { message: "Action <name> names an unknown signature scheme. Use \"konae\", \"hmac-body\", \"timestamped\" or \"svix\".", when: "the signature's scheme is another word, or not text", source: "kernel" },
             { message: "Action <name> has an invalid <key> signature. It takes <names>.", when: "the signature has a key its scheme does not take, such as a header on a svix signature or a window on an hmac-body one", source: "kernel" },
-            { message: "Action <name> binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body.", when: "a query's route declares hmac-body, timestamped or svix", source: "kernel" },
+            { message: "Action <name> binds GET, so its signature must use the konae scheme. A provider's scheme signs a POST body.", when: "a query's route declares hmac-body, timestamped or svix", source: "kernel" },
             { message: "Action <name> names an unknown signature provider. Use <names>.", when: "the signature's provider is not text or not a row of the preset table, in that letter case; <names> is the table's rows, \"github\", \"shopify\", \"stripe\" or \"svix\"", source: "kernel" },
             { message: "Action <name> names the signature provider \"<key>\", so its signature takes only \"provider\" and \"secret\". Remove <names>.", when: "a preset has a long-form key beside it, such as header or scheme; the refusal names every such key in sorted order", source: "kernel" },
             { message: "Action <name> has an invalid signature algorithm. Use \"sha256\" or \"sha1\".", when: "an hmac-body signature names no algorithm or another one", source: "kernel" },
@@ -619,8 +619,8 @@ export const sdkContract = {
         "A provider's preset. { \"provider\": \"github\" | \"shopify\" | \"stripe\" | \"svix\", \"secret\": \"<name>\" } stands for that provider's long form: github for hmac-body over X-Hub-Signature-256 with sha256, hex and prefix sha256=; shopify for hmac-body over X-Shopify-Hmac-Sha256 with sha256 and base64; stripe for timestamped over Stripe-Signature with t=, v1= and window 300; svix for svix, which Resend also uses. A preset takes no other key, so a route has one spelling. Both doors read the table from kernel-rs/src/signature-presets.json, and each row verifies a published or provider-form vector. Any other sender uses the long form.",
         "fields maps an input key to a JSON path into the POST body, such as { \"id\": \"$.data.object.id\" }. Each input fields does not name is read from the body's key of that name, and every other key of the body is left out, so a provider's payload needs no adapter. A path that is missing leaves its input out: a required one is refused as missing, a nullable one binds NULL.",
         "The owner sets the secret with the secret_set admin tool before publishing. It never appears in actions.json, the Build Artifact or an export.",
-        "GET /_littlebox/files/<id>, the path miniapp.files.url returns under the page's base path, answers a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it. A visitor without a session on a private app gets 401 authentication-required before any file is looked up; every other caller who may not read the file gets 404 File not found, the same as for a missing or deleted one.",
-        "The editor preview serves no routes. Run them on a Development Kernel with littlebox dev, or on a Deployment.",
+        "GET /_konae/files/<id>, the path miniapp.files.url returns under the page's base path, answers a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it. A visitor without a session on a private app gets 401 authentication-required before any file is looked up; every other caller who may not read the file gets 404 File not found, the same as for a missing or deleted one.",
+        "The editor preview serves no routes. Run them on a Development Kernel with konae dev, or on a Deployment.",
       ],
     },
   ],

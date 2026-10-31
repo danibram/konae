@@ -3,7 +3,7 @@
 //! Each app has its own Google OAuth client: the owner sets its client ID
 //! and secret as the project secrets `google_client_id` and
 //! `google_client_secret`, and registers this app's own callback,
-//! `https://<app host>/_littlebox/auth/google/callback`, in the Google
+//! `https://<app host>/_konae/auth/google/callback`, in the Google
 //! console, once for the generated host, once for a verified custom
 //! domain and once for its path address (`<domain>/p/<id>`) when it has one.
 //! A path address shares its origin with every other path, so its callback
@@ -11,7 +11,7 @@
 //! address, `<domain>/`, offers no Google sign-in. The whole flow stays on
 //! the app's host:
 //!
-//! `/_littlebox/auth/google/start` → Google → `/_littlebox/auth/google/callback`
+//! `/_konae/auth/google/start` → Google → `/_konae/auth/google/callback`
 //!
 //! `start` records the flow (its `state`, the ID token's `nonce`, the PKCE
 //! verifier, the Deployment and the app origin) and gives the browser a
@@ -53,8 +53,8 @@ const MAX_JWKS_BYTES: usize = 64 * 1024;
 /// most this often. Google publishes a new key well before it signs with it.
 const REFETCH_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
-pub(crate) const CALLBACK_PATH: &str = "/_littlebox/auth/google/callback";
-const START_PATH: &str = "/_littlebox/auth/google/start";
+pub(crate) const CALLBACK_PATH: &str = "/_konae/auth/google/callback";
+const START_PATH: &str = "/_konae/auth/google/start";
 
 /// The project secrets that hold the app's Google client.
 pub(crate) const CLIENT_ID: &str = "google_client_id";
@@ -91,7 +91,7 @@ pub(crate) fn still_on(name: &str) -> String {
 }
 
 /// Google's fixed endpoints. Only a development build may replace them, with
-/// `LITTLEBOX_GOOGLE_TEST_ISSUER` (see `Google::from_env`).
+/// `KONAE_GOOGLE_TEST_ISSUER` (see `Google::from_env`).
 const AUTHORIZE: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN: &str = "https://oauth2.googleapis.com/token";
 const JWKS: &str = "https://www.googleapis.com/oauth2/v3/certs";
@@ -166,24 +166,24 @@ impl Google {
         Self::with(Endpoints::google())
     }
 
-    /// Google, unless `LITTLEBOX_GOOGLE_TEST_ISSUER` points the endpoints at
+    /// Google, unless `KONAE_GOOGLE_TEST_ISSUER` points the endpoints at
     /// a local fake issuer. A release build refuses to start with it set, and
     /// a development build reads it only with a local HTTP public origin.
     pub(crate) fn from_env(public_origin: &str) -> Result<Self> {
-        for retired in ["LITTLEBOX_GOOGLE_CLIENT_ID", "LITTLEBOX_GOOGLE_CLIENT_SECRET"] {
+        for retired in ["KONAE_GOOGLE_CLIENT_ID", "KONAE_GOOGLE_CLIENT_SECRET"] {
             if std::env::var(retired).is_ok_and(|value| !value.is_empty()) {
                 eprintln!("{retired} is no longer read. Each app's owner sets the app's own Google client in Auth > Users.");
             }
         }
-        let Some(base) = std::env::var("LITTLEBOX_GOOGLE_TEST_ISSUER").ok().filter(|v| !v.is_empty()) else {
+        let Some(base) = std::env::var("KONAE_GOOGLE_TEST_ISSUER").ok().filter(|v| !v.is_empty()) else {
             return Ok(Self::real());
         };
         if !cfg!(debug_assertions) {
-            bail!("LITTLEBOX_GOOGLE_TEST_ISSUER works only in a development build. Unset it.");
+            bail!("KONAE_GOOGLE_TEST_ISSUER works only in a development build. Unset it.");
         }
         ensure!(
             local_http(public_origin) && local_http(&base),
-            "LITTLEBOX_GOOGLE_TEST_ISSUER needs a local HTTP public origin and a local HTTP issuer."
+            "KONAE_GOOGLE_TEST_ISSUER needs a local HTTP public origin and a local HTTP issuer."
         );
         Ok(Self::with(Endpoints::fake(&base)))
     }
@@ -504,7 +504,7 @@ fn app_origin(state: &AppState, headers: &HeaderMap) -> Option<String> {
 /// The flow cookie's name. On the path host every app shares the origin, so
 /// the name carries the Deployment's id and two apps' flows do not collide.
 fn cookie_name(state: &AppState, deployment: &Deployment, headers: &HeaderMap) -> String {
-    let base = if state.public_origin.starts_with("https://") { "__Host-littlebox_google" } else { "littlebox_google" };
+    let base = if state.public_origin.starts_with("https://") { "__Host-konae_google" } else { "konae_google" };
     if path::on_path_host(state, headers) { format!("{base}_{}", deployment.id) } else { base.to_owned() }
 }
 
@@ -526,7 +526,7 @@ async fn start_get(State(state): State<AppState>, request: Request) -> Response 
     let headers = request.headers().clone();
     let peer = request.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|info| info.0);
     let Some(deployment) = deployment_for(&state, &headers).await else {
-        return error(StatusCode::NOT_FOUND, "Littlebox deployment not found.");
+        return error(StatusCode::NOT_FOUND, "Konae deployment not found.");
     };
     match begin(&state, &deployment, &headers, peer, IdentityIntent::SignIn).await {
         Ok((location, cookie)) => {
@@ -689,7 +689,7 @@ fn take_flow(db: &Connection, flow_state: &str, deployment_id: &str, origin: &st
 /// state and this browser's flow cookie are its proof.
 async fn callback(State(state): State<AppState>, headers: HeaderMap, Query(query): Query<CallbackQuery>) -> Response {
     let Some(deployment) = deployment_for(&state, &headers).await else {
-        return error(StatusCode::NOT_FOUND, "Littlebox deployment not found.");
+        return error(StatusCode::NOT_FOUND, "Konae deployment not found.");
     };
     let mut response = callback_in(&state, &deployment, &headers, query).await;
     response.headers_mut().append(header::SET_COOKIE, browser_cookie(&state, &deployment, &headers, "", 0));
@@ -819,7 +819,7 @@ fn page_with_link(status: StatusCode, message: &str, link: &str) -> Response {
 }
 
 /// A page with a link back to sign in. The start and callback paths sit in
-/// `/_littlebox/auth/google/`, so the relative link reaches the sign-in page
+/// `/_konae/auth/google/`, so the relative link reaches the sign-in page
 /// under a path address's prefix too.
 fn login_link_page(status: StatusCode, message: &str) -> Response {
     page_with_link(status, message, "../../login")
@@ -828,7 +828,7 @@ fn login_link_page(status: StatusCode, message: &str) -> Response {
 /// The sign-in page's Google button, as a link: a navigation is not bound by
 /// the page's form-action or connect-src. On a path address it keeps the
 /// page's `/p/<segment>` prefix, as the Kernel's other pages do.
-pub(crate) const BUTTON: &str = r#"<a class="google" href="/_littlebox/auth/google/start">Continue with Google</a><script>{const m=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);if(m)document.querySelector('a.google').href='/p/'+m[1]+'/_littlebox/auth/google/start'}</script>"#;
+pub(crate) const BUTTON: &str = r#"<a class="google" href="/_konae/auth/google/start">Continue with Google</a><script>{const m=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);if(m)document.querySelector('a.google').href='/p/'+m[1]+'/_konae/auth/google/start'}</script>"#;
 pub(crate) const BUTTON_STYLE: &str = ".google{display:block;text-align:center;text-decoration:none;font:inherit;border-radius:8px;padding:11px 12px;border:1px solid #c9ced6;color:#20232a;margin-top:16px}@media (prefers-color-scheme:dark){.google{color:#e8eaed;border-color:#3a404a}}";
 
 #[cfg(test)]
@@ -945,7 +945,7 @@ mod tests {
 
     async fn fixture(mode: SignupMode) -> Fixture {
         let (fake, base) = fake_google().await;
-        let root = std::env::temp_dir().join(format!("littlebox-google-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-google-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let mut deployments = HashMap::new();
         for host in [APP, OTHER] {
@@ -986,7 +986,6 @@ mod tests {
             public_origin: KERNEL.into(),
             mcp_origin: None,
             path_origin: Some(PATH_ORIGIN.into()),
-            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(limits::Guards::new(Vec::new())),
         };
@@ -1053,7 +1052,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::SEE_OTHER, "{}", text(response).await);
             let url = url::Url::parse(&location(&response)).unwrap();
             assert!(url.as_str().starts_with(&format!("{}/authorize?", self.base)));
-            let cookie = set_cookies(&response).into_iter().find(|c| c.starts_with("littlebox_google=")).unwrap();
+            let cookie = set_cookies(&response).into_iter().find(|c| c.starts_with("konae_google=")).unwrap();
             (cookie, url.query_pairs().into_owned().collect())
         }
 
@@ -1084,7 +1083,7 @@ mod tests {
         }
 
         async fn session_user(&self, host: &str, response: &Response) -> Value {
-            let cookie = set_cookies(response).into_iter().find(|c| c.starts_with("littlebox_app_session=")).expect("a session cookie");
+            let cookie = set_cookies(response).into_iter().find(|c| c.starts_with("konae_app_session=")).expect("a session cookie");
             let response = session(State(self.state.clone()), headers(host, Some(&cookie))).await;
             serde_json::from_str::<Value>(&text(response).await).unwrap()["result"].clone()
         }
@@ -1118,7 +1117,7 @@ mod tests {
         let first = fixture.google(APP, &cookie, &query, &ANA, "local-test", |_| {}).await;
         assert_eq!(first.status(), StatusCode::SEE_OTHER, "{}", text(first).await);
         assert_eq!(location(&first), "/");
-        assert!(set_cookies(&first).contains(&"littlebox_google=".to_owned()), "the callback clears the flow cookie");
+        assert!(set_cookies(&first).contains(&"konae_google=".to_owned()), "the callback clears the flow cookie");
         let user = fixture.session_user(APP, &first).await;
         assert_eq!(user["name"], ANA.email);
         assert_eq!(user["role"], "member");
@@ -1159,7 +1158,7 @@ mod tests {
     #[tokio::test]
     async fn a_path_address_signs_in_through_its_id_callback_and_the_home_offers_no_google() {
         use tower::ServiceExt;
-        let mut fixture = fixture(SignupMode::Open).await;
+        let fixture = fixture(SignupMode::Open).await;
         let app = fixture.deployment(APP).await;
         // Before the path is on, the owner is shown no path callback.
         assert!(!redirect_uris(&fixture.state, &app).iter().any(|uri| uri.contains("/p/")));
@@ -1175,29 +1174,29 @@ mod tests {
             request.body(Body::empty()).unwrap()
         };
         // The name address starts a flow that returns to the id address, which a rename keeps.
-        let started = router(fixture.state.clone()).oneshot(get("/p/spring-practice/_littlebox/auth/google/start".into(), None)).await.unwrap();
+        let started = router(fixture.state.clone()).oneshot(get("/p/spring-practice/_konae/auth/google/start".into(), None)).await.unwrap();
         assert_eq!(started.status(), StatusCode::SEE_OTHER);
         let query: HashMap<String, String> = url::Url::parse(&location(&started)).unwrap().query_pairs().into_owned().collect();
         assert_eq!(query["redirect_uri"], callback_uri);
-        let flow_cookie = set_cookies(&started).into_iter().find(|c| c.starts_with(&format!("littlebox_google_{}=", app.id))).expect("a flow cookie named for the app");
+        let flow_cookie = set_cookies(&started).into_iter().find(|c| c.starts_with(&format!("konae_google_{}=", app.id))).expect("a flow cookie named for the app");
         let now = auth::now_seconds();
         let claims = json!({"iss": fixture.base, "aud": APP_CLIENT, "azp": APP_CLIENT, "sub": ANA.subject, "email": ANA.email,
             "email_verified": true, "nonce": query["nonce"], "iat": now, "exp": now + 3600});
         fixture.fake.grants.lock().unwrap().insert("path-code".into(), Grant { claims, challenge: query["code_challenge"].clone(), redirect_uri: callback_uri.clone(), kid: "local-test" });
-        let back = format!("/p/{}/_littlebox/auth/google/callback?code=path-code&state={}", app.id, query["state"]);
+        let back = format!("/p/{}/_konae/auth/google/callback?code=path-code&state={}", app.id, query["state"]);
         let signed = router(fixture.state.clone()).oneshot(get(back, Some(flow_cookie))).await.unwrap();
         assert_eq!(signed.status(), StatusCode::SEE_OTHER, "{}", text(signed).await);
         assert_eq!(location(&signed), format!("/p/{}/", app.id), "the app opens under its prefix");
-        assert!(set_cookies(&signed).iter().any(|c| c.starts_with(&format!("littlebox_app_session_{}=", app.id))), "the session is named for the app on the shared origin");
+        assert!(set_cookies(&signed).iter().any(|c| c.starts_with(&format!("konae_app_session_{}=", app.id))), "the session is named for the app on the shared origin");
         assert_eq!(fixture.users(&app.id), 1);
         // The home address shares the origin and has no callback, so Google does not start there.
-        fixture.state.home_deployment = Some(app.id.clone());
-        let home = router(fixture.state.clone()).oneshot(get("/_littlebox/auth/google/start".into(), None)).await.unwrap();
+        path::turn_on_for_test(&fixture.state, &app.id, Some(path::HOME_NAME)).await;
+        let home = router(fixture.state.clone()).oneshot(get("/_konae/auth/google/start".into(), None)).await.unwrap();
         assert_eq!(home.status(), StatusCode::BAD_REQUEST);
         assert!(text(home).await.contains(&escape(NOT_ON_HOME)));
-        let page = router(fixture.state.clone()).oneshot(get("/_littlebox/login".into(), None)).await.unwrap();
+        let page = router(fixture.state.clone()).oneshot(get("/_konae/login".into(), None)).await.unwrap();
         assert!(!text(page).await.contains("Continue with Google"), "the home's sign-in page offers no Google");
-        let page = router(fixture.state.clone()).oneshot(get(format!("/p/{}/_littlebox/login", app.id), None)).await.unwrap();
+        let page = router(fixture.state.clone()).oneshot(get(format!("/p/{}/_konae/login", app.id), None)).await.unwrap();
         assert!(text(page).await.contains("Continue with Google"), "the path address's sign-in page does");
     }
 
@@ -1301,7 +1300,7 @@ mod tests {
         assert!(text(other).await.contains(&escape(STALE)));
         let port = fixture.google("practice.localhost:9999", &cookie, &query, &ANA, "local-test", |_| {}).await;
         assert_eq!(port.status(), StatusCode::GONE);
-        let stranger = fixture.google(APP, "littlebox_google=someone-else", &query, &ANA, "local-test", |_| {}).await;
+        let stranger = fixture.google(APP, "konae_google=someone-else", &query, &ANA, "local-test", |_| {}).await;
         assert!(text(stranger).await.contains(&escape(OTHER_BROWSER)));
         // The right one works once.
         assert_eq!(fixture.google(APP, &cookie, &query, &ANA, "local-test", |_| {}).await.status(), StatusCode::SEE_OTHER);

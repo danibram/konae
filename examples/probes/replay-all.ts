@@ -3,21 +3,21 @@
 // cells of docs/research/capability-matrix.md that no showcase replay proves.
 //
 //   bun run examples/probes/replay-all.ts
-//   LITTLEBOX_PROBE_BASE_PORT=23000 bun run examples/probes/replay-all.ts
+//   KONAE_PROBE_BASE_PORT=23000 bun run examples/probes/replay-all.ts
 //
-// LITTLEBOX_KERNEL_BIN runs an already built Kernel instead of compiling one.
+// KONAE_KERNEL_BIN runs an already built Kernel instead of compiling one.
 import { readdirSync } from "node:fs";
 import path from "node:path";
 
 const root = import.meta.dir;
-const base = Number(process.env.LITTLEBOX_PROBE_BASE_PORT ?? 23000);
+const base = Number(process.env.KONAE_PROBE_BASE_PORT ?? 23000);
 const probes = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
 const failed: string[] = [];
 for (const [index, name] of probes.entries()) {
   const port = base + index * 10;
   const started = Date.now();
   const run = Bun.spawnSync(["bun", "run", path.join(root, name, "replay.ts")], {
-    env: { ...process.env, LITTLEBOX_PROBE_PORT: String(port) },
+    env: { ...process.env, KONAE_PROBE_PORT: String(port) },
     stdout: "pipe",
     stderr: "pipe",
   });

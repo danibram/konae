@@ -12,7 +12,7 @@ import initSqlJs from "sql.js";
 import { chromium } from "playwright";
 import { McpClient } from "../../../src/mcp/client";
 import { signRoute } from "../../../src/lib/route-signature";
-import { buildLocal, publishLocal } from "../../../scripts/littlebox";
+import { buildLocal, publishLocal } from "../../../scripts/konae";
 import { kernelTarget } from "../../../scripts/conform";
 import { createCapsuleValidator } from "../../../src/agent/gate";
 import { generateActionContract } from "../../../src/lib/action-contract";
@@ -20,11 +20,11 @@ import { formatConformanceReport, runConformance } from "../../../src/lib/action
 
 const repo = path.resolve(import.meta.dir, "../../..");
 const source = import.meta.dir;
-const port = Number(process.env.LITTLEBOX_SHOWCASE_PORT ?? 19470);
-assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Set LITTLEBOX_SHOWCASE_PORT to a free local port.");
-const shots = process.env.LITTLEBOX_SHOWCASE_SCREENSHOTS;
+const port = Number(process.env.KONAE_SHOWCASE_PORT ?? 19470);
+assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Set KONAE_SHOWCASE_PORT to a free local port.");
+const shots = process.env.KONAE_SHOWCASE_SCREENSHOTS;
 const url = `http://127.0.0.1:${port}`;
-const scratch = await mkdtemp(path.join(tmpdir(), "littlebox-showcase-booking-"));
+const scratch = await mkdtemp(path.join(tmpdir(), "konae-showcase-booking-"));
 const setupKey = crypto.randomUUID();
 const password = crypto.randomUUID();
 const panelSecret = crypto.randomUUID();
@@ -45,31 +45,31 @@ const utcDay = (offset: number) => new Date(Date.now() + offset * 86_400_000).to
 try {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
   assert.equal(await build.exited, 0, "The Kernel must compile.");
-  const taken = await fetch(`${url}/_littlebox/health`).then(() => true, () => false);
-  assert(!taken, `Port ${port} already answers. Set LITTLEBOX_SHOWCASE_PORT to a free port.`);
-  kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/littlebox-kernel")], {
+  const taken = await fetch(`${url}/_konae/health`).then(() => true, () => false);
+  assert(!taken, `Port ${port} already answers. Set KONAE_SHOWCASE_PORT to a free port.`);
+  kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/konae-kernel")], {
     cwd: repo,
     env: {
-      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))),
-      LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_PUBLIC_ORIGIN: url,
-      LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: path.join(scratch, "data"),
-      LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: repo,
-      LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development",
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
+      KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
+      KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: path.join(scratch, "data"),
+      KONAE_ADMIN_KEY: setupKey, KONAE_BUN_PATH: process.execPath, KONAE_SOURCE_ROOT: repo,
+      KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
       // bookings.release is declared every 15 minutes; the test clock runs it every 2 seconds.
-      LITTLEBOX_SCHEDULE_MIN_SECONDS: "2",
+      KONAE_SCHEDULE_MIN_SECONDS: "2",
     },
     stdout: "ignore", stderr: "inherit",
   });
   let ready = false;
   for (let attempt = 0; attempt < 100 && !ready; attempt++) {
     assert.equal(kernel.exitCode, null, "The Kernel stopped before startup. Is the port taken?");
-    try { ready = (await fetch(`${url}/_littlebox/health`)).ok; } catch { await Bun.sleep(100); }
+    try { ready = (await fetch(`${url}/_konae/health`)).ok; } catch { await Bun.sleep(100); }
   }
   assert(ready, "The Kernel did not start.");
   await Bun.sleep(200);
   assert.equal(kernel.exitCode, null, "The Kernel exited after startup. Another process may hold the port.");
 
-  const ownerSignup = await fetch(`${url}/_littlebox/owner/signup`, {
+  const ownerSignup = await fetch(`${url}/_konae/owner/signup`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "owner@office.example", password, setupKey }),
   });
@@ -106,8 +106,8 @@ try {
   }
   check("Validation Gate and Kernel", `Both pass the Capsule and both refuse ${Object.keys(refusals).join(", ")} with the same sentence. ${JSON.stringify(refusals)}`);
 
-  // 2. Publish public with `littlebox publish`, with the Allowlist from
-  // littlebox.json installed before the first request.
+  // 2. Publish public with `konae publish`, with the Allowlist from
+  // konae.json installed before the first request.
   await owner.call("project_create", { projectId: "showcase_booking", name: "Room board", slug: "booking", manifest: { version: 1, visibility: "public" } });
   const unset = await refusal(publishWithCli("showcase_booking", "booking"));
   assert.match(unset, /signs with the secret panel_hook, which is not set/);
@@ -120,12 +120,12 @@ try {
   const sql = (statement: string) => owner.call<any>("database_execute", { deploymentId, operation: "sql", input: { sql: statement } });
   // schema.sql may only create tables and indexes, so the owner adds the rooms.
   await sql("INSERT INTO rooms (id, name, seats) VALUES ('oak', 'Oak', 6), ('birch', 'Birch', 4), ('cedar', 'Cedar', 10), ('pine', 'Pine', 2)");
-  check("Publish", `Refused first with "${unset}"; published public with littlebox publish at ${receipt.url} after secret_set, with littlebox.json's signupPolicy allowlist @office.example installed on the first release. The owner seeds rooms with database_execute.`);
+  check("Publish", `Refused first with "${unset}"; published public with konae publish at ${receipt.url} after secret_set, with konae.json's signupPolicy allowlist @office.example installed on the first release. The owner seeds rooms with database_execute.`);
 
   // 3. Allowlist by domain, and its refusal next to Closed's.
   const host = receipt.hostname;
   const signup = async (email: string) => {
-    const response = await fetch(`${url}/_littlebox/auth/signup`, {
+    const response = await fetch(`${url}/_konae/auth/signup`, {
       method: "POST", headers: { host, "content-type": "application/json", "x-forwarded-for": freshAddress() },
       body: JSON.stringify({ email, password }),
     });
@@ -139,7 +139,7 @@ try {
   const subdomain = await signup("sam@sub.office.example");
   await owner.call("signup_policy_set", { deploymentId, mode: "closed" });
   const closed = await signup("cara@office.example");
-  const loginWhileClosed = await fetch(`${url}/_littlebox/auth/login`, {
+  const loginWhileClosed = await fetch(`${url}/_konae/auth/login`, {
     method: "POST", headers: { host, "content-type": "application/json", "x-forwarded-for": freshAddress() },
     body: JSON.stringify({ email: "ana@office.example", password }),
   });
@@ -150,7 +150,7 @@ try {
   assert.equal(loginWhileClosed.status, 200, "Closed must not sign out existing staff.");
   check("Allowlist signup", `@office.example signs up. pat@elsewhere.example, sam@sub.office.example and, under Closed, cara@office.example all get ${closed.status} ${JSON.stringify(closed.body)}. Existing staff still sign in under Closed.`);
 
-  const runtime = (cookie?: string, bearer?: string) => new McpClient(`${url}/_littlebox/mcp`, { token: bearer, fetch: (input, init) => {
+  const runtime = (cookie?: string, bearer?: string) => new McpClient(`${url}/_konae/mcp`, { token: bearer, fetch: (input, init) => {
     const headers = new Headers(init?.headers); headers.set("host", host); headers.set("x-forwarded-for", freshAddress());
     if (cookie) headers.set("cookie", cookie);
     return fetch(input, { ...init, headers });
@@ -281,7 +281,7 @@ try {
   const invited = await owner.call<{ results: Array<{ status: string }> }>("app_invitations_create", { deploymentId, emails: ["cara@office.example"], idempotencyKey: "booking-cara-invite" });
   assert.equal(invited.results[0].status, "invited");
   const invitation = await mailFor("invitation", "cara@office.example");
-  const accepted = await fetch(`${url}/_littlebox/auth/accept`, {
+  const accepted = await fetch(`${url}/_konae/auth/accept`, {
     method: "POST", headers: { host, "content-type": "application/json", "x-forwarded-for": freshAddress() },
     body: JSON.stringify({ token: new URL(invitation.link).hash.slice("#invitation=".length), password }),
   });
@@ -328,7 +328,7 @@ try {
   assert.deepEqual(await post({ room: "oak", day, hour: 10 }, { authorization: `Bearer ${panel.key}` }), panelGuard);
   assert.deepEqual(await post({ room: "oak", day, hour: 16 }, { authorization: `Bearer ${panel.key}` }), panelGuard);
   // The runtime endpoint refuses a key and says where keys work.
-  const keyOnRuntimeResponse = await fetch(`${url}/_littlebox/mcp`, {
+  const keyOnRuntimeResponse = await fetch(`${url}/_konae/mcp`, {
     method: "POST", headers: { host, "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${panel.key}`, "x-forwarded-for": freshAddress() },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "actions_invoke", arguments: { name: "availability.day", input: { day } } } }),
   });
@@ -371,7 +371,7 @@ try {
   // 10. The Action Contract, and conform with a session token and with an API key.
   const contractDir = await copyOf("contract");
   const cli = async (args: string[]) => {
-    const child = Bun.spawn(["bun", "run", path.join(repo, "scripts/littlebox.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
     const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     return { code, out, err };
   };
@@ -398,7 +398,7 @@ try {
   check("Action Contract", `contract writes ${contract.actions.length} actions; warnings ${JSON.stringify(warnings ?? [])}; unnamed ${JSON.stringify(unnamed)}; columns typed unknown ${unknownColumns.join(", ")}. conform --token --secret: "${totals(withSecret)}". conform --token --key: "${totals(withKey)}". conform --key alone: "${totals(keyOnly)}".`);
 
   // 11. Chrome under the Content Security Policy: visitor and staff, light and dark.
-  if (process.env.LITTLEBOX_SHOWCASE_BROWSER !== "0") {
+  if (process.env.KONAE_SHOWCASE_BROWSER !== "0") {
     if (shots) await mkdir(shots, { recursive: true });
     const browser = await chromium.launch({ channel: "chrome" });
     try {
@@ -406,7 +406,7 @@ try {
       const staffToken = (await signupSession("dana@office.example")).split("=").slice(1).join("=");
       for (const [who, scheme] of [["visitor", "light"], ["staff", "light"], ["staff", "dark"]] as const) {
         const context = await browser.newContext({ colorScheme: scheme, viewport: { width: 1180, height: 900 } });
-        if (who === "staff") await context.addCookies([{ name: "littlebox_app_session", value: staffToken, domain: appUrl.hostname, path: "/" }]);
+        if (who === "staff") await context.addCookies([{ name: "konae_app_session", value: staffToken, domain: appUrl.hostname, path: "/" }]);
         const page = await context.newPage();
         const violations: string[] = [];
         page.on("console", (entry) => { if (/Content Security Policy|Refused to/i.test(entry.text())) violations.push(entry.text()); });
@@ -465,7 +465,7 @@ try {
 
 async function copyOf(name: string) {
   const root = path.join(scratch, name);
-  await cp(source, root, { recursive: true, filter: (file) => !/(replay\.ts|README\.md|\.littlebox)$/.test(file) });
+  await cp(source, root, { recursive: true, filter: (file) => !/(replay\.ts|README\.md|\.konae)$/.test(file) });
   return root;
 }
 
@@ -482,7 +482,7 @@ async function publish(projectId: string, slug: string, files: Record<string, st
   } finally { await owner.cancel(upload.transferId); }
 }
 
-/** `littlebox publish` from a copy of this folder, with a token that holds read, write and publish and not manage_users. */
+/** `konae publish` from a copy of this folder, with a token that holds read, write and publish and not manage_users. */
 async function publishWithCli(projectId: string, slug: string, signupPolicy?: { mode: string; allowlist: string[] }) {
   const root = await copyOf(`cli-${projectId}-${crypto.randomUUID()}`);
   const owner = new McpClient(`${url}/mcp`, { fetch: ownerFetch });

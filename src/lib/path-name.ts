@@ -6,7 +6,7 @@ import type { RefusalCode } from "../kernel/refusal";
 
 export type PathNameCheck = { ok: true; name: string } | { ok: false; code: RefusalCode; message: string };
 
-const reserved = ["_littlebox", "p", "app", "mcp", "www", "api", "admin", "runtime.js"];
+const reserved = ["_konae", "p", "app", "mcp", "www", "api", "admin", "runtime.js"];
 const uuidShape = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/;
 const minLength = 3;
 const maxLength = 40;
@@ -16,7 +16,7 @@ export function checkPathName(raw: string): PathNameCheck {
   const refuse = (code: RefusalCode, message: string): PathNameCheck => ({ ok: false, code, message });
   if (!name) return refuse("path.missing", "Name the path, such as spring-menu.");
   if (reserved.includes(name)) {
-    return refuse("path.reserved", `${name} is reserved for Littlebox's own addresses. Choose another name, such as spring-menu.`);
+    return refuse("path.reserved", `${name} is reserved for Konae's own addresses. Choose another name, such as spring-menu.`);
   }
   const length = [...name].length;
   if (length < minLength) return refuse("path.length", `${name} is too short. Use ${minLength} to ${maxLength} characters.`);

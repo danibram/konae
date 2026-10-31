@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "actions": {
+    "docs.search": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT path, page, title, substr(body, max(1, instr(lower(body), lower(?1)) - 50), 170) AS snippet, instr(lower(body), lower(?1)) > 51 AS clipped, length(body) > max(1, instr(lower(body), lower(?1)) - 50) + 169 AS cut FROM sections WHERE lower(title) LIKE '%' || lower(?1) || '%' OR lower(body) LIKE '%' || lower(?1) || '%' ORDER BY path LIKE 'adr/%', lower(title) LIKE '%' || lower(?1) || '%' DESC, path LIMIT 12",
+      "bindings": [{ "source": "input", "key": "q", "type": "string", "maxLength": 100 }]
+    }
+  }
+}

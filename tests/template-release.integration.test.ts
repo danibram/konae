@@ -13,7 +13,7 @@ import { starterProject } from "../src/lib/starter";
 let root: string;
 let kernel: ReturnType<typeof Bun.spawn>;
 let client: McpClient;
-const port = Number(process.env.LITTLEBOX_MCP_TEST_PORT) || 19400 + Math.floor(Math.random() * 90);
+const port = Number(process.env.KONAE_MCP_TEST_PORT) || 19400 + Math.floor(Math.random() * 90);
 const url = `http://127.0.0.1:${port}`;
 const setupKey = "template-release-setup";
 const artifact = { version: 1, entrypoint: "index.html", files: { "index.html": "<main>release</main>" } };
@@ -21,20 +21,20 @@ const artifact = { version: 1, entrypoint: "index.html", files: { "index.html": 
 beforeAll(async () => {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
   expect(await build.exited).toBe(0);
-  root = await mkdtemp(path.join(tmpdir(), "littlebox-template-release-"));
-  kernel = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
+  root = await mkdtemp(path.join(tmpdir(), "konae-template-release-"));
+  kernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
     env: {
-      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_"))),
-      LITTLEBOX_DATA_DIR: root, LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_ADMIN_KEY: setupKey,
-      LITTLEBOX_PUBLIC_ORIGIN: url, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: process.cwd(),
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))),
+      KONAE_DATA_DIR: root, KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey,
+      KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, KONAE_SOURCE_ROOT: process.cwd(),
     },
     stdout: "ignore", stderr: "inherit",
   });
   for (let attempt = 0; attempt < 100; attempt++) {
-    try { if ((await fetch(`${url}/_littlebox/health`)).ok) break; } catch {}
+    try { if ((await fetch(`${url}/_konae/health`)).ok) break; } catch {}
     await Bun.sleep(100);
   }
-  const signup = await fetch(`${url}/_littlebox/owner/signup`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@templates.local", password: setupKey, setupKey }) });
+  const signup = await fetch(`${url}/_konae/owner/signup`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@templates.local", password: setupKey, setupKey }) });
   expect(signup.ok).toBe(true);
   const cookie = signup.headers.get("set-cookie")!.split(";")[0];
   client = new McpClient(`${url}/mcp`, { fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }) });

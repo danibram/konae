@@ -29,7 +29,7 @@ describe("deployment manifest", () => {
     };
     const deployment = createDeployment(project, "private", { id: "abcd-1234", now: 42 });
 
-    expect(deployment.url).toBe("https://sensitive-notes-abcd.littlebox.app");
+    expect(deployment.url).toBe("https://sensitive-notes-abcd.konae.app");
     expect(deployment.createdAt).toBe(42);
     expect(deployment.manifest.visibility).toBe("private");
     expect(deployment.manifest.runtime.auth.mode).toBe("required");

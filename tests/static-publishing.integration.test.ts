@@ -3,12 +3,12 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildLocal } from "../scripts/littlebox";
+import { buildLocal } from "../scripts/konae";
 import { McpClient } from "../src/mcp/client";
 import { routingMessage } from "../src/lib/static-artifact.js";
 
 // The static publishing contract on a real Kernel: a multi-page Capsule built
-// by `littlebox build`, served with pages, 404, extensionless paths, content
+// by `konae build`, served with pages, 404, extensionless paths, content
 // types, HEAD and the Content Security Policy on every page.
 
 setDefaultTimeout(60_000);
@@ -77,25 +77,25 @@ async function title(response: Response) {
 beforeAll(async () => {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
   expect(await build.exited).toBe(0);
-  root = await mkdtemp(path.join(tmpdir(), "littlebox-static-"));
-  const port = Number(process.env.LITTLEBOX_STATIC_TEST_PORT ?? 19810 + Math.floor(Math.random() * 40));
+  root = await mkdtemp(path.join(tmpdir(), "konae-static-"));
+  const port = Number(process.env.KONAE_STATIC_TEST_PORT ?? 19810 + Math.floor(Math.random() * 40));
   url = `http://127.0.0.1:${port}`;
-  kernel = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
+  kernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
     env: {
-      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))),
-      LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_PUBLIC_ORIGIN: url,
-      LITTLEBOX_DATA_DIR: path.join(root, "data"), LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_HOST_SUFFIX: "localhost",
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
+      KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
+      KONAE_DATA_DIR: path.join(root, "data"), KONAE_ADMIN_KEY: setupKey, KONAE_HOST_SUFFIX: "localhost",
     },
     stdout: "ignore", stderr: "inherit",
   });
   let ready = false;
   for (let attempt = 0; attempt < 100 && !ready; attempt++) {
-    if (kernel.exitCode !== null) throw Error("The static publishing Kernel stopped before startup. Set LITTLEBOX_STATIC_TEST_PORT to a free port.");
-    try { ready = (await fetch(`${url}/_littlebox/health`)).ok; } catch {}
+    if (kernel.exitCode !== null) throw Error("The static publishing Kernel stopped before startup. Set KONAE_STATIC_TEST_PORT to a free port.");
+    try { ready = (await fetch(`${url}/_konae/health`)).ok; } catch {}
     if (!ready) await Bun.sleep(100);
   }
   expect(ready).toBe(true);
-  const signup = await fetch(`${url}/_littlebox/owner/signup`, {
+  const signup = await fetch(`${url}/_konae/owner/signup`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "owner@static.test", password, setupKey }),
   });
@@ -136,8 +136,8 @@ describe("a multi-page artifact under pages routing", () => {
     }
   });
 
-  test("a path under /_littlebox is never an app file", async () => {
-    const response = await get("static_pages", "/_littlebox/about.html");
+  test("a path under /_konae is never an app file", async () => {
+    const response = await get("static_pages", "/_konae/about.html");
     expect(response.status).not.toBe(200);
     expect(await response.text()).not.toContain("<title>About</title>");
   });
@@ -205,9 +205,9 @@ describe("other answers for a missing path", () => {
   });
 
   test('"routing": "spa" serves index.html for every path the artifact does not hold', async () => {
-    const files = { "index.html": page("Single page", ""), "styles.css": "", "actions.json": capsule["actions.json"], "littlebox.json": "" };
+    const files = { "index.html": page("Single page", ""), "styles.css": "", "actions.json": capsule["actions.json"], "konae.json": "" };
     const directory = await capsuleOnDisk("spa", files);
-    await writeFile(path.join(directory, "littlebox.json"), JSON.stringify({ url, project: { id: "static_spa", name: "spa", slug: "spa", manifest: { routing: "spa" } } }));
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ url, project: { id: "static_spa", name: "spa", slug: "spa", manifest: { routing: "spa" } } }));
     const { artifact } = await buildLocal(directory);
     await release("static_spa", artifact, { routing: "spa" });
     for (const pathname of ["/", "/boards/7", "/about", "/about/"]) {

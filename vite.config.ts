@@ -8,15 +8,18 @@ const frameHeaders = { "Content-Security-Policy": "frame-ancestors 'none'", "X-F
 
 export default defineConfig({
   plugins: [react()],
+  // The editor has one page. Without this, Vite scans every .html in the
+  // repository for dependencies, the example apps' pages included.
+  optimizeDeps: { entries: ["index.html"] },
   preview: { headers: frameHeaders },
   server: {
     port: 4173,
     headers: frameHeaders,
     proxy: {
-      "/mcp": { target: process.env.LITTLEBOX_KERNEL_URL ?? "http://127.0.0.1:8787", changeOrigin: false },
-      "/_littlebox": { target: process.env.LITTLEBOX_KERNEL_URL ?? "http://127.0.0.1:8787", changeOrigin: false },
-      "/.well-known": { target: process.env.LITTLEBOX_KERNEL_URL ?? "http://127.0.0.1:8787", changeOrigin: false },
-      "/oauth": { target: process.env.LITTLEBOX_KERNEL_URL ?? "http://127.0.0.1:8787", changeOrigin: false },
+      "/mcp": { target: process.env.KONAE_KERNEL_URL ?? "http://127.0.0.1:8787", changeOrigin: false },
+      "/_konae": { target: process.env.KONAE_KERNEL_URL ?? "http://127.0.0.1:8787", changeOrigin: false },
+      "/.well-known": { target: process.env.KONAE_KERNEL_URL ?? "http://127.0.0.1:8787", changeOrigin: false },
+      "/oauth": { target: process.env.KONAE_KERNEL_URL ?? "http://127.0.0.1:8787", changeOrigin: false },
     },
   },
 });

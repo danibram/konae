@@ -14,4 +14,4 @@ Rename tables and actions freely, but keep these rules:
 10. Build elements with `textContent` and `addEventListener`; load nothing from another origin.
 11. Reach another app with a call action, never with `fetch` and a secret in the page. Point `status.escalate`'s `url` at your inbox, set `inbox_events` with `"use": "call"`, and keep fields the page must not change as `{ "value": ... }` constants.
 
-Then run `littlebox contract` and the replay.
+Then run `konae contract` and the replay.

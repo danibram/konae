@@ -1,6 +1,6 @@
-# Littlebox
+# Konae
 
-Littlebox is the guardrail that lets a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged. The code, who may open a Deployment, and who may read a row stay separate. The Validation Gate and the Kernel refuse the same Capsule, so a check that passes in the editor still passes on the machine the app leaves on.
+Konae is the guardrail that lets a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged. The code, who may open a Deployment, and who may read a row stay separate. The Validation Gate and the Kernel refuse the same Capsule, so a check that passes in the editor still passes on the machine the app leaves on.
 
 ## Language
 
@@ -13,11 +13,11 @@ Each term below is capitalized in its heading. In a sentence, in docs, in the ed
 ### Before the app runs
 
 **Project**:
-The source lineage, schema, capability configuration and deployment history owned by a workspace member. Its source authority is either Managed by Littlebox or External under its owner.
+The source lineage, schema, capability configuration and deployment history owned by a workspace member. Its source authority is either Managed by Konae or External under its owner.
 _Avoid_: App when referring specifically to editable source
 
 **Capsule**:
-The editable source of a Project taken as one unit. It is a nested source tree with an entrypoint, `app.js` or `src/main.ts`, from which relative imports are bundled, plus optional `index.html` and `styles.css`, the Database Model in `schema.ts` and the Server Action declarations in `actions.json`. Its pages are every `.html` at the root and under `pages/`, and files under `public/` are published as they are. It is the shape the editor and the agent read and write; what a Deployment serves is the Build Artifact built from it.
+The editable source of a Project taken as one unit. It is a nested source tree with an entrypoint, `app.js` or `src/main.ts`, from which relative imports are bundled, plus optional `index.html` and `styles.css`, the schema in `schema.sql`, which the Validation Gate and the Kernel check and run, the Database Model in `schema.ts` when the editor's Data panel manages the tables, and the Server Action declarations in `actions.json`. Its pages are every `.html` at the root and under `pages/`, and files under `public/` are published as they are. It is the shape the editor and the agent read and write; what a Deployment serves is the Build Artifact built from it.
 _Avoid_: bundle, repo, the project files
 
 **Database Model**:
@@ -57,7 +57,7 @@ Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a s
 _Avoid_: Owner, editor user
 
 **Signup Policy**:
-The per-Deployment rule for who may create a Runtime Actor account: Open (anyone), Invitation only (only through an invitation), Closed (nobody signs up, and an invitation the owner sends can still be accepted) or Allowlist (exact emails or `@domain` entries, kept as an advanced option). Public Deployments start Open and Private Deployments start Closed; a first release may name another. The Project Owner chooses it in the publish dialog on a first release and changes it later in the editor's Auth > Users view or with `signup_policy_set`, which needs `manage_users`, and a republish never changes it except to close an Open app made private. The Kernel checks it again when an account verifies and when an invitation is accepted. An External Project names its first release's policy in `littlebox.json` as `project.manifest.signupPolicy`, and `littlebox publish` sends it only then.
+The per-Deployment rule for who may create a Runtime Actor account: Open (anyone), Invitation only (only through an invitation), Closed (nobody signs up, and an invitation the owner sends can still be accepted) or Allowlist (exact emails or `@domain` entries, kept as an advanced option). Public Deployments start Open and Private Deployments start Closed; a first release may name another. The Project Owner chooses it in the publish dialog on a first release and changes it later in the editor's Auth > Users view or with `signup_policy_set`, which needs `manage_users`, and a republish never changes it except to close an Open app made private. The Kernel checks it again when an account verifies and when an invitation is accepted. An External Project names its first release's policy in `konae.json` as `project.manifest.signupPolicy`, and `konae publish` sends it only then.
 _Avoid_: Invite list, access grant
 
 **Sign-in Methods**:
@@ -77,7 +77,7 @@ The local development authority that reproduces the Kernel interfaces without gr
 _Avoid_: Production proxy, mock API
 
 **Pulled Copy**:
-A package of a published app's database, accounts and files that `littlebox pull` keeps in the project folder, and that a Development Kernel with no data starts from. It moves one way, from the Deployment to the developer's machine.
+A package of a published app's database, accounts and files that `konae pull` keeps in the project folder, and that a Development Kernel with no data starts from. It moves one way, from the Deployment to the developer's machine.
 _Avoid_: Sync, mirror, staging database
 
 ### As the app grows
@@ -111,11 +111,11 @@ The kinds of caller an HTTP route takes, any of `"signature"` (a service that si
 _Avoid_: principals, auth mode, access level (that is `anonymous` or `authenticated` on the action)
 
 **Signature Scheme**:
-How a route's signature is computed and where it travels, declared as `"scheme"` on the signature: `littlebox`, the default, or a provider's own, `hmac-body` (an HMAC of the body, as GitHub and Shopify send), `timestamped` (an HMAC of `<t>.<body>` with a window, as Stripe sends) or `svix` (three `svix-*` headers, as Resend sends). A provider's route may add `"fields"`, a JSON path into the body for each input, and then leaves out body keys no input names, so a provider's payload reaches the action with no adapter. Each scheme accepts a delivery once. The Validation Gate and the Kernel parse both from one case file.
+How a route's signature is computed and where it travels, declared as `"scheme"` on the signature: `konae`, the default, or a provider's own, `hmac-body` (an HMAC of the body, as GitHub and Shopify send), `timestamped` (an HMAC of `<t>.<body>` with a window, as Stripe sends) or `svix` (three `svix-*` headers, as Resend sends). A provider's route may add `"fields"`, a JSON path into the body for each input, and then leaves out body keys no input names, so a provider's payload reaches the action with no adapter. Each scheme accepts a delivery once. The Validation Gate and the Kernel parse both from one case file.
 _Avoid_: webhook format, provider adapter
 
 **Signing Secret**:
-A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. One set with `"use": "call"` instead signs, or holds the API key for, the Project's call actions, and may repeat another project's route secret. The two set with `"use": "google"`, `google_client_id` and `google_client_secret`, hold the app's own Google client for its sign-in methods; no route or call reads them. In Littlebox's own signature scheme a sender proves a request with an HMAC under it of a timestamp, a nonce, the method, the path, the canonical query string and the body; in a provider's scheme, with the HMAC that provider computes. It never appears in `actions.json`, a Build Artifact or an export.
+A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. One set with `"use": "call"` instead signs, or holds the API key for, the Project's call actions, and may repeat another project's route secret. The two set with `"use": "google"`, `google_client_id` and `google_client_secret`, hold the app's own Google client for its sign-in methods; no route or call reads them. In Konae's own signature scheme a sender proves a request with an HMAC under it of a timestamp, a nonce, the method, the path, the canonical query string and the body; in a provider's scheme, with the HMAC that provider computes. It never appears in `actions.json`, a Build Artifact or an export.
 _Avoid_: webhook token, API key
 
 **API Key**:
@@ -135,19 +135,19 @@ A namespace on `window.miniapp`, such as `auth`, `actions` or `files`, with a co
 _Avoid_: plugin, library, extension
 
 **Action Contract**:
-The generated description of a Capsule's Server Actions, `action-contract.json` with its JSON Schema and a Markdown rendering: for each action its inputs with types, nullability and limits, the columns a query returns or the `{ changes, lastInsertId }` a mutation returns, the Signal it records, who may call it on the runtime endpoint and on its HTTP route, the errors the Kernel answers with and the limits that apply. It is written from `actions.json` and `schema.sql`, never edited, and travels in the export. The conformance runner (`littlebox conform`) calls every action against a backend and checks the answers against it, which is how a second backend would show it serves the same app.
+The generated description of a Capsule's Server Actions, `action-contract.json` with its JSON Schema and a Markdown rendering: for each action its inputs with types, nullability and limits, the columns a query returns or the `{ changes, lastInsertId }` a mutation returns, the Signal it records, who may call it on the runtime endpoint and on its HTTP route, the errors the Kernel answers with and the limits that apply. It is written from `actions.json` and `schema.sql`, never edited, and travels in the export. The conformance runner (`konae conform`) calls every action against a backend and checks the answers against it, which is how a second backend would show it serves the same app.
 _Avoid_: API spec, OpenAPI document, schema dump
 
 **Custom Domain**:
-A hostname its owner controls on which one Deployment answers next to its generated hostname, which keeps answering. The owner sets it with `domain_set`, which needs `publish`, and proves control with a TXT record `_littlebox.<hostname>` holding a token the Kernel issued; the Kernel looks the record up itself and the alias serves only once it holds the token. One name serves one Deployment. On it the app has its own origin: its own cookies, the same policy, routes, file path and maintenance page. The operator's proxy terminates TLS and forwards `Host` unchanged. A package carries the name without the token, and the destination issues its own.
+A hostname its owner controls on which one Deployment answers next to its generated hostname, which keeps answering. The owner sets it with `domain_set`, which needs `publish`, and proves control with a TXT record `_konae.<hostname>` holding a token the Kernel issued; the Kernel looks the record up itself and the alias serves only once it holds the token. One name serves one Deployment. On it the app has its own origin: its own cookies, the same policy, routes, file path and maintenance page. The operator's proxy terminates TLS and forwards `Host` unchanged. A package carries the name without the token, and the destination issues its own.
 _Avoid_: vanity URL, CNAME (that is one way to point the name), domain mapping
 
 **Path Address**:
-A path on the installation's domain on which one Deployment answers: `<domain>/p/<id>`, and `<domain>/p/<name>` once the owner names it. The owner turns it on with `path_set`, which needs `publish`. Every path and the home share the origin `<domain>`, so an app with accounts or a private app needs the owner's `acceptSharedOrigin` before its path turns on. It needs `LITTLEBOX_DOMAIN`. A package carries the name and the path's state, never the id.
+A path on the installation's domain on which one Deployment answers: `<domain>/p/<id>`, and `<domain>/p/<name>` once the owner names it. The owner turns it on with `path_set`, which needs `publish`. The app whose path holds the name `konae-home` is the home and also answers `<domain>/`. Every path and the home share the origin `<domain>`, so an app with accounts or a private app needs the owner's `acceptSharedOrigin` before its path turns on. It needs `KONAE_DOMAIN`. A package carries the name and the path's state, never the id.
 _Avoid_: short link, vanity path, app URL
 
 **File Store**:
-Where the installation keeps the bytes of app files: each Deployment's folder, or an S3-compatible bucket the operator names with `LITTLEBOX_FILES_S3_*`. The file index in the Deployment's folder decides which files exist either way, and `files-migrate` moves the bytes between the two while no Kernel runs (ADR-0025).
+Where the installation keeps the bytes of app files: each Deployment's folder, or an S3-compatible bucket the operator names with `KONAE_FILES_S3_*`. The file index in the Deployment's folder decides which files exist either way, and `files-migrate` moves the bytes between the two while no Kernel runs (ADR-0025).
 _Avoid_: bucket (one kind of store), storage
 
 **Package**:
@@ -159,28 +159,28 @@ The move of one Deployment to another installation so that exactly one installat
 _Avoid_: replication, sync, transfer (a transfer is one upload or download)
 
 **Maintenance**:
-The state of a Deployment that takes no writes. Its host shows a page naming the operation and refuses actions, uploads, signups, sign-ins, recovery, invitations and HTTP routes, the owner cannot change it, and its email waits. A migration keeps it in the Deployment's folder, `migration.json`, so a restart or a restore keeps it. A restore that cannot read the revocation record keeps it for the whole installation in `recovery-hold.json` until `littlebox-kernel reconcile` runs.
+The state of a Deployment that takes no writes. Its host shows a page naming the operation and refuses actions, uploads, signups, sign-ins, recovery, invitations and HTTP routes, the owner cannot change it, and its email waits. A migration keeps it in the Deployment's folder, `migration.json`, so a restart or a restore keeps it. A restore that cannot read the revocation record keeps it for the whole installation in `recovery-hold.json` until `konae-kernel reconcile` runs.
 _Avoid_: downtime, read-only mode (reads stop too)
 
 **Managed Project**:
-A Project whose source and database-schema authority remain in Littlebox, so changes must pass through its editor, agent, managed build and Validation Gate.
+A Project whose source and database-schema authority remain in Konae, so changes must pass through its editor, agent, managed build and Validation Gate.
 _Avoid_: Hosted Project
 
 **External Project**:
-A Project created with external source authority or transferred out of Littlebox through Eject. Littlebox retains its identity, capabilities and deployment history but the owner supplies Build Artifacts and accepts schema compatibility responsibility.
+A Project created with external source authority or transferred out of Konae through Eject. Konae retains its identity, capabilities and deployment history but the owner supplies Build Artifacts and accepts schema compatibility responsibility.
 _Avoid_: Exported Project, detached Deployment
 
 **Eject**:
-The irreversible transfer of a Managed Project's source and database-schema authority to its owner while retaining the Project's Littlebox hosting and administration. It runs on the Kernel against an expected saved-sources revision and needs the `manage_lifecycle` permission. The owner receives the saved sources as a code package before the Project changes; the Kernel then records who ejected it and when, refuses every Managed source change, and keeps accepting Build Artifacts. The Deployment's URL, accounts, sessions, data, invitations and email continue. Returning to managed authoring creates a new Project.
+The irreversible transfer of a Managed Project's source and database-schema authority to its owner while retaining the Project's Konae hosting and administration. It runs on the Kernel against an expected saved-sources revision and needs the `manage_lifecycle` permission. The owner receives the saved sources as a code package before the Project changes; the Kernel then records who ejected it and when, refuses every Managed source change, and keeps accepting Build Artifacts. The Deployment's URL, accounts, sessions, data, invitations and email continue. Returning to managed authoring creates a new Project.
 _Avoid_: Export, download
 
 **Declared Dependencies**:
-The npm packages a Capsule imports by name, listed with exact versions under `dependencies` in its `package.json`. The editor's build fetches each one from esm.sh at that version and links it into the app's bundle; `littlebox build` and the exported kit read the same list from `node_modules` after `npm install`. Either way the published app holds the package's code and loads nothing from another origin. A version range is refused, so every build reads the same code.
+The npm packages a Capsule imports by name, listed with exact versions under `dependencies` in its `package.json`. The editor's build fetches each one from esm.sh at that version and links it into the app's bundle; `konae build` and the exported kit read the same list from `node_modules` after `npm install`. Either way the published app holds the package's code and loads nothing from another origin. A version range is refused, so every build reads the same code.
 _Avoid_: library allowlist, vendored copy
 
 ## Words for running an installation
 
-**Littlebox Kernel**:
+**Konae Kernel**:
 The provider-independent authority that resolves Deployments, authenticates actors, owns sessions, grants, Usage and Signals, applies visibility, and authorizes capabilities.
 _Avoid_: Cloudflare auth, provider gateway
 
@@ -197,7 +197,7 @@ The disposable copy of a Project's source that the agent reads and edits during 
 _Avoid_: Project, filesystem
 
 **Account**:
-The authenticated identity and personal profile used to enter Littlebox and participate in Workspaces. An Account does not directly own runtime data or imply access to every Project.
+The authenticated identity and personal profile used to enter Konae and participate in Workspaces. An Account does not directly own runtime data or imply access to every Project.
 _Avoid_: Runtime Actor, Project Owner
 
 **Account State**:
@@ -212,8 +212,12 @@ _Avoid_: Deployment list, app runtime
 The owner-facing index of Projects and their latest Deployments, used to enter an editor or open a published app.
 _Avoid_: App store, runtime dashboard
 
+**Installation Home**:
+The app whose path address holds the name `konae-home`. It answers the installation's bare domain. It is not the Workspace Home, which lists an owner's Projects.
+_Avoid_: Landing page, Workspace Home
+
 **Setup Key**:
-The installation secret in `LITTLEBOX_ADMIN_KEY` that creates the first creator Account while the installation has no account and no invitation code was ever issued. It never authenticates an MCP tool and never enters the editor bundle. The Kernel refuses to start on a reachable address while it is still the development default.
+The installation secret in `KONAE_ADMIN_KEY` that creates the first creator Account while the installation has no account and no invitation code was ever issued. It never authenticates an MCP tool and never enters the editor bundle. The Kernel refuses to start on a reachable address while it is still the development default.
 _Avoid_: installation key, admin password, Agent Credential
 
 **Invitation Code**:

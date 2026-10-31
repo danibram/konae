@@ -1,6 +1,6 @@
 //! The HTTP module: Server Actions that answer on a path of their Deployment
 //! host, the owner-set secrets that sign them, API keys, and the file read
-//! path `GET /_littlebox/files/<id>`.
+//! path `GET /_konae/files/<id>`.
 //!
 //! An `http` key in `actions.json` binds one action to one method and path.
 //! The action keeps its access level, bindings, query bound and rate limit.
@@ -43,7 +43,7 @@ const KEY_PREFIX: &str = "lbk_";
 /// The file read path. main.rs routes `/{*path}` to `get_route` and
 /// `post_route` below.
 pub(super) fn routes() -> Router<AppState> {
-    Router::new().route("/_littlebox/files/{id}", get(read_file))
+    Router::new().route("/_konae/files/{id}", get(read_file))
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ pub(super) struct SignatureBinding {
     pub(super) scheme: super::provider::Scheme,
 }
 
-const RESERVED_SEGMENTS: [&str; 4] = ["_littlebox", "oauth", ".well-known", "mcp"];
+const RESERVED_SEGMENTS: [&str; 4] = ["_konae", "oauth", ".well-known", "mcp"];
 const ROUTE_CALLERS: [&str; 3] = ["signature", "key", "session"];
 
 /// Parses and checks one action's `http` key. `Ok(None)` when it has none.
@@ -105,7 +105,7 @@ pub(super) fn binding(name: &str, action: &ActionDefinition) -> Result<Option<Ht
     let first = path[1..].split('/').next().unwrap_or("").to_ascii_lowercase();
     if RESERVED_SEGMENTS.contains(&first.as_str()) {
         return Err(refuse("route.path-reserved", format!(
-            "Action {name} binds the reserved path {path}. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel."
+            "Action {name} binds the reserved path {path}. Paths under /_konae, /oauth, /.well-known and /mcp belong to the Kernel."
         )));
     }
     let signature = match record.get("signature") {
@@ -1062,9 +1062,9 @@ async fn run_route(
     if signs && !accepts("signature") {
         return refusal(StatusCode::UNAUTHORIZED, "authentication-required");
     }
-    // Littlebox's own scheme here; a provider's scheme below.
-    let littlebox = http.signature.as_ref().filter(|signature| signature.scheme == super::provider::Scheme::Littlebox);
-    if let (Some(signature), true) = (littlebox, signs) {
+    // Konae's own scheme here; a provider's scheme below.
+    let konae = http.signature.as_ref().filter(|signature| signature.scheme == super::provider::Scheme::Konae);
+    if let (Some(signature), true) = (konae, signs) {
         let secret = match super::mcp::store(state).and_then(|db| secret_value(&db, &deployment.project_id, &signature.secret)) {
             Ok(Some(secret)) => secret,
             Ok(None) => return refusal(StatusCode::SERVICE_UNAVAILABLE, "The route's signing secret is not set."),
@@ -1087,7 +1087,7 @@ async fn run_route(
     // not succeed, so the provider's retry of it runs.
     let mut delivery = None;
     if let (Some(signature), true) = (&http.signature, signs) {
-        if signature.scheme != super::provider::Scheme::Littlebox {
+        if signature.scheme != super::provider::Scheme::Konae {
             let secret = match super::mcp::store(state).and_then(|db| secret_value(&db, &deployment.project_id, &signature.secret)) {
                 Ok(Some(secret)) => secret,
                 Ok(None) => return refusal(StatusCode::SERVICE_UNAVAILABLE, "The route's signing secret is not set."),
@@ -1277,7 +1277,7 @@ mod tests {
 
     #[test]
     fn a_signature_verifies_once_inside_its_window_and_the_store_remembers_it() {
-        let root = std::env::temp_dir().join(format!("littlebox-signatures-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-signatures-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let file = root.join("identity.sqlite");
         let open = || Connection::open(&file).unwrap();
@@ -1377,7 +1377,6 @@ mod tests {
             public_origin: "http://localhost".into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         }
@@ -1394,7 +1393,7 @@ mod tests {
             "visibility": "public",
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>", "app.js": "app"}}
         });
-        let request = Request::builder().header("x-littlebox-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
+        let request = Request::builder().header("x-konae-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
         assert_eq!(deploy(State(state.clone()), request).await.status(), StatusCode::OK);
         state.deployments.read().await.values().next().cloned().unwrap()
     }
@@ -1409,7 +1408,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_static_request_does_not_parse_actions_and_a_publish_replaces_the_routes() {
-        let root = std::env::temp_dir().join(format!("littlebox-route-cache-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-route-cache-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
         let state = test_state(&root);
         let first = publish_route(&state, "/api/count").await;
@@ -1456,7 +1455,7 @@ mod tests {
     /// and a delivery whose action fails is forgotten so its retry runs.
     #[tokio::test]
     async fn a_provider_delivery_runs_once_and_a_failed_one_can_be_retried() {
-        let root = std::env::temp_dir().join(format!("littlebox-provider-route-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-provider-route-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
         let state = test_state(&root);
         let secret = "github-route-secret-0123";
@@ -1473,7 +1472,7 @@ mod tests {
             "visibility": "public",
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}
         });
-        let request = Request::builder().header("x-littlebox-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
+        let request = Request::builder().header("x-konae-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
         let deployed = deploy(State(state.clone()), request).await;
         let status = deployed.status();
         let text = axum::body::to_bytes(deployed.into_body(), 100_000).await.unwrap();

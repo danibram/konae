@@ -2,7 +2,7 @@
   // A path address answers at /p/<id-or-name>/ and the Kernel strips that prefix, so every Kernel URL carries it.
   const prefix = /^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);
   const base = prefix ? '/p/' + prefix[1] : '';
-  const endpoint = base + '/_littlebox/mcp';
+  const endpoint = base + '/_konae/mcp';
   const urls = new Set();
   let connected;
 
@@ -27,7 +27,7 @@
 
   async function call(name, args = {}) {
     if (!connected) connected = (async () => {
-      await rpc('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'littlebox-app', version: '0.1.0' } });
+      await rpc('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'konae-app', version: '0.1.0' } });
       await rpc('notifications/initialized', undefined, true);
     })().catch(error => { connected = undefined; throw error; });
     await connected;
@@ -100,15 +100,15 @@
   window.miniapp = {
     actions: { call: async (name, input = {}) => {
       try { return await call('actions_invoke', { name, input }); }
-      catch (error) { if (error.status === 401) location.assign(base + '/_littlebox/login'); throw error; }
+      catch (error) { if (error.status === 401) location.assign(base + '/_konae/login'); throw error; }
     } },
     auth: {
       session: async () => {
         try { return await call('auth_session'); }
         catch (error) { if (error.status === 401) return { userId: 'anonymous', name: 'Anonymous', role: 'anonymous' }; throw error; }
       },
-      signIn: () => { location.assign(base + '/_littlebox/login'); },
-      signInWithGoogle: () => { location.assign(base + '/_littlebox/auth/google/start'); },
+      signIn: () => { location.assign(base + '/_konae/login'); },
+      signInWithGoogle: () => { location.assign(base + '/_konae/auth/google/start'); },
       signOut: async () => {
         const result = await call('auth_logout');
         connected = undefined;
@@ -126,7 +126,7 @@
       upload,
       // The Kernel serves the file on the app's own origin, which connect-src
       // 'self' and img-src 'self' allow; a Blob URL cannot be fetched again.
-      url: async (id) => base + '/_littlebox/files/' + encodeURIComponent(fileId(id)),
+      url: async (id) => base + '/_konae/files/' + encodeURIComponent(fileId(id)),
       update: async (id, options) => call('files_update', { fileId: fileId(id), visibility: visibility(options && options.visibility) }),
       delete: async (id) => call('files_delete', { fileId: fileId(id) }),
     },

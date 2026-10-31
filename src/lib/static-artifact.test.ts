@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildLocal } from "../../scripts/littlebox";
+import { buildLocal } from "../../scripts/konae";
 import { createDefaultManifest, normalizeManifest } from "../deployments/manifest";
 import type { MiniAppProject } from "./types";
 import { assembleStaticArtifact, basePath, checkRouting, isDocument, pathPrefixPattern, resolveReference, routingMessage, runtimeFile, runtimeLoaderScript, servedPath, splitFragmentHead, stripModulePaths } from "./static-artifact.js";
@@ -51,7 +51,7 @@ describe("which Capsule files become pages", () => {
     expect(resolveReference("/styles.css?v=2#x", "guide/install.html")).toBe("styles.css");
     expect(resolveReference("img/a%20b.png", "index.html")).toBe("img/a b.png");
     expect(resolveReference("docs/", "index.html")).toBe("docs/index.html");
-    for (const outside of ["https://cdn.example/x.js", "//cdn.example/x.js", "data:image/png;base64,AA", "#top", "mailto:a@b", "/_littlebox/files/1"]) {
+    for (const outside of ["https://cdn.example/x.js", "//cdn.example/x.js", "data:image/png;base64,AA", "#top", "mailto:a@b", "/_konae/files/1"]) {
       expect(resolveReference(outside, "index.html")).toBeNull();
     }
   });
@@ -99,7 +99,7 @@ describe("the artifact", () => {
   test("a fragment page runs in the Capsule document with the SDK inline, as before", async () => {
     const artifact = await assemble({ "index.html": "<main id=app></main>", "app.js": "", "styles.css": "p{}" });
     expect(Object.keys(artifact.files)).toEqual(["index.html"]);
-    expect(artifact.files["index.html"]).toContain("<script data-littlebox-runtime>window.miniapp = {};</script>");
+    expect(artifact.files["index.html"]).toContain("<script data-konae-runtime>window.miniapp = {};</script>");
     expect(artifact.files["index.html"]).toContain("<style>p{}</style>");
   });
 
@@ -138,7 +138,7 @@ describe("the artifact", () => {
 describe("module path comments", () => {
   test("drops a line that names a Capsule file, from either builder, and keeps every other comment", () => {
     const held = new Set(["app.js", "lib/a.js", "lib/b.css"]);
-    expect(stripModulePaths("// lib/a.js\nvar a = 1;\n\n// littlebox:app.js\nconsole.log(a);\n", held)).toBe("var a = 1;\n\nconsole.log(a);\n");
+    expect(stripModulePaths("// lib/a.js\nvar a = 1;\n\n// konae:app.js\nconsole.log(a);\n", held)).toBe("var a = 1;\n\nconsole.log(a);\n");
     expect(stripModulePaths("/* lib/b.css */\np { margin: 0 }\n", held)).toBe("p { margin: 0 }\n");
     const kept = "// ../../tmp/other.js\n// see app.js\n/*! license */\nx();\n";
     expect(stripModulePaths(kept, held)).toBe(kept);
@@ -161,10 +161,10 @@ describe("refusals", () => {
   });
 
   test("a path the Kernel keeps, and the SDK's name", async () => {
-    await refused({ "public/_littlebox/x.txt": "x" }, "public/_littlebox/x.txt would publish at /_littlebox/x.txt, under /_littlebox, which the Kernel keeps.");
+    await refused({ "public/_konae/x.txt": "x" }, "public/_konae/x.txt would publish at /_konae/x.txt, under /_konae, which the Kernel keeps.");
     await refused({ "pages/oauth/callback.html": page("x") }, "pages/oauth/callback.html would publish at /oauth/callback.html, under /oauth, which the Kernel keeps.");
-    await refused({ "index.html": page("x"), "runtime.js": "" }, "The Capsule holds runtime.js, the name the build gives the Littlebox SDK. Rename it.");
-    await refused({ "public/runtime.js": "" }, "public/runtime.js would publish at /runtime.js, where the build puts the Littlebox SDK. Rename it.");
+    await refused({ "index.html": page("x"), "runtime.js": "" }, "The Capsule holds runtime.js, the name the build gives the Konae SDK. Rename it.");
+    await refused({ "public/runtime.js": "" }, "public/runtime.js would publish at /runtime.js, where the build puts the Konae SDK. Rename it.");
   });
 
   test("a module that is not JavaScript, or that imports CSS", async () => {
@@ -205,7 +205,7 @@ describe("the CLI and the editor build the same artifact", () => {
   };
 
   async function onDisk(files: Record<string, string>) {
-    const root = await mkdtemp(path.join(tmpdir(), "littlebox-static-"));
+    const root = await mkdtemp(path.join(tmpdir(), "konae-static-"));
     for (const [file, contents] of Object.entries(files)) {
       await mkdir(path.dirname(path.join(root, file)), { recursive: true });
       await writeFile(path.join(root, file), contents);
@@ -284,7 +284,7 @@ describe("the CLI and the editor build the same artifact", () => {
   });
 
   test("both refuse a routing value the Kernel would refuse", async () => {
-    const root = await onDisk({ ...capsule, "littlebox.json": JSON.stringify({ url: "http://localhost", project: { id: "p", name: "p", slug: "p", manifest: { routing: "history" } } }) });
+    const root = await onDisk({ ...capsule, "konae.json": JSON.stringify({ url: "http://localhost", project: { id: "p", name: "p", slug: "p", manifest: { routing: "history" } } }) });
     try {
       await expect(buildLocal(root)).rejects.toThrow(routingMessage);
       await expect(buildProjectInBrowser({ files: capsule, manifest: { ...createDefaultManifest(), routing: "history" } } as unknown as MiniAppProject)).rejects.toThrow(routingMessage);

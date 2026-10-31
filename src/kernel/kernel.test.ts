@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { createDefaultManifest } from "../deployments/manifest";
 import { KernelIdentity, MemoryKernelIdentityStore } from "./auth";
-import { LittleboxKernel } from "./kernel";
+import { KonaeKernel } from "./kernel";
 
-describe("Littlebox Kernel", () => {
+describe("Konae Kernel", () => {
   test("authenticates and applies deployment visibility through one interface", async () => {
     const store = new MemoryKernelIdentityStore();
     store.setGrants("user_1", [{ type: "deployment", deploymentId: "deploy_1" }]);
     const identity = new KernelIdentity(store, { createToken: () => "opaque-session" });
-    const kernel = new LittleboxKernel(identity);
+    const kernel = new KonaeKernel(identity);
     const session = await identity.issueSession({ actorId: "user_1" });
     const manifest = createDefaultManifest();
     manifest.visibility = "private";

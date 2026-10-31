@@ -1,13 +1,13 @@
 {
-  "name": "miniapp-builder",
+  "name": "konae",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "bin": { "littlebox": "scripts/littlebox.ts" },
+  "bin": { "konae": "scripts/konae.ts" },
   "scripts": {
     "dev": "vite --config vite.config.ts",
     "dev:local": "bun run scripts/dev-local.ts",
-    "kernel": "LITTLEBOX_DATA_DIR=${LITTLEBOX_DATA_DIR:-data/kernel-local} LITTLEBOX_BUN_PATH=${LITTLEBOX_BUN_PATH:-$(command -v bun)} cargo run --manifest-path kernel-rs/Cargo.toml",
+    "kernel": "KONAE_DATA_DIR=${KONAE_DATA_DIR:-data/kernel-local} KONAE_BUN_PATH=${KONAE_BUN_PATH:-$(command -v bun)} cargo run --manifest-path kernel-rs/Cargo.toml",
     "dev:stack": "docker compose up --build",
     "build": "tsc -b && vite build --config vite.config.ts",
     "preview": "vite preview",
@@ -15,7 +15,8 @@
     "test:e2e": "playwright test",
     "test:e2e:minio": "playwright test --config playwright.minio.config.ts",
     "test:e2e:local": "playwright test --config playwright.local.config.ts",
-    "littlebox": "bun run scripts/littlebox.ts",
+    "konae": "bun run scripts/konae.ts",
+    "docs:site": "bun run scripts/docs-site.ts",
     "sdk:render": "bun run scripts/render-sdk.ts",
     "templates:render": "bun run scripts/render-templates.ts",
     "ui:render": "bun run scripts/render-app-ui.ts"

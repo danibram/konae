@@ -11,7 +11,7 @@ import { repoRoot } from "./model-guard";
  * Planning a migration is two jobs with two risk profiles (ADR-0007): deriving
  * the statements runs the owner's `schema.ts` and Drizzle's differ, so it is
  * exiled to a separate process; deciding what those statements mean for a
- * Deployment is Littlebox's judgement over plain data, so it stays here.
+ * Deployment is Konae's judgement over plain data, so it stays here.
  */
 export async function planDrizzleDatabaseChange(input: PlanDatabaseChangeInput): Promise<DatabaseMigrationPlan> {
   const statements = await deriveStatements(input);
@@ -70,7 +70,7 @@ async function deriveStatements(input: PlanDatabaseChangeInput): Promise<string[
   if (raw.length > maximumReplyBytes) throw new Error("The schema change produced too large a result.");
   const marker = raw.lastIndexOf(replyMarker);
   // No framed reply means the process died — a timeout, a crash, or a model that
-  // tried to leave. None of those is a change Littlebox can migrate to.
+  // tried to leave. None of those is a change Konae can migrate to.
   if (marker < 0) throw new Error("Could not derive a migration from these schema.ts files.");
 
   // The reply crosses a process boundary, so it is read as data to be checked,
@@ -91,7 +91,7 @@ function hash(value: string): string {
 
 function bunExecutable(): string {
   if (process.versions.bun) return process.execPath;
-  if (process.env.LITTLEBOX_BUN_PATH) return process.env.LITTLEBOX_BUN_PATH;
+  if (process.env.KONAE_BUN_PATH) return process.env.KONAE_BUN_PATH;
   for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
     const candidate = path.join(directory, "bun");
     try {

@@ -2,9 +2,9 @@
 // a GitHub-style and a Stripe-style webhook in the providers' own schemes, the keyed read route, invitations and suspension, Signals and Usage, the LIMIT
 // refusal in the Gate and the Kernel, the Action Contract, and a browser pass.
 //
-//   LITTLEBOX_SHOWCASE_PORT=19470 bun run examples/showcase/inbox/replay.ts
+//   KONAE_SHOWCASE_PORT=19470 bun run examples/showcase/inbox/replay.ts
 //
-// LITTLEBOX_SHOWCASE_BROWSER=0 skips Chrome. LITTLEBOX_SHOWCASE_SCREENSHOTS=<dir>
+// KONAE_SHOWCASE_BROWSER=0 skips Chrome. KONAE_SHOWCASE_SCREENSHOTS=<dir>
 // keeps the light and dark screenshots there.
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
@@ -14,17 +14,17 @@ import path from "node:path";
 import initSqlJs from "sql.js";
 import { McpClient, McpError } from "../../../src/mcp/client";
 import { signRoute } from "../../../src/lib/route-signature";
-import { buildLocal } from "../../../scripts/littlebox";
+import { buildLocal } from "../../../scripts/konae";
 import { createCapsuleValidator } from "../../../src/agent/gate";
 import { starterProject } from "../../../src/lib/starter";
 import type { CapsuleFiles } from "../../../src/agent/contracts";
 
 const repo = path.resolve(import.meta.dir, "../../..");
 const source = import.meta.dir;
-const scratch = await mkdtemp(path.join(tmpdir(), "littlebox-showcase-inbox-"));
+const scratch = await mkdtemp(path.join(tmpdir(), "konae-showcase-inbox-"));
 const dataDir = path.join(scratch, "data");
-const port = Number(process.env.LITTLEBOX_SHOWCASE_PORT ?? 19470);
-assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Set LITTLEBOX_SHOWCASE_PORT to a free local port.");
+const port = Number(process.env.KONAE_SHOWCASE_PORT ?? 19470);
+assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Set KONAE_SHOWCASE_PORT to a free local port.");
 const url = `http://127.0.0.1:${port}`;
 const setupKey = crypto.randomUUID();
 const password = crypto.randomUUID();
@@ -72,26 +72,26 @@ try {
   // ---------------------------------------------------------------- Kernel
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
   assert.equal(await build.exited, 0, "The Kernel must compile.");
-  kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/littlebox-kernel")], {
+  kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/konae-kernel")], {
     cwd: repo,
     env: {
-      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))),
-      LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_PUBLIC_ORIGIN: url,
-      LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: dataDir,
-      LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: repo,
-      LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development",
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
+      KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
+      KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: dataDir,
+      KONAE_ADMIN_KEY: setupKey, KONAE_BUN_PATH: process.execPath, KONAE_SOURCE_ROOT: repo,
+      KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
     },
     stdout: "ignore", stderr: "inherit",
   });
   let ready = false;
   for (let attempt = 0; attempt < 150 && !ready; attempt++) {
     assert.equal(kernel.exitCode, null, "The Kernel stopped before startup. Is the port taken?");
-    try { ready = (await fetch(`${url}/_littlebox/health`)).ok; } catch {}
+    try { ready = (await fetch(`${url}/_konae/health`)).ok; } catch {}
     if (!ready) await Bun.sleep(100);
   }
   assert(ready, "The Kernel did not start.");
 
-  const ownerSignup = await fetch(`${url}/_littlebox/owner/signup`, {
+  const ownerSignup = await fetch(`${url}/_konae/owner/signup`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "owner@inbox.example", password, setupKey }),
   });
@@ -136,7 +136,7 @@ try {
   pass("Publish", `The release with its three webhook secrets unset is refused with one message naming each; after secret_set it publishes private with signup by invitation at ${inbox.url}.`);
 
   const host = (extra: Record<string, string> = {}) => ({ host: inbox.hostname, "x-forwarded-for": freshAddress(), ...extra });
-  const runtime = (cookie?: string) => new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+  const runtime = (cookie?: string) => new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
     const headers = new Headers(init?.headers); headers.set("host", inbox.hostname); headers.set("x-forwarded-for", freshAddress());
     if (cookie) headers.set("cookie", cookie);
     return fetch(input, { ...init, headers });
@@ -148,7 +148,7 @@ try {
   assert.match(await shell.text(), /<title>Sign in<\/title>/);
   const visitorCall = await rejects(action(runtime(), "events.list"), /Sign in/);
   refused("Signed-out visitor calls events.list on the runtime endpoint", visitorCall);
-  const strangerSignup = await fetch(`${url}/_littlebox/auth/signup`, {
+  const strangerSignup = await fetch(`${url}/_konae/auth/signup`, {
     method: "POST", headers: host({ "content-type": "application/json" }), body: JSON.stringify({ email: "stranger@elsewhere.example", password }),
   });
   assert.equal(strangerSignup.status, 403);
@@ -259,7 +259,7 @@ try {
   const noAction = await feed("", filesOnly.key);
   assert.deepEqual(noAction, { status: 403, body: { error: "This API key may not call events.feed." } });
   refused("A key that names only file visibilities reads GET /api/events", noAction.body.error, 403);
-  const keyOnRuntime = await fetch(`${url}/_littlebox/mcp`, {
+  const keyOnRuntime = await fetch(`${url}/_konae/mcp`, {
     method: "POST", headers: host({ "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${reader.key}` }),
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "actions_invoke", arguments: { name: "events.list", input: {} } } }),
   });
@@ -332,15 +332,15 @@ try {
   });
   const accept = async (email: string) => {
     const token = new URL(linkFor(email).link).hash.slice("#invitation=".length);
-    const preview = await (await appPost("/_littlebox/auth/invitation", { token })).json() as any;
+    const preview = await (await appPost("/_konae/auth/invitation", { token })).json() as any;
     assert.deepEqual(preview.result, { email, app: "Inbox", status: "new-account" });
-    const response = await appPost("/_littlebox/auth/accept", { token, password });
+    const response = await appPost("/_konae/auth/accept", { token, password });
     assert.equal(response.status, 200, await response.clone().text());
     return { token, cookie: response.headers.get("set-cookie")!.split(";")[0] };
   };
   const ana = await accept("ana@team.example");
   const ben = await accept("ben@team.example");
-  const reused = await appPost("/_littlebox/auth/accept", { token: ana.token, password });
+  const reused = await appPost("/_konae/auth/accept", { token: ana.token, password });
   assert.equal(reused.status, 410);
   refused("An accepted invitation link used again", (await reused.json() as any).error, 410);
   const users = await owner.call<{ users: Array<{ userId: string; email: string; state: string }> }>("app_users_list", { deploymentId: inbox.id });
@@ -397,17 +397,17 @@ try {
   assert.equal(suspended.state, "suspended");
   const benAfter = await rejects(action(benClient, "events.list"), /.+/);
   refused("A suspended member's existing session calls events.list", benAfter);
-  const benLogin = await appPost("/_littlebox/auth/login", { email: "ben@team.example", password });
+  const benLogin = await appPost("/_konae/auth/login", { email: "ben@team.example", password });
   assert.equal(benLogin.status, 403);
   refused("A suspended member signs in with the right password", (await benLogin.json() as any).error, 403);
   const benShell = await fetch(`${url}/`, { headers: host({ cookie: ben.cookie }) });
   assert.match(await benShell.text(), /<title>Sign in<\/title>/);
-  const benAccept = await appPost("/_littlebox/auth/accept", { token: ben.token, password });
+  const benAccept = await appPost("/_konae/auth/accept", { token: ben.token, password });
   assert.equal(benAccept.status, 410);
   const reinvite = await owner.call<{ results: Array<{ status: string }> }>("app_invitations_create", { deploymentId: inbox.id, emails: ["ben@team.example"], idempotencyKey: "inbox-reinvite-ben" });
   assert.equal(reinvite.results[0].status, "suspended");
   assert.equal((await action<any[]>(anaClient, "events.list")).length, 5);
-  const anaLogin = await appPost("/_littlebox/auth/login", { email: "ana@team.example", password });
+  const anaLogin = await appPost("/_konae/auth/login", { email: "ana@team.example", password });
   assert.equal(anaLogin.status, 200);
   pass("Suspension", "After app_user_suspend, Ben's open session is refused, the right password answers 403, the shell asks for sign-in again, and a new invitation to that address answers suspended. Ana's session and sign-in keep working.");
 
@@ -486,9 +486,9 @@ try {
   pass("Critical page by email", `POST /hooks/critical, signed like /hooks/events, stores a critical event and pages.critical's "notify": { "to": "owner" } emails owner@inbox.example "${pageMail.subject}". The sender's body with a Bcc line arrives as one line of text. A signed retry stores nothing and sends nothing. usage_read lists "pages.critical: queued" once; mail_status counts ${status.queue.notices.delivered} delivered notice.`);
 
   // ----------------------------------------------------------------- Browser
-  if (process.env.LITTLEBOX_SHOWCASE_BROWSER !== "0") {
+  if (process.env.KONAE_SHOWCASE_BROWSER !== "0") {
     const { chromium } = await import("playwright");
-    const shots = process.env.LITTLEBOX_SHOWCASE_SCREENSHOTS;
+    const shots = process.env.KONAE_SHOWCASE_SCREENSHOTS;
     if (shots) await mkdir(shots, { recursive: true });
     const [before] = await action<Array<{ total: number; acknowledged: number }>>(anaClient, "events.counts");
     const signalsBefore = (await owner.call<{ signals: unknown[] }>("signals_read", { deploymentId: inbox.id, name: "event.acknowledged" })).signals.length;
@@ -539,7 +539,7 @@ try {
 
   // ------------------------------------------- Webhooks from outside services
   // A code host and a payment provider post their own payloads, signed their own way. The replay
-  // signs each with node:crypto as the provider's documentation says, not with Littlebox's signer.
+  // signs each with node:crypto as the provider's documentation says, not with Konae's signer.
   const providerPost = async (route: string, body: string, headers: Record<string, string>) => {
     const response = await fetch(`${url}${route}`, { method: "POST", headers: host({ "content-type": "application/json", ...headers }), body });
     return { status: response.status, body: await response.json() as any };
@@ -609,7 +609,7 @@ try {
   // ------------------------------------------------- Action Contract, conform
   const contractDir = path.join(scratch, "contract");
   await cp(root, contractDir, { recursive: true });
-  const cli = (args: string[]) => Bun.spawn(["bun", "run", path.join(repo, "scripts/littlebox.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+  const cli = (args: string[]) => Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
   const contract = cli(["contract", "--dir", contractDir]);
   assert.equal(await contract.exited, 0, await new Response(contract.stderr).text());
   const written = JSON.parse(await readFile(path.join(contractDir, "action-contract.json"), "utf8"));
@@ -621,7 +621,7 @@ try {
     "events.receive": { severity: "info" },
     "events.list": { severity: "info", state: "open" },
   }));
-  const anaToken = (await appPost("/_littlebox/auth/login", { email: "ana@team.example", password })).headers.get("set-cookie")!.split(";")[0].split("=").slice(1).join("=");
+  const anaToken = (await appPost("/_konae/auth/login", { email: "ana@team.example", password })).headers.get("set-cookie")!.split(";")[0].split("=").slice(1).join("=");
   const conformKey = await owner.call<{ key: string }>("api_keys_create", { deploymentId: inbox.id, name: "Conformance", actions: ["events.feed", "events.receive"] });
   const runConform = async (secrets: string[], target = inbox.url, contractFile = path.join(contractDir, "action-contract.json"), credentials = ["--token", anaToken, "--key", conformKey.key]) => {
     const child = cli(["conform", "--url", target, "--contract", contractFile,
@@ -648,7 +648,7 @@ try {
   for (const route of ["github.receive: answers POST /hooks/github", "payments.receive: answers POST /hooks/payments", "payments.receive: refuses a stale timestamp", "github.receive: refuses a replayed signature"]) {
     assert(keyed.out.includes(`PASS ${route}`), keyed.out);
   }
-  pass("Action Contract", `littlebox contract writes 9 actions, naming each route's signature scheme. littlebox conform signs the provider routes' probes in their own schemes. littlebox conform against the private Deployment, reading the GET route with its key, reports "${keyed.totals}". Against the signed variant with both secrets and no session it reports "${signed.totals}": the signed GET and POST probes each carry a fresh nonce.`);
+  pass("Action Contract", `konae contract writes 9 actions, naming each route's signature scheme. konae conform signs the provider routes' probes in their own schemes. konae conform against the private Deployment, reading the GET route with its key, reports "${keyed.totals}". Against the signed variant with both secrets and no session it reports "${signed.totals}": the signed GET and POST probes each carry a fresh nonce.`);
 
   console.log(JSON.stringify({ app: "inbox", checks: passes.length, refusals }, null, 2));
 } finally {

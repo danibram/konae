@@ -33,7 +33,7 @@ Usage has seven kinds, each counted only after the Kernel allowed the operation 
 | `action` | the action | `actions_invoke` runs a Server Action |
 | `route` | `POST /hooks/orders` | an HTTP route runs its action. It is not counted again under `action` |
 | `upload` | | `files_upload` stores a file |
-| `file_read` | | `files_read` or `GET /_littlebox/files/<id>` returns a file |
+| `file_read` | | `files_read` or `GET /_konae/files/<id>` returns a file |
 | `signup` | | an account becomes active: a signup in local mode, an answered verification link or an accepted invitation |
 | `login` | | a password sign-in or an answered recovery link opens a session |
 
@@ -47,7 +47,7 @@ An action declares `"signal": { "name": "order.placed", "properties": ["id"] }`.
 
 The owner reads with `usage_read { deploymentId, from, to }`, at most 400 days, and `signals_read { deploymentId, name?, cursor? }`, newest first, 100 a page. Both need `read` and the project grant. The runtime endpoint does not list them.
 
-The scheduled copy already took `usage.sqlite` with `VACUUM INTO`, and restore checks its integrity. `package_export` carries it as an optional fourth component, `usage`, when the Deployment has one; an import installs it. The small `project_export` format does not carry it. The Development Kernel that `bun run littlebox -- dev` starts is the same binary, so it records into `.littlebox/dev-data/deployments/<id>/usage.sqlite`. The editor preview records nothing; a signal action there returns `{ "recorded": true }` without a store.
+The scheduled copy already took `usage.sqlite` with `VACUUM INTO`, and restore checks its integrity. `package_export` carries it as an optional fourth component, `usage`, when the Deployment has one; an import installs it. The small `project_export` format does not carry it. The Development Kernel that `bun run konae -- dev` starts is the same binary, so it records into `.konae/dev-data/deployments/<id>/usage.sqlite`. The editor preview records nothing; a signal action there returns `{ "recorded": true }` without a store.
 
 ## Update, 2026-11-06: a refused mutation is visible, and a Signal can name the actor
 

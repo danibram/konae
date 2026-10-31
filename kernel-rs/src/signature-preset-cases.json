@@ -148,7 +148,7 @@
    "provider": "github",
    "secret": "github_webhook"
   },
-  "error": "Action hooks.receive binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body.",
+  "error": "Action hooks.receive binds GET, so its signature must use the konae scheme. A provider's scheme signs a POST body.",
   "code": "signature.provider-on-get"
  },
  {
@@ -188,7 +188,7 @@
   "code": "signature.keys-invalid"
  },
  {
-  "case": "a littlebox signature with no header and no secret",
+  "case": "a konae signature with no header and no secret",
   "method": "POST",
   "signature": {},
   "error": "Action hooks.receive has an invalid signature header. Action hooks.receive names an invalid signature secret. Use lowercase letters, digits and \"_\", starting with a letter.",
@@ -202,7 +202,7 @@
    "header": "svix-signature",
    "secret": "bad name"
   },
-  "error": "Action hooks.receive has an invalid svix signature. It takes \"scheme\" and \"secret\". Action hooks.receive binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body.",
+  "error": "Action hooks.receive has an invalid svix signature. It takes \"scheme\" and \"secret\". Action hooks.receive binds GET, so its signature must use the konae scheme. A provider's scheme signs a POST body.",
   "code": "signature.keys-invalid"
  },
  {

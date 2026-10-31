@@ -28,14 +28,14 @@ const freshClient = () => { nextClient++; return `198.18.${Math.floor(nextClient
 // The setup key creates only the first owner; later owners sign up with an
 // invitation code the operator issues from the Kernel executable.
 function invitationCode() {
-  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_"))), LITTLEBOX_DATA_DIR: root };
-  const created = Bun.spawnSync(["kernel-rs/target/debug/littlebox-kernel", "creator-code-create"], { env });
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_DATA_DIR: root };
+  const created = Bun.spawnSync(["kernel-rs/target/debug/konae-kernel", "creator-code-create"], { env });
   expect(created.exitCode).toBe(0);
   return created.stdout.toString().match(/shown once: (\S+)/)![1];
 }
 
 async function owner(email: string, admission: { setupKey: string } | { code: string } = { setupKey }) {
-  const response = await fetch(`${url}/_littlebox/owner/signup`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password, ...admission }) });
+  const response = await fetch(`${url}/_konae/owner/signup`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password, ...admission }) });
   expect(response.status).toBe(200);
   const cookie = response.headers.get("set-cookie")!.split(";")[0];
   const client = new McpClient(`${url}/mcp`, { fetch: (input, init) => {
@@ -48,8 +48,8 @@ async function owner(email: string, admission: { setupKey: string } | { code: st
 beforeAll(async () => {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
   expect(await build.exited).toBe(0);
-  root = await mkdtemp(path.join(tmpdir(), "littlebox-mcp-"));
-  port = Number(process.env.LITTLEBOX_MCP_TEST_PORT) || 19300 + Math.floor(Math.random() * 90);
+  root = await mkdtemp(path.join(tmpdir(), "konae-mcp-"));
+  port = Number(process.env.KONAE_MCP_TEST_PORT) || 19300 + Math.floor(Math.random() * 90);
   url = `http://127.0.0.1:${port}`;
   await startKernel();
   const first = await owner("alice@owner.test"); alice = first.client; aliceCookie = first.cookie;
@@ -57,12 +57,12 @@ beforeAll(async () => {
 }, 120_000);
 
 async function startKernel() {
-  kernel = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
-    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_S3_"))), LITTLEBOX_DATA_DIR: root, LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_PUBLIC_ORIGIN: url, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development" },
+  kernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_S3_"))), KONAE_DATA_DIR: root, KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development" },
     stdout: "ignore", stderr: "inherit",
   });
   for (let attempt = 0; attempt < 100; attempt++) {
-    try { if ((await fetch(`${url}/_littlebox/health`)).ok) return; } catch {}
+    try { if ((await fetch(`${url}/_konae/health`)).ok) return; } catch {}
     if (kernel.exitCode !== null) throw Error("MCP test Kernel stopped.");
     await Bun.sleep(100);
   }
@@ -94,7 +94,7 @@ async function release(id: string, visibility: "public" | "private" = "public") 
 }
 
 function signup(hostname: string, email: string) {
-  return fetch(`${url}/_littlebox/auth/signup`, { method: "POST", headers: { host: hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password }) });
+  return fetch(`${url}/_konae/auth/signup`, { method: "POST", headers: { host: hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password }) });
 }
 
 async function appUser(hostname: string, email: string) {
@@ -104,14 +104,14 @@ async function appUser(hostname: string, email: string) {
 }
 
 function runtimeClient(hostname: string, cookie?: string) {
-  return new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+  return new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
     const headers = new Headers(init?.headers); headers.set("host", hostname); if (cookie) headers.set("cookie", cookie);
     return fetch(input, { ...init, headers });
   } });
 }
 
 async function loginPage(hostname: string) {
-  return (await fetch(`${url}/_littlebox/login`, { headers: { host: hostname } })).text();
+  return (await fetch(`${url}/_konae/login`, { headers: { host: hostname } })).text();
 }
 
 describe("authenticated MCP", () => {
@@ -297,7 +297,7 @@ describe("authenticated MCP", () => {
       expect((await client.listTools()).tools.some(tool => tool.name === "projects_list")).toBe(true);
       const result = await client.callTool({ name: "platform_describe", arguments: {} });
       expect(result.isError).toBe(false);
-      expect(result.structuredContent).toMatchObject({ result: { name: "Littlebox" } });
+      expect(result.structuredContent).toMatchObject({ result: { name: "Konae" } });
     } finally { await client.close(); }
   });
 
@@ -325,7 +325,7 @@ describe("authenticated MCP", () => {
       expect(await alice.call("signup_policy_read", { deploymentId: target.id })).toMatchObject(policy);
       expect((await signup(target.hostname, "stranger@app.test")).status).toBe(403);
       expect((await signup(target.hostname, "allowed@app.test")).status).toBe(mode === "allowlist" ? 200 : 403);
-      const login = await fetch(`${url}/_littlebox/auth/login`, { method: "POST", headers: { host: target.hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: "existing@app.test", password }) });
+      const login = await fetch(`${url}/_konae/auth/login`, { method: "POST", headers: { host: target.hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: "existing@app.test", password }) });
       expect(login.status).toBe(200);
       const importedMember = runtimeClient(target.hostname, login.headers.get("set-cookie")!.split(";")[0]);
       expect(await importedMember.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: `Kept ${mode}` }]);
@@ -401,9 +401,9 @@ describe("authenticated MCP", () => {
   test("the local CLI creates, builds, publishes and develops without mutating hosted data", async () => {
     const directory = path.join(root, "external-source");
     const token = await alice.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 60 });
-    const env = { ...process.env, LITTLEBOX_MCP_TOKEN: token.token };
+    const env = { ...process.env, KONAE_MCP_TOKEN: token.token };
     const run = async (command: string, args: string[] = []) => {
-      const process = Bun.spawn([Bun.which("bun")!, "run", "scripts/littlebox.ts", command, "--dir", directory, ...args], { env, stdout: "pipe", stderr: "pipe" });
+      const process = Bun.spawn([Bun.which("bun")!, "run", "scripts/konae.ts", command, "--dir", directory, ...args], { env, stdout: "pipe", stderr: "pipe" });
       const [code, output, error] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
       if (code !== 0) throw Error(error);
       return output;
@@ -411,14 +411,14 @@ describe("authenticated MCP", () => {
     expect(await run("init", ["--url", url, "--name", "External proof"])).toContain("Created External proof");
     expect(await run("build")).toContain("artifact.json");
     expect(await run("publish")).toContain("http://external-proof-");
-    const config = await Bun.file(path.join(directory, "littlebox.json")).json();
+    const config = await Bun.file(path.join(directory, "konae.json")).json();
     // init made the ID without a Kernel, and the first publish registered the project as External.
     const state = await alice.call<{ revision: number; project: { sourceAuthority: string } }>("project_inspect", { projectId: config.project.id });
     expect(state.project.sourceAuthority).toBe("external");
     expect(state.revision).toBe(1);
     const port = String(18950 + Math.floor(Math.random() * 50));
-    const dev = Bun.spawn([process.execPath, "run", "scripts/littlebox.ts", "dev", "--dir", directory, "--port", port], {
-      env: { ...env, LITTLEBOX_MCP_TOKEN: "must-not-be-used-in-development", LITTLEBOX_S3_ENDPOINT: "http://127.0.0.1:1", LITTLEBOX_MCP_ORIGIN: "http://unused-origin.test" },
+    const dev = Bun.spawn([process.execPath, "run", "scripts/konae.ts", "dev", "--dir", directory, "--port", port], {
+      env: { ...env, KONAE_MCP_TOKEN: "must-not-be-used-in-development", KONAE_S3_ENDPOINT: "http://127.0.0.1:1", KONAE_MCP_ORIGIN: "http://unused-origin.test" },
       stdout: "pipe", stderr: "inherit",
     });
     let timer: ReturnType<typeof setTimeout>;
@@ -430,15 +430,15 @@ describe("authenticated MCP", () => {
       })();
       const result = await Promise.race([output, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error("Development CLI timed out.")), 20_000); })]);
       expect(result).toContain(`.localhost:${port}`);
-      expect(await Bun.file(path.join(directory, ".littlebox/dev-data/owners.sqlite")).exists()).toBe(true);
+      expect(await Bun.file(path.join(directory, ".konae/dev-data/owners.sqlite")).exists()).toBe(true);
       expect((await alice.call<{ revision: number }>("project_inspect", { projectId: config.project.id })).revision).toBe(1);
     } finally { clearTimeout(timer!); dev.kill(); await dev.exited; }
   }, 30_000);
   test("requires credentials before discovery and closes the old operation routes", async () => {
     expect((await fetch(`${url}/mcp`, { method: "POST", body: "{}" })).status).toBe(401);
-    const stale = await fetch(`${url}/_littlebox/admin/deploy`, { method: "POST", headers: { "x-littlebox-admin-key": setupKey } });
+    const stale = await fetch(`${url}/_konae/admin/deploy`, { method: "POST", headers: { "x-konae-admin-key": setupKey } });
     expect(stale.status).toBe(410);
-    for (const route of ["/_littlebox/session", "/_littlebox/files", "/_littlebox/actions/notes.list"]) expect((await fetch(url + route)).status).toBe(410);
+    for (const route of ["/_konae/session", "/_konae/files", "/_konae/actions/notes.list"]) expect((await fetch(url + route)).status).toBe(410);
     expect((await alice.call<{ protocolVersion: string }>("platform_describe")).protocolVersion).toBe("2025-11-25");
   });
 
@@ -526,13 +526,13 @@ describe("authenticated MCP", () => {
     await expect(user.call("files_update", { fileId: saved.id, visibility: "organizers" })).rejects.toThrow("Value is outside the allowed choices.");
     expect(await user.call("files_update", { fileId: saved.id, visibility: "public" })).toMatchObject({ id: saved.id, visibility: "public", ownerId: saved.ownerId });
     expect(await other.download(await other.call<any>("files_read", { fileId: saved.id }))).toEqual(file);
-    expect((await fetch(`${url}/_littlebox/files/${saved.id}`, { headers: { host: receipt.hostname } })).status).toBe(200);
+    expect((await fetch(`${url}/_konae/files/${saved.id}`, { headers: { host: receipt.hostname } })).status).toBe(200);
     expect(await user.call("files_update", { fileId: saved.id, visibility: "private" })).toMatchObject({ visibility: "private" });
     await expect(other.call("files_read", { fileId: saved.id })).rejects.toThrow("File not found");
     expect(await user.call("files_delete", { fileId: shared.id })).toEqual({ id: shared.id, deleted: true });
     await expect(other.call("files_read", { fileId: shared.id })).rejects.toThrow("File not found");
     await expect(user.call("files_delete", { fileId: shared.id })).rejects.toThrow("File not found.");
-    expect((await fetch(`${url}/_littlebox/files/${shared.id}`, { headers: { host: receipt.hostname } })).status).toBe(404);
+    expect((await fetch(`${url}/_konae/files/${shared.id}`, { headers: { host: receipt.hostname } })).status).toBe(404);
     expect((await user.call<Array<{ id: string }>>("files_list")).map((listed) => listed.id)).toEqual([saved.id]);
     const exported = await alice.call<any>("database_export", { deploymentId: receipt.id });
     expect(new TextDecoder().decode((await alice.download(exported)).slice(0, 15))).toBe("SQLite format 3");
@@ -547,12 +547,12 @@ describe("authenticated MCP", () => {
     const { receipt } = await release("signup_policy_proof");
     expect(await alice.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "open", allowlist: [], visibility: "public" });
     const member = await appUser(receipt.hostname, "first@app.test");
-    expect(await loginPage(receipt.hostname)).toContain("/_littlebox/auth/signup");
+    expect(await loginPage(receipt.hostname)).toContain("/_konae/auth/signup");
 
     await alice.call("signup_policy_set", { deploymentId: receipt.id, mode: "closed" });
     expect((await signup(receipt.hostname, "late@app.test")).status).toBe(403);
     const closedPage = await loginPage(receipt.hostname);
-    expect(closedPage).not.toContain("/_littlebox/auth/signup");
+    expect(closedPage).not.toContain("/_konae/auth/signup");
     expect(closedPage).not.toContain("Account creation is open");
 
     const policy = await alice.call("signup_policy_set", { deploymentId: receipt.id, mode: "allowlist", allowlist: ["Carol@Example.test", "@Team.test"] });
@@ -597,9 +597,9 @@ describe("authenticated MCP", () => {
     const receipt = await publishWith(publisher, { ...payload(id, "private"), initialSignupPolicy: { mode: "invitation", allowlist: [] } });
     expect(await publisher.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "invitation", visibility: "private" });
     expect((await signup(receipt.hostname, "stranger@app.test")).status).toBe(403);
-    const page = await (await fetch(`${url}/_littlebox/login`, { headers: { host: receipt.hostname } })).text();
+    const page = await (await fetch(`${url}/_konae/login`, { headers: { host: receipt.hostname } })).text();
     expect(page).toContain("Only invited people can create an account");
-    expect(page).not.toContain("/_littlebox/auth/signup");
+    expect(page).not.toContain("/_konae/auth/signup");
 
     // Without manage_users, publish changes who may join neither directly nor through a republish.
     await expect(publisher.call("signup_policy_set", { deploymentId: receipt.id, mode: "open" })).rejects.toThrow("Unknown tool");
@@ -630,17 +630,17 @@ describe("authenticated MCP", () => {
     const token = new URL(mailbox[0].link).hash.slice("#invitation=".length);
     expect(JSON.stringify(created)).not.toContain(token);
 
-    const opened = await fetch(`${url}/_littlebox/invitation`, { headers: { host: receipt.hostname } });
+    const opened = await fetch(`${url}/_konae/invitation`, { headers: { host: receipt.hostname } });
     expect(opened.status).toBe(200);
     const post = (route: string, body: object) => fetch(`${url}${route}`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify(body) });
-    expect((await (await post("/_littlebox/auth/invitation", { token })).json()).result).toEqual({ email: "ana@app.test", app: "MCP proof", status: "new-account" });
-    expect((await post("/_littlebox/auth/accept", { token: "0".repeat(64), password })).status).toBe(410);
-    const accepted = await post("/_littlebox/auth/accept", { token, password });
+    expect((await (await post("/_konae/auth/invitation", { token })).json()).result).toEqual({ email: "ana@app.test", app: "MCP proof", status: "new-account" });
+    expect((await post("/_konae/auth/accept", { token: "0".repeat(64), password })).status).toBe(410);
+    const accepted = await post("/_konae/auth/accept", { token, password });
     expect(accepted.status).toBe(200);
     const member = runtimeClient(receipt.hostname, accepted.headers.get("set-cookie")!.split(";")[0]);
     expect(await member.call("auth_session")).toMatchObject({ name: "ana@app.test" });
     await member.call("actions_invoke", { name: "notes.create", input: { title: "Invited" } });
-    expect((await post("/_littlebox/auth/accept", { token, password })).status).toBe(410);
+    expect((await post("/_konae/auth/accept", { token, password })).status).toBe(410);
 
     const users = await manager.call<{ users: Array<{ userId: string; state: string; verified: boolean }> }>("app_users_list", { deploymentId: receipt.id });
     expect(users.users).toEqual([expect.objectContaining({ email: "ana@app.test", state: "active", verified: true })]);
@@ -657,7 +657,7 @@ describe("authenticated MCP", () => {
 
   test("anonymous visitors on a public app may only call actions declared anonymous", async () => {
     const { receipt } = await release("anonymous_proof");
-    const listed = await fetch(`${url}/_littlebox/mcp`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+    const listed = await fetch(`${url}/_konae/mcp`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
     expect(listed.status).toBe(200);
     expect((await listed.json()).result.tools.map((tool: { name: string }) => tool.name)).toEqual(["auth_session", "actions_invoke", "files_list", "files_read", "transfer_read", "transfer_status", "transfer_cancel", "auth_signup", "auth_verify", "auth_recover", "auth_reset"]);
     const visitor = runtimeClient(receipt.hostname);
@@ -677,9 +677,9 @@ describe("authenticated MCP", () => {
     const user = await appUser(receipt.hostname, "member@app.test");
     await user.call("actions_invoke", { name: "notes.create", input: { title: "Counted" } });
     expect(await visitor.call("actions_invoke", { name: "notes.count" })).toEqual([{ total: 1 }]);
-    const tooLarge = await fetch(`${url}/_littlebox/mcp`, { method: "POST", headers: { host: receipt.hostname }, body: "x".repeat(300_000) });
+    const tooLarge = await fetch(`${url}/_konae/mcp`, { method: "POST", headers: { host: receipt.hostname }, body: "x".repeat(300_000) });
     expect(tooLarge.status).toBe(413);
-    const crossOrigin = await fetch(`${url}/_littlebox/mcp`, { method: "POST", headers: { host: receipt.hostname, origin: "https://attacker.test" }, body: "{}" });
+    const crossOrigin = await fetch(`${url}/_konae/mcp`, { method: "POST", headers: { host: receipt.hostname, origin: "https://attacker.test" }, body: "{}" });
     expect(crossOrigin.status).toBe(403);
   });
 
@@ -687,8 +687,8 @@ describe("authenticated MCP", () => {
     const { receipt } = await release("private_proof", "private");
     expect(await alice.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "closed", visibility: "private" });
     expect((await signup(receipt.hostname, "visitor@app.test")).status).toBe(403);
-    expect(await loginPage(receipt.hostname)).not.toContain("/_littlebox/auth/signup");
-    const anonymous = await fetch(`${url}/_littlebox/mcp`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+    expect(await loginPage(receipt.hostname)).not.toContain("/_konae/auth/signup");
+    const anonymous = await fetch(`${url}/_konae/mcp`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
     expect(anonymous.status).toBe(401);
     await expect(runtimeClient(receipt.hostname).call("actions_invoke", { name: "notes.count" })).rejects.toThrow("Sign in");
     await alice.call("signup_policy_set", { deploymentId: receipt.id, mode: "allowlist", allowlist: ["visitor@app.test"] });
@@ -708,7 +708,7 @@ describe("authenticated MCP", () => {
     const { receipt } = await release("signup_oracle_proof");
     await alice.call("signup_policy_set", { deploymentId: receipt.id, mode: "allowlist", allowlist: ["listed@app.test"] });
     const attempt = async (email: string, pw: string) => {
-      const response = await fetch(`${url}/_littlebox/auth/signup`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password: pw }) });
+      const response = await fetch(`${url}/_konae/auth/signup`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password: pw }) });
       return { status: response.status, body: await response.json() };
     };
     const listedWeak = await attempt("listed@app.test", "x");
@@ -773,7 +773,7 @@ describe("authenticated MCP", () => {
   test("app and owner sign-in are rate limited per client and per email from that client", async () => {
     const { receipt } = await release("auth_limit_proof");
     const attempt = (route: string, client: string, email: string, host?: string) => fetch(`${url}${route}`, { method: "POST", headers: { ...(host ? { host } : {}), "content-type": "application/json", "x-forwarded-for": client }, body: JSON.stringify({ email, password: "wrong-password-123" }) });
-    for (const [route, host] of [["/_littlebox/auth/login", receipt.hostname], ["/_littlebox/owner/login", undefined]] as const) {
+    for (const [route, host] of [["/_konae/auth/login", receipt.hostname], ["/_konae/owner/login", undefined]] as const) {
       const client = freshClient();
       // Concurrent, so the test also shows that password checks run in parallel.
       expect((await Promise.all(Array.from({ length: 10 }, (_, i) => attempt(route, client, `guess${i}@limit.test`, host)))).map(r => r.status)).toEqual(Array(10).fill(401));
@@ -787,14 +787,14 @@ describe("authenticated MCP", () => {
     }
     // Signup counts against the same buckets.
     const client = freshClient();
-    for (let i = 0; i < 10; i++) await fetch(`${url}/_littlebox/auth/signup`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json", "x-forwarded-for": client }, body: JSON.stringify({ email: `new${i}@limit.test`, password: "x" }) });
-    expect((await fetch(`${url}/_littlebox/auth/signup`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json", "x-forwarded-for": client }, body: JSON.stringify({ email: "late@limit.test", password }) })).status).toBe(429);
+    for (let i = 0; i < 10; i++) await fetch(`${url}/_konae/auth/signup`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json", "x-forwarded-for": client }, body: JSON.stringify({ email: `new${i}@limit.test`, password: "x" }) });
+    expect((await fetch(`${url}/_konae/auth/signup`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json", "x-forwarded-for": client }, body: JSON.stringify({ email: "late@limit.test", password }) })).status).toBe(429);
   }, 60_000);
 
   test("failed guesses from one address do not lock the account holder out", async () => {
     const { receipt } = await release("lockout_proof");
     await appUser(receipt.hostname, "victim@lockout.test");
-    for (const [route, host, email] of [["/_littlebox/auth/login", receipt.hostname, "victim@lockout.test"], ["/_littlebox/owner/login", undefined, "alice@owner.test"]] as const) {
+    for (const [route, host, email] of [["/_konae/auth/login", receipt.hostname, "victim@lockout.test"], ["/_konae/owner/login", undefined, "alice@owner.test"]] as const) {
       const send = (client: string, pw: string) => fetch(`${url}${route}`, { method: "POST", headers: { ...(host ? { host } : {}), "content-type": "application/json", "x-forwarded-for": client }, body: JSON.stringify({ email, password: pw }) });
       const attacker = freshClient();
       const statuses = [];
@@ -807,7 +807,7 @@ describe("authenticated MCP", () => {
   test("password hashing does not hold the identity lock", async () => {
     const { receipt } = await release("auth_lock_proof");
     const user = await appUser(receipt.hostname, "steady@app.test");
-    const login = (email: string, pw: string) => fetch(`${url}/_littlebox/auth/login`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password: pw }) });
+    const login = (email: string, pw: string) => fetch(`${url}/_konae/auth/login`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password: pw }) });
     let started = performance.now();
     expect((await login("steady@app.test", password)).status).toBe(200);
     const oneHash = performance.now() - started;
@@ -937,22 +937,22 @@ describe("app accounts under required verification", () => {
   const setCookie = (response: Response) => response.headers.get("set-cookie")?.split(";")[0];
 
   beforeAll(async () => {
-    strictRoot = await mkdtemp(path.join(tmpdir(), "littlebox-mcp-strict-"));
+    strictRoot = await mkdtemp(path.join(tmpdir(), "konae-mcp-strict-"));
     // Its own range, so it never meets the admission suite's 19400 to 19489.
-    const strictPort = Number(process.env.LITTLEBOX_MCP_STRICT_TEST_PORT) || 20400 + Math.floor(Math.random() * 90);
+    const strictPort = Number(process.env.KONAE_MCP_STRICT_TEST_PORT) || 20400 + Math.floor(Math.random() * 90);
     strictUrl = `http://127.0.0.1:${strictPort}`;
-    strictKernel = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
-      env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_"))), LITTLEBOX_DATA_DIR: strictRoot, LITTLEBOX_KERNEL_PORT: String(strictPort), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_PUBLIC_ORIGIN: strictUrl, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development", LITTLEBOX_ACCOUNT_VERIFICATION: "required" },
+    strictKernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
+      env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_DATA_DIR: strictRoot, KONAE_KERNEL_PORT: String(strictPort), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: strictUrl, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development", KONAE_ACCOUNT_VERIFICATION: "required" },
       stdout: "ignore", stderr: "inherit",
     });
     let ready = false;
     for (let attempt = 0; attempt < 100 && !ready; attempt++) {
-      try { ready = (await fetch(`${strictUrl}/_littlebox/health`)).ok; } catch {}
+      try { ready = (await fetch(`${strictUrl}/_konae/health`)).ok; } catch {}
       if (!ready) await Bun.sleep(100);
     }
     expect(ready).toBe(true);
-    expect((await post("/_littlebox/owner/signup", { email: ownerEmail, setupKey })).status).toBe(202);
-    const verified = await post("/_littlebox/owner/verify", { token: await token(ownerEmail, "verification"), password });
+    expect((await post("/_konae/owner/signup", { email: ownerEmail, setupKey })).status).toBe(202);
+    const verified = await post("/_konae/owner/verify", { token: await token(ownerEmail, "verification"), password });
     expect(verified.status).toBe(200);
     const cookie = setCookie(verified)!;
     owner = new McpClient(`${strictUrl}/mcp`, { fetch: (input, init) => {
@@ -977,25 +977,25 @@ describe("app accounts under required verification", () => {
   test("a sign-in before the link hints only in the browser that asked for it", async () => {
     const plain = "Email or password is incorrect.";
     const hint = "Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first.";
-    const started = await appPost("/_littlebox/auth/signup", { email: "ana@strict.test" });
+    const started = await appPost("/_konae/auth/signup", { email: "ana@strict.test" });
     expect(started.status).toBe(202);
     const browser = setCookie(started)!;
-    expect(browser).toStartWith("littlebox_signup=");
+    expect(browser).toStartWith("konae_signup=");
     const login = async (email: string, pw: string, cookie?: string) => {
-      const response = await appPost("/_littlebox/auth/login", { email, password: pw }, cookie);
+      const response = await appPost("/_konae/auth/login", { email, password: pw }, cookie);
       return [response.status, (await response.json()).error] as const;
     };
     expect(await login("ana@strict.test", password, browser)).toEqual([401, hint]);
     expect(await login("ana@strict.test", password)).toEqual([401, plain]);
     expect(await login("someone@strict.test", password, browser)).toEqual([401, plain]);
     // An address with an active account: the probe's own signup sets the same cookie and gets the same hint.
-    await appPost("/_littlebox/auth/signup", { email: "ben@strict.test" });
-    expect((await appPost("/_littlebox/auth/verify", { token: await token("ben@strict.test", "verification"), password })).status).toBe(200);
-    const probe = await appPost("/_littlebox/auth/signup", { email: "ben@strict.test" });
+    await appPost("/_konae/auth/signup", { email: "ben@strict.test" });
+    expect((await appPost("/_konae/auth/verify", { token: await token("ben@strict.test", "verification"), password })).status).toBe(200);
+    const probe = await appPost("/_konae/auth/signup", { email: "ben@strict.test" });
     expect(probe.status).toBe(202);
     expect(await login("ben@strict.test", "a-guessed-password", setCookie(probe))).toEqual([401, hint]);
     // The runtime endpoint's auth_signup sets it too.
-    const runtime = await fetch(`${strictUrl}/_littlebox/mcp`, {
+    const runtime = await fetch(`${strictUrl}/_konae/mcp`, {
       method: "POST", headers: { host, "content-type": "application/json", accept: "application/json, text/event-stream", "x-forwarded-for": freshClient() },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "auth_signup", arguments: { email: "cara@strict.test" } } }),
     });
@@ -1019,13 +1019,13 @@ describe("app accounts under required verification", () => {
     const receipt = await owner.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId });
     await owner.call("signup_policy_set", { deploymentId: receipt.id, mode: "open" });
     const at = (route: string, body: unknown, cookie?: string) => post(route, body, { host: receipt.hostname, ...(cookie ? { cookie } : {}) });
-    const runtimeAs = (cookie?: string) => new McpClient(`${strictUrl}/_littlebox/mcp`, { fetch: (input, init) => {
+    const runtimeAs = (cookie?: string) => new McpClient(`${strictUrl}/_konae/mcp`, { fetch: (input, init) => {
       const headers = new Headers(init?.headers); headers.set("host", receipt.hostname); headers.set("x-forwarded-for", freshClient()); if (cookie) headers.set("cookie", cookie);
       return fetch(input, { ...init, headers });
     } });
     // A member, signed up with the link.
-    await at("/_littlebox/auth/signup", { email: "member@strict.test" });
-    const member = setCookie(await at("/_littlebox/auth/verify", { token: await token("member@strict.test", "verification"), password }))!;
+    await at("/_konae/auth/signup", { email: "member@strict.test" });
+    const member = setCookie(await at("/_konae/auth/verify", { token: await token("member@strict.test", "verification"), password }))!;
     expect(await runtimeAs(member).call("actions_invoke", { name: "me.role" })).toEqual([{ role: "member" }]);
     await expect(runtimeAs(member).call("actions_invoke", { name: "notes.pin" })).rejects.toThrow("Only the app's owner can pin a note.");
     expect(await runtimeAs().call("actions_invoke", { name: "me.role" })).toEqual([{ role: null }]);
@@ -1035,12 +1035,12 @@ describe("app accounts under required verification", () => {
     expect([entry.email, entry.account, entry.role]).toEqual([ownerEmail, "created", "owner"]);
     const entryToken = new URLSearchParams(new URL(entry.url).hash.slice(1)).get("entry")!;
     expect((await fetch(entry.url.split("#")[0], { headers: { host: receipt.hostname } })).status).toBe(200);
-    const entered = await at("/_littlebox/owner-entry", { token: entryToken });
+    const entered = await at("/_konae/owner-entry", { token: entryToken });
     expect(entered.status).toBe(200);
     const ownerApp = runtimeAs(setCookie(entered));
     expect(await ownerApp.call<{ role: string; name: string }>("auth_session")).toMatchObject({ role: "owner", name: ownerEmail });
     expect(await ownerApp.call("actions_invoke", { name: "notes.pin" })).toMatchObject({ changes: 1 });
-    expect((await at("/_littlebox/owner-entry", { token: entryToken })).status).toBe(410);
+    expect((await at("/_konae/owner-entry", { token: entryToken })).status).toBe(410);
     const users = await owner.call<{ users: { email: string; role: string; verified: boolean }[] }>("app_users_list", { deploymentId: receipt.id });
     expect(users.users.map((user) => [user.email, user.role, user.verified])).toEqual([["member@strict.test", "member", true], [ownerEmail, "owner", true]]);
 

@@ -1,4 +1,4 @@
-# Full frontend environment for Littlebox: npm, TypeScript, Vite, esbuild and static output
+# Full frontend environment for Konae: npm, TypeScript, Vite, esbuild and static output
 
 **Date:** 2026-08-15  
 **Status:** research and architecture proposal  
@@ -6,7 +6,7 @@
 
 ## Executive recommendation
 
-Yes, this fits Littlebox well, on one condition. **Node must exist in the development and build plane, never in the published runtime of each mini-app**. A Project can look like a normal frontend project, with a file tree, `package.json`, lockfile, TypeScript, Vite, esbuild and npm dependencies, get compiled in an ephemeral environment and produce a static artifact. The Deployment stays an immutable bundle served by the Kernel, with no process, VM or container per application. This keeps the cost rule from `docs/architecture.md`, where an idle app has a near-zero marginal compute cost.
+Yes, this fits Konae well, on one condition. **Node must exist in the development and build plane, never in the published runtime of each mini-app**. A Project can look like a normal frontend project, with a file tree, `package.json`, lockfile, TypeScript, Vite, esbuild and npm dependencies, get compiled in an ephemeral environment and produce a static artifact. The Deployment stays an immutable bundle served by the Kernel, with no process, VM or container per application. This keeps the cost rule from `docs/architecture.md`, where an idle app has a near-zero marginal compute cost.
 
 I would not implement a rigid "compiler = Vite/esbuild" selector. I would model a small build contract:
 
@@ -56,7 +56,7 @@ The good news is that the security boundaries already point the right way, with 
 
 ### 1. Isolated build host/server
 
-This is the most compatible option and the one that can produce a repeatable, auditable result. An ephemeral Linux runner can run the real package manager, `tsc`, Vite, esbuild, PostCSS and plugins. Vite also offers a programmatic JavaScript API, but it is better to invoke the Project's normal script so the contract stays the same as outside Littlebox ([Vite JavaScript API](https://vite.dev/guide/api-javascript.html)).
+This is the most compatible option and the one that can produce a repeatable, auditable result. An ephemeral Linux runner can run the real package manager, `tsc`, Vite, esbuild, PostCSS and plugins. Vite also offers a programmatic JavaScript API, but it is better to invoke the Project's normal script so the contract stays the same as outside Konae ([Vite JavaScript API](https://vite.dev/guide/api-javascript.html)).
 
 Advantages:
 
@@ -115,7 +115,7 @@ Limits:
 - It adds another preview implementation that can diverge from production.
 - Nodebox uses polyfills and lacks full parity with Node. It does not support native N-API addons except through WASM alternatives, native sockets or several APIs, and its documentation notes commercial restrictions for templates that use it ([Sandpack FAQ](https://sandpack.codesandbox.io/docs/resources/faq)).
 
-It is useful if Littlebox decides to offer a separate "curated playground" mode. I would not choose it as the core of a Vite-compatible environment.
+It is useful if Konae decides to offer a separate "curated playground" mode. I would not choose it as the core of a Vite-compatible environment.
 
 ### 4. `esbuild-wasm` in the browser
 
@@ -134,7 +134,7 @@ But esbuild does not install packages. To support `import "react"` we would have
 
 The documentation itself says the WASM version can be an order of magnitude slower than the native binary and leaves out some features, such as the local server. It is intended mainly for the browser when there is no other option ([esbuild getting started](https://esbuild.github.io/getting-started/#wasm)). It also does not run the Vite plugin ecosystem or turn the browser into Node.
 
-It is very good for local syntax/transpilation feedback or an ultra-fast preset without complex packages. I would not build the Littlebox package manager on top of it.
+It is very good for local syntax/transpilation feedback or an ultra-fast preset without complex packages. I would not build the Konae package manager on top of it.
 
 ## Target architecture
 
@@ -190,7 +190,7 @@ Immutable reference to an `artifactId` plus the schema/actions/capability manife
 
 ```text
 project/
-├── littlebox.manifest.json
+├── konae.manifest.json
 ├── package.json
 ├── package-lock.json
 ├── tsconfig.json
@@ -200,12 +200,12 @@ project/
 │   ├── App.tsx
 │   └── styles.css
 ├── public/
-└── littlebox/
+└── konae/
     ├── schema.sql
     └── actions.json
 ```
 
-`littlebox/` is control/capability source and is always excluded from the public directory. The frontend imports a typed `@littlebox/sdk` package or uses a virtual module provided by the preset. The build generates calls to the Runtime Interface on the same hostname, but never includes SQL, credentials or Admin capabilities.
+`konae/` is control/capability source and is always excluded from the public directory. The frontend imports a typed `@konae/sdk` package or uses a virtual module provided by the preset. The build generates calls to the Runtime Interface on the same hostname, but never includes SQL, credentials or Admin capabilities.
 
 The manifest can declare:
 
@@ -223,7 +223,7 @@ The manifest can declare:
 }
 ```
 
-The preset creates starters and defaults, and it must not hide the contract. An exported Project has to compile outside Littlebox with the same commands.
+The preset creates starters and defaults, and it must not hide the contract. An exported Project has to compile outside Konae with the same commands.
 
 ## Canonical build pipeline
 
@@ -234,7 +234,7 @@ The preset creates starters and defaults, and it must not hide the contract. An 
 5. **Install.** `npm ci` requires a lockfile, fails if it does not match `package.json`, does not rewrite it and performs a clean install ([npm ci](https://docs.npmjs.com/cli/v11/commands/npm-ci/)). The lockfile describes the exact tree and contains the resolved URL and integrity of each artifact, so it must be versioned with the source ([package-lock.json](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/)).
 6. **Check types.** Run `npm run typecheck`, usually `tsc --noEmit`. Vite transpiles `.ts` but does not type check, and its documentation recommends separating `tsc --noEmit` from the production build ([Vite TypeScript](https://vite.dev/guide/features#typescript)).
 7. **Build.** `npm run build`. Capture stdout/stderr with limits and separate structured diagnostics from logs.
-8. **Validate `dist`.** Resolve each path physically. Reject symlinks, escapes, the reserved `/_littlebox` names, disallowed hidden files, oversized HTML/JS, file count or total size over quota and dangerous MIME types. Require `index.html`.
+8. **Validate `dist`.** Resolve each path physically. Reject symlinks, escapes, the reserved `/_konae` names, disallowed hidden files, oversized HTML/JS, file count or total size over quota and dangerous MIME types. Require `index.html`.
 9. **Generate the artifact manifest.** Hash per file, sizes, MIME types, entrypoint and minimal provenance. Upload the blobs first and commit the manifest last so a partial build is never visible.
 10. **Destroy the sandbox.** Also on cancellation or timeout. Cloudflare warns that an `exec()` timeout cuts the connection but does not kill the process, so the sandbox must be destroyed or the session deleted explicitly ([execute commands](https://developers.cloudflare.com/sandbox/guides/execute-commands/)).
 11. **Promote.** Update the Preview alias only after validation. Deploy creates an immutable reference to the artifact.
@@ -243,7 +243,7 @@ The preset creates starters and defaults, and it must not hide the contract. An 
 
 It is worth offering them explicitly:
 
-- With a supported preset, Littlebox controls the Vite/esbuild configuration, disables `configFile`, pins plugins and generates the scripts. It is the most predictable path for starters and for the agent.
+- With a supported preset, Konae controls the Vite/esbuild configuration, disables `configFile`, pins plugins and generates the scripts. It is the most predictable path for starters and for the agent.
 - Advanced mode accepts `vite.config.*`, custom plugins and custom scripts. Vite transforms and loads its config file as code, and plugins are installed as Project dependencies, so this mode needs the strong sandbox and can fail for legitimate incompatibilities ([Vite config](https://vite.dev/config/), [Vite plugins](https://vite.dev/guide/using-plugins.html)).
 
 Both produce exactly the same `BuildArtifact`. "Supported" describes the level of guarantee and assistance, not a different Deployment format.
@@ -287,7 +287,7 @@ For published static files:
 
 - hashed-name assets get `Cache-Control: public, max-age=31536000, immutable` and a content ETag;
 - HTML on an immutable Deployment hostname can also be cached aggressively, while a mutable Preview alias must use `no-cache` or a short TTL;
-- `/_littlebox/*` never shares the asset cache and keeps the Kernel's private policies.
+- `/_konae/*` never shares the asset cache and keeps the Kernel's private policies.
 
 Vite already uses the lockfile and config to invalidate its development prebundle and serves dependencies with versioned immutable HTTP caching ([Vite dependency pre-bundling](https://vite.dev/guide/dep-pre-bundling.html)). That cache belongs to a development session, not to the Artifact Store.
 
@@ -301,15 +301,15 @@ There are three separate levels that must not be confused:
 
 The MVP can deliver 1 and 2 and paint the build diagnostics over CodeMirror. Later, the TypeScript Language Service can run in an editor Worker, fed by the Project tree and the dependencies' `.d.ts` files. The official Language Service is designed as a long-lived, incremental, on-demand program, and the host supplies the file set and snapshots/versions ([TypeScript Language Service API](https://github.com/microsoft/TypeScript/wiki/Using-the-Language-Service-API)). Switching to Monaco is not required, since CodeMirror can consume custom diagnostics/completions. Monaco already ships TypeScript/JavaScript workers if a fuller integration is preferred, but it would grow the bundle and the complexity ([Monaco ESM integration](https://github.com/microsoft/monaco-editor/blob/main/docs/integrate-esm.md)).
 
-`@littlebox/sdk` must include types and be part of the starter, for example:
+`@konae/sdk` must include types and be part of the starter, for example:
 
 ```ts
-import { actions, auth, files } from "@littlebox/sdk";
+import { actions, auth, files } from "@konae/sdk";
 
 const tasks = await actions.call("tasks.list");
 ```
 
-Ideally the `actions.call` types are generated from `littlebox/actions.json`, so renaming an action breaks typecheck before deploy. The compiled SDK only knows public names and contracts. SQL stays server-side.
+Ideally the `actions.call` types are generated from `konae/actions.json`, so renaming an action breaks typecheck before deploy. The compiled SDK only knows public names and contracts. SQL stays server-side.
 
 ## Vite, esbuild and static generation
 
@@ -322,9 +322,9 @@ Vite fits as a starter because:
 - it resolves assets, CSS, imports, chunks and base paths;
 - it offers HMR and framework plugins during development.
 
-Do not assume that "supporting Vite" means coupling to esbuild. The repo uses Vite 6 today, while current Vite versions have changed internal parts of the pipeline. Littlebox must treat `vite` as a dependency versioned by the Project and the static output as the stable interface. `esbuild` is also supported as an independent tool/preset.
+Do not assume that "supporting Vite" means coupling to esbuild. The repo uses Vite 6 today, while current Vite versions have changed internal parts of the pipeline. Konae must treat `vite` as a dependency versioned by the Project and the static output as the stable interface. `esbuild` is also supported as an independent tool/preset.
 
-Specifically, Vite 8 replaced the previous internal pipeline with Rolldown/Oxc. This confirms that Littlebox must not depend on bundler internals or install a moving global version ([Vite 8 announcement](https://vite.dev/blog/announcing-vite8)).
+Specifically, Vite 8 replaced the previous internal pipeline with Rolldown/Oxc. This confirms that Konae must not depend on bundler internals or install a moving global version ([Vite 8 announcement](https://vite.dev/blog/announcing-vite8)).
 
 Recommended starter configuration:
 
@@ -332,11 +332,11 @@ Recommended starter configuration:
 - `build.outDir: "dist"`.
 - sourcemaps disabled in public by default; store them as a private Admin artifact if stack traces are wanted.
 - `tsc --noEmit && vite build`, or separate `typecheck`/`build` scripts that the runner executes both of.
-- a **platform-owned** plugin or post-process that ensures the `/_littlebox/runtime.js` client is in the HTML without inline secrets.
+- a **platform-owned** plugin or post-process that ensures the `/_konae/runtime.js` client is in the HTML without inline secrets.
 
 ### esbuild as a small preset
 
-For mini-apps that do not need Vite, a starter can use the native esbuild API/CLI with `bundle`, `platform: "browser"`, `format: "esm"`, `sourcemap` in preview and `minify` in production. The bundler produces browser output by default and supports TS/JSX/loaders/plugins ([esbuild getting started](https://esbuild.github.io/getting-started/), [API](https://esbuild.github.io/api/)). It is simpler and faster, but Littlebox would have to generate/copy `index.html` and assets. I would not try to emulate Vite on top of it.
+For mini-apps that do not need Vite, a starter can use the native esbuild API/CLI with `bundle`, `platform: "browser"`, `format: "esm"`, `sourcemap` in preview and `minify` in production. The bundler produces browser output by default and supports TS/JSX/loaders/plugins ([esbuild getting started](https://esbuild.github.io/getting-started/), [API](https://esbuild.github.io/api/)). It is simpler and faster, but Konae would have to generate/copy `index.html` and assets. I would not try to emulate Vite on top of it.
 
 ### What "static" means
 
@@ -380,7 +380,7 @@ Those capabilities must map to Server Actions/Kernel, or go to the Railway/Docke
 
 ### Preview and browser
 
-- Serve the compiled preview from an origin separate from the editor, ideally `preview-token.preview.littlebox.test/app/`, never from the same origin with Admin credentials.
+- Serve the compiled preview from an origin separate from the editor, ideally `preview-token.preview.konae.test/app/`, never from the same origin with Admin credentials.
 - Iframe with minimal permissions. The HTML Standard explains that `sandbox` creates an opaque origin by default and that combining `allow-scripts` + `allow-same-origin` on same-origin content lets the content remove the sandbox. The preview must be cross-origin and only regain the capabilities it truly needs ([HTML Standard](https://html.spec.whatwg.org/multipage/iframe-embed-object.html#attr-iframe-sandbox)).
 - An authenticated channel/runtime bound to `projectId + snapshotId + previewId`; do not accept supplied IDs as authority.
 - A short, revocable preview URL with a TTL. A random URL is a bearer capability and can leak through logs/referrers.
@@ -391,7 +391,7 @@ Those capabilities must map to Server Actions/Kernel, or go to the Railway/Docke
 
 - Canonicalize and check that every path stays inside `dist`; do not follow symlinks.
 - MIME type from the extension or a trusted list, never from user metadata.
-- `index.html` cannot overwrite `/_littlebox/*`.
+- `index.html` cannot overwrite `/_konae/*`.
 - Limits on file count, total size, HTML/JS size and route depth.
 - HTML is served as HTML. User uploads stay in the Blob Interface with the current restrictive policy, separate from build assets.
 - For SPAs, fall back to `index.html` only on `GET/HEAD` navigation requests that accept HTML. A missing asset must return 404.
@@ -407,7 +407,7 @@ Those capabilities must map to Server Actions/Kernel, or go to the Railway/Docke
 - Persistence outside `localStorage` for large sources, with IndexedDB as a local cache and the Admin API/object storage as the authority. Never persist `node_modules`.
 - A Capsule v1 → v2 migrator that generates a vanilla Vite starter without changing schema/actions.
 
-The phase is done when a v2 Project can be exported, run outside Littlebox and imported again without loss.
+The phase is done when a v2 Project can be exported, run outside Konae and imported again without loss.
 
 ### Phase 1, canonical static MVP
 
@@ -478,4 +478,4 @@ Deployment + Kernel capabilities
 
 This makes it possible to offer a frontend experience very close to Node without turning each mini-app into a Node service. Vite would be the recommended preset; esbuild, a small preset and a direct tool; WebContainers, the DX accelerator; Sandpack, a restricted playground option. The sandboxed server would remain the source of truth for publishing.
 
-My assessment is that this is a natural evolution of the product and widens the range of apps an agent can generate a great deal. Adding a compiler is the small part. The value lies in introducing **snapshot → isolated build → validated artifact → static deployment** correctly, while keeping the security separation Littlebox already has.
+My assessment is that this is a natural evolution of the product and widens the range of apps an agent can generate a great deal. Adding a compiler is the small part. The value lies in introducing **snapshot → isolated build → validated artifact → static deployment** correctly, while keeping the security separation Konae already has.

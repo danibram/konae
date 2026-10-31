@@ -2,7 +2,7 @@
 // multi-answer form in one atomic write, tallies, one vote per person, and
 // what a duplicate or an invalid answer gets back.
 //
-//   LITTLEBOX_PROBE_PORT=23040 bun run examples/probes/survey/replay.ts
+//   KONAE_PROBE_PORT=23040 bun run examples/probes/survey/replay.ts
 import assert from "node:assert/strict";
 import { probe } from "../_kit";
 

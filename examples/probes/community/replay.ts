@@ -3,7 +3,7 @@
 // private rows in one table, realtime by polling, the audit of who did what,
 // and files shared with a role.
 //
-//   LITTLEBOX_PROBE_PORT=23030 bun run examples/probes/community/replay.ts
+//   KONAE_PROBE_PORT=23030 bun run examples/probes/community/replay.ts
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";

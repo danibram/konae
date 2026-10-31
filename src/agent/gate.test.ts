@@ -114,7 +114,7 @@ describe("validation gate", () => {
     for (const [http, access, message] of [
       [{ method: "GET", path: "/api/tasks" }, "authenticated", "Action tasks.feed is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route."],
       [{ method: "POST", path: "/api/tasks" }, "anonymous", "Action tasks.feed must bind GET for a query and POST for a mutation."],
-      [{ method: "GET", path: "/_littlebox/files" }, "anonymous", "Action tasks.feed binds the reserved path /_littlebox/files. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel."],
+      [{ method: "GET", path: "/_konae/files" }, "anonymous", "Action tasks.feed binds the reserved path /_konae/files. Paths under /_konae, /oauth, /.well-known and /mcp belong to the Kernel."],
     ] as const) {
       const refused = await validator.validate(capsule({ "actions.json": program(http, access) }));
       expect(refused.ok).toBe(false);

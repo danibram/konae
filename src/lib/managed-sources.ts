@@ -55,7 +55,7 @@ export class ManagedSources {
   }
 
   save(project: MiniAppProject): Promise<void> {
-    if (this.ejected.has(project.id)) return Promise.reject(new Error("This project was ejected. Its code is edited outside Littlebox now."));
+    if (this.ejected.has(project.id)) return Promise.reject(new Error("This project was ejected. Its code is edited outside Konae now."));
     const previous = this.tails.get(project.id) ?? Promise.resolve();
     const next = previous.then(async () => {
       if (!this.revisions.has(project.id)) {

@@ -4,7 +4,7 @@
 // stored nothing, a guard's refusal, an unproven address, an address typed
 // into the input), what the owner reads, and what both doors refuse.
 //
-//   LITTLEBOX_PROBE_PORT=23060 bun run examples/probes/notify/replay.ts
+//   KONAE_PROBE_PORT=23060 bun run examples/probes/notify/replay.ts
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -40,7 +40,7 @@ await probe("notify", 23060, async (kit) => {
   assert.equal(first.action, "waitlist.join");
   assert.equal(first.subject, "New on the waitlist from newsletter");
   assert(first.text.startsWith("fan@probe.example Bcc: victim@probe.example joined the waitlist.\nThey came from newsletter.\n"), first.text);
-  assert(first.text.includes("probe_notify sent this notice through Littlebox because you own the app."), first.text);
+  assert(first.text.includes("probe_notify sent this notice through Konae because you own the app."), first.text);
   assert(!(await mailbox()).some((message) => String(message.to).includes("victim")), "nobody the input names gets mail");
   kit.pass("Owner notice", `waitlist.join with "notify": { "to": "owner" } queues one email to the owner's account, "${first.subject}". The visitor's address with a Bcc line in it arrives as one line of text, "${first.text.split("\n")[0]}", and no address from the input receives anything. Joining again with the same address changes no row and sends nothing.`);
 
@@ -50,7 +50,7 @@ await probe("notify", 23060, async (kit) => {
   const buyer = "buyer@probe.example";
   let cookie = await kit.signup(app.host, buyer);
   assert.equal((await invoke(cookie, "orders.place", { print: "dune" })).changes, 1);
-  const recover = await kit.appFetch(app.host)(`${kit.url}/_littlebox/auth/recover`, {
+  const recover = await kit.appFetch(app.host)(`${kit.url}/_konae/auth/recover`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: buyer }),
   });
   assert.equal(recover.status, 202, await recover.clone().text());
@@ -59,7 +59,7 @@ await probe("notify", 23060, async (kit) => {
     link = (await mailbox()).find((message) => message.purpose === "recovery" && message.to === buyer);
   }
   assert(link, "the recovery link arrives in the development mailbox");
-  const reset = await kit.appFetch(app.host)(`${kit.url}/_littlebox/auth/reset`, {
+  const reset = await kit.appFetch(app.host)(`${kit.url}/_konae/auth/reset`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ token: new URL(link.link).hash.slice("#recovery=".length), password: crypto.randomUUID() }),
   });

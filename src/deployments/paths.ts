@@ -10,7 +10,7 @@ export type PathView = {
   acceptSharedOrigin: boolean;
   /** `<domain>/p/<id>` first, then `<domain>/p/<name>`; empty while the path is off or the installation names no domain. */
   addresses: string[];
-  /** False when the installation sets no LITTLEBOX_DOMAIN; `next` then says so. */
+  /** False when the installation sets no KONAE_DOMAIN; `next` then says so. */
   domainConfigured: boolean;
   next?: string;
 };

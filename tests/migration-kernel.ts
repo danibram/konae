@@ -8,7 +8,7 @@ import { McpClient, encodeBase64, type Transfer } from "../src/mcp/client";
 import type { PackageManifest } from "../src/lib/portable-package";
 
 const repo = path.resolve(import.meta.dir, "..");
-export const kernelBinary = path.join(repo, "kernel-rs/target/debug/littlebox-kernel");
+export const kernelBinary = path.join(repo, "kernel-rs/target/debug/konae-kernel");
 export const password = "migration-test-password";
 let nextClient = 0;
 /** A client address per request, so the signup and sign-in limits never trip. */
@@ -34,17 +34,17 @@ export type Kernel = {
 export async function startKernel(options: { port: number; data: string; setupKey: string; ownerEmail: string; env?: Record<string, string>; signIn?: boolean }): Promise<Kernel> {
   const url = `http://127.0.0.1:${options.port}`;
   const env = {
-    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))) as Record<string, string>,
-    LITTLEBOX_DATA_DIR: options.data, LITTLEBOX_KERNEL_PORT: String(options.port), LITTLEBOX_BIND: "127.0.0.1",
-    LITTLEBOX_ADMIN_KEY: options.setupKey, LITTLEBOX_PUBLIC_ORIGIN: url, LITTLEBOX_HOST_SUFFIX: "localhost",
-    LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development",
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))) as Record<string, string>,
+    KONAE_DATA_DIR: options.data, KONAE_KERNEL_PORT: String(options.port), KONAE_BIND: "127.0.0.1",
+    KONAE_ADMIN_KEY: options.setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost",
+    KONAE_BUN_PATH: process.execPath, KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
     ...options.env,
   };
   let child: ReturnType<typeof Bun.spawn> | undefined;
   const start = async () => {
     child = Bun.spawn([kernelBinary], { env, stdout: "ignore", stderr: "inherit" });
     for (let attempt = 0; attempt < 150; attempt++) {
-      try { if ((await fetch(`${url}/_littlebox/health`)).ok) return; } catch {}
+      try { if ((await fetch(`${url}/_konae/health`)).ok) return; } catch {}
       if (child.exitCode !== null) throw Error(`The Kernel on ${url} stopped during startup.`);
       await Bun.sleep(100);
     }
@@ -52,7 +52,7 @@ export async function startKernel(options: { port: number; data: string; setupKe
   };
   const stop = async () => { if (child && child.exitCode === null) { child.kill(); await child.exited; } };
   await start();
-  const response = await fetch(`${url}/_littlebox/owner/${options.signIn ? "login" : "signup"}`, {
+  const response = await fetch(`${url}/_konae/owner/${options.signIn ? "login" : "signup"}`, {
     method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": freshClient() },
     body: JSON.stringify(options.signIn ? { email: options.ownerEmail, password } : { email: options.ownerEmail, password, setupKey: options.setupKey }),
   });
@@ -68,7 +68,7 @@ export async function startKernel(options: { port: number; data: string; setupKe
 }
 
 export function runtime(kernel: Kernel, hostname: string, cookie?: string) {
-  return new McpClient(`${kernel.url}/_littlebox/mcp`, { fetch: (input, init) => {
+  return new McpClient(`${kernel.url}/_konae/mcp`, { fetch: (input, init) => {
     const headers = new Headers(init?.headers); headers.set("host", hostname);
     if (cookie) headers.set("cookie", cookie);
     return fetch(input, { ...init, headers });
@@ -86,7 +86,7 @@ export function appFetch(kernel: Kernel, hostname: string, route: string, init: 
 
 /** Signs up or in on an app and returns the session cookie. */
 export async function account(kernel: Kernel, hostname: string, route: "signup" | "login", email: string) {
-  const response = await appFetch(kernel, hostname, `/_littlebox/auth/${route}`, { method: "POST", body: JSON.stringify({ email, password }) });
+  const response = await appFetch(kernel, hostname, `/_konae/auth/${route}`, { method: "POST", body: JSON.stringify({ email, password }) });
   if (response.status !== 200) throw Error(`${route} for ${email} answered ${response.status}: ${await response.text()}`);
   return response.headers.get("set-cookie")!.split(";")[0];
 }

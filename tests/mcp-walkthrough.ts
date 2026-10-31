@@ -5,7 +5,7 @@
 import path from "node:path";
 
 const repo = path.resolve(import.meta.dir, "..");
-const kernelBinary = path.join(repo, "kernel-rs/target/debug/littlebox-kernel");
+const kernelBinary = path.join(repo, "kernel-rs/target/debug/konae-kernel");
 const PROTOCOL = "2025-11-25";
 
 /** The URLs the document shows, whatever ports the run used. */
@@ -86,26 +86,26 @@ export async function callTool(endpoint: string, headers: Record<string, string>
 export type KernelProcess = { url: string; data: string; port: number; child: ReturnType<typeof Bun.spawn> };
 
 function cleanEnv() {
-  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))) as Record<string, string>;
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))) as Record<string, string>;
 }
 
 export async function startKernel(port: number, data: string, setupKey: string): Promise<KernelProcess> {
   const url = `http://127.0.0.1:${port}`;
   const child = Bun.spawn([kernelBinary], {
-    env: { ...cleanEnv(), LITTLEBOX_DATA_DIR: data, LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_PUBLIC_ORIGIN: url, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_MAIL_TRANSPORT: "development" },
+    env: { ...cleanEnv(), KONAE_DATA_DIR: data, KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, KONAE_MAIL_TRANSPORT: "development" },
     stdout: "ignore", stderr: "inherit",
   });
   for (let attempt = 0; attempt < 150; attempt++) {
-    try { if ((await fetch(`${url}/_littlebox/health`)).ok) return { url, data, port, child }; } catch {}
+    try { if ((await fetch(`${url}/_konae/health`)).ok) return { url, data, port, child }; } catch {}
     if (child.exitCode !== null) throw Error(`The Kernel on port ${port} stopped during startup.`);
     await Bun.sleep(100);
   }
   throw Error(`The Kernel on port ${port} did not start.`);
 }
 
-/** Runs the CLI as `bun run littlebox -- <args>` would, and returns what it printed. */
+/** Runs the CLI as `bun run konae -- <args>` would, and returns what it printed. */
 export async function cli(args: string[], env: Record<string, string> = {}) {
-  const child = Bun.spawn([process.execPath, path.join(repo, "scripts/littlebox.ts"), ...args], { cwd: repo, env: { ...cleanEnv(), ...env }, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn([process.execPath, path.join(repo, "scripts/konae.ts"), ...args], { cwd: repo, env: { ...cleanEnv(), ...env }, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   return { code, output: (stdout + stderr).trimEnd() };
 }

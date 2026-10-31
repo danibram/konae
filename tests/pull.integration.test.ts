@@ -3,12 +3,12 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient } from "../src/mcp/client";
-import { INIT_TEMPLATES, initLocal, publishLocal, setDevSecrets } from "../scripts/littlebox";
+import { INIT_TEMPLATES, initLocal, publishLocal, setDevSecrets } from "../scripts/konae";
 import { installPulledAlone, pullLocal, readPulled } from "../scripts/pull";
 
 // init, publish, pull and the first release of a Development Kernel, on two
 // real Kernels: `origin` stands for the installation an app is published to
-// and `local` for the one `littlebox dev` starts.
+// and `local` for the one `konae dev` starts.
 type Kernel = { url: string; process: ReturnType<typeof Bun.spawn>; owner: McpClient; token: string };
 let root: string;
 let origin: Kernel;
@@ -20,16 +20,16 @@ const freshClient = () => { nextClient++; return `198.19.${Math.floor(nextClient
 async function start(name: string, port: number): Promise<Kernel> {
   const url = `http://127.0.0.1:${port}`;
   const setupKey = `pull-integration-${name}-setup-secret`;
-  const process_ = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
-    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_"))), LITTLEBOX_DATA_DIR: path.join(root, name), LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_PUBLIC_ORIGIN: url, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1" },
+  const process_ = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_DATA_DIR: path.join(root, name), KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, KONAE_TRUSTED_PROXIES: "127.0.0.1" },
     stdout: "ignore", stderr: "inherit",
   });
   for (let attempt = 0; attempt < 100; attempt++) {
-    try { if ((await fetch(`${url}/_littlebox/health`)).ok) break; } catch {}
+    try { if ((await fetch(`${url}/_konae/health`)).ok) break; } catch {}
     if (process_.exitCode !== null) throw Error(`The ${name} Kernel stopped.`);
     await Bun.sleep(100);
   }
-  const response = await fetch(`${url}/_littlebox/owner/signup`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: `owner@${name}.test`, password, setupKey }) });
+  const response = await fetch(`${url}/_konae/owner/signup`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: `owner@${name}.test`, password, setupKey }) });
   expect(response.status).toBe(200);
   const cookie = response.headers.get("set-cookie")!.split(";")[0];
   const owner = new McpClient(`${url}/mcp`, { fetch: (input, init) => {
@@ -43,8 +43,8 @@ async function start(name: string, port: number): Promise<Kernel> {
 beforeAll(async () => {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
   expect(await build.exited).toBe(0);
-  root = await mkdtemp(path.join(tmpdir(), "littlebox-pull-"));
-  const port = Number(process.env.LITTLEBOX_PULL_TEST_PORT) || 19900 + Math.floor(Math.random() * 80);
+  root = await mkdtemp(path.join(tmpdir(), "konae-pull-"));
+  const port = Number(process.env.KONAE_PULL_TEST_PORT) || 19900 + Math.floor(Math.random() * 80);
   origin = await start("origin", port);
   local = await start("local", port + 1);
 }, 300_000);
@@ -56,10 +56,10 @@ afterAll(async () => {
 
 /** The app's runtime endpoint for one signed-in account, which `route` creates or signs in. */
 async function member(kernel: Kernel, hostname: string, route: "signup" | "login") {
-  const response = await fetch(`${kernel.url}/_littlebox/auth/${route}`, { method: "POST", headers: { host: hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: "ana@pull.test", password }) });
+  const response = await fetch(`${kernel.url}/_konae/auth/${route}`, { method: "POST", headers: { host: hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: "ana@pull.test", password }) });
   expect(response.status).toBe(200);
   const cookie = response.headers.get("set-cookie")!.split(";")[0];
-  return new McpClient(`${kernel.url}/_littlebox/mcp`, { fetch: (input, init) => {
+  return new McpClient(`${kernel.url}/_konae/mcp`, { fetch: (input, init) => {
     const headers = new Headers(init?.headers); headers.set("host", hostname); headers.set("cookie", cookie);
     return fetch(input, { ...init, headers });
   } });

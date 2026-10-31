@@ -1,7 +1,7 @@
 //! The Kernel's half of the static publishing contract: how a Build Artifact
 //! carries binary files, and which artifact file answers a path.
 //!
-//! The builders (`littlebox build`, the editor and the exported kit) share
+//! The builders (`konae build`, the editor and the exported kit) share
 //! `src/lib/static-artifact.js`. They decide which Capsule files ship. The
 //! Kernel accepts an artifact from any builder, so it checks the encodings and
 //! the routing mode itself and refuses the same routing values with the same
@@ -78,7 +78,7 @@ pub(super) fn decode(artifact: &BuildArtifact) -> Result<HashMap<String, Vec<u8>
 
 /// True for a path the Kernel keeps. No artifact file answers it.
 pub(super) fn kernel_path(path: &str) -> bool {
-    path == "_littlebox" || path.starts_with("_littlebox/")
+    path == "_konae" || path.starts_with("_konae/")
 }
 
 /// The artifact files that may answer `path`, in order. `path` has no leading
@@ -177,8 +177,8 @@ mod tests {
 
     #[test]
     fn kernel_paths_are_never_app_files() {
-        assert!(kernel_path("_littlebox"));
-        assert!(kernel_path("_littlebox/files/1"));
-        assert!(!kernel_path("_littleboxes.html"));
+        assert!(kernel_path("_konae"));
+        assert!(kernel_path("_konae/files/1"));
+        assert!(!kernel_path("_konaees.html"));
     }
 }

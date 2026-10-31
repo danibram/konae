@@ -43,18 +43,18 @@ The yardstick: a person who does not write code, and a person who does, make the
 
 | Finding | Apps | Exact answer |
 | --- | --- | --- |
-| `littlebox build` drops `about.html` without a word; a two-page app cannot be published from the CLI. Fixed 2026-11-06: every page at the root and under `pages/` publishes, and a missing reference stops the build | gallery | artifact holds `index.html` only |
+| `konae build` drops `about.html` without a word; a two-page app cannot be published from the CLI. Fixed 2026-11-06: every page at the root and under `pages/` publishes, and a missing reference stops the build | gallery | artifact holds `index.html` only |
 | Every unknown GET path serves the home page with 200; extensionless paths do not resolve; `404.html` is never read. Fixed 2026-11-06: 404 with `404.html`, `/about` serves `about.html`, `"routing": "spa"` keeps the old fallback | gallery | 200, home page |
-| `littlebox publish` sends no `initialSignupPolicy`: a public app starts Open, a private one Closed, and Invitation only needs a second credential with `manage_users`. Fixed: `littlebox.json` names `project.manifest.signupPolicy`, publish sends it on a first release and warns on a later one that differs | inbox, club, gallery, booking | `Unknown tool or insufficient permission.` |
+| `konae publish` sends no `initialSignupPolicy`: a public app starts Open, a private one Closed, and Invitation only needs a second credential with `manage_users`. Fixed: `konae.json` names `project.manifest.signupPolicy`, publish sends it on a first release and warns on a later one that differs | inbox, club, gallery, booking | `Unknown tool or insufficient permission.` |
 | An app Closed from its first release can admit no one, not even by invitation; the invitation is sent anyway with `acceptable: false`. Fixed: an owner's invitation is acceptable under Closed and a signup stays refused (ADR-0011, note on Closed) | gallery | 403, now 200 |
 | Fixed 2026-11-06. A file cannot be made public later or deleted; a draft is re-uploaded and the private copy keeps counting against the quota | gallery | Now `files_update` and `files_delete`, uploader only; a deleted file frees its quota and reads as `File not found.` |
-| Fixed 2026-11-06. The SDK's Blob URL cannot be re-read with `fetch` under `connect-src 'self'` | gallery | `violates ... "connect-src 'self'"`. Now `miniapp.files.url(fileId)` returns `/_littlebox/files/<id>`, which `fetch` reads under the same policy |
+| Fixed 2026-11-06. The SDK's Blob URL cannot be re-read with `fetch` under `connect-src 'self'` | gallery | `violates ... "connect-src 'self'"`. Now `miniapp.files.url(fileId)` returns `/_konae/files/<id>`, which `fetch` reads under the same policy |
 | A route always answers `{ "result": [rows] }`; no feed shape, no absolute URLs (the statement cannot read the origin), no CORS, `no-store` on everything | gallery | |
 | No per-action rate limit: every anonymous action shares 30 calls per 10 seconds per address, about 260,000 contact messages a day from one address | gallery | |
 | Inputs have type and length but no allowed values and no integer type; a CHECK is the only guard and its SQLite text reaches the visitor | gallery, booking, inbox | `CHECK constraint failed: ...` |
 | The only clock is `now` in UTC milliseconds; no time zone for a local day | habits, booking | |
 | The runtime endpoint answers `rate-limited` as HTTP 200 with `isError`; a route answers 429 | gallery | |
-| Under required verification the CLI cannot create the first owner in one step. Fixed on 2026-11-07: `littlebox login --verify-from <data folder>/mailbox.jsonl` answers the link from a development mailbox on a loopback Kernel, and without the flag the CLI names both steps | habits | Exit 0 and a saved credential. Was 202 `link-sent` |
+| Under required verification the CLI cannot create the first owner in one step. Fixed on 2026-11-07: `konae login --verify-from <data folder>/mailbox.jsonl` answers the link from a development mailbox on a loopback Kernel, and without the flag the CLI names both steps | habits | Exit 0 and a saved credential. Was 202 `link-sent` |
 
 ### Job 4: take the app to another machine
 
@@ -76,7 +76,7 @@ A suspended member's session answers as signed out and only the login route says
 2. Done on 2026-11-06, see the ADR-0010 update. Make a refused mutation visible: a declared `refuse` clause, or a convention that `changes: 0` with a declared guard answers `forbidden`, so the page, Usage, the Signal and the contract all see a refusal. Record Signals only when `changes > 0`, and let a Signal name the actor.
 3. Done on 2026-11-06, see the ADR-0009 note. One refusal text per rule at both doors, with a test that walks every shared case through the Gate and the Kernel and compares the words, as `http-binding-cases.json` and `signal-cases.json` already do for two groups.
 4. Done on 2026-11-06, see the ADR-0005 note on the static publishing contract. The static publishing contract from product-fit: multi-page artifacts in the CLI, 404, extensionless paths, `404.html`.
-5. Done on 2026-11-06, see the ADR-0011 note on Closed and `project.manifest.signupPolicy` in docs/mcp.md. Initial signup policy in `littlebox publish` and `littlebox.json`; invitations allowed under Closed when the owner sends them.
+5. Done on 2026-11-06, see the ADR-0011 note on Closed and `project.manifest.signupPolicy` in docs/mcp.md. Initial signup policy in `konae publish` and `konae.json`; invitations allowed under Closed when the owner sends them.
 6. File lifecycle: publish and delete. Done 2026-11-06: `files_update`, `files_delete` and `miniapp.files.url`.
 7. Done on 2026-11-06, see the ADR-0013 note on keys. Keys in the package, and the docs made true either way.
 

@@ -3,7 +3,7 @@
 // lapses), payments (Checkout Session via a call, then a Stripe-shaped
 // webhook), and what the page may load from a payment provider.
 //
-//   LITTLEBOX_PROBE_PORT=23020 bun run examples/probes/shop/replay.ts
+//   KONAE_PROBE_PORT=23020 bun run examples/probes/shop/replay.ts
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";

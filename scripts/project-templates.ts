@@ -1,5 +1,5 @@
 // The Capsules a project can be born as, as one JSON document both doors
-// read: `littlebox init` writes one into a folder and the Kernel's
+// read: `konae init` writes one into a folder and the Kernel's
 // `project_create` returns one. They come from src/lib/templates, the list
 // the editor's new-project dialog offers.
 import { applyTemplate, templateChoices } from "../src/lib/templates";

@@ -26,7 +26,7 @@ export function svixKey(secret: string): Uint8Array<ArrayBuffer> {
 /**
  * The headers a provider sends with `body`. `t` is the Unix second a
  * timestamped or svix signature carries; `id` the svix message ID, fresh by
- * default. A route in Littlebox's own scheme is signed with signRoute instead.
+ * default. A route in Konae's own scheme is signed with signRoute instead.
  */
 export async function signDelivery(
   signature: RouteSignature,
@@ -48,5 +48,5 @@ export async function signDelivery(
     const mac = await hmac("SHA-256", svixKey(secret), `${id}.${t}.${body}`);
     return { "svix-id": id, "svix-timestamp": String(t), "svix-signature": `v1,${base64(mac)}` };
   }
-  throw new Error("A route in Littlebox's own scheme is signed with signRoute.");
+  throw new Error("A route in Konae's own scheme is signed with signRoute.");
 }

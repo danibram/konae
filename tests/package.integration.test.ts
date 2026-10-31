@@ -22,19 +22,19 @@ const freshClient = () => { nextClient++; return `198.19.${Math.floor(nextClient
 beforeAll(async () => {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
   expect(await build.exited).toBe(0);
-  root = await mkdtemp(path.join(tmpdir(), "littlebox-package-"));
-  const port = Number(process.env.LITTLEBOX_PACKAGE_TEST_PORT) || 19800 + Math.floor(Math.random() * 90);
+  root = await mkdtemp(path.join(tmpdir(), "konae-package-"));
+  const port = Number(process.env.KONAE_PACKAGE_TEST_PORT) || 19800 + Math.floor(Math.random() * 90);
   url = `http://127.0.0.1:${port}`;
-  kernel = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
-    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_"))), LITTLEBOX_DATA_DIR: path.join(root, "data"), LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_PUBLIC_ORIGIN: url, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1" },
+  kernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_DATA_DIR: path.join(root, "data"), KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, KONAE_TRUSTED_PROXIES: "127.0.0.1" },
     stdout: "ignore", stderr: "inherit",
   });
   for (let attempt = 0; attempt < 100; attempt++) {
-    try { if ((await fetch(`${url}/_littlebox/health`)).ok) break; } catch {}
+    try { if ((await fetch(`${url}/_konae/health`)).ok) break; } catch {}
     if (kernel.exitCode !== null) throw Error("The package test Kernel stopped.");
     await Bun.sleep(100);
   }
-  const response = await fetch(`${url}/_littlebox/owner/signup`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: "owner@package.test", password, setupKey }) });
+  const response = await fetch(`${url}/_konae/owner/signup`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: "owner@package.test", password, setupKey }) });
   expect(response.status).toBe(200);
   const cookie = response.headers.get("set-cookie")!.split(";")[0];
   owner = new McpClient(`${url}/mcp`, { fetch: (input, init) => {
@@ -71,7 +71,7 @@ async function publish(id: string) {
 }
 
 function runtime(hostname: string, cookie?: string) {
-  return new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+  return new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
     const headers = new Headers(init?.headers); headers.set("host", hostname);
     if (cookie) headers.set("cookie", cookie);
     return fetch(input, { ...init, headers });
@@ -79,7 +79,7 @@ function runtime(hostname: string, cookie?: string) {
 }
 
 async function account(hostname: string, route: "signup" | "login", email: string) {
-  const response = await fetch(`${url}/_littlebox/auth/${route}`, { method: "POST", headers: { host: hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password }) });
+  const response = await fetch(`${url}/_konae/auth/${route}`, { method: "POST", headers: { host: hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password }) });
   expect(response.status).toBe(200);
   return response.headers.get("set-cookie")!.split(";")[0];
 }
@@ -140,7 +140,7 @@ describe("chunked package", () => {
     const directory = await mkdtemp(path.join(root, "export-"));
     const { source, cookie, fileId, key, exported, files } = await sourcePackage("pkg_source", directory);
     const manifest = exported.manifest;
-    expect(manifest).toMatchObject({ format: "littlebox-package", version: 1, deploymentId: source.id, projectId: "pkg_source", visibility: "public", publishedRevision: 1, sourceAuthority: "external" });
+    expect(manifest).toMatchObject({ format: "konae-package", version: 1, deploymentId: source.id, projectId: "pkg_source", visibility: "public", publishedRevision: 1, sourceAuthority: "external" });
     // The signup, the action and the upload above wrote a Usage store, which travels too.
     expect(manifest.contents.map((content) => content.name)).toEqual(["database", "identity", "files", "usage"]);
     expect(manifest.excluded).toContain("app sessions");
@@ -184,7 +184,7 @@ describe("chunked package", () => {
     // The destination lists the origin's key as revoked at import, and refuses it.
     const keys = await owner.call<{ keys: { keyId: string; name: string; files: string[]; revokedAt: number | null; revokedReason: string | null }[] }>("api_keys_list", { deploymentId: first.receipt.id });
     expect(keys.keys).toEqual([expect.objectContaining({ keyId: key.keyId, name: "Mirror", files: ["public"], revokedAt: expect.any(Number), revokedReason: "import" })]);
-    const refused = await fetch(`${url}/_littlebox/files/${fileId}`, { headers: { host: first.receipt.hostname, "x-forwarded-for": freshClient(), authorization: `Bearer ${key.key}` } });
+    const refused = await fetch(`${url}/_konae/files/${fileId}`, { headers: { host: first.receipt.hostname, "x-forwarded-for": freshClient(), authorization: `Bearer ${key.key}` } });
     expect(refused.status).toBe(401);
     for (const id of Object.values(components)) await owner.cancel(id);
   }, 60_000);

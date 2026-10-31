@@ -117,7 +117,7 @@ export function createDeployment(
     id,
     projectId: project.id,
     projectName: project.name,
-    url: `https://${project.slug}-${id.replaceAll("-", "").slice(0, 4)}.littlebox.app`,
+    url: `https://${project.slug}-${id.replaceAll("-", "").slice(0, 4)}.konae.app`,
     createdAt: options.now ?? Date.now(),
     manifest,
   };

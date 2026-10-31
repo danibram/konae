@@ -3,7 +3,7 @@
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 // The path miniapp.files.url returns; a cover is drawn in a template, which cannot wait for it.
-const fileUrl = (id) => `/_littlebox/files/${encodeURIComponent(id)}`;
+const fileUrl = (id) => `/_konae/files/${encodeURIComponent(id)}`;
 
 const status = $("#status");
 // Every status line reads a failure the same way. A refusal's message is the

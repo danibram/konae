@@ -41,7 +41,7 @@ fn entries() -> &'static Mutex<HashMap<String, Entry>> {
 }
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/_littlebox/owner-entry", get(entry_page).post(enter))
+    Router::new().route("/_konae/owner-entry", get(entry_page).post(enter))
 }
 
 pub(crate) fn admin_tool() -> Value {
@@ -160,7 +160,7 @@ pub(crate) async fn admin_call(state: &AppState, owner: &Owner, arguments: &Valu
         "role": "owner",
         "account": if claimed.created { "created" } else { "existing" },
         "passwordCleared": claimed.password_cleared,
-        "url": format!("{}/_littlebox/owner-entry#entry={token}", deployment.url),
+        "url": format!("{}/_konae/owner-entry#entry={token}", deployment.url),
         "expiresAt": expires_at,
     }))
 }
@@ -222,7 +222,7 @@ async fn enter(State(state): State<AppState>, headers: HeaderMap, request: Reque
 
 async fn entry_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if deployment_for(&state, &headers).await.is_none() {
-        return error(StatusCode::NOT_FOUND, "Littlebox deployment not found.");
+        return error(StatusCode::NOT_FOUND, "Konae deployment not found.");
     }
     (
         [
@@ -240,7 +240,7 @@ async fn entry_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
 const ENTRY_PAGE: &str = r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Opening the app</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;font:16px system-ui,sans-serif;color:#20232a;background:#f4f5f7}main{max-width:380px}#error{color:#a32727}@media (prefers-color-scheme:dark){body{background:#14161a;color:#e8eaed}main{background:#1d2026;border-color:#2e333b;box-shadow:none}p{color:#a9b0bc}input{background:#14161a;color:#e8eaed;border-color:#3a404a}input[readonly]{background:#23272e;color:#e8eaed}button{background:#e8eaed;color:#14161a}button+button{background:#2a2f37;color:#e8eaed}#error{color:#ff8a8a}a{color:#8ab4ff}}</style><link rel="icon" href="data:,">
 <main><h1>Opening the app as its owner</h1><p id="error" role="alert"></p></main>
 <script>
-const match=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);const prefix=match?'/p/'+match[1]:'';const token=new URLSearchParams(location.hash.slice(1)).get('entry');history.replaceState(null,'',location.pathname);const fail=(text)=>{document.querySelector('#error').textContent=text+' Open the app again from the Users view in the editor.'};if(!token){fail('This link has no entry token.')}else{fetch(prefix+'/_littlebox/owner-entry',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token})}).then(async(response)=>{if(response.ok){location.replace(prefix+'/');return}const body=await response.json().catch(()=>({}));fail(body.error||'The app did not open.')},()=>fail('The app did not answer.'))}
+const match=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);const prefix=match?'/p/'+match[1]:'';const token=new URLSearchParams(location.hash.slice(1)).get('entry');history.replaceState(null,'',location.pathname);const fail=(text)=>{document.querySelector('#error').textContent=text+' Open the app again from the Users view in the editor.'};if(!token){fail('This link has no entry token.')}else{fetch(prefix+'/_konae/owner-entry',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token})}).then(async(response)=>{if(response.ok){location.replace(prefix+'/');return}const body=await response.json().catch(()=>({}));fail(body.error||'The app did not open.')},()=>fail('The app did not answer.'))}
 </script></html>"#;
 
 #[cfg(test)]
@@ -248,7 +248,7 @@ mod tests {
     use super::*;
 
     fn store() -> (std::path::PathBuf, auth::AuthService) {
-        let root = std::env::temp_dir().join(format!("littlebox-app-owner-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-app-owner-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let auth = auth::AuthService::open_in(root.join("identity.sqlite"), "deployment:app", auth::Verification::Local).unwrap();
         (root, auth)

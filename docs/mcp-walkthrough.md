@@ -1,6 +1,6 @@
 # Walkthrough: from a credential to a migration over MCP
 
-This page takes one app through every operation an external agent performs on Littlebox: get an Agent Credential, create a project, run it on a Development Kernel, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, publish it with a signup policy, invite a member, check it against its Action Contract, read its Usage and Signals, export it, import it on a second Kernel, eject a Managed Project, and begin and cancel a migration.
+This page takes one app through every operation an external agent performs on Konae: get an Agent Credential, create a project, run it on a Development Kernel, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, publish it with a signup policy, invite a member, check it against its Action Contract, read its Usage and Signals, export it, import it on a second Kernel, eject a Managed Project, and begin and cancel a migration.
 
 Every command and every answer below was recorded from real Kernels by `tests/mcp-walkthrough.integration.test.ts`, which fails when this page differs from what the Kernel answers. Values that change on every run appear as placeholders in angle brackets, such as `<project id>`. Kernel A answers on `http://localhost:4173`, Kernel B on `http://localhost:4174`, and the Development Kernel on `http://localhost:8796`. An app's host is `<slug>-<suffix>.localhost` on its Kernel's port.
 
@@ -8,11 +8,11 @@ A tool call is shown as the `params` of a JSON-RPC `tools/call` request to `<Ker
 
 ## 1. Get an Agent Credential with an invitation code
 
-A new creator needs an invitation code from the installation's operator. The operator issues one on the server, where `LITTLEBOX_DATA_DIR` names the Kernel's data:
+A new creator needs an invitation code from the installation's operator. The operator issues one on the server, where `KONAE_DATA_DIR` names the Kernel's data:
 
 <!-- walkthrough:operator -->
 ```sh
-littlebox-kernel creator-code-create --note 'Walkthrough agent'
+konae-kernel creator-code-create --note 'Walkthrough agent'
 ```
 
 ```text
@@ -23,19 +23,19 @@ It creates one creator account. The setup key no longer creates accounts on this
 ```
 <!-- /walkthrough:operator -->
 
-`littlebox login` creates the account with that code and saves a 24-hour token in the folder. It always asks for `read`, `write` and `publish`. A delegated token cannot add a permission to itself later, so ask now for every permission the work needs: `--manage-users` to invite people, `--export-data` to export, `--manage-lifecycle` to eject and migrate.
+`konae login` creates the account with that code and saves a 24-hour token in the folder. It always asks for `read`, `write` and `publish`. A delegated token cannot add a permission to itself later, so ask now for every permission the work needs: `--manage-users` to invite people, `--export-data` to export, `--manage-lifecycle` to eject and migrate.
 
 <!-- walkthrough:login -->
 ```sh
-LITTLEBOX_EMAIL=agent@walkthrough.test LITTLEBOX_PASSWORD=walkthrough-agent-password LITTLEBOX_INVITATION_CODE=<invitation code> bun run littlebox -- login --dir /tmp/orders --url http://localhost:4173 --manage-users --export-data --manage-lifecycle
+KONAE_EMAIL=agent@walkthrough.test KONAE_PASSWORD=walkthrough-agent-password KONAE_INVITATION_CODE=<invitation code> bun run konae -- login --dir /tmp/orders --url http://localhost:4173 --manage-users --export-data --manage-lifecycle
 ```
 
 ```text
-Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox out of Git.
+Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Git.
 ```
 <!-- /walkthrough:login -->
 
-`session_inspect` shows what the token holds. The token is in `/tmp/orders/.littlebox/credentials.json`; `init`, `publish`, `export` and `eject` read it from there, and `LITTLEBOX_MCP_TOKEN` overrides it.
+`session_inspect` shows what the token holds. The token is in `/tmp/orders/.konae/credentials.json`; `init`, `publish`, `export` and `eject` read it from there, and `KONAE_MCP_TOKEN` overrides it.
 
 <!-- walkthrough:session -->
 ```json
@@ -94,7 +94,7 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
       "maxFileBytes": 2097152,
       "quotaBytes": 20971520
     },
-    "firstRun": "platform_guide topic rules, then pieces, then credentials. Publish with the publishing topic or bun run littlebox -- publish, then project_inspect and one actions_invoke.",
+    "firstRun": "platform_guide topic rules, then pieces, then credentials. Publish with the publishing topic or bun run konae -- publish, then project_inspect and one actions_invoke.",
     "guideTopics": [
       "rules",
       "pieces",
@@ -107,11 +107,11 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
       "portability",
       "refusals"
     ],
-    "localDevelopment": "Use bun run littlebox -- init, dev, build, contract, login, publish, pull, sql, conform, export or eject; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything.",
+    "localDevelopment": "Use bun run konae -- init, dev, build, contract, login, publish, pull, sql, conform, export or eject; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything.",
     "maxTransferBytes": 33554432,
-    "name": "Littlebox",
+    "name": "Konae",
     "protocolVersion": "2025-11-25",
-    "runtimeEndpoint": "/_littlebox/mcp",
+    "runtimeEndpoint": "/_konae/mcp",
     "runtimeTools": [
       "auth_session",
       "actions_invoke",
@@ -158,7 +158,7 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
       "--manage-lifecycle": "adds manage_lifecycle",
       "--manage-users": "adds manage_users"
     },
-    "login": "bun run littlebox -- login --dir <folder> --url <Kernel URL> reads LITTLEBOX_EMAIL and LITTLEBOX_PASSWORD. Add LITTLEBOX_INVITATION_CODE, the code the operator issued with littlebox-kernel creator-code-create, to create the account, or LITTLEBOX_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.littlebox/credentials.json, which publish, pull, sql, export and eject read. LITTLEBOX_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with LITTLEBOX_PASSWORD in the same run.",
+    "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae-kernel creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql, export and eject read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
     "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data or manage_lifecycle.",
     "permissions": {
       "export_data": "package_export, project_export, database_export, and migration_begin together with manage_lifecycle",
@@ -200,18 +200,18 @@ curl -i 'http://localhost:4173/oauth/authorize?client_id=<client id>&redirect_ur
 
 ```text
 HTTP 303
-location: /_littlebox/owner/login?returnTo=%2Foauth%2Fauthorize%3F<the same parameters, URL-encoded>
+location: /_konae/owner/login?returnTo=%2Foauth%2Fauthorize%3F<the same parameters, URL-encoded>
 ```
 
 ```text
 Allow access for 127.0.0.1:9999?
 Approving sends an access token to 127.0.0.1:9999. Only continue if you started this sign-in from an app you trust at that address.
-The client calls itself "Walkthrough agent". Clients register themselves, so Littlebox has not verified this name.
+The client calls itself "Walkthrough agent". Clients register themselves, so Konae has not verified this name.
 The token grants read write publish manage_users access to all of your projects for one hour. You can revoke it from Platform access.
 ```
 
 ```sh
-curl -i -X POST 'http://localhost:4173/oauth/authorize' -H 'cookie: littlebox_owner_session=<owner session>' --data '<the same parameters>&csrf=<csrf>'
+curl -i -X POST 'http://localhost:4173/oauth/authorize' -H 'cookie: konae_owner_session=<owner session>' --data '<the same parameters>&csrf=<csrf>'
 ```
 
 ```text
@@ -268,36 +268,36 @@ content-type: application/json
 ```
 <!-- /walkthrough:oauth-token -->
 
-OAuth offers `read`, `write`, `publish` and `manage_users`. Exporting, Eject and migration need a token from `littlebox login`:
+OAuth offers `read`, `write`, `publish` and `manage_users`. Exporting, Eject and migration need a token from `konae login`:
 
 <!-- walkthrough:oauth-scope -->
 ```sh
-curl -i 'http://localhost:4173/oauth/authorize?client_id=<client id>&redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback&response_type=code&code_challenge_method=S256&code_challenge=<code challenge>&scope=read+export_data&resource=http%3A%2F%2Flocalhost%3A4173%2Fmcp&state=walkthrough' -H 'cookie: littlebox_owner_session=<owner session>'
+curl -i 'http://localhost:4173/oauth/authorize?client_id=<client id>&redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback&response_type=code&code_challenge_method=S256&code_challenge=<code challenge>&scope=read+export_data&resource=http%3A%2F%2Flocalhost%3A4173%2Fmcp&state=walkthrough' -H 'cookie: konae_owner_session=<owner session>'
 ```
 
 ```text
 HTTP 400
 content-type: application/json
 
-{"error":"invalid_request","error_description":"Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data or manage_lifecycle; run littlebox login with --export-data or --manage-lifecycle for a token that holds them."}
+{"error":"invalid_request","error_description":"Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data or manage_lifecycle; run konae login with --export-data or --manage-lifecycle for a token that holds them."}
 ```
 <!-- /walkthrough:oauth-scope -->
 
 ## 4. Create the project
 
-`init` writes a template and `littlebox.json` into an empty folder. It makes the project ID itself and calls no Kernel, so it needs no credential. The first `publish` registers the project as External. Dotfiles, such as the `.littlebox` folder `login` wrote, do not count. The project starts private, and its `signupPolicy` admits only people the owner invites.
+`init` writes a template and `konae.json` into an empty folder. It makes the project ID itself and calls no Kernel, so it needs no credential. The first `publish` registers the project as External. Dotfiles, such as the `.konae` folder `login` wrote, do not count. The project starts private, and its `signupPolicy` admits only people the owner invites.
 
 <!-- walkthrough:init -->
 ```sh
-bun run littlebox -- init --dir /tmp/orders --name Orders --url http://localhost:4173
+bun run konae -- init --dir /tmp/orders --name Orders --url http://localhost:4173
 ```
 
 ```text
-Created Orders in /tmp/orders. Run it with: bun run littlebox -- dev --dir /tmp/orders
+Created Orders in /tmp/orders. Run it with: bun run konae -- dev --dir /tmp/orders
 ```
 
 ```sh
-cat /tmp/orders/littlebox.json
+cat /tmp/orders/konae.json
 ```
 
 ```json
@@ -326,7 +326,7 @@ ls /tmp/orders
 actions.json
 app.js
 index.html
-littlebox.json
+konae.json
 schema.sql
 styles.css
 ```
@@ -334,11 +334,11 @@ styles.css
 
 ## 5. Run it on a Development Kernel
 
-`dev` starts a Kernel with its own data in `.littlebox/dev-data`, publishes the folder there as Open so test accounts can sign up, prints the app's URL and republishes when a file changes. Stop it with Ctrl-C.
+`dev` starts a Kernel with its own data in `.konae/dev-data`, publishes the folder there as Open so test accounts can sign up, prints the app's URL and republishes when a file changes. Stop it with Ctrl-C.
 
 <!-- walkthrough:dev -->
 ```sh
-bun run littlebox -- dev --dir /tmp/orders --port 8796
+bun run konae -- dev --dir /tmp/orders --port 8796
 ```
 
 ```text
@@ -524,11 +524,11 @@ cat /tmp/orders/actions.json
 ```
 <!-- /walkthrough:files -->
 
-`contract` writes the Action Contract beside `littlebox.json`: `action-contract.json`, its JSON Schema, and `action-contract.md` to read.
+`contract` writes the Action Contract beside `konae.json`: `action-contract.json`, its JSON Schema, and `action-contract.md` to read.
 
 <!-- walkthrough:contract -->
 ```sh
-bun run littlebox -- contract --dir /tmp/orders
+bun run konae -- contract --dir /tmp/orders
 ```
 
 ```text
@@ -542,7 +542,7 @@ Wrote the Action Contract for 4 actions to /tmp/orders/action-contract.json, wit
 
 <!-- walkthrough:publish-refused -->
 ```sh
-bun run littlebox -- publish --dir /tmp/orders
+bun run konae -- publish --dir /tmp/orders
 ```
 
 ```text
@@ -576,11 +576,11 @@ A signing secret belongs to the project, never leaves the Kernel and is not part
 ```
 <!-- /walkthrough:secret -->
 
-`publish` builds the folder, uploads the release and applies it. On the first release it sends `project.manifest.signupPolicy` from `littlebox.json` as `initialSignupPolicy`, so the app starts as Invitation only. A visitor without a session gets the sign-in page on every path of a private app.
+`publish` builds the folder, uploads the release and applies it. On the first release it sends `project.manifest.signupPolicy` from `konae.json` as `initialSignupPolicy`, so the app starts as Invitation only. A visitor without a session gets the sign-in page on every path of a private app.
 
 <!-- walkthrough:publish -->
 ```sh
-bun run littlebox -- publish --dir /tmp/orders
+bun run konae -- publish --dir /tmp/orders
 ```
 
 ```text
@@ -623,11 +623,11 @@ Inviting needs `manage_users`. A token from `login` without `--manage-users` is 
 
 <!-- walkthrough:invite-refused -->
 ```sh
-LITTLEBOX_EMAIL=agent@walkthrough.test LITTLEBOX_PASSWORD=walkthrough-agent-password bun run littlebox -- login --dir /tmp/publisher --url http://localhost:4173
+KONAE_EMAIL=agent@walkthrough.test KONAE_PASSWORD=walkthrough-agent-password bun run konae -- login --dir /tmp/publisher --url http://localhost:4173
 ```
 
 ```text
-Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox out of Git.
+Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Git.
 ```
 
 ```json
@@ -645,7 +645,7 @@ Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox o
 
 ```json
 {
-  "error": "Unknown tool or insufficient permission. app_invitations_create needs a credential with manage_users. Run littlebox login with --manage-users, or use a token from token_create that includes it."
+  "error": "Unknown tool or insufficient permission. app_invitations_create needs a credential with manage_users. Run konae login with --manage-users, or use a token from token_create that includes it."
 }
 ```
 <!-- /walkthrough:invite-refused -->
@@ -710,11 +710,11 @@ tail -n 1 /tmp/kernel-a/mailbox.jsonl
 ```
 
 ```json
-{"to":"member@walkthrough.test","purpose":"invitation","scope":"deployment:<deployment id>","link":"http://orders-<suffix>.localhost:4173/_littlebox/invitation#invitation=<invitation token>","expiresAt": <unix seconds>}
+{"to":"member@walkthrough.test","purpose":"invitation","scope":"deployment:<deployment id>","link":"http://orders-<suffix>.localhost:4173/_konae/invitation#invitation=<invitation token>","expiresAt": <unix seconds>}
 ```
 
 ```sh
-curl -i -X POST 'http://orders-<suffix>.localhost:4173/_littlebox/auth/invitation' -H 'content-type: application/json' --data '{"token":"<invitation token>"}'
+curl -i -X POST 'http://orders-<suffix>.localhost:4173/_konae/auth/invitation' -H 'content-type: application/json' --data '{"token":"<invitation token>"}'
 ```
 
 ```text
@@ -725,7 +725,7 @@ content-type: application/json
 ```
 
 ```sh
-curl -i -X POST 'http://orders-<suffix>.localhost:4173/_littlebox/auth/accept' -H 'content-type: application/json' --data '{"token":"<invitation token>","password":"walkthrough-member-password"}'
+curl -i -X POST 'http://orders-<suffix>.localhost:4173/_konae/auth/accept' -H 'content-type: application/json' --data '{"token":"<invitation token>","password":"walkthrough-member-password"}'
 ```
 
 ```text
@@ -736,13 +736,13 @@ content-type: application/json
 ```
 
 ```text
-set-cookie: littlebox_app_session=<app session>; ...
+set-cookie: konae_app_session=<app session>; ...
 ```
 <!-- /walkthrough:accept -->
 
 ## 9. Use the app as the member
 
-The member's calls go to the app's runtime endpoint, `/_littlebox/mcp` on the app's host, with the app session cookie. `miniapp.auth.session()` and `miniapp.actions.call()` in `app.js` make these calls. The second page answers at `/about`, and a path the artifact does not hold answers 404:
+The member's calls go to the app's runtime endpoint, `/_konae/mcp` on the app's host, with the app session cookie. `miniapp.auth.session()` and `miniapp.actions.call()` in `app.js` make these calls. The second page answers at `/about`, and a path the artifact does not hold answers 404:
 
 <!-- walkthrough:runtime -->
 ```json
@@ -778,7 +778,7 @@ The member's calls go to the app's runtime endpoint, `/_littlebox/mcp` on the ap
 ```
 
 ```sh
-curl -i 'http://orders-<suffix>.localhost:4173/about' -H 'cookie: littlebox_app_session=<app session>'
+curl -i 'http://orders-<suffix>.localhost:4173/about' -H 'cookie: konae_app_session=<app session>'
 ```
 
 ```text
@@ -787,7 +787,7 @@ content-type: text/html; charset=utf-8
 ```
 
 ```sh
-curl -i 'http://orders-<suffix>.localhost:4173/missing' -H 'cookie: littlebox_app_session=<app session>'
+curl -i 'http://orders-<suffix>.localhost:4173/missing' -H 'cookie: konae_app_session=<app session>'
 ```
 
 ```text
@@ -876,7 +876,7 @@ The member claims order 1. The second claim changes no row, so the Kernel answer
 ```
 <!-- /walkthrough:guard -->
 
-An upload is a transfer of at most the installation's per-file limit, 2 MiB by default, then `files_upload`. The file is private to the member who uploaded it. `miniapp.files.url(fileId)` returns its path, `/_littlebox/files/<id>`, which the member reads with the session cookie; a visitor of a private app gets 401 before any file is looked up.
+An upload is a transfer of at most the installation's per-file limit, 2 MiB by default, then `files_upload`. The file is private to the member who uploaded it. `miniapp.files.url(fileId)` returns its path, `/_konae/files/<id>`, which the member reads with the session cookie; a visitor of a private app gets 401 before any file is looked up.
 
 <!-- walkthrough:file -->
 ```json
@@ -965,7 +965,7 @@ An upload is a transfer of at most the installation's per-file limit, 2 MiB by d
 ```
 
 ```sh
-curl -i 'http://orders-<suffix>.localhost:4173/_littlebox/files/<file id>' -H 'cookie: littlebox_app_session=<app session>'
+curl -i 'http://orders-<suffix>.localhost:4173/_konae/files/<file id>' -H 'cookie: konae_app_session=<app session>'
 ```
 
 ```text
@@ -974,7 +974,7 @@ content-type: text/plain
 ```
 
 ```sh
-curl -i 'http://orders-<suffix>.localhost:4173/_littlebox/files/<file id>'
+curl -i 'http://orders-<suffix>.localhost:4173/_konae/files/<file id>'
 ```
 
 ```text
@@ -1043,7 +1043,7 @@ content-type: application/json
 ```
 
 ```sh
-curl -i 'http://orders-<suffix>.localhost:4173/_littlebox/files/<file id>' -H 'authorization: Bearer <api key>'
+curl -i 'http://orders-<suffix>.localhost:4173/_konae/files/<file id>' -H 'authorization: Bearer <api key>'
 ```
 
 ```text
@@ -1060,14 +1060,14 @@ content-type: application/json
 
 <!-- walkthrough:conform -->
 ```sh
-bun run littlebox -- conform --url http://orders-<suffix>.localhost:4173 --contract /tmp/orders/action-contract.json --token <app session> --key <api key> --secret orders_webhook=<secret>
+bun run konae -- conform --url http://orders-<suffix>.localhost:4173 --contract /tmp/orders/action-contract.json --token <app session> --key <api key> --secret orders_webhook=<secret>
 ```
 
 ```text
 PASS conform.undeclared: refuses an undeclared action. Refused with "Server action not declared.".
 PASS orders.claim: answers a valid call. Refused with its guard: the generated input changed no row.
 PASS orders.claim: refuses with its guard when no row changes. Refused with "This order is already claimed.".
-PASS orders.claim: refuses a caller without a session. Refused with "Sign in to use Littlebox MCP.".
+PASS orders.claim: refuses a caller without a session. Refused with "Sign in to use Konae MCP.".
 PASS orders.claim: refuses an undeclared input. Refused with "Unexpected action input: conformProbe".
 PASS orders.claim: refuses a missing order. Refused with "Missing action input: order".
 PASS orders.claim: refuses order when it is not a number. Refused with "order must be a number.".
@@ -1078,7 +1078,7 @@ PASS orders.feed: refuses HEAD. Answered 405; a HEAD answer carries no body.
 PASS orders.feed: refuses an unknown API key. Answered 401 "invalid-api-key".
 PASS orders.feed: refuses an undeclared input on the route. Answered 400 "Unexpected action input: conformProbe".
 PASS orders.list: answers a valid call. Answered 1 row with the contract's columns.
-PASS orders.list: refuses a caller without a session. Refused with "Sign in to use Littlebox MCP.".
+PASS orders.list: refuses a caller without a session. Refused with "Sign in to use Konae MCP.".
 PASS orders.list: refuses an undeclared input. Refused with "Unexpected action input: conformProbe".
 PASS orders.receive: answers only on its route. Refused with "Action orders.receive answers only on its HTTP route, POST /hooks/orders.".
 PASS orders.receive: answers POST /hooks/orders. Answered {"changes":1,"lastInsertId":2}.
@@ -1227,7 +1227,7 @@ Exporting needs `export_data`, which OAuth does not grant:
 
 ```json
 {
-  "error": "Unknown tool or insufficient permission. package_export needs a credential with export_data. Run littlebox login with --export-data, or use a token from token_create that includes it."
+  "error": "Unknown tool or insufficient permission. package_export needs a credential with export_data. Run konae login with --export-data, or use a token from token_create that includes it."
 }
 ```
 <!-- /walkthrough:export-refused -->
@@ -1310,7 +1310,7 @@ Exporting needs `export_data`, which OAuth does not grant:
         "Data panel backups",
         "operator email and storage keys"
       ],
-      "format": "littlebox-package",
+      "format": "konae-package",
       "packageId": "<package id>",
       "projectId": "<project id>",
       "publishedRevision": 1,
@@ -1359,11 +1359,11 @@ The destination needs its own credential, the project under the same ID, and the
 
 <!-- walkthrough:second-kernel -->
 ```sh
-LITTLEBOX_EMAIL=agent@walkthrough.test LITTLEBOX_PASSWORD=walkthrough-agent-password LITTLEBOX_SETUP_KEY=walkthrough-second-installation-key bun run littlebox -- login --dir /tmp/orders-b --url http://localhost:4174 --manage-users
+KONAE_EMAIL=agent@walkthrough.test KONAE_PASSWORD=walkthrough-agent-password KONAE_SETUP_KEY=walkthrough-second-installation-key bun run konae -- login --dir /tmp/orders-b --url http://localhost:4174 --manage-users
 ```
 
 ```text
-Saved a 24-hour MCP credential in .littlebox/credentials.json. Keep .littlebox out of Git.
+Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Git.
 ```
 
 ```json
@@ -1481,15 +1481,15 @@ Upload each component with `transfer_begin` and its `component` name, so the upl
 ```
 <!-- /walkthrough:import-upload -->
 
-Build the folder, then upload a release payload: the project, its visibility, the artifact from `.littlebox/artifact.json`, and `initialPackage` with the manifest and the component uploads. `release_plan` checks every component before anything is created, and `release_apply` installs them. The signup policy comes from the manifest.
+Build the folder, then upload a release payload: the project, its visibility, the artifact from `.konae/artifact.json`, and `initialPackage` with the manifest and the component uploads. `release_plan` checks every component before anything is created, and `release_apply` installs them. The signup policy comes from the manifest.
 
 <!-- walkthrough:import-release -->
 ```sh
-bun run littlebox -- build --dir /tmp/orders
+bun run konae -- build --dir /tmp/orders
 ```
 
 ```text
-Built .littlebox/artifact.json
+Built .konae/artifact.json
 ```
 
 ```json
@@ -1505,7 +1505,7 @@ Built .littlebox/artifact.json
     "files": "<path: text of every source file>"
   },
   "visibility": "private",
-  "artifact": "<the JSON in .littlebox/artifact.json>",
+  "artifact": "<the JSON in .konae/artifact.json>",
   "initialPackage": {
     "manifest": "<the manifest package_export returned>",
     "components": {
@@ -1568,7 +1568,7 @@ Sessions and email links stay behind, so the member signs in again with the same
 
 <!-- walkthrough:import-check -->
 ```sh
-curl -i -X POST 'http://orders-<destination suffix>.localhost:4174/_littlebox/auth/login' -H 'content-type: application/json' --data '{"email":"member@walkthrough.test","password":"walkthrough-member-password"}'
+curl -i -X POST 'http://orders-<destination suffix>.localhost:4174/_konae/auth/login' -H 'content-type: application/json' --data '{"email":"member@walkthrough.test","password":"walkthrough-member-password"}'
 ```
 
 ```text
@@ -1725,12 +1725,12 @@ Eject applies to a Managed Project, one the editor saves. The orders app is Exte
 
 <!-- walkthrough:eject -->
 ```sh
-LITTLEBOX_MCP_TOKEN=<token> bun run littlebox -- eject --dir /tmp/notes --project app_walkthrough_notes --url http://localhost:4173
+KONAE_MCP_TOKEN=<token> bun run konae -- eject --dir /tmp/notes --project app_walkthrough_notes --url http://localhost:4173
 ```
 
 ```text
 Ejected app_walkthrough_notes at sources revision 1 into /tmp/notes.
-Publish from this folder with: bun run littlebox -- publish --dir /tmp/notes
+Publish from this folder with: bun run konae -- publish --dir /tmp/notes
 ```
 
 ```sh
@@ -1742,7 +1742,7 @@ README.md
 actions.json
 app.js
 index.html
-littlebox.json
+konae.json
 schema.sql
 ```
 <!-- /walkthrough:eject -->
@@ -1751,7 +1751,7 @@ The folder publishes like any External project, and the Kernel refuses every Man
 
 <!-- walkthrough:eject-publish -->
 ```sh
-LITTLEBOX_MCP_TOKEN=<token> bun run littlebox -- publish --dir /tmp/notes
+KONAE_MCP_TOKEN=<token> bun run konae -- publish --dir /tmp/notes
 ```
 
 ```text
@@ -1771,7 +1771,7 @@ http://notes-<suffix>.localhost:4173
 
 ```json
 {
-  "refused": "This project was ejected: its sources are maintained outside Littlebox, so the Kernel refuses Managed source changes. Publish a Build Artifact with release_plan and release_apply, or create a new project to edit in Littlebox."
+  "refused": "This project was ejected: its sources are maintained outside Konae, so the Kernel refuses Managed source changes. Publish a Build Artifact with release_plan and release_apply, or create a new project to edit in Konae."
 }
 ```
 <!-- /walkthrough:eject-publish -->

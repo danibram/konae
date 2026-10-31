@@ -16,26 +16,26 @@ const setupKey = crypto.randomUUID();
 beforeAll(async () => {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
   expect(await build.exited).toBe(0);
-  root = await mkdtemp(path.join(tmpdir(), "littlebox-http-security-"));
+  root = await mkdtemp(path.join(tmpdir(), "konae-http-security-"));
   const port = 19660 + Math.floor(Math.random() * 20);
   url = `http://127.0.0.1:${port}`;
-  kernel = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
+  kernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
     env: {
-      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))),
-      LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_PUBLIC_ORIGIN: url,
-      LITTLEBOX_DATA_DIR: root, LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_HOST_SUFFIX: "localhost",
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
+      KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
+      KONAE_DATA_DIR: root, KONAE_ADMIN_KEY: setupKey, KONAE_HOST_SUFFIX: "localhost",
     },
     stdout: "ignore", stderr: "inherit",
   });
   let ready = false;
   for (let attempt = 0; attempt < 100; attempt++) {
     if (kernel.exitCode !== null) throw Error("Security test Kernel stopped before startup.");
-    try { ready = (await fetch(`${url}/_littlebox/health`)).ok; } catch {}
+    try { ready = (await fetch(`${url}/_konae/health`)).ok; } catch {}
     if (ready) break;
     await Bun.sleep(100);
   }
   expect(ready).toBe(true);
-  const response = await fetch(`${url}/_littlebox/owner/signup`, {
+  const response = await fetch(`${url}/_konae/owner/signup`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "owner@security.test", password: crypto.randomUUID(), setupKey }),
   });
@@ -66,26 +66,26 @@ afterAll(async () => {
 describe("HTTP security contract", () => {
   test("legacy data, deployment, file and session routes remain closed for every method and host", async () => {
     const paths = [
-      "/_littlebox/admin/deploy", "/_littlebox/admin/storage/test",
-      "/_littlebox/admin/deployments/unknown/database/export",
-      "/_littlebox/admin/deployments/unknown/portable-state",
-      "/_littlebox/admin/deployments/unknown/database", "/_littlebox/session",
-      "/_littlebox/auth/logout", "/_littlebox/files", "/_littlebox/files/",
-      "/_littlebox/actions/notes.list", "/_littlebox/unknown",
+      "/_konae/admin/deploy", "/_konae/admin/storage/test",
+      "/_konae/admin/deployments/unknown/database/export",
+      "/_konae/admin/deployments/unknown/portable-state",
+      "/_konae/admin/deployments/unknown/database", "/_konae/session",
+      "/_konae/auth/logout", "/_konae/files", "/_konae/files/",
+      "/_konae/actions/notes.list", "/_konae/unknown",
     ];
     for (const host of [new URL(url).host, appHost]) {
       for (const method of ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
         for (const route of paths) {
           const response = await fetch(url + route, {
-            method, headers: { host, cookie, "x-littlebox-admin-key": setupKey }, redirect: "manual",
+            method, headers: { host, cookie, "x-konae-admin-key": setupKey }, redirect: "manual",
           });
           expect(response.status).toBe(410);
           expect(response.headers.has("access-control-allow-origin")).toBe(false);
           await response.arrayBuffer();
         }
         // The file read path answers GET only, and an unknown file is not found.
-        const file = await fetch(`${url}/_littlebox/files/${crypto.randomUUID()}`, {
-          method, headers: { host, cookie, "x-littlebox-admin-key": setupKey }, redirect: "manual",
+        const file = await fetch(`${url}/_konae/files/${crypto.randomUUID()}`, {
+          method, headers: { host, cookie, "x-konae-admin-key": setupKey }, redirect: "manual",
         });
         expect(file.status).toBe(method === "GET" || method === "HEAD" ? 404 : 405);
         expect(file.headers.has("access-control-allow-origin")).toBe(false);
@@ -95,7 +95,7 @@ describe("HTTP security contract", () => {
   });
 
   test("MCP only accepts POST and the setup key never grants MCP access", async () => {
-    for (const route of ["/mcp", "/_littlebox/mcp"]) {
+    for (const route of ["/mcp", "/_konae/mcp"]) {
       for (const method of ["GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
         const response = await fetch(url + route, { method });
         expect(response.status).toBe(405);
@@ -103,7 +103,7 @@ describe("HTTP security contract", () => {
         await response.arrayBuffer();
       }
     }
-    const response = await fetch(`${url}/mcp`, { method: "POST", headers: { "x-littlebox-admin-key": setupKey, "content-type": "application/json" }, body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' });
+    const response = await fetch(`${url}/mcp`, { method: "POST", headers: { "x-konae-admin-key": setupKey, "content-type": "application/json" }, body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' });
     expect(response.status).toBe(401);
   });
 
@@ -168,7 +168,7 @@ const adminCall = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }
 
 describe("isolation of hosted code", () => {
   test("an app response carries a CSP that runs only its own inline scripts", async () => {
-    const index = `<!doctype html><html><head><style>p{color:red}</style></head><body><p>CSP app</p><script data-littlebox-runtime>window.miniapp = {};</script><script type="module">document.querySelector("p").textContent = "ran";</script></body></html>`;
+    const index = `<!doctype html><html><head><style>p{color:red}</style></head><body><p>CSP app</p><script data-konae-runtime>window.miniapp = {};</script><script type="module">document.querySelector("p").textContent = "ran";</script></body></html>`;
     const host = await publish("csp_app", "public", { "index.html": index, "logo.svg": '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>' });
     const page = await fetch(url, { headers: { host } });
     expect(await page.text()).toBe(index);
@@ -210,7 +210,7 @@ describe("isolation of hosted code", () => {
   });
 
   test("the editor host cannot be framed by an app", async () => {
-    const login = await fetch(`${url}/_littlebox/owner/login`);
+    const login = await fetch(`${url}/_konae/owner/login`);
     const html = await login.text();
     const policy = directives(login.headers.get("content-security-policy"));
     expect(policy.get("frame-ancestors")).toEqual(["'none'"]);
@@ -236,7 +236,7 @@ describe("isolation of hosted code", () => {
   test("administrative MCP refuses an app origin before it reads any credential", async () => {
     const editor = new URL(url).host;
     for (const host of [editor, appHost]) {
-      for (const headers of [{ cookie }, {}, { cookie, "x-littlebox-admin-key": setupKey }]) {
+      for (const headers of [{ cookie }, {}, { cookie, "x-konae-admin-key": setupKey }]) {
         const response = await fetch(`${url}/mcp`, {
           method: "POST", body: adminCall,
           headers: { ...headers, host, origin: `http://${appHost}`, "sec-fetch-site": "same-site", "content-type": "application/json" },
@@ -250,7 +250,7 @@ describe("isolation of hosted code", () => {
     expect(unknown.status).toBe(403);
     expect((await unknown.json()).error).toBe("Administration refuses requests from app origins.");
     // Owner sign-in, sign-out and the OAuth flow refuse an app origin too.
-    for (const route of ["/_littlebox/owner/login", "/_littlebox/owner/signup", "/_littlebox/owner/logout", "/oauth/token"]) {
+    for (const route of ["/_konae/owner/login", "/_konae/owner/signup", "/_konae/owner/logout", "/oauth/token"]) {
       const form = route === "/oauth/token";
       const response = await fetch(url + route, {
         method: "POST", body: form ? "grant_type=authorization_code" : "{}",
@@ -284,25 +284,25 @@ describe("isolation of hosted code", () => {
 
   test("an app cannot call another app's runtime or reuse its session", async () => {
     const other = await publish("csp_other", "public", { "index.html": "<!doctype html><main>Other app</main>" });
-    const signup = await fetch(`${url}/_littlebox/auth/signup`, {
+    const signup = await fetch(`${url}/_konae/auth/signup`, {
       method: "POST", headers: { host: appHost, origin: `http://${appHost}`, "content-type": "application/json" },
       body: JSON.stringify({ email: "member@cross-app.test", password: "cross-app-password-2026" }),
     });
     expect(signup.status).toBe(200);
     const member = signup.headers.get("set-cookie")!.split(";")[0];
-    const own = await fetch(`${url}/_littlebox/mcp`, { method: "POST", headers: { host: appHost, cookie: member, "content-type": "application/json" }, body: runtimeCall("auth_session") });
+    const own = await fetch(`${url}/_konae/mcp`, { method: "POST", headers: { host: appHost, cookie: member, "content-type": "application/json" }, body: runtimeCall("auth_session") });
     expect((await own.json()).result.structuredContent.result.role).toBe("member");
     // A page on one app posting to another app's runtime is refused on origin.
-    const crossed = await fetch(`${url}/_littlebox/mcp`, {
+    const crossed = await fetch(`${url}/_konae/mcp`, {
       method: "POST", body: runtimeCall("auth_session"),
       headers: { host: other, origin: `http://${appHost}`, "sec-fetch-site": "same-site", cookie: member, "content-type": "application/json" },
     });
     expect(crossed.status).toBe(403);
     // The session of one app is unknown to every other app.
-    const reused = await fetch(`${url}/_littlebox/mcp`, { method: "POST", headers: { host: other, cookie: member, "content-type": "application/json" }, body: runtimeCall("auth_session") });
+    const reused = await fetch(`${url}/_konae/mcp`, { method: "POST", headers: { host: other, cookie: member, "content-type": "application/json" }, body: runtimeCall("auth_session") });
     expect((await reused.json()).result.structuredContent.result.role).toBe("anonymous");
     // Sign-in on another app's host is refused from a foreign app origin as well.
-    const login = await fetch(`${url}/_littlebox/auth/login`, {
+    const login = await fetch(`${url}/_konae/auth/login`, {
       method: "POST", headers: { host: other, origin: `http://${appHost}`, "content-type": "application/json" },
       body: JSON.stringify({ email: "member@cross-app.test", password: "cross-app-password-2026" }),
     });

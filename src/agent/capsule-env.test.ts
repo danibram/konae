@@ -169,7 +169,7 @@ describe("capsule filesystem", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe("shell_unavailable");
-      expect(result.error.message).toContain("no shell in Littlebox");
+      expect(result.error.message).toContain("no shell in Konae");
     }
   });
 

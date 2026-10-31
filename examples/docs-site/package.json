@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "dependencies": {
+    "marked": "18.2.0"
+  }
+}

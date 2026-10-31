@@ -4,7 +4,7 @@ Opened 2026-11-08. The yardstick is the first sentence of AGENTS.md. This plan m
 
 ## Why
 
-A review of the primitives (guard, notify, schedule, signal, http, call) and a look at comparable products found that the size of the glossary is not what makes Littlebox hard. Two numbers are: an author meets about 12 concepts and touches 4 to 6 files before an app with sign-in runs, and an `actions.json` for a realistic app runs 10 to 22 lines per action. Platforms that feel smaller hide identity and rules in the installation, which Littlebox cannot do because the app leaves with its accounts and rules. What Littlebox can do is have those things born with the app, expressed as presets, and refused loudly when written wrong.
+A review of the primitives (guard, notify, schedule, signal, http, call) and a look at comparable products found that the size of the glossary is not what makes Konae hard. Two numbers are: an author meets about 12 concepts and touches 4 to 6 files before an app with sign-in runs, and an `actions.json` for a realistic app runs 10 to 22 lines per action. Platforms that feel smaller hide identity and rules in the installation, which Konae cannot do because the app leaves with its accounts and rules. What Konae can do is have those things born with the app, expressed as presets, and refused loudly when written wrong.
 
 Findings this plan acts on, with evidence:
 
@@ -43,7 +43,7 @@ Owns `src/kernel/route-declaration.ts`, `src/lib/provider-signature.ts`, `src/li
 
 Owns `src/lib/starter.ts`, a new `src/lib/templates/` directory, the new-project UI in `src/components/ProjectDashboard.tsx` (creation flow only), `src/agent/system-prompt.ts` (only the part that tells the agent where a project starts).
 
-- Templates, each a complete Capsule that passes the Gate and runs on `littlebox dev`: shared list (today's Tiny Tasks), members with roles (profiles, a role column, one named role check, promote and demote), public form with an email to the owner, webhook receiver (uses the B preset once B lands; until then the long form), nightly digest (schedule plus notify to the owner), file gallery (`miniapp.files`).
+- Templates, each a complete Capsule that passes the Gate and runs on `konae dev`: shared list (today's Tiny Tasks), members with roles (profiles, a role column, one named role check, promote and demote), public form with an email to the owner, webhook receiver (uses the B preset once B lands; until then the long form), nightly digest (schedule plus notify to the owner), file gallery (`miniapp.files`).
 - The agent picks the template that matches the description before its first edit and says which one it picked. A person picks from the same list in the dashboard.
 - Each template has a test that runs it through the Gate, and the members template replaces the repeated role predicate with the shortest form the Kernel accepts today.
 
@@ -86,7 +86,7 @@ Next wave:
 - The migration refusal carries its code through `schema_apply` and the Database Studio, as Capsule refusals do; today only the case file names it.
 - The items under "Not in this wave": `{changes}` and `{kernel.now}` placeholders and `to` naming a column of account IDs for notices; a "What happened" owner view over notices, calls and scheduled runs; splitting CONTEXT.md and the agent prompt into author and maintainer parts.
 
-Fourth wave, notices: `{changes}`, `{kernel.now}` and `to: { column }` landed with ADR-0021; the nightly digest mails each member their own entries, and `examples/probes/notify-rows` proves a scheduled notice to two members on `littlebox dev`.
+Fourth wave, notices: `{changes}`, `{kernel.now}` and `to: { column }` landed with ADR-0021; the nightly digest mails each member their own entries, and `examples/probes/notify-rows` proves a scheduled notice to two members on `konae dev`.
 
 ## Status after the fourth wave, 2026-11-08
 

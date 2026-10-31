@@ -94,7 +94,7 @@ export function WhatHappenedView({ deployment, onDeploy, onOpen }: Props) {
             <Button size="sm" loading={loading} onClick={refresh}><RefreshCw size={13} /> Refresh</Button>
           </div>
         </header>
-        {!owner ? <p className="happened-note">Sign in with <a href="/_littlebox/owner/login">owner sign-in</a> to read what this app sent and ran.</p>
+        {!owner ? <p className="happened-note">Sign in with <a href="/_konae/owner/login">owner sign-in</a> to read what this app sent and ran.</p>
           : error ? <p className="happened-error" role="alert">{error}</p> : null}
         {!read && !error && owner && loading && <LoadingBlock label="Reading what happened" rows={4} />}
         {read && attention > 0 && <p className="happened-summary" role="status">{attention} {attention === 1 ? "thing needs" : "things need"} someone to act.</p>}

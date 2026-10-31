@@ -176,7 +176,7 @@ function RulesView({ host, onFilesChanged, actionsSource, onSetAccess, visibilit
       </section>
       <div className="auth-grid">
         <article><ShieldCheck size={18} /><div><strong>The session belongs only to this app.</strong></div></article>
-        <article><KeyRound size={18} /><div><strong>This app decides who that person is. Littlebox stores the session.</strong></div></article>
+        <article><KeyRound size={18} /><div><strong>This app decides who that person is. Konae stores the session.</strong></div></article>
       </div>
     </>
   );

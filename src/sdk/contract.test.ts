@@ -192,20 +192,20 @@ describe("the published SDK prefixes every Kernel URL with the page's base path"
 
   test("the home and a generated hostname use the root paths", async () => {
     const home = await sdkOn("/");
-    expect(home).toEqual({ fileUrl: "/_littlebox/files/file-1", requested: ["/_littlebox/mcp"], assigned: ["/_littlebox/login"] });
+    expect(home).toEqual({ fileUrl: "/_konae/files/file-1", requested: ["/_konae/mcp"], assigned: ["/_konae/login"] });
   });
 
   test("a path address uses its /p/<segment> prefix for the endpoint, the file address and sign-in", async () => {
     for (const pathname of ["/p/notes", "/p/notes/", "/p/notes/about/deep.html"]) {
       const onPath = await sdkOn(pathname);
-      expect(onPath.fileUrl).toBe("/p/notes/_littlebox/files/file-1");
-      expect(onPath.requested).toEqual(["/p/notes/_littlebox/mcp"]);
-      expect(onPath.assigned).toEqual(["/p/notes/_littlebox/login"]);
+      expect(onPath.fileUrl).toBe("/p/notes/_konae/files/file-1");
+      expect(onPath.requested).toEqual(["/p/notes/_konae/mcp"]);
+      expect(onPath.assigned).toEqual(["/p/notes/_konae/login"]);
     }
   });
 
   test("a path that only looks like a prefix keeps the root paths", async () => {
-    expect((await sdkOn("/pages/notes")).fileUrl).toBe("/_littlebox/files/file-1");
-    expect((await sdkOn("/p/")).requested).toEqual(["/_littlebox/mcp"]);
+    expect((await sdkOn("/pages/notes")).fileUrl).toBe("/_konae/files/file-1");
+    expect((await sdkOn("/p/")).requested).toEqual(["/_konae/mcp"]);
   });
 });

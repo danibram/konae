@@ -53,8 +53,8 @@ function expectEnforced(db: { run(statement: string): unknown }) {
 
 beforeAll(async () => {
   await buildKernel();
-  root = await mkdtemp(path.join(tmpdir(), "littlebox-check-carry-"));
-  const port = Number(process.env.LITTLEBOX_MCP_TEST_PORT) || 19500 + Math.floor(Math.random() * 90);
+  root = await mkdtemp(path.join(tmpdir(), "konae-check-carry-"));
+  const port = Number(process.env.KONAE_MCP_TEST_PORT) || 19500 + Math.floor(Math.random() * 90);
   kernel = await startKernel({ port, data: path.join(root, "data"), setupKey: "check-carry-setup-secret", ownerEmail: "owner@checks.test" });
 }, 300_000);
 

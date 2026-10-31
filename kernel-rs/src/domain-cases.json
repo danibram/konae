@@ -1,7 +1,7 @@
 {
  "context": {
   "suffix": "apps.example.com",
-  "installationHosts": ["littlebox.example.com", "mcp.example.com"]
+  "installationHosts": ["konae.example.com", "mcp.example.com"]
  },
  "cases": [
   { "case": "a name under the owner's domain", "hostname": "notes.example.org", "hostnameOut": "notes.example.org", "error": null },
@@ -23,9 +23,9 @@
   { "case": "a single label", "hostname": "intranet", "error": "intranet needs at least two labels, such as notes.example.org.", "code": "domain.one-label" },
   { "case": "an IPv4 address", "hostname": "203.0.113.7", "error": "203.0.113.7 is an IP address. Name a hostname under a domain you control.", "code": "domain.ip" },
   { "case": "a local name", "hostname": "notes.localhost", "error": "notes.localhost is a local name. Name a hostname under a domain you control.", "code": "domain.local" },
-  { "case": "the app suffix itself", "hostname": "apps.example.com", "error": "apps.example.com is under this installation's app suffix apps.example.com, where Littlebox names apps itself. Name a hostname outside it.", "code": "domain.app-suffix" },
-  { "case": "a name under the app suffix", "hostname": "notes.apps.example.com", "error": "notes.apps.example.com is under this installation's app suffix apps.example.com, where Littlebox names apps itself. Name a hostname outside it.", "code": "domain.app-suffix" },
-  { "case": "the editor's host", "hostname": "littlebox.example.com", "error": "littlebox.example.com is this installation's own host. Name a hostname no Littlebox host uses.", "code": "domain.installation-host" },
-  { "case": "the MCP host", "hostname": "MCP.example.com", "error": "mcp.example.com is this installation's own host. Name a hostname no Littlebox host uses.", "code": "domain.installation-host" }
+  { "case": "the app suffix itself", "hostname": "apps.example.com", "error": "apps.example.com is under this installation's app suffix apps.example.com, where Konae names apps itself. Name a hostname outside it.", "code": "domain.app-suffix" },
+  { "case": "a name under the app suffix", "hostname": "notes.apps.example.com", "error": "notes.apps.example.com is under this installation's app suffix apps.example.com, where Konae names apps itself. Name a hostname outside it.", "code": "domain.app-suffix" },
+  { "case": "the editor's host", "hostname": "konae.example.com", "error": "konae.example.com is this installation's own host. Name a hostname no Konae host uses.", "code": "domain.installation-host" },
+  { "case": "the MCP host", "hostname": "MCP.example.com", "error": "mcp.example.com is this installation's own host. Name a hostname no Konae host uses.", "code": "domain.installation-host" }
  ]
 }

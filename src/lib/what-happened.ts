@@ -49,7 +49,7 @@ const operatorMail = "Check the mail transport. mail_status shows its state.";
  * `<action>: <reason>` (docs/mcp.md, Notices). `queued` is not here.
  */
 export const noticeReasons: Record<string, Outcome> = {
-  "no-transport": { tone: "danger", words: "Not sent: this installation has no mail transport.", fix: { who: "operator", what: "Set LITTLEBOX_MAIL_TRANSPORT to resend, smtp or development." } },
+  "no-transport": { tone: "danger", words: "Not sent: this installation has no mail transport.", fix: { who: "operator", what: "Set KONAE_MAIL_TRANSPORT to resend, smtp or development." } },
   "owner-has-no-email": { tone: "danger", words: "Not sent: the owner signs in without an email address the Kernel knows.", fix: { who: "owner", what: "Sign in as an owner with an email address, or send this notice to the actor instead.", where: "capsule" } },
   "no-account": { tone: "warning", words: "Not sent: whoever ran the action had no app account to write to.", fix: { who: "capsule", what: "A visitor, a signed request, an API key, a call's answer and a scheduled run have no account. Send this notice to the owner, or make the action need a signed-in person.", where: "capsule" } },
   "unverified-email": { tone: "warning", words: "Not sent: the person has not confirmed their email, or their account is not active.", fix: { who: "person", what: "The person answers a verification, invitation or recovery link. The owner can resend an invitation.", where: "users" } },

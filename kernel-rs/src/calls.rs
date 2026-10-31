@@ -38,7 +38,7 @@ const MAX_POINTER_CHARS: usize = 200;
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(10);
 /// The largest answer a call reads. A larger one ends the call as failed.
 pub(crate) const MAX_ANSWER_BYTES: usize = 64 * 1024;
-/// Calls an app may queue in any 60 seconds, unless LITTLEBOX_CALLS_PER_MINUTE says otherwise.
+/// Calls an app may queue in any 60 seconds, unless KONAE_CALLS_PER_MINUTE says otherwise.
 const DEFAULT_PER_MINUTE: i64 = 20;
 /// Attempts before a call that keeps meeting a retryable answer fails. The
 /// waits double from 30 seconds, so the last attempt runs about 7.5 minutes
@@ -56,9 +56,9 @@ const KEEP_PER_DEPLOYMENT: i64 = 1000;
 const OUTBOX_PAGE: i64 = 50;
 /// The part of an answer the outbox keeps for the owner.
 const EXCERPT_CHARS: usize = 1024;
-const RESERVED_SEGMENTS: [&str; 4] = ["_littlebox", "oauth", ".well-known", "mcp"];
+const RESERVED_SEGMENTS: [&str; 4] = ["_konae", "oauth", ".well-known", "mcp"];
 const ANSWER_ROOTS: [&str; 5] = ["ok", "status", "error", "body", "input"];
-const DEFAULT_SIGNATURE_HEADER: &str = "X-Littlebox-Signature";
+const DEFAULT_SIGNATURE_HEADER: &str = "X-Konae-Signature";
 pub(crate) const RATE_LIMITED: &str = "This app reached its limit of calls in the last minute. Try again in a minute.";
 
 /// The keys an action of `"kind": "call"` adds to an action definition.
@@ -132,7 +132,7 @@ const MAX_CONSTANT_CHARS: usize = 1000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Auth {
-    /// Sign with Littlebox's route scheme, in `header`, with the secret's value.
+    /// Sign with Konae's route scheme, in `header`, with the secret's value.
     Sign { secret: String, header: String },
     /// Send the secret's value, an API key, as `Authorization: Bearer`.
     Key { secret: String },
@@ -223,7 +223,7 @@ fn static_url(name: &str, value: Option<&Value>) -> Result<url::Url, Refusal> {
     let first = url.path().split('/').nth(1).unwrap_or("").to_ascii_lowercase();
     if RESERVED_SEGMENTS.contains(&first.as_str()) {
         return Err(refuse("call.path-reserved", format!(
-            "Action {name} calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel."
+            "Action {name} calls a path under /_konae, /oauth, /.well-known or /mcp, which belong to the Kernel."
         )));
     }
     Ok(url)
@@ -734,7 +734,7 @@ fn connection(data_root: &Path) -> Result<Connection> {
 }
 
 fn per_minute() -> i64 {
-    std::env::var("LITTLEBOX_CALLS_PER_MINUTE")
+    std::env::var("KONAE_CALLS_PER_MINUTE")
         .ok()
         .and_then(|value| value.parse::<i64>().ok())
         .filter(|value| (1..=10_000).contains(value))
@@ -1204,7 +1204,7 @@ pub(crate) async fn send_outside(
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
         .timeout(TIMEOUT)
-        .user_agent("Littlebox-Kernel")
+        .user_agent("Konae-Kernel")
         .resolve(host, address)
         .build()
         .map_err(|_| ("network", true))?;
@@ -1392,7 +1392,7 @@ mod tests {
     }
 
     /// The Validation Gate runs the same file in src/agent/gate-release.test.ts.
-    /// The rules come from the file, not from LITTLEBOX_MCP_ORIGIN, so the
+    /// The rules come from the file, not from KONAE_MCP_ORIGIN, so the
     /// test does not race other tests that set the environment.
     #[test]
     fn release_checks_refuse_what_the_gate_refuses_with_the_same_message() {
@@ -1592,7 +1592,6 @@ mod tests {
             public_origin: public_origin.into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "apps.example.org".into(),
             guards: Arc::new(super::super::limits::Guards::new(Vec::new())),
         }
@@ -1605,7 +1604,7 @@ mod tests {
             "visibility": "public",
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>caller</p>"}}
         });
-        let request = Request::builder().header("x-littlebox-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
+        let request = Request::builder().header("x-konae-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
         let response = deploy(State(state.clone()), request).await;
         if response.status() != StatusCode::OK {
             let bytes = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
@@ -1626,7 +1625,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_call_that_keeps_failing_retries_with_backoff_then_fails_and_runs_its_then_once() {
-        let root = std::env::temp_dir().join(format!("littlebox-calls-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-calls-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
         let state = test_state(&root, "https://editor.example.org");
         // .invalid never resolves (RFC 2606), so every attempt fails DNS, which retries.
@@ -1679,7 +1678,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_installation_rules_refuse_at_release_and_a_private_answer_refuses_at_run() {
-        let root = std::env::temp_dir().join(format!("littlebox-calls-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-calls-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(root.join("deployments")).await.unwrap();
         let state = test_state(&root, "https://editor.example.org");
         let schema = "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);";

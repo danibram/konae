@@ -1,4 +1,4 @@
-# Littlebox launch plan: opening an installation to other people
+# Konae launch plan: opening an installation to other people
 
 Revision of November 6, 2026. This revision replaces the one of the same date that made a third-party identity provider the creator sign-in. It sets the scope, behaviour and order of delivery for the first hosted beta. It does not claim these functions exist and does not by itself change an accepted ADR. Where it differs from the [signup and invitations plan](signup-and-app-invitations.md), this document decides.
 
@@ -10,9 +10,9 @@ It comes after the [self-use plan](self-use-and-sdk-modules.md). That plan leave
 
 A beta where creators sign up with an email, a password and an invitation code the operator issued. One owner per project. Apps are created from the editor or from an agent over MCP. Apps have their own accounts, open or invitation-only signup, private data and an export that runs on the same Kernel on another machine.
 
-Littlebox depends on no identity provider. The Kernel issues creator accounts and app accounts with one verified-account implementation in two scopes. An OIDC provider may be attached as an optional adapter later; signing in and running an installation never require one. The earlier integration with a hosted provider stays in the tree as that optional adapter and is documented in [hosted creator access](../clerk-creator-access.md).
+Konae depends on no identity provider. The Kernel issues creator accounts and app accounts with one verified-account implementation in two scopes. An OIDC provider may be attached as an optional adapter later; signing in and running an installation never require one. The earlier integration with a hosted provider stays in the tree as that optional adapter and is documented in [hosted creator access](../clerk-creator-access.md).
 
-Littlebox hosts a static frontend, declared actions, SQLite and files. Each app is one folder on the Kernel's volume, with its compiled artifact, its databases and its files, as the [self-use plan](self-use-and-sdk-modules.md) lays out; a copy of the folder is the app. The first version runs no server supplied by a creator. The Validation Gate and the query bound hold on the platform and on the exported Kernel.
+Konae hosts a static frontend, declared actions, SQLite and files. Each app is one folder on the Kernel's volume, with its compiled artifact, its databases and its files, as the [self-use plan](self-use-and-sdk-modules.md) lays out; a copy of the folder is the app. The first version runs no server supplied by a creator. The Validation Gate and the query bound hold on the platform and on the exported Kernel.
 
 Generation keeps the current modes: the creator's own provider credentials in the browser, or an external agent. No AI credit plan and no automatic billing. Quotas for projects, storage, operations and email are configured and shown before people are admitted. Reaching one produces a visible error; it never deletes data or blocks a download.
 
@@ -22,20 +22,20 @@ Proposed first values: 50 invited creators, three hosted apps per creator, 100 a
 
 | Area | Decision |
 | --- | --- |
-| Creator identity | Email and password in the Kernel, verified, admitted with an operator-issued invitation code. Internal ID and permissions in Littlebox |
+| Creator identity | Email and password in the Kernel, verified, admitted with an operator-issued invitation code. Internal ID and permissions in Konae |
 | Operator of an installation | Local owner account, created with a new installation secret; the secret is not a creator signup path once invitation codes exist |
 | App users | Email and password in the Kernel, isolated per Deployment |
 | Verification | Required before a new account of either scope is active |
 | Signup | Open, Invitation only or Closed; the existing Allowlist stays as a compatible advanced option |
 | Invitations | By email, single use, seven days |
 | Recovery | Emailed link, 30 minutes; invalidates earlier sessions |
-| Hosted email | Resend, configured and paid by the operator of Littlebox |
+| Hosted email | Resend, configured and paid by the operator of Konae |
 | Email on another machine | The new operator's credentials, through Resend or SMTP |
 | Authorization | Action and row rules in the Kernel; signing in grants no rows |
 | Creator teams | One owner per project; collaboration and ownership transfer deferred |
 | App user sign-in methods | Social sign-in, passkeys and SSO deferred |
 | Migration | Full export with an explicit write pause; no continuous replication |
-| First support outside Littlebox | Docker kit with pinned versions and a persistent volume, a Kernel the operator can administer |
+| First support outside Konae | Docker kit with pinned versions and a persistent volume, a Kernel the operator can administer |
 | Isolation of hosted code | App responses carry a Content Security Policy, frame restrictions and HSTS; administrative cookies never reach an app origin |
 
 No external account enters an export or is needed to sign in to a migrated app. The owner can administer their projects' data; row privacy separates app users from each other, not from the operator of the server.
@@ -59,7 +59,7 @@ The operator issues invitation codes from the server with the Kernel executable 
 
 ## End-to-end product flow
 
-1. The creator receives an invitation code, signs up with email and password, verifies the email and enters. Littlebox creates the internal identity once.
+1. The creator receives an invitation code, signs up with email and password, verifies the email and enters. Konae creates the internal identity once.
 2. They describe the app in the editor or authorize their MCP agent. The connection returns to where it started after sign-in and shows the permissions granted.
 3. The agent creates the app with the SDK. It uses simulated identities only in the preview and tests the rules with two different users.
 4. Before publishing, the creator chooses visibility and who may sign up. A request that already states both lets the agent run those steps.
@@ -93,7 +93,7 @@ Eject runs on the server with an expected revision. Before the project changes, 
 | Visibility and signup policy | Cookies, signing keys and trusted origins of the origin |
 | Invitation history and pending recipients | Secret integrations the owner must configure again |
 
-The package names the published revision and the code revision. Unpublished changes are marked as such; a draft is never presented as the code that produced the app in production. External projects supply their sources from the owner's machine or repository; Littlebox does not claim to keep sources it never received. Without them it can deliver state and a runnable artifact, not a complete project export.
+The package names the published revision and the code revision. Unpublished changes are marked as such; a draft is never presented as the code that produced the app in production. External projects supply their sources from the owner's machine or repository; Konae does not claim to keep sources it never received. Without them it can deliver state and a runnable artifact, not a complete project export.
 
 The export uses a versioned manifest, checksums and an explicit content list. Accounts keep their IDs and hashes; permissions that use internal Deployment IDs are remapped to the destination without changing user IDs or row and file owners.
 
@@ -114,7 +114,7 @@ The importer checks integrity, version, references and limits before activating 
 
 If preparation or import fails before writes are enabled at the destination, the owner can cancel and resume the origin. Invalidated access challenges must be issued again. If the destination has already received writes, going back requires pausing it and migrating its updated state; an old copy is never reactivated.
 
-Littlebox controls its origin and offers this procedure in the exported Kernel. It cannot stop whoever owns the server from starting other copies. That is why an import starts disabled and the procedure states which installation receives writes. No synchronisation or merge between divergent copies is promised.
+Konae controls its origin and offers this procedure in the exported Kernel. It cannot stop whoever owns the server from starting other copies. That is why an import starts disabled and the procedure states which installation receives writes. No synchronisation or merge between divergent copies is promised.
 
 ## Cases the exit must resolve
 
@@ -126,7 +126,7 @@ Littlebox controls its origin and offers this procedure in the exported Kernel. 
 | Run two copies with real data | Independent installations; a password or suspension does not sync |
 | Keep the domain when migrating | Users keep the address but sign in again; keys and sessions rotate anyway |
 | Change domain | Accounts, passwords and data stay; a new URL and new bookmarks |
-| Use a URL under the Littlebox domain | The subdomain is not exported; the migration page may show the validated new URL for seven days |
+| Use a URL under the Konae domain | The subdomain is not exported; the migration page may show the validated new URL for seven days |
 | Open an old access link | Refused; its token is not forwarded and is not consumed elsewhere |
 | Pending invitation | The recipient is kept, not the token; the operator decides when to resend |
 | Signup pending verification | Kept as pending, without access; needs a new challenge |
@@ -142,10 +142,10 @@ Littlebox controls its origin and offers this procedure in the exported Kernel. 
 | Export while writes arrive | Consistent capture through a short pause; for a migration the pause stays until the end |
 | Role or policy change during export | Serialised with the capture; no mixed revisions |
 | New publication after import | Keeps the destination's accounts and data; does not reapply the initial state |
-| Back from another machine to Littlebox | Assisted production import deferred; the standard package is kept for a future migration |
+| Back from another machine to Konae | Assisted production import deferred; the standard package is kept for a future migration |
 | Replace the Kernel with another backend | The owner has sources and data and must migrate authentication and rules. Guaranteed continuity uses the exported Kernel |
 
-The first hosted version uses Littlebox subdomains. Hosted custom domains are deferred. The Kernel outside Littlebox does let its HTTPS origin be configured. No POST or authentication route is redirected during a migration; the origin page offers a clean link to the new app.
+The first hosted version uses Konae subdomains. Hosted custom domains are deferred. The Kernel outside Konae does let its HTTPS origin be configured. No POST or authentication route is redirected during a migration; the origin page offers a clean link to the new app.
 
 ## Security
 
@@ -166,7 +166,7 @@ An invitation fixes the email and the app, is consumed once and rechecks policy 
 
 Legacy accounts without verification are not trusted for having passed an email list. Before the beta opens, migrate them to verification required, revoke their sessions and require verification and a new password to enter. Do not change IDs or reassign rows. Test installations without email stay in local mode and are not promoted to production with active unverified accounts.
 
-Invitations and their email job are stored atomically. The queue persists, encrypts transient secrets and uses idempotency keys; it records and verifies provider events. Limits apply per creator, app, IP and recipient, and a global send limit. Account creation never makes Littlebox a general email relay.
+Invitations and their email job are stored atomically. The queue persists, encrypts transient secrets and uses idempotency keys; it records and verifies provider events. Limits apply per creator, app, IP and recipient, and a global send limit. Account creation never makes Konae a general email relay.
 
 The Kernel issues the creator's administrative session and checks its permissions. Accounts are never joined by matching email. Sign-out, suspension and revocation have defined effects on own sessions and MCP delegations; an identity that was closed is not accepted indefinitely. Recovery of an installation's owner uses a local procedure with server access, not a password shared between exports.
 
@@ -231,16 +231,16 @@ Every delivery that changes the Kernel's contract updates `docs/mcp.md`, `CONTEX
 - Eject keeps the hosted app and refuses new Managed writes, including from old clients.
 - An app at its maximum quotas exports and imports without omitting data or exhausting memory.
 - A migration keeps IDs, passwords, data, files, suspension and policies. Users sign in again; origin tokens fail.
-- The destination works with the Littlebox host unreachable. Its owner administers the app, configures email and recovers accounts with no external provider.
+- The destination works with the Konae host unreachable. Its owner administers the app, configures email and recovers accounts with no external provider.
 - Failing mid-migration allows a retry or a cancel without two active writers. Returning after writing at the destination requires a new migration.
 - A volume loss recovers from remote copies within the rehearsed targets without reactivating revoked identities.
 - Build, Kernel, MCP integration, security and browser checks pass. The exit path runs on two distinct installations, not on mocks.
 
 ## Deferred
 
-Creator teams, ownership transfer, automatic billing, arbitrary visual roles, hosted custom domains, SSO, passkeys, social sign-in for app users, generic business notifications, replication between installations, migrations without maintenance, data merging, assisted production import back into Littlebox, and any identity provider as a requirement.
+Creator teams, ownership transfer, automatic billing, arbitrary visual roles, hosted custom domains, SSO, passkeys, social sign-in for app users, generic business notifications, replication between installations, migrations without maintenance, data merging, assisted production import back into Konae, and any identity provider as a requirement.
 
-These must not appear as active controls or beta promises. First-version support outside Littlebox is the documented kit with the Kernel; replacing it with another backend is the owner's work.
+These must not appear as active controls or beta promises. First-version support outside Konae is the documented kit with the Kernel; replacing it with another backend is the owner's work.
 
 ## Basis
 
@@ -289,7 +289,7 @@ A headless Chrome session against a Kernel from this branch showed the owner pag
 The plan did not account for three things. "Once a code system is active" left signup open to a leaked key on an installation that never issued a code, so the key also stops after the first creator. The browser tests create an owner per run with the default development key, so that key keeps working until the first code is issued. "Codes" in the suspension row reads here as the creator's open account links and OAuth authorization codes, because operator-issued invitation codes are never held by a creator.
 ### Delivery B, November 6, 2026
 
-The queue, the worker, the transports, provider events, the preflight and the limits are in `kernel-rs/src/mail.rs`; [ADR-0012](../adr/0012-account-email-goes-through-a-persistent-queue.md) records the decisions and [the README](../../README.md#account-email) the configuration.
+The queue, the worker, the transports, provider events, the preflight and the limits are in `kernel-rs/src/mail.rs`; [ADR-0012](../adr/0012-account-email-goes-through-a-persistent-queue.md) records the decisions and [the README](../operate.md#account-email) the configuration.
 
 | Refusal or guarantee | Test in `kernel-rs/src/mail.rs` unless named |
 | --- | --- |
@@ -365,7 +365,7 @@ This delivery leaves four things undone. The invitation email names neither the 
 
 Not covered: the Docker stack, and an Eject racing a save on two connections at the same instant. The race is closed by the shared project lock, not by a test that forces the interleaving.
 
-The plan said the client fetches and checks the code package before the project changes, and both clients do. It did not say what the package is. The Kernel cannot build the self-host kit, which is assembled in TypeScript, so the package is the saved source tree with `littlebox.json` and a README in a JSON envelope with per-file SHA-256s; the CLI writes it as a folder and the editor as a tar. It also did not say whether an ejected project's sources stay readable. They do, frozen, because the editor needs them to show the project read-only.
+The plan said the client fetches and checks the code package before the project changes, and both clients do. It did not say what the package is. The Kernel cannot build the self-host kit, which is assembled in TypeScript, so the package is the saved source tree with `konae.json` and a README in a JSON envelope with per-file SHA-256s; the CLI writes it as a folder and the editor as a tar. It also did not say whether an ejected project's sources stay readable. They do, frozen, because the editor needs them to show the project read-only.
 
 ### Delivery H, November 6, 2026
 
@@ -409,7 +409,7 @@ The plan asks the Users view to show each invitation as pending, accepted by the
 
 ### Delivery J, November 6, 2026
 
-`kernel-rs/src/migration.rs` adds the maintenance state and the five migration tools; `kernel-rs/src/recovery.rs` adds the revocation record and its reconciliation; `kernel-rs/src/copies.rs` seals S3 copies with `LITTLEBOX_COPY_SECRET` and applies the record on restore. [ADR-0014](../adr/0014-an-app-migrates-with-one-writer-at-a-time.md) records the decisions, [the MCP guide](../mcp.md#migrate-an-app) the tools and refusals, and [the README](../../README.md#migrate-to-another-server) the procedure and the restore commands.
+`kernel-rs/src/migration.rs` adds the maintenance state and the five migration tools; `kernel-rs/src/recovery.rs` adds the revocation record and its reconciliation; `kernel-rs/src/copies.rs` seals S3 copies with `KONAE_COPY_SECRET` and applies the record on restore. [ADR-0014](../adr/0014-an-app-migrates-with-one-writer-at-a-time.md) records the decisions, [the MCP guide](../mcp.md#migrate-an-app) the tools and refusals, and [the README](../guides/take-the-app-elsewhere.md) the procedure and the restore commands.
 
 | Refusal or proof | Where | Run against |
 | --- | --- | --- |
@@ -427,10 +427,10 @@ The plan asks the Users view to show each invitation as pending, accepted by the
 | A suspension or revocation that cannot reach the copy target is reported, not confirmed | `recovery::tests::a_change_is_confirmed_only_once_it_is_off_the_volume` | Unit |
 | An encrypted copy restored without its secret, with another secret, or with a file moved to another path; nothing installed | `copies::tests::an_encrypted_copy_restores_only_with_its_secret` | Unit, directory source |
 
-The rehearsal, `bun run tests/smoke/migration.ts --port 19460`, ran on five Kernel processes from this branch. On the origin it published an app with two accounts, two rows, a file, an API key, a Signal, a pending invitation, a suspended account and Invitation only. `migration_begin` paused it; an import with one damaged component was refused while the origin stayed paused; `migration_begin` again returned the same operation and package; the retried import landed paused, a repeat returned the same Deployment, and a destination restart kept it paused, with both Kernels refusing a sign-in at that moment. After `migration_confirm` and `migration_activate` with `resendInvitations`, the destination had the same account IDs and states, the password signed in, both rows and the file read back, the suspended account stayed out, the policy was Invitation only, and the Signal was there. The origin's session, API key and invitation link failed on the destination; the resent link, on the destination's host, worked. The origin's page linked to the new address and refused sign-in without a redirect. A second migration cancelled before confirmation let its origin take a signup. A third Kernel with `LITTLEBOX_COPY_DIR` took a copy at restart, then suspended one account and revoked a key; `littlebox-kernel restore` into an empty directory took under a second, and the Kernel started on it kept the account suspended and the key revoked while the other account signed in. With `revocations/started.json` removed, the restored installation served only maintenance pages and refused an owner change until `reconcile --without-record`.
+The rehearsal, `bun run tests/smoke/migration.ts --port 19460`, ran on five Kernel processes from this branch. On the origin it published an app with two accounts, two rows, a file, an API key, a Signal, a pending invitation, a suspended account and Invitation only. `migration_begin` paused it; an import with one damaged component was refused while the origin stayed paused; `migration_begin` again returned the same operation and package; the retried import landed paused, a repeat returned the same Deployment, and a destination restart kept it paused, with both Kernels refusing a sign-in at that moment. After `migration_confirm` and `migration_activate` with `resendInvitations`, the destination had the same account IDs and states, the password signed in, both rows and the file read back, the suspended account stayed out, the policy was Invitation only, and the Signal was there. The origin's session, API key and invitation link failed on the destination; the resent link, on the destination's host, worked. The origin's page linked to the new address and refused sign-in without a redirect. A second migration cancelled before confirmation let its origin take a signup. A third Kernel with `KONAE_COPY_DIR` took a copy at restart, then suspended one account and revoked a key; `konae-kernel restore` into an empty directory took under a second, and the Kernel started on it kept the account suspended and the key revoked while the other account signed in. With `revocations/started.json` removed, the restored installation served only maintenance pages and refused an owner change until `reconcile --without-record`.
 
 Commands and counts on this branch: `cargo test --manifest-path kernel-rs/Cargo.toml` 176 passed; `bun run test` 553 passed; `bun run build` passed; `bun run tests/smoke/portable-export.ts --port 19470` passed and compiled a fresh kit Kernel with the two new modules; `bun run tests/smoke/migration.ts --port 19490` passed; `bun run test:e2e:local` 7 passed, because the editor bundles `src/lib/portable-package.ts` and `src/lib/export-project-sources.ts`. Two earlier full runs under a load average of 10 to 15 from other work on the machine each lost one test elsewhere to a timeout; `tests/creator-admission.integration.test.ts` then passed alone.
 
 Not run: encrypted copies against S3. The sealing in `send_to_s3` uses the same functions the directory test exercises, but MinIO was not running, so `tests/copy-restore.integration.test.ts` skipped its S3 case and no S3 copy was sealed or restored. The restore rehearsal measured a seconds-long restore of a small installation, not the one-hour recovery point and four-hour recovery time on a full volume. Nothing ran against the Docker stack.
 
-The plan did not account for five things. "Domain" for a hosted origin can only be a link: the origin's page shows the validated new URL for seven days and the destination's own `LITTLEBOX_PUBLIC_ORIGIN` builds its hostname, so the app gets a new hostname on the destination even under the same domain. "Rotates signing material" has nothing to rotate: no signing key travels, sessions are random tokens, and route signing secrets live per project on the origin and never enter a package, so the destination sets new ones before the import publishes routes that need them. Activation therefore ends whatever sessions, links and keys the identity file holds and reports that. The procedure needed a way to stop a cancelled migration's package from ever serving, which the plan's order of steps did not give: the origin keeps a confirmation whose hash travels in the package and reveals it only at `migration_confirm`, after which cancel is refused. The plan says any import stays disabled until the operator enables it; this delivery pauses only migration packages, because the kit's `deploy.mjs` and the editor import version 1 packages that must serve at once, so a plain export imported elsewhere still makes an independent second copy, as "Run two copies with real data" describes. The plan says to delete the origin's active state after seven days; the Kernel shows the date and keeps the state, and deleting it is an operator step for now.
+The plan did not account for five things. "Domain" for a hosted origin can only be a link: the origin's page shows the validated new URL for seven days and the destination's own `KONAE_PUBLIC_ORIGIN` builds its hostname, so the app gets a new hostname on the destination even under the same domain. "Rotates signing material" has nothing to rotate: no signing key travels, sessions are random tokens, and route signing secrets live per project on the origin and never enter a package, so the destination sets new ones before the import publishes routes that need them. Activation therefore ends whatever sessions, links and keys the identity file holds and reports that. The procedure needed a way to stop a cancelled migration's package from ever serving, which the plan's order of steps did not give: the origin keeps a confirmation whose hash travels in the package and reveals it only at `migration_confirm`, after which cancel is refused. The plan says any import stays disabled until the operator enables it; this delivery pauses only migration packages, because the kit's `deploy.mjs` and the editor import version 1 packages that must serve at once, so a plain export imported elsewhere still makes an independent second copy, as "Run two copies with real data" describes. The plan says to delete the origin's active state after seven days; the Kernel shows the date and keeps the state, and deleting it is an operator step for now.

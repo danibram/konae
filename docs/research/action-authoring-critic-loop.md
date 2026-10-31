@@ -59,7 +59,7 @@ La propuesta revisada reúne las acciones en una vista "Acciones" del proyecto. 
 | Alice lee sus notas | La consulta filtra por la identidad de Alice y Bob no recibe esas filas | Etiquetar "solo sus datos" por encontrar `authenticated` o un binding de actor |
 | Programa llama con clave | La ruta, método y clave admiten esa acción y la clave no abre herramientas de propietario | Ofrecer "Pública" cuando la intención era permitir un programa identificado |
 | App cambia de privada a pública | La revisión identifica también las acciones anónimas y rutas sin callers explícitos cuyo acceso efectivo cambia | Mostrar solo el cambio de visibilidad global |
-| La app sale de Littlebox | El paquete conserva declaraciones, cuentas, datos y reglas; se vuelve a generar el mismo contrato | Guardar permisos solamente en estado de UI o en el historial del chat |
+| La app sale de Konae | El paquete conserva declaraciones, cuentas, datos y reglas; se vuelve a generar el mismo contrato | Guardar permisos solamente en estado de UI o en el historial del chat |
 
 Estos casos revisan el diseño contra las reglas existentes. No son pruebas de una UI nueva ni de comprensión de usuarios. En una condición SQL que la plataforma no pueda explicar con certeza, el detalle debe reconocerlo y ofrecer ver la regla y probarla con dos cuentas.
 
@@ -86,7 +86,7 @@ Si se implementa, requiere soporte explícito en los parsers de TypeScript y Rus
 
 La segunda propuesta todavía pide demasiado. Una lista con entradas, resultados, límites, rutas y permisos puede reproducir el JSON en una pantalla. Pedir que la persona pruebe cada acción como Alice y Bob también le asigna el trabajo de comprobar la implementación. Este pase sustituye ese recorrido obligatorio por una revisión del comportamiento de la app.
 
-El punto de partida es una tarea, por ejemplo "Quiero recibir reservas". Littlebox propone un resultado concreto y pregunta solo lo que falta para decidir quién recibe información o puede cambiarla. Si la persona ya dijo "cualquiera puede reservar y solo yo veo las reservas", no vuelve a preguntar lo mismo mediante selectores.
+El punto de partida es una tarea, por ejemplo "Quiero recibir reservas". Konae propone un resultado concreto y pregunta solo lo que falta para decidir quién recibe información o puede cambiarla. Si la persona ya dijo "cualquiera puede reservar y solo yo veo las reservas", no vuelve a preguntar lo mismo mediante selectores.
 
 La primera vista muestra frases propias de la app.
 
@@ -97,7 +97,7 @@ La primera vista muestra frases propias de la app.
 | Ver una reserva | La persona que la hizo y tú |
 | Cancelar una reserva | La persona que la hizo y tú |
 
-Esta tabla es un ejemplo de propuesta, no una política predeterminada. Las condiciones las decide la persona y las aplica el Kernel. "Ver una reserva" no se muestra como verificada por encontrar un binding de identidad. Littlebox debe comprobar las condiciones y los casos de acceso pertinentes; si no puede demostrar una regla, debe decir qué queda por comprobar.
+Esta tabla es un ejemplo de propuesta, no una política predeterminada. Las condiciones las decide la persona y las aplica el Kernel. "Ver una reserva" no se muestra como verificada por encontrar un binding de identidad. Konae debe comprobar las condiciones y los casos de acceso pertinentes; si no puede demostrar una regla, debe decir qué queda por comprobar.
 
 Cada fila ofrece "Cambiar". El cambio abre una pregunta contextual o permite describir otra regla. Los nombres técnicos completos, parámetros, límites y contrato quedan en un detalle para quien los necesita. El nombre visible conserva el objeto de la acción, como "Ver reservas", y evita títulos indistinguibles como "Listar filas".
 
@@ -105,7 +105,7 @@ Cada fila ofrece "Cambiar". El cambio abre una pregunta contextual o permite des
 
 La conexión muestra su estado y permite retirarla. HTTP, MCP, claves y firmas aparecen solo cuando la conexión exige un paso manual o cuando la persona abre detalles técnicos. Conectar una app identificada no convierte sus operaciones en accesibles para todo internet. Tampoco hereda la identidad ni los privilegios de un usuario por ser una app conectada.
 
-Littlebox prepara comprobaciones con datos de prueba para visitante, propietario, otra persona y conexión autorizada según el caso. El resumen presenta qué comprobó. "Probar como otra persona" queda disponible, sin ser un paso obligatorio para cada operación. Comprobar una reserva no demuestra todas las políticas de una app; el resumen delimita los casos ejecutados.
+Konae prepara comprobaciones con datos de prueba para visitante, propietario, otra persona y conexión autorizada según el caso. El resumen presenta qué comprobó. "Probar como otra persona" queda disponible, sin ser un paso obligatorio para cada operación. Comprobar una reserva no demuestra todas las políticas de una app; el resumen delimita los casos ejecutados.
 
 Publicar muestra los cambios relevantes, por ejemplo "Los horarios serán visibles sin iniciar sesión. Las reservas seguirán visibles solo para quien las hizo y para ti". Guardar deja el cambio pendiente. Las confirmaciones adicionales se reservan para ampliaciones de acceso o efectos que las necesitan, sin repetir la misma decisión en varias pantallas.
 

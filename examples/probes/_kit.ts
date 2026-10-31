@@ -1,6 +1,6 @@
 // The harness every probe shares. It compiles the Kernel offline, or takes the
-// binary LITTLEBOX_KERNEL_BIN names, starts it on
-// LITTLEBOX_PROBE_PORT with a random setup key, the development mailbox and a
+// binary KONAE_KERNEL_BIN names, starts it on
+// KONAE_PROBE_PORT with a random setup key, the development mailbox and a
 // data directory under the system temp folder, signs up the owner, and removes
 // the Kernel and its data when the probe ends, whether it passed or not.
 //
@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import initSqlJs from "sql.js";
 import { McpClient } from "../../src/mcp/client";
-import { buildLocal } from "../../scripts/littlebox";
+import { buildLocal } from "../../scripts/konae";
 import { createCapsuleValidator } from "../../src/agent/gate";
 
 const repo = path.resolve(import.meta.dir, "../..");
@@ -42,12 +42,12 @@ export type Kit = {
   errorText(promise: Promise<unknown>): Promise<string>;
 };
 
-/** `env` adds to the Kernel's environment, such as LITTLEBOX_DNS_RESOLVER for a fake resolver. */
+/** `env` adds to the Kernel's environment, such as KONAE_DNS_RESOLVER for a fake resolver. */
 export async function probe(name: string, defaultPort: number, body: (kit: Kit) => Promise<void>, options: { env?: Record<string, string> } = {}) {
-  const port = Number(process.env.LITTLEBOX_PROBE_PORT ?? defaultPort);
-  assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Set LITTLEBOX_PROBE_PORT to a free local port.");
+  const port = Number(process.env.KONAE_PROBE_PORT ?? defaultPort);
+  assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Set KONAE_PROBE_PORT to a free local port.");
   const url = `http://127.0.0.1:${port}`;
-  const scratch = await mkdtemp(path.join(tmpdir(), `littlebox-probe-${name}-`));
+  const scratch = await mkdtemp(path.join(tmpdir(), `konae-probe-${name}-`));
   const dataDir = path.join(scratch, "data");
   const setupKey = crypto.randomUUID();
   let kernel: ReturnType<typeof Bun.spawn> | undefined;
@@ -58,24 +58,24 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
     throw Error("Expected a refusal, but the call succeeded.");
   };
   try {
-    try { await fetch(`${url}/_littlebox/health`); throw Error(`Something already answers on port ${port}. Set LITTLEBOX_PROBE_PORT.`); }
+    try { await fetch(`${url}/_konae/health`); throw Error(`Something already answers on port ${port}. Set KONAE_PROBE_PORT.`); }
     catch (error) { if (error instanceof Error && error.message.startsWith("Something")) throw error; }
-    // LITTLEBOX_KERNEL_BIN runs a Kernel binary already built from these sources instead of compiling one.
-    const binary = process.env.LITTLEBOX_KERNEL_BIN ?? path.join(repo, "kernel-rs/target/debug/littlebox-kernel");
-    if (!process.env.LITTLEBOX_KERNEL_BIN) {
+    // KONAE_KERNEL_BIN runs a Kernel binary already built from these sources instead of compiling one.
+    const binary = process.env.KONAE_KERNEL_BIN ?? path.join(repo, "kernel-rs/target/debug/konae-kernel");
+    if (!process.env.KONAE_KERNEL_BIN) {
       const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
       assert.equal(await build.exited, 0, "The Kernel must compile.");
     }
     kernel = Bun.spawn([binary], {
       cwd: repo,
       env: {
-        ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))),
-        LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_PUBLIC_ORIGIN: url,
-        LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: dataDir, LITTLEBOX_ADMIN_KEY: setupKey,
-        LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: repo,
-        LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development",
+        ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
+        KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
+        KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: dataDir, KONAE_ADMIN_KEY: setupKey,
+        KONAE_BUN_PATH: process.execPath, KONAE_SOURCE_ROOT: repo,
+        KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
         // The schedule probe sets it to watch a run in seconds instead of minutes.
-        ...(process.env.LITTLEBOX_SCHEDULE_MIN_SECONDS ? { LITTLEBOX_SCHEDULE_MIN_SECONDS: process.env.LITTLEBOX_SCHEDULE_MIN_SECONDS } : {}),
+        ...(process.env.KONAE_SCHEDULE_MIN_SECONDS ? { KONAE_SCHEDULE_MIN_SECONDS: process.env.KONAE_SCHEDULE_MIN_SECONDS } : {}),
         ...options.env,
       },
       stdout: "ignore", stderr: "inherit",
@@ -83,12 +83,12 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
     let ready = false;
     for (let attempt = 0; attempt < 100 && !ready; attempt++) {
       assert.equal(kernel.exitCode, null, "The Kernel stopped before startup. Is the port taken?");
-      try { ready = (await fetch(`${url}/_littlebox/health`)).ok; } catch {}
+      try { ready = (await fetch(`${url}/_konae/health`)).ok; } catch {}
       if (!ready) await Bun.sleep(100);
     }
     assert(ready, "The Kernel did not start.");
 
-    const signup = await fetch(`${url}/_littlebox/owner/signup`, {
+    const signup = await fetch(`${url}/_konae/owner/signup`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ email: "owner@probe.example", password: crypto.randomUUID(), setupKey }),
     });
@@ -149,9 +149,9 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
         assert.equal(result.ok, false, "The Validation Gate passed sources it should refuse.");
         return { message: result.errors[0].message, detail: result.errors[0].detail };
       },
-      runtime: (host, cookie) => new McpClient(`${url}/_littlebox/mcp`, { fetch: appFetch(host, { cookie }) }),
+      runtime: (host, cookie) => new McpClient(`${url}/_konae/mcp`, { fetch: appFetch(host, { cookie }) }),
       async signup(host, email) {
-        const answer = await appFetch(host)(`${url}/_littlebox/auth/signup`, {
+        const answer = await appFetch(host)(`${url}/_konae/auth/signup`, {
           method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password: crypto.randomUUID() }),
         });
         assert.equal(answer.status, 200, await answer.clone().text());

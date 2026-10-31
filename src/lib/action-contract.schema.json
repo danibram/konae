@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Littlebox Action Contract",
+  "title": "Konae Action Contract",
   "description": "Every Server Action of one Capsule: inputs, output shape, callers, HTTP binding, errors and limits. Generated from actions.json and schema.sql by src/lib/action-contract.ts.",
   "type": "object",
   "required": ["format", "version", "errors", "actions", "notes"],
   "additionalProperties": false,
   "properties": {
     "$schema": { "type": "string" },
-    "format": { "const": "littlebox-action-contract" },
+    "format": { "const": "konae-action-contract" },
     "version": { "const": 1 },
     "project": {
       "type": "object",
@@ -213,7 +213,7 @@
           "required": ["scheme", "header", "headers", "secret", "format", "windowSeconds", "acceptedOnce", "replay"],
           "additionalProperties": false,
           "properties": {
-            "scheme": { "enum": ["littlebox", "hmac-body", "timestamped", "svix"] },
+            "scheme": { "enum": ["konae", "hmac-body", "timestamped", "svix"] },
             "header": { "type": "string" },
             "headers": { "type": "array", "minItems": 1, "items": { "type": "string" } },
             "secret": { "type": "string" },

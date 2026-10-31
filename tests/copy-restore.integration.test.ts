@@ -6,17 +6,17 @@ import { McpClient, type Transfer } from "../src/mcp/client";
 
 // Delivery 2's condition: a Kernel started on an empty volume from a copy
 // serves the same app with its artifact, rows, accounts and files.
-const binary = "kernel-rs/target/debug/littlebox-kernel";
+const binary = "kernel-rs/target/debug/konae-kernel";
 const setupKey = "copy-restore-setup-secret";
 const password = "copy-restore-password-2026";
 const attachment = new TextEncoder().encode("Attachment survives the copy");
-const s3Endpoint = process.env.LITTLEBOX_TEST_S3_ENDPOINT ?? "http://127.0.0.1:9000";
-const s3Bucket = process.env.LITTLEBOX_TEST_S3_BUCKET ?? "littlebox-data";
+const s3Endpoint = process.env.KONAE_TEST_S3_ENDPOINT ?? "http://127.0.0.1:9000";
+const s3Bucket = process.env.KONAE_TEST_S3_BUCKET ?? "konae-data";
 const s3Env = {
-  LITTLEBOX_S3_ENDPOINT: s3Endpoint,
-  LITTLEBOX_S3_ACCESS_KEY: process.env.LITTLEBOX_TEST_S3_ACCESS_KEY ?? "littlebox",
-  LITTLEBOX_S3_SECRET_KEY: process.env.LITTLEBOX_TEST_S3_SECRET_KEY ?? "littlebox-secret",
-  LITTLEBOX_DATA_BUCKET: s3Bucket,
+  KONAE_S3_ENDPOINT: s3Endpoint,
+  KONAE_S3_ACCESS_KEY: process.env.KONAE_TEST_S3_ACCESS_KEY ?? "konae",
+  KONAE_S3_SECRET_KEY: process.env.KONAE_TEST_S3_SECRET_KEY ?? "konae-secret",
+  KONAE_DATA_BUCKET: s3Bucket,
 };
 const minio = await fetch(`${s3Endpoint}/minio/health/live`, { signal: AbortSignal.timeout(1000) }).then((response) => response.ok, () => false);
 if (!minio) console.warn(`MinIO is not reachable at ${s3Endpoint}; the S3 copy target test is skipped.`);
@@ -27,16 +27,16 @@ beforeAll(async () => {
 }, 300_000);
 
 function kernelEnv(root: string, extra: Record<string, string> = {}) {
-  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_")));
-  return { ...inherited, LITTLEBOX_DATA_DIR: root, LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, ...extra };
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_")));
+  return { ...inherited, KONAE_DATA_DIR: root, KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, ...extra };
 }
 
 async function startKernel(root: string, extra: Record<string, string> = {}) {
   const port = 19500 + Math.floor(Math.random() * 400);
   const url = `http://127.0.0.1:${port}`;
-  const child = Bun.spawn([binary], { env: kernelEnv(root, { LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_PUBLIC_ORIGIN: url, ...extra }), stdout: "ignore", stderr: "inherit" });
+  const child = Bun.spawn([binary], { env: kernelEnv(root, { KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url, ...extra }), stdout: "ignore", stderr: "inherit" });
   for (let attempt = 0; attempt < 100; attempt++) {
-    try { if ((await fetch(`${url}/_littlebox/health`)).ok) return { url, child }; } catch {}
+    try { if ((await fetch(`${url}/_konae/health`)).ok) return { url, child }; } catch {}
     if (child.exitCode !== null) throw Error("The Kernel stopped during startup.");
     await Bun.sleep(100);
   }
@@ -79,9 +79,9 @@ const project = {
 
 /** Publishes an app on a Kernel that copies to `copyEnv`, writes a row, an account and a file, waits for a copy that started after those writes, and returns what the second Kernel must serve. */
 async function publishAndCopy(root: string, copyEnv: Record<string, string>) {
-  const { url, child } = await startKernel(root, { LITTLEBOX_COPY_INTERVAL_SECONDS: "1", ...copyEnv });
+  const { url, child } = await startKernel(root, { KONAE_COPY_INTERVAL_SECONDS: "1", ...copyEnv });
   try {
-    const owner = withHeaders(`${url}/mcp`, { cookie: await sign(url, "/_littlebox/owner/signup", { email: "owner@copy.test", password, setupKey }) });
+    const owner = withHeaders(`${url}/mcp`, { cookie: await sign(url, "/_konae/owner/signup", { email: "owner@copy.test", password, setupKey }) });
     await owner.call("project_create", { projectId: "copy_proof", name: "Copy proof" });
     const payload = { project: { id: "copy_proof", name: "Copy proof", slug: "copy-proof", manifest: { version: 1, visibility: "public" }, files: project }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Copied app</main>" } } };
     const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify(payload)), "copy_proof");
@@ -89,8 +89,8 @@ async function publishAndCopy(root: string, copyEnv: Record<string, string>) {
     const { hostname } = await owner.call<{ hostname: string }>("release_apply", { planId: plan.planId });
     await owner.cancel(transfer.transferId);
 
-    const cookie = await sign(url, "/_littlebox/auth/signup", { email: "writer@copy.test", password }, hostname);
-    const writer = withHeaders(`${url}/_littlebox/mcp`, { host: hostname, cookie });
+    const cookie = await sign(url, "/_konae/auth/signup", { email: "writer@copy.test", password }, hostname);
+    const writer = withHeaders(`${url}/_konae/mcp`, { host: hostname, cookie });
     await writer.call("actions_invoke", { name: "notes.create", input: { title: "Before the copy" } });
     const upload = await writer.upload(attachment);
     const file = await writer.call<{ id: string }>("files_upload", { transferId: upload.transferId, name: "note.txt", type: "text/plain" });
@@ -99,7 +99,7 @@ async function publishAndCopy(root: string, copyEnv: Record<string, string>) {
     const written = Date.now();
     let copies: { targets: { lastAttemptAt: number | null; lastSuccessAt: number | null; lastError: string | null }[]; alert: string | null } | undefined;
     for (let attempt = 0; attempt < 200; attempt++) {
-      copies = (await (await fetch(`${url}/_littlebox/health`)).json()).copies;
+      copies = (await (await fetch(`${url}/_konae/health`)).json()).copies;
       const done = copies!.targets.every((target) => target.lastAttemptAt !== null && target.lastAttemptAt > written && target.lastSuccessAt !== null && target.lastSuccessAt >= target.lastAttemptAt);
       if (done) break;
       await Bun.sleep(100);
@@ -118,13 +118,13 @@ async function expectSameApp(root: string, app: { hostname: string; cookie: stri
     const shell = await fetch(`${url}/`, { headers: { host: app.hostname } });
     expect(shell.status).toBe(200);
     expect(await shell.text()).toContain("<main>Copied app</main>");
-    const stale = await withHeaders(`${url}/_littlebox/mcp`, { host: app.hostname, cookie: app.cookie }).call<{ role: string }>("auth_session");
+    const stale = await withHeaders(`${url}/_konae/mcp`, { host: app.hostname, cookie: app.cookie }).call<{ role: string }>("auth_session");
     expect(stale.role).toBe("anonymous");
-    const cookie = await sign(url, "/_littlebox/auth/login", { email: "writer@copy.test", password }, app.hostname);
-    const writer = withHeaders(`${url}/_littlebox/mcp`, { host: app.hostname, cookie });
+    const cookie = await sign(url, "/_konae/auth/login", { email: "writer@copy.test", password }, app.hostname);
+    const writer = withHeaders(`${url}/_konae/mcp`, { host: app.hostname, cookie });
     expect(await writer.call("actions_invoke", { name: "notes.list" })).toEqual([{ id: 1, title: "Before the copy" }]);
     expect(await writer.download(await writer.call<Transfer>("files_read", { fileId: app.fileId }))).toEqual(attachment);
-    const owner = withHeaders(`${url}/mcp`, { cookie: await sign(url, "/_littlebox/owner/login", { email: "owner@copy.test", password }) });
+    const owner = withHeaders(`${url}/mcp`, { cookie: await sign(url, "/_konae/owner/login", { email: "owner@copy.test", password }) });
     // The project registry in mcp.sqlite travelled with the owner account.
     const inspection = await owner.call<{ deployment: { hostname: string } }>("project_inspect", { projectId: "copy_proof" });
     expect(inspection.deployment.hostname).toBe(app.hostname);
@@ -135,10 +135,10 @@ async function expectSameApp(root: string, app: { hostname: string; cookie: stri
 
 describe("copies off the volume", () => {
   test("a directory copy restores into an empty data directory and serves the same app", async () => {
-    const scratch = await mkdtemp(path.join(tmpdir(), "littlebox-copy-dir-"));
+    const scratch = await mkdtemp(path.join(tmpdir(), "konae-copy-dir-"));
     try {
       const copies = path.join(scratch, "second-disk");
-      const app = await publishAndCopy(path.join(scratch, "source"), { LITTLEBOX_COPY_DIR: copies });
+      const app = await publishAndCopy(path.join(scratch, "source"), { KONAE_COPY_DIR: copies });
       expect((await readdir(copies)).filter((name) => /^\d{4}-\d\d-\d\dT/.test(name)).length).toBeGreaterThan(0);
       const restored = path.join(scratch, "restored");
       const first = await restore(copies, restored);
@@ -155,10 +155,10 @@ describe("copies off the volume", () => {
 
   // Needs the data bucket to exist, as `docker compose up minio minio-init` creates it.
   test.skipIf(!minio)("an S3 copy restores into an empty data directory and serves the same app", async () => {
-    const scratch = await mkdtemp(path.join(tmpdir(), "littlebox-copy-s3-"));
+    const scratch = await mkdtemp(path.join(tmpdir(), "konae-copy-s3-"));
     const prefix = `copy-test-${crypto.randomUUID()}/`;
     try {
-      const app = await publishAndCopy(path.join(scratch, "source"), { ...s3Env, LITTLEBOX_COPY_S3_PREFIX: prefix });
+      const app = await publishAndCopy(path.join(scratch, "source"), { ...s3Env, KONAE_COPY_S3_PREFIX: prefix });
       const restored = path.join(scratch, "restored");
       const first = await restore(`s3://${s3Bucket}/${prefix}`, restored, s3Env);
       expect(first.output).toContain("checksums verified");
@@ -166,7 +166,7 @@ describe("copies off the volume", () => {
       await expectSameApp(restored, app);
     } finally {
       await rm(scratch, { recursive: true, force: true });
-      const bucket = new Bun.S3Client({ endpoint: s3Endpoint, bucket: s3Bucket, accessKeyId: s3Env.LITTLEBOX_S3_ACCESS_KEY, secretAccessKey: s3Env.LITTLEBOX_S3_SECRET_KEY });
+      const bucket = new Bun.S3Client({ endpoint: s3Endpoint, bucket: s3Bucket, accessKeyId: s3Env.KONAE_S3_ACCESS_KEY, secretAccessKey: s3Env.KONAE_S3_SECRET_KEY });
       const listed = await bucket.list({ prefix }).catch(() => undefined);
       await Promise.all((listed?.contents ?? []).map((object) => bucket.delete(object.key)));
     }

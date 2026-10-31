@@ -9,7 +9,7 @@ let initialized: Promise<void> | undefined;
 
 /**
  * The editor's door to the static publishing contract in
- * src/lib/static-artifact.js, the same rules `littlebox build` runs. A Managed
+ * src/lib/static-artifact.js, the same rules `konae build` runs. A Managed
  * Project holds text files only, so a page that references an image the
  * project does not hold is refused here as it would be by the CLI.
  */
@@ -58,19 +58,19 @@ async function bundleInBrowser(files: Record<string, string>, entrypoint: string
 
 function projectFilesPlugin(files: Record<string, string>): esbuild.Plugin {
   return {
-    name: "littlebox-project-files",
+    name: "konae-project-files",
     setup(build) {
       build.onResolve({ filter: /.*/ }, (args) => {
         if (args.namespace === "package") return undefined;
-        if (!args.importer) return { path: requireProjectFile(args.path), namespace: "littlebox" };
+        if (!args.importer) return { path: requireProjectFile(args.path), namespace: "konae" };
         if (!args.path.startsWith(".")) return undefined;
         const parent = args.importer.includes("/") ? args.importer.slice(0, args.importer.lastIndexOf("/")) : "";
         const candidate = normalizeRelative(`${parent}/${args.path}`);
         const resolved = resolveExtension(candidate, files);
         if (!resolved) throw new Error(`Cannot resolve ${args.path} from ${args.importer}.`);
-        return { path: resolved, namespace: "littlebox" };
+        return { path: resolved, namespace: "konae" };
       });
-      build.onLoad({ filter: /.*/, namespace: "littlebox" }, (args) => {
+      build.onLoad({ filter: /.*/, namespace: "konae" }, (args) => {
         const contents = files[args.path];
         if (contents === undefined) throw new Error(`Project file not found: ${args.path}`);
         return { contents, loader: loaderFor(args.path), resolveDir: args.path.includes("/") ? args.path.slice(0, args.path.lastIndexOf("/")) : "" };
@@ -160,7 +160,7 @@ function packageLoader(url: string): esbuild.Loader {
  */
 function packagesPlugin(packages: Map<string, string>): esbuild.Plugin {
   return {
-    name: "littlebox-packages",
+    name: "konae-packages",
     setup(build) {
       build.onResolve({ filter: /.*/ }, (args) => {
         if (args.namespace === "package") {

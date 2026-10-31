@@ -4,7 +4,7 @@ test.beforeEach(async ({ page }) => {
   // The Kernel limits owner signups per client address. The test server trusts the local
   // proxy, so give each test its own forwarded address and repeated runs stay under the limit.
   const client = `198.51.100.${1 + Math.floor(Math.random() * 254)}`;
-  const response = await page.request.post("/_littlebox/owner/signup", { headers: { "x-forwarded-for": client }, data: { email: `owner-${crypto.randomUUID()}@example.test`, password: "Owner-test-password-2026", setupKey: "local-development-key" } });
+  const response = await page.request.post("/_konae/owner/signup", { headers: { "x-forwarded-for": client }, data: { email: `owner-${crypto.randomUUID()}@example.test`, password: "Owner-test-password-2026", setupKey: "local-development-key" } });
   expect(response.ok()).toBe(true);
   await page.addInitScript(() => localStorage.clear());
 });

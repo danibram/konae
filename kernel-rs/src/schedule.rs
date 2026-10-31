@@ -49,7 +49,7 @@ const DAY_MS: u64 = 86_400_000;
 /// How often the timer looks for due work on a real clock.
 const TICK: Duration = Duration::from_secs(60);
 /// The test clock's variable and its largest value.
-const TEST_CLOCK: &str = "LITTLEBOX_SCHEDULE_MIN_SECONDS";
+const TEST_CLOCK: &str = "KONAE_SCHEDULE_MIN_SECONDS";
 const MAX_TEST_SECONDS: u64 = 300;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,7 +85,7 @@ pub(crate) struct Clock {
 }
 
 impl Clock {
-    /// Reads `LITTLEBOX_SCHEDULE_MIN_SECONDS`. It shortens every schedule to
+    /// Reads `KONAE_SCHEDULE_MIN_SECONDS`. It shortens every schedule to
     /// that many seconds so a test can watch a run happen, and the Kernel
     /// refuses to start with it unless it listens only on a loopback address.
     pub(crate) fn from_env(bind: &str) -> anyhow::Result<Self> {
@@ -95,11 +95,11 @@ impl Clock {
     fn parse(bind: &str, value: Option<&str>) -> anyhow::Result<Self> {
         let Some(value) = value.filter(|value| !value.is_empty()) else { return Ok(Self { test_seconds: None }) };
         if !super::is_local_host(bind) {
-            anyhow::bail!("LITTLEBOX_SCHEDULE_MIN_SECONDS is for tests, and LITTLEBOX_BIND={bind} is reachable from other machines. Remove it, or bind the Kernel to 127.0.0.1.");
+            anyhow::bail!("KONAE_SCHEDULE_MIN_SECONDS is for tests, and KONAE_BIND={bind} is reachable from other machines. Remove it, or bind the Kernel to 127.0.0.1.");
         }
         let seconds = value.parse::<u64>().ok().filter(|seconds| (1..=MAX_TEST_SECONDS).contains(seconds));
         let Some(seconds) = seconds else {
-            anyhow::bail!("LITTLEBOX_SCHEDULE_MIN_SECONDS must be a whole number of seconds from 1 to 300.");
+            anyhow::bail!("KONAE_SCHEDULE_MIN_SECONDS must be a whole number of seconds from 1 to 300.");
         };
         Ok(Self { test_seconds: Some(seconds) })
     }
@@ -376,12 +376,12 @@ mod tests {
         assert_eq!(Clock::parse("::1", Some("300")).unwrap(), Clock { test_seconds: Some(300) });
         assert_eq!(
             Clock::parse("0.0.0.0", Some("2")).unwrap_err().to_string(),
-            "LITTLEBOX_SCHEDULE_MIN_SECONDS is for tests, and LITTLEBOX_BIND=0.0.0.0 is reachable from other machines. Remove it, or bind the Kernel to 127.0.0.1."
+            "KONAE_SCHEDULE_MIN_SECONDS is for tests, and KONAE_BIND=0.0.0.0 is reachable from other machines. Remove it, or bind the Kernel to 127.0.0.1."
         );
         for bad in ["0", "301", "1.5", "-1", "two"] {
             assert_eq!(
                 Clock::parse("127.0.0.1", Some(bad)).unwrap_err().to_string(),
-                "LITTLEBOX_SCHEDULE_MIN_SECONDS must be a whole number of seconds from 1 to 300.",
+                "KONAE_SCHEDULE_MIN_SECONDS must be a whole number of seconds from 1 to 300.",
                 "{bad}"
             );
         }
@@ -401,7 +401,7 @@ mod tests {
 
     impl Rig {
         async fn new(label: &str) -> Self {
-            let root = std::env::temp_dir().join(format!("littlebox-schedule-{label}-{}", uuid::Uuid::new_v4()));
+            let root = std::env::temp_dir().join(format!("konae-schedule-{label}-{}", uuid::Uuid::new_v4()));
             let (state, _) = crate::tests::login_test_state(&root, "public").await;
             let id = state.deployments.read().await.values().next().unwrap().id.clone();
             let db = rusqlite::Connection::open(root.join("deployments").join(&id).join("database.sqlite")).unwrap();

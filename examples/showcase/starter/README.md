@@ -23,7 +23,7 @@ Every rule lives in `actions.json`. The Kernel binds the caller's ID and the SQL
 | --- | --- | --- |
 | Public landing | Public Deployment, actions declared `anonymous` | `status.list`, `updates.list`, `downloads.list` |
 | Public read API | An unsigned `GET` route on a public app, with pagination and search under a `LIMIT` | `updates.list` at `GET /api/updates?before=&q=` |
-| Accounts | Signup Policy Open, `LITTLEBOX_ACCOUNT_VERIFICATION=required` | `littlebox.json` `signupPolicy`, the Kernel's sign-in page |
+| Accounts | Signup Policy Open, `KONAE_ACCOUNT_VERIFICATION=required` | `konae.json` `signupPolicy`, the Kernel's sign-in page |
 | Member area | `actor` bindings on `authenticated` actions | `me.*`, `notes.*`, `attachments.*` |
 | Team area with roles | A role column and guarded mutations whose `WHERE` checks the caller's role | `team.*`, `updates.publish` |
 | Admin area for the owner | Guards on `{ "source": "actor", "field": "role" }` equal to `'owner'`, which the Kernel gives only the Project Owner's own account | `members.list`, `members.promote`, `members.demote`, `updates.remove`, `admin.stats` |
@@ -39,29 +39,29 @@ Every rule lives in `actions.json`. The Kernel binds the caller's ID and the SQL
 
 ## Run it
 
-The replay builds the Kernel, starts one on `LITTLEBOX_SHOWCASE_PORT` and a second on the next port, both with required verification and the development mail transport, and deletes their data on exit. It needs Chrome for the last check.
+The replay builds the Kernel, starts one on `KONAE_SHOWCASE_PORT` and a second on the next port, both with required verification and the development mail transport, and deletes their data on exit. It needs Chrome for the last check.
 
 ```sh
-LITTLEBOX_SHOWCASE_PORT=23450 bun run examples/showcase/starter/replay.ts
-LITTLEBOX_SHOWCASE_SCREENSHOTS=/tmp/starter-shots LITTLEBOX_SHOWCASE_PORT=23450 bun run examples/showcase/starter/replay.ts
-LITTLEBOX_SHOWCASE_BROWSER=0 LITTLEBOX_SHOWCASE_PORT=23450 bun run examples/showcase/starter/replay.ts
+KONAE_SHOWCASE_PORT=23450 bun run examples/showcase/starter/replay.ts
+KONAE_SHOWCASE_SCREENSHOTS=/tmp/starter-shots KONAE_SHOWCASE_PORT=23450 bun run examples/showcase/starter/replay.ts
+KONAE_SHOWCASE_BROWSER=0 KONAE_SHOWCASE_PORT=23450 bun run examples/showcase/starter/replay.ts
 ```
 
 By hand, against a Kernel you started with `bun run dev:local`:
 
 ```sh
-LITTLEBOX_EMAIL=you@example.com LITTLEBOX_PASSWORD=... bun run littlebox -- login --dir /tmp/starter --url http://localhost:4173
-bun run littlebox -- init --dir /tmp/starter --name Starter --url http://localhost:4173
+KONAE_EMAIL=you@example.com KONAE_PASSWORD=... bun run konae -- login --dir /tmp/starter --url http://localhost:4173
+bun run konae -- init --dir /tmp/starter --name Starter --url http://localhost:4173
 cp examples/showcase/starter/{index.html,styles.css,app.js,favicon.svg,schema.sql,schema.ts,actions.json} /tmp/starter/
-# In /tmp/starter/littlebox.json set "visibility": "public" and "signupPolicy": { "mode": "open" },
+# In /tmp/starter/konae.json set "visibility": "public" and "signupPolicy": { "mode": "open" },
 # and delete the template's other files.
 # Set the webhook's secret before the first publish: in the editor's Auth > Integrations view, or over MCP
-# with an owner credential that holds publish: secret_set { "projectId": "<id in littlebox.json>",
+# with an owner credential that holds publish: secret_set { "projectId": "<id in konae.json>",
 # "name": "status_webhook", "value": "<16 to 512 printable characters>" }.
 # status.escalate calls a team inbox. Publish examples/showcase/inbox first, put its URL with
 # /hooks/events in place of http://inbox.localhost/hooks/events in actions.json, and set
 # secret_set { "projectId": "<id>", "name": "inbox_events", "value": "<the inbox's events_webhook value>", "use": "call" }.
-bun run littlebox -- publish --dir /tmp/starter
+bun run konae -- publish --dir /tmp/starter
 ```
 
 Then, as the Project Owner, open the project's Auth > Users view in the editor and choose Open as owner. The app opens signed in as your own email with the role `owner`, and its admin area is where you make members team admins. An agent with the owner's browser session calls `app_owner_enter` for the same link.
@@ -86,7 +86,7 @@ The run of 2026-11-07 passed every check in about 75 seconds.
 | Signals carry the actor and only real changes | 47 Signals: each person's `member.joined` once though each joined twice; program updates name the key; `status.changed` has `actor` null and skips the identical retry; no refused call records one |
 | The Action Contract names every column; conform passes with a session and with a key | 29 actions, no warning, no unnamed column; conform with a session, the key and the secret: 208 passed, 0 failed, 1 skipped, the skip being `status.escalate`'s valid call, which conform does not send, the member meeting each role's guard on the probes that omit a nullable input too; with the key and the secret: 68 passed, 0 failed, 44 skipped. Both counts include the HEAD probe on `GET /api/updates` |
 | The app exports as a package and imports with every rule intact | On the second Kernel, passwords, rows, roles, guards, file visibility, the deleted file, Signals and open signup with verification hold; old keys answer `invalid-api-key`; the origin's last webhook delivery answers 409 |
-| The same Capsule publishes from the CLI and the managed path | `littlebox login`, `init`, `build`, `publish` for one Deployment; `project_sources_save` and `release_plan`/`release_apply` for another; each is built in its own folder, and their page, script, styles and icon are byte for byte the same, with no bundler comment naming a folder |
+| The same Capsule publishes from the CLI and the managed path | `konae login`, `init`, `build`, `publish` for one Deployment; `project_sources_save` and `release_plan`/`release_apply` for another; each is built in its own folder, and their page, script, styles and icon are byte for byte the same, with no bundler comment naming a folder |
 | No console error under the policy | A visitor in light, Ana in dark and the owner in light load with no violation, console error or failed request |
 
 ## What the primitives refused or could not do
@@ -100,7 +100,7 @@ Each row is a limit the app met, with the exact answer. None was worked around.
 | Required verification | Ana signs in before opening her verification link | Was `401 {"error":"Email or password is incorrect."}`. Fixed on 2026-11-07: from her browser, `401 {"error":"Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first."}`; from another browser, the plain answer | None now. The hint depends on a cookie the signup request set, never on the account, so it tells nobody whether an address has an account |
 | conform | `conform --token` as a member, on `updates.publish`, a guarded mutation with a nullable `body` | Fixed on 2026-11-07: `PASS updates.publish: answers without the nullable body. Refused with its guard, "Only team admins can publish an update.": the bindings accepted the call without body.` Before, the same probe failed with `Refused with "Only team admins can publish an update." where the contract makes body optional.` | None now. conform passes a guard refusal on the probe that omits a nullable input, as it does on the valid call |
 | Action Contract | `admin.stats` returns six `COUNT(*)` columns, each aliased | Each is typed `unknown` with `nullable: null` | A second backend learns nothing about a count's type |
-| Build Artifact | `littlebox build` of `app.js` | Fixed on 2026-11-07: the build drops esbuild's module path comments, and the CLI and managed copies, built in two folders, are byte for byte the same. Before, the published `app.js` started with `// ../../../../../../../../../private/var/folders/…/littlebox-showcase-starter-…/cli/app.js` | None now |
+| Build Artifact | `konae build` of `app.js` | Fixed on 2026-11-07: the build drops esbuild's module path comments, and the CLI and managed copies, built in two folders, are byte for byte the same. Before, the published `app.js` started with `// ../../../../../../../../../private/var/folders/…/konae-showcase-starter-…/cli/app.js` | None now |
 | Build Artifact | `index.html` as a fragment, the Capsule's default shape | Fixed on 2026-11-07: a fragment that opens with `<title>` and `<link rel="icon">` gets them in the head, so the browser does not ask for `/favicon.ico`. Before, they landed in the body, Chrome requested `/favicon.ico`, got 404 and logged `Failed to load resource: the server responded with a status of 404 (Not Found)` | Starter's `index.html` stays a whole document. A binary `favicon.ico` still does not survive the managed path, which holds text only; an SVG file or a `data:` SVG icon works from every door (`docs/mcp.md`, "What the build publishes") |
 | Public read API | `GET /api/updates`, whose `SELECT` lists `id, title, body, source, published_at, author` | Each row's keys arrive as `author, body, id, published_at, source, title` | The order the SQL chose is lost on the route and through `actions_invoke` |
 | API key files | The Release bot key, which names no file visibility, reads Ana's public avatar | Was `404 {"error":"File not found."}`. Fixed on 2026-11-07: 200 with the image, as for a visitor; the private draft still answers 404 | None now. A key reads a public file of a public Deployment as a visitor does, plus the visibilities it names |
@@ -110,8 +110,8 @@ Each row is a limit the app met, with the exact answer. None was worked around.
 | Call action | Ben, a member with no team role, invokes `status.escalate` with a title of his own | `{ callId, queued: true }`; the inbox files "Ben says api is down" under source `starter` | A call runs no SQL, so no `WHERE` can check the caller's role, and it cannot read the app's rows, so the page supplies the title and the event ID. Only the action's access gates it. The page shows the button to team admins only, which is a courtesy; the inbox's one event per source and ID is the only other check |
 | Call action | Ana writes `status.escalated` herself | `Action status.escalated runs only after the call status.escalate answers.` | None. Only the Kernel records what the inbox answered |
 | Signing secret | `secret_set` of the inbox's `events_webhook` value as the starter's `inbox_events` | `Another of your projects already uses this secret value. ...` without `"use": "call"`; accepted with it | One owner's two apps need the call-only use to share a value |
-| Signed route | `littlebox publish` before `secret_set` | `Action status.report signs with the secret status_webhook, which is not set for this project. Set it with secret_set before publishing.` | Each Kernel and each project needs `secret_set` before its first release: the CLI project, the managed project and the import, for `status_webhook` and `inbox_events` both |
-| CLI | `littlebox init` | Writes `"visibility": "private"` and `{ "mode": "invitation" }`, plus the template's own files | A public, open app takes a hand edit of `littlebox.json`, and the template's own files have to be deleted before the Capsule goes in |
+| Signed route | `konae publish` before `secret_set` | `Action status.report signs with the secret status_webhook, which is not set for this project. Set it with secret_set before publishing.` | Each Kernel and each project needs `secret_set` before its first release: the CLI project, the managed project and the import, for `status_webhook` and `inbox_events` both |
+| CLI | `konae init` | Writes `"visibility": "private"` and `{ "mode": "invitation" }`, plus the template's own files | A public, open app takes a hand edit of `konae.json`, and the template's own files have to be deleted before the Capsule goes in |
 | Signed webhook | A signed delivery with state "on fire" | `400 {"error":"CHECK constraint failed: state IN ('operational', 'degraded', 'down')"}` | The sender sees SQLite's words; an action has no way to state an allowed list as an input rule |
 | Package import | The origin's Release bot key on the destination | `401 invalid-api-key`; `api_keys_list` shows both keys with `revokedReason: "import"` | Every program needs a new key after a move, as documented |
 | Package import | Ana's origin session cookie on the destination, calling `notes.list` | `authentication-required` | People sign in again, as documented |

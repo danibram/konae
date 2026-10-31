@@ -21,7 +21,7 @@ Downloading state needs a new permission, `export_data`. The owner's browser ses
 
 ## Consequences
 
-The kit carries the package under `littlebox/package/`, and its `deploy.mjs` uploads it in 64 KiB blocks, resuming from the Kernel's offset. A 256 MiB database at its write cap and 20 MiB of files exported and imported with each process at or under 120 MiB of resident memory (`tests/smoke/package-quota.ts`). Moving it takes about 4,400 MCP calls each way.
+The kit carries the package under `konae/package/`, and its `deploy.mjs` uploads it in 64 KiB blocks, resuming from the Kernel's offset. A 256 MiB database at its write cap and 20 MiB of files exported and imported with each process at or under 120 MiB of resident memory (`tests/smoke/package-quota.ts`). Moving it takes about 4,400 MCP calls each way.
 
 `transfer_complete` hashes uploads in 64 KiB reads instead of reading the file whole. Package transfers write one audit row at their first block rather than one per block.
 

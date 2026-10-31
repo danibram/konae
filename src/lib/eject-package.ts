@@ -8,7 +8,7 @@ export type EjectPlan = {
   expectedRevision: number;
   expiresAt: number | null;
   applied: boolean;
-  package: { format: "littlebox-eject"; size: number; sha256: string; contents: { path: string; size: number; sha256: string }[] };
+  package: { format: "konae-eject"; size: number; sha256: string; contents: { path: string; size: number; sha256: string }[] };
   effects: Record<"code" | "hostedApp" | "result" | "returning", string>;
   transfer: Transfer;
   receipt?: EjectReceipt;
@@ -38,7 +38,7 @@ export type EjectFiles = { files: Record<string, string>; directories: string[] 
 export async function checkEjectPackage(bytes: Uint8Array, plan: Pick<EjectPlan, "projectId" | "expectedRevision" | "package">): Promise<EjectFiles> {
   if (bytes.byteLength !== plan.package.size || await checksum(bytes) !== plan.package.sha256) throw Error("The code package does not match its plan. Nothing was changed.");
   const body = JSON.parse(new TextDecoder().decode(bytes)) as { format?: unknown; version?: unknown; projectId?: unknown; sourcesRevision?: unknown; contents?: unknown; directories?: unknown; files?: unknown };
-  if (body.format !== "littlebox-eject" || body.version !== 1 || body.projectId !== plan.projectId || body.sourcesRevision !== plan.expectedRevision) throw Error("The code package names another project or revision.");
+  if (body.format !== "konae-eject" || body.version !== 1 || body.projectId !== plan.projectId || body.sourcesRevision !== plan.expectedRevision) throw Error("The code package names another project or revision.");
   if (!body.files || typeof body.files !== "object" || !Array.isArray(body.contents) || !Array.isArray(body.directories)) throw Error("The code package is malformed.");
   const files = body.files as Record<string, unknown>;
   const listed = body.contents as { path?: unknown; size?: unknown; sha256?: unknown }[];

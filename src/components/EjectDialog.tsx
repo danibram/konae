@@ -27,9 +27,9 @@ export const ejectEffects = [
 
 export function publishCommands(folder: string, origin: string) {
   return [
-    `bun run littlebox -- login --dir ${folder} --url ${origin}`,
-    `bun run littlebox -- build --dir ${folder}`,
-    `bun run littlebox -- publish --dir ${folder}`,
+    `bun run konae -- login --dir ${folder} --url ${origin}`,
+    `bun run konae -- build --dir ${folder}`,
+    `bun run konae -- publish --dir ${folder}`,
   ];
 }
 
@@ -61,7 +61,7 @@ export function EjectDialog({ project, onClose, prepare, apply, onEjected }: Pro
   if (step === "done" && receipt) {
     return <Dialog open title={`${project.name} is External`} description="The code downloaded and the project changed." onClose={close} className="eject-dialog" footer={<Button variant="primary" onClick={close}>Done</Button>}>
       <p>{folder}-code.tar holds the sources at saved revision {receipt.sourcesRevision}. In this editor the project opens read-only.{receipt.deployment ? ` ${receipt.deployment.url} keeps serving its users.` : ""}</p>
-      <p>Unpack it, then publish from that folder with a Littlebox checkout:</p>
+      <p>Unpack it, then publish from that folder with a Konae checkout:</p>
       <pre className="eject-commands">{publishCommands(folder, window.location.origin).join("\n")}</pre>
     </Dialog>;
   }
@@ -69,7 +69,7 @@ export function EjectDialog({ project, onClose, prepare, apply, onEjected }: Pro
   return <Dialog
     open
     title={`Eject ${project.name}?`}
-    description="Edit this project's code outside Littlebox. This cannot be undone."
+    description="Edit this project's code outside Konae. This cannot be undone."
     onClose={close}
     className="eject-dialog"
     footer={<>
@@ -81,7 +81,7 @@ export function EjectDialog({ project, onClose, prepare, apply, onEjected }: Pro
       {ejectEffects.map(([label, text]) => <div key={label}><dt>{label}</dt><dd>{text}</dd></div>)}
     </dl>
     <p>Eject does not cancel hosting, does not export data and does not close your account. Email keeps working while the app is hosted.</p>
-    <p>The editor downloads the code and checks it before the project changes. Afterwards Littlebox refuses edits to this project from every tab and agent, and you publish with the Littlebox CLI. Returning to the managed editor creates a new project, with no automatic merge of production data.</p>
+    <p>The editor downloads the code and checks it before the project changes. Afterwards Konae refuses edits to this project from every tab and agent, and you publish with the Konae CLI. Returning to the managed editor creates a new project, with no automatic merge of production data.</p>
     {error && <p className="eject-error" role="alert">Nothing changed. {error}</p>}
   </Dialog>;
 }
@@ -100,8 +100,8 @@ export function EjectedNotice({ projectId, slug, ejectedAt, sourcesRevision }: {
   const folder = slug || projectId;
   const when = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(ejectedAt);
   return <section className="ejected-notice" role="note" aria-label="This project is External">
-    <p>This project was ejected on {when} at saved revision {sourcesRevision}. Its code is edited outside Littlebox now, so these files are read-only here and the agent makes no changes. The hosted app keeps running.</p>
-    <p>The code went to whoever ejected it, as {folder}-code.tar from this editor or as a folder from <code>bun run littlebox -- eject</code>. To fetch the same code again into an empty folder, run <code>bun run littlebox -- eject --dir {folder} --project {projectId}</code>. Publish from that folder:</p>
+    <p>This project was ejected on {when} at saved revision {sourcesRevision}. Its code is edited outside Konae now, so these files are read-only here and the agent makes no changes. The hosted app keeps running.</p>
+    <p>The code went to whoever ejected it, as {folder}-code.tar from this editor or as a folder from <code>bun run konae -- eject</code>. To fetch the same code again into an empty folder, run <code>bun run konae -- eject --dir {folder} --project {projectId}</code>. Publish from that folder:</p>
     <pre>{publishCommands(folder, window.location.origin).join("\n")}</pre>
   </section>;
 }

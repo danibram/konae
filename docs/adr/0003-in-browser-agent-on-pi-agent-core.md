@@ -30,7 +30,7 @@ Metrics to hold ourselves to: time-to-first-token, model turns per accepted edit
 ## Considered options
 
 - **Single structured-output call (provider SDK):** simplest, but no streaming-of-work UX, no incremental diffs, no growth path past a one-prompt Capsule; the validation loop must be hand-rolled around it anyway.
-- **A larger IDE-style framework around the harness:** more capability than a five-file Capsule editor needs; Littlebox keeps its own thin presentation (chat + preview + diff) and takes only the harness.
+- **A larger IDE-style framework around the harness:** more capability than a five-file Capsule editor needs; Konae keeps its own thin presentation (chat + preview + diff) and takes only the harness.
 - **Hand-rolled loop:** rebuilds streaming, sessions, compaction and abort for no benefit over a 4-dependency MIT package.
 - **In-browser local models (WebLLM/Phi):** rejected as the primary path, because multi-file schema/actions coherence is where small models degrade, and gigabyte downloads contradict a product whose rule is zero marginal weight. Remains a future adapter behind the same model layer.
 

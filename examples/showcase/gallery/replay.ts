@@ -5,9 +5,9 @@
 // artifact, writes the Action Contract and runs conform. Exits 0 when every
 // assertion holds; removes its Kernel and data either way.
 //
-//   LITTLEBOX_SHOWCASE_PORT=19620 bun run examples/showcase/gallery/replay.ts
+//   KONAE_SHOWCASE_PORT=19620 bun run examples/showcase/gallery/replay.ts
 //
-// LITTLEBOX_SHOWCASE_BROWSER=0 skips Chrome. LITTLEBOX_SHOWCASE_SCREENSHOTS=<dir>
+// KONAE_SHOWCASE_BROWSER=0 skips Chrome. KONAE_SHOWCASE_SCREENSHOTS=<dir>
 // writes a light and a dark screenshot of the published home page there.
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -16,7 +16,7 @@ import path from "node:path";
 import { deflateSync } from "node:zlib";
 import { chromium } from "playwright";
 import { McpClient } from "../../../src/mcp/client";
-import { buildLocal } from "../../../scripts/littlebox";
+import { buildLocal } from "../../../scripts/konae";
 import { kernelTarget } from "../../../scripts/conform";
 import { generateActionContract } from "../../../src/lib/action-contract";
 import { formatConformanceReport, runConformance } from "../../../src/lib/action-conformance";
@@ -24,9 +24,9 @@ import { fakeResolver } from "../../probes/_dns";
 
 const here = import.meta.dir;
 const repo = path.resolve(here, "../../..");
-const scratch = await mkdtemp(path.join(tmpdir(), "littlebox-showcase-gallery-"));
-const port = Number(process.env.LITTLEBOX_SHOWCASE_PORT ?? 19620);
-assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Set LITTLEBOX_SHOWCASE_PORT to a free local port.");
+const scratch = await mkdtemp(path.join(tmpdir(), "konae-showcase-gallery-"));
+const port = Number(process.env.KONAE_SHOWCASE_PORT ?? 19620);
+assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Set KONAE_SHOWCASE_PORT to a free local port.");
 const url = `http://127.0.0.1:${port}`;
 const dataDir = path.join(scratch, "data");
 const setupKey = crypto.randomUUID();
@@ -95,28 +95,28 @@ let kernel: ReturnType<typeof Bun.spawn> | undefined;
 try {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
   assert.equal(await build.exited, 0, "The Kernel must compile.");
-  kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/littlebox-kernel")], {
+  kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/konae-kernel")], {
     cwd: repo,
     env: {
-      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))),
-      LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_PUBLIC_ORIGIN: url,
-      LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: dataDir, LITTLEBOX_ADMIN_KEY: setupKey,
-      LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: repo,
-      LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development",
-      LITTLEBOX_DNS_RESOLVER: dns.address,
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
+      KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
+      KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: dataDir, KONAE_ADMIN_KEY: setupKey,
+      KONAE_BUN_PATH: process.execPath, KONAE_SOURCE_ROOT: repo,
+      KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
+      KONAE_DNS_RESOLVER: dns.address,
     },
     stdout: "ignore", stderr: "inherit",
   });
   let ready = false;
   for (let attempt = 0; attempt < 100 && !ready; attempt++) {
     assert.equal(kernel.exitCode, null, "The Kernel stopped before startup. Is the port taken?");
-    try { ready = (await fetch(`${url}/_littlebox/health`)).ok; } catch {}
+    try { ready = (await fetch(`${url}/_konae/health`)).ok; } catch {}
     if (!ready) await Bun.sleep(100);
   }
   assert(ready, "The Kernel did not start.");
 
   // The owner of the installation and of the project.
-  const signup = await fetch(`${url}/_littlebox/owner/signup`, {
+  const signup = await fetch(`${url}/_konae/owner/signup`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "owner@studio.example", password: ownerPassword, setupKey }),
   });
@@ -127,20 +127,20 @@ try {
     return fetch(input, { ...init, headers });
   } });
 
-  // littlebox build publishes every page at the Capsule root with the files they load.
+  // konae build publishes every page at the Capsule root with the files they load.
   const cliCopy = path.join(scratch, "cli-build");
   await cp(here, cliCopy, { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
   const { artifact } = await buildLocal(cliCopy);
   assert.deepEqual(Object.keys(artifact.files).sort(), ["404.html", "about.html", "app.js", "index.html", "runtime.js", "styles.css"]);
   assert(!("schema.sql" in artifact.files) && !("actions.json" in artifact.files));
-  pass("CLI build", `littlebox build writes an artifact with ${Object.keys(artifact.files).sort().join(", ")}: the three pages, the stylesheet and module they load, and the SDK. schema.sql and actions.json stay out.`);
+  pass("CLI build", `konae build writes an artifact with ${Object.keys(artifact.files).sort().join(", ")}: the three pages, the stylesheet and module they load, and the SDK. schema.sql and actions.json stay out.`);
   // A page that names a file the Capsule does not hold stops the build with the path.
   const brokenCopy = path.join(scratch, "cli-broken");
   await cp(cliCopy, brokenCopy, { recursive: true });
   await writeFile(path.join(brokenCopy, "about.html"), (await readFile(path.join(brokenCopy, "about.html"), "utf8")).replace("</main>", '<img src="/portrait.jpg" alt=""></main>'));
   const brokenBuild = await errorText(buildLocal(brokenCopy));
   assert.equal(brokenBuild, "about.html references /portrait.jpg, but the Capsule holds no portrait.jpg.");
-  refused("`littlebox build` with about.html naming a missing /portrait.jpg", brokenBuild);
+  refused("`konae build` with about.html naming a missing /portrait.jpg", brokenBuild);
 
   const source = async (name: string) => readFile(path.join(here, name), "utf8");
   const capsule = {
@@ -179,17 +179,17 @@ try {
     if (cookie) headers.set("cookie", cookie);
     return fetch(input, { ...init, headers });
   };
-  const runtime = (cookie?: string, address = freshAddress()) => new McpClient(`${url}/_littlebox/mcp`, { fetch: appFetch(address, cookie) });
+  const runtime = (cookie?: string, address = freshAddress()) => new McpClient(`${url}/_konae/mcp`, { fetch: appFetch(address, cookie) });
   const post = (route: string, body: object, address = freshAddress()) => appFetch(address)(url + route, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   });
   const get = (route: string, init: RequestInit = {}) => appFetch()(url + route, { redirect: "manual", ...init });
 
   // Closed: a stranger cannot create an account, and neither can the curator yet.
-  const stranger = await post("/_littlebox/auth/signup", { email: "stranger@example.test", password: crypto.randomUUID() });
+  const stranger = await post("/_konae/auth/signup", { email: "stranger@example.test", password: crypto.randomUUID() });
   const strangerBody = await stranger.json();
   assert.equal(stranger.status, 403);
-  refused("A visitor signs up while signup is Closed (POST /_littlebox/auth/signup)", strangerBody.error, 403);
+  refused("A visitor signs up while signup is Closed (POST /_konae/auth/signup)", strangerBody.error, 403);
 
   // The owner invites the curator. Closed refuses self-signup, not the
   // owner's invitation (ADR-0011, note of 2026-11-06 on Closed).
@@ -206,16 +206,16 @@ try {
     if (!invitationToken) await Bun.sleep(100);
   }
   assert(invitationToken, "The invitation never reached mailbox.jsonl.");
-  const curatorSignup = await post("/_littlebox/auth/signup", { email: curatorEmail, password: curatorPassword });
+  const curatorSignup = await post("/_konae/auth/signup", { email: curatorEmail, password: curatorPassword });
   assert.equal(curatorSignup.status, 403, "an invitation is not a signup");
-  const accepted = await post("/_littlebox/auth/accept", { token: invitationToken, password: curatorPassword });
+  const accepted = await post("/_konae/auth/accept", { token: invitationToken, password: curatorPassword });
   assert.equal(accepted.status, 200, await accepted.clone().text());
   const curatorCookie = accepted.headers.get("set-cookie")!.split(";")[0];
   const policyAfter = await owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receipt.id });
   assert.equal(policyAfter.mode, "closed", "the policy never left Closed");
-  const strangerAgain = await post("/_littlebox/auth/signup", { email: "second@example.test", password: crypto.randomUUID() });
+  const strangerAgain = await post("/_konae/auth/signup", { email: "second@example.test", password: crypto.randomUUID() });
   assert.equal(strangerAgain.status, 403);
-  const curatorLogin = await post("/_littlebox/auth/login", { email: curatorEmail, password: curatorPassword });
+  const curatorLogin = await post("/_konae/auth/login", { email: curatorEmail, password: curatorPassword });
   assert.equal(curatorLogin.status, 200);
   const users = await owner.call<{ users: any[] }>("app_users_list", { deploymentId: receipt.id });
   assert.deepEqual(users.users.map((user) => user.email), [curatorEmail]);
@@ -266,10 +266,10 @@ try {
   const draftRead = await errorText(visitor.call("files_read", { fileId: drafts[0].fileId }));
   assert.equal(draftRead, "File not found.");
   refused("A visitor reads a draft over MCP (files_read)", draftRead);
-  const draftHttp = await get(`/_littlebox/files/${drafts[0].fileId}`);
+  const draftHttp = await get(`/_konae/files/${drafts[0].fileId}`);
   assert.equal(draftHttp.status, 404);
-  refused("A visitor reads a draft at GET /_littlebox/files/<id>", (await draftHttp.text()).trim() || "(empty body)", 404);
-  const publicHttp = await get(`/_littlebox/files/${stored[0].fileId}`);
+  refused("A visitor reads a draft at GET /_konae/files/<id>", (await draftHttp.text()).trim() || "(empty body)", 404);
+  const publicHttp = await get(`/_konae/files/${stored[0].fileId}`);
   assert.equal(publicHttp.status, 200);
   assert.equal(publicHttp.headers.get("content-type"), "image/png");
   assert.match(publicHttp.headers.get("content-disposition") ?? "", /^inline/);
@@ -292,7 +292,7 @@ try {
   assert.equal(await errorText(action(curator, "photos.publish", { id: drafts[0].id })), "Only the studio's curator can publish, and only a photograph that is still a draft.");
   assert.equal(await errorText(action(curator, "photos.publish", { id: drafts[0].id, file_id: stored[0].fileId })), "Unexpected action input: file_id");
   assert.equal((await action(visitor, "photos.published")).length, 4);
-  const publishedDraft = await get(`/_littlebox/files/${drafts[0].fileId}`);
+  const publishedDraft = await get(`/_konae/files/${drafts[0].fileId}`);
   assert.equal(publishedDraft.status, 200);
   assert.deepEqual(new Uint8Array(await publishedDraft.arrayBuffer()), images[3]);
   assert.equal((await curator.call<any[]>("files_list")).length, 5);
@@ -309,7 +309,7 @@ try {
   assert.equal((await curator.call<any[]>("files_list")).length, 5);
   const deletedRead = await errorText(curator.call("files_read", { fileId: stray.id }));
   assert.equal(deletedRead, "File not found.");
-  const deletedHttp = await appFetch(freshAddress(), curatorCookie)(`${url}/_littlebox/files/${stray.id}`);
+  const deletedHttp = await appFetch(freshAddress(), curatorCookie)(`${url}/_konae/files/${stray.id}`);
   assert.equal(deletedHttp.status, 404);
   const deletedAgain = await errorText(curator.call("files_delete", { fileId: stray.id }));
   assert.equal(deletedAgain, "File not found.");
@@ -327,7 +327,7 @@ try {
   assert.deepEqual(Object.keys(feedBody), ["result"]);
   assert.equal(feedBody.result.length, 4);
   assert.equal(feedBody.result[0].title, "Fog over the dyke");
-  assert.match(feedBody.result[0].image, /^\/_littlebox\/files\/[^/]+$/);
+  assert.match(feedBody.result[0].image, /^\/_konae\/files\/[^/]+$/);
   assert.equal((await get(feedBody.result[0].image)).status, 200);
   const head = await get("/feed.json", { method: "HEAD" });
   assert.equal(head.status, 405);
@@ -354,7 +354,7 @@ try {
   const message = (n: number) => ({ name: `Reader ${n}`, email: `reader${n}@example.test`, topic: n % 2 ? "print" : "commission", message: `Is print ${n} still available?` });
   let lastResponse: Response | undefined;
   const limitedAddress = freshAddress();
-  const sameAddress = new McpClient(`${url}/_littlebox/mcp`, { fetch: async (input, init) => (lastResponse = await appFetch(limitedAddress)(input, init)) });
+  const sameAddress = new McpClient(`${url}/_konae/mcp`, { fetch: async (input, init) => (lastResponse = await appFetch(limitedAddress)(input, init)) });
   let sent = 0, limitedAt = 0, retryAfter = "";
   for (let n = 1; n <= 40 && !limitedAt; n++) {
     try { assert.equal((await action(sameAddress, "contact.send", message(n))).changes, 1); sent++; }
@@ -423,12 +423,12 @@ try {
   const claim = await owner.call<{ status: string; record: { name: string; value: string } }>("domain_set", { deploymentId: receipt.id, hostname: studioDomain });
   assert.equal(claim.status, "pending");
   assert.equal((await onAlias("/")).status, 404);
-  dns.txt(claim.record.name, ["littlebox-verify-copied-from-another-app"]);
+  dns.txt(claim.record.name, ["konae-verify-copied-from-another-app"]);
   const wrongRecord = await errorText(owner.call("domain_set", { deploymentId: receipt.id, hostname: studioDomain }));
-  assert.equal(wrongRecord, `The TXT record at ${claim.record.name} holds "littlebox-verify-copied-from-another-app", not this Deployment's token. Set it to ${claim.record.value} and call domain_set again.`);
+  assert.equal(wrongRecord, `The TXT record at ${claim.record.name} holds "konae-verify-copied-from-another-app", not this Deployment's token. Set it to ${claim.record.value} and call domain_set again.`);
   refused(`domain_set ${studioDomain} while ${claim.record.name} holds another value`, wrongRecord);
   const underSuffix = await errorText(owner.call("domain_set", { deploymentId: receipt.id, hostname: "gallery.localhost" }));
-  assert.equal(underSuffix, "gallery.localhost is under this installation's app suffix localhost, where Littlebox names apps itself. Name a hostname outside it.");
+  assert.equal(underSuffix, "gallery.localhost is under this installation's app suffix localhost, where Konae names apps itself. Name a hostname outside it.");
   refused("domain_set gallery.localhost", underSuffix);
   dns.txt(claim.record.name, [claim.record.value]);
   const proved = await owner.call<{ status: string; url: string }>("domain_set", { deploymentId: receipt.id, hostname: studioDomain });
@@ -447,24 +447,24 @@ try {
   const aliasImage = await onAlias(aliasFeed.result[0].image);
   assert.equal(aliasImage.status, 200);
   assert.equal(aliasImage.headers.get("content-type"), "image/png");
-  const aliasRuntime = new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+  const aliasRuntime = new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
     const headers = new Headers(init?.headers); headers.set("host", aliasHost); headers.set("origin", aliasOrigin); headers.set("x-forwarded-for", freshAddress());
     return fetch(input, { ...init, headers });
   } });
   const aliasPhotos = await aliasRuntime.call<any[]>("actions_invoke", { name: "photos.published", input: {} });
   assert.equal(aliasPhotos.length, 4);
-  const crossOrigin = await errorText(new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+  const crossOrigin = await errorText(new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
     const headers = new Headers(init?.headers); headers.set("host", aliasHost); headers.set("origin", `http://${host}:${port}`);
     return fetch(input, { ...init, headers });
   } }).call("actions_invoke", { name: "photos.published", input: {} }));
   assert.match(crossOrigin, /Cross-origin or unrecognized-host MCP request rejected/);
   refused(`A page on ${host} calls the runtime on ${studioDomain}`, crossOrigin, 403);
-  pass("Custom domain", `domain_set ${studioDomain} answers pending with ${claim.record.name}; a record holding another value is refused and the alias answers 404; once the fake resolver returns the token the alias serves: / answers 200 with the app policy, /about 200, /missing-page 404 with 404.html, /feed.json the same 4 items, the first image 200 image/png from /_littlebox/files/<id>, and photos.published over the runtime with Origin ${aliasOrigin} returns 4 rows. The generated hostname keeps answering, and a page on it cannot call the runtime on the alias.`);
+  pass("Custom domain", `domain_set ${studioDomain} answers pending with ${claim.record.name}; a record holding another value is refused and the alias answers 404; once the fake resolver returns the token the alias serves: / answers 200 with the app policy, /about 200, /missing-page 404 with 404.html, /feed.json the same 4 items, the first image 200 image/png from /_konae/files/<id>, and photos.published over the runtime with Origin ${aliasOrigin} returns 4 rows. The generated hostname keeps answering, and a page on it cannot call the runtime on the alias.`);
 
   // The published pages in Chrome, under the Kernel's Content Security Policy.
-  if (process.env.LITTLEBOX_SHOWCASE_BROWSER !== "0") {
+  if (process.env.KONAE_SHOWCASE_BROWSER !== "0") {
     const browser = await chromium.launch({ channel: "chrome" });
-    const shots = process.env.LITTLEBOX_SHOWCASE_SCREENSHOTS;
+    const shots = process.env.KONAE_SHOWCASE_SCREENSHOTS;
     if (shots) await mkdir(shots, { recursive: true });
     const open = async (route: string, options: { colorScheme?: "light" | "dark"; cookie?: string } = {}) => {
       const context = await browser.newContext({ colorScheme: options.colorScheme ?? "light", viewport: { width: 1280, height: 900 }, extraHTTPHeaders: { "x-forwarded-for": freshAddress() } });
@@ -519,7 +519,7 @@ try {
         try { await miniapp.files.upload(new Blob([new Uint8Array([1])], { type: "image/png" }), { visibility: "organizers" }); } catch (error) { refusal = (error as Error).message; }
         return { url, status: response.status, type: response.headers.get("content-type"), bytes, published, hidden, refusal, files: (await miniapp.files.list()).length };
       }, drafts[1].fileId);
-      assert.deepEqual(sdk, { url: `/_littlebox/files/${drafts[1].fileId}`, status: 200, type: "image/png", bytes: images[4].byteLength, published: "public", hidden: "private", refusal: "File visibility must be private or public.", files: 5 });
+      assert.deepEqual(sdk, { url: `/_konae/files/${drafts[1].fileId}`, status: 200, type: "image/png", bytes: images[4].byteLength, published: "public", hidden: "private", refusal: "File visibility must be private or public.", files: 5 });
       refused("miniapp.files.upload(file, { visibility: \"organizers\" }) in the page", sdk.refusal);
       await studio.page.waitForTimeout(300);
       assert.deepEqual(studio.violations, [], "Reading a file through files.url broke under the Content Security Policy.");
@@ -533,21 +533,21 @@ try {
       assert.equal(await studio.page.evaluate(async () => (await (window as any).miniapp.files.list()).length), 5, "A refused photograph leaves no file.");
       await studio.page.locator("#drafts .draft").getByRole("button", { name: "Publish" }).click();
       await studio.page.locator("#drafts .draft").filter({ hasText: "Only the studio's curator can publish" }).waitFor({ timeout: 10_000 });
-      assert.equal((await get(`/_littlebox/files/${drafts[1].fileId}`)).status, 404, "A refused publish leaves the draft's file private.");
+      assert.equal((await get(`/_konae/files/${drafts[1].fileId}`)).status, 404, "A refused publish leaves the draft's file private.");
       await owner.call("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: `INSERT INTO studio (user_id) VALUES ('${curatorSession.userId.replaceAll("'", "''")}')` } });
       assert.deepEqual(studio.violations, [], "The refused upload and publish broke under the Content Security Policy.");
       await studio.context.close();
-      pass("Chrome", `The home page in light and dark, about.html with a sent contact form, and the signed-in studio load with no policy violation; with the account out of the studio table, a refused upload deletes its file and a refused publish leaves the draft private; every grid image loads from /_littlebox/files/<id> at 640px. In the studio, fetch(await miniapp.files.url(draft)) answers ${sdk.status} ${sdk.type} with ${sdk.bytes} bytes under connect-src 'self', files.update publishes and hides the draft, and files.upload refuses visibility "organizers" before sending anything.`);
+      pass("Chrome", `The home page in light and dark, about.html with a sent contact form, and the signed-in studio load with no policy violation; with the account out of the studio table, a refused upload deletes its file and a refused publish leaves the draft private; every grid image loads from /_konae/files/<id> at 640px. In the studio, fetch(await miniapp.files.url(draft)) answers ${sdk.status} ${sdk.type} with ${sdk.bytes} bytes under connect-src 'self', files.update publishes and hides the draft, and files.upload refuses visibility "organizers" before sending anything.`);
     } finally { await browser.close(); }
   }
 
   // The Action Contract, written by the CLI, and conform with no credential.
   const contractDir = path.join(scratch, "contract");
-  const cli = (args: string[]) => Bun.spawn(["bun", "run", path.join(repo, "scripts/littlebox.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+  const cli = (args: string[]) => Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
   const written = cli(["contract", "--dir", cliCopy, "--out", contractDir]);
   const [writtenCode, writtenOut, writtenErr] = await Promise.all([written.exited, new Response(written.stdout).text(), new Response(written.stderr).text()]);
   assert.equal(writtenCode, 0, writtenErr);
-  if (process.env.LITTLEBOX_SHOWCASE_CONTRACT_OUT) await writeFile(process.env.LITTLEBOX_SHOWCASE_CONTRACT_OUT, await readFile(path.join(contractDir, "action-contract.md"), "utf8"));
+  if (process.env.KONAE_SHOWCASE_CONTRACT_OUT) await writeFile(process.env.KONAE_SHOWCASE_CONTRACT_OUT, await readFile(path.join(contractDir, "action-contract.md"), "utf8"));
   const inputsFile = path.join(scratch, "conform-inputs.json");
   await writeFile(inputsFile, JSON.stringify({ "contact.send": { topic: "other" } }));
   const conformCli = cli(["conform", "--url", receipt.url, "--contract", path.join(contractDir, "action-contract.json"), "--inputs", inputsFile]);

@@ -6,8 +6,8 @@ const encoder = new TextEncoder();
 
 async function packaged(files: Record<string, string>, contents?: { path: string; size: number; sha256: string }[]) {
   const listed = contents ?? await Promise.all(Object.entries(files).map(async ([path, text]) => ({ path, size: encoder.encode(text).byteLength, sha256: await checksum(encoder.encode(text)) })));
-  const bytes = encoder.encode(JSON.stringify({ format: "littlebox-eject", version: 1, projectId: "app_one", sourcesRevision: 3, contents: listed, directories: ["src"], files }));
-  return { bytes, plan: { projectId: "app_one", expectedRevision: 3, package: { format: "littlebox-eject" as const, size: bytes.byteLength, sha256: await checksum(bytes), contents: listed } } };
+  const bytes = encoder.encode(JSON.stringify({ format: "konae-eject", version: 1, projectId: "app_one", sourcesRevision: 3, contents: listed, directories: ["src"], files }));
+  return { bytes, plan: { projectId: "app_one", expectedRevision: 3, package: { format: "konae-eject" as const, size: bytes.byteLength, sha256: await checksum(bytes), contents: listed } } };
 }
 
 describe("checkEjectPackage", () => {

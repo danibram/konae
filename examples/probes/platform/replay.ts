@@ -5,7 +5,7 @@
 // schedule and domain probes prove them, and this one checks that both doors
 // refuse the forms they do not take and what an unclaimed hostname answers.
 //
-//   LITTLEBOX_PROBE_PORT=23050 bun run examples/probes/platform/replay.ts
+//   KONAE_PROBE_PORT=23050 bun run examples/probes/platform/replay.ts
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -75,7 +75,7 @@ await probe("platform", 23050, async (kit) => {
   assert.notEqual(custom.status, 200);
   console.log(`  Host: notes.example.org answers ${custom.status} ${customBody}`);
   // A proxy that maps the domain and rewrites Host still carries the browser's Origin, which the runtime refuses.
-  const proxied = await fetch(`${url}/_littlebox/mcp`, {
+  const proxied = await fetch(`${url}/_konae/mcp`, {
     method: "POST",
     headers: { host: app.host, origin: "https://notes.example.org", "content-type": "application/json", accept: "application/json, text/event-stream", "x-forwarded-for": kit.address() },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "probe", version: "1" } } }),

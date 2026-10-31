@@ -8,17 +8,17 @@
 import signaturePresets from "../../kernel-rs/src/signature-presets.json";
 import { joinRefusals, refusal, type RefusalError } from "./refusal";
 
-export type SignatureScheme = "littlebox" | "hmac-body" | "timestamped" | "svix";
+export type SignatureScheme = "konae" | "hmac-body" | "timestamped" | "svix";
 
 /**
- * A route's signature. `scheme` is absent for Littlebox's own. `header` is the
+ * A route's signature. `scheme` is absent for Konae's own. `header` is the
  * header the MAC arrives in, `svix-signature` for the svix scheme. `secret`
  * names a value the owner sets with `secret_set`; it is never in actions.json.
  */
 export type RouteSignature = {
   header: string;
   secret: string;
-  scheme?: Exclude<SignatureScheme, "littlebox">;
+  scheme?: Exclude<SignatureScheme, "konae">;
   /** hmac-body: the HMAC's hash. */
   algorithm?: "sha256" | "sha1";
   /** hmac-body: how the MAC is written. */
@@ -31,9 +31,9 @@ export type RouteSignature = {
   window?: number;
 };
 
-const SCHEMES: readonly SignatureScheme[] = ["littlebox", "hmac-body", "timestamped", "svix"];
+const SCHEMES: readonly SignatureScheme[] = ["konae", "hmac-body", "timestamped", "svix"];
 const SCHEME_KEYS: Record<SignatureScheme, readonly string[]> = {
-  littlebox: ["scheme", "header", "secret"],
+  konae: ["scheme", "header", "secret"],
   "hmac-body": ["scheme", "header", "secret", "algorithm", "encoding", "prefix"],
   timestamped: ["scheme", "header", "secret", "prefix", "tag", "window"],
   svix: ["scheme", "secret"],
@@ -91,15 +91,15 @@ export function parseRouteSignature(name: string, method: "GET" | "POST", value:
  * every other wrong key adds its sentence, so one refusal names them all.
  */
 function parseLongForm(name: string, method: "GET" | "POST", record: Record<string, unknown>): RouteSignature {
-  const scheme = record.scheme === undefined ? "littlebox" : SCHEMES.find((candidate) => candidate === record.scheme);
-  if (!scheme) throw refusal("signature.scheme-unknown", `Action ${name} names an unknown signature scheme. Use "littlebox", "hmac-body", "timestamped" or "svix".`);
+  const scheme = record.scheme === undefined ? "konae" : SCHEMES.find((candidate) => candidate === record.scheme);
+  if (!scheme) throw refusal("signature.scheme-unknown", `Action ${name} names an unknown signature scheme. Use "konae", "hmac-body", "timestamped" or "svix".`);
   const problems: RefusalError[] = [];
   const keys = SCHEME_KEYS[scheme];
   if (Object.keys(record).some((key) => !keys.includes(key))) {
     problems.push(refusal("signature.keys-invalid", `Action ${name} has an invalid ${scheme} signature. It takes ${quotedList(keys)}.`));
   }
-  if (method === "GET" && scheme !== "littlebox") {
-    problems.push(refusal("signature.provider-on-get", `Action ${name} binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body.`));
+  if (method === "GET" && scheme !== "konae") {
+    problems.push(refusal("signature.provider-on-get", `Action ${name} binds GET, so its signature must use the konae scheme. A provider's scheme signs a POST body.`));
     throw joinRefusals(problems);
   }
   const header =

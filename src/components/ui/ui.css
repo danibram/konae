@@ -258,3 +258,23 @@
 .ui-tick:focus-visible { outline: 2px solid var(--ds-blue); outline-offset: 2px; }
 .ui-title em { font-style: normal; color: var(--ds-muted); }
 .ui-form > .ui-button { justify-self: start; }
+/* A row of actions that wraps on a narrow screen: a primary action first, then the others. */
+.ui-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 20px; }
+.ui-actions > .ui-button { margin: 0; }
+
+/* A page that stands on its own: a skip link, a top bar with the name and a few links, numbered steps. */
+.ui-skip { position: absolute; left: 12px; top: -60px; z-index: 10; padding: 8px 12px; border: var(--ds-bw) solid var(--ds-stroke); background: var(--ds-surface); color: var(--ds-text); font: 700 12px/1.3 var(--ds-font); text-decoration: none; }
+.ui-skip:focus { top: 12px; }
+.ui-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 20px; width: min(680px, calc(100% - 40px)); margin: 0 auto; padding: 20px 0 0; font-family: var(--ds-font); }
+.ui-bar > a:first-child { color: var(--ds-text); font: 800 18px/1 var(--ds-font); letter-spacing: -.03em; text-decoration: none; }
+.ui-bar nav { display: flex; flex-wrap: wrap; gap: 20px; font: 600 13px/1.3 var(--ds-font); }
+.ui-bar nav a { color: var(--ds-muted); text-decoration: none; }
+.ui-bar nav a:hover { color: var(--ds-text); text-decoration: underline; }
+.ui-steps .ui-list-item { align-items: start; padding-inline: 0; }
+.ui-steps .ui-list-lead { display: grid; place-items: center; width: 28px; height: 28px; border: var(--ds-bw) solid var(--ds-stroke); background: var(--ds-surface); color: var(--ds-text); font: 700 12px/1 var(--ds-mono); }
+/* A wider page for a site that needs room beside its text, such as a home with an illustration. */
+.ui-page.ui-page-wide, .ui-bar.ui-page-wide { width: min(1120px, calc(100% - 40px)); }
+/* A block of code or of a message the reader should see whole, with an optional caption above it. */
+.ui-pre { margin: 0; border: var(--ds-bw) solid var(--ds-line); background: var(--ds-field); color: var(--ds-text); }
+.ui-pre > figcaption { padding: 6px 12px; border-bottom: 1px solid var(--ds-border); background: var(--ds-subtle); color: var(--ds-muted); font: 600 11px/1.4 var(--ds-mono); letter-spacing: .06em; text-transform: var(--ds-label-case); }
+.ui-pre > pre { margin: 0; padding: 12px; overflow-x: auto; font: 400 12.5px/1.6 var(--ds-mono); white-space: pre-wrap; overflow-wrap: anywhere; }

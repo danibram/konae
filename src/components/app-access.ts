@@ -140,7 +140,7 @@ export function invitationResultMessage(result: InvitationResult): { label: stri
 export function mailReadiness(status: MailStatus | null): { ready: boolean; reason: string } {
   if (!status) return { ready: false, reason: "Checking whether this installation can send email." };
   if (status.sending) return { ready: true, reason: "" };
-  if (!status.transport) return { ready: false, reason: "This installation has no mail transport, so it cannot send invitations. The operator sets LITTLEBOX_MAIL_TRANSPORT." };
+  if (!status.transport) return { ready: false, reason: "This installation has no mail transport, so it cannot send invitations. The operator sets KONAE_MAIL_TRANSPORT." };
   if (status.preflight?.state === "checking") return { ready: false, reason: "This installation is still checking its mail sender. Invitations wait until it passes." };
   const why = status.preflight?.reason ? ` ${status.preflight.reason.replace(/\.?$/, ".")}` : "";
   return { ready: false, reason: `This installation cannot send email: the provider refused the sender.${why}` };
@@ -230,7 +230,7 @@ export function googleRefusal(cause: unknown, saving?: GoogleField): { message: 
   return { message: refusal.message, field: refusal.code.startsWith("secret.") ? saving : undefined };
 }
 
-const KEY_PLACEHOLDER = "$LITTLEBOX_API_KEY";
+const KEY_PLACEHOLDER = "$KONAE_API_KEY";
 
 function sample(type: string) {
   return type === "number" ? 1 : type === "boolean" ? true : "text";
@@ -260,7 +260,7 @@ export function routeCurl(appUrl: string, action: RouteAction, key = KEY_PLACEHO
 
 /** A curl command for the file read path. The file ID comes from the app's upload. */
 export function fileCurl(appUrl: string, key = KEY_PLACEHOLDER): string {
-  return `curl -OJ -H "Authorization: Bearer ${key}" "${appUrl.replace(/\/$/, "")}/_littlebox/files/<file id>"`;
+  return `curl -OJ -H "Authorization: Bearer ${key}" "${appUrl.replace(/\/$/, "")}/_konae/files/<file id>"`;
 }
 
 /**

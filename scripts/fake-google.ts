@@ -3,7 +3,7 @@
  * Google" on a development Kernel without a real Google client.
  *
  *   bun run scripts/fake-google.ts            # listens on 127.0.0.1:8799
- *   LITTLEBOX_GOOGLE_TEST_ISSUER=http://127.0.0.1:8799 bun run dev:local
+ *   KONAE_GOOGLE_TEST_ISSUER=http://127.0.0.1:8799 bun run dev:local
  *
  * Then set any client ID and secret for the app in Auth > Users and turn
  * Google on. /authorize shows a form where you pick the Google subject, the
@@ -11,7 +11,7 @@
  * checks that the client sends the secret it used, the redirect URI and
  * PKCE, and answers an ID token signed with the Kernel's RS256 test key.
  * /jwks serves the matching public key. A development build of the Kernel
- * reads LITTLEBOX_GOOGLE_TEST_ISSUER only with a local HTTP public origin; a
+ * reads KONAE_GOOGLE_TEST_ISSUER only with a local HTTP public origin; a
  * release build refuses to start with it set.
  */
 import { createHash, createPrivateKey, randomBytes, sign } from "node:crypto";

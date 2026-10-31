@@ -1,6 +1,6 @@
 # Hosted creator access
 
-This integration is an optional adapter. The [launch plan](plans/platform-launch.md) makes creator accounts a Kernel concern with email, password, verification and operator-issued invitation codes; signing in and running an installation never require this provider. The rest of this document describes the adapter as implemented.
+This integration is an optional adapter. Creator accounts are a Kernel concern with email, password, verification and operator-issued invitation codes, so signing in and running an installation never require this provider. The rest of this document describes the adapter as implemented.
 
 Clerk proves the identity of a hosted creator. The Kernel maps the configured issuer and Clerk subject to an internal owner ID, then issues its own administrative session. The mapping never reads an email address. App users keep their own accounts, passwords and sessions in each deployment.
 
@@ -14,11 +14,11 @@ Set these environment variables on the Kernel process.
 
 | Variable | Value |
 | --- | --- |
-| `LITTLEBOX_CLERK_ISSUER` | Exact HTTPS instance origin, without a trailing slash |
-| `LITTLEBOX_CLERK_JWKS_FILE` | Absolute path to the operator-managed JWKS JSON file |
-| `LITTLEBOX_CLERK_AUTHORIZED_ORIGINS` | JSON array of exact editor origins, such as `["https://editor.example.com"]` |
-| `LITTLEBOX_CLERK_BETA_SUBJECTS` | JSON array of admitted Clerk user IDs, such as `["user_example"]` |
-| `LITTLEBOX_CLERK_PUBLISHABLE_KEY` | Clerk publishable key for the hosted sign-in page |
+| `KONAE_CLERK_ISSUER` | Exact HTTPS instance origin, without a trailing slash |
+| `KONAE_CLERK_JWKS_FILE` | Absolute path to the operator-managed JWKS JSON file |
+| `KONAE_CLERK_AUTHORIZED_ORIGINS` | JSON array of exact editor origins, such as `["https://app.example.com"]` |
+| `KONAE_CLERK_BETA_SUBJECTS` | JSON array of admitted Clerk user IDs, such as `["user_example"]` |
+| `KONAE_CLERK_PUBLISHABLE_KEY` | Clerk publishable key for the hosted sign-in page |
 
 Subject admission is an operator decision. A new person first creates their Clerk account with Google. The Kernel denies the exchange until the operator finds that account in the Clerk dashboard and adds its user subject to the beta list. The person then retries sign-in. This delivery does not send beta invitations or automate their acceptance. The pending screen should explain that access awaits operator approval and show the Clerk subject so the person can identify their request. An empty subject array denies everyone. An absent or invalid required setting produces a configuration error. Any Clerk variable enables hosted mode, so a partial configuration must never fall back to password authentication.
 
@@ -35,8 +35,8 @@ Removing a subject from the beta list or suspending its identity blocks administ
 The operator can suspend a creator on the server using the same Kernel executable and data directory.
 
 ```sh
-LITTLEBOX_DATA_DIR=/data LITTLEBOX_CLERK_ISSUER=https://example.clerk.accounts.dev \
-  littlebox-kernel creator-suspend user_example
+KONAE_DATA_DIR=/data KONAE_CLERK_ISSUER=https://example.clerk.accounts.dev \
+  konae-kernel creator-suspend user_example
 ```
 
 This command locates the owner by issuer and subject, suspends the identity and deletes its Kernel sessions in one transaction. It then deletes the owner's MCP credentials and pending OAuth codes. It does not start a server. If MCP cleanup fails, suspension remains in force because each administrative request checks the identity. There is no command to reverse suspension in this delivery. The operator must investigate the account before changing its stored status.

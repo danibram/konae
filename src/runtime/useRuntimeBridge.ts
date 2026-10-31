@@ -55,7 +55,7 @@ export function useRuntimeBridge(
       };
       activePort.start();
       iframe.contentWindow?.postMessage(
-        { channel: "littlebox-runtime", type: "connect", capability },
+        { channel: "konae-runtime", type: "connect", capability },
         "*",
         [channel.port2],
       );
@@ -71,7 +71,7 @@ export function useRuntimeBridge(
     const greeting = (event: MessageEvent) => {
       if (event.source !== iframe.contentWindow) return;
       const message = event.data as { channel?: string; type?: string } | null;
-      if (!message || message.channel !== "littlebox-runtime" || message.type !== "hello") return;
+      if (!message || message.channel !== "konae-runtime" || message.type !== "hello") return;
       connect();
     };
 

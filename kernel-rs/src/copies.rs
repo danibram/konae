@@ -6,7 +6,7 @@
 //! `manifest.json` that lists every file with its size and SHA-256. The
 //! `restore` subcommand installs one copy into an empty data directory.
 //!
-//! With `LITTLEBOX_COPY_SECRET` set, every file sent to S3 is sealed with
+//! With `KONAE_COPY_SECRET` set, every file sent to S3 is sealed with
 //! AES-256-GCM, as `mail.rs` seals queued links, and `restore` needs the
 //! same secret to open it. Every target also keeps the revocation record of
 //! `recovery.rs`, which `restore` applies before the Kernel serves.
@@ -142,9 +142,9 @@ impl CopyConfig {
         // Refuses a short secret at startup rather than at the first copy.
         CopyKey::from_env()?;
         Self::parse(
-            read("LITTLEBOX_COPY_DIR").as_deref(),
-            read("LITTLEBOX_COPY_S3_PREFIX").as_deref(),
-            read("LITTLEBOX_COPY_INTERVAL_SECONDS").as_deref(),
+            read("KONAE_COPY_DIR").as_deref(),
+            read("KONAE_COPY_S3_PREFIX").as_deref(),
+            read("KONAE_COPY_INTERVAL_SECONDS").as_deref(),
             data_root,
             s3_configured,
         )
@@ -163,18 +163,18 @@ impl CopyConfig {
             let data_root = std::path::absolute(data_root)?;
             ensure!(
                 !directory.starts_with(&data_root) && !data_root.starts_with(&directory),
-                "LITTLEBOX_COPY_DIR must be outside LITTLEBOX_DATA_DIR, on another disk."
+                "KONAE_COPY_DIR must be outside KONAE_DATA_DIR, on another disk."
             );
             targets.push(Target::Directory(directory));
         }
         if let Some(prefix) = s3_prefix {
-            ensure!(s3_configured, "LITTLEBOX_COPY_S3_PREFIX needs LITTLEBOX_S3_ENDPOINT.");
+            ensure!(s3_configured, "KONAE_COPY_S3_PREFIX needs KONAE_S3_ENDPOINT.");
             let prefix = normalize_prefix(prefix);
-            ensure!(!prefix.is_empty(), "LITTLEBOX_COPY_S3_PREFIX must name a prefix, such as copies/.");
+            ensure!(!prefix.is_empty(), "KONAE_COPY_S3_PREFIX must name a prefix, such as copies/.");
             // Publishing deletes stale artifact keys under deployments/<id>/.
             ensure!(
                 !prefix.starts_with("deployments/"),
-                "LITTLEBOX_COPY_S3_PREFIX must not start with deployments/, where artifacts live."
+                "KONAE_COPY_S3_PREFIX must not start with deployments/, where artifacts live."
             );
             targets.push(Target::S3 { prefix });
         }
@@ -187,7 +187,7 @@ impl CopyConfig {
                 .parse::<u64>()
                 .ok()
                 .filter(|seconds| *seconds > 0)
-                .context("LITTLEBOX_COPY_INTERVAL_SECONDS must be a whole number of seconds above zero.")?,
+                .context("KONAE_COPY_INTERVAL_SECONDS must be a whole number of seconds above zero.")?,
             None => DEFAULT_INTERVAL_SECONDS,
         };
         Ok(Some(Self { targets, interval: Duration::from_secs(seconds) }))
@@ -197,7 +197,7 @@ impl CopyConfig {
 // ---------------------------------------------------------------------------
 // Encryption at rest
 
-/// The key that seals copy files on S3. HKDF-SHA256 of `LITTLEBOX_COPY_SECRET`
+/// The key that seals copy files on S3. HKDF-SHA256 of `KONAE_COPY_SECRET`
 /// with a fixed salt and label, as `mail.rs` derives its link key, so the
 /// secret itself never encrypts anything.
 pub(crate) struct CopyKey {
@@ -207,17 +207,17 @@ pub(crate) struct CopyKey {
 
 impl CopyKey {
     pub(crate) fn from_env() -> Result<Option<Self>> {
-        match std::env::var("LITTLEBOX_COPY_SECRET").ok().filter(|value| !value.is_empty()) {
+        match std::env::var("KONAE_COPY_SECRET").ok().filter(|value| !value.is_empty()) {
             None => Ok(None),
             Some(secret) => {
-                ensure!(secret.len() >= 32, "LITTLEBOX_COPY_SECRET must be at least 32 characters.");
+                ensure!(secret.len() >= 32, "KONAE_COPY_SECRET must be at least 32 characters.");
                 Ok(Some(Self::derive(&secret)))
             }
         }
     }
 
     pub(crate) fn derive(secret: &str) -> Self {
-        let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, b"littlebox-copy-v1").extract(secret.as_bytes());
+        let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, b"konae-copy-v1").extract(secret.as_bytes());
         let okm = prk.expand(&[b"copy file"], &AES_256_GCM).expect("HKDF output fits AES-256");
         let key = LessSafeKey::new(UnboundKey::from(okm));
         // A second expansion, so the manifest can tell a wrong secret from a
@@ -281,7 +281,7 @@ struct TargetReport {
     last_error: Option<String>,
 }
 
-/// What `/_littlebox/health` shows about copies. A failed copy never stops
+/// What `/_konae/health` shows about copies. A failed copy never stops
 /// the Kernel from serving; it shows here and in the log.
 #[derive(Default)]
 pub struct CopyStatus {
@@ -814,9 +814,9 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
 // Restore
 
 const RESTORE_USAGE: &str =
-    "Usage: littlebox-kernel restore --from <copy directory | s3://bucket/prefix> [--copy <copy ID>]";
+    "Usage: konae-kernel restore --from <copy directory | s3://bucket/prefix> [--copy <copy ID>]";
 
-/// Handles `littlebox-kernel restore`. Returns false for any other command.
+/// Handles `konae-kernel restore`. Returns false for any other command.
 pub async fn operator_command() -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) != Some("restore") {
@@ -833,7 +833,7 @@ pub async fn operator_command() -> Result<bool> {
         }
     }
     let from = from.context(RESTORE_USAGE)?;
-    let destination = PathBuf::from(std::env::var("LITTLEBOX_DATA_DIR").unwrap_or_else(|_| "/data".into()));
+    let destination = PathBuf::from(std::env::var("KONAE_DATA_DIR").unwrap_or_else(|_| "/data".into()));
     let source = source_for(&from).await?;
     let summary = restore(&source, copy.as_deref(), &destination, CopyKey::from_env()?.as_ref()).await?;
     println!(
@@ -847,14 +847,14 @@ pub async fn operator_command() -> Result<bool> {
     match summary.reconciled {
         Ok(changed) => println!("Applied the revocation record: {changed} rows changed, so no account suspended or API key revoked after this copy is active again."),
         Err(reason) => println!(
-            "The installation starts in maintenance: {reason} Run littlebox-kernel reconcile --from <the same source> once the record is reachable, or littlebox-kernel reconcile --without-record to reopen without it."
+            "The installation starts in maintenance: {reason} Run konae-kernel reconcile --from <the same source> once the record is reachable, or konae-kernel reconcile --without-record to reopen without it."
         ),
     }
     Ok(true)
 }
 
 /// Reads the revocation record next to the copies at `from`, for
-/// `littlebox-kernel reconcile`. `None` when the source keeps no record.
+/// `konae-kernel reconcile`. `None` when the source keeps no record.
 pub(crate) async fn read_record(from: &str) -> Result<Option<Vec<Vec<u8>>>> {
     let source = source_for(from).await?;
     // A directory that is itself one copy keeps the record one level up.
@@ -872,7 +872,7 @@ async fn source_for(from: &str) -> Result<Source> {
             ensure!(!bucket.is_empty(), "{RESTORE_USAGE}");
             let client = s3_client_from_env()
                 .await
-                .context("Set LITTLEBOX_S3_ENDPOINT and its credentials to restore from S3.")?;
+                .context("Set KONAE_S3_ENDPOINT and its credentials to restore from S3.")?;
             Source::S3 { client, bucket: bucket.to_owned(), prefix: normalize_prefix(prefix) }
         }
         None => Source::Directory(PathBuf::from(from)),
@@ -991,11 +991,11 @@ async fn restore(source: &Source, copy: Option<&str>, destination: &Path, key: O
     if let Some(encryption) = &manifest.encryption {
         ensure!(encryption.algorithm == ENCRYPTION, "Copy {copy} uses {}, which this Kernel cannot open.", encryption.algorithm);
         let key = key.with_context(|| {
-            format!("Copy {copy} is encrypted. Set LITTLEBOX_COPY_SECRET to the secret the copies were made with. Nothing was installed.")
+            format!("Copy {copy} is encrypted. Set KONAE_COPY_SECRET to the secret the copies were made with. Nothing was installed.")
         })?;
         ensure!(
             key.check == encryption.key_check,
-            "LITTLEBOX_COPY_SECRET does not open copy {copy}: it is not the secret the copy was encrypted with. Nothing was installed."
+            "KONAE_COPY_SECRET does not open copy {copy}: it is not the secret the copy was encrypted with. Nothing was installed."
         );
     }
     for file in &manifest.files {
@@ -1065,7 +1065,7 @@ fn ensure_empty(destination: &Path) -> Result<()> {
             for entry in entries {
                 if entry?.file_name() != "lost+found" {
                     bail!(
-                        "Restore refuses {}: it is not empty. Point LITTLEBOX_DATA_DIR at an empty directory.",
+                        "Restore refuses {}: it is not empty. Point KONAE_DATA_DIR at an empty directory.",
                         destination.display()
                     );
                 }
@@ -1153,7 +1153,7 @@ mod tests {
 
     #[test]
     fn a_copy_carries_the_custom_domain_with_the_record_and_the_migration_state() {
-        let root = std::env::temp_dir().join(format!("littlebox-copy-domain-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-copy-domain-{}", uuid::Uuid::new_v4()));
         let (source, target) = (root.join("source"), root.join("target"));
         std::fs::create_dir_all(&source).unwrap();
         for name in ["deployment.json", crate::domain::RECORD_FILE, crate::path::RECORD_FILE, "stray.tmp"] {
@@ -1174,7 +1174,7 @@ mod tests {
     use tokio::sync::RwLock;
 
     fn scratch(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("littlebox-{label}-{}", uuid::Uuid::new_v4()))
+        std::env::temp_dir().join(format!("konae-{label}-{}", uuid::Uuid::new_v4()))
     }
 
     fn state(root: &Path) -> AppState {
@@ -1192,7 +1192,6 @@ mod tests {
             public_origin: "http://localhost".into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         }
@@ -1313,15 +1312,15 @@ mod tests {
 
     #[test]
     fn copy_settings_refuse_unsafe_targets() {
-        let data = Path::new("/srv/littlebox/data");
+        let data = Path::new("/srv/konae/data");
         assert!(CopyConfig::parse(None, None, None, data, false).unwrap().is_none());
         let config = CopyConfig::parse(Some("/mnt/second"), Some("/copies"), None, data, true).unwrap().unwrap();
         assert_eq!(config.targets, vec![Target::Directory("/mnt/second".into()), Target::S3 { prefix: "copies/".into() }]);
         assert_eq!(config.interval, Duration::from_secs(3600));
         let refuse = |dir, prefix, interval, s3| CopyConfig::parse(dir, prefix, interval, data, s3).unwrap_err().to_string();
-        assert!(refuse(Some("/srv/littlebox/data/copies"), None, None, false).contains("outside"));
+        assert!(refuse(Some("/srv/konae/data/copies"), None, None, false).contains("outside"));
         assert!(refuse(None, Some("deployments/x"), None, true).contains("must not start with deployments/"));
-        assert!(refuse(None, Some("copies"), None, false).contains("LITTLEBOX_S3_ENDPOINT"));
+        assert!(refuse(None, Some("copies"), None, false).contains("KONAE_S3_ENDPOINT"));
         assert!(refuse(Some("/mnt/second"), None, Some("0"), false).contains("above zero"));
     }
 
@@ -1447,7 +1446,7 @@ mod tests {
         }
     }
 
-    /// The files an S3 copy holds when LITTLEBOX_COPY_SECRET is set: each
+    /// The files an S3 copy holds when KONAE_COPY_SECRET is set: each
     /// sealed with the copy ID and path, and a manifest naming the cipher.
     fn seal_copy(plain: &Path, sealed: &Path, id: &str, key: &CopyKey) {
         let manifest: Manifest = serde_json::from_slice(&std::fs::read(plain.join(id).join(MANIFEST)).unwrap()).unwrap();
@@ -1473,7 +1472,7 @@ mod tests {
 
         let refused_root = scratch("sealed-refused");
         let without = restore(&Source::Directory(sealed.clone()), None, &refused_root, None).await.err().unwrap().to_string();
-        assert!(without.contains("is encrypted") && without.contains("LITTLEBOX_COPY_SECRET"), "{without}");
+        assert!(without.contains("is encrypted") && without.contains("KONAE_COPY_SECRET"), "{without}");
         let wrong = CopyKey::derive("another secret that is long enough for tests");
         let refused = restore(&Source::Directory(sealed.clone()), None, &refused_root, Some(&wrong)).await.err().unwrap().to_string();
         assert!(refused.contains("does not open"), "{refused}");
@@ -1552,8 +1551,8 @@ mod tests {
         mail.execute_batch(
             "INSERT INTO jobs (id, purpose, recipient, scope, app_name, token_hash, link_nonce, link_sealed, link_expires_at,
                state, next_attempt_at, created_at, updated_at)
-             VALUES ('pending-job', 'recovery', 'p@copy.test', 'creator', 'Littlebox', 'h', x'00', x'00', 9999999999, 'pending', 0, 0, 0),
-                    ('sent-job', 'recovery', 'p@copy.test', 'creator', 'Littlebox', 'h', NULL, NULL, 9999999999, 'delivered', 0, 0, 0);",
+             VALUES ('pending-job', 'recovery', 'p@copy.test', 'creator', 'Konae', 'h', x'00', x'00', 9999999999, 'pending', 0, 0, 0),
+                    ('sent-job', 'recovery', 'p@copy.test', 'creator', 'Konae', 'h', NULL, NULL, 9999999999, 'delivered', 0, 0, 0);",
         )
         .unwrap();
         drop(mail);

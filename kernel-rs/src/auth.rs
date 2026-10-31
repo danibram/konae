@@ -59,14 +59,14 @@ pub enum Verification {
 }
 
 impl Verification {
-    /// Reads `LITTLEBOX_ACCOUNT_VERIFICATION`: `required`, or `local` and unset
+    /// Reads `KONAE_ACCOUNT_VERIFICATION`: `required`, or `local` and unset
     /// for local development.
     pub fn from_env() -> Result<Self, String> {
-        match std::env::var("LITTLEBOX_ACCOUNT_VERIFICATION").as_deref() {
+        match std::env::var("KONAE_ACCOUNT_VERIFICATION").as_deref() {
             Err(_) | Ok("") | Ok("local") => Ok(Self::Local),
             Ok("required") => Ok(Self::Required),
             Ok(other) => Err(format!(
-                "LITTLEBOX_ACCOUNT_VERIFICATION={other} is not valid. Use required or local."
+                "KONAE_ACCOUNT_VERIFICATION={other} is not valid. Use required or local."
             )),
         }
     }
@@ -1335,7 +1335,7 @@ mod tests {
     impl TempDb {
         fn new() -> Self {
             let path =
-                std::env::temp_dir().join(format!("littlebox-auth-{}.sqlite", Uuid::new_v4()));
+                std::env::temp_dir().join(format!("konae-auth-{}.sqlite", Uuid::new_v4()));
             Self(path)
         }
         fn service(&self) -> AuthService {

@@ -30,7 +30,7 @@ function firstWordRefusal(name: string, kind: "query" | "mutation", word: string
     ? kind === "query"
       ? " Move the WITH clause into a subquery, as in SELECT ... FROM (WITH ... SELECT ...)."
       : " Put the WITH clause after INSERT INTO <table> (<columns>), or inside a subquery."
-    : STRUCTURE_WORDS.has(word) ? " Tables and indexes belong in schema.sql, and Littlebox runs no triggers or views." : "";
+    : STRUCTURE_WORDS.has(word) ? " Tables and indexes belong in schema.sql, and Konae runs no triggers or views." : "";
   return rule + hint;
 }
 

@@ -18,7 +18,7 @@ export function WorkspaceNav({ active, projectCount, ownerSession }: Props) {
 
   return (
     <aside className="account-sidebar">
-      <div className="account-brand"><span><Box size={17} /></span><strong>littlebox</strong></div>
+      <div className="account-brand"><span><Box size={17} /></span><strong>konae</strong></div>
       <nav>
         <a href="/" className={active === "projects" ? "active" : undefined} aria-current={active === "projects" ? "page" : undefined}>
           <LayoutGrid size={16} /> Projects {projectCount !== undefined && <span>{projectCount}</span>}

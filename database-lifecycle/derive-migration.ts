@@ -25,7 +25,7 @@ import { assertConstrainedModel, repoRoot } from "./model-guard";
 import { assertPlannableChange } from "./plannable-change";
 
 /** Framing token: the model may print anything, so the reply is what follows the last one. */
-export const replyMarker = "<<littlebox-schema-reply>>";
+export const replyMarker = "<<konae-schema-reply>>";
 
 export type DeriveRequest = { acceptedSource: string; candidateSource: string };
 export type DeriveReply = { ok: true; statements: string[] } | { ok: false; error: string };
@@ -62,7 +62,7 @@ export async function snapshotFromSource(source: string, label: string): Promise
   // A data: URL would be tidier, but Bun rejects one this large as a path name.
   // The file lives in this process's own temp directory and is removed after the
   // import, whatever the model does.
-  const file = path.join(os.tmpdir(), `littlebox-model-${randomUUID()}.mjs`);
+  const file = path.join(os.tmpdir(), `konae-model-${randomUUID()}.mjs`);
   await writeFile(file, code, "utf8");
   try {
     const model = await import(`file://${file}`) as Record<string, unknown>;

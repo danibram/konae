@@ -4,7 +4,7 @@ import type {
   AgentKeyStore,
   AgentProposal,
   AgentSessionConfig,
-  LittleboxAgent,
+  KonaeAgent,
   ProviderConfig,
 } from "../agent/contracts";
 import {
@@ -20,8 +20,8 @@ import {
 } from "./agent-thread-state";
 
 export type AgentThreadInput = {
-  ensureAgent: () => Promise<LittleboxAgent | null>;
-  agent: LittleboxAgent | null;
+  ensureAgent: () => Promise<KonaeAgent | null>;
+  agent: KonaeAgent | null;
   sessionConfig: AgentSessionConfig;
   keyStore: AgentKeyStore;
   threadResetToken: number;
@@ -82,7 +82,7 @@ export function useAgentThread({
   const [draft, setDraft] = useState("");
   const [demoPending, setDemoPending] = useState(false);
   // Subscription is keyed by instance so a send can attach before it runs.
-  const subscription = useRef<{ agent: LittleboxAgent; off: () => void } | null>(null);
+  const subscription = useRef<{ agent: KonaeAgent; off: () => void } | null>(null);
 
   const provider = resolveProvider(providers, sessionConfig.provider);
   const hasKey = useMemo(() => Boolean(keyStore.getKey(provider.id)), [keyStore, provider.id, keyVersion]);
@@ -91,7 +91,7 @@ export function useAgentThread({
   const footer = proposalFooter(state);
   const running = state.busy;
 
-  function attach(next: LittleboxAgent) {
+  function attach(next: KonaeAgent) {
     if (subscription.current?.agent === next) return;
     subscription.current?.off();
     subscription.current = {
@@ -214,6 +214,6 @@ export function useAgentThread({
   };
 }
 
-function readSnapshot(agent: LittleboxAgent): AgentThreadSnapshot {
+function readSnapshot(agent: KonaeAgent): AgentThreadSnapshot {
   return { proposal: agent.proposal(), gate: agent.applyGateStatus() };
 }

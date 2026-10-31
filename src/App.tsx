@@ -32,7 +32,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEven
 import { PROVIDERS, defaultSessionConfig } from "./agent/catalog";
 import { mergeProposal } from "./agent/apply";
 import type { AgentProposal, AgentSessionConfig } from "./agent/contracts";
-import type { LittleboxAgentHandle, PlatformConfirmation, PublishOutcome } from "./agent/harness";
+import type { KonaeAgentHandle, PlatformConfirmation, PublishOutcome } from "./agent/harness";
 import { createAgentKeyStore } from "./agent/key-store";
 import { Button, Dialog, LoadingBlock } from "./components/ui";
 import { AgentPanel } from "./components/AgentPanel";
@@ -152,8 +152,8 @@ function CardForPlatformError({ message, onRetry }: { message: string; onRetry: 
 
 function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { ownerSession: Extract<OwnerSession, { state: "signed-in" }>; refreshOwnerSession: () => void; sources: ManagedSources; loaded: { projects: MiniAppProject[]; external: ProjectMetadata[]; missing: ProjectMetadata[]; deployments: Record<string, DeploymentReceipt>; ejected: Record<string, EjectRecord> } }) {
   const workspaceStorage = useMemo(() => ({
-    getItem: (key: string) => localStorage.getItem(`littlebox:owner:${encodeURIComponent(ownerSession.ownerId)}:${key}`),
-    setItem: (key: string, value: string) => localStorage.setItem(`littlebox:owner:${encodeURIComponent(ownerSession.ownerId)}:${key}`, value),
+    getItem: (key: string) => localStorage.getItem(`konae:owner:${encodeURIComponent(ownerSession.ownerId)}:${key}`),
+    setItem: (key: string, value: string) => localStorage.setItem(`konae:owner:${encodeURIComponent(ownerSession.ownerId)}:${key}`, value),
   }), [ownerSession.ownerId]);
   const [initialWorkspace] = useState(() => {
     const cached = loadWorkspaceState(workspaceStorage);
@@ -222,13 +222,13 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const resolveAgentPublish = useRef<((outcome: PublishOutcome) => void) | null>(null);
   const deploymentsRef = useRef(deployments);
   deploymentsRef.current = deployments;
-  const [agent, setAgent] = useState<LittleboxAgentHandle | null>(null);
+  const [agent, setAgent] = useState<KonaeAgentHandle | null>(null);
   const [agentSession, setAgentSession] = useState<AgentSessionConfig>(defaultSessionConfig);
   const [threadResetToken, setThreadResetToken] = useState(0);
   const [keyVersion, setKeyVersion] = useState(0);
   const codeTabEscape = useRef(false);
-  const agentRef = useRef<LittleboxAgentHandle | null>(null);
-  const agentLoad = useRef<Promise<LittleboxAgentHandle | null> | null>(null);
+  const agentRef = useRef<KonaeAgentHandle | null>(null);
+  const agentLoad = useRef<Promise<KonaeAgentHandle | null> | null>(null);
   const projectRef = useRef(project);
   const demoProject = useRef<MiniAppProject | null>(null);
   const projectMenu = useRef<HTMLDetailsElement>(null);
@@ -600,11 +600,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
    * on the first prompt, never at editor start.
    */
   const ensureAgent = () => {
-    if (agentRef.current) return Promise.resolve<LittleboxAgentHandle | null>(agentRef.current);
+    if (agentRef.current) return Promise.resolve<KonaeAgentHandle | null>(agentRef.current);
     if (!agentLoad.current) {
       agentLoad.current = import("./agent/harness")
-        .then(({ createLittleboxAgent }) => {
-          const handle = createLittleboxAgent(projectRef.current, agentSession, keyStore, {
+        .then(({ createKonaeAgent }) => {
+          const handle = createKonaeAgent(projectRef.current, agentSession, keyStore, {
             // The Validation Gate's migration stage needs the live database, not just a fresh one.
             liveDatabase: () => hostRef.current.exportDatabase(),
             // The other half of the gate: what the running preview actually threw.
@@ -1261,9 +1261,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   return (
     <div className={`workshop ${compact ? "is-compact" : ""} ${isVisible(displayedLayout, "code") ? "is-code-open" : ""} ${operationError || agentThread.footer.kind === "blocked" || (agentThread.footer.kind === "validated" && agentThread.footer.owner) ? "has-error" : ""}`}>
       <header className="topbar">
-        <button className="brand" aria-label="Littlebox home" onClick={() => goToProjects()}>
+        <button className="brand" aria-label="Konae home" onClick={() => goToProjects()}>
           <span className="brand-mark"><Box size={17} strokeWidth={2.4} /></span>
-          <span>littlebox</span>
+          <span>konae</span>
         </button>
 
         <details className="project-switcher" ref={switcherRef} onToggle={(event) => { if (event.currentTarget.open) projectMenu.current?.removeAttribute("open"); }}>
@@ -1291,7 +1291,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           {saveError && <Button onClick={retrySave} disabled={pendingSaves.current > 0}>Retry save</Button>}
           <div className="take-actions" role="group" aria-label="Take it with you">
             <Button className="export-button" aria-label={exporting ? "Exporting" : "Export"} disabled={exporting} onClick={() => void exportProject()}><Download size={14} /> <span>{exporting ? "Exporting…" : "Export"}</span></Button>
-            <Button variant="primary" className="deploy-button" aria-label="Deploy" disabled={Boolean(ejectRecord)} title={ejectRecord ? "Publish this External project with the Littlebox CLI." : undefined} onClick={() => { setDeployment(null); setDeployError(""); setDeployOpen(true); refreshOwnerSession(); }}><Rocket size={15} /> <span>Deploy</span></Button>
+            <Button variant="primary" className="deploy-button" aria-label="Deploy" disabled={Boolean(ejectRecord)} title={ejectRecord ? "Publish this External project with the Konae CLI." : undefined} onClick={() => { setDeployment(null); setDeployError(""); setDeployOpen(true); refreshOwnerSession(); }}><Rocket size={15} /> <span>Deploy</span></Button>
           </div>
           <details className="mobile-project-actions" ref={projectMenu} onToggle={(event) => { if (event.currentTarget.open) switcherRef.current?.removeAttribute("open"); }}>
             <summary>More</summary>

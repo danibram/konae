@@ -7,7 +7,7 @@
  * answered.
  *
  * The policy is to refuse. The two readings differ in what happens to the owner's
- * rows, and Littlebox does not guess about the owner's data.
+ * rows, and Konae does not guess about the owner's data.
  */
 
 type Snapshot = {
@@ -39,6 +39,6 @@ function isAmbiguous(before: string[], after: string[]): boolean {
 
 function ambiguity(what: string): Error {
   return new Error(
-    `This change removes ${what} and adds another in the same step, so Littlebox cannot tell a rename from a replacement — and the two do different things to existing rows. Apply the addition and the removal as separate changes.`,
+    `This change removes ${what} and adds another in the same step, so Konae cannot tell a rename from a replacement — and the two do different things to existing rows. Apply the addition and the removal as separate changes.`,
   );
 }

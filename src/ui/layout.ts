@@ -502,7 +502,7 @@ function readHome(raw: unknown): Home | null {
   };
 }
 
-const storageKey = "littlebox:layout-v2";
+const storageKey = "konae:layout-v2";
 
 export function loadLayout(storage: Pick<Storage, "getItem"> = localStorage): LayoutState {
   try {

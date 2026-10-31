@@ -12,30 +12,30 @@ let reader: McpClient;
 let publisher: McpClient;
 const projectId = "security_mcp_primary";
 const otherProjectId = "security_mcp_other";
-const port = Number(process.env.LITTLEBOX_SECURITY_MCP_PORT ?? 19600);
+const port = Number(process.env.KONAE_SECURITY_MCP_PORT ?? 19600);
 const origin = `http://127.0.0.1:${port}`;
 const setupKey = crypto.randomUUID();
 
 beforeAll(async () => {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
   expect(await build.exited).toBe(0);
-  root = await mkdtemp(path.join(tmpdir(), "littlebox-security-mcp-"));
-  kernel = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
+  root = await mkdtemp(path.join(tmpdir(), "konae-security-mcp-"));
+  kernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
     env: {
-      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_"))),
-      LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_PUBLIC_ORIGIN: origin,
-      LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: root, LITTLEBOX_ADMIN_KEY: setupKey,
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))),
+      KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: origin,
+      KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: root, KONAE_ADMIN_KEY: setupKey,
     }, stdout: "ignore", stderr: "inherit",
   });
   let ready = false;
   for (let attempt = 0; attempt < 100; attempt++) {
     if (kernel.exitCode !== null) throw Error("Security test Kernel stopped.");
-    try { ready = (await fetch(`${origin}/_littlebox/health`)).ok; } catch {}
+    try { ready = (await fetch(`${origin}/_konae/health`)).ok; } catch {}
     if (ready) break;
     await Bun.sleep(100);
   }
   expect(ready).toBe(true);
-  const response = await fetch(`${origin}/_littlebox/owner/signup`, {
+  const response = await fetch(`${origin}/_konae/owner/signup`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "owner@security.test", password: setupKey, setupKey }),
   });

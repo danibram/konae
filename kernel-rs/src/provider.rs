@@ -1,12 +1,12 @@
 //! Webhooks from outside services: the signature schemes a route may declare
-//! besides Littlebox's own, and the `fields` map that reads a provider's
+//! besides Konae's own, and the `fields` map that reads a provider's
 //! nested payload into the action's inputs (ADR-0018).
 //!
 //! A route's `signature` names a `scheme`:
 //!
 //! | Scheme        | Header the sender sets                  | MAC                                   | Replay refused by          |
 //! | ------------- | --------------------------------------- | ------------------------------------- | -------------------------- |
-//! | `littlebox`   | `header`: `t=..,n=..,v1=..`             | http.rs, over t, nonce, route, body   | the MAC, for 600 s         |
+//! | `konae`   | `header`: `t=..,n=..,v1=..`             | http.rs, over t, nonce, route, body   | the MAC, for 600 s         |
 //! | `hmac-body`   | `header`: `[prefix]<hex or base64>`     | HMAC-SHA256 or SHA-1 of the raw body  | the MAC, for 72 hours      |
 //! | `timestamped` | `header`: `<prefix><t>,<tag><hex>`      | HMAC-SHA256 of `<t>.<body>`           | `t` outside `window`, then the MAC until `t` leaves it |
 //! | `svix`        | `svix-id`, `svix-timestamp`, `svix-signature` | HMAC-SHA256 of `<id>.<t>.<body>` with the `whsec_` key | `t` outside 300 s, then the id for 72 hours |
@@ -53,7 +53,7 @@ pub(super) enum Encoding {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Scheme {
-    Littlebox,
+    Konae,
     HmacBody { algorithm: Algorithm, encoding: Encoding, prefix: Option<String> },
     Timestamped { prefix: String, tag: String, window: u64 },
     Svix,
@@ -65,7 +65,7 @@ pub(super) enum Scheme {
 /// The keys each scheme takes, in the order its refusal lists them.
 fn scheme_keys(scheme: &str) -> &'static [&'static str] {
     match scheme {
-        "littlebox" => &["scheme", "header", "secret"],
+        "konae" => &["scheme", "header", "secret"],
         "hmac-body" => &["scheme", "header", "secret", "algorithm", "encoding", "prefix"],
         "timestamped" => &["scheme", "header", "secret", "prefix", "tag", "window"],
         _ => &["scheme", "secret"],
@@ -160,11 +160,11 @@ pub(super) fn signature(name: &str, method: &str, value: &Value) -> Result<(Stri
 /// every other wrong key adds its sentence, so one refusal names them all.
 fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) -> Result<(String, String, Scheme), Refusal> {
     let scheme = match record.get("scheme") {
-        None => "littlebox",
-        Some(Value::String(scheme)) if ["littlebox", "hmac-body", "timestamped", "svix"].contains(&scheme.as_str()) => scheme.as_str(),
+        None => "konae",
+        Some(Value::String(scheme)) if ["konae", "hmac-body", "timestamped", "svix"].contains(&scheme.as_str()) => scheme.as_str(),
         Some(_) => {
             return Err(refuse("signature.scheme-unknown", format!(
-                r#"Action {name} names an unknown signature scheme. Use "littlebox", "hmac-body", "timestamped" or "svix"."#
+                r#"Action {name} names an unknown signature scheme. Use "konae", "hmac-body", "timestamped" or "svix"."#
             )));
         }
     };
@@ -174,9 +174,9 @@ fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) 
         let takes = quoted_list(keys);
         problems.push(refuse("signature.keys-invalid", format!("Action {name} has an invalid {scheme} signature. It takes {takes}.")));
     }
-    if method == "GET" && scheme != "littlebox" {
+    if method == "GET" && scheme != "konae" {
         problems.push(refuse("signature.provider-on-get", format!(
-            "Action {name} binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body."
+            "Action {name} binds GET, so its signature must use the konae scheme. A provider's scheme signs a POST body."
         )));
         return Err(Refusal::join(problems));
     }
@@ -255,7 +255,7 @@ fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) 
             }
         }
         "svix" => Some(Scheme::Svix),
-        _ => Some(Scheme::Littlebox),
+        _ => Some(Scheme::Konae),
     };
     match (header, secret, parsed) {
         (Some(header), Some(secret), Some(parsed)) if problems.is_empty() => Ok((header.to_owned(), secret.to_owned(), parsed)),
@@ -384,7 +384,7 @@ fn first_match(key: &hmac::Key, message: &[u8], tags: &[Vec<u8>]) -> Option<Stri
 /// header by its lowercase name. `now` is in Unix seconds.
 pub(super) fn verify(scheme: &Scheme, signature_header: &str, secret: &str, header: &dyn Fn(&str) -> Option<String>, body: &[u8], now: u64) -> Delivery {
     match scheme {
-        Scheme::Littlebox => Delivery::Invalid,
+        Scheme::Konae => Delivery::Invalid,
         Scheme::HmacBody { algorithm, encoding, prefix } => {
             let Some(value) = header(&signature_header.to_ascii_lowercase()) else { return Delivery::Invalid };
             let encoded = match prefix {

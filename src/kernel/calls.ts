@@ -11,7 +11,7 @@ import { refusal } from "./refusal";
 
 /** How a call proves itself to the app it calls. */
 export type CallAuth =
-  /** Signs with Littlebox's route scheme in `header`, with the secret's value. */
+  /** Signs with Konae's route scheme in `header`, with the secret's value. */
   | { secret: string; header: string }
   /** Sends the secret's value, an API key, as `Authorization: Bearer`. */
   | { key: string };
@@ -43,7 +43,7 @@ const MAX_HEADERS = 8;
 const MAX_POINTER_CHARS = 200;
 const MAX_CONSTANT_CHARS = 1000;
 const MAX_THEN_INPUTS = 100;
-const RESERVED_SEGMENTS = new Set(["_littlebox", "oauth", ".well-known", "mcp"]);
+const RESERVED_SEGMENTS = new Set(["_konae", "oauth", ".well-known", "mcp"]);
 const ANSWER_ROOTS = new Set(["ok", "status", "error", "body", "input"]);
 const LOCAL_NAMES = new Set(["localhost", "metadata", "instance-data"]);
 const SECRET_NAME = /^[a-z][a-z0-9_]{0,63}$/;
@@ -51,7 +51,7 @@ const SIGNATURE_HEADER = /^[A-Za-z0-9-]{1,64}$/;
 const UNSIGNABLE_HEADERS = new Set(["authorization", "cookie", "host", "content-type", "content-length"]);
 const ALLOWED_CALL_HEADER = "Idempotency-Key";
 const IPV4 = /^\d+\.\d+\.\d+\.\d+$/;
-export const DEFAULT_SIGNATURE_HEADER = "X-Littlebox-Signature";
+export const DEFAULT_SIGNATURE_HEADER = "X-Konae-Signature";
 
 type Kind = "query" | "mutation" | "signal" | "call";
 type Binding = { source: string; key?: string; nullable?: boolean };
@@ -109,7 +109,7 @@ function staticUrl(name: string, value: unknown): string {
     throw refusal("call.host-local", `Action ${name} calls ${host}, which names this machine or a cloud metadata service.`);
   }
   if (RESERVED_SEGMENTS.has((url.pathname.split("/")[1] ?? "").toLowerCase())) {
-    throw refusal("call.path-reserved", `Action ${name} calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel.`);
+    throw refusal("call.path-reserved", `Action ${name} calls a path under /_konae, /oauth, /.well-known or /mcp, which belong to the Kernel.`);
   }
   return value;
 }

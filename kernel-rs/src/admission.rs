@@ -12,7 +12,7 @@
 //! it keeps creating local accounts, because local development and the
 //! browser tests sign up a fresh owner per run. The Kernel refuses to listen
 //! off loopback with that key unless the operator sets
-//! `LITTLEBOX_ALLOW_DEFAULT_KEY=1`.
+//! `KONAE_ALLOW_DEFAULT_KEY=1`.
 
 use super::*;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -235,10 +235,10 @@ pub(crate) fn return_to(body: &Value) -> Option<String> {
 pub(crate) fn login_page(origin: &str, return_to: Option<&str>) -> String {
     match return_to {
         Some(target) => format!(
-            "{origin}/_littlebox/owner/login?{}",
+            "{origin}/_konae/owner/login?{}",
             url::form_urlencoded::Serializer::new(String::new()).append_pair("returnTo", target).finish()
         ),
-        None => format!("{origin}/_littlebox/owner/login"),
+        None => format!("{origin}/_konae/owner/login"),
     }
 }
 
@@ -257,19 +257,19 @@ struct CodeRow {
 }
 
 /// Runs `creator-code-create`, `creator-code-list` or `creator-code-revoke`
-/// against `LITTLEBOX_DATA_DIR`. Returns false when the arguments name
+/// against `KONAE_DATA_DIR`. Returns false when the arguments name
 /// another command.
 pub fn operator_command() -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if !args.first().is_some_and(|name| name.starts_with("creator-code-")) {
         return Ok(false);
     }
-    let root = PathBuf::from(env("LITTLEBOX_DATA_DIR", "/data"));
+    let root = PathBuf::from(env("KONAE_DATA_DIR", "/data"));
     println!("{}", run(&root, &args, now_seconds())?);
     Ok(true)
 }
 
-const USAGE: &str = "Usage: littlebox-kernel creator-code-create [--expires-in 14d] [--note TEXT] | creator-code-list | creator-code-revoke <id>";
+const USAGE: &str = "Usage: konae-kernel creator-code-create [--expires-in 14d] [--note TEXT] | creator-code-list | creator-code-revoke <id>";
 
 fn run(root: &Path, args: &[String], now: i64) -> Result<String> {
     match args.first().map(String::as_str) {
@@ -332,7 +332,7 @@ fn run(root: &Path, args: &[String], now: i64) -> Result<String> {
 fn open_store(root: &Path) -> Result<Connection> {
     std::fs::create_dir_all(root)?;
     // Installs the schema without applying a verification mode, so a shell
-    // without the Kernel's LITTLEBOX_ACCOUNT_VERIFICATION changes nothing.
+    // without the Kernel's KONAE_ACCOUNT_VERIFICATION changes nothing.
     AuthService::open(owners_path(root))?;
     let connection = Connection::open(owners_path(root))?;
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -468,7 +468,7 @@ mod tests {
     }
 
     fn fixture(verification: Verification, key: &str) -> Fixture {
-        let root = std::env::temp_dir().join(format!("littlebox-admission-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-admission-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let mailbox = Arc::new(MemoryMailbox::default());
         let state = AppState {
@@ -490,7 +490,6 @@ mod tests {
             public_origin: "http://localhost".into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };
@@ -512,7 +511,7 @@ mod tests {
         async fn signup(&self, body: Value) -> Response {
             let request = Request::builder()
                 .method("POST")
-                .uri("/_littlebox/owner/signup")
+                .uri("/_konae/owner/signup")
                 .header(header::HOST, "localhost")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body.to_string()))
@@ -613,7 +612,7 @@ mod tests {
     fn operator_commands_leave_the_kernels_verification_mode_alone() {
         let fixture = fixture(Verification::Required, KEY);
         accounts::creator_store(&fixture.state).unwrap();
-        // The operator's shell does not set LITTLEBOX_ACCOUNT_VERIFICATION.
+        // The operator's shell does not set KONAE_ACCOUNT_VERIFICATION.
         fixture.cli(&["creator-code-create"]).unwrap();
         fixture.cli(&["creator-code-list"]).unwrap();
         let recorded: String = Connection::open(owners_path(&fixture.root))
@@ -696,7 +695,7 @@ mod tests {
         let signup = fixture.signup(json!({"email": "ada@example.test", "code": code.to_lowercase()})).await;
         assert_eq!(signup.status(), StatusCode::ACCEPTED);
         let link = fixture.last_link();
-        assert!(link.starts_with("http://localhost/_littlebox/owner/login#verification="), "{link}");
+        assert!(link.starts_with("http://localhost/_konae/owner/login#verification="), "{link}");
         let listed = fixture.cli(&["creator-code-list"]).unwrap();
         assert!(listed.contains(&format!("{id}\tused\t")), "{listed}");
         assert!(listed.contains("ada@example.test (pending)"), "{listed}");
@@ -786,7 +785,7 @@ mod tests {
         fixture.signup(json!({"email": "ada@example.test", "code": code, "returnTo": consent})).await;
         let link = fixture.last_link();
         let parsed = url::Url::parse(&link).unwrap();
-        assert_eq!(parsed.path(), "/_littlebox/owner/login");
+        assert_eq!(parsed.path(), "/_konae/owner/login");
         let back: Vec<(String, String)> = parsed.query_pairs().into_owned().collect();
         assert_eq!(back, vec![("returnTo".to_owned(), consent.to_owned())]);
         assert!(parsed.fragment().unwrap().starts_with("verification="));
@@ -804,6 +803,6 @@ mod tests {
             assert_eq!(return_to(&json!({"returnTo": foreign})), None, "{foreign}");
         }
         assert_eq!(return_to(&json!({"returnTo": format!("/oauth/authorize?{}", "a".repeat(MAX_RETURN_BYTES))})), None);
-        assert_eq!(login_page("http://localhost", None), "http://localhost/_littlebox/owner/login");
+        assert_eq!(login_page("http://localhost", None), "http://localhost/_konae/owner/login");
     }
 }

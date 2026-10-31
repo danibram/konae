@@ -181,7 +181,7 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let directory = std::env::temp_dir().join(format!("littlebox-app-db-{name}-{}", uuid::Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!("konae-app-db-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         directory.join("database.sqlite")
     }

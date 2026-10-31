@@ -13,7 +13,7 @@ import type {
   CapsuleMutation,
   CapsuleValidator,
   CapsuleWorkspace,
-  LittleboxAgent,
+  KonaeAgent,
   LiveDatabase,
   LiveDatabaseExport,
   ValidationResult,
@@ -26,12 +26,12 @@ import { buildInitialUserMessage, buildSystemPrompt } from "./system-prompt";
 import { createCapsuleTools, readLiveDatabase, readReleaseFacts, type PreviewFailureReport } from "./tools";
 
 /**
- * The concrete agent. Beyond the `LittleboxAgent` contract it exposes the four
+ * The concrete agent. Beyond the `KonaeAgent` contract it exposes the four
  * operations the editor needs around a proposal: swap the model without losing
  * the conversation, throw the workspace away, re-seed it after an Apply, and
  * point the session at the Project as it now stands.
  */
-export type LittleboxAgentHandle = LittleboxAgent & {
+export type KonaeAgentHandle = KonaeAgent & {
   configure(config: AgentSessionConfig): void;
   /** Throw away the Agent Workspace edits and the transcript. */
   discard(): void;
@@ -46,7 +46,7 @@ export type LittleboxAgentHandle = LittleboxAgent & {
   dispose(): void;
 };
 
-export type LittleboxAgentOptions = {
+export type KonaeAgentOptions = {
   /** The owner's MCP session (ADR-0022). Without it the agent edits files and nothing else. */
   platform?: AgentPlatformBinding;
   /** Injected sql.js loader for the Validation Gate; defaults to the browser one. */
@@ -65,18 +65,18 @@ export type LittleboxAgentOptions = {
   releaseFacts?: () => Promise<ReleaseFacts>;
 };
 
-export function createLittleboxAgent(
+export function createKonaeAgent(
   project: MiniAppProject,
   sessionConfig: AgentSessionConfig,
   keyStore: AgentKeyStore,
-  options: LittleboxAgentOptions = {},
-): LittleboxAgentHandle {
-  return new LittleboxAgentSession(project, sessionConfig, keyStore, options);
+  options: KonaeAgentOptions = {},
+): KonaeAgentHandle {
+  return new KonaeAgentSession(project, sessionConfig, keyStore, options);
 }
 
 const riskyFiles: ProjectFile[] = ["schema.sql", "actions.json"];
 
-class LittleboxAgentSession implements LittleboxAgentHandle {
+class KonaeAgentSession implements KonaeAgentHandle {
   private readonly workspace: WorkspaceHolder;
   private readonly validator: CapsuleValidator;
   private readonly agent: Agent;
@@ -110,7 +110,7 @@ class LittleboxAgentSession implements LittleboxAgentHandle {
     project: MiniAppProject,
     sessionConfig: AgentSessionConfig,
     private readonly keyStore: AgentKeyStore,
-    private readonly options: LittleboxAgentOptions,
+    private readonly options: KonaeAgentOptions,
   ) {
     this.project = project;
     this.config = sessionConfig;

@@ -20,7 +20,7 @@ function deployment(visibility: "public" | "private"): KernelDeployment {
   return { id: "deploy_1", projectId: "project_1", manifest };
 }
 
-describe("Littlebox Kernel access", () => {
+describe("Konae Kernel access", () => {
   test("serves public shells without exposing undeclared actions", () => {
     const publicDeployment = deployment("public");
     expect(authorizeKernelIntent(anonymousActor, { type: "open-deployment", deployment: publicDeployment }).allowed).toBe(true);
@@ -30,7 +30,7 @@ describe("Littlebox Kernel access", () => {
     });
   });
 
-  test("gates private shells using Littlebox deployment grants", () => {
+  test("gates private shells using Konae deployment grants", () => {
     const privateDeployment = deployment("private");
     expect(authorizeKernelIntent(anonymousActor, { type: "open-deployment", deployment: privateDeployment })).toEqual({
       allowed: false,

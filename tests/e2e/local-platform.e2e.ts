@@ -6,7 +6,7 @@ test.beforeEach(async ({ page }) => {
   // The Kernel limits owner signups per client address. The test server trusts the local
   // proxy, so give each test its own forwarded address and repeated runs stay under the limit.
   const client = `198.51.100.${1 + Math.floor(Math.random() * 254)}`;
-  const response = await page.request.post("/_littlebox/owner/signup", { headers: { "x-forwarded-for": client }, data: { email: `owner-${crypto.randomUUID()}@example.test`, password: "Owner-test-password-2026", setupKey: "local-development-key" } });
+  const response = await page.request.post("/_konae/owner/signup", { headers: { "x-forwarded-for": client }, data: { email: `owner-${crypto.randomUUID()}@example.test`, password: "Owner-test-password-2026", setupKey: "local-development-key" } });
   expect(response.ok()).toBe(true);
 });
 
@@ -14,12 +14,12 @@ test("platform pages require an owner session and return to the requested page a
   const email = `owner-${crypto.randomUUID()}@example.test`;
   const password = "Owner-test-password-2026";
   const client = `203.0.113.${1 + Math.floor(Math.random() * 254)}`;
-  const signup = await page.request.post("/_littlebox/owner/signup", { headers: { "x-forwarded-for": client }, data: { email, password, setupKey: "local-development-key" } });
+  const signup = await page.request.post("/_konae/owner/signup", { headers: { "x-forwarded-for": client }, data: { email, password, setupKey: "local-development-key" } });
   expect(signup.ok()).toBe(true);
   // A fresh owner has no projects, so a link to the browser starter would fall back to the
   // project list. Create a project first so the requested page is a real workspace.
   const projectPath = await createProject(page, `Return here ${Date.now()}`);
-  await page.request.post("/_littlebox/owner/logout");
+  await page.request.post("/_konae/owner/logout");
 
   for (const path of ["/", projectPath, "/design-system"]) {
     await page.goto(path);
@@ -159,10 +159,10 @@ test("mobile domain settings persist claims, explain TXT checks and confirm chan
   await settings.getByLabel("Domain", { exact: true }).fill("notes.example.test");
   await settings.getByRole("button", { name: "Add domain", exact: true }).click();
   await expect(settings.getByText("Waiting for TXT", { exact: true })).toBeVisible();
-  await expect(settings.getByText("_littlebox.notes.example.test", { exact: true })).toBeVisible();
+  await expect(settings.getByText("_konae.notes.example.test", { exact: true })).toBeVisible();
   await expect(settings.getByRole("button", { name: "Copy TXT value", exact: true })).toBeVisible();
   await settings.getByRole("button", { name: "Copy TXT name", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("_littlebox.notes.example.test");
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("_konae.notes.example.test");
   const token = await settings.locator(".domain-record code").nth(1).textContent();
   await settings.getByRole("button", { name: "Copy TXT value", exact: true }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(token);
@@ -178,10 +178,10 @@ test("mobile domain settings persist claims, explain TXT checks and confirm chan
   await settings.getByRole("button", { name: "Change domain", exact: true }).click();
   await expect(settings.getByRole("region", { name: "Confirm domain change", exact: true })).toContainText("even if the new TXT is still pending");
   await settings.getByRole("button", { name: "Cancel change", exact: true }).click();
-  await expect(settings.getByText("_littlebox.notes.example.test", { exact: true })).toBeVisible();
+  await expect(settings.getByText("_konae.notes.example.test", { exact: true })).toBeVisible();
   await settings.getByRole("button", { name: "Change domain", exact: true }).click();
   await settings.getByRole("button", { name: "Replace domain", exact: true }).click();
-  await expect(settings.getByText("_littlebox.new-notes.example.test", { exact: true })).toBeVisible();
+  await expect(settings.getByText("_konae.new-notes.example.test", { exact: true })).toBeVisible();
   await settings.getByRole("button", { name: "Remove domain", exact: true }).click();
   await settings.getByRole("button", { name: "Confirm removal", exact: true }).click();
   await expect(settings.getByText("No custom domain", { exact: true })).toBeVisible();
@@ -233,7 +233,7 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   await app.getByRole("button", { name: "Add task" }).click();
   await expect(app.getByText("Survives a new release")).toBeVisible();
   // Uploads still need a session.
-  await app.goto(new URL("/_littlebox/login", url!).href);
+  await app.goto(new URL("/_konae/login", url!).href);
   await signInApp(app);
   await expect(app.getByText("Survives a new release")).toBeVisible();
   // The app's CSP keeps connect-src to its own origin, so the SDK's blob URL cannot be fetched.
@@ -241,7 +241,7 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   const attachment = await app.evaluate(async () => {
     const sdk = (window as unknown as { miniapp: { files: { upload(file: File): Promise<{ id: string }> } } }).miniapp;
     const stored = await sdk.files.upload(new File(['<script>document.body.dataset.executed="yes"</script>'], "untrusted.html", { type: "text/html" }));
-    const response = await fetch(`/_littlebox/files/${stored.id}`);
+    const response = await fetch(`/_konae/files/${stored.id}`);
     return { status: response.status, disposition: response.headers.get("content-disposition"), sniffing: response.headers.get("x-content-type-options") };
   });
   expect(attachment).toEqual({ status: 200, disposition: "attachment", sniffing: "nosniff" });
@@ -360,10 +360,10 @@ test("local and deployed migrations track their own model state", async ({ page,
   await expect(app.getByText("Keep published data")).toBeVisible();
 });
 
-// playwright.local.config.ts starts the Kernel with LITTLEBOX_MAIL_TRANSPORT=development,
+// playwright.local.config.ts starts the Kernel with KONAE_MAIL_TRANSPORT=development,
 // which writes each message to mailbox.jsonl in the data directory instead of sending it.
 async function invitationLink(to: string) {
-  const mailbox = path.join(process.env.LITTLEBOX_E2E_DATA_DIR!, "mailbox.jsonl");
+  const mailbox = path.join(process.env.KONAE_E2E_DATA_DIR!, "mailbox.jsonl");
   let link: string | undefined;
   await expect(async () => {
     const lines = (await readFile(mailbox, "utf8").catch(() => "")).trim().split("\n").filter(Boolean);
@@ -417,7 +417,7 @@ test("a private Invitation only app admits the person the owner invites from the
   await app.getByRole("button", { name: "Accept and enter" }).click();
   await expect(app.getByPlaceholder("Keep a thought…")).toBeVisible();
   await app.getByRole("button", { name: "Sign out", exact: true }).click();
-  await app.goto(new URL("/_littlebox/login", url).href);
+  await app.goto(new URL("/_konae/login", url).href);
   await app.getByLabel("Email").fill(invitee);
   await app.getByLabel("Password").fill("Invited-password-2026");
   await app.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -462,10 +462,10 @@ test("a private Invitation only app admits the person the owner invites from the
   await integrations.getByRole("button", { name: "Create API key" }).click();
   const reveal = page.getByRole("dialog", { name: "Copy this API key now" });
   await expect(reveal.locator("code").first()).toHaveText(/^lbk_/);
-  await expect(reveal).toContainText(`${url.replace(/\/$/, "")}/_littlebox/files/`);
+  await expect(reveal).toContainText(`${url.replace(/\/$/, "")}/_konae/files/`);
   await reveal.getByRole("button", { name: "I copied the key" }).click();
   await expect(integrations.getByRole("list", { name: "Live API keys" })).toContainText("Nightly backup");
-  await expect(integrations.getByRole("list", { name: "Live API keys" })).toContainText("Bearer $LITTLEBOX_API_KEY");
+  await expect(integrations.getByRole("list", { name: "Live API keys" })).toContainText("Bearer $KONAE_API_KEY");
   for (const scheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: scheme });
     await page.screenshot({ path: testInfo.outputPath(`integrations-${scheme}.png`), animations: "disabled" });

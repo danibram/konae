@@ -15,7 +15,7 @@ function memoryStorage(seed: Record<string, string> = {}) {
 describe("workspace project registry", () => {
   test("an empty store offers nothing to import, not a starter or the architecture map", () => {
     expect(storedLocalProjects(memoryStorage())).toEqual([]);
-    expect(storedLocalProjects(memoryStorage({ "littlebox:projects": "[]" }))).toEqual([]);
+    expect(storedLocalProjects(memoryStorage({ "konae:projects": "[]" }))).toEqual([]);
   });
 
   test("an untouched starter stored by an earlier build is not a draft", () => {
@@ -35,7 +35,7 @@ describe("workspace project registry", () => {
 
   test("a stored project is offered once and the architecture map never", () => {
     const mine = { ...cloneStarter(), id: "app_mine", name: "Mine" };
-    const found = storedLocalProjects(memoryStorage({ "littlebox:projects": JSON.stringify([mine, { ...cloneStarter(), id: architectureProjectId }]) }));
+    const found = storedLocalProjects(memoryStorage({ "konae:projects": JSON.stringify([mine, { ...cloneStarter(), id: architectureProjectId }]) }));
     expect(found.map((project) => project.id)).toEqual(["app_mine"]);
   });
 
@@ -64,8 +64,8 @@ describe("workspace project registry", () => {
     const project = cloneStarter();
     const deployment = { id: "deploy_1", projectId: project.id, projectName: project.name, url: "http://tiny.localhost", createdAt: 1, manifest: project.manifest, accessCode: "secret" };
     const storage = memoryStorage({
-      "littlebox:project": JSON.stringify(project),
-      "littlebox:active-deployment": JSON.stringify(deployment),
+      "konae:project": JSON.stringify(project),
+      "konae:active-deployment": JSON.stringify(deployment),
     });
     const workspace = loadWorkspaceState(storage);
 
@@ -86,7 +86,7 @@ describe("workspace project registry", () => {
 
   test("drops a stored copy of the architecture map", () => {
     const mine = cloneStarter();
-    const storage = memoryStorage({ "littlebox:projects": JSON.stringify([mine, { ...cloneStarter(), id: architectureProjectId }]) });
+    const storage = memoryStorage({ "konae:projects": JSON.stringify([mine, { ...cloneStarter(), id: architectureProjectId }]) });
     expect(loadWorkspaceState(storage).projects.map((project) => project.id)).toEqual([mine.id]);
   });
 
@@ -95,7 +95,7 @@ describe("workspace project registry", () => {
     stale.files["index.html"] = stale.files["index.html"].replace('class="ui-identity">Guest', 'class="identity">guest').replace('class="ui-page"', 'class="app-shell"');
     stale.files["styles.css"] = ":root { color-scheme: light; }";
     stale.files["app.js"] = stale.files["app.js"].replace("identity.textContent = session.role === 'anonymous' ? 'Guest' : session.name;", "identity.textContent = session.name;");
-    const storage = memoryStorage({ "littlebox:projects": JSON.stringify([stale]) });
+    const storage = memoryStorage({ "konae:projects": JSON.stringify([stale]) });
     const loaded = loadWorkspaceState(storage).projects.find((project) => project.id === stale.id);
     expect(loaded?.files["app.js"]).toContain("Nothing here yet");
     expect(loaded?.files["index.html"]).toContain(">Guest<");
@@ -109,8 +109,8 @@ describe("workspace project registry", () => {
     persistWorkspace([project], project.id, {
       [project.id]: { id: "deploy_1", projectId: project.id, projectName: project.name, url: "http://tiny.localhost", createdAt: 1, manifest: project.manifest, accessCode: "secret" },
     }, storage);
-    expect(storage.value("littlebox:projects")).toContain(project.name);
-    expect(storage.value("littlebox:deployments")).not.toContain("secret");
+    expect(storage.value("konae:projects")).toContain(project.name);
+    expect(storage.value("konae:deployments")).not.toContain("secret");
   });
 
   test("repairs a starter that cleared the chosen file before sign-in finished", () => {
@@ -132,7 +132,7 @@ describe("workspace project registry", () => {
   }`,
     );
     expect(broken.files["app.js"]).toContain("fileInput.value = '';\n    miniapp.auth.signIn();");
-    const storage = memoryStorage({ "littlebox:projects": JSON.stringify([broken]) });
+    const storage = memoryStorage({ "konae:projects": JSON.stringify([broken]) });
     const loaded = loadWorkspaceState(storage).projects.find((project) => project.id === broken.id);
     expect(loaded?.files["app.js"]).toContain("await miniapp.auth.signIn();");
     expect(loaded?.files["app.js"]).toContain("if (session.role === 'anonymous') {\n      fileInput.value = '';\n      return;\n    }");

@@ -8,7 +8,7 @@ export type OwnerSession =
   /** The platform could not be reached, which is not the same as being signed out. */
   | { state: "unavailable"; message: string };
 
-const emailKey = "littlebox:owner-email";
+const emailKey = "konae:owner-email";
 
 /** The email this browser last signed in with. The session check only returns an opaque ID. */
 export function rememberOwnerEmail(email: string | null) {
@@ -32,7 +32,7 @@ export function isSignedOutError(error: unknown): boolean {
  */
 export async function checkOwnerSession(): Promise<OwnerSession> {
   try {
-    const response = await fetch("/_littlebox/owner/session", { cache: "no-store", headers: { accept: "application/json" } });
+    const response = await fetch("/_konae/owner/session", { cache: "no-store", headers: { accept: "application/json" } });
     if (!response.ok) {
       const body = await response.json().catch(() => ({})) as { error?: string };
       return { state: "unavailable", message: body.error ?? `The platform answered ${response.status}.` };

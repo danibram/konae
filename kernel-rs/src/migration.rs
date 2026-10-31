@@ -295,7 +295,7 @@ fn refusal(operation: &str, message: &str) -> Response {
 /// recovery, invitations and HTTP routes. Nothing is redirected.
 pub(super) async fn guard(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let path = request.uri().path();
-    if path == "/_littlebox/health" {
+    if path == "/_konae/health" {
         return next.run(request).await;
     }
     let Some(deployment) = deployment_for(&state, request.headers()).await else {
@@ -309,7 +309,7 @@ pub(super) async fn guard(State(state): State<AppState>, request: Request, next:
         .get(header::ACCEPT)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|accept| accept.contains("text/html"));
-    let page = matches!(*request.method(), Method::GET | Method::HEAD) && (!path.starts_with("/_littlebox/") || wants_page);
+    let page = matches!(*request.method(), Method::GET | Method::HEAD) && (!path.starts_with("/_konae/") || wants_page);
     // A custom domain still pointed at this origin would link to itself.
     let host = request.headers().get(header::HOST).and_then(|value| value.to_str().ok()).and_then(|value| value.split(':').next()).map(str::to_ascii_lowercase);
     let new_url = new_url.filter(|url| url::Url::parse(url).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase)) != host);
@@ -1006,7 +1006,7 @@ mod tests {
     use super::*;
 
     fn scratch() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("littlebox-migration-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-migration-{}", Uuid::new_v4()));
         std::fs::create_dir_all(root.join("deployments/app-1")).unwrap();
         root
     }
@@ -1121,7 +1121,6 @@ mod tests {
             public_origin: "http://localhost".into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(limits::Guards::new(Vec::new())),
         }
@@ -1206,7 +1205,7 @@ mod tests {
 
     #[test]
     fn a_live_artifact_travels_with_its_binary_files_as_base64() {
-        let root = std::env::temp_dir().join(format!("littlebox-live-artifact-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-live-artifact-{}", Uuid::new_v4()));
         std::fs::create_dir_all(root.join("img")).unwrap();
         std::fs::write(root.join("index.html"), "<p>home</p>").unwrap();
         std::fs::write(root.join("img/logo.png"), [0x89, b'P', b'N', b'G', 0xff, 0xfe]).unwrap();

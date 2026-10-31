@@ -302,7 +302,7 @@ describe("the preview refuses miniapp.actions.call with the Kernel's words", () 
     host.setPreviewActor("guest");
     const answer = await handlePreviewMcp(host, {
       jsonrpc: "2.0", id: 1, method: "tools/call",
-      params: { name: "actions_invoke", arguments: args, _meta: { "littlebox/capability": "cap" } },
+      params: { name: "actions_invoke", arguments: args, _meta: { "konae/capability": "cap" } },
     }, "cap");
     expect(answer).toMatchObject({ result: { isError: true, content: [{ text: kernelMessage(template, fill as Record<string, string> | undefined) }] } });
   });
@@ -321,7 +321,7 @@ describe("the preview refuses miniapp.files.upload with the Kernel's words", () 
     host.setPreviewActor("alice");
     const answer = await handlePreviewMcp(host, {
       jsonrpc: "2.0", id: 1, method: "tools/call",
-      params: { name: "preview_files_upload", arguments: { name: "a.txt", type: "text/plain", size, dataUrl: "data:text/plain;base64," }, _meta: { "littlebox/capability": "cap" } },
+      params: { name: "preview_files_upload", arguments: { name: "a.txt", type: "text/plain", size, dataUrl: "data:text/plain;base64," }, _meta: { "konae/capability": "cap" } },
     }, "cap");
     expect(answer).toMatchObject({ result: { isError: true, content: [{ text: message }] } });
     expect(host.getFiles()).toEqual([]);

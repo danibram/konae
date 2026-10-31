@@ -21,19 +21,19 @@ const freshClient = () => { nextClient++; return `198.20.${Math.floor(nextClient
 beforeAll(async () => {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
   expect(await build.exited).toBe(0);
-  root = await mkdtemp(path.join(tmpdir(), "littlebox-eject-"));
-  const port = Number(process.env.LITTLEBOX_EJECT_TEST_PORT) || 19700 + Math.floor(Math.random() * 90);
+  root = await mkdtemp(path.join(tmpdir(), "konae-eject-"));
+  const port = Number(process.env.KONAE_EJECT_TEST_PORT) || 19700 + Math.floor(Math.random() * 90);
   url = `http://127.0.0.1:${port}`;
-  kernel = Bun.spawn(["kernel-rs/target/debug/littlebox-kernel"], {
-    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_"))), LITTLEBOX_DATA_DIR: path.join(root, "data"), LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_PUBLIC_ORIGIN: url, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development" },
+  kernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_DATA_DIR: path.join(root, "data"), KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_BUN_PATH: process.execPath, KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development" },
     stdout: "ignore", stderr: "inherit",
   });
   for (let attempt = 0; attempt < 100; attempt++) {
-    try { if ((await fetch(`${url}/_littlebox/health`)).ok) break; } catch {}
+    try { if ((await fetch(`${url}/_konae/health`)).ok) break; } catch {}
     if (kernel.exitCode !== null) throw Error("The eject test Kernel stopped.");
     await Bun.sleep(100);
   }
-  const response = await fetch(`${url}/_littlebox/owner/signup`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: "owner@eject.test", password, setupKey }) });
+  const response = await fetch(`${url}/_konae/owner/signup`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: "owner@eject.test", password, setupKey }) });
   expect(response.status).toBe(200);
   const cookie = response.headers.get("set-cookie")!.split(";")[0];
   owner = new McpClient(`${url}/mcp`, { fetch: (input, init) => {
@@ -91,7 +91,7 @@ async function delegate(scopes: string[], projectIds: string[] = []) {
 }
 
 function runtime(hostname: string, cookie?: string) {
-  return new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+  return new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
     const headers = new Headers(init?.headers); headers.set("host", hostname);
     if (cookie) headers.set("cookie", cookie);
     return fetch(input, { ...init, headers });
@@ -121,7 +121,7 @@ describe("Eject on the server", () => {
     const id = "eject_serving";
     await managed(id);
     const deployment = await release(owner, id);
-    const signup = await fetch(`${url}/_littlebox/auth/signup`, { method: "POST", headers: { host: deployment.hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: "member@eject.test", password }) });
+    const signup = await fetch(`${url}/_konae/auth/signup`, { method: "POST", headers: { host: deployment.hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: "member@eject.test", password }) });
     expect(signup.status).toBe(200);
     const member = runtime(deployment.hostname, signup.headers.get("set-cookie")!.split(";")[0]);
     await member.call("actions_invoke", { name: "notes.create", input: { title: "Written before Eject" } });
@@ -133,9 +133,9 @@ describe("Eject on the server", () => {
     const { plan: planned, package: code } = await plan(owner, id, 2);
     expect(planned.applied).toBe(false);
     expect(planned.effects.hostedApp).toBe("Keeps URL, users, sessions, data, invitations and email service.");
-    expect(Object.keys(code.files).sort()).toEqual(["README.md", "actions.json", "app.js", "index.html", "littlebox.json", "schema.sql", "schema.ts", "styles.css"]);
-    expect(JSON.parse(code.files["littlebox.json"])).toMatchObject({ url, project: { id, sourceAuthority: "external", manifest: { visibility: "public" } } });
-    expect(code.files["README.md"]).toContain("bun run littlebox -- publish");
+    expect(Object.keys(code.files).sort()).toEqual(["README.md", "actions.json", "app.js", "index.html", "konae.json", "schema.sql", "schema.ts", "styles.css"]);
+    expect(JSON.parse(code.files["konae.json"])).toMatchObject({ url, project: { id, sourceAuthority: "external", manifest: { visibility: "public" } } });
+    expect(code.files["README.md"]).toContain("bun run konae -- publish");
 
     const receipt = await owner.call<EjectReceipt>("eject_apply", { planId: planned.planId });
     expect(receipt).toMatchObject({ projectId: id, sourceAuthority: "external", sourcesRevision: 2, packageSha256: planned.package.sha256, via: "session", deployment: { id: deployment.id, url: deployment.url } });
@@ -161,7 +161,7 @@ describe("Eject on the server", () => {
     expect(page.status).toBe(200);
     expect(await page.text()).toContain("Eject proof");
 
-    // The owner keeps publishing artifacts built outside Littlebox.
+    // The owner keeps publishing artifacts built outside Konae.
     const inspected = await owner.call<{ revision: number; project: { sourceAuthority: string; ejected: { by: string; sourcesRevision: number } } }>("project_inspect", { projectId: id });
     const republished = await release(agent, id, "Built outside");
     expect(republished.id).toBe(deployment.id);
@@ -244,7 +244,7 @@ describe("Eject on the server", () => {
     const id = "eject_external";
     await owner.call("project_create", { projectId: id, name: "External" });
     await expect(owner.call("eject_plan", { projectId: id, expectedRevision: 0 })).rejects.toThrow("already External");
-    await expect(owner.call("project_create", { projectId: id, name: "External", sourceAuthority: "managed" })).rejects.toThrow("This project is External. Littlebox does not take source authority back, so create a new project");
+    await expect(owner.call("project_create", { projectId: id, name: "External", sourceAuthority: "managed" })).rejects.toThrow("This project is External. Konae does not take source authority back, so create a new project");
   });
 
   test("the CLI refuses a stale revision before downloading, then writes, verifies and applies", async () => {
@@ -254,7 +254,7 @@ describe("Eject on the server", () => {
     const { token } = await owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish", "manage_lifecycle"], projectIds: [id], ttlSeconds: 600 });
     const directory = path.join(root, "ejected");
     const run = async (args: string[]) => {
-      const child = Bun.spawn([process.execPath, "run", "scripts/littlebox.ts", ...args], { env: { ...process.env, LITTLEBOX_MCP_TOKEN: token }, stdout: "pipe", stderr: "pipe" });
+      const child = Bun.spawn([process.execPath, "run", "scripts/konae.ts", ...args], { env: { ...process.env, KONAE_MCP_TOKEN: token }, stdout: "pipe", stderr: "pipe" });
       const [code, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
       return { code, output, error };
     };
@@ -267,8 +267,8 @@ describe("Eject on the server", () => {
     expect(ejected.code).toBe(0);
     expect(ejected.output).toContain("publish");
     expect(await readFile(path.join(directory, "app.js"), "utf8")).toBe(files["app.js"]);
-    expect(JSON.parse(await readFile(path.join(directory, "littlebox.json"), "utf8")).project.sourceAuthority).toBe("external");
-    expect(JSON.parse(await readFile(path.join(directory, ".littlebox/eject-receipt.json"), "utf8"))).toMatchObject({ projectId: id, sourcesRevision: 1 });
+    expect(JSON.parse(await readFile(path.join(directory, "konae.json"), "utf8")).project.sourceAuthority).toBe("external");
+    expect(JSON.parse(await readFile(path.join(directory, ".konae/eject-receipt.json"), "utf8"))).toMatchObject({ projectId: id, sourcesRevision: 1 });
     expect((await owner.call<{ project: { sourceAuthority: string } }>("project_inspect", { projectId: id })).project.sourceAuthority).toBe("external");
     // The folder publishes on its own with the same credential.
     const published = await run(["publish", "--dir", directory]);

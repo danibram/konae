@@ -114,7 +114,7 @@ fn sender() -> &'static SyncSender<Message> {
     QUEUE_SENDER.get_or_init(|| {
         let (sender, receiver) = sync_channel(QUEUE);
         std::thread::Builder::new()
-            .name("littlebox-usage".into())
+            .name("konae-usage".into())
             .spawn(move || writer(receiver))
             .expect("start the usage writer");
         sender
@@ -793,7 +793,7 @@ mod tests {
     }
 
     fn scratch(label: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("littlebox-usage-{label}-{}", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("konae-usage-{label}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&path).unwrap();
         path
     }

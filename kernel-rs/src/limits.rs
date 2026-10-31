@@ -289,7 +289,7 @@ pub(crate) fn registration_key(address: IpAddr) -> String {
     }
 }
 
-/// Parses LITTLEBOX_TRUSTED_PROXIES, a comma-separated list of IP addresses.
+/// Parses KONAE_TRUSTED_PROXIES, a comma-separated list of IP addresses.
 pub(crate) fn trusted_proxies(value: &str) -> anyhow::Result<Vec<IpAddr>> {
     value
         .split(',')
@@ -299,7 +299,7 @@ pub(crate) fn trusted_proxies(value: &str) -> anyhow::Result<Vec<IpAddr>> {
             entry
                 .parse::<IpAddr>()
                 .map(|address| address.to_canonical())
-                .map_err(|_| anyhow::anyhow!("LITTLEBOX_TRUSTED_PROXIES entry {entry} is not an IP address."))
+                .map_err(|_| anyhow::anyhow!("KONAE_TRUSTED_PROXIES entry {entry} is not an IP address."))
         })
         .collect()
 }

@@ -1,10 +1,10 @@
 // A fake DNS resolver on a local UDP port for the custom domain replays. It
 // answers TXT queries from a table the replay edits, and NXDOMAIN for any
 // other name. Start it before the Kernel and pass its address as
-// LITTLEBOX_DNS_RESOLVER, so the Kernel's own lookup runs against it.
+// KONAE_DNS_RESOLVER, so the Kernel's own lookup runs against it.
 
 export type FakeResolver = {
-  /** host:port, the value for LITTLEBOX_DNS_RESOLVER. */
+  /** host:port, the value for KONAE_DNS_RESOLVER. */
   address: string;
   /** Sets the TXT values a name answers with; no values removes the name. */
   txt(name: string, values: string[]): void;

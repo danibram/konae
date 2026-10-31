@@ -3,11 +3,11 @@ import { Database } from "bun:sqlite";
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { exportLocal, publishLocal } from "../../scripts/littlebox";
+import { exportLocal, publishLocal } from "../../scripts/konae";
 import { McpClient, type Transfer } from "../../src/mcp/client";
 
 // Delivery H's quota proof: an app whose database reached its 256 MiB cap,
-// with 20 MiB of files, leaves through `littlebox export --with-data` and
+// with 20 MiB of files, leaves through `konae export --with-data` and
 // arrives through the kit's `npm run deploy`, with peak memory sampled on
 // every process that touches the package.
 // Run with `bun run tests/smoke/package-quota.ts --port 19460`; the target
@@ -16,12 +16,12 @@ const portIndex = process.argv.indexOf("--port");
 const port = portIndex < 0 ? 19460 : Number(process.argv[portIndex + 1]);
 if (!Number.isInteger(port) || port < 1024 || port > 65534) throw Error("Choose a source port between 1024 and 65534. The target uses the next port.");
 const repo = path.resolve(import.meta.dir, "../..");
-const root = await mkdtemp(path.join(tmpdir(), "littlebox-package-quota-"));
+const root = await mkdtemp(path.join(tmpdir(), "konae-package-quota-"));
 const key = crypto.randomUUID() + crypto.randomUUID();
 const password = crypto.randomUUID();
 const sourceUrl = `http://127.0.0.1:${port}`;
 const targetUrl = `http://127.0.0.1:${port + 1}`;
-const binary = path.join(repo, "kernel-rs/target/debug/littlebox-kernel");
+const binary = path.join(repo, "kernel-rs/target/debug/konae-kernel");
 const processes: ReturnType<typeof Bun.spawn>[] = [];
 const mib = 1024 * 1024;
 const sources = {
@@ -61,14 +61,14 @@ async function command(args: string[], cwd = repo, sample?: (pid: number) => () 
 
 async function startKernel(url: string, dataDirectory: string) {
   const logPath = path.join(root, `kernel-${new URL(url).port}.log`);
-  const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("LITTLEBOX_") && !name.startsWith("VITE_")));
+  const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("KONAE_") && !name.startsWith("VITE_")));
   const child = Bun.spawn([binary], {
-    env: { ...environment, LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: new URL(url).port, LITTLEBOX_PUBLIC_ORIGIN: url, LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: dataDirectory, LITTLEBOX_ADMIN_KEY: key },
+    env: { ...environment, KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: new URL(url).port, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: dataDirectory, KONAE_ADMIN_KEY: key },
     stdout: "ignore", stderr: Bun.file(logPath),
   });
   processes.push(child);
   for (let attempt = 0; attempt < 100; attempt++) {
-    try { if ((await fetch(`${url}/_littlebox/health`)).ok) return child; } catch {}
+    try { if ((await fetch(`${url}/_konae/health`)).ok) return child; } catch {}
     if (child.exitCode !== null) throw Error(`Kernel stopped before startup.\n${await readFile(logPath, "utf8")}`);
     await Bun.sleep(100);
   }
@@ -76,7 +76,7 @@ async function startKernel(url: string, dataDirectory: string) {
 }
 
 async function ownerSession(url: string, email: string, route: "signup" | "login") {
-  const response = await fetch(`${url}/_littlebox/owner/${route}`, {
+  const response = await fetch(`${url}/_konae/owner/${route}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password: key, setupKey: key }),
   });
   assert.equal(response.status, 200, await response.text());
@@ -88,7 +88,7 @@ async function ownerSession(url: string, email: string, route: "signup" | "login
 }
 
 function runtime(url: string, hostname: string, cookie?: string) {
-  return new McpClient(`${url}/_littlebox/mcp`, { fetch: (input, init) => {
+  return new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
     const headers = new Headers(init?.headers); headers.set("host", hostname);
     if (cookie) headers.set("cookie", cookie);
     return fetch(input, { ...init, headers });
@@ -96,7 +96,7 @@ function runtime(url: string, hostname: string, cookie?: string) {
 }
 
 async function sign(url: string, hostname: string, operation: "signup" | "login") {
-  const response = await fetch(`${url}/_littlebox/auth/${operation}`, {
+  const response = await fetch(`${url}/_konae/auth/${operation}`, {
     method: "POST", headers: { host: hostname, "content-type": "application/json" }, body: JSON.stringify({ email: "writer@quota.test", password }),
   });
   assert.equal(response.status, 200, await response.text());
@@ -132,7 +132,7 @@ try {
   const directory = path.join(root, "quota-app");
   await mkdir(directory);
   const config = { url: sourceUrl, project: { id: "quota-app", name: "Quota app", slug: "quota-app", manifest: { version: 1, visibility: "private" } } };
-  for (const [filename, contents] of Object.entries({ ...sources, "littlebox.json": JSON.stringify(config) })) await writeFile(path.join(directory, filename), contents);
+  for (const [filename, contents] of Object.entries({ ...sources, "konae.json": JSON.stringify(config) })) await writeFile(path.join(directory, filename), contents);
   const published = await publishLocal(directory, config, token);
   await admin.call("signup_policy_set", { deploymentId: published.id, mode: "open" });
   const inspected = await admin.call<{ deployment: { hostname: string } }>("project_inspect", { projectId: "quota-app" });
@@ -182,7 +182,7 @@ try {
   await command(["tar", "-xf", archive, "-C", kit]);
   await rm(archive);
   await symlink(path.join(repo, "node_modules"), path.join(kit, "node_modules"), "dir");
-  await writeFile(path.join(kit, ".env"), `LITTLEBOX_PORT=${port + 1}\nLITTLEBOX_ADMIN_KEY=${key}\n`, { mode: 0o600 });
+  await writeFile(path.join(kit, ".env"), `KONAE_PORT=${port + 1}\nKONAE_ADMIN_KEY=${key}\n`, { mode: 0o600 });
   const targetData = path.join(kit, "data");
   const targetKernel = await startKernel(targetUrl, targetData);
   const stopTarget = sampleRss(targetKernel.pid);
@@ -191,7 +191,7 @@ try {
   const importSeconds = (performance.now() - importStarted) / 1000;
   const targetPeak = await stopTarget();
 
-  const marker = JSON.parse(await readFile(path.join(kit, "littlebox/deployment.json"), "utf8"));
+  const marker = JSON.parse(await readFile(path.join(kit, "konae/deployment.json"), "utf8"));
   const moved = JSON.parse(await readFile(path.join(targetData, "deployments", marker.deploymentId, "deployment.json"), "utf8"));
   const target = await ownerSession(targetUrl, "owner@selfhost.local", "login");
   assert.equal(await counts(target, marker.deploymentId), before, "Row counts and byte totals differ after the import.");

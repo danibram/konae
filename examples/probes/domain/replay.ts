@@ -4,14 +4,14 @@
 // requests reach the alias with a Host header, as a proxy that forwards Host
 // unchanged sends them.
 //
-//   LITTLEBOX_PROBE_PORT=23060 bun run examples/probes/domain/replay.ts
+//   KONAE_PROBE_PORT=23060 bun run examples/probes/domain/replay.ts
 import assert from "node:assert/strict";
 import { probe } from "../_kit";
 import { fakeResolver } from "../_dns";
 
 const here = import.meta.dir;
 const alias = "guestbook.example.org";
-const record = `_littlebox.${alias}`;
+const record = `_konae.${alias}`;
 const dns = await fakeResolver();
 
 type Domain = { status: string; hostname: string | null; url?: string; record?: { name: string; value: string }; dns?: string };
@@ -31,7 +31,7 @@ await probe("domain", 23060, async (kit) => {
 
   // Names the Kernel refuses before it stores anything.
   const underSuffix = await kit.errorText(set(app.deploymentId, "guestbook.localhost"));
-  assert.equal(underSuffix, "guestbook.localhost is under this installation's app suffix localhost, where Littlebox names apps itself. Name a hostname outside it.");
+  assert.equal(underSuffix, "guestbook.localhost is under this installation's app suffix localhost, where Konae names apps itself. Name a hostname outside it.");
   const notAName = await kit.errorText(set(app.deploymentId, "https://guestbook.example.org/"));
   assert.match(notAName, /is not a valid DNS name/);
   assert.equal((await owner.call<Domain>("domain_read", { deploymentId: app.deploymentId })).status, "none");
@@ -45,16 +45,16 @@ await probe("domain", 23060, async (kit) => {
   assert.equal(pending.dns, `No TXT record at ${record} yet.`);
   const token = pending.record!.value;
   assert.equal((await page(aliasHost)).status, 404);
-  const pendingRuntime = await fetch(`${url}/_littlebox/mcp`, {
+  const pendingRuntime = await fetch(`${url}/_konae/mcp`, {
     method: "POST", headers: { host: aliasHost, origin: aliasOrigin, "content-type": "application/json", accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "probe", version: "1" } } }),
   });
   assert.equal(pendingRuntime.status, 403, "a pending alias is not a host the runtime knows");
 
   // A record that holds something else is refused.
-  dns.txt(record, ["littlebox-verify-not-this-one"]);
+  dns.txt(record, ["konae-verify-not-this-one"]);
   const wrong = await kit.errorText(set(app.deploymentId, alias));
-  assert.equal(wrong, `The TXT record at ${record} holds "littlebox-verify-not-this-one", not this Deployment's token. Set it to ${token} and call domain_set again.`);
+  assert.equal(wrong, `The TXT record at ${record} holds "konae-verify-not-this-one", not this Deployment's token. Set it to ${token} and call domain_set again.`);
   assert.equal((await page(aliasHost)).status, 404);
 
   // The right token makes it serve.
@@ -69,7 +69,7 @@ await probe("domain", 23060, async (kit) => {
   assert.equal(home.status, 200);
   assert.match(home.headers.get("content-security-policy") ?? "", /connect-src 'self'/);
   assert.equal(home.headers.get("strict-transport-security"), null, "plain HTTP sends no HSTS");
-  const initialize = (host: string, origin: string) => fetch(`${url}/_littlebox/mcp`, {
+  const initialize = (host: string, origin: string) => fetch(`${url}/_konae/mcp`, {
     method: "POST",
     headers: { host, origin, "content-type": "application/json", accept: "application/json, text/event-stream", "x-forwarded-for": kit.address() },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "probe", version: "1" } } }),
@@ -83,7 +83,7 @@ await probe("domain", 23060, async (kit) => {
   const fromGenerated = await (await kit.appFetch(`${app.host}:${port}`)(`${url}/api/entries`)).json();
   assert.equal(fromAlias.result[0].body, "Signed from the custom domain");
   assert.deepEqual(fromAlias, fromGenerated);
-  const signup = await kit.appFetch(aliasHost)(`${url}/_littlebox/auth/signup`, {
+  const signup = await kit.appFetch(aliasHost)(`${url}/_konae/auth/signup`, {
     method: "POST", headers: { "content-type": "application/json", origin: aliasOrigin }, body: JSON.stringify({ email: "ines@probe.example", password: crypto.randomUUID() }),
   });
   assert.equal(signup.status, 200, await signup.clone().text());
@@ -148,5 +148,5 @@ await probe("domain", 23060, async (kit) => {
   assert.equal(aliasPage.status, 503);
   assert(!(await aliasPage.text()).includes("<a href="), "the alias does not link to itself");
   kit.pass("Maintenance page", `migration_confirm without newUrl records ${confirmed.newUrl}. The generated hostname's 503 page links it; the same page on the alias shows no link to itself.`);
-}, { env: { LITTLEBOX_DNS_RESOLVER: dns.address } });
+}, { env: { KONAE_DNS_RESOLVER: dns.address } });
 dns.stop();

@@ -223,7 +223,7 @@
   "code": "route.authenticated"
  },
  {
-  "case": "a path under /_littlebox",
+  "case": "a path under /_konae",
   "actions": {
    "orders.list": {
     "kind": "query",
@@ -232,11 +232,11 @@
     "bindings": [],
     "http": {
      "method": "GET",
-     "path": "/_littlebox/files"
+     "path": "/_konae/files"
     }
    }
   },
-  "error": "Action orders.list binds the reserved path /_littlebox/files. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel.",
+  "error": "Action orders.list binds the reserved path /_konae/files. Paths under /_konae, /oauth, /.well-known and /mcp belong to the Kernel.",
   "code": "route.path-reserved"
  },
  {
@@ -260,7 +260,7 @@
     }
    }
   },
-  "error": "Action orders.receive binds the reserved path /mcp. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel.",
+  "error": "Action orders.receive binds the reserved path /mcp. Paths under /_konae, /oauth, /.well-known and /mcp belong to the Kernel.",
   "code": "route.path-reserved"
  },
  {
@@ -277,7 +277,7 @@
     }
    }
   },
-  "error": "Action orders.list binds the reserved path /OAuth/token. Paths under /_littlebox, /oauth, /.well-known and /mcp belong to the Kernel.",
+  "error": "Action orders.list binds the reserved path /OAuth/token. Paths under /_konae, /oauth, /.well-known and /mcp belong to the Kernel.",
   "code": "route.path-reserved"
  },
  {
@@ -406,7 +406,7 @@
     }
    }
   },
-  "error": "Action orders.receive has an invalid littlebox signature. It takes \"scheme\", \"header\" and \"secret\".",
+  "error": "Action orders.receive has an invalid konae signature. It takes \"scheme\", \"header\" and \"secret\".",
   "code": "signature.keys-invalid"
  },
  {
@@ -866,7 +866,7 @@
   "error": null
  },
  {
-  "case": "the littlebox scheme named explicitly",
+  "case": "the konae scheme named explicitly",
   "actions": {
    "hooks.receive": {
     "kind": "mutation",
@@ -893,7 +893,7 @@
      "method": "POST",
      "path": "/hooks/provider",
      "signature": {
-      "scheme": "littlebox",
+      "scheme": "konae",
       "header": "X-Signature",
       "secret": "orders_webhook"
      }
@@ -1023,7 +1023,7 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive names an unknown signature scheme. Use \"littlebox\", \"hmac-body\", \"timestamped\" or \"svix\".",
+  "error": "Action hooks.receive names an unknown signature scheme. Use \"konae\", \"hmac-body\", \"timestamped\" or \"svix\".",
   "code": "signature.scheme-unknown"
  },
  {
@@ -1065,7 +1065,7 @@
     "statement": "INSERT INTO orders (external_id, note, created_at) VALUES (?1, ?2, ?3)"
    }
   },
-  "error": "Action hooks.receive names an unknown signature scheme. Use \"littlebox\", \"hmac-body\", \"timestamped\" or \"svix\".",
+  "error": "Action hooks.receive names an unknown signature scheme. Use \"konae\", \"hmac-body\", \"timestamped\" or \"svix\".",
   "code": "signature.scheme-unknown"
  },
  {
@@ -1356,7 +1356,7 @@
     "statement": "SELECT id FROM orders WHERE external_id = ?1 AND note = ?2 AND created_at < ?3 LIMIT 10"
    }
   },
-  "error": "Action hooks.receive binds GET, so its signature must use the littlebox scheme. A provider's scheme signs a POST body.",
+  "error": "Action hooks.receive binds GET, so its signature must use the konae scheme. A provider's scheme signs a POST body.",
   "code": "signature.provider-on-get"
  },
  {

@@ -19,7 +19,7 @@ async function render() {
   const fileOf = new Map(mine.map(p => [p.id, p.file_id]));
   $('#gallery').innerHTML = pieces.map(p => {
     const file = fileOf.get(p.id);
-    const img = file ? `<img src="/_littlebox/files/${encodeURIComponent(file)}" alt="${esc(p.title)}">` : p.image_data !== '-' ? `<img src="${esc(p.image_data)}" alt="${esc(p.title)}">` : `<div class="nophoto">photo only visible when signed in</div>`;
+    const img = file ? `<img src="/_konae/files/${encodeURIComponent(file)}" alt="${esc(p.title)}">` : p.image_data !== '-' ? `<img src="${esc(p.image_data)}" alt="${esc(p.title)}">` : `<div class="nophoto">photo only visible when signed in</div>`;
     return `<article class="piece">${img}<h3>${esc(p.title)}</h3><p>${esc(p.body)}</p></article>`;
   }).join('') || '<p class="muted">No pieces yet.</p>';
 }

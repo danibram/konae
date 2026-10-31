@@ -2,19 +2,19 @@
 // if any fails. Each replay starts and removes its own Kernel.
 //
 //   bun run examples/showcase/replay-all.ts
-//   LITTLEBOX_SHOWCASE_BASE_PORT=22000 bun run examples/showcase/replay-all.ts
+//   KONAE_SHOWCASE_BASE_PORT=22000 bun run examples/showcase/replay-all.ts
 import { readdirSync } from "node:fs";
 import path from "node:path";
 
 const root = import.meta.dir;
-const base = Number(process.env.LITTLEBOX_SHOWCASE_BASE_PORT ?? 22000);
+const base = Number(process.env.KONAE_SHOWCASE_BASE_PORT ?? 22000);
 const apps = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
 const failed: string[] = [];
 for (const [index, app] of apps.entries()) {
   const port = base + index * 10;
   const started = Date.now();
   const run = Bun.spawnSync(["bun", "run", path.join(root, app, "replay.ts")], {
-    env: { ...process.env, LITTLEBOX_SHOWCASE_PORT: String(port) },
+    env: { ...process.env, KONAE_SHOWCASE_PORT: String(port) },
     stdout: "pipe",
     stderr: "pipe",
   });

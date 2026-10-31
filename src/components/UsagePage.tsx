@@ -86,7 +86,7 @@ export function UsagePage({ ownerSession }: { ownerSession: OwnerSession }) {
       </header>
       <div className="usage-range"><span>{range.from} to {range.to} · UTC</span><span>{updatedAt ? `Updated ${formatTime(updatedAt)}` : "Waiting for Kernel data"}</span></div>
       {error && <Alert tone="danger" className="usage-error" title="Usage could not be refreshed" action={<Button onClick={() => void load()}>Try again</Button>}>{updatedAt ? "The figures below are from the last successful read. " : ""}{error}</Alert>}
-      {reading && <LoadingBlock label="Loading Littlebox" sinceNavigation><UsageLoadingShapes /></LoadingBlock>}
+      {reading && <LoadingBlock label="Loading Konae" sinceNavigation><UsageLoadingShapes /></LoadingBlock>}
       {!selected && updatedAt && !reading && <AccountUsage apps={apps} />}
       {!selected && nextCursor && <Button disabled={pending} onClick={() => void load(nextCursor)}>Load more apps</Button>}
       {selected && summary && !reading && <AppUsage summary={summary} />}
@@ -130,7 +130,7 @@ function AppUsage({ summary }: { summary: UsageSummary }) {
   const signalNames = [...new Set([...summary.actions.flatMap((a) => a.signal ? [a.signal.name] : []), ...summary.metrics.filter((m) => m.feature === "signal").map((m) => m.name)])].sort();
   const actionNames = [...new Set([...summary.actions.filter((a) => a.kind !== "call").map((a) => a.name), ...summary.metrics.filter((m) => m.feature === "execution").map((m) => m.name)])].sort();
   return <>
-    <div className="usage-app-link"><a href={summary.url} target="_blank" rel="noopener">{new URL(summary.url).hostname} <ArrowUpRight size={14} /></a>{summary.sourceAuthority === "managed" ? <a href={projectHref(summary.projectId)}>Open project</a> : <span className="usage-note">External project · Files are managed outside Littlebox</span>}</div>
+    <div className="usage-app-link"><a href={summary.url} target="_blank" rel="noopener">{new URL(summary.url).hostname} <ArrowUpRight size={14} /></a>{summary.sourceAuthority === "managed" ? <a href={projectHref(summary.projectId)}>Open project</a> : <span className="usage-note">External project · Files are managed outside Konae</span>}</div>
     {notices.notSent > 0 && <Alert tone="warning" className="usage-error" title={`${number.format(notices.notSent)} email ${notices.notSent === 1 ? "notice was" : "notices were"} not sent`}>{[...new Set(notices.reasons.map((r) => r.label))].map((label) => label[0].toUpperCase() + label.slice(1)).join(". ")}. The actions themselves completed; only the email is missing.{notices.reasons.some((r) => r.reason === "no-transport") && " Whoever runs this installation can connect an email service."}</Alert>}
     <section className="usage-coverage" aria-label="Data coverage"><p>{coverage.startedAt ? `Execution outcomes and business event totals have been collected since ${formatTime(coverage.startedAt)}.` : "No execution outcome history yet. It starts when this Kernel records the next operation."} Earlier operation counts may still appear below.</p>
       <p>Up to {coverage.retentionDays} days are retained, subject to storage limits. Blank history does not prove a feature was never used.</p>

@@ -37,7 +37,7 @@ describe("a provider's signature", () => {
     }
   });
 
-  test("a svix delivery gets a fresh id, and Littlebox's own scheme is not signed here", async () => {
+  test("a svix delivery gets a fresh id, and Konae's own scheme is not signed here", async () => {
     const svix = parseRouteSignature("hooks.receive", "POST", { scheme: "svix", secret: "resend_webhook" });
     const secret = `whsec_${btoa("svix-test-key-0123456789")}`;
     const one = await signDelivery(svix, secret, "{}", { t: 1 });

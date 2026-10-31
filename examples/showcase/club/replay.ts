@@ -9,16 +9,16 @@ import path from "node:path";
 import { deflateSync } from "node:zlib";
 import { chromium } from "playwright";
 import { McpClient, type Transfer } from "../../../src/mcp/client";
-import { buildLocal, publishLocal } from "../../../scripts/littlebox";
+import { buildLocal, publishLocal } from "../../../scripts/konae";
 
 const repo = path.resolve(import.meta.dir, "../../..");
-const scratch = await mkdtemp(path.join(tmpdir(), "littlebox-showcase-club-"));
-const portA = Number(process.env.LITTLEBOX_SHOWCASE_PORT ?? 19470);
+const scratch = await mkdtemp(path.join(tmpdir(), "konae-showcase-club-"));
+const portA = Number(process.env.KONAE_SHOWCASE_PORT ?? 19470);
 const portB = portA + 1;
 assert(Number.isInteger(portA) && portA >= 1024 && portB <= 65535, "Choose a valid local port.");
 const password = crypto.randomUUID();
 const newPassword = crypto.randomUUID();
-const shots = process.env.LITTLEBOX_SHOWCASE_SCREENSHOTS;
+const shots = process.env.KONAE_SHOWCASE_SCREENSHOTS;
 const observations: { scenario: string; result: string }[] = [];
 const refusals: { primitive: string; request: string; answer: string }[] = [];
 const kernels: ReturnType<typeof Bun.spawn>[] = [];
@@ -70,14 +70,14 @@ async function startKernel(port: number, name: string) {
   const url = `http://127.0.0.1:${port}`;
   const dataDir = path.join(scratch, name);
   const setupKey = crypto.randomUUID();
-  const kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/littlebox-kernel")], {
+  const kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/konae-kernel")], {
     cwd: repo,
     env: {
-      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LITTLEBOX_") && !key.startsWith("VITE_"))),
-      LITTLEBOX_BIND: "127.0.0.1", LITTLEBOX_KERNEL_PORT: String(port), LITTLEBOX_PUBLIC_ORIGIN: url,
-      LITTLEBOX_HOST_SUFFIX: "localhost", LITTLEBOX_DATA_DIR: dataDir,
-      LITTLEBOX_ADMIN_KEY: setupKey, LITTLEBOX_BUN_PATH: process.execPath, LITTLEBOX_SOURCE_ROOT: repo,
-      LITTLEBOX_TRUSTED_PROXIES: "127.0.0.1", LITTLEBOX_MAIL_TRANSPORT: "development",
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
+      KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
+      KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: dataDir,
+      KONAE_ADMIN_KEY: setupKey, KONAE_BUN_PATH: process.execPath, KONAE_SOURCE_ROOT: repo,
+      KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
     },
     stdout: "ignore", stderr: "inherit",
   });
@@ -85,11 +85,11 @@ async function startKernel(port: number, name: string) {
   let ready = false;
   for (let attempt = 0; attempt < 100 && !ready; attempt++) {
     assert.equal(kernel.exitCode, null, `Kernel ${name} stopped before startup. Is port ${port} free?`);
-    try { ready = (await fetch(`${url}/_littlebox/health`)).ok; } catch {}
+    try { ready = (await fetch(`${url}/_konae/health`)).ok; } catch {}
     if (!ready) await Bun.sleep(100);
   }
   assert(ready, `Kernel ${name} did not start on port ${port}.`);
-  const signup = await fetch(`${url}/_littlebox/owner/signup`, {
+  const signup = await fetch(`${url}/_konae/owner/signup`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: `owner@${name}.example.test`, password, setupKey }),
   });
@@ -115,7 +115,7 @@ function app(kernel: Kernel, receipt: Receipt) {
     return fetch(kernel.url + route, { ...init, headers, redirect: "manual" });
   };
   const post = (route: string, body: object) => http(route, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  const runtime = (cookie?: string) => new McpClient(`${kernel.url}/_littlebox/mcp`, { fetch: (input, init) => {
+  const runtime = (cookie?: string) => new McpClient(`${kernel.url}/_konae/mcp`, { fetch: (input, init) => {
     const headers = new Headers(init?.headers);
     headers.set("host", receipt.hostname);
     if (cookie) headers.set("cookie", cookie);
@@ -123,7 +123,7 @@ function app(kernel: Kernel, receipt: Receipt) {
   } });
   const cookieOf = (response: Response) => response.headers.get("set-cookie")!.split(";")[0];
   const login = async (email: string, secret: string) => {
-    const response = await post("/_littlebox/auth/login", { email, password: secret });
+    const response = await post("/_konae/auth/login", { email, password: secret });
     return { status: response.status, body: await response.json().catch(() => ({})), cookie: response.ok ? cookieOf(response) : undefined };
   };
   return { receipt, http, post, runtime, cookieOf, login };
@@ -149,7 +149,7 @@ async function upload(client: McpClient, bytes: Uint8Array, name: string, type: 
   finally { await client.cancel(transfer.transferId).catch(() => {}); }
 }
 function cli(args: string[]) {
-  const child = Bun.spawn(["bun", "run", path.join(repo, "scripts/littlebox.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
   return Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
 }
 
@@ -163,15 +163,15 @@ try {
   const root = path.join(scratch, "club");
   await cp(import.meta.dir, root, { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
   const project = { id: "showcase_club", name: "Club", slug: "club", manifest: { version: 1, visibility: "private" } };
-  // littlebox.json names the first release's signup policy; publish sends it as initialSignupPolicy.
+  // konae.json names the first release's signup policy; publish sends it as initialSignupPolicy.
   const cliProject = { ...project, manifest: { ...project.manifest, signupPolicy: { mode: "invitation" } } };
-  await writeFile(path.join(root, "littlebox.json"), JSON.stringify({ url: origin.url, project: cliProject }, null, 2));
+  await writeFile(path.join(root, "konae.json"), JSON.stringify({ url: origin.url, project: cliProject }, null, 2));
   const publishToken = await origin.owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 600 });
   const receiptA = await publishLocal(root, { url: origin.url, project: cliProject }, publishToken.token) as Receipt;
   const A = app(origin, receiptA);
   const firstPolicy = await origin.owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receiptA.id });
   assert.equal(firstPolicy.mode, "invitation");
-  // A republish whose littlebox.json names another policy warns and changes nothing.
+  // A republish whose konae.json names another policy warns and changes nothing.
   const warnings: string[] = [];
   const openProject = { ...project, manifest: { ...project.manifest, signupPolicy: { mode: "open" } } };
   await publishLocal(root, { url: origin.url, project: openProject }, publishToken.token, (line) => warnings.push(line));
@@ -179,9 +179,9 @@ try {
   assert.match(warnings[0], /asks for signup Open, but this app has Invitation only\..*Auth > Users.*signup_policy_set/);
   assert.equal((await origin.owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receiptA.id })).mode, "invitation");
   const publishOnlySet = await message(new McpClient(`${origin.url}/mcp`, { token: publishToken.token }).call("signup_policy_set", { deploymentId: receiptA.id, mode: "open" }));
-  assert.equal(publishOnlySet, "Unknown tool or insufficient permission. signup_policy_set needs a credential with manage_users. Run littlebox login with --manage-users, or use a token from token_create that includes it.");
+  assert.equal(publishOnlySet, "Unknown tool or insufficient permission. signup_policy_set needs a credential with manage_users. Run konae login with --manage-users, or use a token from token_create that includes it.");
   refused("Signup policy", "signup_policy_set with the CLI's publish token", publishOnlySet);
-  check("Publish", `littlebox publish deployed ${receiptA.url} as private with policy ${firstPolicy.mode} from littlebox.json, on a token without manage_users. A republish naming open warned "${warnings[0]}" and kept invitation.`);
+  check("Publish", `konae publish deployed ${receiptA.url} as private with policy ${firstPolicy.mode} from konae.json, on a token without manage_users. A republish naming open warned "${warnings[0]}" and kept invitation.`);
 
   // A visitor gets the sign-in page and nothing else.
   const shell = await A.http("/");
@@ -189,11 +189,11 @@ try {
   assert.equal(shell.status, 200);
   assert.match(shellText, /<title>Sign in<\/title>/);
   assert.match(shellText, /Only invited people can create an account/);
-  assert(!shellText.includes("/_littlebox/auth/signup"));
-  const stranger = await A.post("/_littlebox/auth/signup", { email: "stranger@example.test", password });
+  assert(!shellText.includes("/_konae/auth/signup"));
+  const stranger = await A.post("/_konae/auth/signup", { email: "stranger@example.test", password });
   assert.equal(stranger.status, 403);
-  refused("Invitation only", "POST /_littlebox/auth/signup from an uninvited address", `${stranger.status} ${JSON.stringify(await stranger.json())}`);
-  const visitorList = await A.http("/_littlebox/mcp", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+  refused("Invitation only", "POST /_konae/auth/signup from an uninvited address", `${stranger.status} ${JSON.stringify(await stranger.json())}`);
+  const visitorList = await A.http("/_konae/mcp", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
   assert.equal(visitorList.status, 401);
   check("Visitor", "GET / answers the sign-in page without a signup form, signup answers 403 and the runtime endpoint answers 401.");
 
@@ -206,9 +206,9 @@ try {
   const cookies: Record<keyof typeof people, string> = {} as never;
   for (const [who, email] of Object.entries(people) as [keyof typeof people, string][]) {
     const { token, link } = await mail(origin, email, "invitation");
-    assert(link.includes("/_littlebox/invitation#invitation="));
-    assert.deepEqual((await (await A.post("/_littlebox/auth/invitation", { token })).json()).result, { email, app: "Club", status: "new-account" });
-    const accepted = await A.post("/_littlebox/auth/accept", { token, password });
+    assert(link.includes("/_konae/invitation#invitation="));
+    assert.deepEqual((await (await A.post("/_konae/auth/invitation", { token })).json()).result, { email, app: "Club", status: "new-account" });
+    const accepted = await A.post("/_konae/auth/accept", { token, password });
     assert.equal(accepted.status, 200, await accepted.clone().text());
     cookies[who] = A.cookieOf(accepted);
   }
@@ -245,15 +245,15 @@ try {
 
   const benReadsAnaNote = await message(ben.call("files_read", { fileId: anaNote.id }));
   assert.equal(benReadsAnaNote, "File not found.");
-  const benGetsAnaNote = await A.http(`/_littlebox/files/${anaNote.id}`, { cookie: cookies.ben });
+  const benGetsAnaNote = await A.http(`/_konae/files/${anaNote.id}`, { cookie: cookies.ben });
   assert.equal(benGetsAnaNote.status, 404);
   refused("Private file", "Ben's files_read of Ana's note", benReadsAnaNote);
-  refused("Private file", "Ben's GET /_littlebox/files/<Ana's note> with his session", `${benGetsAnaNote.status} ${await benGetsAnaNote.text()}`);
-  const anaGetsNote = await A.http(`/_littlebox/files/${anaNote.id}`, { cookie: cookies.ana });
+  refused("Private file", "Ben's GET /_konae/files/<Ana's note> with his session", `${benGetsAnaNote.status} ${await benGetsAnaNote.text()}`);
+  const anaGetsNote = await A.http(`/_konae/files/${anaNote.id}`, { cookie: cookies.ana });
   assert.equal(anaGetsNote.status, 200);
   assert.match(anaGetsNote.headers.get("content-disposition") ?? "", /^attachment/);
   assert.equal(await anaGetsNote.text(), anaNoteText);
-  const benGetsCover = await A.http(`/_littlebox/files/${anaCover.id}`, { cookie: cookies.ben });
+  const benGetsCover = await A.http(`/_konae/files/${anaCover.id}`, { cookie: cookies.ben });
   assert.equal(benGetsCover.status, 200);
   assert.equal(benGetsCover.headers.get("content-type"), "image/png");
   assert.match(benGetsCover.headers.get("content-disposition") ?? "", /^inline/);
@@ -261,13 +261,13 @@ try {
   assert.deepEqual(await ben.download(await ben.call<Transfer>("files_read", { fileId: anaCover.id })), coverOne);
   const benList = (await ben.call<Array<{ id: string }>>("files_list")).map((file) => file.id).sort();
   assert.deepEqual(benList, [anaCover.id, benCover.id, benNote.id].sort());
-  const visitorCover = await A.http(`/_littlebox/files/${anaCover.id}`);
+  const visitorCover = await A.http(`/_konae/files/${anaCover.id}`);
   assert.equal(visitorCover.status, 401);
-  refused("Private Deployment", "A visitor's GET /_littlebox/files/<public cover>", `${visitorCover.status} ${await visitorCover.text()}`);
+  refused("Private Deployment", "A visitor's GET /_konae/files/<public cover>", `${visitorCover.status} ${await visitorCover.text()}`);
   // A visitor of a private app is asked to sign in before any file is looked
   // up, so a public cover, a private note and a missing ID answer alike.
   for (const id of [anaNote.id, crypto.randomUUID()]) {
-    const visitorFile = await A.http(`/_littlebox/files/${id}`);
+    const visitorFile = await A.http(`/_konae/files/${id}`);
     assert.deepEqual([visitorFile.status, await visitorFile.json()], [401, { error: "authentication-required" }]);
   }
   // There is no visibility between "only me" and "every member". The runtime
@@ -289,13 +289,13 @@ try {
 
   // A program reads public covers with an API key scoped to public files.
   const key = await origin.owner.call<{ key: string; keyId: string }>("api_keys_create", { deploymentId: receiptA.id, name: "Cover mirror", files: ["public"] });
-  const keyCover = await A.http(`/_littlebox/files/${benCover.id}`, { bearer: key.key });
+  const keyCover = await A.http(`/_konae/files/${benCover.id}`, { bearer: key.key });
   assert.equal(keyCover.status, 200);
   assert.deepEqual(new Uint8Array(await keyCover.arrayBuffer()), coverTwo);
-  const keyNote = await A.http(`/_littlebox/files/${anaNote.id}`, { bearer: key.key });
+  const keyNote = await A.http(`/_konae/files/${anaNote.id}`, { bearer: key.key });
   assert.equal(keyNote.status, 404);
   refused("API key", "A key scoped to public files reads a private note", `${keyNote.status} ${await keyNote.text()}`);
-  const keyOnMcp = await A.http("/_littlebox/mcp", { method: "POST", bearer: key.key, headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+  const keyOnMcp = await A.http("/_konae/mcp", { method: "POST", bearer: key.key, headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
   assert.equal(keyOnMcp.status, 403);
   const keyOnMcpText = await keyOnMcp.text();
   assert.equal(JSON.parse(keyOnMcpText).error, "An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.");
@@ -345,7 +345,7 @@ try {
   assert.equal(await message(action(ben, "notes.add", { bookId: kindred, fileId: kindredNote.id, name: "note-kindred.txt" })), "Join the club first, and pick a book that is still on the list.");
   check("Removed book", "Ben's note on a book Ana removed stays in notes.mine under \"A removed book\", and notes.add refuses the removed book with its guard.");
 
-  if (process.env.LITTLEBOX_SHOWCASE_BROWSER !== "0") {
+  if (process.env.KONAE_SHOWCASE_BROWSER !== "0") {
     // Ben signs in through the Kernel's own page, sees the covers from the
     // file read path, opens his note, and is refused an organizer action.
     const browser = await chromium.launch({ channel: "chrome" });
@@ -383,7 +383,7 @@ try {
             try { await miniapp.files.upload(new File(["For the organizers"], "for-organizers.txt", { type: "text/plain" }), { visibility: "organizers" }); } catch (error) { refusal = (error as Error).message; }
             return { refusal, url: await miniapp.files.url(noteId), added: (await miniapp.files.list()).length - before };
           }, benNote.id);
-          assert.deepEqual(sdk, { refusal: "File visibility must be private or public.", url: `/_littlebox/files/${benNote.id}`, added: 0 });
+          assert.deepEqual(sdk, { refusal: "File visibility must be private or public.", url: `/_konae/files/${benNote.id}`, added: 0 });
           refused("File visibility", "miniapp.files.upload(file, { visibility: \"organizers\" }) in Ben's page", sdk.refusal);
           // The note form uploads first and then calls notes.add. When the action refuses,
           // the page deletes the upload, so a refused note leaves no file behind.
@@ -407,29 +407,29 @@ try {
         await context.close();
       }
     } finally { await browser.close(); }
-    check("Browser", `Chrome signed Ben in through the Kernel's page, rendered both covers from /_littlebox/files, fetched his note from miniapp.files.url, saw the SDK refuse visibility "organizers" without storing a file, deleted the upload of a note notes.add refused, showed the organizer refusal, and reported no policy violation${shots ? `; screenshots in ${shots}` : ""}.`);
+    check("Browser", `Chrome signed Ben in through the Kernel's page, rendered both covers from /_konae/files, fetched his note from miniapp.files.url, saw the SDK refuse visibility "organizers" without storing a file, deleted the upload of a note notes.add refused, showed the organizer refusal, and reported no policy violation${shots ? `; screenshots in ${shots}` : ""}.`);
   }
 
   // Account recovery: the emailed link sets a new password and ends Cy's old session.
   assert.equal((await cy.call<{ name: string }>("auth_session")).name, people.cy);
-  const recover = await A.post("/_littlebox/auth/recover", { email: people.cy });
+  const recover = await A.post("/_konae/auth/recover", { email: people.cy });
   assert.equal(recover.status, 202);
-  const unknownRecover = await A.post("/_littlebox/auth/recover", { email: "nobody@club.example.test" });
+  const unknownRecover = await A.post("/_konae/auth/recover", { email: "nobody@club.example.test" });
   assert.equal(unknownRecover.status, 202);
   const recovery = await mail(origin, people.cy, "recovery");
-  assert(recovery.link.includes("/_littlebox/account#recovery="));
-  const reset = await A.post("/_littlebox/auth/reset", { token: recovery.token, password: newPassword });
+  assert(recovery.link.includes("/_konae/account#recovery="));
+  const reset = await A.post("/_konae/auth/reset", { token: recovery.token, password: newPassword });
   assert.equal(reset.status, 200, await reset.clone().text());
   const cyNew = A.runtime(A.cookieOf(reset));
   const oldSession = await message(cy.call("auth_session"));
-  assert.equal(oldSession, "Sign in to use Littlebox MCP.");
+  assert.equal(oldSession, "Sign in to use Konae MCP.");
   refused("Recovery", "Cy's session from before the reset calls auth_session", oldSession);
   assert.equal((await cyNew.call<{ name: string }>("auth_session")).name, people.cy);
   const oldPassword = await A.login(people.cy, password);
   assert.notEqual(oldPassword.status, 200);
   refused("Recovery", "Cy signs in with the old password", `${oldPassword.status} ${JSON.stringify(oldPassword.body)}`);
   assert.equal((await A.login(people.cy, newPassword)).status, 200);
-  const reused = await A.post("/_littlebox/auth/reset", { token: recovery.token, password: crypto.randomUUID() });
+  const reused = await A.post("/_konae/auth/reset", { token: recovery.token, password: crypto.randomUUID() });
   assert.equal(reused.status, 410);
   refused("Recovery", "The same recovery link used twice", `${reused.status} ${await reused.text()}`);
   check("Recovery", "The emailed link reset Cy's password; her earlier session answers 401, the old password fails and the link works once.");
@@ -467,19 +467,19 @@ try {
   assert.equal((await action(anaOnB, "me.get"))[0].role, "organizer");
   assert.deepEqual((await action(anaOnB, "books.list")).map((book: any) => [book.title, book.status, book.cover_file_id]),
     [["The Dispossessed", "current", anaCover.id], ["Solaris", "proposed", benCover.id]]);
-  const coverOnB = await B.http(`/_littlebox/files/${anaCover.id}`, { cookie: benB.cookie });
+  const coverOnB = await B.http(`/_konae/files/${anaCover.id}`, { cookie: benB.cookie });
   assert.equal(coverOnB.status, 200);
   assert.deepEqual(new Uint8Array(await coverOnB.arrayBuffer()), coverOne);
   assert.equal(new TextDecoder().decode(await anaOnB.download(await anaOnB.call<Transfer>("files_read", { fileId: anaNote.id }))), anaNoteText);
   assert.equal(await message(benOnB.call("files_read", { fileId: anaNote.id })), "File not found.");
-  assert.equal((await B.http(`/_littlebox/files/${anaNote.id}`, { cookie: benB.cookie })).status, 404);
+  assert.equal((await B.http(`/_konae/files/${anaNote.id}`, { cookie: benB.cookie })).status, 404);
   assert.equal(await message(action(benOnB, "books.finish", { id: dispossessed })), "Only an organizer can mark the current book as finished.");
   assert.equal((await action(anaOnB, "books.finish", { id: dispossessed })).changes, 1);
 
   const originSession = await message(B.runtime(cookies.ana).call("auth_session"));
-  assert.equal(originSession, "Sign in to use Littlebox MCP.");
+  assert.equal(originSession, "Sign in to use Konae MCP.");
   refused("Import", "Ana's origin session cookie on the destination Kernel", originSession);
-  const originKey = await B.http(`/_littlebox/files/${anaCover.id}`, { bearer: key.key });
+  const originKey = await B.http(`/_konae/files/${anaCover.id}`, { bearer: key.key });
   const originKeyBody = await originKey.json();
   assert.deepEqual([originKey.status, originKeyBody], [401, { error: "invalid-api-key" }]);
   refused("Import", "The origin's API key on the destination's file read path", `${originKey.status} ${JSON.stringify(originKeyBody)}`);
@@ -509,7 +509,7 @@ try {
     assert.deepEqual(skipped, ["SKIP books.propose: refuses with its guard when no row changes", "SKIP notes.add: refuses with its guard when no row changes"], out);
     conformTotals[label] = totals;
   }
-  check("Action Contract", `littlebox contract wrote the contract for 10 actions; conform as Ben: origin "${conformTotals.origin}", destination "${conformTotals.destination}"`);
+  check("Action Contract", `konae contract wrote the contract for 10 actions; conform as Ben: origin "${conformTotals.origin}", destination "${conformTotals.destination}"`);
 
   console.log(JSON.stringify({ app: "club", checks: observations.length, observations, refusals, conform: conformTotals }, null, 2));
 } finally {

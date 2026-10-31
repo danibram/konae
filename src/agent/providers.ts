@@ -40,7 +40,7 @@ const providerFactories: Record<ProviderId, () => Provider> = {
 const providerHeaders: Record<ProviderId, ProviderHeaders> = {
   anthropic: { "anthropic-dangerous-direct-browser-access": "true" },
   openai: {},
-  openrouter: { "x-title": "Littlebox" },
+  openrouter: { "x-title": "Konae" },
 };
 
 let sharedModels: MutableModels | null = null;

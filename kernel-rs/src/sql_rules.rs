@@ -51,7 +51,7 @@ fn first_word_refusal(name: &str, kind: &str, first: &str) -> Refusal {
         ("query", "WITH") => " Move the WITH clause into a subquery, as in SELECT ... FROM (WITH ... SELECT ...).",
         (_, "WITH") => " Put the WITH clause after INSERT INTO <table> (<columns>), or inside a subquery.",
         (_, word) if STRUCTURE_WORDS.contains(&word) => {
-            " Tables and indexes belong in schema.sql, and Littlebox runs no triggers or views."
+            " Tables and indexes belong in schema.sql, and Konae runs no triggers or views."
         }
         _ => "",
     };
@@ -156,7 +156,7 @@ pub(super) fn stored_trigger_or_view(db: &rusqlite::Connection) -> rusqlite::Res
     db.query_row(
         "SELECT upper(type), name FROM sqlite_master WHERE type IN ('trigger', 'view') ORDER BY type, name LIMIT 1",
         [],
-        |row| Ok(format!("The database holds CREATE {} {}, and Littlebox runs no triggers or views. Drop it before importing.", row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        |row| Ok(format!("The database holds CREATE {} {}, and Konae runs no triggers or views. Drop it before importing.", row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
     )
     .optional()
 }

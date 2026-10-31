@@ -1,5 +1,5 @@
 // The static publishing contract: which Capsule files become a Build Artifact
-// and at which path each one is served. The CLI (`littlebox build`), the
+// and at which path each one is served. The CLI (`konae build`), the
 // editor's browser build and the exported kit's scripts/build.mjs all run this
 // file, so it is plain JavaScript with no imports. Each door supplies how to
 // read a file and how to bundle a module; the rules below are the same for all.
@@ -13,7 +13,7 @@
 // writes its script tag under the page's base path.
 
 /** The attribute that marks the SDK script, so tools that rebuild a document can find it. */
-export const runtimeScriptAttribute = "data-littlebox-runtime";
+export const runtimeScriptAttribute = "data-konae-runtime";
 
 /** The SDK file a document page loads. The build adds it; a Capsule cannot hold its own. */
 export const runtimeFile = "runtime.js";
@@ -46,7 +46,7 @@ export function runtimeLoaderScript() {
 export const routingModes = ["pages", "spa"];
 export const routingMessage = 'Routing must be "pages" or "spa".';
 
-const reservedRoots = ["_littlebox", "oauth", ".well-known", "mcp"];
+const reservedRoots = ["_konae", "oauth", ".well-known", "mcp"];
 const fetchingRels = ["stylesheet", "icon", "apple-touch-icon", "mask-icon", "manifest", "preload", "modulepreload", "prefetch"];
 const defaultBody = "<main id=app></main>";
 
@@ -127,7 +127,7 @@ export async function assembleStaticArtifact(input) {
   const claim = (served, source) => {
     const reserved = reservedRoots.find((root) => served === root || served.startsWith(`${root}/`));
     if (reserved) throw new Error(`${source} would publish at /${served}, under /${reserved}, which the Kernel keeps.`);
-    if (served === runtimeFile) throw new Error(`${source} would publish at /${runtimeFile}, where the build puts the Littlebox SDK. Rename it.`);
+    if (served === runtimeFile) throw new Error(`${source} would publish at /${runtimeFile}, where the build puts the Konae SDK. Rename it.`);
     const other = sources.get(served);
     if (other && other !== source) throw new Error(`${other} and ${source} would both publish at /${served}. Keep one.`);
     sources.set(served, source);
@@ -136,7 +136,7 @@ export async function assembleStaticArtifact(input) {
     const served = servedPath(source);
     if (served) claim(served, source);
   }
-  if (held.has(runtimeFile)) throw new Error(`The Capsule holds ${runtimeFile}, the name the build gives the Littlebox SDK. Rename it.`);
+  if (held.has(runtimeFile)) throw new Error(`The Capsule holds ${runtimeFile}, the name the build gives the Konae SDK. Rename it.`);
 
   const files = {};
   const encodings = {};
@@ -227,12 +227,12 @@ export async function assembleStaticArtifact(input) {
  * `// app.js` or `/* lib/b.css *\/`. The name is relative to the folder the
  * builder ran in, so it would ship the builder's directory layout to every
  * visitor and make two builds of one Capsule from two folders differ. Only a
- * line that names a file the Capsule holds is dropped, with the `littlebox:`
+ * line that names a file the Capsule holds is dropped, with the `konae:`
  * namespace the editor's builder adds. esbuild drops a page's other comments
  * already, except legal ones, which stay.
  */
 export function stripModulePaths(code, held) {
-  const named = (path) => held.has(path.startsWith("littlebox:") ? path.slice("littlebox:".length) : path);
+  const named = (path) => held.has(path.startsWith("konae:") ? path.slice("konae:".length) : path);
   return code.replace(/^(?:\/\/ (\S+)|\/\* (\S+) \*\/)\n/gm, (line, js, css) => named(js ?? css) ? "" : line);
 }
 
@@ -242,7 +242,7 @@ function withoutModulePaths(output, held) {
 
 /**
  * The served path a reference names, or null when it is not a Capsule file:
- * another origin, a fragment, a data URL or a Kernel path under /_littlebox.
+ * another origin, a fragment, a data URL or a Kernel path under /_konae.
  */
 export function resolveReference(raw, from) {
   const value = raw.trim();
@@ -261,7 +261,7 @@ export function resolveReference(raw, from) {
     } else parts.push(part);
   }
   const target = parts.join("/");
-  if (!target || target === "_littlebox" || target.startsWith("_littlebox/")) return null;
+  if (!target || target === "_konae" || target.startsWith("_konae/")) return null;
   if (decoded.endsWith("/")) return `${target}/index.html`;
   return target;
 }
@@ -313,7 +313,7 @@ export function scanCss(css, from, reference) {
 
 /**
  * True for a URL that starts at the origin root: `/about`, `/`, `/?q=1`,
- * `/_littlebox/...`. A protocol-relative `//host` is not, and neither is the
+ * `/_konae/...`. A protocol-relative `//host` is not, and neither is the
  * SDK file the build supplies. On a path address such a URL leaves the app's
  * prefix, so the build and the Validation Gate warn about it.
  */

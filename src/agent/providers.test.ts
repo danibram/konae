@@ -124,7 +124,7 @@ describe("agent key store", () => {
     keyStore.setKey("openai", "  sk-openai-test  ");
     expect(keyStore.getKey("openai")).toBe("sk-openai-test");
     expect([...storage.entries.keys()]).toEqual([agentKeyName("openai")]);
-    expect(agentKeyName("openai")).toStartWith("littlebox:agent-key:");
+    expect(agentKeyName("openai")).toStartWith("konae:agent-key:");
 
     keyStore.clearKey("openai");
     expect(keyStore.getKey("openai")).toBeNull();

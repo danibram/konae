@@ -1,6 +1,6 @@
 .git
 .env*
-.littlebox/
+.konae/
 data/
 dist/
 node_modules/

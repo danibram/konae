@@ -1,12 +1,12 @@
 # A route verifies a provider's own signature
 
-Status: accepted, 2026-11-07. Amends [ADR-0011](0011-one-verified-account-core-for-creators-and-app-users.md)'s HTTP routes, which took a signature in Littlebox's scheme only.
+Status: accepted, 2026-11-07. Amends [ADR-0011](0011-one-verified-account-core-for-creators-and-app-users.md)'s HTTP routes, which took a signature in Konae's scheme only.
 
-A route's signature was Littlebox's own: an HMAC over a timestamp, a nonce, the method, the path, the query and the body, in one header. No outside service signs that way, so a code host's, a shop's or a payment provider's webhook answered `invalid-signature`, and a body with fields the action did not declare answered `Unexpected action input`. The capability matrix found that this left the integration hub with no way to receive a webhook and left payments with no verified confirmation. The only answer was an adapter the owner runs elsewhere, which is a second server, the thing Littlebox exists to avoid.
+A route's signature was Konae's own: an HMAC over a timestamp, a nonce, the method, the path, the query and the body, in one header. No outside service signs that way, so a code host's, a shop's or a payment provider's webhook answered `invalid-signature`, and a body with fields the action did not declare answered `Unexpected action input`. The capability matrix found that this left the integration hub with no way to receive a webhook and left payments with no verified confirmation. The only answer was an adapter the owner runs elsewhere, which is a second server, the thing Konae exists to avoid.
 
 ## Decision
 
-A route's `signature` may name a `scheme`. `littlebox` stays the default. Three more cover the forms the common providers use:
+A route's `signature` may name a `scheme`. `konae` stays the default. Three more cover the forms the common providers use:
 
 - `hmac-body`: the HMAC of the raw body with `algorithm` `sha256` or `sha1`, written in `hex` or `base64`, after an optional `prefix`. GitHub and Shopify sign this way.
 - `timestamped`: comma-separated fields in one header, the Unix time after `prefix` and the hex HMAC-SHA256 of `<t>.<body>` after `tag`, refused outside a declared `window` of 1 to 3600 seconds. Stripe signs this way.
@@ -20,7 +20,7 @@ Each scheme accepts a delivery once. The Kernel records it in a `route_deliverie
 
 ## Considered options
 
-- **An adapter outside Littlebox that verifies the sender and re-signs in Littlebox's scheme.** Rejected as the answer, because a person who does not write code cannot run one, and it takes the app's rules to a server that does not leave with the app.
+- **An adapter outside Konae that verifies the sender and re-signs in Konae's scheme.** Rejected as the answer, because a person who does not write code cannot run one, and it takes the app's rules to a server that does not leave with the app.
 - **One generic template for the signed string and its header layout.** Rejected because each template is a small language both doors must parse identically, and the three forms above cover the providers the showcase and the probes needed. A fourth form is a new scheme with its own cases.
 - **Trust a provider's delivery ID header for replays.** Rejected for `hmac-body`, because GitHub's `X-GitHub-Delivery` is outside the MAC, so a replay could change it. The MAC is remembered instead. Svix's id is inside its MAC, so it is the key there.
 - **Remember a delivery even when its action fails.** Rejected because providers retry a delivery that did not answer 2xx with the same body, and a failure the owner then fixes, such as a missing column, would refuse every retry as a replay.
@@ -41,4 +41,4 @@ A GitHub or Stripe route took six signature keys copied from prose, and the Gate
 - The table holds `github`, `shopify`, `stripe` and `svix`, the four forms kernel-rs/src/provider-signature-cases.json has vectors for. A test on each door refuses a row without a vector that names it, so a provider joins the table with a vector that signs as it does. Resend signs with Svix's scheme and uses `svix`.
 - A preset takes only `provider` and `secret`. A long-form key beside it is refused with `Action <name> names the signature provider "<provider>", so its signature takes only "provider" and "secret". Remove <keys>.`, so a route has one spelling. An unknown provider is refused with the list of the table's rows.
 - The long form stays for every other sender. When it has several wrong keys, one refusal names them all, one sentence each, where the parse used to stop at the first. An unknown scheme and a provider's scheme on GET still stop it.
-- The preset expands before the long-form checks, so the Kernel, the Action Contract and `littlebox conform` see the same scheme and settings as before. kernel-rs/src/signature-preset-cases.json holds the cases both doors run.
+- The preset expands before the long-form checks, so the Kernel, the Action Contract and `konae conform` see the same scheme and settings as before. kernel-rs/src/signature-preset-cases.json holds the cases both doors run.

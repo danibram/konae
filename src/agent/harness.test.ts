@@ -4,7 +4,7 @@ import initSqlJs, { type SqlJsStatic } from "sql.js";
 import { cloneStarter, starterProject } from "../lib/starter";
 import type { MiniAppProject } from "../lib/types";
 import type { AgentSessionConfig, AgentUiEvent, CapsuleFiles, LiveDatabase, ValidationResult } from "./contracts";
-import { createLittleboxAgent, type LittleboxAgentOptions } from "./harness";
+import { createKonaeAgent, type KonaeAgentOptions } from "./harness";
 import { emptyAgentKeyStore } from "./key-store";
 import type { ReleaseFacts } from "./release-check";
 
@@ -124,10 +124,10 @@ function stubModels(turns: Turn[]): Harness {
   return { models, requests };
 }
 
-function agentFor(turns: Turn[], options: Partial<LittleboxAgentOptions> = {}) {
+function agentFor(turns: Turn[], options: Partial<KonaeAgentOptions> = {}) {
   const harness = stubModels(turns);
   const events: AgentUiEvent[] = [];
-  const agent = createLittleboxAgent(starterProject, sessionConfig, emptyAgentKeyStore(), {
+  const agent = createKonaeAgent(starterProject, sessionConfig, emptyAgentKeyStore(), {
     models: harness.models,
     loadSql,
     ...options,
@@ -162,7 +162,7 @@ const cssEdit = {
   arguments: { path: "/workspace/styles.css", old_string: "--ds-orange: #f45d35;", new_string: "--ds-orange: #3157d5;" },
 };
 
-describe("littlebox agent", () => {
+describe("konae agent", () => {
   test("seeds the whole capsule in the first message and only the prompt afterwards", async () => {
     const { agent, harness } = agentFor([say("Listo."), say("Listo otra vez.")]);
 

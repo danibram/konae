@@ -6,7 +6,7 @@
 // secret, the refusals at both doors, the per-app limit, the outbox, Usage,
 // and connects with a public GET route read from another app's origin.
 //
-//   LITTLEBOX_PROBE_PORT=23070 bun run examples/probes/calls/replay.ts
+//   KONAE_PROBE_PORT=23070 bun run examples/probes/calls/replay.ts
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -152,9 +152,9 @@ await probe("calls", 23070, async (kit) => {
   const metadataKernel = await kit.planRefusal(path.join(here, "tasks"), "probe_tasks", { "actions.json": metadata });
   assert.equal(metadataGate.detail, "Action tasks.escalate calls the IP address 169.254.169.254. Name a host instead.");
   assert.equal(metadataKernel, metadataGate.detail);
-  const admin = withUrl(`${deskOrigin}/_littlebox/mcp`);
+  const admin = withUrl(`${deskOrigin}/_konae/mcp`);
   const adminKernel = await kit.planRefusal(path.join(here, "tasks"), "probe_tasks", { "actions.json": admin });
-  assert.equal(adminKernel, "Action tasks.escalate calls a path under /_littlebox, /oauth, /.well-known or /mcp, which belong to the Kernel.");
+  assert.equal(adminKernel, "Action tasks.escalate calls a path under /_konae, /oauth, /.well-known or /mcp, which belong to the Kernel.");
   assert.equal((await kit.gateRefusal({ ...tasksFiles, "actions.json": admin })).detail, adminKernel);
   const plain = await kit.planRefusal(path.join(here, "tasks"), "probe_tasks", { "actions.json": withUrl("http://api.example.com/hooks") });
   assert.equal(plain, "Action tasks.escalate calls http://api.example.com, which is not an app of this installation. Use https.");

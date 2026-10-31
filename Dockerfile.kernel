@@ -17,32 +17,32 @@ RUN mkdir src && printf 'fn main() {}\n' > src/main.rs && cargo build --release 
 COPY kernel-rs/src ./src
 RUN touch src/main.rs && cargo build --release --locked
 COPY kernel-rs/derive-helper.c ./derive-helper.c
-RUN gcc -O2 -s -o littlebox-derive derive-helper.c
+RUN gcc -O2 -s -o konae-derive derive-helper.c
 
 FROM debian:bookworm-slim
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
   && rm -rf /var/lib/apt/lists/* \
-  && groupadd --system --gid 10001 littlebox \
-  && useradd --system --uid 10001 --gid littlebox --home-dir /data --no-create-home --shell /usr/sbin/nologin littlebox \
-  && groupadd --system --gid 10002 littlebox-derive \
-  && useradd --system --uid 10002 --gid littlebox-derive --home-dir /tmp --no-create-home --shell /usr/sbin/nologin littlebox-derive \
+  && groupadd --system --gid 10001 konae \
+  && useradd --system --uid 10001 --gid konae --home-dir /data --no-create-home --shell /usr/sbin/nologin konae \
+  && groupadd --system --gid 10002 konae-derive \
+  && useradd --system --uid 10002 --gid konae-derive --home-dir /tmp --no-create-home --shell /usr/sbin/nologin konae-derive \
   && mkdir -p /data \
-  && chown littlebox:littlebox /data \
+  && chown konae:konae /data \
   && chmod 0700 /data
-COPY --from=build /src/target/release/littlebox-kernel /usr/local/bin/littlebox-kernel
-COPY --from=build /src/littlebox-derive /usr/local/bin/littlebox-derive
-RUN chown root:root /usr/local/bin/littlebox-derive && chmod 4755 /usr/local/bin/littlebox-derive
+COPY --from=build /src/target/release/konae-kernel /usr/local/bin/konae-kernel
+COPY --from=build /src/konae-derive /usr/local/bin/konae-derive
+RUN chown root:root /usr/local/bin/konae-derive && chmod 4755 /usr/local/bin/konae-derive
 COPY --from=tooling /usr/local/bin/bun /usr/local/bin/bun
-COPY --from=tooling /app/package.json /opt/littlebox/package.json
-COPY --from=tooling /app/node_modules /opt/littlebox/node_modules
-COPY --from=tooling /app/database-lifecycle /opt/littlebox/database-lifecycle
-COPY ops/kernel-entrypoint.sh /usr/local/bin/littlebox-entrypoint
-RUN chmod 755 /usr/local/bin/littlebox-entrypoint
+COPY --from=tooling /app/package.json /opt/konae/package.json
+COPY --from=tooling /app/node_modules /opt/konae/node_modules
+COPY --from=tooling /app/database-lifecycle /opt/konae/database-lifecycle
+COPY ops/kernel-entrypoint.sh /usr/local/bin/konae-entrypoint
+RUN chmod 755 /usr/local/bin/konae-entrypoint
 # The Kernel binds all interfaces here, so it refuses the local development
 # key unless the compose file opts in. Schema derivation goes through the
-# setuid helper, which becomes littlebox-derive before the model loads.
-ENV LITTLEBOX_BUN_PATH=/usr/local/bin/bun LITTLEBOX_SOURCE_ROOT=/opt/littlebox LITTLEBOX_BIND=0.0.0.0 LITTLEBOX_DATA_DIR=/data LITTLEBOX_DERIVE_HELPER=/usr/local/bin/littlebox-derive
+# setuid helper, which becomes konae-derive before the model loads.
+ENV KONAE_BUN_PATH=/usr/local/bin/bun KONAE_SOURCE_ROOT=/opt/konae KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/data KONAE_DERIVE_HELPER=/usr/local/bin/konae-derive
 EXPOSE 8787
-ENTRYPOINT ["/usr/local/bin/littlebox-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/konae-entrypoint"]

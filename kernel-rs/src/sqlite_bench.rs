@@ -21,7 +21,6 @@ fn state(root: &Path) -> AppState {
         public_origin: "http://localhost".into(),
         mcp_origin: None,
         path_origin: None,
-        home_deployment: None,
         host_suffix: "localhost".into(),
         guards: Arc::new(Guards::new(Vec::new())),
     }
@@ -58,7 +57,7 @@ fn report(label: &str, mut samples: Vec<Duration>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore]
 async fn sqlite_bench() {
-    let root = std::env::temp_dir().join(format!("littlebox-sqlite-bench-{}", Uuid::new_v4()));
+    let root = std::env::temp_dir().join(format!("konae-sqlite-bench-{}", Uuid::new_v4()));
     std::fs::create_dir_all(root.join("deployments").join(ID)).unwrap();
     let state = state(&root);
     let path = database_path(&state, ID);

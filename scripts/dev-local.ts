@@ -4,10 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const kernelPort = process.env.LITTLEBOX_KERNEL_PORT ?? "8790";
-const editorPort = process.env.LITTLEBOX_EDITOR_PORT ?? "4173";
-const kernelUrl = process.env.LITTLEBOX_KERNEL_URL ?? `http://127.0.0.1:${kernelPort}`;
-const dataRootSetting = process.env.LITTLEBOX_DATA_DIR ?? "data/kernel-local";
+const kernelPort = process.env.KONAE_KERNEL_PORT ?? "8790";
+const editorPort = process.env.KONAE_EDITOR_PORT ?? "4173";
+const kernelUrl = process.env.KONAE_KERNEL_URL ?? `http://127.0.0.1:${kernelPort}`;
+const dataRootSetting = process.env.KONAE_DATA_DIR ?? "data/kernel-local";
 const dataRoot = path.isAbsolute(dataRootSetting) ? dataRootSetting : path.resolve(root, dataRootSetting);
 
 await mkdir(dataRoot, { recursive: true });
@@ -51,28 +51,28 @@ process.on("SIGINT", () => stop(0));
 process.on("SIGTERM", () => stop(0));
 
 const kernelEnv = {
-  LITTLEBOX_BUN_PATH: process.execPath,
-  LITTLEBOX_SOURCE_ROOT: root,
+  KONAE_BUN_PATH: process.execPath,
+  KONAE_SOURCE_ROOT: root,
   ...process.env,
-  LITTLEBOX_KERNEL_PORT: kernelPort,
-  LITTLEBOX_DATA_DIR: dataRoot,
-  LITTLEBOX_PUBLIC_ORIGIN: process.env.LITTLEBOX_PUBLIC_ORIGIN ?? `http://localhost:${kernelPort}`,
-  LITTLEBOX_HOST_SUFFIX: process.env.LITTLEBOX_HOST_SUFFIX ?? "localhost",
+  KONAE_KERNEL_PORT: kernelPort,
+  KONAE_DATA_DIR: dataRoot,
+  KONAE_PUBLIC_ORIGIN: process.env.KONAE_PUBLIC_ORIGIN ?? `http://localhost:${kernelPort}`,
+  KONAE_HOST_SUFFIX: process.env.KONAE_HOST_SUFFIX ?? "localhost",
 };
-delete kernelEnv.LITTLEBOX_S3_ENDPOINT;
-delete kernelEnv.LITTLEBOX_S3_ACCESS_KEY;
-delete kernelEnv.LITTLEBOX_S3_SECRET_KEY;
-delete kernelEnv.LITTLEBOX_S3_REGION;
-delete kernelEnv.LITTLEBOX_ARTIFACT_BUCKET;
-delete kernelEnv.LITTLEBOX_DATA_BUCKET;
+delete kernelEnv.KONAE_S3_ENDPOINT;
+delete kernelEnv.KONAE_S3_ACCESS_KEY;
+delete kernelEnv.KONAE_S3_SECRET_KEY;
+delete kernelEnv.KONAE_S3_REGION;
+delete kernelEnv.KONAE_ARTIFACT_BUCKET;
+delete kernelEnv.KONAE_DATA_BUCKET;
 const editorEnv = {
   ...process.env,
-  LITTLEBOX_KERNEL_URL: kernelUrl,
-  LITTLEBOX_BUN_PATH: process.execPath,
+  KONAE_KERNEL_URL: kernelUrl,
+  KONAE_BUN_PATH: process.execPath,
 };
 
-console.log(`Littlebox editor: http://localhost:${editorPort}`);
-console.log(`Littlebox Kernel: ${kernelUrl}`);
+console.log(`Konae editor: http://localhost:${editorPort}`);
+console.log(`Konae Kernel: ${kernelUrl}`);
 console.log(`Local app data: ${dataRoot}`);
 
 start("cargo", ["run", "--manifest-path", path.join(root, "kernel-rs", "Cargo.toml")], kernelEnv);

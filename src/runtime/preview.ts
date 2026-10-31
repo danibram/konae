@@ -15,7 +15,7 @@ export const runtimeClient = String.raw`
     return new Promise((resolve, reject) => {
       const id = 'req_' + (++sequence);
       pending.set(id, { resolve, reject });
-      runtimePort.postMessage({ jsonrpc: '2.0', id, method, params: { ...params, _meta: { 'littlebox/capability': capability } } });
+      runtimePort.postMessage({ jsonrpc: '2.0', id, method, params: { ...params, _meta: { 'konae/capability': capability } } });
     });
   }
   function request(method, payload) {
@@ -28,7 +28,7 @@ export const runtimeClient = String.raw`
   addEventListener('message', (event) => {
     if (event.source !== parent || !event.ports[0]) return;
     const message = event.data;
-    if (!message || message.channel !== 'littlebox-runtime' || message.type !== 'connect') return;
+    if (!message || message.channel !== 'konae-runtime' || message.type !== 'connect') return;
     // Last connect wins: the host may hand over a fresh port after a reload or a
     // missed handshake, and refusing it would strand the app on a dead one.
     if (runtimePort) runtimePort.close();
@@ -43,8 +43,8 @@ export const runtimeClient = String.raw`
       else handler.resolve(response.result);
     };
     runtimePort.start();
-    rpc('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'littlebox-preview-app', version: '0.1.0' } }).then(() => {
-      runtimePort.postMessage({ jsonrpc: '2.0', method: 'notifications/initialized', params: { _meta: { 'littlebox/capability': capability } } });
+    rpc('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'konae-preview-app', version: '0.1.0' } }).then(() => {
+      runtimePort.postMessage({ jsonrpc: '2.0', method: 'notifications/initialized', params: { _meta: { 'konae/capability': capability } } });
       connectRuntime();
     }).catch(() => {});
   });
@@ -60,7 +60,7 @@ export const runtimeClient = String.raw`
     if (reporting) return;
     reporting = true;
     const box = document.createElement('pre');
-    box.dataset.littleboxError = kind;
+    box.dataset.konaeError = kind;
     box.style.cssText = 'margin:20px;padding:16px;background:#3b1717;color:#ffdede;white-space:pre-wrap';
     box.textContent = message + (stack ? '\n\n' + stack : '');
     document.body.appendChild(box);
@@ -83,7 +83,7 @@ export const runtimeClient = String.raw`
    * and a handshake that depends on winning that race silently strands the app.
    */
   try {
-    parent.postMessage({ channel: 'littlebox-runtime', type: 'hello' }, '*');
+    parent.postMessage({ channel: 'konae-runtime', type: 'hello' }, '*');
   } catch (error) {
     /* no parent to greet */
   }

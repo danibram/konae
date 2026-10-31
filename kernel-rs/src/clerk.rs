@@ -54,11 +54,11 @@ impl ClerkConfig {
     /// Any Clerk setting enables hosted mode. Partial configuration fails closed.
     pub fn from_env() -> Result<Option<Self>> {
         let names = [
-            "LITTLEBOX_CLERK_ISSUER",
-            "LITTLEBOX_CLERK_JWKS_FILE",
-            "LITTLEBOX_CLERK_AUTHORIZED_ORIGINS",
-            "LITTLEBOX_CLERK_BETA_SUBJECTS",
-            "LITTLEBOX_CLERK_PUBLISHABLE_KEY",
+            "KONAE_CLERK_ISSUER",
+            "KONAE_CLERK_JWKS_FILE",
+            "KONAE_CLERK_AUTHORIZED_ORIGINS",
+            "KONAE_CLERK_BETA_SUBJECTS",
+            "KONAE_CLERK_PUBLISHABLE_KEY",
         ];
         if names.iter().all(|name| std::env::var_os(name).is_none()) {
             return Ok(None);
@@ -373,12 +373,12 @@ pub fn operator_command() -> Result<bool> {
     }
     ensure!(
         args.len() == 2 && valid_id(&args[1], "user_"),
-        "Usage: littlebox-kernel creator-suspend <Clerk user subject>"
+        "Usage: konae-kernel creator-suspend <Clerk user subject>"
     );
-    let issuer = std::env::var("LITTLEBOX_CLERK_ISSUER")
-        .context("Set LITTLEBOX_CLERK_ISSUER before suspending a hosted creator.")?;
+    let issuer = std::env::var("KONAE_CLERK_ISSUER")
+        .context("Set KONAE_CLERK_ISSUER before suspending a hosted creator.")?;
     let root = std::path::PathBuf::from(
-        std::env::var("LITTLEBOX_DATA_DIR").unwrap_or_else(|_| "/data".into()),
+        std::env::var("KONAE_DATA_DIR").unwrap_or_else(|_| "/data".into()),
     );
     let mut db = Connection::open_with_flags(
         root.join("owners.sqlite"),

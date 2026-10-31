@@ -1,5 +1,5 @@
-// `littlebox pull`: a copy of a Deployment's live package kept under
-// .littlebox/pull, which `littlebox dev` installs on a Development Kernel
+// `konae pull`: a copy of a Deployment's live package kept under
+// .konae/pull, which `konae dev` installs on a Development Kernel
 // that holds no data yet. The copy travels one way. Nothing here writes to
 // the Deployment it came from.
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -8,8 +8,8 @@ import type { McpClient, Transfer } from "../src/mcp/client";
 import { checkPackageManifest, packageComponentFiles, type PackageManifest } from "../src/lib/portable-package";
 import { downloadToFile, uploadFromFile } from "./package-files";
 
-/** Where the copy sits in a project folder. .littlebox is already kept out of Git. */
-export const PULL_DIRECTORY = ".littlebox/pull";
+/** Where the copy sits in a project folder. .konae is already kept out of Git. */
+export const PULL_DIRECTORY = ".konae/pull";
 const RECORD = "pull.json";
 
 /** What pull.json holds: the package's manifest, the installation it came from and when. */
@@ -47,15 +47,15 @@ export async function downloadPackage(client: McpClient, deploymentId: string, d
 }
 
 /**
- * Downloads the project's live package into .littlebox/pull. The download
+ * Downloads the project's live package into .konae/pull. The download
  * lands in a folder beside it first, so a pull that fails keeps the copy an
  * earlier pull left.
  */
 export async function pullLocal(root: string, client: McpClient, from: string, projectId: string): Promise<Pulled> {
   const remote = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId });
   if (!remote.deployment) throw Error("This project has no Deployment to pull from. Publish it first.");
-  await mkdir(path.join(root, ".littlebox"), { recursive: true });
-  const scratch = await mkdtemp(path.join(root, ".littlebox/pull-"));
+  await mkdir(path.join(root, ".konae"), { recursive: true });
+  const scratch = await mkdtemp(path.join(root, ".konae/pull-"));
   try {
     const { manifest } = await downloadPackage(client, remote.deployment.id, scratch);
     const pulled: Pulled = { manifest, from, at: Date.now() };
@@ -101,7 +101,7 @@ export async function uploadPulled(client: McpClient, root: string, pulled: Pull
  */
 export async function installPulledAlone(client: McpClient, root: string, pulled: Pulled, project: { id: string; name: string; slug: string; manifest: Record<string, unknown> }) {
   const components = await uploadPulled(client, root, pulled, project.id);
-  const page = "<!doctype html><title>Waiting for a migration</title><main><h1>Waiting for a migration</h1><p>This Development Kernel holds the pulled copy. The app's actions need a newer schema than the copy has. Apply the change with littlebox sql, then save a file.</p></main>";
+  const page = "<!doctype html><title>Waiting for a migration</title><main><h1>Waiting for a migration</h1><p>This Development Kernel holds the pulled copy. The app's actions need a newer schema than the copy has. Apply the change with konae sql, then save a file.</p></main>";
   const payload = {
     project: { ...project, files: { "actions.json": '{"version":1,"actions":{}}', "schema.sql": "" } },
     visibility: pulled.manifest.visibility,

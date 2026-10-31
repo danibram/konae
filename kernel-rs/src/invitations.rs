@@ -30,9 +30,9 @@ const IDEMPOTENCY_SECONDS: i64 = 7 * 24 * 60 * 60;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/_littlebox/invitation", get(invitation_page))
-        .route("/_littlebox/auth/invitation", post(inspect_route))
-        .route("/_littlebox/auth/accept", post(accept_route))
+        .route("/_konae/invitation", get(invitation_page))
+        .route("/_konae/auth/invitation", post(inspect_route))
+        .route("/_konae/auth/accept", post(accept_route))
 }
 
 /// Whether a valid invitation may activate an account for this email under
@@ -235,7 +235,7 @@ async fn accept_route(State(state): State<AppState>, request: Request) -> Respon
 
 async fn invitation_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let Some(deployment) = deployment_for(&state, &headers).await else {
-        return error(StatusCode::NOT_FOUND, "Littlebox deployment not found.");
+        return error(StatusCode::NOT_FOUND, "Konae deployment not found.");
     };
     // With Google offered, the page can accept with the Google account of the
     // invited email instead of a password.
@@ -265,13 +265,13 @@ async fn invitation_page(State(state): State<AppState>, headers: HeaderMap) -> R
 const INVITATION_PAGE: &str = r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Your invitation</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f5f7;color:#20232a;font:16px system-ui,sans-serif}main{width:min(100%,380px);padding:32px;background:white;border:1px solid #e1e4e8;border-radius:12px;box-shadow:0 12px 36px #1f293714}h1{margin:0 0 8px;font-size:24px}p{color:#586174;line-height:1.5}form,label{display:grid;gap:8px}form{gap:16px;margin-top:24px}input,button{font:inherit;border-radius:8px;padding:11px 12px}input{width:100%;border:1px solid #c9ced6}input[readonly]{background:#f4f5f7;color:#20232a}button{border:0;background:#273449;color:white;cursor:pointer}#error{min-height:1.5em;margin:0;color:#a32727}[hidden]{display:none}@media (prefers-color-scheme:dark){body{background:#14161a;color:#e8eaed}main{background:#1d2026;border-color:#2e333b;box-shadow:none}p{color:#a9b0bc}input{background:#14161a;color:#e8eaed;border-color:#3a404a}input[readonly]{background:#23272e;color:#e8eaed}button{background:#e8eaed;color:#14161a}button+button{background:#2a2f37;color:#e8eaed}#error{color:#ff8a8a}a{color:#8ab4ff}}</style><link rel="icon" href="data:,">
 <main><h1 id="title">Your invitation</h1><p id="note">Checking your invitation.</p>
 <form id="accept" hidden><label>Email <input id="email" type="email" readonly></label><label>Choose a password <input name="password" type="password" minlength="8" required autocomplete="new-password"></label><button>Accept and enter</button></form>
-<p id="error" role="alert"></p><p><a id="signin" href="/_littlebox/login">Sign in instead</a></p></main>
+<p id="error" role="alert"></p><p><a id="signin" href="/_konae/login">Sign in instead</a></p></main>
 <script>
-const token=new URLSearchParams(location.hash.slice(1)).get('invitation');const $=s=>document.querySelector(s);const pathMatch=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);const prefix=pathMatch?'/p/'+pathMatch[1]:'';$('#signin').href=prefix+'/_littlebox/login';
+const token=new URLSearchParams(location.hash.slice(1)).get('invitation');const $=s=>document.querySelector(s);const pathMatch=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);const prefix=pathMatch?'/p/'+pathMatch[1]:'';$('#signin').href=prefix+'/_konae/login';
 async function post(path,body){const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const b=await r.json().catch(()=>({}));if(!r.ok)throw Error(b.error||'Request failed.');return b.result;}
-if(!token){$('#note').textContent='This page needs the link from your invitation email.';}else{history.replaceState(null,'',location.pathname);post(prefix+'/_littlebox/auth/invitation',{token}).then(r=>{$('#title').textContent='Join '+r.app;$('#email').value=r.email;if(r.status==='existing-account'){$('#note').textContent='This email already has an account here. Sign in with its password.';return}if(r.status==='signup-closed'){$('#note').textContent='This app is not accepting new accounts right now. Ask whoever invited you.';return}$('#note').textContent='Choose the password for your account. Accepting activates it and signs you in.';$('#accept').hidden=false;},x=>{$('#note').textContent='';$('#error').textContent=x.message});}
-$('#google')?.addEventListener('click',async()=>{try{const r=await post(prefix+'/_littlebox/auth/google/start',{invitation:token});location.assign(r.location);}catch(x){$('#error').textContent=x.message}});
-$('#accept').addEventListener('submit',async e=>{e.preventDefault();try{await post(prefix+'/_littlebox/auth/accept',{token,password:new FormData(e.currentTarget).get('password')});location.replace(prefix+'/');}catch(x){$('#error').textContent=x.message}});
+if(!token){$('#note').textContent='This page needs the link from your invitation email.';}else{history.replaceState(null,'',location.pathname);post(prefix+'/_konae/auth/invitation',{token}).then(r=>{$('#title').textContent='Join '+r.app;$('#email').value=r.email;if(r.status==='existing-account'){$('#note').textContent='This email already has an account here. Sign in with its password.';return}if(r.status==='signup-closed'){$('#note').textContent='This app is not accepting new accounts right now. Ask whoever invited you.';return}$('#note').textContent='Choose the password for your account. Accepting activates it and signs you in.';$('#accept').hidden=false;},x=>{$('#note').textContent='';$('#error').textContent=x.message});}
+$('#google')?.addEventListener('click',async()=>{try{const r=await post(prefix+'/_konae/auth/google/start',{invitation:token});location.assign(r.location);}catch(x){$('#error').textContent=x.message}});
+$('#accept').addEventListener('submit',async e=>{e.preventDefault();try{await post(prefix+'/_konae/auth/accept',{token,password:new FormData(e.currentTarget).get('password')});location.replace(prefix+'/');}catch(x){$('#error').textContent=x.message}});
 </script></html>"#;
 
 // ---------------------------------------------------------------------------
@@ -439,7 +439,7 @@ async fn run(state: &AppState, deployment: &Deployment, inviter: &str, name: &st
             // The rows that record the invitations are committed before any
             // message leaves, so a retry with the same key finds them. Each
             // message then goes through the account mail outbox and its budgets.
-            let page = format!("{}/_littlebox/invitation", super::domain::app_url(state, deployment));
+            let page = format!("{}/_konae/invitation", super::domain::app_url(state, deployment));
             let invited_by = inviter_display(state, &inviter);
             let mut outcomes: HashMap<String, &'static str> = HashMap::new();
             for (invitation, challenge) in issued {
@@ -840,7 +840,7 @@ mod tests {
     }
 
     fn fixture(mode: SignupMode) -> Fixture {
-        let root = std::env::temp_dir().join(format!("littlebox-invitations-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("konae-invitations-{}", Uuid::new_v4()));
         let mut deployments = HashMap::new();
         for host in [APP_HOST, OTHER_HOST] {
             let item = Deployment {
@@ -880,7 +880,6 @@ mod tests {
             public_origin: "http://localhost".into(),
             mcp_origin: None,
             path_origin: None,
-            home_deployment: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
         };
@@ -938,7 +937,7 @@ mod tests {
             let body = json!({"token": token, "password": password}).to_string();
             let request = Request::builder()
                 .method("POST")
-                .uri("/_littlebox/auth/accept")
+                .uri("/_konae/auth/accept")
                 .header(header::HOST, host)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
@@ -950,7 +949,7 @@ mod tests {
             let body = json!({"email": email, "password": password}).to_string();
             let request = Request::builder()
                 .method("POST")
-                .uri("/_littlebox/auth/login")
+                .uri("/_konae/auth/login")
                 .header(header::HOST, APP_HOST)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
@@ -964,7 +963,7 @@ mod tests {
             let body = json!({"email": email}).to_string();
             let request = Request::builder()
                 .method("POST")
-                .uri("/_littlebox/auth/signup")
+                .uri("/_konae/auth/signup")
                 .header(header::HOST, APP_HOST)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
@@ -1001,7 +1000,7 @@ mod tests {
         let mut fixture = fixture(SignupMode::Invitation);
         let transport = Arc::new(Recorded::default());
         let queue = Arc::new(
-            mail::MailQueue::open(&fixture.root, transport.clone(), "Littlebox <no-reply@mail.example.test>",
+            mail::MailQueue::open(&fixture.root, transport.clone(), "Konae <no-reply@mail.example.test>",
                 "a mail secret that is long enough for tests", mail::Limits::default(), std::time::Duration::from_millis(50))
             .unwrap(),
         );
@@ -1047,7 +1046,7 @@ mod tests {
         assert_eq!((result["status"].as_str(), result["delivery"].as_str()), (Some("invited"), Some("queued")));
         assert_eq!(created["policy"], "invitation");
         let link = fixture.mailbox.0.lock().unwrap()[0].clone();
-        assert!(link.link.starts_with(&format!("http://{APP_HOST}/_littlebox/invitation#invitation=")));
+        assert!(link.link.starts_with(&format!("http://{APP_HOST}/_konae/invitation#invitation=")));
         assert!(!created.to_string().contains(&fixture.last_token()), "no tool returns a token");
         assert_eq!(fixture.accounts_named("ana@example.test").await[0].1, "pending");
         assert_eq!(fixture.signup("ana@example.test").await, StatusCode::FORBIDDEN, "an invitation is not a signup");
@@ -1364,7 +1363,7 @@ mod tests {
         let resent = run(&fixture.state, &imported, OWNER, "app_invitation_resend", &json!({"invitationId": bo, "idempotencyKey": "copy-resend"})).await.unwrap();
         assert_eq!(resent["delivery"], "queued");
         let link = fixture.mailbox.0.lock().unwrap().last().unwrap().link.clone();
-        assert!(link.starts_with("http://invite-imported.localhost/_littlebox/invitation#invitation="));
+        assert!(link.starts_with("http://invite-imported.localhost/_konae/invitation#invitation="));
         assert!(answer(fixture.last_token()).await.is_ok());
     }
 
