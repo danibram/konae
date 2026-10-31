@@ -692,7 +692,7 @@ pub(crate) fn read_summary(data_root: &Path, deployment: &Deployment, from: &str
     actions.sort_by(|a,b| a["name"].as_str().cmp(&b["name"].as_str()));
     let start = parse_day(from).unwrap() * 86_400_000;
     let end = (parse_day(to).unwrap() + 1) * 86_400_000;
-    Ok(json!({"deploymentId": deployment.id, "projectId": deployment.project_id, "projectName": deployment.project_name, "sourceAuthority": "external", "url": deployment.url,
+    Ok(json!({"deploymentId": deployment.id, "projectId": deployment.project_id, "projectName": deployment.project_name, "url": deployment.url,
         "usage": usage, "metrics": metrics, "actions": actions,
         "calls": retained_states(&data_root.join("calls.sqlite"), "calls", "deployment", &deployment.id, start, end)?,
         "mail": retained_states(&data_root.join("mail.sqlite"), "jobs", "scope", &format!("deployment:{}", deployment.id), start, end)?,

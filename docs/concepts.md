@@ -6,7 +6,7 @@ Product terms are capitalized. Declaration keys stay lowercase: guard, notice, s
 
 ## Before the app runs
 
-**Project.** The source lineage, schema, capability configuration and deployment history owned by a workspace member. Its source authority is either Managed by Konae or External under its owner.
+**Project.** The source lineage, schema, capability configuration and deployment history owned by a workspace member. Its sources open in the editor, and the CLI publishes them from a folder.
 
 **Capsule.** The editable source of a Project taken as one unit. It is a nested source tree with an entrypoint, `app.js` or `src/main.ts`, plus optional `index.html` and `styles.css`, the schema in `schema.sql`, which the Validation Gate and the Kernel check and run, the Database Model in `schema.ts` when the editor's Data panel manages the tables, and the Server Action declarations in `actions.json`. See [The Capsule](./capsule.md).
 
@@ -71,10 +71,6 @@ Product terms are capitalized. Declaration keys stay lowercase: guard, notice, s
 **Migration.** The move of one Deployment to another installation so that exactly one installation takes its writes.
 
 **Maintenance.** The state of a Deployment that takes no writes. Its host shows a page naming the operation, and its email waits.
-
-**Managed Project.** A Project whose source and database-schema authority remain in Konae, so changes pass through its editor, agent, managed build and Validation Gate.
-
-**External Project.** A Project created with external source authority. The owner supplies Build Artifacts and accepts schema compatibility responsibility.
 
 ## Words for running an installation
 

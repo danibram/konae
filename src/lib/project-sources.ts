@@ -3,7 +3,7 @@ import type { MiniAppProject } from "./types";
 import type { DeploymentReceipt } from "../deployments/client";
 import { repairDroppedPreviewUpload } from "./starter";
 
-export type ProjectMetadata = { id: string; name: string; slug: string; sourceAuthority: "managed" | "external" };
+export type ProjectMetadata = { id: string; name: string; slug: string };
 type SourceResult = { revision: number; transfer: Parameters<McpClient["download"]>[0] | null };
 
 /** How many Kernel projects the signed-in owner has, including ones without editor sources. */
@@ -14,7 +14,7 @@ export async function readOwnerProjectCount(ownerId?: string): Promise<number> {
 }
 
 /** One instance remains bound to the owner that opened the workspace. */
-export class ManagedSources {
+export class ProjectSources {
   private readonly client: McpClient;
   private readonly revisions = new Map<string, number>();
   private readonly tails = new Map<string, Promise<void>>();
@@ -25,15 +25,12 @@ export class ManagedSources {
 
   async load() {
     const result = await this.client.call<{ projects: { project: ProjectMetadata }[] }>("projects_list");
-    // An External project has no sources here.
-    const external = result.projects.filter(({ project }) => project.sourceAuthority === "external").map(({ project }) => project);
     const missing: ProjectMetadata[] = [];
     const projects: MiniAppProject[] = [];
     const deployments: Record<string, DeploymentReceipt> = {};
     for (const { project } of result.projects) {
       const inspected = await this.client.call<{ deployment: DeploymentReceipt | null }>("project_inspect", { projectId: project.id });
       if (inspected.deployment) deployments[project.id] = inspected.deployment;
-      if (project.sourceAuthority !== "managed") continue;
       const saved = await this.client.call<SourceResult>("project_sources_read", { projectId: project.id });
       this.revisions.set(project.id, saved.revision);
       if (!saved.transfer) { missing.push(project); continue; }
@@ -42,7 +39,7 @@ export class ManagedSources {
       if (source.id !== project.id) throw new Error("The saved source does not match its project.");
       projects.push(repairDroppedPreviewUpload(source));
     }
-    return { projects, external, missing, deployments };
+    return { projects, missing, deployments };
   }
 
   save(project: MiniAppProject): Promise<void> {
@@ -51,7 +48,7 @@ export class ManagedSources {
       if (!this.revisions.has(project.id)) {
         const upload = await this.client.upload(new TextEncoder().encode(JSON.stringify(project)));
         try {
-          const created = await this.client.call<ProjectMetadata & { sourcesRevision: number }>("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest, sourceAuthority: "managed", sourcesTransferId: upload.transferId });
+          const created = await this.client.call<ProjectMetadata & { sourcesRevision: number }>("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest, sourcesTransferId: upload.transferId });
           this.revisions.set(project.id, created.sourcesRevision);
         } finally {
           await this.client.cancel(upload.transferId).catch(() => {});

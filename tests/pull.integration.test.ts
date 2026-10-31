@@ -91,9 +91,9 @@ describe("a project starts the same through MCP and through init", () => {
     const read = async (folder: string) => Object.fromEntries(await Promise.all(["actions.json", "app.js", "index.html", "schema.sql", "styles.css"].map(async (name) => [name, await readFile(path.join(folder, name), "utf8")])));
     const notes = path.join(root, "mcp-notes");
     await initLocal(notes);
-    const created = await origin.owner.call<{ files: Record<string, string>; manifest: { visibility: string }; sourceAuthority: string }>("project_create", { name: "From MCP" });
+    const created = await origin.owner.call<{ files: Record<string, string>; manifest: { visibility: string } }>("project_create", { name: "From MCP" });
     expect(created.files).toEqual(await read(notes));
-    expect(created).toMatchObject({ manifest: { visibility: "private" }, sourceAuthority: "external" });
+    expect(created).toMatchObject({ manifest: { visibility: "private" } });
 
     const tasks = path.join(root, "mcp-tasks");
     const config = await initLocal(tasks, { template: "tasks" });

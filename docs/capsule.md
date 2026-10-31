@@ -21,7 +21,7 @@ mini-app/
 └── actions.json
 ```
 
-An External Project also keeps `konae.json`, which names its project on one Kernel and its manifest: visibility, signup policy and routing.
+A folder that the CLI publishes also keeps `konae.json`, which names its project on one Kernel and its manifest: visibility, signup policy and routing.
 
 ## What each file does
 
@@ -54,9 +54,9 @@ The Gate checks the schema and `actions.json`. A page that names a missing file 
 
 A published app runs under the Kernel's Content Security Policy. Its own inline scripts and same-origin files load. Inline event handler attributes such as `onclick="..."` and other origins do not. Attach listeners in JavaScript and keep scripts and fetches on the app's own origin. The editor preview applies no such policy, so code that works there can still fail once published.
 
-## Who holds the source
+## Where the sources live
 
-A Managed Project keeps its source in Konae, and changes pass through the editor and the Validation Gate. An External Project keeps its source in the owner's folder. `konae init` creates an External Project.
+Every project is one kind. The editor saves its sources in Konae, and a change there passes the Validation Gate before it is saved. `konae init` writes the same files into a folder, and `konae publish` sends them to the same project. A publish from a folder does not change the sources the editor opens.
 
 ## Read next
 

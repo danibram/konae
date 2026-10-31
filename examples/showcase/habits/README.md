@@ -24,7 +24,7 @@ The app is a product probe. It uses Konae's primitives the way a creator would, 
 - The `habit.completed` Signal on `checkins.add` and on the `POST /api/checkins` route, with `habitId`, `day` and `device` as properties. The owner reads it with `signals_read` and the daily totals with `usage_read`.
 - HTTP routes `POST /api/habits`, `GET /api/habits` and `POST /api/checkins`, each with `"callers": ["key"]`, called with an API key from `api_keys_create`.
 - Guards: the twenty-first habit is refused with `You already track 20 habits. Archive one first.`, and an archive that changes nothing with `This habit is already archived, or it is not yours.`
-- The editor's managed path, simulated over MCP: `project_create` with `sourceAuthority: "managed"`, `project_sources_save`, then `release_plan` and `release_apply` with the editor's payload.
+- The editor's path, simulated over MCP: `project_create`, `project_sources_save`, then `release_plan` and `release_apply` with the editor's payload.
 - `konae publish` from a folder that holds the same project's files.
 - A scheduled copy to `KONAE_COPY_DIR` and `konae-kernel restore` into an empty data directory.
 - `konae contract` and `konae conform`.

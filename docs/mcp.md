@@ -85,9 +85,9 @@ This changes the contract. `signup_policy_set` needed `publish` before `manage_u
 
 Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `domain_read` needs `read`; `domain_set` and `domain_clear` need `publish`. `path_read` needs `read`; `path_set` and `path_clear` need `publish`. `usage_read`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read` and `notices_read` need `read`.
 
-`project_create` returns a template and an External identity by default. The template is one of `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` and `gallery`, named with `template`, and its files are the ones `konae init` writes, because both read `kernel-rs/src/project-templates.json`, which `bun run templates:render` writes from the editor's templates. Without a `manifest` the project takes the template's visibility. Later sources stay in the user's folder; `project_inspect` returns metadata and the Deployment, without claiming to synchronize that code with the editor.
+`project_create` registers a project and returns a template. The template is one of `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` and `gallery`, named with `template`, and its files are the ones `konae init` writes, because both read `kernel-rs/src/project-templates.json`, which `bun run templates:render` writes from the editor's templates. Without a `manifest` the project takes the template's visibility. A publish from a folder does not change the sources the editor saved; `project_inspect` returns metadata, the Deployment and `sourcesRevision`, the number of editor saves.
 
-The editor uploads a new app's JSON without a `projectId`, then calls `project_create` with `sourceAuthority: "managed"` and `sourcesTransferId`. The Kernel validates the files and saves the project registry entry and files in one transaction, returning `sourcesRevision: 1`. A failed upload or validation leaves no project entry. Repeating the same initial files returns the saved revision; different files cannot overwrite an existing save through `project_create`. Subsequent edits use `project_sources_save` with that revision.
+The editor uploads a new app's JSON without a `projectId`, then calls `project_create` with `sourcesTransferId`. The Kernel validates the files and saves the project registry entry and files in one transaction, returning `sourcesRevision: 1`. A failed upload or validation leaves no project entry. Repeating the same initial files returns the saved revision; different files cannot overwrite an existing save through `project_create`. Subsequent edits use `project_sources_save` with that revision.
 
 The editor saves sources with `project_sources_save { projectId, transferId, expectedRevision }`, where the transfer holds this JSON. An agent that saves sources over MCP sends the same:
 
@@ -257,7 +257,7 @@ bun run konae -- init --dir /tmp/my-app --name "My app"
 bun run konae -- dev --dir /tmp/my-app --port 8796
 ```
 
-`init` writes a template and `konae.json` into an empty folder. It makes the project ID itself, and `--template` takes one of the editor's templates: `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` or `gallery`. The project is External, and it is registered on an installation by its first `publish`, which calls `project_create` with that ID. `publish`, `pull`, `sql` and `export --with-data` talk to the installation `--url` names, else the `url` in `konae.json`, else the one `login` saved in the folder. A first publish of a project that names none writes the address into `konae.json`.
+`init` writes a template and `konae.json` into an empty folder. It makes the project ID itself, and `--template` takes one of the editor's templates: `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` or `gallery`. The first `publish` registers the project on an installation, which calls `project_create` with that ID. `publish`, `pull`, `sql` and `export --with-data` talk to the installation `--url` names, else the `url` in `konae.json`, else the one `login` saved in the folder. A first publish of a project that names none writes the address into `konae.json`.
 
 `dev` compiles and starts the Rust Kernel, or starts the binary `KONAE_KERNEL_BIN` names without compiling, with data under `/tmp/my-app/.konae/dev-data`. It generates a separate development identity, removes the remote configuration from its environment and publishes the build to that local Kernel. That Deployment is private, so `dev` then sets its signup policy to Open and you can create test accounts. A signing secret that `actions.json` names and the local Kernel does not hold gets a value made on the spot, which `dev` prints so a local request can be signed with it; the published app's values never leave its installation. It prints the URL and rebuilds when the sources change. Reload the app to see the new build. When the command exits, the Kernel stops and the data stays in that folder.
 
@@ -665,7 +665,7 @@ The editor preview answers a call with `{ callId, queued: true }` and sends noth
 
 ## Usage and Signals
 
-The owner's Usage page at `/usage` reads all accessible projects from the Kernel, including external projects and unpublished drafts. Open one published app for feature activity, execution outcomes, business event totals and retained delivery states. The page offers 7, 30 and 90 days and refreshes every minute while visible. A notice the Kernel could not queue shows as not sent, with its reason, on the overview and on the app.
+The owner's Usage page at `/usage` reads all accessible projects from the Kernel, including projects published from a folder and unpublished drafts. Open one published app for feature activity, execution outcomes, business event totals and retained delivery states. The page offers 7, 30 and 90 days and refreshes every minute while visible. A notice the Kernel could not queue shows as not sent, with its reason, on the overview and on the app.
 
 ```text
 usage_summary  { "deploymentId", "from", "to" }
@@ -907,7 +907,7 @@ The build lives in `.konae/artifact.json`. Publishing transfers it over MCP, val
 - A fragment page names its title and icon by opening with them: a `<title>` and any `<link>` whose `rel` names an icon (`icon`, `apple-touch-icon`, `mask-icon`), before its first other element. The build moves them into the head of the Capsule document, where the browser reads them; without an icon the browser asks for `/favicon.ico`, which a Capsule rarely holds. A `<title>` further down, such as one inside an `<svg>`, stays where it is.
 - A Capsule without `index.html` gets the fragment `<main id=app></main>`.
 - The build drops the comment esbuild writes above each module it bundles, such as `// app.js`, when the line names a Capsule file. That name is relative to the folder the build ran in, so without this the published script would carry the builder's directory layout. The same Capsule built from two folders gives byte-identical files, and the CLI, the editor and the exported kit publish the same `app.js`.
-- A binary file, such as an image or a font, travels as base64 and the artifact names it in `encodings`, for example `"encodings": { "logo.png": "base64" }`. The CLI reads any file. A Managed Project holds text files only, so the editor publishes text assets, and a page there that names an image the project does not hold is refused with the same words as the CLI.
+- A binary file, such as an image or a font, travels as base64 and the artifact names it in `encodings`, for example `"encodings": { "logo.png": "base64" }`. The CLI reads any file. The editor's saved sources hold text files only, so the editor publishes text assets, and a page there that names an image the project does not hold is refused with the same words as the CLI.
 - An icon that must work from every door is SVG: a text file such as `favicon.svg`, or a `data:` URL such as `<link rel="icon" href="data:image/svg+xml,...">`. The Content Security Policy allows `data:` images, and the build follows no `data:` URL, so it needs no file. A binary `favicon.ico` or `.png` publishes from the CLI and the kit only.
 
 The build refuses, with the file and the path in the message:
@@ -1039,7 +1039,7 @@ Database backups return `databaseModelSource` and `schemaRevision` when the depl
     "format": "konae-package", "version": 1, "packageId": "…", "createdAt": 1762430000000,
     "deploymentId": "…", "projectId": "…", "visibility": "private",
     "signupPolicy": { "mode": "closed", "allowlist": [] },
-    "publishedRevision": 4, "artifactVersion": "v…", "sourceAuthority": "managed", "sourcesRevision": 9,
+    "publishedRevision": 4, "artifactVersion": "v…", "sourcesRevision": 9,
     "contents": [
       { "name": "database", "size": 268435456, "sha256": "…" },
       { "name": "identity", "size": 110592, "sha256": "…" },
@@ -1059,7 +1059,7 @@ Database backups return `databaseModelSource` and `schemaRevision` when the depl
 | `files` | A ustar archive of `index.json` and one `<id>.blob` per file, in index order | The destination's per-file limit and file quota, 2 MiB and 20 MiB by default |
 | `usage` | `usage.sqlite`, copied with `VACUUM INTO`. Present only when the Deployment recorded Usage or a Signal. A Kernel from before this component refuses a package that lists it | 128 MiB |
 
-`publishedRevision` counts the releases applied to the project. `sourcesRevision` counts saves of Managed sources and is absent for External projects; the two count different things, so a package never claims the saved sources produced the published app. Data panel backups, owner accounts and MCP credentials stay behind.
+`publishedRevision` counts the releases applied to the project. `sourcesRevision` counts saves of the editor's sources and is absent when the editor never saved any; the two count different things, so a package never claims the saved sources produced the published app. Data panel backups, owner accounts and MCP credentials stay behind.
 
 Read each download with `transfer_read` and cancel it when done. The transfers expire after one hour like other owner transfers. They need `export_data`, not `read`, even though every credential of one owner shares the transfer pool. The audit log gets one `package_export` row and one `package_download` row per component at its first block, with the Deployment as target and the component as detail, plus a row for every refused read.
 

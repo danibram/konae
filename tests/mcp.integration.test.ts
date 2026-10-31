@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient, checksum, encodeBase64 } from "../src/mcp/client";
-import { ManagedSources } from "../src/lib/managed-sources";
+import { ProjectSources } from "../src/lib/project-sources";
 import { createWorkspaceProject } from "../src/lib/workspace";
 import { signupModes } from "../src/deployments/client";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -127,7 +127,7 @@ describe("authenticated MCP", () => {
       return fetch(`${url}/mcp`, { method: "POST", headers: { "content-type": "application/json", cookie: aliceCookie }, body });
     } });
     try {
-      const sources = new ManagedSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+      const sources = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
       const project = createWorkspaceProject("Interrupted creation", []);
       await expect(sources.save(project)).rejects.toThrow("Upload interrupted");
       const listed = await alice.call<{ projects: { project: { id: string } }[] }>("projects_list");
@@ -147,7 +147,7 @@ describe("authenticated MCP", () => {
   test("creating an editor project saves its files atomically", async () => {
     const id = "atomic_editor_creation";
     const project = { id, name: "Atomic", slug: "atomic", files: { "index.html": "first" }, directories: [], databaseModel: { source: "", acceptedSource: "", revision: "" }, manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
-    const args = { projectId: id, name: project.name, sourceAuthority: "managed" };
+    const args = { projectId: id, name: project.name };
     const invalid = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...project, files: { "index.html": 123 } })));
     await expect(alice.call("project_create", { ...args, sourcesTransferId: invalid.transferId })).rejects.toThrow("Invalid project files");
     const listed = await alice.call<{ projects: { project: { id: string } }[] }>("projects_list");
@@ -168,10 +168,10 @@ describe("authenticated MCP", () => {
     await alice.cancel(upload.transferId);
   });
 
-  test("Managed sources persist per owner and reject stale writes", async () => {
-    const id = "managed_sources_proof";
-    await alice.call("project_create", { projectId: id, name: "Managed", sourceAuthority: "managed" });
-    const project = { id, name: "Managed", slug: "managed", files: { "index.html": "first" }, directories: [], databaseModel: { source: "", acceptedSource: "", revision: "" }, manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
+  test("saved sources persist per owner and reject stale writes", async () => {
+    const id = "project_sources_proof";
+    await alice.call("project_create", { projectId: id, name: "Sources" });
+    const project = { id, name: "Sources", slug: "sources", files: { "index.html": "first" }, directories: [], databaseModel: { source: "", acceptedSource: "", revision: "" }, manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
     const upload = await alice.upload(new TextEncoder().encode(JSON.stringify(project)), id);
     expect(await alice.call("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: 0 })).toEqual({ revision: 1 });
     await expect(alice.call("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: 0 })).rejects.toThrow("revision conflict");
@@ -205,12 +205,6 @@ describe("authenticated MCP", () => {
     const reader = new McpClient(`${url}/mcp`, { token: readGrant.token });
     await expect(reader.call("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: 3 })).rejects.toThrow("Unknown tool");
 
-    const external = "external_sources_proof";
-    await alice.call("project_create", { projectId: external, name: "External" });
-    await expect(alice.call("project_sources_read", { projectId: external })).rejects.toThrow("externally");
-    const externalUpload = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...project, id: external })), external);
-    await expect(alice.call("project_sources_save", { projectId: external, transferId: externalUpload.transferId, expectedRevision: 0 })).rejects.toThrow("externally");
-    await alice.cancel(externalUpload.transferId);
   });
 
   test("the account usage monitor isolates owners and paginates accessible projects", async () => {
@@ -399,7 +393,7 @@ describe("authenticated MCP", () => {
   });
 
   test("the local CLI creates, builds, publishes and develops without mutating hosted data", async () => {
-    const directory = path.join(root, "external-source");
+    const directory = path.join(root, "cli-source");
     const token = await alice.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 60 });
     const env = { ...process.env, KONAE_MCP_TOKEN: token.token };
     const run = async (command: string, args: string[] = []) => {
@@ -412,10 +406,15 @@ describe("authenticated MCP", () => {
     expect(await run("build")).toContain("artifact.json");
     expect(await run("publish")).toContain("http://external-proof-");
     const config = await Bun.file(path.join(directory, "konae.json")).json();
-    // init made the ID without a Kernel, and the first publish registered the project as External.
-    const state = await alice.call<{ revision: number; project: { sourceAuthority: string } }>("project_inspect", { projectId: config.project.id });
-    expect(state.project.sourceAuthority).toBe("external");
-    expect(state.revision).toBe(1);
+    // init made the ID without a Kernel, and the first publish registered the project.
+    const state = await alice.call<{ revision: number; sourcesRevision: number }>("project_inspect", { projectId: config.project.id });
+    expect(state).toMatchObject({ revision: 1, sourcesRevision: 0 });
+    // The project published from the folder takes the editor's saves too.
+    expect(await alice.call("project_sources_read", { projectId: config.project.id })).toEqual({ revision: 0, transfer: null });
+    const editorFiles = { id: config.project.id, name: config.project.name, slug: config.project.slug, files: { "index.html": "<main>From the editor</main>" }, directories: [], databaseModel: { source: "", acceptedSource: "", revision: "" }, manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
+    const editorUpload = await alice.upload(new TextEncoder().encode(JSON.stringify(editorFiles)), config.project.id);
+    expect(await alice.call("project_sources_save", { projectId: config.project.id, transferId: editorUpload.transferId, expectedRevision: 0 })).toEqual({ revision: 1 });
+    await alice.cancel(editorUpload.transferId);
     const port = String(18950 + Math.floor(Math.random() * 50));
     const dev = Bun.spawn([process.execPath, "run", "scripts/konae.ts", "dev", "--dir", directory, "--port", port], {
       env: { ...env, KONAE_MCP_TOKEN: "must-not-be-used-in-development", KONAE_S3_ENDPOINT: "http://127.0.0.1:1", KONAE_MCP_ORIGIN: "http://unused-origin.test" },

@@ -68,7 +68,7 @@ import type { MiniAppProject, ProjectFile } from "./lib/types";
 import { createDirectory, createFile, directoriesForFiles, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
 import { actionReadout } from "./components/action-readiness";
 import { createWorkspaceProject, dismissDrafts, loadWorkspaceState, persistWorkspace, readDismissedDrafts, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./lib/workspace";
-import { ManagedSources, type ProjectMetadata } from "./lib/managed-sources";
+import { ProjectSources, type ProjectMetadata } from "./lib/project-sources";
 import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
 import { useRuntimeBridge } from "./runtime/useRuntimeBridge";
@@ -130,8 +130,8 @@ function PlatformGate() {
 }
 
 function WorkspaceGate({ ownerSession, refreshOwnerSession }: { ownerSession: Extract<OwnerSession, { state: "signed-in" }>; refreshOwnerSession: () => void }) {
-  const [sources] = useState(() => new ManagedSources(ownerSession.ownerId));
-  const [loaded, setLoaded] = useState<Awaited<ReturnType<ManagedSources["load"]>> | null>(null);
+  const [sources] = useState(() => new ProjectSources(ownerSession.ownerId));
+  const [loaded, setLoaded] = useState<Awaited<ReturnType<ProjectSources["load"]>> | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
     let active = true;
@@ -149,7 +149,7 @@ function CardForPlatformError({ message, onRetry }: { message: string; onRetry: 
   return <div className="platform-card"><h1>Platform unavailable</h1><p role="alert">Could not check your session. {message}</p><Button onClick={onRetry}>Try again</Button></div>;
 }
 
-function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { ownerSession: Extract<OwnerSession, { state: "signed-in" }>; refreshOwnerSession: () => void; sources: ManagedSources; loaded: { projects: MiniAppProject[]; external: ProjectMetadata[]; missing: ProjectMetadata[]; deployments: Record<string, DeploymentReceipt> } }) {
+function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { ownerSession: Extract<OwnerSession, { state: "signed-in" }>; refreshOwnerSession: () => void; sources: ProjectSources; loaded: { projects: MiniAppProject[]; missing: ProjectMetadata[]; deployments: Record<string, DeploymentReceipt> } }) {
   const workspaceStorage = useMemo(() => ({
     getItem: (key: string) => localStorage.getItem(`konae:owner:${encodeURIComponent(ownerSession.ownerId)}:${key}`),
     setItem: (key: string, value: string) => localStorage.setItem(`konae:owner:${encodeURIComponent(ownerSession.ownerId)}:${key}`, value),
@@ -951,7 +951,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   if (route.screen === "not-found") return <NotFound what={route.what} path={route.path} />;
 
   if (screen === "projects") {
-    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} external={loaded.external} missing={missing} notice={routeNotice} drafts={drafts} onImportDraft={importDraft} onDismissDraft={dismissDraft} onDeleteMissing={deleteMissingProject} onOpenProject={openProject} onCreateProject={createProject} />;
+    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} notice={routeNotice} drafts={drafts} onImportDraft={importDraft} onDismissDraft={dismissDraft} onDeleteMissing={deleteMissingProject} onOpenProject={openProject} onCreateProject={createProject} />;
   }
 
   const signInHref = platformAccessHref(window.location.pathname);

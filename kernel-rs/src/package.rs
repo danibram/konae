@@ -84,9 +84,7 @@ pub(super) struct Manifest {
     pub(super) published_revision: u64,
     #[serde(default)]
     pub(super) artifact_version: Option<String>,
-    #[serde(default)]
-    pub(super) source_authority: Option<String>,
-    /// Saves of the Managed sources. It counts saves, not releases, so a
+    /// Saves of the project's sources. It counts saves, not releases, so a
     /// package never claims the saved sources are the published ones.
     #[serde(default)]
     pub(super) sources_revision: Option<u64>,
@@ -253,7 +251,7 @@ pub(super) async fn export_with(state: &AppState, owner: &Owner, principal: &str
     let captured = {
         let _project = database_lock(state, &format!("project:{}", deployment.project_id)).await;
         let deployment = state.deployments.read().await.values().find(|d| d.id == id).cloned().unwrap_or(deployment);
-        let (project, published_revision) = owned_project(state, owner, &deployment.project_id, "export_data")?;
+        let (_, published_revision) = owned_project(state, owner, &deployment.project_id, "export_data")?;
         let _data = database_lock(state, &deployment.id).await;
         let _identity = database_lock(state, &format!("identity:{}", deployment.id)).await;
         open_auth(state, &deployment)?;
@@ -267,16 +265,12 @@ pub(super) async fn export_with(state: &AppState, owner: &Owner, principal: &str
         let (source, target) = (folder.clone(), scratch.clone());
         let blobs = file_store::BlockingFiles::new(state.files.store.clone(), &deployment.id);
         let components = tokio::task::spawn_blocking(move || capture(&source, &target, &blobs)).await?;
-        let sources_revision: Option<u64> = if project["sourceAuthority"] == "managed" {
-            store(state)?
-                .query_row("SELECT revision FROM managed_sources WHERE project=?1", [&deployment.project_id], |r| r.get(0))
-                .optional()?
-        } else {
-            None
-        };
-        components.map(|components| (components, deployment, project, published_revision, sources_revision))
+        let sources_revision: Option<u64> = store(state)?
+            .query_row("SELECT revision FROM project_sources WHERE project=?1", [&deployment.project_id], |r| r.get(0))
+            .optional()?;
+        components.map(|components| (components, deployment, published_revision, sources_revision))
     };
-    let (components, deployment, project, published_revision, sources_revision) = match captured {
+    let (components, deployment, published_revision, sources_revision) = match captured {
         Ok(value) => value,
         Err(error_value) => {
             let _ = tokio::fs::remove_dir_all(&scratch).await;
@@ -295,7 +289,6 @@ pub(super) async fn export_with(state: &AppState, owner: &Owner, principal: &str
         sign_in_methods: Some(deployment.sign_in_methods.clone()),
         published_revision,
         artifact_version: deployment.artifact_version.clone(),
-        source_authority: project["sourceAuthority"].as_str().map(str::to_owned),
         sources_revision,
         contents: components.iter().map(|(name, _, size, sha256)| Content { name: name.clone(), size: *size, sha256: sha256.clone() }).collect(),
         excluded: EXCLUDED.iter().map(|item| (*item).to_owned()).collect(),
@@ -810,7 +803,6 @@ mod tests {
             sign_in_methods: None,
             published_revision: 1,
             artifact_version: None,
-            source_authority: None,
             sources_revision: None,
             contents: vec![Content { name: "database".into(), size: 4096, sha256: "a".repeat(64) }],
             excluded: vec![],

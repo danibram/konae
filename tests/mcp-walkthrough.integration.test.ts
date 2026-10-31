@@ -444,7 +444,7 @@ describe("the MCP walkthrough", () => {
     expect((await run(["login", "--dir", destination, "--url", b.url, "--manage-users"], { KONAE_EMAIL: "agent@walkthrough.test", KONAE_PASSWORD: password, KONAE_SETUP_KEY: setupKeyB })).code).toBe(0);
     s.tokenB = JSON.parse(await readFile(path.join(destination, ".konae/credentials.json"), "utf8")).token;
     const manifest = { version: 1, visibility: "private" };
-    await tool("project_create", { projectId: s.projectId, name: "Orders", slug: "orders", manifest }, { token: s.tokenB, kernel: b, pick: (value) => ({ id: value.id, name: value.name, slug: value.slug, sourceAuthority: value.sourceAuthority }) });
+    await tool("project_create", { projectId: s.projectId, name: "Orders", slug: "orders", manifest }, { token: s.tokenB, kernel: b, pick: (value) => ({ id: value.id, name: value.name, slug: value.slug }) });
     await tool("secret_set", { projectId: s.projectId, name: "orders_webhook", value: secret }, { token: s.tokenB, kernel: b });
 
     r.step("import-upload");

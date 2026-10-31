@@ -50,7 +50,7 @@ The Signup Policy decides who may create an app account on one Deployment.
 
 Public Deployments start Open. Private Deployments start Closed. A first release may name another mode. After that, a republish never changes it, except that republishing a public app as private turns Open into Closed.
 
-The Project Owner changes it in the editor's Auth > Users view, or with `signup_policy_set`, which needs the `manage_users` permission. An External Project names its first release's policy in `konae.json` as `project.manifest.signupPolicy`.
+The Project Owner changes it in the editor's Auth > Users view, or with `signup_policy_set`, which needs the `manage_users` permission. A project published with the CLI names its first release's policy in `konae.json` as `project.manifest.signupPolicy`.
 
 In local verification mode, Konae does not verify email addresses. Whoever signs up first with a listed address gets that account. Use Closed for apps that hold private data, or require verification.
 

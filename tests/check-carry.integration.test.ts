@@ -31,7 +31,7 @@ function payload(id: string, source = model) {
 }
 
 async function publish(id: string) {
-  await kernel.owner.call("project_create", { projectId: id, name: id, sourceAuthority: "managed" });
+  await kernel.owner.call("project_create", { projectId: id, name: id });
   return (await release(kernel.owner, payload(id), id)).receipt;
 }
 

@@ -1,5 +1,5 @@
 // Replays the starter showcase on two Kernels it starts itself. It publishes
-// the Capsule from the CLI and from the managed path, then proves each rule
+// the Capsule from the CLI and from the editor's path, then proves each rule
 // the README claims: verified open signup, the visitor's public reads, rows
 // bound to each member, a team admin promoted by a guarded mutation, an API
 // key inside and outside its scope, a signed webhook, the file lifecycle and
@@ -37,7 +37,7 @@ const webhookSecret = `status-${crypto.randomUUID()}`;
 // set with "use": "call", since one owner's route secrets must differ.
 const inboxSecret = `inbox-${crypto.randomUUID()}`;
 const inboxPlaceholder = "http://inbox.localhost/hooks/events";
-const managedSecret = `managed-${crypto.randomUUID()}`;
+const editorSecret = `editor-${crypto.randomUUID()}`;
 const MiB = 1024 * 1024;
 
 const observations: { scenario: string; result: string }[] = [];
@@ -328,8 +328,8 @@ try {
   assert.equal(policy.mode, "open");
   check("CLI publish", `konae login, init, build and publish ran against the local Kernel. init wrote a ${initVisibility} app with signup ${initPolicy}; with konae.json set to public and open, publish was refused until secret_set, then served ${receipt.url} with signup ${policy.mode}.`);
 
-  // --------------------------------------------- the managed path publishes too
-  const managedId = "showcase_starter_managed";
+  // --------------------------------------------- the editor's path publishes too
+  const editorId = "showcase_starter_editor";
   const manifest = {
     version: 1, visibility: "public",
     runtime: {
@@ -337,36 +337,35 @@ try {
       auth: { mode: "optional" }, files: { access: "deployment" },
     },
   };
-  const managedSource = { id: managedId, name: "Starter", slug: "starter-managed", files: sources, directories: [], databaseModel: { source: sources["schema.ts"], acceptedSource: sources["schema.ts"], revision: "r1" }, manifest, updatedAt: Date.now() };
-  const created = await A.owner.call<{ sourceAuthority: string }>("project_create", { projectId: managedId, name: "Starter", slug: "starter-managed", manifest, sourceAuthority: "managed" });
-  assert.equal(created.sourceAuthority, "managed");
-  const saveUpload = await A.owner.upload(json(managedSource), managedId);
-  const saved = await A.owner.call<{ revision: number }>("project_sources_save", { projectId: managedId, transferId: saveUpload.transferId, expectedRevision: 0 });
+  const editorSource = { id: editorId, name: "Starter", slug: "starter-editor", files: sources, directories: [], databaseModel: { source: sources["schema.ts"], acceptedSource: sources["schema.ts"], revision: "r1" }, manifest, updatedAt: Date.now() };
+  await A.owner.call("project_create", { projectId: editorId, name: "Starter", slug: "starter-editor", manifest });
+  const saveUpload = await A.owner.upload(json(editorSource), editorId);
+  const saved = await A.owner.call<{ revision: number }>("project_sources_save", { projectId: editorId, transferId: saveUpload.transferId, expectedRevision: 0 });
   await A.owner.cancel(saveUpload.transferId).catch(() => {});
   assert.deepEqual(saved, { revision: 1 });
-  // One owner's two projects cannot share a signing secret, so the managed copy gets its own.
-  await A.owner.call("secret_set", { projectId: managedId, name: "status_webhook", value: managedSecret });
-  await A.owner.call("secret_set", { projectId: managedId, name: "inbox_events", value: inboxSecret, use: "call" });
-  const managedRoot = path.join(scratch, "managed");
-  await mkdir(managedRoot);
-  for (const name of capsuleFiles) await writeFile(path.join(managedRoot, name), sources[name]);
-  const { artifact: managedArtifact } = await buildLocal(managedRoot);
-  const releaseUpload = await A.owner.upload(json({ project: managedSource, visibility: "public", artifact: managedArtifact, initialSignupPolicy: { mode: "open", allowlist: [] } }), managedId);
-  const managedPlan = await A.owner.call<{ planId: string }>("release_plan", { transferId: releaseUpload.transferId });
-  const managedReceipt = await A.owner.call<Receipt>("release_apply", { planId: managedPlan.planId });
+  // One owner's two projects cannot share a signing secret, so the editor's copy gets its own.
+  await A.owner.call("secret_set", { projectId: editorId, name: "status_webhook", value: editorSecret });
+  await A.owner.call("secret_set", { projectId: editorId, name: "inbox_events", value: inboxSecret, use: "call" });
+  const editorRoot = path.join(scratch, "editor");
+  await mkdir(editorRoot);
+  for (const name of capsuleFiles) await writeFile(path.join(editorRoot, name), sources[name]);
+  const { artifact: editorArtifact } = await buildLocal(editorRoot);
+  const releaseUpload = await A.owner.upload(json({ project: editorSource, visibility: "public", artifact: editorArtifact, initialSignupPolicy: { mode: "open", allowlist: [] } }), editorId);
+  const editorPlan = await A.owner.call<{ planId: string }>("release_plan", { transferId: releaseUpload.transferId });
+  const editorReceipt = await A.owner.call<Receipt>("release_apply", { planId: editorPlan.planId });
   await A.owner.cancel(releaseUpload.transferId).catch(() => {});
-  const M = app(A, managedReceipt);
+  const M = app(A, editorReceipt);
   // Every file the page loads, from both doors, built from two folders: byte for byte the same,
   // and no bundler comment names either folder.
   let servedBytes = 0;
   for (const file of ["/", "/app.js", "/styles.css", "/favicon.svg"]) {
     const fromCli = await (await S.http("GET", file)).text();
-    const fromManaged = await (await M.http("GET", file)).text();
-    assert.equal(fromManaged, fromCli, `${file} must be the same from both doors.`);
+    const fromEditor = await (await M.http("GET", file)).text();
+    assert.equal(fromEditor, fromCli, `${file} must be the same from both doors.`);
     assert(!fromCli.includes(path.basename(scratch)) && !/^\/\/ .*app\.js$/m.test(fromCli), `${file} names no build folder.`);
     servedBytes += fromCli.length;
   }
-  check("Managed publish", `project_sources_save reached revision ${saved.revision} and release_plan/release_apply served ${managedReceipt.url}. Its page, app.js, styles.css and favicon.svg (${servedBytes} bytes) are byte for byte the CLI deployment's, though each was built in its own folder, and no bundler comment names either folder.`);
+  check("Editor publish", `project_sources_save reached revision ${saved.revision} and release_plan/release_apply served ${editorReceipt.url}. Its page, app.js, styles.css and favicon.svg (${servedBytes} bytes) are byte for byte the CLI deployment's, though each was built in its own folder, and no bundler comment names either folder.`);
 
   // ----------------------------------------------- open signup, verification required
   const anaStart = await S.auth("/_konae/auth/signup", { email: people.ana });
@@ -728,19 +727,19 @@ try {
   const unknownColumns = queries.flatMap((item: any) => item.output.columns.filter((column: any) => column.type === "unknown").map((column: any) => `${item.name}.${column.name}`));
   assert.deepEqual(unknownColumns, ["admin.stats.members", "admin.stats.admins", "admin.stats.notes", "admin.stats.attachments", "admin.stats.published", "admin.stats.updates"]);
   refused("Action Contract", "admin.stats returns six COUNT(*) columns, each aliased", `Each is typed "unknown" with nullable null: ${unknownColumns.join(", ")}`);
-  // conform runs every mutation once, so it targets the managed Deployment, not the one that travels.
+  // conform runs every mutation once, so it targets the editor's Deployment, not the one that travels.
   const conformCookie = await M.signUp("conform@starter.test", `conform-${crypto.randomUUID()}`);
-  const conformKey = await A.owner.call<{ key: string }>("api_keys_create", { deploymentId: managedReceipt.id, name: "Conformance", actions: ["updates.post", "status.report"] });
+  const conformKey = await A.owner.call<{ key: string }>("api_keys_create", { deploymentId: editorReceipt.id, name: "Conformance", actions: ["updates.post", "status.report"] });
   const inputsFile = path.join(scratch, "conform-inputs.json");
   await writeFile(inputsFile, JSON.stringify({ "status.report": { component: "conform", state: "degraded", detail: "conformance run" } }));
   const contractFile = path.join(contractDir, "action-contract.json");
   const conformRuns: Record<string, string> = {};
   const conformFailures: Record<string, string[]> = {};
   for (const [label, extra] of [
-    ["session, key and secret", ["--token", tokenOfCookie(conformCookie), "--key", conformKey.key, "--secret", `status_webhook=${managedSecret}`]],
-    ["key and secret", ["--key", conformKey.key, "--secret", `status_webhook=${managedSecret}`]],
+    ["session, key and secret", ["--token", tokenOfCookie(conformCookie), "--key", conformKey.key, "--secret", `status_webhook=${editorSecret}`]],
+    ["key and secret", ["--key", conformKey.key, "--secret", `status_webhook=${editorSecret}`]],
   ] as const) {
-    const [, out, err] = await cli(["conform", "--url", managedReceipt.url, "--contract", contractFile, "--inputs", inputsFile, ...extra]);
+    const [, out, err] = await cli(["conform", "--url", editorReceipt.url, "--contract", contractFile, "--inputs", inputsFile, ...extra]);
     conformRuns[label] = out.trim().split("\n").at(-1)!;
     conformFailures[label] = out.split("\n").filter((line) => line.startsWith("FAIL "));
     assert.match(conformRuns[label], /^\d+ passed, \d+ failed, \d+ skipped/, out + err);
@@ -752,7 +751,7 @@ try {
   assert.match(conformRuns["session, key and secret"], /^\d+ passed, 0 failed, 1 skipped/);
   assert.deepEqual(conformFailures["key and secret"], []);
   assert.match(conformRuns["key and secret"], /^\d+ passed, 0 failed, \d+ skipped/);
-  check("Action Contract and conform", `konae contract writes 29 actions with no warning, and every query names each column it returns. conform against ${managedReceipt.url}: with a session, a key and the secret "${conformRuns["session, key and secret"]}", the member meeting every role's guard; with the key and the secret "${conformRuns["key and secret"]}", the session-only actions skipped.`);
+  check("Action Contract and conform", `konae contract writes 29 actions with no warning, and every query names each column it returns. conform against ${editorReceipt.url}: with a session, a key and the secret "${conformRuns["session, key and secret"]}", the member meeting every role's guard; with the key and the secret "${conformRuns["key and secret"]}", the session-only actions skipped.`);
 
   // ------------------------------------------- package export, import on Kernel B
   const exported = await A.owner.call<{ manifest: any; downloads: Record<string, Transfer> }>("package_export", { deploymentId: receipt.id });

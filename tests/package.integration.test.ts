@@ -140,7 +140,7 @@ describe("chunked package", () => {
     const directory = await mkdtemp(path.join(root, "export-"));
     const { source, cookie, fileId, key, exported, files } = await sourcePackage("pkg_source", directory);
     const manifest = exported.manifest;
-    expect(manifest).toMatchObject({ format: "konae-package", version: 1, deploymentId: source.id, projectId: "pkg_source", visibility: "public", publishedRevision: 1, sourceAuthority: "external" });
+    expect(manifest).toMatchObject({ format: "konae-package", version: 1, deploymentId: source.id, projectId: "pkg_source", visibility: "public", publishedRevision: 1 });
     // The signup, the action and the upload above wrote a Usage store, which travels too.
     expect(manifest.contents.map((content) => content.name)).toEqual(["database", "identity", "files", "usage"]);
     expect(manifest.excluded).toContain("app sessions");

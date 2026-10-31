@@ -5,7 +5,7 @@ export type DailyCount = UsageCount & { day: string };
 export type Metric = { day: string; feature: "execution" | "signal"; name: string; origin: string; outcome: string; count: number; lastAt: number };
 export type PublishedAction = { name: string; kind: string; http: { method: string; path: string } | null; signal: { name: string } | null; schedule: unknown; notify: unknown };
 export type UsageSummary = {
-  deploymentId: string; projectId: string; projectName: string; sourceAuthority: "managed" | "external"; url: string; updatedAt: number;
+  deploymentId: string; projectId: string; projectName: string; url: string; updatedAt: number;
   usage: { from: string; to: string; days: DailyCount[]; totals: UsageCount[] };
   metrics: Metric[]; actions: PublishedAction[];
   calls: { states: { state: string; count: number }[]; retainedOnly: boolean };

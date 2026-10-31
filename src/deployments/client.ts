@@ -22,7 +22,7 @@ export type PortableProjectState = {
  * the Kernel installs it before the app serves, and refuses it on a republish.
  */
 export async function deployProject(project: MiniAppProject, visibility: DeploymentVisibility, artifact: BuildArtifact, initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">): Promise<DeploymentReceipt> {
-  await platformMcp.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest, sourceAuthority: "managed" });
+  await platformMcp.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
   const transfer = await platformMcp.upload(new TextEncoder().encode(JSON.stringify({ project, visibility, artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}) })), project.id);
   try {
     const plan = await platformMcp.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });

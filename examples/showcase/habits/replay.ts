@@ -183,7 +183,7 @@ try {
   check("Streak SQL within the LIMIT rules",
     `The Gate passes the capsule and both doors refuse the streak query without its top-level LIMIT. A WITH RECURSIVE calendar that leads the statement is refused by both with "${kernelRefusals.recursive}". A Signal property that is neither an input key nor actor is refused by both with "${kernelRefusals.signalActor}"; the capsule's Signals list actor and pass`);
 
-  // ------------------------------------------------- the editor's managed path
+  // ---------------------------------------------------------- the editor's path
   // project_sources_save and release_plan/apply in the shapes the editor sends.
   const manifest = {
     version: 1, visibility: "public",
@@ -192,21 +192,20 @@ try {
       auth: { mode: "optional" }, files: { access: "deployment" },
     },
   };
-  const managedSource = (files: Record<string, string>) => ({
+  const editorSource = (files: Record<string, string>) => ({
     id: projectId, name: "Habits", slug: "habits", files, directories: [],
     databaseModel: { source: files["schema.ts"], acceptedSource: files["schema.ts"], revision: "r1" },
     manifest, updatedAt: Date.now(),
   });
-  const created = await owner.call<{ sourceAuthority: string }>("project_create", { projectId, name: "Habits", slug: "habits", manifest, sourceAuthority: "managed" });
-  assert.equal(created.sourceAuthority, "managed");
+  await owner.call("project_create", { projectId, name: "Habits", slug: "habits", manifest });
   const saveSources = async (expectedRevision: number, files = sources) => {
-    const upload = await owner.upload(new TextEncoder().encode(JSON.stringify(managedSource(files))), projectId);
+    const upload = await owner.upload(new TextEncoder().encode(JSON.stringify(editorSource(files))), projectId);
     try { return await owner.call<{ revision: number }>("project_sources_save", { projectId, transferId: upload.transferId, expectedRevision }); }
     finally { await owner.cancel(upload.transferId).catch(() => {}); }
   };
   assert.deepEqual(await saveSources(0), { revision: 1 });
   const { artifact } = await buildLocal(appRoot);
-  const releasePayload = { project: managedSource(sources), visibility: "public", artifact, initialSignupPolicy: { mode: "open", allowlist: [] } };
+  const releasePayload = { project: editorSource(sources), visibility: "public", artifact, initialSignupPolicy: { mode: "open", allowlist: [] } };
   const releaseUpload = await owner.upload(new TextEncoder().encode(JSON.stringify(releasePayload)), projectId);
   let receipt: { id: string; hostname: string; url: string };
   try {
@@ -216,7 +215,7 @@ try {
   const host = receipt.hostname;
   const appOrigin = new URL(receipt.url).origin;
   assert.equal((await owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receipt.id })).mode, "open");
-  check("Managed publish", `Saved sources reach revision 1 and the editor-shaped release serves ${receipt.url} as a public app with Open signup.`);
+  check("Editor publish", `Saved sources reach revision 1 and the editor-shaped release serves ${receipt.url} as a public app with Open signup.`);
 
   const appPost = (route: string, body: unknown, headers: Record<string, string> = {}) => post(route, body, { host, ...headers });
   const runtime = (cookie?: string) => withHeaders(`${url}/_konae/mcp`, cookie ? { host, cookie } : { host });

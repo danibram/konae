@@ -121,7 +121,6 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
       "files_update",
       "files_delete"
     ],
-    "sourceAuthority": "external",
     "workflow": [
       "platform_guide topic rules",
       "platform_guide topic pieces",
@@ -285,7 +284,7 @@ content-type: application/json
 
 ## 4. Create the project
 
-`init` writes a template and `konae.json` into an empty folder. It makes the project ID itself and calls no Kernel, so it needs no credential. The first `publish` registers the project as External. Dotfiles, such as the `.konae` folder `login` wrote, do not count. The project starts private, and its `signupPolicy` admits only people the owner invites.
+`init` writes a template and `konae.json` into an empty folder. It makes the project ID itself and calls no Kernel, so it needs no credential. The first `publish` registers the project. Dotfiles, such as the `.konae` folder `login` wrote, do not count. The project starts private, and its `signupPolicy` admits only people the owner invites.
 
 <!-- walkthrough:init -->
 ```sh
@@ -1321,7 +1320,6 @@ Exporting needs `export_data`, which OAuth does not grant:
         "allowlist": [],
         "mode": "invitation"
       },
-      "sourceAuthority": "external",
       "sourcesRevision": null,
       "version": 1,
       "visibility": "private"
@@ -1386,8 +1384,7 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
   "result": {
     "id": "<project id>",
     "name": "Orders",
-    "slug": "orders",
-    "sourceAuthority": "external"
+    "slug": "orders"
   }
 }
 ```

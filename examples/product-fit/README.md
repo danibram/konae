@@ -29,7 +29,7 @@ Since 2026-11-07 every mutation a person can be refused by declares a guard, so 
 
 ## Use one example in another project
 
-The fixture folders contain source files only. They carry no existing project ID or server URL. Create a new External Project with the CLI, then copy an example's sources over its template while retaining the generated `konae.json`.
+The fixture folders contain source files only. They carry no existing project ID or server URL. Create a new project with the CLI, then copy an example's sources over its template while retaining the generated `konae.json`.
 
 ```sh
 bun run konae -- init --dir /tmp/my-journal --name "My journal" --url http://localhost:4173

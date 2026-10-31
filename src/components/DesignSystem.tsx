@@ -1,6 +1,6 @@
 import { Download, FolderOpen, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { readOwnerProjectCount } from "../lib/managed-sources";
+import { readOwnerProjectCount } from "../lib/project-sources";
 import { templateChoices, type TemplateId } from "../lib/templates";
 import type { OwnerSession } from "./owner-session";
 import { WorkspaceNav } from "./WorkspaceNav";

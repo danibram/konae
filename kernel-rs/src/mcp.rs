@@ -48,7 +48,7 @@ pub(super) fn store(state: &AppState) -> Result<Connection> {
     db.busy_timeout(std::time::Duration::from_secs(5))?;
     db.execute_batch("PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS managed_sources(project TEXT PRIMARY KEY REFERENCES projects(id), body BLOB NOT NULL, revision INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS project_sources(project TEXT PRIMARY KEY REFERENCES projects(id), body BLOB NOT NULL, revision INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS credentials(hash TEXT PRIMARY KEY, owner TEXT NOT NULL, scopes TEXT NOT NULL, projects TEXT NOT NULL, expires INTEGER NOT NULL, audience TEXT);
         CREATE TABLE IF NOT EXISTS transfers(id TEXT PRIMARY KEY, principal TEXT NOT NULL, body TEXT NOT NULL, expires INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, owner TEXT NOT NULL, project TEXT NOT NULL, revision INTEGER NOT NULL, transfer TEXT NOT NULL, expires INTEGER NOT NULL, receipt TEXT);
@@ -249,7 +249,7 @@ async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
     }
     let mut db = store(state)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    for (table, column) in [("managed_sources", "project"), ("plans", "project"), ("package_imports", "project"), ("project_secrets", "project")] {
+    for (table, column) in [("project_sources", "project"), ("plans", "project"), ("package_imports", "project"), ("project_secrets", "project")] {
         let present: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)", [table], |r| r.get(0))?;
         if present {
             tx.execute(&format!("DELETE FROM {table} WHERE {column}=?1"), [id])?;
@@ -260,7 +260,7 @@ async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
     Ok(ids)
 }
 
-fn validate_managed_sources(source: &Value, id: &str) -> Result<()> {
+fn validate_sources(source: &Value, id: &str) -> Result<()> {
     let string = |value: &Value, max: usize| value.as_str().is_some_and(|s| s.len() <= max);
     let path = |value: &str| value.len() <= 240 && value.trim() == value
         && safe_relative_path(value) && !value.chars().any(|c| c.is_control());
@@ -370,7 +370,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             &["projectId"],
             true,
         ),
-        tool("project_sources_read", "Download the latest saved Managed project sources.", json!({"projectId":text}), &["projectId"], true),
+        tool("project_sources_read", "Download the project sources the editor or project_sources_save saved last.", json!({"projectId":text}), &["projectId"], true),
         tool(
             "database_execute",
             "Administer a deployment database. Mutations require write permission.",
@@ -388,8 +388,8 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     ];
     if owner.scopes.iter().any(|s| s == "write") {
         tools.extend([
-            tool("project_create", "Register a project and return a template's files, the ones konae init writes: template is tasks, notes (the default), members, form, webhook, digest or gallery, and without a manifest the project takes the template's visibility. Write the files into the folder and keep id, slug and manifest in konae.json. For an editor project, upload its JSON without a projectId and pass sourcesTransferId to create the project and its files atomically. Repeating the same initial files is safe; existing saved files cannot be replaced here.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourceAuthority":{"type":"string","enum":["managed","external"]},"sourcesTransferId":text,"template":{"type":"string","enum":["tasks","notes","members","form","webhook","digest","gallery"]}}), &["name"], false),
-            tool("project_sources_save", "Save Managed project sources if the expected source revision still matches. Upload the project JSON first: { id, name, slug, files: { path: text }, directories, databaseModel: { source, acceptedSource, revision }, manifest, updatedAt }, the format the editor saves and docs/mcp.md describes.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
+            tool("project_create", "Register a project and return a template's files, the ones konae init writes: template is tasks, notes (the default), members, form, webhook, digest or gallery, and without a manifest the project takes the template's visibility. Write the files into the folder and keep id, slug and manifest in konae.json. To save the editor's files with it, upload the project JSON without a projectId and pass sourcesTransferId to create the project and its files atomically. Repeating the same initial files is safe; existing saved files cannot be replaced here.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourcesTransferId":text,"template":{"type":"string","enum":["tasks","notes","members","form","webhook","digest","gallery"]}}), &["name"], false),
+            tool("project_sources_save", "Save the project sources the editor opens if the expected source revision still matches. Upload the project JSON first: { id, name, slug, files: { path: text }, directories, databaseModel: { source, acceptedSource, revision }, manifest, updatedAt }, the format the editor saves and docs/mcp.md describes.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
             tool("project_delete", "Delete a project for good: its registry entry, saved editor files and secrets, and, when it is published, its Deployment with the database, app accounts, uploaded files, backups and custom domain. The address stops answering at once. name must equal the project's name. Read back with projects_list.", json!({"projectId":text,"name":text}), &["projectId","name"], false),
             tool("schema_plan", "Derive and validate SQL from two Drizzle models in an isolated subprocess.", json!({"acceptedSource":text,"candidateSource":text,"projectId":text}), &["acceptedSource","candidateSource"], false),
         ]);
@@ -1211,7 +1211,6 @@ async fn admin_call(
             json!({
                 "name":"Konae",
                 "protocolVersion":VERSION,
-                "sourceAuthority":"external",
                 "runtimeEndpoint":"/_konae/mcp",
                 "chunkBytes":CHUNK,
                 "maxTransferBytes":MAX_TRANSFER,
@@ -1287,13 +1286,12 @@ async fn admin_call(
                 "Invalid project ID."
             );
             let initial_sources = if let Some(transfer_id) = a["sourcesTransferId"].as_str() {
-                anyhow::ensure!(a["sourceAuthority"] == "managed", "Initial editor files require a Managed project.");
                 let upload = transfer(state, principal, &json!({"transferId":transfer_id}))?;
                 anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload"
                     && (upload["projectId"].is_null() || upload["projectId"] == id), "Completed upload for this project required.");
                 let bytes = tokio::fs::read(transfer_path(state, transfer_id)?).await?;
                 let source: Value = serde_json::from_slice(&bytes)?;
-                validate_managed_sources(&source, &id)?;
+                validate_sources(&source, &id)?;
                 anyhow::ensure!(source["name"] == a["name"]
                     && a.get("slug").is_none_or(|slug| *slug == source["slug"])
                     && a.get("manifest").is_none_or(|manifest| *manifest == source["manifest"]), "Initial files must match the project metadata.");
@@ -1309,19 +1307,16 @@ async fn admin_call(
             if let Some(existing) = existing {
                 anyhow::ensure!(existing == owner.id, "Project not found or access denied.");
                 let mut project = owned_project(state, owner, &id, "read")?.0;
-                if a["sourceAuthority"] == "managed" && project["sourceAuthority"] != "managed" {
-                    anyhow::bail!("This project is External. Create a new project to edit in Konae.");
-                }
                 if let Some(bytes) = initial_sources {
                     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
                     let saved: Option<(Vec<u8>, u64)> = tx.query_row(
-                        "SELECT body,revision FROM managed_sources WHERE project=?1", [&id], |r| Ok((r.get(0)?, r.get(1)?)),
+                        "SELECT body,revision FROM project_sources WHERE project=?1", [&id], |r| Ok((r.get(0)?, r.get(1)?)),
                     ).optional()?;
                     let revision = if let Some((saved, revision)) = saved {
                         anyhow::ensure!(saved == bytes, "This project already has saved sources. Reload before saving.");
                         revision
                     } else {
-                        tx.execute("INSERT INTO managed_sources(project,body,revision) VALUES(?1,?2,1)", params![id,bytes])?;
+                        tx.execute("INSERT INTO project_sources(project,body,revision) VALUES(?1,?2,1)", params![id,bytes])?;
                         1
                     };
                     tx.commit()?;
@@ -1339,7 +1334,7 @@ async fn admin_call(
                 "Existing deployments must be claimed by their original operator."
             );
             let template = project_template(a["template"].as_str())?;
-            let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"sourceAuthority":a["sourceAuthority"].as_str().unwrap_or("external"),"manifest":a.get("manifest").cloned().unwrap_or(json!({"version":1,"visibility":template["visibility"]})),"files":template["files"]});
+            let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"manifest":a.get("manifest").cloned().unwrap_or(json!({"version":1,"visibility":template["visibility"]})),"files":template["files"]});
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             tx.execute(
                 "INSERT INTO projects(id,owner,body) VALUES(?1,?2,?3)",
@@ -1350,7 +1345,7 @@ async fn admin_call(
                 }],
             )?;
             if let Some(bytes) = initial_sources {
-                tx.execute("INSERT INTO managed_sources(project,body,revision) VALUES(?1,?2,1)", params![id,bytes])?;
+                tx.execute("INSERT INTO project_sources(project,body,revision) VALUES(?1,?2,1)", params![id,bytes])?;
                 project["sourcesRevision"] = json!(1);
             }
             tx.commit()?;
@@ -1361,17 +1356,16 @@ async fn admin_call(
             let (project, revision) = owned_project(state, owner, id, "read")?;
             let deployment = recover_deployed_model(state, id).await?;
             let sources_revision: u64 = store(state)?
-                .query_row("SELECT revision FROM managed_sources WHERE project=?1", [id], |r| r.get(0))
+                .query_row("SELECT revision FROM project_sources WHERE project=?1", [id], |r| r.get(0))
                 .optional()?
                 .unwrap_or(0);
             Ok(json!({"project":project,"revision":revision,"sourcesRevision":sources_revision,"deployment":deployment}))
         }
         "project_sources_read" => {
             let id = a["projectId"].as_str().unwrap();
-            let (project, _) = owned_project(state, owner, id, "read")?;
-            anyhow::ensure!(project["sourceAuthority"] == "managed", "Project sources are maintained externally.");
+            owned_project(state, owner, id, "read")?;
             let row: Option<(Vec<u8>, u64)> = store(state)?.query_row(
-                "SELECT body,revision FROM managed_sources WHERE project=?1", [id],
+                "SELECT body,revision FROM project_sources WHERE project=?1", [id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             ).optional()?;
             match row {
@@ -1386,16 +1380,15 @@ async fn admin_call(
             anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload" && upload["projectId"] == id, "Completed upload for this project required.");
             let bytes = tokio::fs::read(transfer_path(state, transfer_id)?).await?;
             let source: Value = serde_json::from_slice(&bytes)?;
-            validate_managed_sources(&source, id)?;
+            validate_sources(&source, id)?;
             let _guard = database_lock(state, &format!("project:{id}")).await;
-            let (project, _) = owned_project(state, owner, id, "write")?;
-            anyhow::ensure!(project["sourceAuthority"] == "managed", "Project sources are maintained externally.");
+            owned_project(state, owner, id, "write")?;
             let mut db = store(state)?;
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let current: u64 = tx.query_row("SELECT revision FROM managed_sources WHERE project=?1", [id], |r| r.get(0)).optional()?.unwrap_or(0);
+            let current: u64 = tx.query_row("SELECT revision FROM project_sources WHERE project=?1", [id], |r| r.get(0)).optional()?.unwrap_or(0);
             anyhow::ensure!(current == a["expectedRevision"].as_u64().unwrap(), "Source revision conflict. Reload the saved project before writing.");
             let revision = current.checked_add(1).ok_or_else(|| anyhow::anyhow!("Source revision exhausted."))?;
-            tx.execute("INSERT INTO managed_sources(project,body,revision) VALUES(?1,?2,?3) ON CONFLICT(project) DO UPDATE SET body=excluded.body,revision=excluded.revision", params![id,bytes,revision])?;
+            tx.execute("INSERT INTO project_sources(project,body,revision) VALUES(?1,?2,?3) ON CONFLICT(project) DO UPDATE SET body=excluded.body,revision=excluded.revision", params![id,bytes,revision])?;
             tx.commit()?;
             Ok(json!({"revision":revision}))
         }
@@ -1483,7 +1476,7 @@ async fn admin_call(
             let items = rows.into_iter().take(50).map(|(id, body)| {
                 let project: Value = serde_json::from_str(&body)?;
                 let deployment = find_project_deployment(&deployments, &id);
-                Ok((id, project["name"].clone(), project["sourceAuthority"].clone(), deployment))
+                Ok((id, project["name"].clone(), deployment))
             }).collect::<Result<Vec<_>>>()?;
             drop(deployments);
             let root = state.data_root.clone();
@@ -1493,14 +1486,11 @@ async fn admin_call(
                 // Validate the range even for an account without deployments.
                 super::usage::validate_range(&from, &to)?;
                 let flushed = super::usage::flush_status();
-                let apps: Vec<Value> = items.into_iter().map(|(id, name, authority, deployment)| {
+                let apps: Vec<Value> = items.into_iter().map(|(id, name, deployment)| {
                     match deployment {
                         None => json!({"projectId": id, "name": name, "summary": null}),
                         Some(d) => match super::usage::read_summary(&root, &d, &from, &to, flushed) {
-                            Ok(mut summary) => {
-                                summary["sourceAuthority"] = authority;
-                                json!({"projectId": id, "name": name, "summary": super::usage::compact_overview(summary)})
-                            },
+                            Ok(summary) => json!({"projectId": id, "name": name, "summary": super::usage::compact_overview(summary)}),
                             Err(_) => json!({"projectId": id, "name": name, "summary": null, "error": "Usage could not be read. Try again."}),
                         }
                     }
@@ -1510,12 +1500,7 @@ async fn admin_call(
         }
         "usage_read" | "signals_read" | "usage_summary" => {
             let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "read").await?;
-            let mut value = super::usage::admin_call(&state.data_root, &deployment, name, &a).await?;
-            if name == "usage_summary" {
-                let (project, _) = owned_project(state, owner, &deployment.project_id, "read")?;
-                value["sourceAuthority"] = project["sourceAuthority"].clone();
-            }
-            Ok(value)
+            super::usage::admin_call(&state.data_root, &deployment, name, &a).await
         }
         "sign_in_methods_read" => {
             let id = a["deploymentId"].as_str().unwrap();
@@ -1777,7 +1762,7 @@ async fn recover_deployed_model(state: &AppState, project_id: &str) -> Result<Op
     let Some(mut deployment) = find_project_deployment(&*state.deployments.read().await, project_id) else { return Ok(None) };
     if deployment.database_model.is_some() { return Ok(Some(deployment)); }
     let saved: Option<Vec<u8>> = store(state)?.query_row(
-        "SELECT body FROM managed_sources WHERE project=?1", [project_id], |r| r.get(0)).optional()?;
+        "SELECT body FROM project_sources WHERE project=?1", [project_id], |r| r.get(0)).optional()?;
     let Some(saved) = saved else { return Ok(Some(deployment)) };
     let saved: Value = serde_json::from_slice(&saved)?;
     let Some(source) = saved["databaseModel"]["acceptedSource"].as_str() else { return Ok(Some(deployment)) };
@@ -2689,7 +2674,7 @@ async fn claim_for_first_owner(state: &AppState, user_id: &str) {
             .unwrap_or(0);
         if owners == 1 {
             for d in state.deployments.read().await.values() {
-                let _=db.execute("INSERT OR IGNORE INTO projects(id,owner,body) VALUES(?1,?2,?3)",params![d.project_id,user_id,json!({"id":d.project_id,"name":d.project_name,"sourceAuthority":"managed","manifest":d.manifest}).to_string()]);
+                let _=db.execute("INSERT OR IGNORE INTO projects(id,owner,body) VALUES(?1,?2,?3)",params![d.project_id,user_id,json!({"id":d.project_id,"name":d.project_name,"manifest":d.manifest}).to_string()]);
             }
         }
     }
@@ -2868,7 +2853,7 @@ mod tests {
             for (id, name) in [(published.as_str(), "Notes"), (draft, "Draft")] {
                 db.execute("INSERT INTO projects(id,owner,body) VALUES(?1,'o',?2)", params![id, json!({"id": id, "name": name}).to_string()]).unwrap();
             }
-            db.execute("INSERT INTO managed_sources(project,body,revision) VALUES(?1,x'7b7d',1)", [draft]).unwrap();
+            db.execute("INSERT INTO project_sources(project,body,revision) VALUES(?1,x'7b7d',1)", [draft]).unwrap();
         }
         let call = |name: &'static str, a: Value| { let (state, owner) = (state.clone(), owner.clone()); async move { admin_call(&state, &owner, "owner:o", name, a).await } };
 
@@ -2884,7 +2869,7 @@ mod tests {
         call("project_delete", json!({"projectId": draft, "name": "Draft"})).await.unwrap();
         let listed = call("projects_list", json!({})).await.unwrap();
         assert_eq!(listed["projects"], json!([]));
-        let sources: i64 = store(&state).unwrap().query_row("SELECT COUNT(*) FROM managed_sources", [], |r| r.get(0)).unwrap();
+        let sources: i64 = store(&state).unwrap().query_row("SELECT COUNT(*) FROM project_sources", [], |r| r.get(0)).unwrap();
         assert_eq!(sources, 0);
         let again = call("project_delete", json!({"projectId": draft, "name": "Draft"})).await.unwrap_err();
         assert_eq!(again.to_string(), "Project not found or access denied.");
@@ -3134,8 +3119,8 @@ mod tests {
     fn a_refused_source_save_names_the_expected_format() {
         let manifest = json!({"version":1,"visibility":"private","runtime":{"database":{"mode":"declared-actions","actions":[]},"auth":{"mode":"optional"},"files":{"access":"deployment"}}});
         let base = json!({"id":"app_a","name":"A","slug":"a","files":{"index.html":"<main></main>"},"directories":[],"databaseModel":{"source":"","acceptedSource":"","revision":"r1"},"manifest":manifest,"updatedAt":1});
-        assert!(validate_managed_sources(&base, "app_a").is_ok());
-        let refusal = |change: &dyn Fn(&mut Value)| { let mut source = base.clone(); change(&mut source); validate_managed_sources(&source, "app_a").unwrap_err().to_string() };
+        assert!(validate_sources(&base, "app_a").is_ok());
+        let refusal = |change: &dyn Fn(&mut Value)| { let mut source = base.clone(); change(&mut source); validate_sources(&source, "app_a").unwrap_err().to_string() };
         assert_eq!(refusal(&|s| { s.as_object_mut().unwrap().remove("databaseModel"); }), "Invalid database model. Send databaseModel as { source, acceptedSource, revision } strings; an app without a Drizzle model sends empty sources.");
         assert!(refusal(&|s| s["manifest"] = json!({"version":1,"visibility":"private"})).starts_with("Invalid project manifest. Send { version: 1, visibility, runtime: { database: { mode: \"declared-actions\""));
         assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("updatedAt"); }).starts_with("Invalid project metadata. Send { id, name, slug, files, directories, databaseModel, manifest, updatedAt }"));

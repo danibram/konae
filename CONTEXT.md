@@ -13,7 +13,7 @@ Each term below is capitalized in its heading. In a sentence, in docs, in the ed
 ### Before the app runs
 
 **Project**:
-The source lineage, schema, capability configuration and deployment history owned by a workspace member. Its source authority is either Managed by Konae or External under its owner.
+The source lineage, schema, capability configuration and deployment history owned by a workspace member. Its sources open in the editor, and the CLI publishes them from a folder.
 _Avoid_: App when referring specifically to editable source
 
 **Capsule**:
@@ -57,7 +57,7 @@ Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a s
 _Avoid_: Owner, editor user
 
 **Signup Policy**:
-The per-Deployment rule for who may create a Runtime Actor account: Open (anyone), Invitation only (only through an invitation), Closed (nobody signs up, and an invitation the owner sends can still be accepted) or Allowlist (exact emails or `@domain` entries, kept as an advanced option). Public Deployments start Open and Private Deployments start Closed; a first release may name another. The Project Owner chooses it in the publish dialog on a first release and changes it later in the editor's Auth > Users view or with `signup_policy_set`, which needs `manage_users`, and a republish never changes it except to close an Open app made private. The Kernel checks it again when an account verifies and when an invitation is accepted. An External Project names its first release's policy in `konae.json` as `project.manifest.signupPolicy`, and `konae publish` sends it only then.
+The per-Deployment rule for who may create a Runtime Actor account: Open (anyone), Invitation only (only through an invitation), Closed (nobody signs up, and an invitation the owner sends can still be accepted) or Allowlist (exact emails or `@domain` entries, kept as an advanced option). Public Deployments start Open and Private Deployments start Closed; a first release may name another. The Project Owner chooses it in the publish dialog on a first release and changes it later in the editor's Auth > Users view or with `signup_policy_set`, which needs `manage_users`, and a republish never changes it except to close an Open app made private. The Kernel checks it again when an account verifies and when an invitation is accepted. A project published with the CLI names its first release's policy in `konae.json` as `project.manifest.signupPolicy`, and `konae publish` sends it only then.
 _Avoid_: Invite list, access grant
 
 **Sign-in Methods**:
@@ -161,14 +161,6 @@ _Avoid_: replication, sync, transfer (a transfer is one upload or download)
 **Maintenance**:
 The state of a Deployment that takes no writes. Its host shows a page naming the operation and refuses actions, uploads, signups, sign-ins, recovery, invitations and HTTP routes, the owner cannot change it, and its email waits. A migration keeps it in the Deployment's folder, `migration.json`, so a restart or a restore keeps it. A restore that cannot read the revocation record keeps it for the whole installation in `recovery-hold.json` until `konae-kernel reconcile` runs.
 _Avoid_: downtime, read-only mode (reads stop too)
-
-**Managed Project**:
-A Project whose source and database-schema authority remain in Konae, so changes must pass through its editor, agent, managed build and Validation Gate.
-_Avoid_: Hosted Project
-
-**External Project**:
-A Project created with external source authority. Konae retains its identity, capabilities and deployment history but the owner supplies Build Artifacts and accepts schema compatibility responsibility.
-_Avoid_: Exported Project, detached Deployment
 
 **Declared Dependencies**:
 The npm packages a Capsule imports by name, listed with exact versions under `dependencies` in its `package.json`. The editor's build fetches each one from esm.sh at that version and links it into the app's bundle; `konae build` and the exported kit read the same list from `node_modules` after `npm install`. Either way the published app holds the package's code and loads nothing from another origin. A version range is refused, so every build reads the same code.

@@ -45,7 +45,7 @@ beforeAll(async () => {
 afterAll(async () => { kernel?.kill(); if (kernel) await kernel.exited; if (root) await rm(root, { recursive: true, force: true }); });
 
 async function publish(id: string, withModel = true, initialDomain?: string, projectFiles = files, releaseModel = databaseModel) {
-  await client.call("project_create", { projectId: id, name: id, sourceAuthority: "managed", manifest });
+  await client.call("project_create", { projectId: id, name: id, manifest });
   const transfer = await client.upload(new TextEncoder().encode(JSON.stringify({ project: { id, name: id, slug: id, files: projectFiles, manifest, ...(withModel ? { databaseModel: releaseModel } : {}) }, visibility: "private", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<main>test</main>" } }, ...(initialDomain ? { initialDomain } : {}) })), id);
   try {
     const plan = await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });

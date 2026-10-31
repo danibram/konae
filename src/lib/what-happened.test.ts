@@ -9,7 +9,7 @@ const at = (time: string) => Date.parse(`${day}T${time}:00Z`);
 function summary(extra: Partial<UsageSummary> & { scheduled?: unknown[] } = {}): UsageSummary {
   const { scheduled = [], ...rest } = extra;
   return {
-    deploymentId: "d", projectId: "p", projectName: "Desk", sourceAuthority: "managed", url: "http://desk.localhost", updatedAt: 0,
+    deploymentId: "d", projectId: "p", projectName: "Desk", url: "http://desk.localhost", updatedAt: 0,
     usage: { from: day, to: day, days: [], totals: [], scheduled } as UsageSummary["usage"],
     metrics: [], actions: [],
     calls: { states: [], retainedOnly: false }, mail: { states: [], retainedOnly: false },

@@ -49,7 +49,7 @@ afterAll(async () => {
 type Release = { id: string; files: Record<string, string>; manifest: object; model: string };
 
 async function plan({ id, files, manifest, model }: Release) {
-  await client.call("project_create", { projectId: id, name: id, sourceAuthority: "managed", manifest });
+  await client.call("project_create", { projectId: id, name: id, manifest });
   const program = JSON.parse(files["actions.json"]) as { actions: Record<string, { http?: { signature?: { secret?: string } }; auth?: { secret?: string } }> };
   for (const action of Object.values(program.actions)) {
     const secret = action.http?.signature?.secret ?? action.auth?.secret;

@@ -239,7 +239,6 @@ describe("Usage and Signals", () => {
     const overview = await owner.call<UsageOverview>("usage_overview", { from: yesterday(), to: today() });
     const appSummary = overview.apps.find((a) => a.projectId === "usage_app")?.summary;
     expect(appSummary?.deploymentId).toBe(deploymentId);
-    expect(appSummary?.sourceAuthority).toBe("external");
     expect(appSummary?.metrics.filter((m) => m.feature === "execution" && m.outcome === "failed").reduce((n, m) => n + m.count, 0)).toBe(1);
     expect(appSummary?.usage.totals.filter((row) => row.kind === "action").reduce((n, row) => n + row.count, 0)).toBe(4);
     expect(overview.apps.find((a) => a.projectId === "usage_other")?.summary).toBeNull();

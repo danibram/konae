@@ -34,7 +34,7 @@ Eight apps in `examples/product-fit/`. A smoke run publishes all eight on an iso
 bun run examples/product-fit/smoke.ts
 ```
 
-To start from one of them, create a new External Project, then copy the example's sources over the template and keep the generated `konae.json`.
+To start from one of them, create a new project with `konae init`, then copy the example's sources over the template and keep the generated `konae.json`.
 
 ```sh
 bun run konae -- init --dir /tmp/my-journal --name "My journal" --url http://localhost:4173

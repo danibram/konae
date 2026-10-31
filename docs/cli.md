@@ -35,7 +35,7 @@ A delegated token cannot widen itself later, so the flags are the only way the C
 bun run konae -- init --dir ./my-app [--name 'My app'] [--template <id>] [--url <Kernel URL>]
 ```
 
-Writes a template and `konae.json` into an empty folder, without a credential or a Kernel. The templates are the editor's: `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` and `gallery`. The project is External, and its first `publish` registers it on the installation.
+Writes a template and `konae.json` into an empty folder, without a credential or a Kernel. The templates are the editor's: `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` and `gallery`. Its first `publish` registers the project on the installation.
 
 ## dev
 

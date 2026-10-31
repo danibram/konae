@@ -9,7 +9,7 @@ Five apps built as product probes on 2026-11-06, and a sixth, starter, on 2026-1
 | [gallery](gallery/README.md) | A public portfolio with a contact form and a JSON feed | Public files under the CSP, anonymous rate limits, an open GET route, a multi-page artifact, a custom domain, the contract without a credential |
 | [habits](habits/README.md) | A personal tracker used from two devices | Required verification, actor-bound rows, a daily schedule that closes the day, Signals and Usage, a publish from a folder, copies and restore |
 | [booking](booking/README.md) | A room board with a public view and staff sign-in | Allowlist by domain, one atomic multi-row write, concurrent double booking, a confirmation email to the booker, a schedule that releases bookings nobody checked in, the contract with a session and with a key |
-| [starter](starter/README.md) | The typical app in one, and the one to copy first: public landing and API, verified open signup, member, team and admin areas | Every primitive at once: public reads, key-only and signed routes, guards for roles, the file lifecycle and quota, Signals, the contract and conform, a package import, the CLI and the managed path |
+| [starter](starter/README.md) | The typical app in one, and the one to copy first: public landing and API, verified open signup, member, team and admin areas | Every primitive at once: public reads, key-only and signed routes, guards for roles, the file lifecycle and quota, Signals, the contract and conform, a package import, the CLI and the editor's path |
 
 Each app has a `replay.ts` that starts its own Kernel, publishes the app, runs every flow and refusal, runs `konae contract` and `conform`, and removes its data on exit. Run them all:
 

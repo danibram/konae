@@ -7,7 +7,7 @@ test("usage periods include today and use UTC across month and year boundaries",
 });
 
 const summary = (totals: { kind: string; name: string; count: number }[]): UsageSummary => ({
-  deploymentId: "d", projectId: "p", projectName: "Form", sourceAuthority: "managed", url: "http://form.localhost", updatedAt: 0,
+  deploymentId: "d", projectId: "p", projectName: "Form", url: "http://form.localhost", updatedAt: 0,
   usage: { from: "2026-11-01", to: "2026-11-08", days: totals.map((t) => ({ ...t, day: "2026-11-08" })), totals },
   metrics: [], actions: [{ name: "messages.send", kind: "mutation", http: null, signal: null, schedule: null, notify: { to: "owner" } }],
   calls: { states: [], retainedOnly: true }, mail: { states: [], retainedOnly: true },
