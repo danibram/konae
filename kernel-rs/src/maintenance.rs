@@ -28,7 +28,7 @@ pub(crate) const MAIL_HOLD_MS: i64 = 60_000;
 
 /// The answer to every refused request while an app is in maintenance.
 const MESSAGE: &str = "This app is in maintenance. It accepts no writes, signups, recovery, administrative changes or email until it comes out of maintenance.";
-const UNREADABLE: &str = "This app is in maintenance: its maintenance state (maintenance.json) cannot be read. The operator must repair or remove that file.";
+const UNREADABLE: &str = "This app is in maintenance because its maintenance state (maintenance.json) cannot be read. The operator must repair or remove that file.";
 
 /// The maintenance state of one Deployment. A file that exists but cannot be
 /// read keeps the app paused, because the Kernel cannot tell why it was paused.

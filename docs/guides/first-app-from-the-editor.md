@@ -34,13 +34,13 @@ Observe the result through the same door you wrote through, before you tell anyo
 
 ## Data and republishing
 
-Use Data to choose the local or deployed database, browse and edit rows, run SQL, create backups and restore them. `schema.sql` is the only model: a publish adds the tables and indexes it declares, and a changed or removed column needs an `ALTER TABLE` in SQL, on the preview and on the published app. Publishing the same project keeps its URL and database, and the republished app stops serving files that the new artifact no longer contains.
+Use Data to choose the local or deployed database, browse and edit rows, run SQL, create backups and restore them. `schema.sql` is the only model. A publish adds the tables and indexes it declares, and a changed or removed column needs an `ALTER TABLE` in SQL, on the preview and on the published app. Publishing the same project keeps its URL and database, and the republished app stops serving files that the new artifact no longer contains.
 
 The Auth panel lets you try the app as Guest, Alice and Bob in the preview. A published app uses its own accounts.
 
 ## What the preview cannot show
 
-The editor preview is not a Deployment. It applies no Content Security Policy, so inline handlers and fetches to other origins still run there, and a published app refuses them. It has no HTTP routes, no schedule timer, no notice email, no Usage store, no call outbox and no owner app account. Try those on `konae dev` or on the published Deployment.
+The editor preview is not a Deployment. It applies no Content Security Policy, so inline handlers and fetches to other origins still run there, and a published app refuses them. It has no HTTP routes, no schedule timer, no notice email, no Usage store and no call outbox. Try those on `konae dev` or on the published Deployment.
 
 The Gate checks the schema and `actions.json`. A page that names a missing file fails at build or release, not at the Gate, so check every path you write.
 

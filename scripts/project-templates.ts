@@ -20,7 +20,7 @@ export function renderProjectTemplates(): string {
   for (const { id, name, sentence } of templateChoices) {
     const born = applyTemplate(structuredClone(starterProject), id);
     const files: Record<string, string> = {};
-    // The Capsule alone. The Drizzle model stays behind, so schema.sql is the one place the schema is written.
+    // The Capsule's files, as a folder holds them.
     for (const [filename, source] of Object.entries(born.files).sort(([a], [b]) => a.localeCompare(b))) if (typeof source === "string") files[filename] = source;
     templates[id] = { name, sentence, visibility: born.manifest.visibility, files };
   }

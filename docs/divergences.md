@@ -15,7 +15,7 @@ Attach listeners in JavaScript, and keep scripts and fetches on the app's own or
 
 ## What the preview lacks
 
-The preview has no HTTP routes, schedule timer, notice email, Usage store, call outbox or owner app account. Try those on `konae dev` or on a published Deployment.
+The preview has no HTTP routes, schedule timer, notice email, Usage store or call outbox. Try those on `konae dev` or on a published Deployment.
 
 ## File size
 

@@ -42,7 +42,7 @@ Your own app account is an app account like any other. Sign up or accept an invi
 - On `konae dev`, the invitation email lands in `<folder>/.konae/dev-data/mailbox.jsonl`, and `konae events` lists it with its link.
 - Decide whether you may call these tools from `session_inspect`'s `can` map. A tool your credential may not call answers `Unknown tool or insufficient permission.` and names the permission.
 
-The editor preview has no owner app account and sends no email, so test invitations on `konae dev` or on a Deployment. A package keeps the invitation as history without its link, and the owner resends it.
+The editor preview sends no email, so test invitations on `konae dev` or on a Deployment. A package keeps the invitation as history without its link, and the owner resends it.
 
 ## Read next
 

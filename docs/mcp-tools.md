@@ -25,7 +25,7 @@ OAuth offers `read`, `write`, `publish` and `manage_users`. It does not offer `e
 | `actions` | The `actions.json` format and its rules. |
 | `sdk` | The `window.miniapp` modules, rendered from `src/sdk/contract.ts`. |
 | `publishing` | The release steps as MCP calls, access, import, and custom domain. |
-| `users` | Signup policy, invitations, accounts, and the owner's app account. |
+| `users` | Signup policy, invitations, accounts, and roles inside an app. |
 | `portability` | Export and import. |
 | `refusals` | Every code a refused Capsule answers, with who fixes it and a one-line remedy. |
 

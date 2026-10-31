@@ -101,7 +101,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "capabilities": "session_inspect answers can for the scopes this credential holds, and createTokens when it is the owner's browser session. Decide from can, not from memory of which flag login took.",
             "divergences": [
                 {"where": "editor preview vs published Deployment", "fact": "The preview applies no Content Security Policy. Inline event handlers and other-origin fetches can still run there; a published app refuses them. Attach listeners in JavaScript and keep scripts and fetches on the app's own origin."},
-                {"where": "editor preview vs Deployment", "fact": "The preview has no HTTP routes, no schedule timer, no notice email, no Usage store, no call outbox, and no owner app account. Try those on bun run konae -- dev or on a published Deployment."},
+                {"where": "editor preview vs Deployment", "fact": "The preview has no HTTP routes, no schedule timer, no notice email, no Usage store and no call outbox. Try those on bun run konae -- dev or on a published Deployment."},
                 {"where": "editor preview vs Deployment", "fact": "The editor preview has no Google sign-in. miniapp.auth.signInWithGoogle() refuses there; try it on a published Deployment once the owner has set the app's Google client and turned Google on."},
                 {"where": "Validation Gate vs publish builders", "fact": "The Gate checks schema and actions.json. A page that names a missing file fails at build or release, not at validate_capsule. Check every path you write."}
             ]

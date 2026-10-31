@@ -115,7 +115,7 @@ describe("the build agent's tools from the owner's MCP", () => {
     expect(databaseCallWrites({ operation: "sql", input: { sql: "DELETE FROM tasks" } })).toBe(true);
     expect(databaseCallWrites({ operation: "sql", input: { sql: "SELECT 1; DELETE FROM tasks" } })).toBe(true);
     expect(databaseCallWrites({ operation: "delete-row" })).toBe(true);
-    expect(databaseCallWrites({ operation: "apply-migration" })).toBe(true);
+    expect(databaseCallWrites({ operation: "create-backup" })).toBe(true);
     const { value, confirmations } = binding();
     const tools = await toolsFor(value);
     await run(tools.database_execute, { operation: "sql", input: { sql: "SELECT id FROM tasks LIMIT 5" } });

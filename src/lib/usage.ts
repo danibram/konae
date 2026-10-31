@@ -59,7 +59,7 @@ export function featureRows(summary: UsageSummary) {
 // The Kernel names each notice "<action>: <reason>", where reason is "queued" or why nothing was queued (docs/mcp.md).
 const noticeReasons: Record<string, string> = {
   "no-transport": "this installation has no email service",
-  "owner-has-no-email": "the owner account has no email address",
+  "owner-has-no-email": "the Deployment has no contact email",
   "no-account": "the caller had no app account",
   "unverified-email": "the caller's email is not verified",
   "app-limit": "the app's daily email budget was used up",

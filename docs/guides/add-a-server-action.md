@@ -71,7 +71,7 @@ A Server Action is the deployed app's only database interface. It runs one SQL s
 
     It writes `action-contract.json`, its schema and `action-contract.md` from `actions.json` and `schema.sql`.
 
-The editor preview runs actions against its own local database, not the Deployment's. It has no Usage store and no owner app account, so check those on `konae dev` or a Deployment.
+The editor preview runs actions against its own local database, not the Deployment's. It has no Usage store, so check that on `konae dev` or a Deployment.
 
 ## Read next
 

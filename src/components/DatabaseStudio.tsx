@@ -441,7 +441,7 @@ function SchemaView({ tables, onEdit }: { tables: DatabaseTable[]; onEdit: () =>
         ))}
       </ul>
       <div className="schema-actions"><button onClick={onEdit}><Pencil size={12} /> Edit schema.sql</button></div>
-      <p className="schema-rule">A publish runs schema.sql, so a new table or index arrives with it. A changed or removed column does not: change it with ALTER TABLE in SQL, here and on the published app.</p>
+      <p className="schema-rule">A publish runs schema.sql, so a new table or index arrives with it. A changed or removed column does not arrive, so change it with ALTER TABLE in SQL, here and on the published app.</p>
     </div>
   );
 }
