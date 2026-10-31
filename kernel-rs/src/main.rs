@@ -37,7 +37,6 @@ mod checks;
 mod clerk;
 mod copies;
 mod domain;
-mod eject;
 mod file_store;
 mod files;
 mod google;

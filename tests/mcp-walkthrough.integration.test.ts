@@ -94,19 +94,6 @@ await show();
   }, null, 2) + "\n",
 };
 
-const NOTES = {
-  id: "app_walkthrough_notes", name: "Notes", slug: "notes", updatedAt: 1762430000000,
-  files: {
-    "index.html": "<main id=app></main>",
-    "app.js": "document.querySelector('#app').textContent = 'Notes';\n",
-    "schema.sql": "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);\n",
-    "actions.json": "{\"version\":1,\"actions\":{}}\n",
-  },
-  directories: [],
-  databaseModel: { source: "", acceptedSource: "", revision: "r1" },
-  manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "optional" }, files: { access: "deployment" } } },
-};
-
 const r = new Recorder();
 let root = "";
 let a: KernelProcess;
@@ -510,36 +497,7 @@ describe("the MCP walkthrough", () => {
     expect((keys.result as any).keys[0].revokedReason).toBe("import");
   }, 180_000);
 
-  test("14. Eject a Managed Project and publish from its folder", async () => {
-    r.step("managed");
-    await tool("project_create", { projectId: NOTES.id, name: "Notes", sourceAuthority: "managed" }, { pick: (value) => ({ id: value.id, name: value.name, slug: value.slug, sourceAuthority: value.sourceAuthority }) });
-    r.add("json", JSON.stringify(NOTES, null, 2));
-    const client = new McpClient(`${a.url}/mcp`, { token: s.token });
-    const upload = await client.upload(new TextEncoder().encode(JSON.stringify(NOTES)), NOTES.id);
-    r.name(upload.transferId, "<sources upload>");
-    const saved = await tool("project_sources_save", { projectId: NOTES.id, transferId: upload.transferId, expectedRevision: 0 });
-    expect(saved.result).toEqual({ revision: 1 });
-    await client.cancel(upload.transferId).catch(() => {});
-
-    r.step("eject");
-    const folder = path.join(root, "notes");
-    const ejected = await run(["eject", "--dir", folder, "--project", NOTES.id, "--url", a.url], { KONAE_MCP_TOKEN: s.token }, { KONAE_MCP_TOKEN: "<token>" });
-    expect(ejected.code).toBe(0);
-    r.add("sh", "ls /tmp/notes");
-    r.add("text", (await readdir(folder)).filter((name) => !name.startsWith(".")).sort().join("\n"));
-
-    r.step("eject-publish");
-    expect((await run(["publish", "--dir", folder], { KONAE_MCP_TOKEN: s.token }, { KONAE_MCP_TOKEN: "<token>" })).code).toBe(0);
-    const receipt = JSON.parse(await readFile(path.join(folder, ".konae/deployment.json"), "utf8"));
-    r.name(receipt.hostname.split(".")[0], "notes-<suffix>");
-    const change = await new McpClient(`${a.url}/mcp`, { token: s.token }).upload(new TextEncoder().encode(JSON.stringify({ ...NOTES, updatedAt: NOTES.updatedAt + 1 })), NOTES.id);
-    r.name(change.transferId, "<another sources upload>");
-    const after = await tool("project_sources_save", { projectId: NOTES.id, transferId: change.transferId, expectedRevision: 1 });
-    await new McpClient(`${a.url}/mcp`, { token: s.token }).cancel(change.transferId).catch(() => {});
-    expect(after.refused).toStartWith("This project was ejected");
-  }, 120_000);
-
-  test("15. begin and cancel a migration", async () => {
+  test("14. begin and cancel a migration", async () => {
     r.step("migration-begin");
     const begun = await tool("migration_begin", { deploymentId: s.deploymentId }, { pick: (value) => ({ operationId: value.operationId, packageId: value.packageId, phase: value.phase, paused: value.paused, downloads: Object.keys(value.downloads), next: value.next }) });
     const operationId = (begun.result as any).operationId;

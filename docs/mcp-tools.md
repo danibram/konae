@@ -26,7 +26,7 @@ OAuth offers `read`, `write`, `publish` and `manage_users`. It does not offer `e
 | `sdk` | The `window.miniapp` modules, rendered from `src/sdk/contract.ts`. |
 | `publishing` | The release steps as MCP calls, access, import, and custom domain. |
 | `users` | Signup policy, invitations, accounts, and the owner's app account. |
-| `portability` | Export, import, Eject and migration. |
+| `portability` | Export, import and migration. |
 | `refusals` | Every code a refused Capsule answers, with who fixes it and a one-line remedy. |
 
 ## Permissions
@@ -40,7 +40,7 @@ The catalog of tools depends on the credential. A call to a tool the credential 
 | `publish` | `release_plan`, `release_apply`, `secret_set`, `secret_delete`, `api_keys_create`, `api_keys_revoke`, `domain_set`, `domain_clear`, `path_set`, `path_clear`, and `initialSignupPolicy` on a first release |
 | `manage_users` | `signup_policy_set`, `sign_in_methods_set`, `app_users_list`, `app_user_suspend`, `app_user_resume` and the `app_invitations` tools |
 | `export_data` | `package_export`, `project_export`, `database_export`, and `migration_begin` together with `manage_lifecycle` |
-| `manage_lifecycle` | `eject_plan`, `eject_apply` and the migration tools |
+| `manage_lifecycle` | The migration tools |
 
 A delegated token cannot create tokens or add permissions to itself. Run `login` again with the flag.
 
@@ -50,7 +50,6 @@ A delegated token cannot create tokens or add permissions to itself. Run `login`
 | --- | --- |
 | Discovery | `platform_describe`, `platform_guide`, `session_inspect`, `mail_status`, `projects_list`, `project_inspect` |
 | Projects | `project_create`, `project_sources_read`, `project_sources_save`, `project_delete` |
-| Eject | `eject_plan`, `eject_apply` |
 | Migration | `migration_begin`, `migration_confirm`, `migration_cancel`, `migration_activate`, `migration_status` |
 | Owner schema and data | `schema_plan`, `database_execute`, `storage_test` |
 | App export | `package_export`, `project_export`, `database_export` |
@@ -109,8 +108,6 @@ Every tool that writes has a tool that observes its effect through the same door
 | `package_export` | `transfer_read` |
 | `project_export` | `transfer_read` |
 | `database_export` | `transfer_read` |
-| `eject_plan` | `eject_plan` |
-| `eject_apply` | `project_inspect` |
 | `migration_begin` | `migration_status` |
 | `migration_confirm` | `migration_status` |
 | `migration_cancel` | `migration_status` |

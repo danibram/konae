@@ -56,7 +56,7 @@ A published app runs under the Kernel's Content Security Policy. Its own inline 
 
 ## Who holds the source
 
-A Managed Project keeps its source in Konae, and changes pass through the editor and the Validation Gate. An External Project keeps its source in the owner's folder. `konae init` creates an External Project. [Eject](./guides/eject.md) turns a Managed Project into one, and the step cannot be undone.
+A Managed Project keeps its source in Konae, and changes pass through the editor and the Validation Gate. An External Project keeps its source in the owner's folder. `konae init` creates an External Project.
 
 ## Read next
 

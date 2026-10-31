@@ -69,7 +69,7 @@ An app's own Google OAuth client, which its Project Owner makes in their own Goo
 _Avoid_: OAuth app, installation Google client (there is none)
 
 **Agent Credential**:
-A Project Owner's revocable delegation that permits an external agent to perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity. Its permissions are `read`, `write`, `publish`, `manage_users`, `export_data` and `manage_lifecycle`. Only `manage_users` lists, suspends and invites app accounts or changes a Signup Policy, only `export_data` downloads accounts and data, and only `manage_lifecycle` ejects or migrates a Project. An OAuth client may hold the first four. A call it may not make is refused with the permission it needs.
+A Project Owner's revocable delegation that permits an external agent to perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity. Its permissions are `read`, `write`, `publish`, `manage_users`, `export_data` and `manage_lifecycle`. Only `manage_users` lists, suspends and invites app accounts or changes a Signup Policy, only `export_data` downloads accounts and data, and only `manage_lifecycle` migrates a Project. An OAuth client may hold the first four. A call it may not make is refused with the permission it needs.
 _Avoid_: Runtime session, setup key
 
 **Development Kernel**:
@@ -167,12 +167,8 @@ A Project whose source and database-schema authority remain in Konae, so changes
 _Avoid_: Hosted Project
 
 **External Project**:
-A Project created with external source authority or transferred out of Konae through Eject. Konae retains its identity, capabilities and deployment history but the owner supplies Build Artifacts and accepts schema compatibility responsibility.
+A Project created with external source authority. Konae retains its identity, capabilities and deployment history but the owner supplies Build Artifacts and accepts schema compatibility responsibility.
 _Avoid_: Exported Project, detached Deployment
-
-**Eject**:
-The irreversible transfer of a Managed Project's source and database-schema authority to its owner while retaining the Project's Konae hosting and administration. It runs on the Kernel against an expected saved-sources revision and needs the `manage_lifecycle` permission. The owner receives the saved sources as a code package before the Project changes; the Kernel then records who ejected it and when, refuses every Managed source change, and keeps accepting Build Artifacts. The Deployment's URL, accounts, sessions, data, invitations and email continue. Returning to managed authoring creates a new Project.
-_Avoid_: Export, download
 
 **Declared Dependencies**:
 The npm packages a Capsule imports by name, listed with exact versions under `dependencies` in its `package.json`. The editor's build fetches each one from esm.sh at that version and links it into the app's bundle; `konae build` and the exported kit read the same list from `node_modules` after `npm install`. Either way the published app holds the package's code and loads nothing from another origin. A version range is refused, so every build reads the same code.

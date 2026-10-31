@@ -1,6 +1,6 @@
 # Walkthrough: from a credential to a migration over MCP
 
-This page takes one app through every operation an external agent performs on Konae: get an Agent Credential, create a project, run it on a Development Kernel, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, publish it with a signup policy, invite a member, check it against its Action Contract, read its Usage and Signals, export it, import it on a second Kernel, eject a Managed Project, and begin and cancel a migration.
+This page takes one app through every operation an external agent performs on Konae: get an Agent Credential, create a project, run it on a Development Kernel, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, publish it with a signup policy, invite a member, check it against its Action Contract, read its Usage and Signals, export it, import it on a second Kernel, and begin and cancel a migration.
 
 Every command and every answer below was recorded from real Kernels by `tests/mcp-walkthrough.integration.test.ts`, which fails when this page differs from what the Kernel answers. Values that change on every run appear as placeholders in angle brackets, such as `<project id>`. Kernel A answers on `http://localhost:4173`, Kernel B on `http://localhost:4174`, and the Development Kernel on `http://localhost:8796`. An app's host is `<slug>-<suffix>.localhost` on its Kernel's port.
 
@@ -23,7 +23,7 @@ It creates one creator account. The setup key no longer creates accounts on this
 ```
 <!-- /walkthrough:operator -->
 
-`konae login` creates the account with that code and saves a 24-hour token in the folder. It always asks for `read`, `write` and `publish`. A delegated token cannot add a permission to itself later, so ask now for every permission the work needs: `--manage-users` to invite people, `--export-data` to export, `--manage-lifecycle` to eject and migrate.
+`konae login` creates the account with that code and saves a 24-hour token in the folder. It always asks for `read`, `write` and `publish`. A delegated token cannot add a permission to itself later, so ask now for every permission the work needs: `--manage-users` to invite people, `--export-data` to export, `--manage-lifecycle` to migrate.
 
 <!-- walkthrough:login -->
 ```sh
@@ -35,7 +35,7 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
 ```
 <!-- /walkthrough:login -->
 
-`session_inspect` shows what the token holds. The token is in `/tmp/orders/.konae/credentials.json`; `init`, `publish`, `export` and `eject` read it from there, and `KONAE_MCP_TOKEN` overrides it.
+`session_inspect` shows what the token holds. The token is in `/tmp/orders/.konae/credentials.json`; `init`, `publish` and `export` read it from there, and `KONAE_MCP_TOKEN` overrides it.
 
 <!-- walkthrough:session -->
 ```json
@@ -107,7 +107,7 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
       "portability",
       "refusals"
     ],
-    "localDevelopment": "Use bun run konae -- init, dev, build, contract, login, publish, pull, sql, conform, export or eject; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything.",
+    "localDevelopment": "Use bun run konae -- init, dev, build, contract, login, publish, pull, sql, conform or export; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything.",
     "maxTransferBytes": 33554432,
     "name": "Konae",
     "protocolVersion": "2025-11-25",
@@ -158,11 +158,11 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
       "--manage-lifecycle": "adds manage_lifecycle",
       "--manage-users": "adds manage_users"
     },
-    "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae-kernel creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql, export and eject read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
+    "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae-kernel creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
     "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data or manage_lifecycle.",
     "permissions": {
       "export_data": "package_export, project_export, database_export, and migration_begin together with manage_lifecycle",
-      "manage_lifecycle": "eject_plan, eject_apply and the migration tools",
+      "manage_lifecycle": "the migration tools",
       "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
       "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, and initialSignupPolicy on a first release",
       "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read, migration_status",
@@ -268,7 +268,7 @@ content-type: application/json
 ```
 <!-- /walkthrough:oauth-token -->
 
-OAuth offers `read`, `write`, `publish` and `manage_users`. Exporting, Eject and migration need a token from `konae login`:
+OAuth offers `read`, `write`, `publish` and `manage_users`. Exporting and migration need a token from `konae login`:
 
 <!-- walkthrough:oauth-scope -->
 ```sh
@@ -1637,146 +1637,7 @@ content-type: application/json
 ```
 <!-- /walkthrough:import-check -->
 
-## 15. Eject a Managed Project
-
-Eject applies to a Managed Project, one the editor saves. The orders app is External from `init` and has nothing to eject. To rehearse Eject over MCP, create a Managed Project and save sources in the editor's format with `project_sources_save`:
-
-<!-- walkthrough:managed -->
-```json
-{
-  "name": "project_create",
-  "arguments": {
-    "projectId": "app_walkthrough_notes",
-    "name": "Notes",
-    "sourceAuthority": "managed"
-  }
-}
-```
-
-```json
-{
-  "result": {
-    "id": "app_walkthrough_notes",
-    "name": "Notes",
-    "slug": "notes",
-    "sourceAuthority": "managed"
-  }
-}
-```
-
-```json
-{
-  "id": "app_walkthrough_notes",
-  "name": "Notes",
-  "slug": "notes",
-  "updatedAt": <time ms>,
-  "files": {
-    "index.html": "<main id=app></main>",
-    "app.js": "document.querySelector('#app').textContent = 'Notes';\n",
-    "schema.sql": "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);\n",
-    "actions.json": "{\"version\":1,\"actions\":{}}\n"
-  },
-  "directories": [],
-  "databaseModel": {
-    "source": "",
-    "acceptedSource": "",
-    "revision": "r1"
-  },
-  "manifest": {
-    "version": 1,
-    "visibility": "private",
-    "runtime": {
-      "database": {
-        "mode": "declared-actions",
-        "actions": []
-      },
-      "auth": {
-        "mode": "optional"
-      },
-      "files": {
-        "access": "deployment"
-      }
-    }
-  }
-}
-```
-
-```json
-{
-  "name": "project_sources_save",
-  "arguments": {
-    "projectId": "app_walkthrough_notes",
-    "transferId": "<sources upload>",
-    "expectedRevision": 0
-  }
-}
-```
-
-```json
-{
-  "result": {
-    "revision": 1
-  }
-}
-```
-<!-- /walkthrough:managed -->
-
-`eject` plans at the saved-sources revision, downloads and checks the code package, writes it into an empty folder, and only then applies:
-
-<!-- walkthrough:eject -->
-```sh
-KONAE_MCP_TOKEN=<token> bun run konae -- eject --dir /tmp/notes --project app_walkthrough_notes --url http://localhost:4173
-```
-
-```text
-Ejected app_walkthrough_notes at sources revision 1 into /tmp/notes.
-Publish from this folder with: bun run konae -- publish --dir /tmp/notes
-```
-
-```sh
-ls /tmp/notes
-```
-
-```text
-README.md
-actions.json
-app.js
-index.html
-konae.json
-schema.sql
-```
-<!-- /walkthrough:eject -->
-
-The folder publishes like any External project, and the Kernel refuses every Managed source change from then on:
-
-<!-- walkthrough:eject-publish -->
-```sh
-KONAE_MCP_TOKEN=<token> bun run konae -- publish --dir /tmp/notes
-```
-
-```text
-http://notes-<suffix>.localhost:4173
-```
-
-```json
-{
-  "name": "project_sources_save",
-  "arguments": {
-    "projectId": "app_walkthrough_notes",
-    "transferId": "<another sources upload>",
-    "expectedRevision": 1
-  }
-}
-```
-
-```json
-{
-  "refused": "This project was ejected: its sources are maintained outside Konae, so the Kernel refuses Managed source changes. Publish a Build Artifact with release_plan and release_apply, or create a new project to edit in Konae."
-}
-```
-<!-- /walkthrough:eject-publish -->
-
-## 16. Begin and cancel a migration
+## 15. Begin and cancel a migration
 
 `migration_begin` pauses the app at once and captures it as a version 2 package. Its answer lists the downloads and what comes next. While paused, the app refuses writes with 503:
 

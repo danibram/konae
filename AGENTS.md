@@ -36,7 +36,6 @@ After any write through MCP or the editor, observe the effect through the same d
 | Take the app elsewhere | package or migration | Copy (moves the installation) |
 | Debug, or try the next version, on what the published app holds | `konae pull` + `dev --reset` | Publishing to find out |
 | See the email, calls, scheduled runs and Signals of a local run | `konae events` | Reading the Kernel's files by hand |
-| Leave managed editing | Eject | Package (moves data, not source authority) |
 
 A Deployment folder on the Kernel is the app. Prefer a declaration inside the Capsule over a new platform resource. Topic `pieces` of `platform_guide` is the same table for agents.
 

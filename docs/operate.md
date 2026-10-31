@@ -113,16 +113,16 @@ The editor, the `konae` CLI and the test configurations read these:
 | --- | --- | --- | --- |
 | `KONAE_EDITOR_PORT` | `dev:local` | `4173` | Port of the Vite editor. |
 | `KONAE_KERNEL_URL` | `dev:local`, `vite.config.ts` | `http://127.0.0.1:<kernel port>` under `dev:local`, `http://127.0.0.1:8787` for plain `bun run dev` | Kernel the editor proxies `/mcp`, `/_konae`, `/oauth` and `/.well-known` to. |
-| `KONAE_MCP_TOKEN` | `konae` CLI | unset | Bearer token for `init`, `publish`, `domain`, `export --with-data` and `eject`. When unset, the CLI reads `.konae/credentials.json`. |
+| `KONAE_MCP_TOKEN` | `konae` CLI | unset | Bearer token for `init`, `publish`, `domain` and `export --with-data`. When unset, the CLI reads `.konae/credentials.json`. |
 | `KONAE_KERNEL_BIN` | `konae dev` | unset | A Kernel binary built from this checkout. `dev` starts it instead of compiling one with `cargo`. |
-| `KONAE_URL` | `konae login`, `konae init`, `konae eject`, `konae domain` | `http://localhost:4173`; unset for `init` | Konae installation to talk to. `--url` overrides it. `init` writes it into `konae.json` only when it is set. |
+| `KONAE_URL` | `konae login`, `konae init`, `konae domain` | `http://localhost:4173`; unset for `init` | Konae installation to talk to. `--url` overrides it. `init` writes it into `konae.json` only when it is set. |
 | `KONAE_EMAIL`, `KONAE_PASSWORD` | `konae login` | unset | Owner credentials exchanged for a 24-hour MCP token. |
 | `KONAE_SETUP_KEY` | `konae login` | unset | Installation setup key, needed only to create an installation's first owner. |
 | `KONAE_INVITATION_CODE` | `konae login` | unset | Invitation code that creates the account when it does not exist yet. Under required verification, add `--verify-from <data folder>/mailbox.jsonl` on a development Kernel to answer the emailed link in the same run. |
 | `KONAE_EDITOR_URL` | `playwright.local.config.ts` | `http://127.0.0.1:4176` | Editor the local end-to-end suite opens. When set outside CI, the suite reuses a server that is already running. |
 | `KONAE_TEST_KERNEL_PORT` | `playwright.local.config.ts` | `8794` | Kernel port for the local end-to-end suite. |
 | `KONAE_PORT` | exported self-host kit | `8787` | Port the exported Kernel publishes, read from the kit's `.env`. |
-| `KONAE_APP_DOMAIN` | exported self-host kit | unset | The app's own hostname, read from the kit's `.env`. Each `npm run deploy` calls `domain_set` with it until its TXT record verifies. With `KONAE_PUBLIC_ORIGIN` and `KONAE_HOST_SUFFIX` in the same `.env`, the kit's Kernel answers on your domain; see [Serve the app on its own domain](./guides/eject.md#serve-the-app-on-its-own-domain). |
+| `KONAE_APP_DOMAIN` | exported self-host kit | unset | The app's own hostname, read from the kit's `.env`. Each `npm run deploy` calls `domain_set` with it until its TXT record verifies. With `KONAE_PUBLIC_ORIGIN` and `KONAE_HOST_SUFFIX` in the same `.env`, the kit's Kernel answers on your domain; see [Serve the app on its own domain](./guides/take-the-app-elsewhere.md#serve-the-app-on-its-own-domain). |
 
 `konae dev` ignores every `KONAE_` and `VITE_` variable from your shell. It starts its own Kernel on `127.0.0.1` with a generated setup key and data under `.konae/dev-data`, and opens signup on the local Deployment so you can create test accounts. It sets a local value for each signing secret `actions.json` names and prints it, and it serves a page of the email, calls, scheduled runs and Signals the app produced on the port after the app's, on this machine only.
 

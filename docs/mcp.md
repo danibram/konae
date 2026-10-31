@@ -25,7 +25,7 @@ Each owner administers their own projects. The page creates read-only or read, e
 | `konae login` | `read`, `write` and `publish`, plus one scope per flag: `--manage-users`, `--export-data`, `--manage-lifecycle` | 24 hours |
 | An OAuth client | `read`, `write`, `publish` and `manage_users`. The consent screen does not offer `export_data` or `manage_lifecycle`, and asking for either answers `Invalid scope.` | Per token |
 
-Only `export_data` downloads an app's accounts and data, and only `manage_lifecycle` ejects or migrates a project. The owner's browser session holds both.
+Only `export_data` downloads an app's accounts and data, and only `manage_lifecycle` migrates a project. The owner's browser session holds both.
 
 The setup key does not authenticate MCP tools and is not included in the editor bundle. The server listens on `127.0.0.1` by default. The Kernel refuses to start on a non-loopback address, or with a `KONAE_PUBLIC_ORIGIN` whose host is not `localhost`, a `*.localhost` name or a loopback IP, while the setup key is unset or still `local-development-key`, unless `KONAE_ALLOW_DEFAULT_KEY=1`. For a remote installation, configure the setup key, the HTTPS origin and the proxy before listening on another interface.
 
@@ -60,7 +60,6 @@ If MCP is published on an origin other than the hosting origin, set `KONAE_MCP_O
 | --- | --- |
 | Discovery | `platform_describe`, `platform_guide`, `session_inspect`, `mail_status`, `projects_list`, `project_inspect` |
 | Projects | `project_create`, `project_sources_read`, `project_sources_save`, `project_delete` |
-| Eject, with `manage_lifecycle` | `eject_plan`, `eject_apply` |
 | Migration, with `manage_lifecycle` | `migration_begin`, `migration_confirm`, `migration_cancel`, `migration_activate`; `migration_status` with `read` |
 | Owner schema and data | `schema_plan`, `database_execute`, `storage_test` |
 | App export, with `export_data` | `package_export`, `project_export`, `database_export` |
@@ -89,6 +88,20 @@ Listing signing secrets and API keys needs the `read` scope; setting, creating a
 `project_create` returns a template and an External identity by default. The template is one of `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` and `gallery`, named with `template`, and its files are the ones `konae init` writes, because both read `kernel-rs/src/project-templates.json`, which `bun run templates:render` writes from the editor's templates. Without a `manifest` the project takes the template's visibility. Later sources stay in the user's folder; `project_inspect` returns metadata and the Deployment, without claiming to synchronize that code with the editor.
 
 The editor uploads a new app's JSON without a `projectId`, then calls `project_create` with `sourceAuthority: "managed"` and `sourcesTransferId`. The Kernel validates the files and saves the project registry entry and files in one transaction, returning `sourcesRevision: 1`. A failed upload or validation leaves no project entry. Repeating the same initial files returns the saved revision; different files cannot overwrite an existing save through `project_create`. Subsequent edits use `project_sources_save` with that revision.
+
+The editor saves sources with `project_sources_save { projectId, transferId, expectedRevision }`, where the transfer holds this JSON. An agent that saves sources over MCP sends the same:
+
+```json
+{ "id": "app_notes", "name": "Notes", "slug": "notes", "updatedAt": 1762430000000,
+  "files": { "index.html": "<main id=app></main>", "app.js": "...", "schema.sql": "...", "actions.json": "..." },
+  "directories": [],
+  "databaseModel": { "source": "", "acceptedSource": "", "revision": "r1" },
+  "manifest": { "version": 1, "visibility": "private",
+    "runtime": { "database": { "mode": "declared-actions", "actions": [{ "name": "notes.list", "kind": "query", "access": "authenticated" }] },
+      "auth": { "mode": "optional" }, "files": { "access": "deployment" } } } }
+```
+
+A save refuses JSON without one of these parts with the part's name and its expected shape, such as `Invalid database model. Send databaseModel as { source, acceptedSource, revision } strings; an app without a Drizzle model sends empty sources.`
 
 `project_delete { projectId, name }` needs `write` and deletes a project for good. `name` must equal the project's name; any other value is refused with `The name does not match this project. Type the project's name exactly to delete it.` The Kernel removes the project's Deployments from routing first, so their addresses stop answering, then deletes each Deployment folder (database, app accounts, uploaded files, backups, custom domain) and its stored artifacts, then the registry entry, saved editor files, plans and signing secrets. The answer lists the deleted Deployment IDs. Read back with `projects_list`. A paused app refuses it like any other change. Export a package first to keep the data. The build agent does not get this tool.
 
@@ -928,7 +941,7 @@ The content type follows the extension: HTML, CSS, JavaScript, JSON and source m
 
 The 16 MiB artifact limit counts the bytes the Kernel stores, after base64 is decoded. The Kernel refuses an encoding other than base64, an encoding for a file the artifact does not hold, and a file marked base64 that does not decode, each with the path in the message.
 
-There is also `bun run konae -- login --dir /tmp/my-app --url http://localhost:4173`. It reads `KONAE_EMAIL` and `KONAE_PASSWORD` from the environment, obtains a 24-hour credential with `read`, `write` and `publish` and stores it with `0600` permissions in `.konae/credentials.json`, which `init`, `publish`, `export` and `eject` read when `KONAE_MCP_TOKEN` is unset. `--manage-users`, `--export-data` and `--manage-lifecycle` add those permissions; a delegated token cannot add one to itself later, so ask for every permission the work needs. `KONAE_INVITATION_CODE` lets it create the account if it does not exist yet, and `KONAE_SETUP_KEY` does so for an installation's first owner. On an installation that requires verification, creating the account sends a link, and `login` stops with the two steps: open the link, choose `KONAE_PASSWORD` as the password, then run `login` again without the code or key, which are used by then. On a development Kernel on the same machine, `--verify-from <data folder>/mailbox.jsonl` does both in one run: after the signup it waits up to 15 seconds for the newest creator verification line for that email in the development mailbox, answers it with `KONAE_PASSWORD` and goes on to save the credential. The flag refuses any Kernel URL that is not `localhost`, a `.localhost` name or a loopback address, because the mailbox is a file on the Kernel's machine and only the development transport writes it. The command adds `.konae/` to `.gitignore`; do not copy credentials into the frontend.
+There is also `bun run konae -- login --dir /tmp/my-app --url http://localhost:4173`. It reads `KONAE_EMAIL` and `KONAE_PASSWORD` from the environment, obtains a 24-hour credential with `read`, `write` and `publish` and stores it with `0600` permissions in `.konae/credentials.json`, which `init`, `publish` and `export` read when `KONAE_MCP_TOKEN` is unset. `--manage-users`, `--export-data` and `--manage-lifecycle` add those permissions; a delegated token cannot add one to itself later, so ask for every permission the work needs. `KONAE_INVITATION_CODE` lets it create the account if it does not exist yet, and `KONAE_SETUP_KEY` does so for an installation's first owner. On an installation that requires verification, creating the account sends a link, and `login` stops with the two steps: open the link, choose `KONAE_PASSWORD` as the password, then run `login` again without the code or key, which are used by then. On a development Kernel on the same machine, `--verify-from <data folder>/mailbox.jsonl` does both in one run: after the signup it waits up to 15 seconds for the newest creator verification line for that email in the development mailbox, answers it with `KONAE_PASSWORD` and goes on to save the credential. The flag refuses any Kernel URL that is not `localhost`, a `.localhost` name or a loopback address, because the mailbox is a file on the Kernel's machine and only the development transport writes it. The command adds `.konae/` to `.gitignore`; do not copy credentials into the frontend.
 
 ## Custom domain
 
@@ -1005,56 +1018,6 @@ For each Server Action the contract states:
 Column names follow SQLite: the alias, or the column's own name. An expression without `AS`, such as `count(*)`, gets a key only SQLite would print, so the contract lists it under `unnamed`, `contract` prints a warning and the Validation Gate passes the Capsule with the same warning. Types come from `schema.sql` and SQLite does not enforce them. A column of a subquery or a table-valued function has a name and the type `unknown`. Error messages come from the SDK contract, whose test checks each one against the Kernel's source.
 
 `conform` is what a replacement backend would run. It calls every action through the runtime endpoint with generated inputs and checks the answer's shape, then probes each refusal the contract lists: an undeclared action, an undeclared, missing, mistyped, empty or overlong input, a caller without a session or without an ID, and on a route an unsigned, stale or replayed signature, a caller with no key or session where the route needs one, an unknown API key, a key the route does not take, an undeclared query or body key, a body that is not JSON, a POST to an unbound path, and a `HEAD` on a `GET` route, checked by its status alone since the answer has no body. A guarded mutation must answer its guard when its statement changes no row: `conform` sends the valid input, and again when the first call changed a row, and fails a backend that answers `{ changes: 0 }` instead; when both calls change a row it reports the check as skipped. A caller without the role a guard checks meets that guard on every call, so a guard refusal passes the valid call and the probes that omit a nullable input: the bindings accepted the call and the app's rule refused it. An action whose route is its only door is checked to refuse `actions_invoke` with `Action <name> answers only on its HTTP route, <method> <path>.`, and its inputs are probed on the route. A refusal passes only when the contract lists the message and the backend answers with it, with the contract's status on a route. `--token` carries an app session token, the value of the app session cookie; `KONAE_APP_EMAIL` and `KONAE_APP_PASSWORD` sign in for one instead. `--secret <name>=<value>` signs a route and may repeat, with a fresh nonce for each request. `--key` sends an API key to a route that takes one when no secret signs it, and an action that binds the caller's ID gets the key or, with `--token`, the session cookie. The generated inputs are a short unique string, the number 1 and `true`; a statement that reads a string as more than text, such as `json_each(?1)`, needs a real value, which `--inputs <file>` gives as JSON keyed by action name, for example `{ "items.jsonin": { "ids": "[1, 2]" } }`. A valid call refused with a message the contract does not list fails and says so. A check that needs a credential it was not given is reported as skipped, not passed. It runs every mutation once with real input, so point it at a test Deployment. It exits with 1 when any check fails.
-
-## Eject
-
-Eject moves a Managed Project's source authority to its owner. The project becomes External: the owner builds outside Konae and publishes Build Artifacts through `release_plan` and `release_apply`, as for a project created with the CLI. The Deployment does not change. Its URL, accounts, sessions, data, files, invitations and email service continue, and Eject exports no data. [ADR-0005](./adr/0005-build-artifacts-separate-managed-and-external-projects.md) records the decision.
-
-```sh
-bun run konae -- login --dir /tmp/ejected --url http://localhost:4173 --manage-lifecycle
-bun run konae -- eject --dir /tmp/ejected --project <project id> --url http://localhost:4173
-bun run konae -- publish --dir /tmp/ejected
-```
-
-Only a Managed Project ejects: one the editor saves. A project made with `konae init` or `project_create` is External from the start, and `eject_plan` refuses it. The editor saves sources with `project_sources_save { projectId, transferId, expectedRevision }`, where the transfer holds this JSON; an agent that saves sources over MCP sends the same:
-
-```json
-{ "id": "app_notes", "name": "Notes", "slug": "notes", "updatedAt": 1762430000000,
-  "files": { "index.html": "<main id=app></main>", "app.js": "...", "schema.sql": "...", "actions.json": "..." },
-  "directories": [],
-  "databaseModel": { "source": "", "acceptedSource": "", "revision": "r1" },
-  "manifest": { "version": 1, "visibility": "private",
-    "runtime": { "database": { "mode": "declared-actions", "actions": [{ "name": "notes.list", "kind": "query", "access": "authenticated" }] },
-      "auth": { "mode": "optional" }, "files": { "access": "deployment" } } } }
-```
-
-A save refuses JSON without one of these parts with the part's name and its expected shape, such as `Invalid database model. Send databaseModel as { source, acceptedSource, revision } strings; an app without a Drizzle model sends empty sources.`
-
-`eject` reads the saved-sources revision from `project_inspect`, or takes `--revision`, and calls `eject_plan`. It downloads the code package, checks its size, SHA-256 and the SHA-256 of every file, writes the files into the directory, and only then calls `eject_apply`. It saves the receipt in `.konae/eject-receipt.json`. The directory must be empty apart from dotfiles. A run interrupted after the plan resumes in the same directory and keeps the files it already wrote if they are unchanged.
-
-Both tools need `manage_lifecycle`. The owner's browser session holds it; `token_create` delegates it only when asked, and `read`, `write`, `publish`, `manage_users` and `export_data` do not include it.
-
-`eject_plan { projectId, expectedRevision }` compares `expectedRevision` with the saved-sources revision, the counter `project_sources_save` advances and `project_inspect` returns as `sourcesRevision`. It is not the release revision. A mismatch is refused before any transfer exists. The answer holds a `planId`, the `package` size, SHA-256 and content list, the `effects` Eject has, and a download `transfer`. Planning again at the same revision while the plan is current returns the same `planId` with a new download, so a client can fetch the package again after an interruption. The plan lasts one hour.
-
-The package is JSON with `format: "konae-eject"`, `version: 1`, `projectId`, `sourcesRevision`, `contents` (path, size and SHA-256 of each file), `directories` and `files`. `files` holds the saved sources, `schema.ts` from the Database Model when the sources lack it, a `konae.json` naming the Kernel's MCP origin and the project with `sourceAuthority: "external"`, and a `README.md` (or `KONAE.md` when the sources have a README) with the CLI commands. The Kernel builds it from the stored sources, so every download of one revision has the same SHA-256. `src/lib/eject-package.ts` checks it on the client.
-
-`eject_apply { planId }` takes the project lock that `project_sources_save` takes, checks that the plan is current and the saved-sources revision still equals the planned one, sets `sourceAuthority` to `external`, records `ejected: { at, by, via, planId, sourcesRevision }` on the project, and returns a receipt with the Deployment's ID and URL. Applying an applied plan returns its receipt. Planning again at the ejected revision returns the applied plan, its receipt and a new download.
-
-After Eject, `project_sources_read` still returns the frozen sources with `readOnly: true`, so the editor can show them. Every Managed source change is refused with one message, whichever tab, agent or credential sends it. The audit log has one `eject_plan` row with the project as target and one `eject_apply` row per call with the project as target and `sources revision N` as detail.
-
-| Refusal | Message |
-| --- | --- |
-| `project_sources_save` after Eject, at any expected revision | `This project was ejected: its sources are maintained outside Konae, so the Kernel refuses Managed source changes. Publish a Build Artifact with release_plan and release_apply, or create a new project to edit in Konae.` |
-| `project_create` with `sourceAuthority: "managed"` for an ejected project | The same message |
-| `project_create` with `sourceAuthority: "managed"` for a project created External | `This project is External. Konae does not take source authority back, so create a new project to edit in Konae.` |
-| `eject_plan` with a stale revision | `Source revision changed: the saved sources are at revision 2, not 1. Reload the project, then plan the Eject again.` |
-| `eject_apply` after a save made the plan stale | `Source revision changed since this plan: the saved sources are at revision 2, not 1. Plan the Eject again.` |
-| Eject without `manage_lifecycle` | `Unknown tool or insufficient permission. eject_plan needs a credential with manage_lifecycle. Run konae login with --manage-lifecycle, or use a token from token_create that includes it.` A credential limited to other projects gets `Project is outside this token's grants.` |
-| `eject_plan` for a project created External | `Project sources are maintained externally. A project created outside the editor is already External and does not pass through Eject.` |
-| `eject_plan` at another revision after Eject | `This project was ejected at sources revision 2. Plan again with that revision to download its package.` |
-| `eject_plan` with no saved sources | `This project has no saved sources to eject. Save it in the editor, or with project_sources_save, first.` |
-
-Returning to managed authoring is not supported. To edit in Konae again, create a new project; production data does not merge into it.
 
 ## Deployed database models
 

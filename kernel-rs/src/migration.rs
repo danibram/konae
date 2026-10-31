@@ -322,7 +322,7 @@ pub(super) async fn guard(State(state): State<AppState>, request: Request, next:
 
 /// Tools that change nothing a paused app serves. Every other tool that
 /// names a paused Deployment, its project or one of its plans is refused.
-const OPEN_TOOLS: [&str; 25] = [
+const OPEN_TOOLS: [&str; 24] = [
     "platform_guide",
     "platform_describe",
     "mail_status",
@@ -347,7 +347,6 @@ const OPEN_TOOLS: [&str; 25] = [
     "project_export",
     "schema_plan",
     "release_plan",
-    "eject_plan",
 ];
 const READ_TOOLS_SUFFIX: [&str; 2] = ["_list", "_read"];
 
@@ -380,8 +379,7 @@ pub(super) async fn admin_guard(state: &AppState, name: &str, a: &Value) -> Resu
                     None => None,
                 }
             }
-            (None, Some(plan)) => super::eject::plan_project(&store(state)?, plan),
-            (None, None) => None,
+            _ => None,
         };
         match project {
             Some(project) => find_project_deployment(&*state.deployments.read().await, &project).map(|d| d.id),

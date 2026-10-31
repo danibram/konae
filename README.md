@@ -12,7 +12,7 @@ It is built for two people making the same app, one who does not write code and 
 - **Accounts per app.** Each app has its own users, sign-in page and signup policy, which is Open, Invitation only, Closed or an Allowlist. The owner invites people by email and can add Google sign-in with the app's own Google client.
 - **A Kernel that serves the apps.** One Rust server holds every published app as one folder with its static files, SQLite database, accounts, uploads and backups. It serves each app on its own hostname, on a custom domain, or on a path of the installation's domain.
 - **Two ways to work.** The editor is one. The `konae` CLI is the other, with `init`, `dev` and `publish` run from a folder of files in your own Git repository. Agents operate the platform over authenticated MCP, with the same tools the editor calls.
-- **A way out.** An owner exports an app as a package with its database, accounts and files, imports it on another Kernel, migrates it with one writer at a time, or ejects the code to edit it outside Konae.
+- **A way out.** An owner exports an app as a package with its database, accounts and files, imports it on another Kernel, or migrates it with one writer at a time.
 
 [The docs overview](./docs/README.md) has the five jobs Konae is measured against, and [Concepts](./docs/concepts.md) defines the words.
 

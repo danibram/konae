@@ -74,9 +74,7 @@ Product terms are capitalized. Declaration keys stay lowercase: guard, notice, s
 
 **Managed Project.** A Project whose source and database-schema authority remain in Konae, so changes pass through its editor, agent, managed build and Validation Gate.
 
-**External Project.** A Project created with external source authority or transferred out of Konae through Eject. The owner supplies Build Artifacts and accepts schema compatibility responsibility.
-
-**Eject.** The irreversible transfer of a Managed Project's source and database-schema authority to its owner, while Konae keeps hosting and administering it. It needs the `manage_lifecycle` permission.
+**External Project.** A Project created with external source authority. The owner supplies Build Artifacts and accepts schema compatibility responsibility.
 
 ## Words for running an installation
 

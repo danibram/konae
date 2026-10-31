@@ -48,7 +48,7 @@ type Policy = "read" | "confirm";
 /**
  * The tools the build agent gets from the owner's MCP, and whether each asks the
  * owner first. A tool the Kernel lists that is not here never reaches the model:
- * transfers, credentials, secret values, exports, eject and migration stay with
+ * transfers, credentials, secret values, exports and migration stay with
  * the owner. `project_sources_read` and `project_sources_save` are left out on
  * purpose, because in the editor the agent edits a scratch copy behind the
  * Validation Gate and Apply saves it.

@@ -75,7 +75,6 @@ pub(super) fn store(state: &AppState) -> Result<Connection> {
     }
     db.execute("CREATE INDEX IF NOT EXISTS audit_at ON audit(at)", [])?;
     super::oauth::install(&db)?;
-    super::eject::install(&db)?;
     super::migration::install(&db)?;
     Ok(db)
 }
@@ -250,7 +249,7 @@ async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
     }
     let mut db = store(state)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    for (table, column) in [("managed_sources", "project"), ("plans", "project"), ("eject_plans", "project"), ("package_imports", "project"), ("project_secrets", "project")] {
+    for (table, column) in [("managed_sources", "project"), ("plans", "project"), ("package_imports", "project"), ("project_secrets", "project")] {
         let present: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)", [table], |r| r.get(0))?;
         if present {
             tx.execute(&format!("DELETE FROM {table} WHERE {column}=?1"), [id])?;
@@ -390,7 +389,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     if owner.scopes.iter().any(|s| s == "write") {
         tools.extend([
             tool("project_create", "Register a project and return a template's files, the ones konae init writes: template is tasks, notes (the default), members, form, webhook, digest or gallery, and without a manifest the project takes the template's visibility. Write the files into the folder and keep id, slug and manifest in konae.json. For an editor project, upload its JSON without a projectId and pass sourcesTransferId to create the project and its files atomically. Repeating the same initial files is safe; existing saved files cannot be replaced here.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourceAuthority":{"type":"string","enum":["managed","external"]},"sourcesTransferId":text,"template":{"type":"string","enum":["tasks","notes","members","form","webhook","digest","gallery"]}}), &["name"], false),
-            tool("project_sources_save", "Save Managed project sources if the expected source revision still matches. Upload the project JSON first: { id, name, slug, files: { path: text }, directories, databaseModel: { source, acceptedSource, revision }, manifest, updatedAt }, the format the editor saves and docs/mcp.md describes under Eject.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
+            tool("project_sources_save", "Save Managed project sources if the expected source revision still matches. Upload the project JSON first: { id, name, slug, files: { path: text }, directories, databaseModel: { source, acceptedSource, revision }, manifest, updatedAt }, the format the editor saves and docs/mcp.md describes.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
             tool("project_delete", "Delete a project for good: its registry entry, saved editor files and secrets, and, when it is published, its Deployment with the database, app accounts, uploaded files, backups and custom domain. The address stops answering at once. name must equal the project's name. Read back with projects_list.", json!({"projectId":text,"name":text}), &["projectId","name"], false),
             tool("schema_plan", "Derive and validate SQL from two Drizzle models in an isolated subprocess.", json!({"acceptedSource":text,"candidateSource":text,"projectId":text}), &["acceptedSource","candidateSource"], false),
         ]);
@@ -486,9 +485,6 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ]);
         tools.extend(super::domain::tools());
         tools.extend(super::path::tools());
-    }
-    if owner.scopes.iter().any(|s| s == "manage_lifecycle") {
-        tools.extend(super::eject::tools());
     }
     tools.extend(super::migration::tools_for(&owner.scopes));
     if owner.session {
@@ -1022,10 +1018,6 @@ fn audit(
                 .map(|id| format!("deployment {id}"));
             (project, deployment)
         }
-        "eject_apply" => (
-            store(state).ok().and_then(|db| super::eject::plan_project(&db, arguments["planId"].as_str().unwrap_or(""))),
-            result.as_ref().ok().map(|receipt| format!("sources revision {}", receipt["sourcesRevision"])),
-        ),
         name if name.starts_with("migration_") => (
             arguments["deploymentId"]
                 .as_str()
@@ -1240,7 +1232,7 @@ async fn admin_call(
                 ],
                 "guideTopics":super::guide::TOPICS,
                 "runtimeTools":["auth_session","actions_invoke","files_list","files_read","files_upload","files_update","files_delete"],
-                "localDevelopment":"Use bun run konae -- init, dev, build, contract, login, publish, pull, sql, conform, export or eject; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything."
+                "localDevelopment":"Use bun run konae -- init, dev, build, contract, login, publish, pull, sql, conform or export; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything."
             }),
         ),
         "mail_status" => super::mail::status_tool(state, a["refresh"].as_bool().unwrap_or(false)).await,
@@ -1317,10 +1309,8 @@ async fn admin_call(
             if let Some(existing) = existing {
                 anyhow::ensure!(existing == owner.id, "Project not found or access denied.");
                 let mut project = owned_project(state, owner, &id, "read")?.0;
-                // Source authority does not come back: an External project asked
-                // to be Managed again gets the Eject refusal.
                 if a["sourceAuthority"] == "managed" && project["sourceAuthority"] != "managed" {
-                    anyhow::bail!(if super::eject::is_ejected(&project) { super::eject::CLOSED } else { super::eject::ALWAYS_EXTERNAL });
+                    anyhow::bail!("This project is External. Create a new project to edit in Konae.");
                 }
                 if let Some(bytes) = initial_sources {
                     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -1370,23 +1360,23 @@ async fn admin_call(
             let id = a["projectId"].as_str().unwrap();
             let (project, revision) = owned_project(state, owner, id, "read")?;
             let deployment = recover_deployed_model(state, id).await?;
-            let sources_revision = super::eject::sources_revision(&store(state)?, id)?;
+            let sources_revision: u64 = store(state)?
+                .query_row("SELECT revision FROM managed_sources WHERE project=?1", [id], |r| r.get(0))
+                .optional()?
+                .unwrap_or(0);
             Ok(json!({"project":project,"revision":revision,"sourcesRevision":sources_revision,"deployment":deployment}))
         }
         "project_sources_read" => {
             let id = a["projectId"].as_str().unwrap();
             let (project, _) = owned_project(state, owner, id, "read")?;
-            // An ejected project's last saved sources stay readable, frozen, so
-            // the editor can show them read-only.
-            let ejected = super::eject::is_ejected(&project);
-            anyhow::ensure!(project["sourceAuthority"] == "managed" || ejected, "Project sources are maintained externally.");
+            anyhow::ensure!(project["sourceAuthority"] == "managed", "Project sources are maintained externally.");
             let row: Option<(Vec<u8>, u64)> = store(state)?.query_row(
                 "SELECT body,revision FROM managed_sources WHERE project=?1", [id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             ).optional()?;
             match row {
-                Some((bytes, revision)) => Ok(json!({"revision":revision,"readOnly":ejected,"transfer":download(state, principal, &bytes, Some(id)).await?})),
-                None => Ok(json!({"revision":0,"readOnly":ejected,"transfer":null})),
+                Some((bytes, revision)) => Ok(json!({"revision":revision,"transfer":download(state, principal, &bytes, Some(id)).await?})),
+                None => Ok(json!({"revision":0,"transfer":null})),
             }
         }
         "project_sources_save" => {
@@ -1399,7 +1389,6 @@ async fn admin_call(
             validate_managed_sources(&source, id)?;
             let _guard = database_lock(state, &format!("project:{id}")).await;
             let (project, _) = owned_project(state, owner, id, "write")?;
-            anyhow::ensure!(!super::eject::is_ejected(&project), super::eject::CLOSED);
             anyhow::ensure!(project["sourceAuthority"] == "managed", "Project sources are maintained externally.");
             let mut db = store(state)?;
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -1719,7 +1708,6 @@ async fn admin_call(
         }
         "app_owner_enter" => super::app_owner::admin_call(state, owner, &a).await,
         name if name.starts_with("app_") => super::invitations::admin_call(state, owner, name, &a).await,
-        name if name.starts_with("eject_") => super::eject::admin_call(state, owner, principal, name, &a).await,
         name if name.starts_with("migration_") => super::migration::admin_call(state, owner, principal, name, &a).await,
         name if name.starts_with("domain_") => super::domain::admin_call(state, owner, name, &a).await,
         name if name.starts_with("path_") => super::path::admin_call(state, owner, name, &a).await,

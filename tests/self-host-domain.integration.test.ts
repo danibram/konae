@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { ejectLocal, exportLocal, publishLocal } from "../scripts/konae";
+import { exportLocal, publishLocal } from "../scripts/konae";
 import { McpClient } from "../src/mcp/client";
 
 // An app leaves its installation as a self-host kit with its data and answers
@@ -105,29 +105,15 @@ test("an exported kit serves the app with its accounts and rows on the app's own
   const admin = new McpClient(`${sourceUrl}/mcp`, { fetch: (input, init) => { const headers = new Headers(init?.headers); headers.set("cookie", ownerCookie); return fetch(input, { ...init, headers }); } });
   const { token } = await admin.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish", "export_data", "manage_lifecycle"], ttlSeconds: 3600 });
 
-  // A Managed project the editor saved and published, then ejected into a folder.
+  // A project published from its folder.
   const projectId = "self-host-notes";
-  const manifest = { version: 1, visibility: "public" };
-  await admin.call("project_create", { projectId, name: "Notes", sourceAuthority: "managed" });
-  const saved = await admin.upload(new TextEncoder().encode(JSON.stringify({
-    id: projectId, name: "Notes", slug: "notes", files: sources, directories: [],
-    databaseModel: { source: "export const notes = {};\n", acceptedSource: "export const notes = {};\n", revision: "r1" },
-    manifest: { ...manifest, runtime: { database: { mode: "declared-actions", actions: [{ name: "notes.list", kind: "query", access: "authenticated" }, { name: "notes.add", kind: "mutation", access: "authenticated" }] }, auth: { mode: "optional" }, files: { access: "deployment" } } },
-    updatedAt: 1,
-  })), projectId);
-  await admin.call("project_sources_save", { projectId, transferId: saved.transferId, expectedRevision: 0 });
-  await admin.cancel(saved.transferId);
-  const release = await admin.upload(new TextEncoder().encode(JSON.stringify({ project: { id: projectId, name: "Notes", slug: "notes", manifest, files: sources }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Managed notes</main>" } } })), projectId);
-  const managed = await admin.call<{ id: string }>("release_apply", { planId: (await admin.call<{ planId: string }>("release_plan", { transferId: release.transferId })).planId });
-  await admin.cancel(release.transferId);
-  await admin.call("signup_policy_set", { deploymentId: managed.id, mode: "open" });
   const appDirectory = path.join(root, "app");
   await mkdir(appDirectory);
-  await ejectLocal(appDirectory, sourceUrl, projectId, token);
-  const config = JSON.parse(await readFile(path.join(appDirectory, "konae.json"), "utf8"));
-  expect(config.project.sourceAuthority).toBe("external");
+  for (const [name, text] of Object.entries(sources)) await writeFile(path.join(appDirectory, name), text);
+  const config = { url: sourceUrl, project: { id: projectId, name: "Notes", slug: "notes", manifest: { version: 1, visibility: "public" } } };
+  await writeFile(path.join(appDirectory, "konae.json"), JSON.stringify(config));
   const published = await publishLocal(appDirectory, config, token, () => {});
-  expect(published.id).toBe(managed.id);
+  await admin.call("signup_policy_set", { deploymentId: published.id, mode: "open" });
   const generated = new URL(published.url).host.split(":")[0];
   const writerSignup = await at(sourcePort, generated, "/_konae/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "writer@self-host.test", password }) });
   expect(writerSignup.status).toBe(200);

@@ -15,7 +15,6 @@ import kernelCopiesSource from "../../kernel-rs/src/copies.rs?raw";
 import kernelDomainSource from "../../kernel-rs/src/domain.rs?raw";
 import kernelDomainCases from "../../kernel-rs/src/domain-cases.json?raw";
 import kernelGoogleClientCases from "../../kernel-rs/src/google-client-cases.json?raw";
-import kernelEjectSource from "../../kernel-rs/src/eject.rs?raw";
 import kernelFileStoreSource from "../../kernel-rs/src/file_store.rs?raw";
 import kernelAppDbSource from "../../kernel-rs/src/app_db.rs?raw";
 import kernelHostsSource from "../../kernel-rs/src/hosts.rs?raw";
@@ -85,7 +84,6 @@ export const kernelFiles: ExportFile[] = [
   { path: "kernel-rs/src/domain.rs", contents: kernelDomainSource },
   { path: "kernel-rs/src/domain-cases.json", contents: kernelDomainCases },
   { path: "kernel-rs/src/google-client-cases.json", contents: kernelGoogleClientCases },
-  { path: "kernel-rs/src/eject.rs", contents: kernelEjectSource },
   { path: "kernel-rs/src/file_store.rs", contents: kernelFileStoreSource },
   { path: "kernel-rs/src/app_db.rs", contents: kernelAppDbSource },
   { path: "kernel-rs/src/hosts.rs", contents: kernelHostsSource },

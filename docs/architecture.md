@@ -122,7 +122,6 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 | `recovery.rs` | The revocation record and `konae-kernel reconcile` |
 | `package.rs` | The chunked package, `package_export` and its import |
 | `migration.rs` | Migration and maintenance |
-| `eject.rs` | Eject on the server |
 | `domain.rs` | Custom domains: the hostname rules, the TXT proof through the Kernel's own DNS lookup, and the alias index |
 
 `src/lib/export-project-sources.ts` lists every one of these files, so an exported kit compiles the same Kernel.

@@ -16,7 +16,6 @@ import {
   ACTION_CONTRACT_FILE, ACTION_CONTRACT_MARKDOWN, ACTION_CONTRACT_SCHEMA_FILE,
   actionContractSchema, generateActionContract, renderActionContractMarkdown, serializeActionContract,
 } from "../src/lib/action-contract";
-import { checkEjectPackage, type EjectPlan, type EjectReceipt } from "../src/lib/eject-package";
 import { checkHostname, type DomainRules } from "../src/lib/domain-name";
 import { assembleStaticArtifact } from "../src/lib/static-artifact.js";
 
@@ -94,7 +93,7 @@ login     --dir <folder> --url <Kernel URL> [--manage-users] [--export-data] [--
           Reads KONAE_EMAIL and KONAE_PASSWORD, plus KONAE_INVITATION_CODE to create the
           account with an operator's invitation code, or KONAE_SETUP_KEY for the first owner.
           Saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json.
-          Each flag adds that permission: inviting app users, exporting live data, Eject and migration.
+          Each flag adds that permission: inviting app users, exporting live data and migration.
           On a Kernel that verifies email, creating the account sends a link; --verify-from reads it from
           a development mailbox on this machine and sets KONAE_PASSWORD, for loopback Kernels only.
 init      --dir <empty folder> [--name <name>] [--template <id>] [--url <Kernel URL>]
@@ -131,8 +130,6 @@ conform   --url <app URL> --contract <file> [--token <app session>] [--key <API 
           so point it at a test Deployment.
 export    --dir <folder> [--out <file>] [--with-data]   Writes a self-hosted kit; --with-data adds the
           live package and needs a credential from login --export-data.
-eject     --dir <empty folder> --project <id> --url <Kernel URL> [--revision <n>]
-          Moves a Managed project's sources into the folder. Needs login --manage-lifecycle.
 domain    --deployment <id> [--set <hostname> | --clear] [--url <Kernel URL>]
           Shows, sets or clears the app's custom domain. --set prints the TXT record that proves you
           control the hostname; run it again once the record is at your DNS provider.
@@ -393,53 +390,6 @@ export async function writeContract(root: string, out = root) {
   return { contract, warnings, file: path.join(out, ACTION_CONTRACT_FILE) };
 }
 
-/**
- * Eject: plan on the server at the saved-sources revision, download and check
- * the code package, write it into `root`, then apply. A stale revision is
- * refused by eject_plan, before anything downloads. The project changes only
- * after every file is on disk, and a run after an interruption finishes the
- * same Eject: eject_plan returns the applied plan and its receipt.
- */
-export async function ejectLocal(root: string, url: string, projectId: string, token: string, expectedRevision?: number): Promise<EjectReceipt> {
-  const marker = path.join(root, ".konae/eject-plan.json");
-  let resuming = false;
-  try { resuming = (await json<{ projectId?: string }>(marker)).projectId === projectId; } catch {}
-  if (!resuming) await assertEmptyForInit(root);
-  const client = new McpClient(endpoint(url), { token });
-  const revision = expectedRevision ?? (await client.call<{ sourcesRevision: number }>("project_inspect", { projectId })).sourcesRevision;
-  let plan: EjectPlan;
-  try {
-    plan = await client.call<EjectPlan>("eject_plan", { projectId, expectedRevision: revision });
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("Unknown tool")) {
-      throw Error("Eject needs a credential with the manage_lifecycle permission. Run login with --manage-lifecycle, or create a token with manage_lifecycle for this project.");
-    }
-    throw error;
-  }
-  const checked = await checkEjectPackage(await client.download(plan.transfer), plan);
-  const targets = Object.entries(checked.files).map(([name, text]) => {
-    const target = path.resolve(root, name);
-    if (!target.startsWith(root + path.sep)) throw Error(`Invalid package path: ${name}`);
-    return [target, text] as const;
-  });
-  // A resumed run keeps files it already wrote, but only if they are unchanged.
-  for (const [target, text] of targets) {
-    const existing = await readFile(target, "utf8").catch(() => undefined);
-    if (existing !== undefined && existing !== text) throw Error(`${path.relative(root, target)} differs from the code package. Choose an empty directory.`);
-  }
-  await mkdir(path.join(root, ".konae"), { recursive: true });
-  await writeFile(marker, JSON.stringify({ projectId, planId: plan.planId, sourcesRevision: plan.expectedRevision, sha256: plan.package.sha256 }, null, 2));
-  for (const directory of checked.directories) await mkdir(path.resolve(root, directory), { recursive: true });
-  for (const [target, text] of targets) {
-    await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, text);
-  }
-  await ignoreInGit(root, [".konae/", "node_modules/"]);
-  const receipt = plan.applied && plan.receipt ? plan.receipt : await client.call<EjectReceipt>("eject_apply", { planId: plan.planId });
-  await writeFile(path.join(root, ".konae/eject-receipt.json"), JSON.stringify(receipt, null, 2));
-  return receipt;
-}
-
 /** Add each entry to .gitignore unless a line already names it. */
 export async function ignoreInGit(root: string, entries: string[]) {
   const file = path.join(root, ".gitignore");
@@ -553,7 +503,7 @@ async function main() {
     console.log(HELP);
     return;
   }
-  if (!["login", "init", "build", "contract", "conform", "eject", "export", "publish", "dev", "pull", "sql", "events", "domain"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
+  if (!["login", "init", "build", "contract", "conform", "export", "publish", "dev", "pull", "sql", "events", "domain"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
   const option = (name: string, fallback?: string) => {
     const i = args.indexOf(`--${name}`);
     if (i < 0) return fallback;
@@ -591,18 +541,6 @@ async function main() {
   if (command === "conform") {
     const { conformFromCli } = await import("./conform");
     process.exitCode = await conformFromCli(args);
-    return;
-  }
-  if (command === "eject") {
-    const projectId = option("project");
-    if (!projectId) throw Error("Name the project to eject with --project <id>.");
-    const pinned = option("revision");
-    if (pinned !== undefined && !/^\d+$/.test(pinned)) throw Error("--revision needs a whole number.");
-    const url = option("url", process.env.KONAE_URL ?? "http://localhost:4173")!;
-    const token = process.env.KONAE_MCP_TOKEN ?? (await json<{ token: string }>(path.join(root, ".konae/credentials.json"))).token;
-    const receipt = await ejectLocal(root, url, projectId, token, pinned === undefined ? undefined : Number(pinned));
-    console.log(`Ejected ${projectId} at sources revision ${receipt.sourcesRevision} into ${root}.${receipt.deployment ? ` ${receipt.deployment.url} keeps serving.` : ""}`);
-    console.log(`Publish from this folder with: bun run konae -- publish --dir ${root}`);
     return;
   }
   if (command === "domain") {

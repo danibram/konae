@@ -22,7 +22,6 @@ This is the same table as the `pieces` topic of `platform_guide`.
 | Take the app elsewhere | Package or migration | Copy (moves the installation) |
 | Debug, or try the next version, on what the published app holds | `konae pull` + `dev --reset` | Publishing to find out |
 | See the email, calls, scheduled runs and Signals of a local run | `konae events` | Reading the Kernel's files by hand |
-| Leave managed editing | Eject | Package (moves data, not source authority) |
 
 ## The unit
 
@@ -32,7 +31,7 @@ A Deployment folder on the Kernel is the app. It holds the artifact, database, i
 
 - `guard`, `notify`, `schedule`, `signal`, `http` and `kind: call` are on [Server Actions](./server-actions.md).
 - Signup Policy and invitations are on [Accounts and access](./accounts-and-access.md).
-- Package, migration and Eject are in the [take the app elsewhere](./guides/take-the-app-elsewhere.md) and [eject](./guides/eject.md) guides.
+- Package and migration are in the [take the app elsewhere](./guides/take-the-app-elsewhere.md) guide.
 
 ## Read next
 

@@ -58,8 +58,6 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("package_export", "transfer_read"),
     ("project_export", "transfer_read"),
     ("database_export", "transfer_read"),
-    ("eject_plan", "eject_plan"),
-    ("eject_apply", "project_inspect"),
     ("migration_begin", "migration_status"),
     ("migration_confirm", "migration_status"),
     ("migration_cancel", "migration_status"),
@@ -130,13 +128,12 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 {"need": "A short link on the installation's domain", "use": "path address (path_set)", "not": "A custom domain when DNS is not yours"},
                 {"need": "Take the app to another machine", "use": "package export/import or migration", "not": "Copy (that moves the whole installation)"},
                 {"need": "Debug, or try the next version, on what the published app holds", "use": "konae pull, then dev --reset", "not": "Publishing to find out"},
-                {"need": "See the email, calls, scheduled runs and Signals of a local run", "use": "konae events (--json for an agent), or the page dev serves", "not": "Reading the Kernel's files by hand"},
-                {"need": "Leave managed editing for a folder on disk", "use": "Eject", "not": "Package (that moves data, not source authority)"}
+                {"need": "See the email, calls, scheduled runs and Signals of a local run", "use": "konae events (--json for an agent), or the page dev serves", "not": "Reading the Kernel's files by hand"}
             ],
             "unit": "A Deployment folder on the Kernel is the app: artifact, database, identity, files and Usage. Prefer adding a declaration inside the Capsule over adding a new platform resource."
         }),
         "credentials" => json!({
-            "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae-kernel creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql, export and eject read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
+            "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae-kernel creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
             "flags": {"--manage-users": "adds manage_users", "--export-data": "adds export_data", "--manage-lifecycle": "adds manage_lifecycle"},
             "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data or manage_lifecycle.",
             "permissions": {
@@ -145,7 +142,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, and initialSignupPolicy on a first release",
                 "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
                 "export_data": "package_export, project_export, database_export, and migration_begin together with manage_lifecycle",
-                "manage_lifecycle": "eject_plan, eject_apply and the migration tools"
+                "manage_lifecycle": "the migration tools"
             },
             "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds."
         }),
@@ -213,11 +210,6 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "For each component, transfer_begin { size, sha256, projectId, component } with the component's name, transfer_write each block and transfer_complete.",
                 "Build the folder, upload the release JSON of the publishing topic with initialPackage { manifest, components: { <name>: <transferId> } }, then release_plan and release_apply.",
                 "Sessions, email links and live API keys stay behind: people sign in with their passwords, and api_keys_list shows each key revoked at import so the owner issues new ones."
-            ],
-            "eject": [
-                "Eject moves a Managed project, one the editor saves with project_sources_save, to its owner's folder. A project made with konae init is already External.",
-                "bun run konae -- eject --dir <empty folder> --project <id> --url <Kernel URL> calls eject_plan and eject_apply, which need manage_lifecycle, and writes the sources and a konae.json.",
-                "bun run konae -- publish --dir <that folder> publishes from it. The Deployment, its URL and its data stay."
             ],
             "migration": [
                 "migration_begin { deploymentId } needs manage_lifecycle and export_data. The app pauses at once and the answer holds the package downloads and next steps.",
@@ -324,8 +316,8 @@ mod tests {
             "package_export needs a credential with export_data. Run konae login with --export-data, or use a token from token_create that includes it."
         );
         assert_eq!(
-            missing_permission("eject_plan", &publisher).unwrap(),
-            "eject_plan needs a credential with manage_lifecycle. Run konae login with --manage-lifecycle, or use a token from token_create that includes it."
+            missing_permission("migration_begin", &publisher).unwrap(),
+            "migration_begin needs a credential with manage_lifecycle. Run konae login with --manage-lifecycle, or use a token from token_create that includes it."
         );
         assert_eq!(
             missing_permission("release_plan", &owner(&["read"])).unwrap(),
@@ -353,7 +345,7 @@ mod tests {
             .chain(runtime_tools())
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
-        let prefixes = ["platform_", "project_", "projects_", "schema_", "database_", "storage_", "release_", "signup_policy_", "sign_in_methods_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "notices_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "eject_", "migration_", "package_", "mail_", "session_", "domain_", "path_"];
+        let prefixes = ["platform_", "project_", "projects_", "schema_", "database_", "storage_", "release_", "signup_policy_", "sign_in_methods_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "notices_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "migration_", "package_", "mail_", "session_", "domain_", "path_"];
         for name in TOPICS {
             let text = topic(name).unwrap().to_string();
             for word in text.split(|c: char| !(c.is_ascii_lowercase() || c == '_')) {

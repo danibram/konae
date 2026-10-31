@@ -25,7 +25,7 @@ Reads `KONAE_EMAIL` and `KONAE_PASSWORD`. Add `KONAE_INVITATION_CODE`, the code 
 | --- | --- | --- |
 | `--manage-users` | `manage_users` | Inviting app users, suspending, changing the Signup Policy |
 | `--export-data` | `export_data` | Exporting live data |
-| `--manage-lifecycle` | `manage_lifecycle` | Eject and migration |
+| `--manage-lifecycle` | `manage_lifecycle` | Migration |
 
 A delegated token cannot widen itself later, so the flags are the only way the CLI gets these permissions. On a Kernel that verifies email, creating the account sends a link. `--verify-from` reads that link from a development mailbox on this machine and works only with a Kernel on `localhost` or `127.0.0.1`.
 
@@ -108,14 +108,6 @@ bun run konae -- export --dir ./my-app [--out <file>] [--with-data]
 ```
 
 Writes a self-hosted kit. `--with-data` adds the live package and needs a credential from `login --export-data`.
-
-## eject
-
-```sh
-bun run konae -- eject --dir ./empty-folder --project <id> --url <Kernel URL> [--revision <n>]
-```
-
-Moves a Managed project's sources into the folder. Needs `login --manage-lifecycle`.
 
 ## domain
 

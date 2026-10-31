@@ -65,6 +65,5 @@ Do not treat the URL `publish` printed as proof. Read the Deployment back throug
 
 - [Add a Server Action](./add-a-server-action.md)
 - [Take the app elsewhere](./take-the-app-elsewhere.md)
-- [Eject a managed project](./eject.md)
 - [CLI reference](../cli.md)
 - [The Capsule](../capsule.md)

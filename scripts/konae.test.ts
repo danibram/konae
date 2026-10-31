@@ -131,7 +131,7 @@ describe("konae CLI", () => {
   });
 
   test("help names every command and every login flag, and an unknown command prints it", async () => {
-    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "eject", "--manage-users", "--export-data", "--manage-lifecycle", "--verify-from", "--with-data", "--project", "--revision", "--secret", "--key", "--inputs", "domain", "--deployment", "--set", "--clear", "pull", "sql", "events", "--prod", "--follow", "--json", "--events-port", "KONAE_KERNEL_BIN", "--file", "--reset", "--template"]) expect(HELP).toContain(word);
+    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "--manage-users", "--export-data", "--manage-lifecycle", "--verify-from", "--with-data", "--secret", "--key", "--inputs", "domain", "--deployment", "--set", "--clear", "pull", "sql", "events", "--prod", "--follow", "--json", "--events-port", "KONAE_KERNEL_BIN", "--file", "--reset", "--template"]) expect(HELP).toContain(word);
     const run = cli("deploy");
     expect(await run.exited).toBe(1);
     expect(await new Response(run.stderr).text()).toContain("Unknown command deploy.\n\nUsage: bun run konae --");

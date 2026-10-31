@@ -1,12 +1,12 @@
 // Replays the habits showcase against its own Kernel: verified signup, rows
 // bound to the actor, a day closed by a schedule, an API key on a route,
-// Signals and Usage, Eject from the managed path, and a scheduled copy
+// Signals and Usage, a publish from a folder, and a scheduled copy
 // restored into a fresh Kernel. It asserts
 // what works and what each primitive refuses, then removes its Kernel and data.
 //
 //   KONAE_SHOWCASE_PORT=21410 bun run examples/showcase/habits/replay.ts
 import assert from "node:assert/strict";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import initSqlJs from "sql.js";
@@ -453,35 +453,27 @@ try {
   }
   check("Action Contract", `konae contract writes 12 actions${contractErr.trim() ? ` with warnings: ${contractErr.trim()}` : " with no warning"}; konae conform reports "${conformTotals}" and calls the three actor-bound routes with the API key.`);
 
-  // ------------------------------------------------------------------ Eject
-  const lifecycle = await owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish", "manage_lifecycle"], projectIds: [projectId], ttlSeconds: 3600 });
-  const ejectedDir = path.join(scratch, "ejected");
-  await mkdir(ejectedDir);
-  const [ejectCode, ejectOut, ejectErr] = await cli(["eject", "--dir", ejectedDir, "--project", projectId, "--url", url], { KONAE_MCP_TOKEN: lifecycle.token });
-  assert.equal(ejectCode, 0, ejectOut + ejectErr);
-  const ejectedFiles = (await readdir(ejectedDir)).filter((name) => !name.startsWith(".")).sort();
-  const ejectedConfig = JSON.parse(await readFile(path.join(ejectedDir, "konae.json"), "utf8"));
-  assert.equal(ejectedConfig.url, url);
-  assert.equal(ejectedConfig.project.sourceAuthority, "external");
-  const indexHtml = await readFile(path.join(ejectedDir, "index.html"), "utf8");
+  // ------------------------------------------------- publish from a folder
+  // The same project, published with the CLI from a folder that holds its files.
+  const publisher = await owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], projectIds: [projectId], ttlSeconds: 3600 });
+  const folder = path.join(scratch, "folder");
+  await mkdir(folder);
+  for (const name of appFiles) await writeFile(path.join(folder, name), sources[name]);
+  await writeFile(path.join(folder, "konae.json"), JSON.stringify({ url, project: { id: projectId, name: "Habits", slug: "habits", manifest } }, null, 2));
+  const indexHtml = await readFile(path.join(folder, "index.html"), "utf8");
   assert(indexHtml.includes("Build 1"));
-  await writeFile(path.join(ejectedDir, "index.html"), indexHtml.replace("Build 1", "Build 2, published from the ejected folder"));
-  const [publishCode, publishOut, publishErr] = await cli(["publish", "--dir", ejectedDir], { KONAE_MCP_TOKEN: lifecycle.token });
+  await writeFile(path.join(folder, "index.html"), indexHtml.replace("Build 1", "Build 2, published from a folder"));
+  const [publishCode, publishOut, publishErr] = await cli(["publish", "--dir", folder], { KONAE_MCP_TOKEN: publisher.token });
   assert.equal(publishCode, 0, publishOut + publishErr);
   assert.equal(publishOut.trim(), receipt.url);
   const shell = await (await fetch(url, { headers: { host } })).text();
-  assert(shell.includes("Build 2, published from the ejected folder"));
-  assert.equal((await anaPhone.call<{ userId: string }>("auth_session")).userId, anaSession.userId, "Eject keeps sessions.");
+  assert(shell.includes("Build 2, published from a folder"));
+  assert.equal((await anaPhone.call<{ userId: string }>("auth_session")).userId, anaSession.userId, "Publishing from a folder keeps sessions.");
   assert.equal((await action(anaLaptop, "habits.streaks", { today }))[0].total_days, 6);
   assert.equal((await appPost("/_konae/auth/login", { email: ben, password: benPassword })).status, 200);
-  let managedRefusal = "";
-  await assert.rejects(saveSources(1), (error: Error) => { managedRefusal = error.message; return true; });
-  assert.match(managedRefusal, /^This project was ejected: its sources are maintained outside Konae/);
-  const frozen = await owner.call<{ readOnly: boolean; revision: number; transfer: { transferId: string } }>("project_sources_read", { projectId });
-  assert.equal(frozen.readOnly, true);
-  await owner.cancel(frozen.transfer.transferId).catch(() => {});
-  check("Eject and publish from outside",
-    `konae eject writes ${ejectedFiles.join(", ")} with sourceAuthority external; konae publish serves "Build 2" at the same URL; Ana's phone session, her rows and Ben's password survive; project_sources_save answers "${managedRefusal}"`);
+  assert.deepEqual(await saveSources(1), { revision: 2 });
+  check("Publish from a folder",
+    `konae publish serves "Build 2" at the same URL; Ana's phone session, her rows and Ben's password survive, and the editor still saves the project's sources.`);
 
   // ------------------------------------------------------- copy and restore
   const written = Date.now();
@@ -506,7 +498,7 @@ try {
   const ownerAgain = await post("/_konae/owner/login", { email: ownerEmail, password: ownerPassword });
   assert.equal(ownerAgain.status, 200);
   const restoredOwner = withHeaders(`${url}/mcp`, { cookie: cookieOf(ownerAgain)! });
-  await assert.rejects(new McpClient(`${url}/mcp`, { token: lifecycle.token }).call("projects_list"));
+  await assert.rejects(new McpClient(`${url}/mcp`, { token: publisher.token }).call("projects_list"));
   const anaAgain = await appPost("/_konae/auth/login", { email: ana, password: anaPassword });
   assert.equal(anaAgain.status, 200);
   const anaRestored = runtime(cookieOf(anaAgain)!);
@@ -524,15 +516,9 @@ try {
   assert.deepEqual(await action(anaRestored, "days.recent"), closedDays);
   const restoredRuns = (await restoredOwner.call<{ scheduled: Run[] }>("usage_read", { deploymentId: receipt.id, from: utcDay(-1), to: utcDay(1) })).scheduled;
   assert(restoredRuns.length >= closeRuns.length, `${restoredRuns.length} runs after the restore, ${closeRuns.length} before the copy.`);
-  let restoredRefusal = "";
-  const restoredUpload = await restoredOwner.upload(new TextEncoder().encode(JSON.stringify(managedSource(sources))), projectId);
-  try {
-    await assert.rejects(restoredOwner.call("project_sources_save", { projectId, transferId: restoredUpload.transferId, expectedRevision: 1 }), (error: Error) => { restoredRefusal = error.message; return true; });
-  } finally { await restoredOwner.cancel(restoredUpload.transferId).catch(() => {}); }
-  assert.equal(restoredRefusal, managedRefusal);
   assert((await (await fetch(url, { headers: { host } })).text()).includes("Build 2"));
   check("Copy and restore",
-    `A directory copy taken ${copies!.targets[0].lastCopyId} restores into an empty data directory. The restored Kernel serves Build 2, signs out Ana's sessions, the owner's session and the delegated token, keeps the passwords, rows, streaks, ${signalCountBefore} Signals, the closed day and ${restoredRuns.length} scheduled runs, the ejected state and the API key, which still reads GET /api/habits.`);
+    `A directory copy taken ${copies!.targets[0].lastCopyId} restores into an empty data directory. The restored Kernel serves Build 2, signs out Ana's sessions, the owner's session and the delegated token, keeps the passwords, rows, streaks, ${signalCountBefore} Signals, the closed day and ${restoredRuns.length} scheduled runs and the API key, which still reads GET /api/habits.`);
 
   // ------------------------------------------- Chrome under the app's policy
   if (process.env.KONAE_SHOWCASE_BROWSER !== "0") {
