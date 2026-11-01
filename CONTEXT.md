@@ -25,7 +25,7 @@ A named, deployed operation that authorizes a Runtime Actor before running SQL o
 _Avoid_: Raw SQL endpoint
 
 **Validation Gate**:
-The check that every agent-proposed change must pass before it is applied to a Project. The schema must be valid, a schema change must come with a migration that converges, and every Server Action that runs SQL must remain executable against the migrated schema. Applying is versioned and reversible. The Gate and the Kernel must refuse the same Capsule with the same words; that shared refusal is what lets the app leave with its rules unchanged.
+The check that every agent-proposed change must pass before it is applied to a Project. The schema must be valid and every Server Action that runs SQL must prepare against it. The Kernel derives the change to a published database from `schema.sql` and asks the owner before one that loses data. Applying is versioned and reversible. The Gate and the Kernel must refuse the same Capsule with the same words; that shared refusal is what lets the app leave with its rules unchanged.
 _Avoid_: linter, preview
 
 **Build Artifact**:

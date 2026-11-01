@@ -38,10 +38,10 @@ Writes a template and `konae.json` into an empty folder, without a credential or
 ## dev
 
 ```sh
-bun run konae -- dev --dir ./my-app [--port 8796] [--events-port 8797] [--reset]
+bun run konae -- dev --dir ./my-app [--port 8796] [--events-port 8797] [--reset] [--confirm-schema <confirmation>]
 ```
 
-Compiles and starts the Rust Kernel with data under `.konae/dev-data`, with its own identities and no link to production. It publishes the build there, sets the signup policy to Open so test accounts can sign up, and rebuilds when the sources change. Its email, notices included, goes to `.konae/dev-data/mailbox.jsonl`. When the command exits, the Kernel stops and the data stays in the folder. `--reset` deletes that data first. A Development Kernel with no data starts from the copy `pull` left, when there is one.
+Compiles and starts the Rust Kernel with data under `.konae/dev-data`, with its own identities and no link to production. It publishes the build there, sets the signup policy to Open so test accounts can sign up, and rebuilds when the sources change. Its email, notices included, goes to `.konae/dev-data/mailbox.jsonl`. When the command exits, the Kernel stops and the data stays in the folder. `--reset` deletes that data first. A Development Kernel with no data starts from the copy `pull` left, when there is one, and the Kernel brings that copy's tables to what `schema.sql` states. A change that loses data asks first, as `publish` does. On every start and change it writes `actions.d.ts`, which types `miniapp.actions.call`.
 
 ## pull
 
@@ -57,7 +57,7 @@ Downloads the published app's database, accounts and files into `.konae/pull`. N
 bun run konae -- sql --dir ./my-app [--prod] [--url <Kernel URL>] ("<statement>" | --file <file.sql>)
 ```
 
-Runs SQL on the app's database through `database_execute`, on the Development Kernel that `dev` is running for the folder. That is where to rehearse a schema change on a pulled copy. Only `--prod` reaches the published Deployment.
+Runs SQL on the app's database through `database_execute`, on the Development Kernel that `dev` is running for the folder. That is where to look at a pulled copy's rows after a schema change. Only `--prod` reaches the published Deployment.
 
 ## events
 
@@ -81,15 +81,17 @@ Writes `.konae/artifact.json`.
 bun run konae -- contract --dir ./my-app [--out <folder>]
 ```
 
-Writes `action-contract.json`, its schema and `action-contract.md`, from `actions.json` and `schema.sql`.
+Writes `action-contract.json`, its schema, `action-contract.md` and `actions.d.ts`, from `actions.json` and `schema.sql`. `actions.d.ts` types `miniapp.actions.call` by action name, input and the columns a query returns. A page written in TypeScript, or a JavaScript page whose `jsconfig.json` sets `checkJs`, reads it when the folder's TypeScript configuration includes it.
 
 ## publish
 
 ```sh
-bun run konae -- publish --dir ./my-app [--url <Kernel URL>]
+bun run konae -- publish --dir ./my-app [--url <Kernel URL>] [--confirm-schema <confirmation>]
 ```
 
 Builds and publishes to the installation `konae.json` names, or `--url`, or the one `login` saved. Set each signing secret with `secret_set` first, because a release that signs with an unset secret is refused. On a first release it sends `project.manifest.signupPolicy` from `konae.json`.
+
+The Kernel changes the published database to what `schema.sql` states. A new table, column or index applies. When the change drops a table or a column, or changes a column's type, `publish` prints what it loses, the statements and the plan's confirmation, then asks. Without a terminal it publishes nothing; run it again with `--confirm-schema` and that confirmation. A confirmation fits only the plan it was printed for. `.konae/release-plan.json` keeps the last plan.
 
 ## conform
 

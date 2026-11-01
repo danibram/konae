@@ -263,12 +263,10 @@ bun run konae -- dev --dir /tmp/my-app --reset
 
 A Development Kernel that holds no data starts from that copy. `dev` sends it as `initialPackage` with its first release, the import that [Export and import an app](#export-and-import-an-app) describes. Only a project without a Deployment takes a package, so `dev` never replaces data it already has. `--reset` deletes `.konae/dev-data` first, which is how a newer pull, or a clean start, takes effect; without it `dev` says a copy is waiting and keeps the local data. Sessions do not travel and API keys arrive revoked. An account signs in with the password it has on the published app, and a password reset asked on the local app lands in `.konae/dev-data/mailbox.jsonl`. Nothing travels back. No command writes local data to a published app, and the local Kernel sends no email.
 
-The copy's database has the schema of the published app. A release only creates tables and indexes, so when the folder's actions need a column the copy lacks, the release is refused with the sentence `publish` would get, such as `action notes.list does not match the deployed schema: no such column: pinned`. `dev` then installs the copy without the app and keeps running. Change the database through the owner's door, and repeat the statement on the published app before publishing there:
+The copy's database has the schema of the published app. When the folder's `schema.sql` is ahead of it, the first release brings the copy to that schema the way a publish brings the published database: a new table, column or index applies with every row kept, and a change that deletes data prints its plan and asks. So a column the next version adds is tried on the published rows before the published app sees it, and `publish` then makes the same change there.
 
 ```sh
-bun run konae -- sql --dir /tmp/my-app "ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
-bun run konae -- sql --dir /tmp/my-app --prod "ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
-bun run konae -- publish --dir /tmp/my-app
+bun run konae -- sql --dir /tmp/my-app "SELECT id, title, pinned FROM notes LIMIT 5"
 ```
 
 `sql` runs `database_execute` with `operation: "sql"` on the Development Kernel that `dev` is running for the folder, and after it a saved file makes `dev` publish the app again. Only `--prod` reaches the published Deployment, which needs `write`. With no Development Kernel running, `sql` stops and says so instead of falling through to the published database. `--file <file.sql>` reads the statement from a file.
@@ -875,6 +873,18 @@ A published app runs under the Kernel's Content Security Policy, described in [t
 
 The build lives in `.konae/artifact.json`. Publishing transfers it over MCP, validates a plan against the project revision and applies it. The tool saves the plan and the receipt in `.konae`. The Kernel rejects a stale plan. Repeating a plan that was already applied returns its receipt. `publish` deploys as private unless `konae.json` sets `project.manifest.visibility` to `"public"`. A republish keeps the URL and database and stops serving files that the new artifact no longer contains.
 
+### The schema change
+
+`schema.sql` states what the database should be. `release_plan` loads it into a scratch SQLite database, compares tables, columns and indexes with a copy of the live database and answers the change under `schema`:
+
+```json
+{ "statements": ["DROP TABLE \"notes\""],
+  "losses": [{ "table": "notes", "column": null, "sentence": "Drops table notes and its 2 rows." }],
+  "confirmation": "<64 hex characters>" }
+```
+
+A new table, a new column and a new index apply and keep every row; `losses` is empty and `confirmation` is null. A dropped table, a dropped column or a changed column type fills `losses`, and `release_apply` runs the change only with `confirmSchema` set to that `confirmation`. Without it, or with the confirmation of another plan, `release_apply` refuses with `schema.confirmation-required` and changes nothing. A dropped or changed index loses no row and applies. Where SQLite cannot add a column in place, or a table's definition changed in another way, the Kernel rebuilds the table as the SQLite page on ALTER TABLE describes: with foreign keys off, in one transaction, it creates the new table under another name, copies every column that still exists, drops the old one, renames the new one, recreates its indexes and checks that no row now breaks a foreign key. A copy that a new constraint refuses, such as a NOT NULL column without a default on a table with rows, stops the release and changes nothing. A renamed column is a dropped column and a new one. The editor shows the losses in a dialog before it publishes, and `publish` and `dev` print them and ask.
+
 `project.manifest.signupPolicy` in `konae.json` names who may create an app account when the first release goes out, with the modes of [Signup policy](#signup-policy):
 
 ```json
@@ -988,7 +998,9 @@ bun run konae -- contract --dir /tmp/my-app
 bun run konae -- conform --url http://my-app-ab12.localhost:8796 --contract /tmp/my-app/action-contract.json --token <app session token>
 ```
 
-`contract` reads `actions.json` and `schema.sql` and writes three files beside `konae.json`, or into `--out`: `action-contract.json`, its JSON Schema `action-contract.schema.json`, and `action-contract.md` for a person to read. The Markdown has a Signal section for each action that records one, naming its properties and when it is recorded. `build` and `publish` never upload them. The export kit carries the same three under `konae/`, and the editor shows the Markdown in Files as `action-contract.md`, generated and read-only. `src/lib/action-contract.ts` writes all of them.
+`contract` reads `actions.json` and `schema.sql` and writes four files beside `konae.json`, or into `--out`: `action-contract.json`, its JSON Schema `action-contract.schema.json`, `action-contract.md` for a person to read, and `actions.d.ts`. The Markdown has a Signal section for each action that records one, naming its properties and when it is recorded. `build` and `publish` never upload them. The export kit carries the same four under `konae/`, `dev` writes `actions.d.ts` on every start and change, and the editor shows the Markdown in Files as `action-contract.md`, generated and read-only. `src/lib/action-contract.ts` writes the contract and `src/lib/action-types.ts` the declarations.
+
+`actions.d.ts` declares the global `miniapp` so that `miniapp.actions.call` takes only the name of an action a page may call, the input that action declares, and answers its type: the rows of a query with each column typed from `schema.sql`, `{ changes, lastInsertId }` for a mutation. A scheduled mutation, a call's `then` mutation and an action whose route is its only door are left out, because a page cannot call them. A column whose type the generator cannot tell is `any`, and the other modules of `miniapp` stay untyped.
 
 For each Server Action the contract states:
 
@@ -1075,7 +1087,7 @@ To import on another Kernel, first create the project there with `project_create
 
 The release payload is the one `release_plan` always takes, `project`, `visibility` and the `artifact` that `konae build` writes to `.konae/artifact.json`, plus `initialPackage`. No CLI command imports a package into a Kernel you already run; [the walkthrough](mcp-walkthrough.md#14-import-on-a-second-kernel) shows the tool calls.
 
-The CLI's `export --with-data` downloads the package into the kit as `konae/package/`, and the kit's `deploy.mjs` uploads it to the kit's own Kernel, signing in with that Kernel's setup key, records its progress in `konae/import-state.json` and resumes from the Kernel's offset after an interruption. `deploy.mjs` sets no signing secret, so for an app whose routes sign it stops at `release_plan` with the refusal that names each secret; `deploy.mjs` creates the kit Kernel's owner as `owner@selfhost.local` with the setup key as password, so `KONAE_EMAIL=owner@selfhost.local KONAE_PASSWORD=<key> bun run konae -- login` gets a credential for `secret_set` there, and the next `deploy.mjs` run goes through. When the kit's `.env` sets `KONAE_PUBLIC_ORIGIN`, `deploy.mjs` still connects to 127.0.0.1 and sends that origin's host as `Host`, because the Kernel accepts owner sign-in only there; `KONAE_APP_DOMAIN` makes it call `domain_set` on each run until the name verifies. `src/lib/portable-package.ts` checks the manifest on the client with the same limits as `kernel-rs/src/package.rs`.
+The CLI's `export --with-data` downloads the package into the kit as `konae/package/`, and the kit's `deploy.mjs` uploads it to the kit's own Kernel, signing in with that Kernel's setup key, records its progress in `konae/import-state.json` and resumes from the Kernel's offset after an interruption. When the package's database needs a change that deletes data, `deploy.mjs` prints what goes and stops; run it again with `KONAE_CONFIRM_SCHEMA=<confirmation>` to apply that plan. `deploy.mjs` sets no signing secret, so for an app whose routes sign it stops at `release_plan` with the refusal that names each secret; `deploy.mjs` creates the kit Kernel's owner as `owner@selfhost.local` with the setup key as password, so `KONAE_EMAIL=owner@selfhost.local KONAE_PASSWORD=<key> bun run konae -- login` gets a credential for `secret_set` there, and the next `deploy.mjs` run goes through. When the kit's `.env` sets `KONAE_PUBLIC_ORIGIN`, `deploy.mjs` still connects to 127.0.0.1 and sends that origin's host as `Host`, because the Kernel accepts owner sign-in only there; `KONAE_APP_DOMAIN` makes it call `domain_set` on each run until the name verifies. `src/lib/portable-package.ts` checks the manifest on the client with the same limits as `kernel-rs/src/package.rs`.
 
 `project_export`, the small format, and `database_export`, the raw database file, now need `export_data` too. It returns the database, accounts and files as base64 in one transfer of at most 16 MiB, and a release still imports it through `initialDatabase`, `initialIdentity`, `initialFiles` and `initialSignupPolicy`.
 
