@@ -131,6 +131,7 @@ describe("buildProjectExport", () => {
     expect(contract.actions[0].output).toEqual({ kind: "rows", columns: [{ name: "id", type: "integer", nullable: false, from: { table: "notes", column: "id" } }], unnamed: [] });
     expect(files.get("konae/action-contract.md")).toContain("## notes.list");
     expect(JSON.parse(files.get("konae/action-contract.schema.json")!).title).toBe("Konae Action Contract");
+    expect(files.get("konae/actions.d.ts")).toContain('"notes.list": {');
     expect(files.get("README.md")).toContain("konae/action-contract.json");
     expect(() => buildProjectExport({ ...project, files: { ...project.files, "actions.json": "{" } }, artifact, kernelFiles))
       .toThrow("The export cannot describe its Server Actions: actions.json must contain valid JSON.");

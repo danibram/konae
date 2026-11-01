@@ -8,6 +8,7 @@ import type { MiniAppProject } from "./types";
 import type { PortableProjectState } from "../deployments/client";
 import { checkPackageManifest, type PackageManifest } from "./portable-package";
 import { actionContractSchema, generateActionContract, renderActionContractMarkdown, serializeActionContract } from "./action-contract";
+import { ACTION_TYPES_FILE, renderActionTypes } from "./action-types";
 
 export type ExportFile = { path: string; contents: string | Uint8Array };
 
@@ -382,6 +383,7 @@ function actionContractEntries(actionsSource: string | undefined, schemaSource: 
     { path: "konae/action-contract.json", contents: serializeActionContract(contract) },
     { path: "konae/action-contract.md", contents: renderActionContractMarkdown(contract) },
     { path: "konae/action-contract.schema.json", contents: `${JSON.stringify(actionContractSchema, null, 2)}\n` },
+    { path: `konae/${ACTION_TYPES_FILE}`, contents: renderActionTypes(contract) },
   ];
 }
 

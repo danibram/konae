@@ -17,9 +17,11 @@ import { PULL_DIRECTORY, describePulled, downloadPackage, pullLocal, readPulled,
 import {
   ACTION_CONTRACT_FILE, ACTION_CONTRACT_MARKDOWN, ACTION_CONTRACT_SCHEMA_FILE,
   actionContractSchema, generateActionContract, renderActionContractMarkdown, serializeActionContract,
+  type ActionContract,
 } from "../src/lib/action-contract";
 import { checkHostname, type DomainRules } from "../src/lib/domain-name";
 import { assembleStaticArtifact } from "../src/lib/static-artifact.js";
+import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
 
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
@@ -108,7 +110,7 @@ dev       --dir <folder> [--port 8796] [--events-port 8797] [--reset] [--confirm
           KONAE_KERNEL_BIN names a built Kernel binary to run instead of compiling one.
           --reset deletes <folder>/.konae/dev-data first. A Development Kernel with no data starts
           from the copy pull left, when there is one. A schema change that loses data asks first,
-          as publish does.
+          as publish does. Writes actions.d.ts, which types miniapp.actions.call.
 sql       --dir <folder> [--prod] [--url <Kernel URL>] ("<statement>" | --file <file.sql>)
           Runs SQL on the app's database through database_execute, the owner's door, on the
           Development Kernel that dev is running for this folder. Only --prod reaches the published
@@ -122,7 +124,8 @@ pull      --dir <folder> [--url <Kernel URL>]
           Downloads the published app's database, accounts and files into <folder>/.konae/pull.
           Needs a credential from login --export-data. Run dev --reset to start the local app from it.
 build     --dir <folder>                 Writes .konae/artifact.json.
-contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its schema and action-contract.md.
+contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its schema, action-contract.md and
+          actions.d.ts, which types miniapp.actions.call.
 publish   --dir <folder> [--url <Kernel URL>] [--confirm-schema <confirmation>]
           Builds and publishes to the installation konae.json names, or --url, or the one login
           saved. Set each signing secret with secret_set first. The Kernel changes the database to
@@ -212,7 +215,7 @@ async function credentials(root: string) {
 }
 
 /** Files the CLI writes beside the Capsule, which are never uploaded as its source. */
-const generatedFiles = new Set(["konae.json", ACTION_CONTRACT_FILE, ACTION_CONTRACT_SCHEMA_FILE]);
+const generatedFiles = new Set(["konae.json", ACTION_CONTRACT_FILE, ACTION_CONTRACT_SCHEMA_FILE, ACTION_TYPES_FILE]);
 
 async function sources(root: string, prefix = ""): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
@@ -410,7 +413,30 @@ export async function writeContract(root: string, out = root) {
   await writeFile(path.join(out, ACTION_CONTRACT_FILE), serializeActionContract(contract));
   await writeFile(path.join(out, ACTION_CONTRACT_SCHEMA_FILE), `${JSON.stringify(actionContractSchema, null, 2)}\n`);
   await writeFile(path.join(out, ACTION_CONTRACT_MARKDOWN), renderActionContractMarkdown(contract));
+  await writeActionTypes(out, contract);
   return { contract, warnings, file: path.join(out, ACTION_CONTRACT_FILE) };
+}
+
+/** Writes actions.d.ts into `out` when its text changed, so a watcher that sees the file sees a real change. */
+export async function writeActionTypes(out: string, contract: ActionContract) {
+  const file = path.join(out, ACTION_TYPES_FILE);
+  const text = renderActionTypes(contract);
+  if (await readFile(file, "utf8").catch(() => undefined) !== text) await writeFile(file, text);
+}
+
+/**
+ * What dev writes on each start and change: actions.d.ts from the folder's
+ * own actions.json and schema.sql. When they do not parse, the last one stays.
+ */
+async function refreshActionTypes(root: string) {
+  const actionsSource = await readFile(path.join(root, "actions.json"), "utf8").catch(() => undefined);
+  if (actionsSource === undefined) return;
+  const schemaSource = await readFile(path.join(root, "schema.sql"), "utf8").catch(() => "");
+  try {
+    await writeActionTypes(root, generateActionContract({ actionsSource, schemaSource }).contract);
+  } catch (error) {
+    console.warn(`${ACTION_TYPES_FILE} stays as it was: ${error instanceof Error ? error.message : error}`);
+  }
 }
 
 /** Add each entry to .gitignore unless a line already names it. */
@@ -697,6 +723,7 @@ async function main() {
       const { signupPolicy: _, ...manifest } = devConfig.project.manifest;
       const secrets = async () => { for (const line of await setDevSecrets(root, admin, { ...devConfig.project, manifest })) console.log(line); };
       await secrets();
+      await refreshActionTypes(root);
       const first = await publishLocal(root, devConfig, token, console.warn, pulled, confirm);
       // The marker sits in dev-data, so --reset removes it with the data it describes.
       const marker = path.join(dataDirectory, "pulled.json");
@@ -723,12 +750,12 @@ async function main() {
       let working = false; let queued = false;
       const rebuild = async () => {
         if (working) { queued = true; return; } working = true;
-        do { queued = false; try { await secrets(); console.log(`Updated ${(await publishLocal(root, devConfig, token, console.warn, undefined, confirm)).url}. Reload the app to see changes.`); } catch (e) { console.error(e instanceof Error ? e.message : e); } } while (queued);
+        do { queued = false; try { await secrets(); await refreshActionTypes(root); console.log(`Updated ${(await publishLocal(root, devConfig, token, console.warn, undefined, confirm)).url}. Reload the app to see changes.`); } catch (e) { console.error(e instanceof Error ? e.message : e); } } while (queued);
         working = false;
       };
       let timer: ReturnType<typeof setTimeout>;
       const watcher = watch(root, { recursive: true }, (_, filename) => {
-        if (!filename || filename.startsWith(".") || filename.includes("node_modules") || !/\.(?:html|css|js|jsx|ts|tsx|json|sql)$/.test(filename)) return;
+        if (!filename || generatedFiles.has(filename) || filename.startsWith(".") || filename.includes("node_modules") || !/\.(?:html|css|js|jsx|ts|tsx|json|sql)$/.test(filename)) return;
         clearTimeout(timer); timer = setTimeout(() => void rebuild(), 200);
       });
       await child.exited; watcher.close();
