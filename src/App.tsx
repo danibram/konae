@@ -1318,8 +1318,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         <Button variant="primary" onClick={() => { resolvePlatformConfirmation.current?.(true); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }}>Allow</Button>
       </>}><div className="ui-dialog-body"><p style={{ overflowWrap: "anywhere" }}>{platformConfirmation.summary}</p><p>It runs as you, on this app only, through <code>{platformConfirmation.tool}</code>.</p></div></Dialog>}
 
-      {schemaChange && <SchemaChangeDialog change={schemaChange.change} onAnswer={(confirmed) => { schemaChange.resolve(confirmed); setSchemaChange(null); }} />}
       {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
+      {/* After the Deploy dialog, so it paints over it. */}
+      {schemaChange && <SchemaChangeDialog change={schemaChange.change} onAnswer={(confirmed) => { schemaChange.resolve(confirmed); setSchemaChange(null); }} />}
 
       <Dialog
         open={resetOpen}
