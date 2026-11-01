@@ -52,7 +52,8 @@ export async function startLab(port: number, env: Record<string, string> = {}): 
   try {
     for (const [name, spec] of Object.entries(SHOWCASE) as [keyof typeof SHOWCASE, (typeof SHOWCASE)[keyof typeof SHOWCASE]][]) {
       const source = path.join(root, name);
-      await cp(path.join(showcase, name), source, { recursive: true, filter: (from) => !from.endsWith("replay.ts") && !from.endsWith("README.md") });
+      // The showcase keeps its sources in one folder; the build reads them from an app folder's app/.
+      await cp(path.join(showcase, name), path.join(source, "app"), { recursive: true, filter: (from) => !from.endsWith("replay.ts") && !from.endsWith("README.md") });
       const compiled = await buildLocal(source);
       const project = { id: `review_${name}`, name, slug: name, manifest: { version: 1, visibility: spec.visibility } };
       await kernel.owner.call("project_create", { projectId: project.id, name, slug: name, manifest: project.manifest });

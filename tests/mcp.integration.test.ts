@@ -97,6 +97,13 @@ function signup(hostname: string, email: string) {
   return fetch(`${url}/_konae/auth/signup`, { method: "POST", headers: { host: hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password }) });
 }
 
+/** project_export's manifest, with every download released. */
+async function exportApp(deploymentId: string) {
+  const exported = await alice.call<any>("project_export", { deploymentId });
+  for (const transfer of [exported.folder, ...Object.values<any>(exported.downloads)]) await alice.cancel(transfer.transferId).catch(() => {});
+  return exported;
+}
+
 async function appUser(hostname: string, email: string) {
   const response = await signup(hostname, email);
   expect(response.status).toBe(200);
@@ -295,7 +302,7 @@ describe("authenticated MCP", () => {
     } finally { await client.close(); }
   });
 
-  test("portable imports keep closed and allowlist signup policies from the first request", async () => {
+  test("an export carries closed and allowlist signup policies", async () => {
     for (const mode of ["closed", "allowlist"]) {
       const sourceId = `policy_source_${mode}`;
       const { receipt: source } = await release(sourceId);
@@ -303,55 +310,10 @@ describe("authenticated MCP", () => {
       await member.call("actions_invoke", { name: "notes.create", input: { title: `Kept ${mode}` } });
       const policy = { mode, allowlist: mode === "allowlist" ? ["allowed@app.test"] : [] };
       await alice.call("signup_policy_set", { deploymentId: source.id, ...policy });
-      const exported = await alice.call<any>("project_export", { deploymentId: source.id });
-      const portable = JSON.parse(new TextDecoder().decode(await alice.download(exported))).result;
-      expect(portable.initialSignupPolicy).toEqual(policy);
-      expect(portable.visibility).toBe("public");
-      const targetId = `policy_target_${mode}`;
-      await alice.call("project_create", { projectId: targetId, name: "Imported signup policy" });
-      const targetRequest = { ...payload(targetId), ...portable };
-      const upload = await alice.upload(new TextEncoder().encode(JSON.stringify(targetRequest)), targetId);
-      let target: { id: string; hostname: string };
-      try {
-        const plan = await alice.call<{ planId: string }>("release_plan", { transferId: upload.transferId });
-        target = await alice.call("release_apply", { planId: plan.planId });
-      } finally { await alice.cancel(upload.transferId); }
-      expect(await alice.call("signup_policy_read", { deploymentId: target.id })).toMatchObject(policy);
-      expect((await signup(target.hostname, "stranger@app.test")).status).toBe(403);
-      expect((await signup(target.hostname, "allowed@app.test")).status).toBe(mode === "allowlist" ? 200 : 403);
-      const login = await fetch(`${url}/_konae/auth/login`, { method: "POST", headers: { host: target.hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: "existing@app.test", password }) });
-      expect(login.status).toBe(200);
-      const importedMember = runtimeClient(target.hostname, login.headers.get("set-cookie")!.split(";")[0]);
-      expect(await importedMember.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: `Kept ${mode}` }]);
-      const overwrite = { ...payload(targetId), initialSignupPolicy: { mode: "open", allowlist: [] } };
-      const rejected = await alice.upload(new TextEncoder().encode(JSON.stringify(overwrite)), targetId);
-      try {
-        await expect(alice.call("release_plan", { transferId: rejected.transferId })).rejects.toThrow("first deployment");
-      } finally { await alice.cancel(rejected.transferId); }
-      await release(targetId);
-      expect(await alice.call("signup_policy_read", { deploymentId: target.id })).toMatchObject(policy);
+      const exported = await exportApp(source.id);
+      expect(exported.manifest.signupPolicy).toEqual(policy);
+      expect(exported.manifest.visibility).toBe("public");
     }
-  }, 30_000);
-
-  test("portable signup policies validate and normalize their entries before publishing", async () => {
-    const id = "invalid_initial_policy";
-    await alice.call("project_create", { projectId: id, name: "Initial policy validation" });
-    for (const initialSignupPolicy of [
-      { mode: "invalid", allowlist: [] },
-      { mode: "allowlist", allowlist: ["not an email"] },
-      { mode: "allowlist", allowlist: Array.from({ length: 101 }, (_, i) => `user${i}@app.test`) },
-    ]) {
-      const transfer = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...payload(id), initialSignupPolicy })), id);
-      try { await expect(alice.call("release_plan", { transferId: transfer.transferId })).rejects.toThrow(); }
-      finally { await alice.cancel(transfer.transferId); }
-    }
-    const initialSignupPolicy = { mode: "allowlist", allowlist: [" ALLOWED@APP.TEST ", "allowed@app.test", "@TEAM.TEST"] };
-    const transfer = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...payload(id), initialSignupPolicy })), id);
-    try {
-      const plan = await alice.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
-      const receipt = await alice.call<{ id: string }>("release_apply", { planId: plan.planId });
-      expect(await alice.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "allowlist", allowlist: ["allowed@app.test", "@team.test"] });
-    } finally { await alice.cancel(transfer.transferId); }
   });
 
   test("portable exports capture visibility after an earlier project inspection becomes stale", async () => {
@@ -360,10 +322,9 @@ describe("authenticated MCP", () => {
     const inspected = await alice.call<any>("project_inspect", { projectId: id });
     expect(inspected.deployment.manifest.visibility).toBe("public");
     await release(id, "private");
-    const exported = await alice.call<any>("project_export", { deploymentId: receipt.id });
-    const portable = JSON.parse(new TextDecoder().decode(await alice.download(exported))).result;
-    expect(portable.visibility).toBe("private");
-    expect(portable.initialSignupPolicy.mode).toBe("closed");
+    const exported = await exportApp(receipt.id);
+    expect(exported.manifest.visibility).toBe("private");
+    expect(exported.manifest.signupPolicy.mode).toBe("closed");
     expect(inspected.deployment.manifest.visibility).toBe("public");
   });
 
@@ -402,10 +363,11 @@ describe("authenticated MCP", () => {
       if (code !== 0) throw Error(error);
       return output;
     };
-    expect(await run("init", ["--url", url, "--name", "External proof"])).toContain("Created External proof");
-    expect(await run("build")).toContain("artifact.json");
-    expect(await run("publish")).toContain("http://external-proof-");
-    const config = await Bun.file(path.join(directory, "konae.json")).json();
+    expect(await run("init", ["--name", "External proof"])).toContain("Created External proof");
+    expect(await run("build")).toContain("dist");
+    expect(await run("publish", ["--url", url])).toContain("http://external-proof-");
+    const settings = await Bun.file(path.join(directory, "konae.json")).json();
+    const config = { project: settings };
     // init made the ID without a Kernel, and the first publish registered the project.
     const state = await alice.call<{ revision: number; sourcesRevision: number }>("project_inspect", { projectId: config.project.id });
     expect(state).toMatchObject({ revision: 1, sourcesRevision: 0 });
@@ -533,8 +495,12 @@ describe("authenticated MCP", () => {
     await expect(user.call("files_delete", { fileId: shared.id })).rejects.toThrow("File not found.");
     expect((await fetch(`${url}/_konae/files/${shared.id}`, { headers: { host: receipt.hostname } })).status).toBe(404);
     expect((await user.call<Array<{ id: string }>>("files_list")).map((listed) => listed.id)).toEqual([saved.id]);
-    const exported = await alice.call<any>("database_export", { deploymentId: receipt.id });
-    expect(new TextDecoder().decode((await alice.download(exported)).slice(0, 15))).toBe("SQLite format 3");
+    const exported = await alice.call<any>("project_export", { deploymentId: receipt.id });
+    try {
+      expect(new TextDecoder().decode((await alice.download(exported.downloads.database)).slice(0, 15))).toBe("SQLite format 3");
+    } finally {
+      for (const transfer of [exported.folder, ...Object.values<any>(exported.downloads)]) await alice.cancel(transfer.transferId).catch(() => {});
+    }
     await expect(alice.call("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: "ATTACH DATABASE '/tmp/other.sqlite' AS other;" } })).rejects.toThrow();
     await user.call("auth_logout");
     // The revoked cookie now reads as a signed-out visitor of this public app.

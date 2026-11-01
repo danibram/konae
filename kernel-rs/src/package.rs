@@ -1,17 +1,19 @@
-//! The chunked package of one Deployment.
+//! The export of one app, and the import of its data.
 //!
-//! `package_export` captures the Deployment's database, accounts and files
-//! under its locks, the same way a scheduled copy does, and offers each
-//! component as a download transfer. A versioned manifest lists every
-//! component with its size and SHA-256 and names the revisions that produced
-//! the app.
+//! `project_export` hands over the app folder in pieces that travel as
+//! transfers. The `folder` download holds `konae.json`, `app/` and `dist/`.
+//! The data is captured under the app's locks, the same way a scheduled copy
+//! does, and each part of `data/` is one component: database, identity,
+//! files and usage. A versioned manifest lists every component with its size
+//! and SHA-256 and names the revisions that produced the app. Secrets, owners
+//! and the installation's `.konae/` never leave.
 //!
 //! An import uploads the same components as transfers started with their
 //! component name, then names them in the release payload as
 //! `initialPackage`. `release_plan` verifies the manifest, the checksums, the
 //! references between files and accounts and the free space before any
 //! Deployment exists; `release_apply` copies the components into the new
-//! Deployment's folder. Only a project without a Deployment accepts a package.
+//! app's `data/`. Only a project without a Deployment accepts a package.
 //!
 //! Every step reads and writes components in 64 KiB blocks or lets SQLite
 //! page through them, so no component sits in memory on the Kernel.
@@ -34,6 +36,9 @@ pub(super) const PACKAGE_FORMAT: &str = "konae-package";
 pub(super) const PACKAGE_VERSION: u64 = 1;
 /// `usage` travels when the Deployment has a Usage store, ADR-0010.
 pub(super) const COMPONENT_NAMES: [&str; 4] = ["database", "identity", "files", "usage"];
+/// The download that holds `konae.json`, `app/` and `dist/`. An import
+/// takes sources and built files from its release, so the manifest does not list it.
+const FOLDER_DOWNLOAD: &str = "folder";
 const MIB: u64 = 1024 * 1024;
 /// The largest component a transfer may carry, a database at its quota.
 pub(super) const MAX_COMPONENT_BYTES: u64 = MAX_APP_DATABASE_BYTES;
@@ -216,9 +221,9 @@ pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id:
         |r| r.get(0),
     )?;
     ensure!(
-        held + COMPONENT_NAMES.len() <= MAX_OWNER_PRINCIPAL_TRANSFERS,
-        "A package export needs {} free transfers. Cancel completed transfers first.",
-        COMPONENT_NAMES.len()
+        held + COMPONENT_NAMES.len() + 1 <= MAX_OWNER_PRINCIPAL_TRANSFERS,
+        "An export needs {} free transfers. Cancel completed transfers first.",
+        COMPONENT_NAMES.len() + 1
     );
     let folder = crate::layout::data(&state.data_root, &deployment.id);
     let scratch = state.data_root.join("transfers").join(format!(".package-{}", Uuid::new_v4()));
@@ -238,14 +243,23 @@ pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id:
         ensure_space(free_bytes(&state.data_root)?, needed, "capture this app")?;
         let (source, target) = (folder.clone(), scratch.clone());
         let blobs = file_store::BlockingFiles::new(state.files.store.clone(), &deployment.id);
-        let components = tokio::task::spawn_blocking(move || capture(&source, &target, &blobs)).await?;
+        let app_folder = crate::layout::folder(&state.data_root, &deployment.id);
+        let components = tokio::task::spawn_blocking(move || {
+            let components = capture(&source, &target, &blobs)?;
+            write_folder_tar(&app_folder, &target.join("folder.tar"))?;
+            Ok::<_, anyhow::Error>(components)
+        })
+        .await?;
         let sources_revision: Option<u64> = store(state)?
             .query_row("SELECT sources FROM projects WHERE id=?1", [&deployment.project_id], |r| r.get(0))
             .optional()?
             .filter(|saves: &u64| *saves > 0);
-        components.map(|components| (components, deployment, published_revision, sources_revision))
+        // The editor saves sources between releases, so app/ may be ahead of what dist/ and the record serve.
+        let saved_actions = tokio::fs::read_to_string(crate::layout::sources(&state.data_root, &deployment.id).join("actions.json")).await.ok();
+        let sources_ahead = saved_actions.is_some_and(|saved| saved != deployment.actions);
+        components.map(|components| (components, deployment, published_revision, sources_revision, sources_ahead))
     };
-    let (components, deployment, published_revision, sources_revision) = match captured {
+    let (components, deployment, published_revision, sources_revision, sources_ahead) = match captured {
         Ok(value) => value,
         Err(error_value) => {
             let _ = tokio::fs::remove_dir_all(&scratch).await;
@@ -272,7 +286,12 @@ pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id:
     };
     let mut downloads = serde_json::Map::new();
     let mut failure = None;
-    for (name, path, size, sha256) in &components {
+    let folder_download = {
+        let folder_tar = scratch.join("folder.tar");
+        let (size, sha256) = copies::checksum_file(&folder_tar)?;
+        (FOLDER_DOWNLOAD.to_owned(), folder_tar, size, sha256)
+    };
+    for (name, path, size, sha256) in components.iter().chain(std::iter::once(&folder_download)) {
         let body = json!({"direction":"download","size":size,"sha256":sha256,"complete":true,"projectId":deployment.project_id,
             "exportData":true,"deploymentId":deployment.id,"component":name});
         match new_transfer(state, principal, body).await {
@@ -299,7 +318,8 @@ pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id:
         }
         return Err(error_value);
     }
-    Ok(json!({"manifest": manifest, "downloads": downloads}))
+    let folder = downloads.remove(FOLDER_DOWNLOAD);
+    Ok(json!({"manifest": manifest, "downloads": downloads, "folder": folder, "sourcesAhead": sources_ahead}))
 }
 
 fn folder_size(folder: &Path) -> Result<u64> {
@@ -343,7 +363,7 @@ fn capture(folder: &Path, scratch: &Path, blobs: &file_store::BlockingFiles) -> 
         .collect()
 }
 
-/// Deletes sessions and open email links from an identity file and marks
+/// Deletes sessions, open email links and invitation tokens from an identity file and marks
 /// every live API key revoked at import. `secure_delete` overwrites the
 /// freed pages, so the session and link token hashes do not stay in the
 /// file. A key's hash stays with its revoked row; it opens nothing.
@@ -361,6 +381,8 @@ pub(super) fn revoke_access(path: &Path) -> Result<usize> {
         }
     }
     removed += super::http::revoke_imported_keys(&connection)?;
+    // An invitation's link opens nothing outside the installation that sent it.
+    super::invitations::forget_tokens(&connection)?;
     Ok(removed)
 }
 
@@ -391,6 +413,61 @@ fn write_files_tar(directory: &Path, target: &Path, blobs: &file_store::Blocking
     output.write_all(&[0; 1024])?;
     output.into_inner().map_err(|error_value| error_value.into_error())?.sync_all()?;
     Ok(())
+}
+
+/// Writes the part of the app folder that is not data: `konae.json`,
+/// `app/` and `dist/`, as a ustar archive whose names are folder paths.
+fn write_folder_tar(folder: &Path, target: &Path) -> Result<()> {
+    let mut output = std::io::BufWriter::new(std::fs::File::create(target)?);
+    let mut entries = vec![crate::layout::SETTINGS_FILE.to_owned()];
+    for top in ["app", "dist"] {
+        let mut pending = vec![folder.join(top)];
+        while let Some(directory) = pending.pop() {
+            let Ok(listing) = std::fs::read_dir(&directory) else { continue };
+            for entry in listing {
+                let entry = entry?;
+                if entry.file_type()?.is_dir() {
+                    pending.push(entry.path());
+                } else {
+                    let relative = entry.path().strip_prefix(folder)?.components()
+                        .map(|part| part.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
+                    entries.push(relative);
+                }
+            }
+        }
+    }
+    entries.sort();
+    for relative in entries {
+        let mut input = std::fs::File::open(folder.join(&relative)).with_context(|| format!("{relative} is not readable."))?;
+        let size = input.metadata()?.len();
+        output.write_all(&path_header(&relative, size)?)?;
+        let copied = std::io::copy(&mut input, &mut output)?;
+        ensure!(copied == size, "{relative} changed during the export.");
+        output.write_all(&vec![0; tar_padding(size)])?;
+    }
+    output.write_all(&[0; 1024])?;
+    output.into_inner().map_err(|error_value| error_value.into_error())?.sync_all()?;
+    Ok(())
+}
+
+/// A header for a path of up to 255 bytes: ustar keeps what does not fit in
+/// the 100-byte name in its 155-byte prefix, split at a slash.
+fn path_header(path: &str, size: u64) -> Result<[u8; 512]> {
+    if path.len() <= 100 {
+        return Ok(tar_header(path, size));
+    }
+    let split = path
+        .char_indices()
+        .filter(|(index, c)| *c == '/' && *index <= 155 && path.len() - index - 1 <= 100)
+        .map(|(index, _)| index)
+        .next()
+        .with_context(|| format!("{path} is too long for the export archive."))?;
+    let mut header = tar_header(&path[split + 1..], size);
+    header[345..345 + split].copy_from_slice(&path.as_bytes()[..split]);
+    header[148..156].fill(b' ');
+    let checksum: u32 = header.iter().map(|byte| u32::from(*byte)).sum();
+    header[148..156].copy_from_slice(format!("{checksum:06o}\0 ").as_bytes());
+    Ok(header)
 }
 
 fn tar_padding(size: u64) -> usize {

@@ -103,7 +103,7 @@ await probe("domain", 23060, async (kit) => {
   kit.pass("A name another Deployment holds", `domain_set on a second app answers "${taken}"`);
 
   // A package carries the name without the token; the destination issues its own.
-  const exported = await owner.call<{ manifest: any; downloads: Record<string, any> }>("package_export", { deploymentId: app.deploymentId });
+  const exported = await owner.call<{ manifest: any; downloads: Record<string, any> }>("project_export", { deploymentId: app.deploymentId });
   assert.equal(exported.manifest.domain, alias);
   assert(!JSON.stringify(exported.manifest).includes(token), "the token stays behind");
   const bytes: Record<string, Uint8Array> = {};
@@ -127,7 +127,7 @@ await probe("domain", 23060, async (kit) => {
   assert.equal(arrived.hostname, alias);
   assert.notEqual(arrived.record!.value, token);
   assert.equal((await page(aliasHost)).status, 404, "an imported name waits for its own token");
-  kit.pass("Package", `package_export's manifest names domain ${alias} and holds no token. Importing it while the origin serves the name answers "${held.slice(0, 90)}…". After domain_clear the alias answers 404, the generated hostname 200, and the import arrives with ${alias} pending under a new token.`);
+  kit.pass("Package", `project_export's manifest names domain ${alias} and holds no token. Importing it while the origin serves the name answers "${held.slice(0, 90)}…". After domain_clear the alias answers 404, the generated hostname 200, and the import arrives with ${alias} pending under a new token.`);
 
   // A new claim meets the old record: the first answer says so instead of refusing a token nobody could know.
   const reclaimed = await set(app.deploymentId, alias);

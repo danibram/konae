@@ -4,8 +4,9 @@
 // refused with the same sentence.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { parseServerActionSource } from "../src/kernel/actions";
-import { encodeBase64 } from "../src/mcp/client";
-import { release } from "./kernel-harness";
+import { checksum } from "../src/mcp/client";
+import type { PackageManifest } from "../src/lib/portable-package";
+import { importPackage, release } from "./kernel-harness";
 import { answerText, rawCall, runtimeClient, startLab, testPort, type Lab } from "./security-review-kernel";
 
 let lab: Lab;
@@ -150,13 +151,24 @@ describe("schema.sql and imported databases", () => {
     expect(again).toContain("too big");
   });
 
-  test("an initial database that carries a trigger is refused, and Studio cannot add one", async () => {
+  test("an imported database that carries a trigger is refused, and Studio cannot add one", async () => {
     const { Database } = await import("bun:sqlite");
     const file = `${lab.root}/trigger.sqlite`;
     const db = new Database(file);
     db.exec(`${SCHEMA} CREATE TRIGGER leak AFTER INSERT ON notes BEGIN UPDATE notes SET body = 'leaked'; END;`);
     db.close();
-    const refused = await publish({ "notes.list": action("SELECT id FROM notes LIMIT 5") }, SCHEMA, { initialDatabase: encodeBase64(new Uint8Array(await Bun.file(file).arrayBuffer())) });
+    const bytes = new Uint8Array(await Bun.file(file).arrayBuffer());
+    const id = `review_sql_${++count}`;
+    const releaseFile = `${lab.root}/trigger-release.json`;
+    await Bun.write(releaseFile, JSON.stringify({
+      project: { id, name: id, slug: id.replaceAll("_", "-"), manifest: { version: 1, visibility: "public" }, files: { "schema.sql": SCHEMA, "actions.json": JSON.stringify({ version: 1, actions: { "notes.list": action("SELECT id FROM notes LIMIT 5") } }) } },
+      visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>SQL</main>" } },
+    }));
+    const manifest = {
+      format: "konae-package", version: 1, packageId: crypto.randomUUID(), createdAt: Date.now(), deploymentId: "elsewhere", projectId: "elsewhere",
+      visibility: "public", publishedRevision: 1, contents: [{ name: "database", size: bytes.length, sha256: await checksum(bytes) }], excluded: [],
+    } as unknown as PackageManifest;
+    const refused = await importPackage(lab.kernel.owner, { manifest, files: { database: file, release: releaseFile } }, id).then(() => "imported", (error) => (error as Error).message);
     expect(refused).toContain("The database holds CREATE TRIGGER leak, and Konae runs no triggers or views. Drop it before importing.");
     const app = await publish({ "notes.list": action("SELECT id FROM notes LIMIT 5") });
     if (typeof app === "string") throw Error(app);

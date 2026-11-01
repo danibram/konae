@@ -747,11 +747,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     try {
       const { createProjectExport } = await import("./lib/export-project");
       const artifact = await buildProjectInBrowser(project);
-      const state = activeDeployment && deployedDatabase
-        ? await deployedDatabase.exportPortableState()
-        : { initialDatabase: await hostRef.current.exportDatabase() };
-      const result = await createProjectExport(project, artifact, state);
+      const result = await createProjectExport(project, artifact, activeDeployment?.id);
       downloadBlob(result.blob, result.filename);
+      // The editor saves between releases, so the published app may run older sources than app/ holds.
+      if (result.sourcesAhead) setOperationError("Exported. The folder's app/ holds sources saved after the last publish; dist/ and data/ are the published app's. Publish, then export again, to make them match.");
     } catch (error) {
       setOperationError(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {

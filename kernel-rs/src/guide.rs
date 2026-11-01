@@ -53,9 +53,7 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("transfer_write", "transfer_status"),
     ("transfer_complete", "transfer_status"),
     ("transfer_cancel", "transfer_status"),
-    ("package_export", "transfer_read"),
     ("project_export", "transfer_read"),
-    ("database_export", "transfer_read"),
     ("token_create", "tokens_list"),
     ("token_revoke", "tokens_list"),
     ("auth_logout", "auth_session"),
@@ -120,7 +118,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 {"need": "Files a person uploads", "use": "miniapp.files", "not": "Base64 in a SQLite column for large bytes"},
                 {"need": "Who may create an app account", "use": "Signup Policy and invitations", "not": "A homemade users table that bypasses Runtime Actor"},
                 {"need": "A short link on the installation's domain", "use": "path address (path_set)", "not": "A custom domain when DNS is not yours"},
-                {"need": "Take the app to another machine", "use": "package export and import", "not": "Copy (that moves the whole installation)"},
+                {"need": "Take the app to another machine", "use": "export and import of the app folder", "not": "Copy (that moves the whole installation)"},
                 {"need": "Debug, or try the next version, on what the published app holds", "use": "konae pull, then dev --reset", "not": "Publishing to find out"},
                 {"need": "See the email, calls, scheduled runs and Signals of a local run", "use": "konae events (--json for an agent), or the page dev serves", "not": "Reading the Kernel's files by hand"}
             ],
@@ -135,7 +133,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "write": "project_create, project_sources_save, project_delete and database_execute changes",
                 "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, and initialSignupPolicy on a first release",
                 "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
-                "export_data": "package_export, project_export and database_export"
+                "export_data": "project_export"
             },
             "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds."
         }),
@@ -194,9 +192,9 @@ pub(super) fn topic(name: &str) -> Result<Value> {
         }),
         "portability" => json!({
             "export": [
-                "package_export { deploymentId } needs export_data. It returns a manifest and one download per component: database, identity, files and, when the app recorded any, usage.",
+                "project_export { deploymentId } needs export_data. It hands over the app folder: folder, a download of konae.json, app/ and dist/, and a manifest with one download per part of data/: database, identity, files and, when the app recorded any, usage. sourcesAhead says the editor saved sources after the release that dist/ holds. Secrets, owners and the installation's records never leave.",
                 "Read each download with transfer_read { transferId, offset } until nextOffset equals size, check its SHA-256, then transfer_cancel it.",
-                "bun run konae -- export --dir <folder> --with-data writes the same package into a self-hosted kit."
+                "bun run konae -- export --dir <folder> --out <new folder> --with-data writes the same app folder on disk."
             ],
             "import": [
                 "On the destination Kernel, project_create with the same projectId, and secret_set for every secret the app's routes sign with, and, when the app offers Google sign-in, google_client_id and google_client_secret with use google. Register the destination's redirect URIs, which sign_in_methods_read lists, in that Google client.",
@@ -298,8 +296,8 @@ mod tests {
             "app_invitations_create needs a credential with manage_users. Run konae login with --manage-users, or use a token from token_create that includes it."
         );
         assert_eq!(
-            missing_permission("package_export", &publisher).unwrap(),
-            "package_export needs a credential with export_data. Run konae login with --export-data, or use a token from token_create that includes it."
+            missing_permission("project_export", &publisher).unwrap(),
+            "project_export needs a credential with export_data. Run konae login with --export-data, or use a token from token_create that includes it."
         );
         assert_eq!(
             missing_permission("release_plan", &owner(&["read"])).unwrap(),
@@ -327,7 +325,7 @@ mod tests {
             .chain(runtime_tools())
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
-        let prefixes = ["platform_", "project_", "projects_", "database_", "storage_", "release_", "signup_policy_", "sign_in_methods_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "notices_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "package_", "mail_", "session_", "domain_", "path_"];
+        let prefixes = ["platform_", "project_", "projects_", "database_", "storage_", "release_", "signup_policy_", "sign_in_methods_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "notices_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "mail_", "session_", "domain_", "path_"];
         for name in TOPICS {
             let text = topic(name).unwrap().to_string();
             for word in text.split(|c: char| !(c.is_ascii_lowercase() || c == '_')) {

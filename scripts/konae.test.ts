@@ -48,6 +48,7 @@ beforeEach(async () => {
   for (const name of Object.keys(answers)) delete answers[name];
   uploaded = "";
   directory = await mkdtemp(path.join(tmpdir(), "konae-cli-"));
+  await mkdir(path.join(directory, "app"));
 });
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
@@ -63,7 +64,7 @@ function cli(...args: string[]) {
 
 describe("konae CLI", () => {
   test.each(["release_plan", "release_apply"])("a failed %s releases its upload so later publishes can proceed", async (step) => {
-    await writeFile(path.join(directory, "app.js"), "console.log('hi');");
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
     failing.add(step);
     const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
 
@@ -76,7 +77,7 @@ describe("konae CLI", () => {
   });
 
   test("cleanup failure preserves the publishing error", async () => {
-    await writeFile(path.join(directory, "app.js"), "console.log('hi');");
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
     failing.add("release_plan");
     failing.add("transfer_cancel");
     const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
@@ -85,8 +86,8 @@ describe("konae CLI", () => {
   });
 
   test("a publish whose upload cannot be released afterwards still reports the release", async () => {
-    await writeFile(path.join(directory, "app.js"), "console.log('hi');");
-    await writeFile(path.join(directory, "index.html"), "<main id=app></main>");
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    await writeFile(path.join(directory, "app", "index.html"), "<main id=app></main>");
     failing.add("transfer_cancel");
     const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
 
@@ -96,7 +97,7 @@ describe("konae CLI", () => {
     expect(calls.map((call) => call.name)).toContain("transfer_cancel");
     // No visibility in the manifest publishes private, the same default as the exported deploy script.
     expect(JSON.parse(uploaded).visibility).toBe("private");
-    const html = JSON.parse(await readFile(path.join(directory, ".konae/artifact.json"), "utf8")).files["index.html"] as string;
+    const html = await readFile(path.join(directory, "dist/index.html"), "utf8");
     expect(html).toContain("<script data-konae-runtime>");
   });
 
@@ -174,15 +175,15 @@ describe("konae CLI", () => {
   });
 
   test("init refuses a directory with files before it creates a project", async () => {
-    await writeFile(path.join(directory, "app.js"), "mine");
-    const run = cli("init", "--dir", directory, "--url", origin());
+    await writeFile(path.join(directory, "app", "app.js"), "mine");
+    const run = cli("init", "--dir", directory);
     expect(await run.exited).toBe(1);
-    expect(await new Response(run.stderr).text()).toContain("Refusing to overwrite app.js");
+    expect(await new Response(run.stderr).text()).toContain("Refusing to overwrite app");
     expect(calls.map((call) => call.name)).not.toContain("project_create");
   });
 
   test("a first release sends konae.json's signup policy and keeps it out of the project manifest", async () => {
-    await writeFile(path.join(directory, "app.js"), "console.log('hi');");
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
     const manifest = { visibility: "private", signupPolicy: { mode: "allowlist", allowlist: ["@example.test"] } };
     const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest } };
     const warnings: string[] = [];
@@ -198,7 +199,7 @@ describe("konae CLI", () => {
   });
 
   test("a republish sends no policy and warns, without failing, when the app has another", async () => {
-    await writeFile(path.join(directory, "app.js"), "console.log('hi');");
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
     answers.project_inspect = { deployment: { id: "dep_1" } };
     answers.signup_policy_read = { deploymentId: "dep_1", mode: "closed", allowlist: [] };
     const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: { signupPolicy: { mode: "invitation" } } } };
@@ -233,20 +234,22 @@ describe("konae CLI", () => {
     expect(manifestSignupPolicy({ signupPolicy: { mode: "closed" } })).toEqual({ mode: "closed", allowlist: [] });
     expect(() => manifestSignupPolicy({ signupPolicy: { mode: "members" } })).toThrow('signupPolicy.mode must be "open", "invitation", "closed" or "allowlist"');
     expect(() => manifestSignupPolicy({ signupPolicy: { mode: "allowlist", allowlist: "@example.test" } })).toThrow("must be a list of emails and @domains");
-    await writeFile(path.join(directory, "app.js"), "console.log('hi');");
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
     const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: { signupPolicy: "invitation" } } };
     await expect(publishLocal(directory, config, "token")).rejects.toThrow("signupPolicy.mode");
     expect(calls).toEqual([]);
   });
 
   test("init writes a private app that admits the people its owner invites", async () => {
-    const run = cli("init", "--dir", directory, "--url", origin());
+    await rm(path.join(directory, "app"), { recursive: true });
+    const run = cli("init", "--dir", directory);
     expect(await run.exited).toBe(0);
     const written = JSON.parse(await readFile(path.join(directory, "konae.json"), "utf8"));
-    expect(written.project.manifest).toMatchObject({ visibility: "private", signupPolicy: { mode: "invitation" } });
+    expect(written).toMatchObject({ visibility: "private", signupPolicy: { mode: "invitation" }, signInMethods: ["password"] });
   });
 
-  test("init needs no Kernel and no credential, and names no installation unless --url does", async () => {
+  test("init writes the app folder and needs no Kernel and no credential", async () => {
+    await rm(path.join(directory, "app"), { recursive: true });
     const run = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "konae.ts"), "init", "--dir", directory, "--name", "Field Notes!"], {
       env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))) as Record<string, string>, stdout: "pipe", stderr: "pipe",
     });
@@ -254,28 +257,34 @@ describe("konae CLI", () => {
     expect(calls).toEqual([]);
     const written = JSON.parse(await readFile(path.join(directory, "konae.json"), "utf8"));
     expect(written.url).toBeUndefined();
-    expect(written.project).toMatchObject({ name: "Field Notes!", slug: "field-notes" });
-    expect(written.project.id).toMatch(/^app_[0-9a-f-]{36}$/);
-    for (const file of ["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]) expect((await readFile(path.join(directory, file), "utf8")).length).toBeGreaterThan(0);
+    expect(written).toMatchObject({ name: "Field Notes!", slug: "field-notes", kernel: "0.1.0" });
+    expect(written.id).toMatch(/^app_[0-9a-f-]{36}$/);
+    for (const file of ["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]) expect((await readFile(path.join(directory, "app", file), "utf8")).length).toBeGreaterThan(0);
+    for (const file of ["AGENTS.md", "action-contract.md", "compose.yaml", ".env.example", "package.json", "scripts/build.mjs", "scripts/static-artifact.mjs", "scripts/runtime.js"]) {
+      expect((await readFile(path.join(directory, file), "utf8")).length).toBeGreaterThan(0);
+    }
+    expect(await readFile(path.join(directory, ".gitignore"), "utf8")).toContain("data/");
   });
 
   test("init takes the editor's templates by id and refuses another before it writes", async () => {
     expect([...INIT_TEMPLATES]).toEqual(templateChoices.map((choice) => choice.id));
     // The file init and project_create both read is what the editor's templates render to.
     expect(await readFile(path.join(import.meta.dir, "..", PROJECT_TEMPLATES_FILE), "utf8"), "Run bun run templates:render.").toBe(renderProjectTemplates());
+    await rm(path.join(directory, "app"), { recursive: true });
     const run = cli("init", "--dir", directory, "--template", "blog");
     expect(await run.exited).toBe(1);
     expect(await new Response(run.stderr).text()).toContain("Unknown template blog. Choose one of: tasks, notes, members");
     await expect(readFile(path.join(directory, "konae.json"), "utf8")).rejects.toThrow();
     // The shared list is for anyone with the link, so it is born public.
     expect(await cli("init", "--dir", directory, "--template", "tasks").exited).toBe(0);
-    expect(JSON.parse(await readFile(path.join(directory, "konae.json"), "utf8")).project.manifest.visibility).toBe("public");
+    expect(JSON.parse(await readFile(path.join(directory, "konae.json"), "utf8")).visibility).toBe("public");
   });
 
-  test("a publish with no installation in konae.json goes to the one login saved, and keeps it", async () => {
-    await writeFile(path.join(directory, "app.js"), "console.log('hi');");
-    const config = { project: { id: "app_test", name: "Test", slug: "test", manifest: { visibility: "private" } } };
-    await writeFile(path.join(directory, "konae.json"), JSON.stringify(config));
+  test("a publish goes to --url or the installation login saved", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    const settings = { id: "app_test", name: "Test", slug: "test", visibility: "private", signupPolicy: { mode: "invitation", allowlist: [] }, signInMethods: ["password"], kernel: "0.1.0", manifest: { version: 1 } };
+    const config = { project: { id: "app_test", name: "Test", slug: "test", manifest: { version: 1, visibility: "private" } } };
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify(settings));
     await expect(publishLocal(directory, config, "token")).rejects.toThrow(NO_INSTALLATION);
     const refused = cli("publish", "--dir", directory);
     expect(await refused.exited).toBe(1);
@@ -286,11 +295,11 @@ describe("konae CLI", () => {
     await writeFile(path.join(directory, ".konae/credentials.json"), JSON.stringify({ url: origin(), token: "token" }));
     expect(await cli("publish", "--dir", directory).exited).toBe(0);
     expect(calls.map((call) => call.name)).toContain("release_apply");
-    expect(JSON.parse(await readFile(path.join(directory, "konae.json"), "utf8"))).toEqual({ url: origin(), ...config });
+    expect(JSON.parse(await readFile(path.join(directory, "konae.json"), "utf8"))).toEqual(settings);
   });
 
   test("a pulled copy goes with a first release as its package, and never with a later one", async () => {
-    await writeFile(path.join(directory, "app.js"), "console.log('hi');");
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
     const bytes = new TextEncoder().encode("database bytes");
     const sha256 = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
     const manifest = { format: "konae-package", version: 1, packageId: "pkg_1", createdAt: 1, deploymentId: "dep_origin", projectId: "app_test", visibility: "public", publishedRevision: 1, contents: [{ name: "database", size: bytes.length, sha256 }], excluded: [] };
@@ -316,7 +325,7 @@ describe("konae CLI", () => {
   });
 
   test("sql and events reach the Development Kernel unless --prod, and say so when none runs", async () => {
-    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ project: { id: "app_test", name: "Test", slug: "test", manifest: {} } }));
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_test", name: "Test", slug: "test", visibility: "private", signupPolicy: { mode: "invitation" }, signInMethods: ["password"], kernel: "0.1.0", manifest: {} }));
     for (const command of [["sql", "SELECT 1"], ["events"]]) {
       const run = cli(command[0], "--dir", directory, ...command.slice(1));
       expect(await run.exited).toBe(1);

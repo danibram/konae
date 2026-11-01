@@ -587,7 +587,7 @@ pub(crate) fn admin_tools() -> Vec<Value> {
 
 /// Answers `usage_read` and `signals_read` for a Deployment the caller may read.
 pub(crate) async fn admin_call(data_root: &Path, deployment: &Deployment, name: &str, a: &Value) -> Result<Value> {
-    let path = folder(data_root, &deployment.id).join(USAGE_DATABASE);
+    let path = crate::layout::usage(data_root, &deployment.id);
     let arguments = a.clone();
     let deployment = deployment.clone();
     let data_root = data_root.to_path_buf();
@@ -668,7 +668,7 @@ pub(crate) fn read_usage(path: &Path, from: &str, to: &str) -> Result<Value> {
 
 /// Reads only Kernel aggregates and published declarations, never application rows.
 pub(crate) fn read_summary(data_root: &Path, deployment: &Deployment, from: &str, to: &str, flushed: bool) -> Result<Value> {
-    let path = folder(data_root, &deployment.id).join(USAGE_DATABASE);
+    let path = crate::layout::usage(data_root, &deployment.id);
     let usage = read_usage(&path, from, to)?;
     let mut metrics = Vec::new();
     let mut started_at: Option<i64> = None;

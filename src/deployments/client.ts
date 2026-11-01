@@ -3,18 +3,9 @@ import type { DatabaseAdminHost, DatabaseBackup, DatabasePage, DatabaseRunResult
 import type { SqlValue } from "sql.js";
 import type { DeploymentRecord, DeploymentVisibility } from "./manifest";
 import type { BuildArtifact } from "../runtime/artifact";
-import { platformMcp, decodeBase64, type Transfer } from "../mcp/client";
+import { platformMcp, type Transfer } from "../mcp/client";
 
 export type DeploymentReceipt = DeploymentRecord & { accessCode?: string };
-
-export type PortableProjectState = {
-  visibility?: DeploymentVisibility;
-  domain?: string;
-  initialDatabase: Uint8Array;
-  initialIdentity?: Uint8Array;
-  initialFiles?: Uint8Array;
-  initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">;
-};
 
 /**
  * Publishes the project. `initialSignupPolicy` goes only with a first release:
@@ -230,23 +221,14 @@ export class HostedDatabaseClient implements DatabaseAdminHost {
     return this.request<DatabaseBackup>({ operation: "restore-backup", backupId });
   }
 
+  /** The database as the one export carries it: project_export, then only its database download. */
   async exportDatabase() {
-    const transfer = await platformMcp.call<Transfer>("database_export", { deploymentId: this.deploymentId });
-    return platformMcp.download(transfer);
-  }
-
-  async exportPortableState(): Promise<PortableProjectState> {
-    const transfer = await platformMcp.call<Transfer>("project_export", { deploymentId: this.deploymentId });
-    const body = JSON.parse(new TextDecoder().decode(await platformMcp.download(transfer))) as { result: { initialDatabase: string; initialIdentity?: string; initialFiles?: string; initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">; visibility?: DeploymentVisibility; domain?: string } };
-    if (!body.result?.initialDatabase) throw new Error("Portable export is missing its database.");
-    return {
-      ...(body.result.visibility ? { visibility: body.result.visibility } : {}),
-      ...(body.result.domain ? { domain: body.result.domain } : {}),
-      initialDatabase: decodeBase64(body.result.initialDatabase),
-      ...(body.result.initialIdentity ? { initialIdentity: decodeBase64(body.result.initialIdentity) } : {}),
-      ...(body.result.initialFiles ? { initialFiles: decodeBase64(body.result.initialFiles) } : {}),
-      ...(body.result.initialSignupPolicy ? { initialSignupPolicy: body.result.initialSignupPolicy } : {}),
-    };
+    const exported = await platformMcp.call<{ downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { deploymentId: this.deploymentId });
+    try {
+      return await platformMcp.download(exported.downloads.database);
+    } finally {
+      for (const transfer of [exported.folder, ...Object.values(exported.downloads)]) await platformMcp.cancel(transfer.transferId).catch(() => {});
+    }
   }
 
   private async request<T = unknown>(payload: Record<string, unknown>): Promise<T> {

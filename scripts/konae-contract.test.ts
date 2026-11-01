@@ -11,8 +11,8 @@ describe("konae contract", () => {
   test("writes the contract, its schema and Markdown beside konae.json, and never uploads them", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "konae-contract-"));
     try {
-      await cp(path.join(repo, "examples/product-fit/feed"), root, { recursive: true });
-      await writeFile(path.join(root, "konae.json"), JSON.stringify({ url: "http://localhost:4173", project: { id: "app_feed", name: "Status feed", slug: "feed", manifest: { version: 1 } } }));
+      await cp(path.join(repo, "examples/product-fit/feed"), path.join(root, "app"), { recursive: true });
+      await writeFile(path.join(root, "konae.json"), JSON.stringify({ id: "app_feed", name: "Status feed", slug: "feed", visibility: "private", signupPolicy: { mode: "invitation", allowlist: [] }, signInMethods: ["password"], kernel: "0.1.0", manifest: { version: 1 } }));
       const run = Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), "contract", "--dir", root], { stdout: "pipe", stderr: "pipe" });
       const [code, output] = await Promise.all([run.exited, new Response(run.stdout).text()]);
       expect(code).toBe(0);
@@ -36,7 +36,7 @@ describe("konae contract", () => {
       const run = Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), "contract", "--dir", root], { stdout: "pipe", stderr: "pipe" });
       const [code, error] = await Promise.all([run.exited, new Response(run.stderr).text()]);
       expect(code).toBe(1);
-      expect(error).toContain(`No actions.json in ${root}.`);
+      expect(error).toContain(`No actions.json in ${path.join(root, "app")}.`);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

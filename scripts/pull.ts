@@ -1,14 +1,13 @@
-// `konae pull`: a copy of a Deployment's live package kept under
-// .konae/pull, which `konae dev` installs on a Development Kernel
-// that holds no data yet. The copy travels one way. Nothing here writes to
-// the Deployment it came from.
+// `konae pull` exports the published app's data into .konae/pull, and
+// `konae dev --reset` imports it into a Development Kernel that holds no data
+// yet. The data travels one way. Nothing here writes to the app it came from.
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { McpClient, Transfer } from "../src/mcp/client";
 import { checkPackageManifest, packageComponentFiles, type PackageManifest } from "../src/lib/portable-package";
 import { downloadToFile, uploadFromFile } from "./package-files";
 
-/** Where the copy sits in a project folder. .konae is already kept out of Git. */
+/** Where the exported data sits in the app folder. .konae is already kept out of Git. */
 export const PULL_DIRECTORY = ".konae/pull";
 const RECORD = "pull.json";
 
@@ -18,14 +17,15 @@ export type Pulled = { manifest: PackageManifest; from: string; at: number };
 export const NEEDS_EXPORT_DATA = "Downloading live data needs a credential with the export_data permission. Run login with --export-data, or create a token with export_data for this project.";
 
 /**
- * Captures the Deployment with package_export and writes each component into
- * `directory` under its kit file name, checked against the manifest's size
- * and SHA-256. Every download transfer is released, whether it was read or not.
+ * Exports the app with project_export and writes each data component into
+ * `directory` under its file name, checked against the manifest's size and
+ * SHA-256. Every download transfer is released, the folder download too,
+ * whether it was read or not.
  */
 export async function downloadPackage(client: McpClient, deploymentId: string, directory: string) {
-  let exported: { manifest: unknown; downloads: Record<string, Transfer> };
+  let exported: { manifest: unknown; downloads: Record<string, Transfer>; folder?: Transfer };
   try {
-    exported = await client.call("package_export", { deploymentId });
+    exported = await client.call("project_export", { deploymentId });
   } catch (error) {
     if (error instanceof Error && error.message.includes("Unknown tool")) throw Error(NEEDS_EXPORT_DATA);
     throw error;
@@ -42,13 +42,13 @@ export async function downloadPackage(client: McpClient, deploymentId: string, d
     }
     return { manifest, files };
   } finally {
-    for (const transfer of Object.values(exported.downloads)) await client.cancel(transfer.transferId).catch(() => {});
+    for (const transfer of [...Object.values(exported.downloads), ...(exported.folder ? [exported.folder] : [])]) await client.cancel(transfer.transferId).catch(() => {});
   }
 }
 
 /**
- * Downloads the project's live package into .konae/pull. The download
- * lands in a folder beside it first, so a pull that fails keeps the copy an
+ * Exports the published app's data into .konae/pull. The download
+ * lands in a folder beside it first, so a pull that fails keeps the data an
  * earlier pull left.
  */
 export async function pullLocal(root: string, client: McpClient, from: string, projectId: string): Promise<Pulled> {
@@ -70,7 +70,7 @@ export async function pullLocal(root: string, client: McpClient, from: string, p
   }
 }
 
-/** The copy a pull left in the folder, or undefined when there is none. */
+/** The data a pull exported into the folder, or undefined when there is none. */
 export async function readPulled(root: string): Promise<Pulled | undefined> {
   let text: string;
   try { text = await readFile(path.join(root, PULL_DIRECTORY, RECORD), "utf8"); }
@@ -79,7 +79,7 @@ export async function readPulled(root: string): Promise<Pulled | undefined> {
   return { ...pulled, manifest: checkPackageManifest(pulled.manifest) };
 }
 
-/** Uploads each component of the pulled copy and returns the transfer IDs a release names in `initialPackage.components`. */
+/** Uploads each component of the exported data and returns the transfer IDs a release names in `initialPackage.components`. */
 export async function uploadPulled(client: McpClient, root: string, pulled: Pulled, projectId: string) {
   const components: Record<string, string> = {};
   try {
@@ -94,14 +94,14 @@ export async function uploadPulled(client: McpClient, root: string, pulled: Pull
 }
 
 /**
- * Installs the pulled copy as a project's first Deployment under a Capsule
+ * Imports the exported data as a project's first Deployment under a Capsule
  * with no actions and one page. `dev` falls back to it when the folder's own
- * actions need a schema the copy does not have yet, so the copy is there to
+ * actions need a schema the data does not have yet, so the data is there to
  * migrate. The caller holds a project without a Deployment.
  */
 export async function installPulledAlone(client: McpClient, root: string, pulled: Pulled, project: { id: string; name: string; slug: string; manifest: Record<string, unknown> }) {
   const components = await uploadPulled(client, root, pulled, project.id);
-  const page = "<!doctype html><title>Waiting for a migration</title><main><h1>Waiting for a migration</h1><p>This Development Kernel holds the pulled copy. The app's actions need a newer schema than the copy has. Apply the change with konae sql, then save a file.</p></main>";
+  const page = "<!doctype html><title>Waiting for a migration</title><main><h1>Waiting for a migration</h1><p>This Development Kernel holds the imported data. The app's actions need a newer schema than the data has. Apply the change with konae sql, then save a file.</p></main>";
   const payload = {
     project: { ...project, files: { "actions.json": '{"version":1,"actions":{}}', "schema.sql": "" } },
     visibility: pulled.manifest.visibility,
@@ -118,9 +118,9 @@ export async function installPulledAlone(client: McpClient, root: string, pulled
   }
 }
 
-/** One phrase for the copy: where it came from, when, and each component with its size. */
+/** One phrase for the exported data: where it came from, when, and each component with its size. */
 export function describePulled(pulled: Pulled) {
   const size = (bytes: number) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
   const parts = pulled.manifest.contents.map((content) => `${content.name} ${size(content.size)}`).join(", ");
-  return `the copy of ${new URL(pulled.from).host} pulled ${new Date(pulled.at).toISOString().replace(/\.\d+Z$/, "Z")} (${parts})`;
+  return `${new URL(pulled.from).host} exported ${new Date(pulled.at).toISOString().replace(/\.\d+Z$/, "Z")} (${parts})`;
 }

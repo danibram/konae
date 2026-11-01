@@ -157,7 +157,7 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
     "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae-kernel creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
     "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data.",
     "permissions": {
-      "export_data": "package_export, project_export and database_export",
+      "export_data": "project_export",
       "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
       "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, and initialSignupPolicy on a first release",
       "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read",
@@ -283,7 +283,7 @@ content-type: application/json
 
 <!-- walkthrough:init -->
 ```sh
-bun run konae -- init --dir /tmp/orders --name Orders --url http://localhost:4173
+bun run konae -- init --dir /tmp/orders --name Orders
 ```
 
 ```text
@@ -296,31 +296,40 @@ cat /tmp/orders/konae.json
 
 ```json
 {
-  "url": "http://localhost:4173",
-  "project": {
-    "id": "<project id>",
-    "name": "Orders",
-    "slug": "orders",
-    "manifest": {
-      "version": 1,
-      "visibility": "private",
-      "signupPolicy": {
-        "mode": "invitation"
-      }
-    }
+  "id": "<project id>",
+  "name": "Orders",
+  "slug": "orders",
+  "visibility": "private",
+  "signupPolicy": {
+    "mode": "invitation",
+    "allowlist": []
+  },
+  "signInMethods": [
+    "password"
+  ],
+  "kernel": "0.1.0",
+  "manifest": {
+    "version": 1
   }
 }
 ```
 
 ```sh
-ls /tmp/orders
+ls /tmp/orders /tmp/orders/app
 ```
 
 ```text
+AGENTS.md
+action-contract.md
+app
+compose.yaml
+konae.json
+package.json
+scripts
+
 actions.json
 app.js
 index.html
-konae.json
 schema.sql
 styles.css
 ```
@@ -355,7 +364,7 @@ The app keeps orders that a shop posts to a signed webhook. Members sign in, see
 
 <!-- walkthrough:files -->
 ```sh
-cat /tmp/orders/index.html
+cat /tmp/orders/app/index.html
 ```
 
 ```html
@@ -368,7 +377,7 @@ cat /tmp/orders/index.html
 ```
 
 ```sh
-cat /tmp/orders/pages/about.html
+cat /tmp/orders/app/pages/about.html
 ```
 
 ```html
@@ -380,7 +389,7 @@ cat /tmp/orders/pages/about.html
 ```
 
 ```sh
-cat /tmp/orders/styles.css
+cat /tmp/orders/app/styles.css
 ```
 
 ```css
@@ -388,7 +397,7 @@ body { font: 16px system-ui; max-width: 48rem; margin: 3rem auto; padding: 1rem;
 ```
 
 ```sh
-cat /tmp/orders/app.js
+cat /tmp/orders/app/app.js
 ```
 
 ```js
@@ -410,7 +419,7 @@ await show();
 ```
 
 ```sh
-cat /tmp/orders/schema.sql
+cat /tmp/orders/app/schema.sql
 ```
 
 ```sql
@@ -424,7 +433,7 @@ CREATE TABLE IF NOT EXISTS orders(
 ```
 
 ```sh
-cat /tmp/orders/actions.json
+cat /tmp/orders/app/actions.json
 ```
 
 ```json
@@ -1212,7 +1221,7 @@ Exporting needs `export_data`, which OAuth does not grant:
 <!-- walkthrough:export-refused -->
 ```json
 {
-  "name": "package_export",
+  "name": "project_export",
   "arguments": {
     "deploymentId": "<project id>"
   }
@@ -1221,7 +1230,7 @@ Exporting needs `export_data`, which OAuth does not grant:
 
 ```json
 {
-  "error": "Unknown tool or insufficient permission. package_export needs a credential with export_data. Run konae login with --export-data, or use a token from token_create that includes it."
+  "error": "Unknown tool or insufficient permission. project_export needs a credential with export_data. Run konae login with --export-data, or use a token from token_create that includes it."
 }
 ```
 <!-- /walkthrough:export-refused -->
@@ -1231,7 +1240,7 @@ Exporting needs `export_data`, which OAuth does not grant:
 <!-- walkthrough:export -->
 ```json
 {
-  "name": "package_export",
+  "name": "project_export",
   "arguments": {
     "deploymentId": "<project id>"
   }
@@ -1270,6 +1279,13 @@ Exporting needs `export_data`, which OAuth does not grant:
         "size": 57344,
         "transferId": "<usage download>"
       }
+    },
+    "folder": {
+      "chunkBytes": 65536,
+      "expiresAt": <time ms>,
+      "sha256": "<folder sha256>",
+      "size": 19968,
+      "transferId": "<folder download>"
     },
     "manifest": {
       "artifactVersion": "<artifact version>",
@@ -1318,7 +1334,8 @@ Exporting needs `export_data`, which OAuth does not grant:
       "sourcesRevision": null,
       "version": 1,
       "visibility": "private"
-    }
+    },
+    "sourcesAhead": false
   }
 }
 ```
@@ -1481,7 +1498,7 @@ bun run konae -- build --dir /tmp/orders
 ```
 
 ```text
-Built .konae/artifact.json
+Built /tmp/orders/dist
 ```
 
 ```json
@@ -1497,9 +1514,9 @@ Built .konae/artifact.json
     "files": "<path: text of every source file>"
   },
   "visibility": "private",
-  "artifact": "<the JSON in .konae/artifact.json>",
+  "artifact": "<version 1, entrypoint index.html, and the text of every file in dist/>",
   "initialPackage": {
-    "manifest": "<the manifest package_export returned>",
+    "manifest": "<the manifest project_export returned>",
     "components": {
       "database": "<database upload>",
       "files": "<files upload>",

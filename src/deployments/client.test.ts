@@ -9,46 +9,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-describe("HostedDatabaseClient portable export", () => {
-  test("exports portable state through authenticated MCP and verifies its checksum", async () => {
-    const bytes = new TextEncoder().encode(JSON.stringify({ result: { initialDatabase: "AAH/", initialIdentity: "AQID", initialFiles: "BAUG", initialSignupPolicy: { mode: "closed", allowlist: [] }, visibility: "private" } }));
-    const sha256 = await checksum(bytes);
-    const names: string[] = [];
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toBe("/mcp");
-      expect(init?.credentials).toBe("same-origin");
-      const request = JSON.parse(String(init?.body));
-      if (request.method.startsWith("notifications/")) return new Response(null, { status: 202 });
-      let result: unknown;
-      if (request.method === "initialize") result = { protocolVersion: "2025-11-25" };
-      else {
-        const { name, arguments: args } = request.params;
-        names.push(name);
-        let value: unknown = {};
-        if (name === "project_export") { expect(args.deploymentId).toBe("deploy/a"); value = { transferId: "export", size: bytes.length, sha256 }; }
-        if (name === "transfer_read") value = { offset: 0, nextOffset: bytes.length, data: encodeBase64(bytes) };
-        result = { structuredContent: { result: value }, content: [], isError: false };
-      }
-      return Response.json({ jsonrpc: "2.0", id: request.id, result });
-    }) as typeof fetch;
-    const state = await new HostedDatabaseClient("deploy/a").exportPortableState();
-    expect(names).toEqual(["project_export", "transfer_read", "transfer_cancel"]);
-    expect(state.initialDatabase).toEqual(Uint8Array.from([0, 1, 255]));
-    expect(state.initialIdentity).toEqual(Uint8Array.from([1, 2, 3]));
-    expect(state.initialFiles).toEqual(Uint8Array.from([4, 5, 6]));
-    expect(state.initialSignupPolicy).toEqual({ mode: "closed", allowlist: [] });
-    expect(state.visibility).toBe("private");
-  });
-
-  test("surfaces an MCP export error without returning partial state", async () => {
-    globalThis.fetch = (async (_input, init) => {
-      const request = JSON.parse(String(init?.body));
-      return Response.json({ jsonrpc: "2.0", id: request.id, result: { isError: true, content: [{ type: "text", text: "Export unavailable." }] } });
-    }) as typeof fetch;
-    await expect(new HostedDatabaseClient("deploy_1").exportPortableState()).rejects.toThrow("Export unavailable.");
-  });
-});
-
 describe("signup policy", () => {
   test("reads and saves the policy through the owner MCP tools", async () => {
     const calls: { name: string; args: Record<string, unknown> }[] = [];

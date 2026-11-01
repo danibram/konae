@@ -434,12 +434,12 @@ try {
   check("Recovery", "The emailed link reset Cy's password; her earlier session answers 401, the old password fails and the link works once.");
 
   // Export the app as a package from the origin Kernel.
-  const exported = await origin.owner.call<{ manifest: any; downloads: Record<string, Transfer> }>("package_export", { deploymentId: receiptA.id });
+  const exported = await origin.owner.call<{ manifest: any; downloads: Record<string, Transfer> }>("project_export", { deploymentId: receiptA.id });
   assert.equal(exported.manifest.visibility, "private");
   assert.deepEqual(exported.manifest.signupPolicy, { mode: "invitation", allowlist: [] });
   const componentBytes: Record<string, Uint8Array> = {};
   for (const content of exported.manifest.contents) componentBytes[content.name] = await origin.owner.download(exported.downloads[content.name]);
-  check("Export", `package_export wrote ${exported.manifest.contents.map((c: any) => `${c.name} ${c.size} B`).join(", ")}; excluded: ${exported.manifest.excluded.join("; ")}.`);
+  check("Export", `project_export wrote ${exported.manifest.contents.map((c: any) => `${c.name} ${c.size} B`).join(", ")}; excluded: ${exported.manifest.excluded.join("; ")}.`);
 
   // Import into a second Kernel, under a second owner who never saw the origin.
   await destination.owner.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });

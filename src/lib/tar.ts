@@ -84,3 +84,23 @@ function concatenate(chunks: readonly Uint8Array[]): Uint8Array {
   }
   return result;
 }
+
+/** The regular files of a ustar archive, with the prefix field joined to each name. */
+export function readTar(archive: Uint8Array): { path: string; contents: Uint8Array }[] {
+  const decoder = new TextDecoder();
+  const field = (block: Uint8Array, offset: number, width: number) => decoder.decode(block.subarray(offset, offset + width)).replace(/\0.*$/s, "");
+  const entries: { path: string; contents: Uint8Array }[] = [];
+  let offset = 0;
+  while (offset + blockSize <= archive.length) {
+    const header = archive.subarray(offset, offset + blockSize);
+    if (header.every((byte) => byte === 0)) break;
+    const name = field(header, 0, 100);
+    const prefix = field(header, 345, 155);
+    const size = Number.parseInt(field(header, 124, 12).trim() || "0", 8);
+    const start = offset + blockSize;
+    if (!Number.isSafeInteger(size) || start + size > archive.length) throw new Error("The archive is cut short.");
+    if (header[156] === 48 || header[156] === 0) entries.push({ path: normalizeArchivePath(prefix ? `${prefix}/${name}` : name), contents: archive.slice(start, start + size) });
+    offset = start + size + tarPadding(size);
+  }
+  return entries;
+}

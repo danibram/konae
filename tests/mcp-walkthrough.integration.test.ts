@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient, encodeBase64, type Transfer } from "../src/mcp/client";
@@ -253,16 +253,16 @@ describe("the MCP walkthrough", () => {
   test("4. init", async () => {
     r.step("init");
     const config = async () => JSON.parse(await readFile(path.join(app(), "konae.json"), "utf8"));
-    const init = await cli(["init", "--dir", app(), "--name", "Orders", "--url", a.url]);
+    const init = await cli(["init", "--dir", app(), "--name", "Orders"]);
     expect(init.code).toBe(0);
-    s.projectId = (await config()).project.id;
+    s.projectId = (await config()).id;
     r.name(s.projectId, "<project id>");
-    r.add("sh", shownCommand(["init", "--dir", app(), "--name", "Orders", "--url", a.url]));
+    r.add("sh", shownCommand(["init", "--dir", app(), "--name", "Orders"]));
     r.add("text", init.output);
     r.add("sh", "cat /tmp/orders/konae.json");
     r.add("json", JSON.stringify(await config(), null, 2));
-    r.add("sh", "ls /tmp/orders");
-    r.add("text", (await readdir(app())).filter((name) => !name.startsWith(".")).sort().join("\n"));
+    r.add("sh", "ls /tmp/orders /tmp/orders/app");
+    r.add("text", [...(await readdir(app())).filter((name) => !name.startsWith(".")).sort(), "", ...(await readdir(path.join(app(), "app"))).sort()].join("\n"));
   }, 60_000);
 
   test("5. dev", async () => {
@@ -295,9 +295,9 @@ describe("the MCP walkthrough", () => {
   test("6. the app's files, and its Action Contract", async () => {
     r.step("files");
     for (const [name, text] of Object.entries(APP_FILES)) {
-      await mkdir(path.dirname(path.join(app(), name)), { recursive: true });
-      await writeFile(path.join(app(), name), text);
-      r.add("sh", `cat /tmp/orders/${name}`);
+      await mkdir(path.dirname(path.join(app(), "app", name)), { recursive: true });
+      await writeFile(path.join(app(), "app", name), text);
+      r.add("sh", `cat /tmp/orders/app/${name}`);
       r.add(path.extname(name).slice(1), text);
     }
     r.step("contract");
@@ -420,13 +420,15 @@ describe("the MCP walkthrough", () => {
 
   test("13. export the package, import it on a second Kernel", async () => {
     r.step("export-refused");
-    const refused = await tool("package_export", { deploymentId: s.deploymentId }, { token: s.oauth });
-    expect(refused.error).toBe("Unknown tool or insufficient permission. package_export needs a credential with export_data. Run konae login with --export-data, or use a token from token_create that includes it.");
+    const refused = await tool("project_export", { deploymentId: s.deploymentId }, { token: s.oauth });
+    expect(refused.error).toBe("Unknown tool or insufficient permission. project_export needs a credential with export_data. Run konae login with --export-data, or use a token from token_create that includes it.");
 
     r.step("export");
-    const exported = await tool("package_export", { deploymentId: s.deploymentId });
-    const result = exported.result as { manifest: any; downloads: Record<string, Transfer> };
+    const exported = await tool("project_export", { deploymentId: s.deploymentId });
+    const result = exported.result as { manifest: any; downloads: Record<string, Transfer>; folder: Transfer };
     r.name(result.manifest.packageId, "<package id>");
+    r.name(result.folder.transferId, "<folder download>");
+    r.name(result.folder.sha256, "<folder sha256>");
     r.name(result.manifest.artifactVersion, "<artifact version>");
     for (const [name, transfer] of Object.entries(result.downloads)) r.name(transfer.transferId, `<${name} download>`);
     const first = await callTool(`${a.url}/mcp`, { authorization: `Bearer ${s.token}` }, "transfer_read", { transferId: result.downloads.identity.transferId, offset: 0 });
@@ -435,6 +437,7 @@ describe("the MCP walkthrough", () => {
     const source = new McpClient(`${a.url}/mcp`, { token: s.token });
     const components: Record<string, Uint8Array> = {};
     for (const [name, transfer] of Object.entries(result.downloads)) components[name] = await source.download(transfer);
+    await source.cancel(result.folder.transferId).catch(() => {});
 
     r.step("second-kernel");
     b = await startKernel(ports.b, path.join(root, "kernel-b"), setupKeyB);
@@ -471,9 +474,15 @@ describe("the MCP walkthrough", () => {
 
     r.step("import-release");
     expect((await run(["build", "--dir", app()])).code).toBe(0);
-    const artifact = JSON.parse(await readFile(path.join(app(), ".konae/artifact.json"), "utf8"));
+    // The release carries the built files of dist/, each as text.
+    const dist = path.join(app(), "dist");
+    const builtFiles: Record<string, string> = {};
+    for (const name of await readdir(dist, { recursive: true })) {
+      if ((await stat(path.join(dist, name))).isFile()) builtFiles[name.split(path.sep).join("/")] = await readFile(path.join(dist, name), "utf8");
+    }
+    const artifact = { version: 1, entrypoint: "index.html", files: builtFiles };
     const payload = { project: { id: s.projectId, name: "Orders", slug: "orders", manifest, files: APP_FILES }, visibility: "private", artifact, initialPackage: { manifest: result.manifest, components: uploads } };
-    r.add("json", JSON.stringify({ ...payload, project: { ...payload.project, files: "<path: text of every source file>" }, artifact: "<the JSON in .konae/artifact.json>", initialPackage: { manifest: "<the manifest package_export returned>", components: uploads } }, null, 2));
+    r.add("json", JSON.stringify({ ...payload, project: { ...payload.project, files: "<path: text of every source file>" }, artifact: "<version 1, entrypoint index.html, and the text of every file in dist/>", initialPackage: { manifest: "<the manifest project_export returned>", components: uploads } }, null, 2));
     const release = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), s.projectId);
     r.name(release.transferId, "<release upload>");
     const plan = await tool("release_plan", { transferId: release.transferId }, { token: s.tokenB, kernel: b });

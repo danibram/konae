@@ -1,5 +1,5 @@
-// The chunked package that `package_export` returns and a release imports
-// as `initialPackage`. kernel-rs/src/package.rs checks the same manifest with
+// The data part of an export: the manifest `project_export` returns and a
+// release imports as `initialPackage`. kernel-rs/src/package.rs checks the same manifest with
 // the same limits; a change here lands there too.
 
 export const packageFormat = "konae-package";
@@ -18,7 +18,7 @@ export const packageComponentLimits = {
 
 export type PackageComponentName = keyof typeof packageComponentLimits;
 
-/** Where each component sits inside an exported kit, under `konae/package/`. */
+/** The file each component is written to while it travels, as `konae pull` keeps it in .konae/pull. */
 export const packageComponentFiles: Record<PackageComponentName, string> = {
   database: "database.sqlite",
   identity: "identity.sqlite",

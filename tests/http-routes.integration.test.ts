@@ -365,23 +365,12 @@ describe("HTTP routes", () => {
     expect((await route("/_konae/files/", { headers: { authorization: `Bearer ${reader.key}` } })).status).toBe(410);
   });
 
-  test("a portable export carries keys and the import revokes them", async () => {
-    const live = await owner.call<{ key: string; keyId: string }>("api_keys_create", { deploymentId, name: "Travels", actions: ["notes.add"] });
-    const exported = await owner.call<{ transferId: string; size: number; sha256: string }>("project_export", { deploymentId });
-    const state = (JSON.parse(new TextDecoder().decode(await owner.download(exported as never))) as { result: Record<string, unknown> }).result;
+  test("one owner's two apps cannot share a route secret", async () => {
     await owner.call("project_create", { projectId: "http_routes_copy", name: "HTTP routes copy" });
     // A signature names no app, so one owner's two projects cannot share a value.
     await expect(owner.call("secret_set", { projectId: "http_routes_copy", name: "orders_webhook", value: secret }))
       .rejects.toThrow("Another of your projects already uses this secret value.");
     await owner.call("secret_set", { projectId: "http_routes_copy", name: "orders_webhook", value: `${secret}_copy` });
-    const copy = await release("http_routes_copy", { "schema.sql": schema, "actions.json": JSON.stringify(actions) }, {
-      initialDatabase: state.initialDatabase, initialIdentity: state.initialIdentity, initialFiles: state.initialFiles,
-    });
-    const keys = await owner.call<{ keys: { keyId: string; revokedAt: number | null; revokedReason: string | null }[] }>("api_keys_list", { deploymentId: copy.id });
-    expect(keys.keys.find(key => key.keyId === live.keyId)).toMatchObject({ revokedAt: expect.any(Number), revokedReason: "import" });
-    expect(keys.keys.every(key => key.revokedAt !== null)).toBe(true);
-    expect((await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "x" }), headers: { authorization: `Bearer ${live.key}` } }, copy.hostname)).status).toBe(401);
-    expect((await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "x" }), headers: { authorization: `Bearer ${live.key}` } })).status).toBe(200);
   });
 
   test("a guarded mutation that changes no row is refused, counted as refused and records no Signal", async () => {

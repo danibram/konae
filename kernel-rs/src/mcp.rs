@@ -426,22 +426,8 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     if owner.scopes.iter().any(|s| s == "export_data") {
         tools.extend([
             tool(
-                "database_export",
-                "Snapshot a deployment database into a downloadable transfer of at most 32 MiB. Requires export_data.",
-                json!({"deploymentId":text}),
-                &["deploymentId"],
-                true,
-            ),
-            tool(
                 "project_export",
-                "Export the small portable format: database, accounts without sessions, and files as base64 in one transfer of at most 16 MiB. Requires export_data.",
-                json!({"deploymentId":text}),
-                &["deploymentId"],
-                true,
-            ),
-            tool(
-                "package_export",
-                "Capture a consistent copy of a deployment's database, accounts without sessions or links, and files. Returns a versioned manifest and one download transfer per component. Requires export_data.",
+                "Export the app as its folder: konae.json, app/ and dist/ in the folder download, and a consistent copy of data/ (database, accounts without sessions or links, files, Usage) as one download per component that the manifest lists. Never secrets, owners or the installation's records. Requires export_data.",
                 json!({"deploymentId":text}),
                 &["deploymentId"],
                 true,
@@ -1590,32 +1576,7 @@ async fn admin_call(
             )
             .await
         }
-        "package_export" => super::package::export(state, owner, principal, a["deploymentId"].as_str().unwrap()).await,
-        "database_export" | "project_export" => {
-            let id = a["deploymentId"].as_str().unwrap();
-            let d = owned_deployment(state, owner, id, "export_data").await?;
-            let response = if name == "database_export" {
-                export_database(
-                    State(state.clone()),
-                    AxumPath(id.to_owned()),
-                    internal_request(state, json!({})),
-                )
-                .await
-            } else {
-                export_portable_state(
-                    State(state.clone()),
-                    AxumPath(id.to_owned()),
-                    internal_request(state, json!({})),
-                )
-                .await
-            };
-            anyhow::ensure!(
-                response.status().is_success(),
-                "Could not export deployment."
-            );
-            let bytes = axum::body::to_bytes(response.into_body(), MAX_TRANSFER).await?;
-            download(state, principal, &bytes, Some(&d.project_id)).await
-        }
+        "project_export" => super::package::export(state, owner, principal, a["deploymentId"].as_str().unwrap()).await,
         "release_plan" => {
             let transfer = transfer(state, principal, &json!({"transferId":a["transferId"]}))?;
             anyhow::ensure!(
@@ -1775,10 +1736,6 @@ fn tool_error(error: &anyhow::Error) -> Value {
 }
 
 pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
-    if let Some(hostname) = &input.initial_domain {
-        super::domain::check_hostname(hostname, &super::domain::Rules::of(state))?;
-        anyhow::ensure!(input.initial_package.is_none(), "Send the domain in the package manifest when importing a package.");
-    }
     anyhow::ensure!(
         input.artifact.version == 1
             && input.artifact.entrypoint == "index.html"
@@ -1821,12 +1778,8 @@ pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> R
     let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
     let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
     anyhow::ensure!(
-        existing.is_none() || (input.initial_database.is_none()
-            && input.initial_identity.is_none()
-            && input.initial_files.is_none()
-            && input.initial_signup_policy.is_none()
-            && input.initial_package.is_none()
-            && input.initial_domain.is_none()),
+        existing.is_none() || (input.initial_signup_policy.is_none()
+            && input.initial_package.is_none()),
         "Portable state can only be imported on the first deployment."
     );
     if let Some(policy) = input.initial_signup_policy.as_ref() {
@@ -1839,8 +1792,6 @@ pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> R
         if let Some(ref deployment) = existing {
             let connection = Connection::open(database_path(state, &deployment.id))?;
             connection.execute("VACUUM INTO ?1", [temp.to_string_lossy().as_ref()])?;
-        } else if let Some(snapshot) = input.initial_database.as_deref() {
-            initialize_database_from_base64(&temp, snapshot, 16 * 1024 * 1024)?;
         } else if let Some(package) = input.initial_package.as_ref() {
             super::package::copy_database(state, package, &temp)?;
         } else {

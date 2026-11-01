@@ -46,7 +46,7 @@ describe("CHECK constraints from schema.sql", () => {
   test("travel in a package to another app", async () => {
     const app = await publish("checks_package");
     await sql(app.id, "INSERT INTO habits(name) VALUES('read')");
-    const exported = await kernel.owner.call<{ manifest: PackageManifest; downloads: Record<string, Transfer> }>("package_export", { deploymentId: app.id });
+    const exported = await kernel.owner.call<{ manifest: PackageManifest; downloads: Record<string, Transfer> }>("project_export", { deploymentId: app.id });
     const directory = await mkdtemp(path.join(root, "package-"));
     const files: Record<string, string> = {};
     for (const content of exported.manifest.contents) {

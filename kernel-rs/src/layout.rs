@@ -74,9 +74,6 @@ pub(crate) fn secrets(root: &Path, id: &str) -> PathBuf {
 
 pub(crate) const SECRETS_DATABASE: &str = "secrets.sqlite";
 
-/// The files of `data/` an export hands over.
-pub(crate) const EXPORTED_DATA: [&str; 4] = ["database.sqlite", "identity.sqlite", crate::usage::USAGE_DATABASE, "files"];
-
 /// `.konae/`: what this installation keeps about the app and never hands
 /// over: its Deployment record, address markers, maintenance marker,
 /// backups and the editor's metadata of the saved sources.

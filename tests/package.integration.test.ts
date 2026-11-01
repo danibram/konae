@@ -4,6 +4,7 @@ import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient, checksum, encodeBase64, type Transfer } from "../src/mcp/client";
+import { readTar } from "../src/lib/tar";
 import { downloadToFile } from "../scripts/package-files";
 import type { PackageManifest } from "../src/lib/portable-package";
 
@@ -89,16 +90,22 @@ async function delegate(scopes: string[], projectIds: string[]) {
   return new McpClient(`${url}/mcp`, { token });
 }
 
-type Exported = { manifest: PackageManifest; downloads: Record<string, Transfer> };
+type Exported = { manifest: PackageManifest; downloads: Record<string, Transfer>; folder: Transfer; sourcesAhead: boolean };
 
+/** Downloads each data component to a file, and reads the folder download: konae.json, app/ and dist/. */
 async function download(client: McpClient, exported: Exported, directory: string) {
   const files: Record<string, string> = {};
   for (const content of exported.manifest.contents) {
     files[content.name] = path.join(directory, content.name);
     await downloadToFile(client, exported.downloads[content.name], files[content.name]);
   }
+  try {
+    folders.push(readTar(await client.download(exported.folder)).map((entry) => entry.path));
+  } finally { await client.cancel(exported.folder.transferId).catch(() => {}); }
   return files;
 }
+/** The paths of each folder download, newest last. */
+const folders: string[][] = [];
 
 async function uploadFile(client: McpClient, file: string, content: { name: string; size: number; sha256: string }, projectId: string) {
   const transfer = await client.call<Transfer>("transfer_begin", { projectId, size: content.size, sha256: content.sha256, component: content.name });
@@ -131,7 +138,7 @@ async function sourcePackage(id: string, directory: string) {
   const file = await writer.call<{ id: string }>("files_upload", { transferId: upload.transferId, name: "note.txt", type: "text/plain" });
   await writer.cancel(upload.transferId);
   const key = await owner.call<{ keyId: string; key: string }>("api_keys_create", { deploymentId: source.id, name: "Mirror", files: ["public"] });
-  const exported = await owner.call<Exported>("package_export", { deploymentId: source.id });
+  const exported = await owner.call<Exported>("project_export", { deploymentId: source.id });
   return { source, cookie, fileId: file.id, key, exported, files: await download(owner, exported, directory) };
 }
 
@@ -144,6 +151,10 @@ describe("chunked package", () => {
     // The signup, the action and the upload above wrote a Usage store, which travels too.
     expect(manifest.contents.map((content) => content.name)).toEqual(["database", "identity", "files", "usage"]);
     expect(manifest.excluded).toContain("app sessions");
+    // The folder download is the rest of the app folder, and never a secret or the installation's records.
+    const folder = folders.at(-1)!;
+    expect(folder).toEqual(expect.arrayContaining(["konae.json", "dist/index.html"]));
+    expect(folder.every((entry) => entry === "konae.json" || entry.startsWith("app/") || entry.startsWith("dist/"))).toBe(true);
     expect(manifest.excluded).not.toContain("Usage and Signals");
     for (const content of manifest.contents) expect(await checksum(new Uint8Array(await readFile(files[content.name])))).toBe(content.sha256);
     const identity = new Database(files.identity, { readonly: true });
@@ -238,15 +249,15 @@ describe("chunked package", () => {
     await publish("pkg_other");
     for (const scopes of [["read"], ["publish"], ["read", "write", "publish"]]) {
       const client = await delegate(scopes, ["pkg_permission"]);
-      for (const name of ["package_export", "project_export", "database_export"]) {
+      for (const name of ["project_export"]) {
         await expect(client.call(name, { deploymentId: source.id })).rejects.toThrow("Unknown tool or insufficient permission");
       }
     }
     const elsewhere = await delegate(["export_data"], ["pkg_other"]);
-    await expect(elsewhere.call("package_export", { deploymentId: source.id })).rejects.toThrow("outside this token's grants");
+    await expect(elsewhere.call("project_export", { deploymentId: source.id })).rejects.toThrow("outside this token's grants");
     const exporter = await delegate(["export_data"], ["pkg_permission"]);
-    const exported = await exporter.call<Exported>("package_export", { deploymentId: source.id });
-    for (const transfer of Object.values(exported.downloads)) await exporter.cancel(transfer.transferId);
+    const exported = await exporter.call<Exported>("project_export", { deploymentId: source.id });
+    for (const transfer of [...Object.values(exported.downloads), exported.folder]) await exporter.cancel(transfer.transferId);
   }, 30_000);
 
   test("a read credential cannot read the transfers of an export, and each download is audited once", async () => {
@@ -255,7 +266,7 @@ describe("chunked package", () => {
     await writer.call("actions_invoke", { name: "notes.create", input: { title: "first" } });
     // About 300 KiB of rows, so the database download takes several blocks.
     await owner.call("database_execute", { deploymentId: source.id, operation: "sql", input: { sql: "INSERT INTO notes(title,user_id) WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<300) SELECT hex(randomblob(500)),'bulk' FROM c" } });
-    const exported = await owner.call<Exported>("package_export", { deploymentId: source.id });
+    const exported = await owner.call<Exported>("project_export", { deploymentId: source.id });
     expect(exported.downloads.database.size).toBeGreaterThan(4 * 64 * 1024);
     const reader = await delegate(["read"], ["pkg_leak"]);
     for (const transfer of Object.values(exported.downloads)) {
@@ -270,14 +281,14 @@ describe("chunked package", () => {
       const details = (ok: number) => rows.filter((row) => row.ok === ok).map((row) => row.detail).sort();
       // The source app recorded Usage, so its package has a fourth component.
       expect(details(0)).toEqual(["database", "files", "identity", "usage"]);
-      expect(details(1)).toEqual(["database", "files", "identity", "usage"]);
+      expect(details(1)).toEqual(["database", "files", "folder", "identity", "usage"]);
       const reads = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_read'").get() as { n: number };
       expect(reads.n).toBe(0);
       // Component uploads in the earlier tests wrote one row per component, not one per block.
       const writes = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_write'").get() as { n: number };
       const completes = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_complete' AND ok=1").get() as { n: number };
       expect(writes.n).toBeLessThanOrEqual(completes.n + 2);
-      expect(db.query("SELECT COUNT(*) n FROM audit WHERE tool='package_export' AND target=?1 AND ok=1").get(source.id)).toEqual({ n: 1 });
+      expect(db.query("SELECT COUNT(*) n FROM audit WHERE tool='project_export' AND target=?1 AND ok=1").get(source.id)).toEqual({ n: 1 });
     } finally { db.close(); }
   }, 30_000);
 });

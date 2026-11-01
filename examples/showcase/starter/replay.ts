@@ -738,7 +738,7 @@ try {
   check("Action Contract and conform", `konae contract writes 29 actions with no warning, and every query names each column it returns. conform against ${editorReceipt.url}: with a session, a key and the secret "${conformRuns["session, key and secret"]}", the member meeting every role's guard; with the key and the secret "${conformRuns["key and secret"]}", the session-only actions skipped.`);
 
   // ------------------------------------------- package export, import on Kernel B
-  const exported = await A.owner.call<{ manifest: any; downloads: Record<string, Transfer> }>("package_export", { deploymentId: receipt.id });
+  const exported = await A.owner.call<{ manifest: any; downloads: Record<string, Transfer> }>("project_export", { deploymentId: receipt.id });
   assert.deepEqual(exported.manifest.signupPolicy, { mode: "open", allowlist: [] });
   assert.equal(exported.manifest.visibility, "public");
   const componentBytes: Record<string, Uint8Array> = {};
@@ -809,7 +809,7 @@ try {
   const newcomer = await I.auth("/_konae/auth/signup", { email: "dee@starter.test" });
   assert.equal(newcomer.status, 202);
   assert.match(cookieOf(newcomer) ?? "", /^konae_signup=/, "No session before the link, only the signup hint.");
-  check("Package export and import", `package_export carried ${exported.manifest.contents.map((item: any) => `${item.name} (${item.size} B)`).join(", ")}. Kernel B imported it after its own secret_set: Ana, Ben and the owner sign in with their passwords; rows, the admin and owner roles, every guard, the private draft, the public avatar and brochure, the deleted file's 404 and the visitor's limits hold. The origin's Release bot key answers invalid-api-key and appears as revoked at import; a new key works within its scope. The webhook takes the secret the owner set again, the origin's last delivery replayed answers ${originSigned.status} ${originSigned.body.error}, 26 note.added Signals arrived, and a new signup is still open and waits for its link.`);
+  check("Package export and import", `project_export carried ${exported.manifest.contents.map((item: any) => `${item.name} (${item.size} B)`).join(", ")}. Kernel B imported it after its own secret_set: Ana, Ben and the owner sign in with their passwords; rows, the admin and owner roles, every guard, the private draft, the public avatar and brochure, the deleted file's 404 and the visitor's limits hold. The origin's Release bot key answers invalid-api-key and appears as revoked at import; a new key works within its scope. The webhook takes the secret the owner set again, the origin's last delivery replayed answers ${originSigned.status} ${originSigned.body.error}, 26 note.added Signals arrived, and a new signup is still open and waits for its link.`);
 
   // --------------------------------------------- Chrome under the app's policy
   if (process.env.KONAE_SHOWCASE_BROWSER !== "0") {

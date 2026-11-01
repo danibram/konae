@@ -1,14 +1,16 @@
 #!/usr/bin/env bun
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { watch } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { McpClient, type Transfer } from "../src/mcp/client";
-import { normalizeManifest } from "../src/deployments/manifest";
-import { packageComponentFiles, type PackageManifest } from "../src/lib/portable-package";
-import { writeTarFile, type FileTarEntry } from "./package-files";
+import type { PackageComponentName } from "../src/lib/portable-package";
+import {
+  DIST_FOLDER, KERNEL_VERSION, SETTINGS_FILE, SOURCES_FOLDER, dataEntries, generatedFiles, gitignore,
+  type AppSettings, type FolderEntry,
+} from "../src/lib/app-folder";
 import { PROJECT_TEMPLATES_FILE, type ProjectTemplates } from "./project-templates";
 import type { AppEvent } from "./events";
 import { PULL_DIRECTORY, describePulled, downloadPackage, installPulledAlone, pullLocal, readPulled, uploadPulled, type Pulled } from "./pull";
@@ -95,17 +97,19 @@ login     --dir <folder> --url <Kernel URL> [--manage-users] [--export-data]
           Each flag adds that permission: inviting app users and exporting live data.
           On a Kernel that verifies email, creating the account sends a link; --verify-from reads it from
           a development mailbox on this machine and sets KONAE_PASSWORD, for loopback Kernels only.
-init      --dir <empty folder> [--name <name>] [--template <id>] [--url <Kernel URL>]
-          Writes a template and konae.json. It needs no credential and no Kernel, and the first
-          publish registers the project. Templates: ${INIT_TEMPLATES.join(", ")}.
+init      --dir <empty folder> [--name <name>] [--template <id>]
+          Writes an app folder: konae.json, the template in app/, AGENTS.md, action-contract.md,
+          compose.yaml, .env.example and package.json, whose npm run build writes dist/. It needs no
+          credential and no Kernel, and the first publish registers the project.
+          Templates: ${INIT_TEMPLATES.join(", ")}.
 dev       --dir <folder> [--port 8796] [--events-port 8797] [--reset]
           Runs the app on a local Development Kernel and republishes on change.
           Its email, notices included, goes to <folder>/.konae/dev-data/mailbox.jsonl.
           It sets and prints a local value for each signing secret actions.json names, and serves a
           page of what the app did (email, calls, scheduled runs, Signals) on the next port.
           KONAE_KERNEL_BIN names a built Kernel binary to run instead of compiling one.
-          --reset deletes <folder>/.konae/dev-data first. A Development Kernel with no data starts
-          from the copy pull left, when there is one.
+          --reset deletes <folder>/.konae/dev-data first. A Development Kernel with no data imports
+          the data pull exported, when there is some.
 sql       --dir <folder> [--prod] [--url <Kernel URL>] ("<statement>" | --file <file.sql>)
           Runs SQL on the app's database through database_execute, the owner's door, on the
           Development Kernel that dev is running for this folder. Only --prod reaches the published
@@ -116,19 +120,21 @@ events    --dir <folder> [--follow] [--json] [--days 7] [--prod]
           recipient and text, because nothing is sent. --json prints one object per line and --follow
           keeps printing. Only --prod reads the published Deployment.
 pull      --dir <folder> [--url <Kernel URL>]
-          Downloads the published app's database, accounts and files into <folder>/.konae/pull.
-          Needs a credential from login --export-data. Run dev --reset to start the local app from it.
-build     --dir <folder>                 Writes .konae/artifact.json.
+          Exports the published app's data (database, accounts, files, Usage) into
+          <folder>/.konae/pull. Needs a credential from login --export-data. dev --reset imports it.
+build     --dir <folder>                 Builds app/ into dist/.
 contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its schema and action-contract.md.
 publish   --dir <folder> [--url <Kernel URL>]
-          Builds and publishes to the installation konae.json names, or --url, or the one login
-          saved. Set each signing secret with secret_set first.
+          Builds and publishes to --url or the installation login saved. Set each signing secret
+          with secret_set first.
 conform   --url <app URL> --contract <file> [--token <app session>] [--key <API key>]
           [--secret <name>=<value>] [--inputs <file>]
           Calls every action and checks the answers against the contract. It runs each mutation once,
           so point it at a test Deployment.
-export    --dir <folder> [--out <file>] [--with-data]   Writes a self-hosted kit; --with-data adds the
-          live package and needs a credential from login --export-data.
+export    --dir <folder> --out <empty folder> [--with-data]
+          Writes the app folder: konae.json, app/, a fresh dist/ and the files every app folder
+          carries. --with-data adds the published app's data/ and needs a credential from
+          login --export-data. Secrets never go with it.
 domain    --deployment <id> [--set <hostname> | --clear] [--url <Kernel URL>]
           Shows, sets or clears the app's custom domain. --set prints the TXT record that proves you
           control the hostname; run it again once the record is at your DNS provider.
@@ -206,58 +212,71 @@ async function credentials(root: string) {
   return (await json<{ token: string }>(path.join(root, ".konae/credentials.json"))).token;
 }
 
-/** Files the CLI writes beside the Capsule, which are never uploaded as its source. */
-const generatedFiles = new Set(["konae.json", ACTION_CONTRACT_FILE, ACTION_CONTRACT_SCHEMA_FILE]);
+/** The folder's sources: `app/`. */
+export function appDir(root: string) { return path.join(root, SOURCES_FOLDER); }
 
+/** The text files of `app/`, which a release carries as the project's files. */
 async function sources(root: string, prefix = ""): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
-  for (const entry of await readdir(path.join(root, prefix), { withFileTypes: true })) {
-    if (entry.name.startsWith(".") || ["node_modules", "dist", "data", "target"].includes(entry.name)) continue;
+  for (const entry of await readdir(path.join(appDir(root), prefix), { withFileTypes: true })) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
     const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isDirectory()) Object.assign(result, await sources(root, relative));
-    else if (entry.isFile() && /\.(?:html|css|js|jsx|ts|tsx|json|sql)$/.test(entry.name) && !generatedFiles.has(relative)) result[relative] = await readFile(path.join(root, relative), "utf8");
+    else if (entry.isFile() && /\.(?:html|css|js|jsx|ts|tsx|json|sql)$/.test(entry.name)) result[relative] = await readFile(path.join(appDir(root), relative), "utf8");
   }
   return result;
 }
 
-/**
- * Every file the build may publish, text or binary. Dot folders and
- * node_modules are skipped at any depth, and the folders the CLI and the
- * Development Kernel write (dist, data, target) at the Capsule root.
- */
+/** Every file of `app/` the build may publish, text or binary. Dot folders and node_modules are skipped at any depth. */
 async function capsulePaths(root: string, prefix = ""): Promise<string[]> {
   const result: string[] = [];
-  for (const entry of await readdir(path.join(root, prefix), { withFileTypes: true })) {
+  for (const entry of await readdir(path.join(appDir(root), prefix), { withFileTypes: true })) {
     if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-    if (!prefix && ["dist", "data", "target"].includes(entry.name)) continue;
     const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isDirectory()) result.push(...await capsulePaths(root, relative));
-    else if (entry.isFile() && !generatedFiles.has(relative)) result.push(relative);
+    else if (entry.isFile()) result.push(relative);
   }
   return result;
+}
+
+/** Reads konae.json. */
+export async function readSettings(root: string): Promise<AppSettings> {
+  try { return await json<AppSettings>(path.join(root, SETTINGS_FILE)); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw Error(`No konae.json in ${root}. Run init there, or name the app folder with --dir.`);
+    throw error;
+  }
+}
+
+/** The project a release names, from konae.json. The Signup Policy rides in the manifest until the release reads it. */
+export function configOf(settings: AppSettings, url?: string): Config {
+  return {
+    ...(url ? { url } : {}),
+    project: { id: settings.id, name: settings.name, slug: settings.slug, manifest: { ...settings.manifest, visibility: settings.visibility, signupPolicy: settings.signupPolicy } },
+  };
 }
 
 /** A file as text when it is UTF-8, else as bytes, which the artifact carries as base64. */
 async function readCapsuleFile(root: string, relative: string): Promise<string | Uint8Array> {
-  const bytes = new Uint8Array(await readFile(path.join(root, relative)));
+  const bytes = new Uint8Array(await readFile(path.join(appDir(root), relative)));
   try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return bytes; }
 }
 
 async function bundleModule(root: string, entry: string) {
   // absWorkingDir names each bundled module by its Capsule path, which the build then drops.
-  const result = await build({ entryPoints: [path.join(root, entry)], absWorkingDir: path.resolve(root), bundle: true, write: false, platform: "browser", format: "esm", target: "es2022", outdir: "out" });
+  const result = await build({ entryPoints: [path.join(appDir(root), entry)], absWorkingDir: path.resolve(appDir(root)), bundle: true, write: false, platform: "browser", format: "esm", target: "es2022", outdir: "out" });
   const script = result.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
   if (script === undefined) throw Error("The local builder produced no JavaScript.");
   return { script, styles: result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? "" };
 }
 
 /**
- * Builds the Capsule in `root` by the static publishing contract in
+ * Builds `app/` into `dist/` by the static publishing contract in
  * src/lib/static-artifact.js, the rules the editor's build runs too.
  */
 export async function buildLocal(root: string) {
   const files = await sources(root);
-  const config = await json<Partial<Config>>(path.join(root, "konae.json")).catch(() => undefined);
+  const settings = await readSettings(root).catch(() => undefined);
   const sdk = await readFile(path.join(toolRoot, "src/mcp/runtime.js"), "utf8");
   const artifact = await assembleStaticArtifact({
     paths: await capsulePaths(root),
@@ -268,11 +287,10 @@ export async function buildLocal(root: string) {
     },
     bundle: (relative) => bundleModule(root, relative),
     runtime: sdk,
-    routing: config?.project?.manifest?.routing,
+    routing: settings?.manifest?.routing as "pages" | "spa" | undefined,
     warn: (message) => console.warn(`Warning: ${message}`),
   });
-  await mkdir(path.join(root, ".konae"), { recursive: true });
-  await writeFile(path.join(root, ".konae/artifact.json"), JSON.stringify(artifact));
+  await writeDist(root, artifact);
   return { artifact, files };
 }
 
@@ -292,7 +310,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
   const remote = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId: project.id });
   const first = !remote.deployment;
   const { artifact, files } = await buildLocal(root);
-  // Only a project without a Deployment takes a package, so a pulled copy goes with the first release or not at all.
+  // Only a project without a Deployment takes a package, so the exported data goes with the first release or not at all.
   const components = first && pulled ? await uploadPulled(client, root, pulled, project.id) : undefined;
   const payload = {
     project: { ...project, files }, visibility: manifest.visibility ?? "private", artifact,
@@ -304,6 +322,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
   try {
     transfer = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), project.id);
     const plan = await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+    await mkdir(path.join(root, ".konae"), { recursive: true });
     await writeFile(path.join(root, ".konae/release-plan.json"), JSON.stringify(plan, null, 2));
     receipt = await client.call<{ id: string; url: string }>("release_apply", { planId: plan.planId });
     await writeFile(path.join(root, ".konae/deployment.json"), JSON.stringify(receipt, null, 2));
@@ -320,46 +339,63 @@ export async function publishLocal(root: string, config: Config, token: string, 
   return Object.assign(receipt, { first });
 }
 
-export async function exportLocal(root: string, config: Config, output: string, token?: string) {
-  const { artifact, files } = await buildLocal(root);
-  let manifest = config.project.manifest;
-  let captured: { package: PackageManifest; files: FileTarEntry[] } | undefined;
-  const scratch = token === undefined ? undefined : await mkdtemp(path.join(tmpdir(), "konae-package-"));
-  try {
-    if (token !== undefined && scratch) {
-      if (!config.url) throw Error(NO_INSTALLATION);
-      const client = new McpClient(endpoint(config.url), { token });
-      const remote = await client.call<{ deployment?: { id: string; manifest?: Record<string, unknown> } }>("project_inspect", { projectId: config.project.id });
-      if (!remote.deployment) throw Error("Publish the project before exporting its live data, or omit --with-data.");
-      const deployedManifest = remote.deployment.manifest;
-      if (deployedManifest?.visibility !== "public" && deployedManifest?.visibility !== "private") {
-        throw Error("The deployment did not provide its visibility. Live data export stopped.");
-      }
-      manifest = deployedManifest;
-      const downloaded = await downloadPackage(client, remote.deployment.id, scratch);
-      const checked = downloaded.manifest;
-      const components: FileTarEntry[] = downloaded.files.map(({ name, file, size }) => ({ path: `konae/package/${packageComponentFiles[name as keyof typeof packageComponentFiles]}`, file, size }));
-      captured = { package: checked, files: components };
-    }
-    const [{ projectExportEntries }, { kernelFiles }] = await Promise.all([
-      import("../src/lib/export-project-kit"), import("../src/lib/export-project-sources"),
-    ]);
-    const project = {
-      ...config.project,
-      manifest: normalizeManifest({ ...manifest, visibility: manifest.visibility ?? "private" }),
-      files, directories: [], updatedAt: Date.now(),
-    };
-    const entries = projectExportEntries(project, artifact, kernelFiles, captured && { package: captured.package });
-    // The kit rebuilds from app/, so it also needs the files that are not
-    // source text: images, fonts and everything under public/.
-    for (const relative of await capsulePaths(root)) {
-      if (files[relative] === undefined) entries.push({ path: `app/${relative}`, contents: new Uint8Array(await readFile(path.join(root, relative))) });
-    }
-    await writeTarFile(output, [...entries, ...(captured?.files ?? [])]);
-    return output;
-  } finally {
-    if (scratch) await rm(scratch, { recursive: true, force: true });
+/** Replaces `dist/` with the built artifact's files. */
+async function writeDist(root: string, artifact: { files: Record<string, string>; encodings?: Record<string, string> }) {
+  const dist = path.join(root, DIST_FOLDER);
+  await rm(dist, { recursive: true, force: true });
+  for (const [file, contents] of Object.entries(artifact.files)) {
+    const target = path.join(dist, file);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, artifact.encodings?.[file] === "base64" ? Buffer.from(contents, "base64") : contents);
   }
+}
+
+/** The files beside app/, dist/ and data/ that every app folder carries. */
+async function folderFiles(root: string, settings: AppSettings) {
+  const read = (file: string) => readFile(path.join(appDir(root), file), "utf8").catch(() => "");
+  return generatedFiles({
+    settings, actionsSource: await read("actions.json"), schemaSource: await read("schema.sql"),
+    runtime: await readFile(path.join(toolRoot, "src/mcp/runtime.js"), "utf8"),
+    staticArtifact: await readFile(path.join(toolRoot, "src/lib/static-artifact.js"), "utf8"),
+  });
+}
+
+async function writeEntries(root: string, entries: FolderEntry[]) {
+  for (const entry of entries) {
+    const target = path.resolve(root, entry.path);
+    if (!target.startsWith(path.resolve(root) + path.sep)) throw Error(`Invalid folder path ${entry.path}.`);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, entry.contents);
+  }
+}
+
+/**
+ * Exports the app folder into the empty folder `output`: konae.json, app/,
+ * a fresh dist/ and the files every app folder carries. With `remote`, a
+ * credential that holds export_data, it adds the published app's data/ from
+ * project_export. No secret and nothing of .konae/ goes with it.
+ */
+export async function exportLocal(root: string, output: string, remote?: { url: string; token: string }) {
+  await assertEmptyFolder(output);
+  const settings = await readSettings(root);
+  await buildLocal(root);
+  await mkdir(output, { recursive: true });
+  await cp(appDir(root), path.join(output, SOURCES_FOLDER), { recursive: true, filter: (source) => !path.basename(source).startsWith(".") && path.basename(source) !== "node_modules" });
+  await cp(path.join(root, DIST_FOLDER), path.join(output, DIST_FOLDER), { recursive: true });
+  await writeFile(path.join(output, SETTINGS_FILE), `${JSON.stringify(settings, null, 2)}\n`);
+  await writeEntries(output, await folderFiles(root, settings));
+  if (!remote) return { output, data: false };
+  const client = new McpClient(endpoint(remote.url), { token: remote.token });
+  const published = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId: settings.id });
+  if (!published.deployment) throw Error("Publish the app before exporting its data, or leave out --with-data.");
+  const scratch = await mkdtemp(path.join(tmpdir(), "konae-export-"));
+  try {
+    const { files } = await downloadPackage(client, published.deployment.id, scratch);
+    for (const { name, file } of files) await writeEntries(output, dataEntries(name as PackageComponentName, new Uint8Array(await readFile(file))));
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+  return { output, data: true };
 }
 
 /**
@@ -368,16 +404,16 @@ export async function exportLocal(root: string, config: Config, output: string, 
  * konae.json when there is one.
  */
 export async function writeContract(root: string, out = root) {
-  const read = async (file: string) => readFile(path.join(root, file), "utf8");
+  const read = async (file: string) => readFile(path.join(appDir(root), file), "utf8");
   let project: { id: string; name: string } | undefined;
   try {
-    const config = await json<Config>(path.join(root, "konae.json"));
-    project = { id: config.project.id, name: config.project.name };
+    const settings = await json<AppSettings>(path.join(root, SETTINGS_FILE));
+    project = { id: settings.id, name: settings.name };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   let actionsSource: string;
-  try { actionsSource = await read("actions.json"); } catch { throw Error(`No actions.json in ${root}.`); }
+  try { actionsSource = await read("actions.json"); } catch { throw Error(`No actions.json in ${appDir(root)}.`); }
   const schemaSource = await read("schema.sql").catch(() => "");
   const { contract, warnings } = generateActionContract({ actionsSource, schemaSource, project });
   await mkdir(out, { recursive: true });
@@ -404,29 +440,33 @@ function slugOf(name: string) {
 }
 
 /**
- * Writes a template and konae.json into an empty folder, without a Kernel.
- * The project ID is made here; the first publish registers it on the
- * installation with project_create, which takes an ID the caller chose.
+ * Writes a new app folder without a Kernel: the template in app/, konae.json
+ * and the files every app folder carries. The app's ID is made here; the
+ * first publish registers it on the installation with project_create, which
+ * takes an ID the caller chose.
  */
-export async function initLocal(root: string, options: { name?: string; template?: string; url?: string } = {}) {
+export async function initLocal(root: string, options: { name?: string; template?: string } = {}) {
   // The file project_create answers from, so a folder starts the same through the CLI and through MCP.
   const all = await json<ProjectTemplates>(path.join(toolRoot, PROJECT_TEMPLATES_FILE));
   const born = all.templates[options.template ?? all.default];
   if (!born) throw Error(`Unknown template ${options.template}. Choose one of: ${INIT_TEMPLATES.join(", ")}.`);
-  await assertEmptyForInit(root);
+  await assertEmptyFolder(root);
   const name = options.name ?? "My app";
   for (const [filename, source] of Object.entries(born.files)) {
-    const target = path.resolve(root, filename);
-    if (!target.startsWith(path.resolve(root) + path.sep)) throw Error("Invalid template path.");
+    const target = path.resolve(appDir(root), filename);
+    if (!target.startsWith(path.resolve(appDir(root)) + path.sep)) throw Error("Invalid template path.");
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, source, { flag: "wx" });
   }
   // The template says who may open the app. Only people the owner invites can create an account.
-  const manifest = { version: 1, visibility: born.visibility, signupPolicy: INIT_SIGNUP_POLICY };
-  const config: Config = { ...(options.url ? { url: options.url } : {}), project: { id: `app_${crypto.randomUUID()}`, name, slug: slugOf(name), manifest } };
-  await writeFile(path.join(root, "konae.json"), `${JSON.stringify(config, null, 2)}\n`, { flag: "wx" });
-  await ignoreInGit(root, [".konae/", "node_modules/"]);
-  return config;
+  const settings: AppSettings = {
+    id: `app_${crypto.randomUUID()}`, name, slug: slugOf(name), visibility: born.visibility,
+    signupPolicy: { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] }, signInMethods: ["password"], kernel: KERNEL_VERSION, manifest: { version: 1 },
+  };
+  await writeFile(path.join(root, SETTINGS_FILE), `${JSON.stringify(settings, null, 2)}\n`, { flag: "wx" });
+  await writeEntries(root, await folderFiles(root, settings));
+  await ignoreInGit(root, gitignore.trim().split("\n"));
+  return settings;
 }
 
 /**
@@ -437,7 +477,7 @@ export async function initLocal(root: string, options: { name?: string; template
  */
 export async function setDevSecrets(root: string, client: Pick<McpClient, "call">, project: { id: string; name: string; slug: string; manifest: Record<string, unknown> }) {
   let actions: Record<string, { http?: { signature?: { secret?: string } }; auth?: { secret?: string } }>;
-  try { actions = JSON.parse(await readFile(path.join(root, "actions.json"), "utf8")).actions ?? {}; } catch { return []; }
+  try { actions = JSON.parse(await readFile(path.join(appDir(root), "actions.json"), "utf8")).actions ?? {}; } catch { return []; }
   const wanted = new Map<string, "route" | "call">();
   for (const action of Object.values(actions)) {
     if (typeof action?.http?.signature?.secret === "string") wanted.set(action.http.signature.secret, "route");
@@ -457,8 +497,8 @@ export async function setDevSecrets(root: string, client: Pick<McpClient, "call"
   return lines;
 }
 
-/** init writes a template into the directory, so it must hold nothing but dotfiles (.git, .konae, .gitignore). */
-async function assertEmptyForInit(root: string) {
+/** init and export write a whole app folder, so the target must hold nothing but dotfiles (.git, .konae, .gitignore). */
+async function assertEmptyFolder(root: string) {
   let entries: string[] = [];
   try { entries = await readdir(root); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   const occupied = entries.filter((name) => !name.startsWith("."));
@@ -524,11 +564,11 @@ async function main() {
     return;
   }
   if (command === "init") {
-    const config = await initLocal(root, { name: option("name"), template: option("template"), url: option("url", process.env.KONAE_URL) });
-    console.log(`Created ${config.project.name} in ${root}. Run it with: bun run konae -- dev --dir ${root}`);
+    const settings = await initLocal(root, { name: option("name"), template: option("template") });
+    console.log(`Created ${settings.name} in ${root}. Run it with: bun run konae -- dev --dir ${root}`);
     return;
   }
-  if (command === "build") { await buildLocal(root); console.log("Built .konae/artifact.json"); return; }
+  if (command === "build") { await buildLocal(root); console.log(`Built ${path.join(root, DIST_FOLDER)}`); return; }
   if (command === "contract") {
     const { contract, warnings, file } = await writeContract(root, path.resolve(option("out", root)!));
     for (const warning of warnings) console.warn(`Warning: ${warning.message}`);
@@ -548,25 +588,24 @@ async function main() {
     for (const line of await domainLocal(new McpClient(endpoint(url), { token: process.env.KONAE_MCP_TOKEN ?? saved!.token }), deploymentId, { set: option("set"), clear: args.includes("--clear") })) console.log(line);
     return;
   }
-  const config = await json<Config>(path.join(root, "konae.json"));
-  // The installation: --url, then konae.json, then the one login saved beside the token it would send.
+  const config = configOf(await readSettings(root));
+  // The installation: --url, then the one login saved beside the token it would send.
   const installation = async () => {
-    const url = option("url") ?? config.url ?? (await json<{ url?: string }>(path.join(root, ".konae/credentials.json")).catch(() => undefined))?.url;
+    const url = option("url") ?? (await json<{ url?: string }>(path.join(root, ".konae/credentials.json")).catch(() => undefined))?.url;
     if (!url) throw Error(NO_INSTALLATION);
     return url;
   };
   if (command === "export") {
-    const output = path.resolve(option("out", path.join(root, ".konae/selfhost.tar"))!);
+    const out = option("out");
+    if (!out) throw Error("Name an empty folder for the export with --out <folder>.");
     const withData = args.includes("--with-data");
-    await exportLocal(root, withData ? { ...config, url: await installation() } : config, output, withData ? await credentials(root) : undefined);
-    console.log(`Exported self-hosted app to ${output}.`);
+    const exported = await exportLocal(root, path.resolve(out), withData ? { url: await installation(), token: await credentials(root) } : undefined);
+    console.log(`Exported the app folder to ${exported.output}${exported.data ? ", with the published app's data in data/" : ""}. Its secrets stay where they are set.`);
     return;
   }
   if (command === "publish") {
     const url = await installation();
     console.log((await publishLocal(root, { ...config, url }, await credentials(root))).url);
-    // A project init wrote without an installation keeps the first one it was published to.
-    if (!config.url) await writeFile(path.join(root, "konae.json"), `${JSON.stringify({ url, ...config }, null, 2)}\n`);
     return;
   }
   // sql and events reach the Development Kernel dev is running for the folder, and the published Deployment only with --prod.
@@ -622,8 +661,8 @@ async function main() {
   if (command === "pull") {
     const url = await installation();
     const pulled = await pullLocal(root, new McpClient(endpoint(url), { token: await credentials(root) }), url, config.project.id);
-    console.log(`Saved ${describePulled(pulled)} in ${path.join(root, PULL_DIRECTORY)}. It holds the app's accounts and rows, so keep .konae out of Git.`);
-    console.log(`Start the local app from it with: bun run konae -- dev --dir ${root} --reset`);
+    console.log(`Exported the data ${describePulled(pulled)} to ${path.join(root, PULL_DIRECTORY)}. It holds the app's accounts and rows, so keep .konae out of Git.`);
+    console.log(`Import it into the local app with: bun run konae -- dev --dir ${root} --reset`);
     return;
   }
   if (command === "dev") {
@@ -674,21 +713,21 @@ async function main() {
         await secrets();
         first = await publishLocal(root, devConfig, token, console.warn, pulled);
       } catch (error) {
-        // A refused first release leaves no Deployment. When the refusal is a schema the pulled copy
-        // does not have yet, install the copy alone and keep serving until it is migrated.
+        // A refused first release leaves no Deployment. When the refusal is a schema the exported data
+        // does not have yet, import the data alone and keep serving until it is migrated.
         const schemaBehind = error instanceof Error && error.message.includes("does not match the deployed schema");
         const remote = pulled && schemaBehind ? await admin.call<{ deployment?: unknown }>("project_inspect", { projectId: config.project.id }).catch(() => undefined) : undefined;
         if (!pulled || !remote || remote.deployment) throw error;
         first = { ...await installPulledAlone(admin, root, pulled, { ...devConfig.project, manifest }), first: true };
-        console.error(`${error instanceof Error ? error.message : error}\nThe pulled copy is installed without the app. Change its database the way the published one must change, for example: bun run konae -- sql --dir ${root} "ALTER TABLE ..." Then save a file and dev publishes the app again.`);
+        console.error(`${error instanceof Error ? error.message : error}\nThe exported data is imported without the app. Change its database the way the published one must change, for example: bun run konae -- sql --dir ${root} "ALTER TABLE ..." Then save a file and dev publishes the app again.`);
       }
       // The marker sits in dev-data, so --reset removes it with the data it describes.
       const marker = path.join(dataDirectory, "pulled.json");
       if (pulled && first.first) {
         await writeFile(marker, JSON.stringify({ packageId: pulled.manifest.packageId }));
-        console.log(`Started from ${describePulled(pulled)}. Its sessions did not travel and its API keys arrive revoked. Its accounts keep their passwords; to sign in as one without knowing it, ask the app for a password reset and open the link in ${path.join(dataDirectory, "mailbox.jsonl")}.`);
+        console.log(`Imported the data ${describePulled(pulled)}. Its sessions did not travel and its API keys arrive revoked. Its accounts keep their passwords; to sign in as one without knowing it, ask the app for a password reset and open the link in ${path.join(dataDirectory, "mailbox.jsonl")}.`);
       } else if (pulled && (await json<{ packageId?: string }>(marker).catch(() => undefined))?.packageId !== pulled.manifest.packageId) {
-        console.log(`A pulled copy this Development Kernel did not start from waits in ${path.join(root, PULL_DIRECTORY)}. Run dev with --reset to replace the local data with it.`);
+        console.log(`Exported data this Development Kernel has not imported waits in ${path.join(root, PULL_DIRECTORY)}. Run dev with --reset to replace the local data with it.`);
       }
       // The events page answers on the next port, on this machine only. A taken port leaves the command, which reads the Kernel itself.
       const { serveEvents } = await import("./events");
@@ -697,7 +736,7 @@ async function main() {
       catch { console.warn(`Port ${eventsPort} is taken, so the events page is off. Choose another with --events-port, or run events.`); }
       // What sql and events read: this Kernel, its owner token, the Deployment and the events page.
       await writeFile(devSession, JSON.stringify({ url, token, deploymentId: first.id, ...(feed ? { events: feed.url } : {}) }), { mode: 0o600 });
-      // dev-data kept from an earlier run, or a pulled copy, may hold another policy. The development
+      // dev-data kept from an earlier run, or imported data, may hold another policy. The development
       // Kernel is isolated and local, so let the developer create test accounts.
       await admin.call("signup_policy_set", { deploymentId: first.id, mode: "open" });
       console.log(first.url);
@@ -711,7 +750,7 @@ async function main() {
         working = false;
       };
       let timer: ReturnType<typeof setTimeout>;
-      const watcher = watch(root, { recursive: true }, (_, filename) => {
+      const watcher = watch(appDir(root), { recursive: true }, (_, filename) => {
         if (!filename || filename.startsWith(".") || filename.includes("node_modules") || !/\.(?:html|css|js|jsx|ts|tsx|json|sql)$/.test(filename)) return;
         clearTimeout(timer); timer = setTimeout(() => void rebuild(), 200);
       });

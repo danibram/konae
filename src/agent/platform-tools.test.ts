@@ -41,7 +41,7 @@ describe("the build agent's tools from the owner's MCP", () => {
   test("only the allowlisted tools reach the model, never source saves, credentials, secrets or transfers", async () => {
     const tools = await toolsFor(binding().value);
     expect(Object.keys(tools).sort()).toEqual(["database_execute", "domain_read", "domain_set", "path_clear", "path_read", "path_set", "platform_guide", "project_inspect"]);
-    for (const name of ["project_sources_save", "project_sources_read", "token_create", "api_keys_create", "secret_set", "transfer_begin", "package_export", "project_export"]) {
+    for (const name of ["project_sources_save", "project_sources_read", "token_create", "api_keys_create", "secret_set", "transfer_begin", "project_export"]) {
       expect(platformToolPolicy[name]).toBeUndefined();
     }
   });

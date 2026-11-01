@@ -1290,12 +1290,11 @@ mod tests {
         let pending = fixture.last_token();
         assert_eq!(fixture.answer(APP_HOST, &first, PASSWORD).await.status(), StatusCode::OK);
 
-        // Export through the Kernel's portable state, then import into a new Deployment.
+        // Export the accounts as the export does, then import them into a new Deployment.
         let app = fixture.app(APP_HOST).await;
-        let exported = super::super::portable_state(&fixture.state, &app).await.unwrap();
-        let bytes = decode_base64(exported["initialIdentity"].as_str().unwrap()).unwrap();
         let carried = fixture.root.join("carried.sqlite");
-        std::fs::write(&carried, &bytes).unwrap();
+        crate::copies::vacuum_into(&crate::layout::identity(&fixture.root, &app.id), &carried).unwrap();
+        crate::package::revoke_access(&carried).unwrap();
         let copy = Connection::open(&carried).unwrap();
         let count = |sql: &str| copy.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
         assert_eq!(count("SELECT COUNT(*) FROM app_invitations"), 2, "the history travels");
@@ -1307,7 +1306,7 @@ mod tests {
         let imported_id = Uuid::new_v4().to_string();
         let directory = crate::layout::data(&fixture.root, &imported_id);
         std::fs::create_dir_all(&directory).unwrap();
-        super::super::initialize_identity_from_base64(&crate::layout::identity(&fixture.root, &imported_id), exported["initialIdentity"].as_str().unwrap(), 16 << 20).unwrap();
+        std::fs::copy(&carried, crate::layout::identity(&fixture.root, &imported_id)).unwrap();
         let imported = Deployment { id: imported_id, hostname: "invite-imported.localhost".into(), url: "http://invite-imported.localhost".into(), ..app.clone() };
         fixture.state.deployments.write().await.insert(imported.hostname.clone(), imported.clone());
         let answer = |token: String| {

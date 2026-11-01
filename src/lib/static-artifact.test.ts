@@ -205,10 +205,12 @@ describe("the CLI and the editor build the same artifact", () => {
   };
 
   async function onDisk(files: Record<string, string>) {
+    // An app folder: konae.json at the root, the sources in app/.
     const root = await mkdtemp(path.join(tmpdir(), "konae-static-"));
     for (const [file, contents] of Object.entries(files)) {
-      await mkdir(path.dirname(path.join(root, file)), { recursive: true });
-      await writeFile(path.join(root, file), contents);
+      const target = file === "konae.json" ? path.join(root, file) : path.join(root, "app", file);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, contents);
     }
     return root;
   }
@@ -274,7 +276,7 @@ describe("the CLI and the editor build the same artifact", () => {
     const withImage = { ...capsule, "about.html": page("About", '<img src="/team.png">') };
     const root = await onDisk(withImage);
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff]);
-    await writeFile(path.join(root, "team.png"), png);
+    await writeFile(path.join(root, "app", "team.png"), png);
     try {
       const cli = (await buildLocal(root)).artifact;
       expect(cli.encodings).toEqual({ "team.png": "base64" });
@@ -284,7 +286,7 @@ describe("the CLI and the editor build the same artifact", () => {
   });
 
   test("both refuse a routing value the Kernel would refuse", async () => {
-    const root = await onDisk({ ...capsule, "konae.json": JSON.stringify({ url: "http://localhost", project: { id: "p", name: "p", slug: "p", manifest: { routing: "history" } } }) });
+    const root = await onDisk({ ...capsule, "konae.json": JSON.stringify({ id: "p", name: "p", slug: "p", visibility: "private", signupPolicy: { mode: "closed" }, signInMethods: ["password"], kernel: "0.1.0", manifest: { routing: "history" } }) });
     try {
       await expect(buildLocal(root)).rejects.toThrow(routingMessage);
       await expect(buildProjectInBrowser({ files: capsule, manifest: { ...createDefaultManifest(), routing: "history" } } as unknown as MiniAppProject)).rejects.toThrow(routingMessage);

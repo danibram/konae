@@ -350,20 +350,12 @@ struct DeployInput {
     visibility: String,
     artifact: BuildArtifact,
     #[serde(default)]
-    initial_database: Option<String>,
-    #[serde(default)]
-    initial_identity: Option<String>,
-    #[serde(default)]
-    initial_files: Option<String>,
-    #[serde(default)]
     initial_signup_policy: Option<SignupPolicy>,
     #[serde(default)]
     initial_sign_in_methods: Option<Vec<SignInMethod>>,
     /// A chunked package whose components were uploaded as transfers.
     #[serde(default)]
     initial_package: Option<package::InitialPackage>,
-    #[serde(default)]
-    initial_domain: Option<String>,
     /// The email `notify` to the owner reaches. Konae's release_apply sets it.
     #[serde(default)]
     contact_email: Option<String>,
@@ -688,13 +680,9 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
     let existing = find_project_deployment(&deployments, &input.project.id);
     drop(deployments);
     if existing.is_some()
-        && (input.initial_database.is_some()
-            || input.initial_identity.is_some()
-            || input.initial_files.is_some()
-            || input.initial_signup_policy.is_some()
+        && (input.initial_signup_policy.is_some()
             || input.initial_sign_in_methods.is_some()
-            || input.initial_package.is_some()
-            || input.initial_domain.is_some())
+            || input.initial_package.is_some())
     {
         return error(
             StatusCode::CONFLICT,
@@ -720,31 +708,6 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         },
         None => None,
     };
-    let imported_size = [
-        &input.initial_database,
-        &input.initial_identity,
-        &input.initial_files,
-    ]
-    .into_iter()
-    .flatten()
-    .try_fold(0usize, |total, encoded| {
-        decode_base64(encoded).map(|bytes| total.saturating_add(bytes.len()))
-    });
-    match imported_size {
-        Ok(size) if size <= 16 * 1024 * 1024 => {}
-        Ok(_) => {
-            return error(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "Portable state exceeds the 16 MiB combined import limit.",
-            );
-        }
-        Err(error_value) => {
-            return error(
-                StatusCode::BAD_REQUEST,
-                &format!("Portable state is invalid: {error_value}"),
-            );
-        }
-    }
     // The app keeps one ID: its folder, its project and its Deployment share it.
     let id = input.project.id.clone();
     let hostname = existing
@@ -814,11 +777,6 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             }
         }
     }
-    if input.initial_package.is_none() {
-        if let Err(error_value) = domain::arrive(&state, &id, input.initial_domain.as_deref()).await {
-            return error(StatusCode::BAD_REQUEST, &error_value.to_string());
-        }
-    }
     let db_path = layout::database(&state.data_root, &id);
     let schema = input
         .project
@@ -827,12 +785,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         .cloned()
         .unwrap_or_default();
     if !db_path.exists() {
-        let initialized = if let Some(snapshot) = input.initial_database.as_ref() {
-            initialize_database_from_base64(&db_path, snapshot, 16 * 1024 * 1024)
-        } else {
-            initialize_database(&db_path)
-        };
-        if let Err(error_value) = initialized {
+        if let Err(error_value) = initialize_database(&db_path) {
             return error(
                 StatusCode::BAD_REQUEST,
                 &format!("Database initialization failed: {error_value}"),
@@ -847,26 +800,8 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
     }
     let identity_path = layout::identity(&state.data_root, &id);
     if !identity_path.exists() {
-        if let Some(snapshot) = input.initial_identity.as_ref() {
-            if let Err(error_value) =
-                initialize_identity_from_base64(&identity_path, snapshot, 16 * 1024 * 1024)
-            {
-                return error(
-                    StatusCode::BAD_REQUEST,
-                    &format!("Identity import failed: {error_value}"),
-                );
-            }
-        } else if let Err(error_value) = open_auth(&state, &deployment) {
+        if let Err(error_value) = open_auth(&state, &deployment) {
             return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
-        }
-    }
-    if let Some(files) = input.initial_files.as_ref() {
-        let files_dir = layout::files(&state.data_root, &id);
-        if let Err(error_value) = restore_initial_files(&state.files, &id, &files_dir, files, 16 * 1024 * 1024).await {
-            return error(
-                StatusCode::BAD_REQUEST,
-                &format!("File import failed: {error_value}"),
-            );
         }
     }
     // New files go into a staging folder beside dist/. Readers keep the
@@ -1980,168 +1915,7 @@ fn artifact_response(bytes: Vec<u8>, path: &str) -> Response {
     response
 }
 
-async fn export_database(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-    request: Request,
-) -> Response {
-    if !is_admin(&state, request.headers()) {
-        return error(StatusCode::UNAUTHORIZED, "Admin authorization required.");
-    }
-    let _guard = database_lock(&state, &id).await;
-    let path = crate::layout::database(&state
-        .data_root, &id);
-    match tokio::fs::read(path).await {
-        Ok(bytes) => ([(header::CONTENT_TYPE, "application/vnd.sqlite3")], bytes).into_response(),
-        Err(_) => error(StatusCode::NOT_FOUND, "Database not found."),
-    }
-}
-
-async fn export_portable_state(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-    request: Request,
-) -> Response {
-    if !is_admin(&state, request.headers()) {
-        return error(StatusCode::UNAUTHORIZED, "Admin authorization required.");
-    }
-    let Some(deployment) = state
-        .deployments
-        .read()
-        .await
-        .values()
-        .find(|deployment| deployment.id == id)
-        .cloned()
-    else {
-        return error(StatusCode::NOT_FOUND, "Deployment not found.");
-    };
-    let _project_guard = database_lock(&state, &format!("project:{}", deployment.project_id)).await;
-    let deployment = state.deployments.read().await.values()
-        .find(|current| current.id == id).cloned().unwrap_or(deployment);
-    match portable_state(&state, &deployment).await {
-        Ok(result) => Json(json!({"result": result})).into_response(),
-        Err(error_value) => error(StatusCode::BAD_REQUEST, &error_value.to_string()),
-    }
-}
-
 /// The small export's whole budget: databases plus the base64 file bundle.
-const PORTABLE_LIMIT: usize = 16 * 1024 * 1024;
-
-/// The small export format. The databases and the file index are taken under
-/// the Deployment's data and identity locks, so they agree with each other.
-/// The file bytes are read after the locks are released, as a copy reads
-/// them: the bytes under a file ID never change, and a file deleted since the
-/// index was taken is left out. The budget is checked against the sizes the
-/// index records before any byte is read, so a large file store is refused
-/// without loading it.
-async fn portable_state(state: &AppState, deployment: &Deployment) -> Result<Value> {
-    let (database, identity, file_index) = {
-        let _data_guard = database_lock(state, &deployment.id).await;
-        let _identity_guard = database_lock(state, &format!("identity:{}", deployment.id)).await;
-        portable_snapshot(state, deployment).await?
-    };
-    let mut files_budget = PORTABLE_LIMIT.saturating_sub(database.len()).saturating_sub(identity.len());
-    let mut wanted = Vec::with_capacity(file_index.len());
-    for metadata in file_index {
-        let file_id = metadata
-            .get("id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("Stored file has no id."))?
-            .to_owned();
-        if !valid_file_id(&file_id) {
-            anyhow::bail!("Stored file id is invalid.");
-        }
-        let size = metadata.get("size").and_then(Value::as_u64).unwrap_or(0) as usize;
-        let encoded = size.div_ceil(3).saturating_mul(4).saturating_add(serde_json::to_vec(&metadata)?.len());
-        files_budget = files_budget
-            .checked_sub(encoded)
-            .ok_or_else(|| anyhow::anyhow!("Portable state exceeds the 16 MiB combined export limit."))?;
-        let item = metadata
-            .as_object()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Stored file metadata is invalid."))?;
-        wanted.push((file_id, item));
-    }
-    let mut portable_files = Vec::with_capacity(wanted.len());
-    for (file_id, mut item) in wanted {
-        let Some(bytes) = file_store::read_all(state.files.store.as_ref(), &deployment.id, &file_id).await? else {
-            continue;
-        };
-        item.insert("dataBase64".into(), Value::String(encode_base64(&bytes)));
-        portable_files.push(Value::Object(item));
-    }
-    let file_bundle = serde_json::to_vec(&json!({"files": portable_files}))?;
-    let total = database
-        .len()
-        .saturating_add(identity.len())
-        .saturating_add(file_bundle.len());
-    if total > PORTABLE_LIMIT {
-        anyhow::bail!("Portable state exceeds the 16 MiB combined export limit.");
-    }
-    Ok(json!({
-        "domain": domain::for_package(state, &deployment.id),
-        "initialDatabase": encode_base64(&database),
-        "initialIdentity": encode_base64(&identity),
-        "initialFiles": encode_base64(&file_bundle),
-        "initialSignupPolicy": deployment.signup_policy,
-        "initialSignInMethods": deployment.sign_in_methods,
-        "visibility": if is_private(deployment) { "private" } else { "public" },
-        "sizeBytes": total
-    }))
-}
-
-/// The data database, the sanitized identity database and the file index.
-async fn portable_snapshot(state: &AppState, deployment: &Deployment) -> Result<(Vec<u8>, Vec<u8>, Vec<Value>)> {
-    let backup_dir = backup_dir(state, &deployment.id);
-    tokio::fs::create_dir_all(&backup_dir).await?;
-    let database_path = database_path(state, &deployment.id);
-    let database = sqlite_snapshot(&database_path, &backup_dir, "portable-data").await?;
-    if database.len() > PORTABLE_LIMIT {
-        anyhow::bail!("Database exceeds the 16 MiB portable export limit.");
-    }
-
-    let identity_path = crate::layout::identity(&state
-        .data_root, &deployment.id);
-    let _ = open_auth(state, deployment)?;
-    let identity_copy = sqlite_snapshot(&identity_path, &backup_dir, "portable-identity").await?;
-    let identity_source = backup_dir.join(format!("identity-source-{}.sqlite", Uuid::new_v4()));
-    tokio::fs::write(&identity_source, identity_copy).await?;
-    let identity_sanitized =
-        backup_dir.join(format!("identity-sanitized-{}.sqlite", Uuid::new_v4()));
-    {
-        let connection = Connection::open(&identity_source)?;
-        connection.execute("DELETE FROM app_sessions", [])?;
-        connection.execute("DELETE FROM account_challenges", [])?;
-        invitations::forget_tokens(&connection)?;
-        connection.execute(
-            "VACUUM INTO ?1",
-            [identity_sanitized.to_string_lossy().as_ref()],
-        )?;
-    }
-    let identity = tokio::fs::read(&identity_sanitized).await?;
-    let _ = tokio::fs::remove_file(&identity_source).await;
-    let _ = tokio::fs::remove_file(&identity_sanitized).await;
-
-    let index_path = crate::layout::files(&state
-        .data_root, &deployment.id)
-        .join("index.json");
-    let file_index = match tokio::fs::read(index_path).await {
-        Ok(bytes) => serde_json::from_slice::<Vec<Value>>(&bytes)?,
-        Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(error_value) => return Err(error_value.into()),
-    };
-    Ok((database, identity, file_index))
-}
-
-async fn sqlite_snapshot(source: &Path, directory: &Path, label: &str) -> Result<Vec<u8>> {
-    let snapshot = directory.join(format!("{label}-{}.sqlite", Uuid::new_v4()));
-    let connection = Connection::open(source)?;
-    connection.execute("VACUUM INTO ?1", [snapshot.to_string_lossy().as_ref()])?;
-    drop(connection);
-    let bytes = tokio::fs::read(&snapshot).await?;
-    tokio::fs::remove_file(snapshot).await?;
-    Ok(bytes)
-}
 
 async fn admin_database(
     State(state): State<AppState>,
@@ -3145,145 +2919,6 @@ fn apply_additive_schema(path: &Path, schema: &str, program: &ActionProgram) -> 
     Ok(())
 }
 
-fn initialize_database_from_base64(path: &Path, encoded: &str, maximum_bytes: usize) -> Result<()> {
-    let bytes = decode_base64(encoded)?;
-    if bytes.len() > maximum_bytes {
-        anyhow::bail!("Initial database exceeds the 16 MiB limit.");
-    }
-    let temp = path.with_extension("initial.sqlite");
-    std::fs::write(&temp, &bytes)?;
-    let check = Connection::open(&temp)?;
-    let integrity: String = check.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-    let stored = sql_rules::stored_trigger_or_view(&check)?;
-    drop(check);
-    if integrity != "ok" {
-        let _ = std::fs::remove_file(&temp);
-        anyhow::bail!("Initial database failed SQLite's integrity check.");
-    }
-    if let Some(refusal) = stored {
-        let _ = std::fs::remove_file(&temp);
-        anyhow::bail!(refusal);
-    }
-    replace_database_file(&temp, path)?;
-    Ok(())
-}
-
-fn initialize_identity_from_base64(path: &Path, encoded: &str, maximum_bytes: usize) -> Result<()> {
-    let bytes = decode_base64(encoded)?;
-    if bytes.len() > maximum_bytes {
-        anyhow::bail!("Initial identity database exceeds 16 MiB.");
-    }
-    let temp = path.with_extension("initial-identity.sqlite");
-    std::fs::write(&temp, &bytes)?;
-    let check = Connection::open(&temp)?;
-    let integrity: String = check.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-    let has_users = check.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_users')",
-        [],
-        |row| row.get::<_, bool>(0),
-    )?;
-    drop(check);
-    if integrity != "ok" || !has_users {
-        let _ = std::fs::remove_file(&temp);
-        anyhow::bail!("Initial identity database is invalid.");
-    }
-    std::fs::rename(&temp, path)?;
-    let _ = AuthService::open(path)?;
-    let connection = Connection::open(path)?;
-    connection.execute("DELETE FROM app_sessions", [])?;
-    connection.execute("DELETE FROM account_challenges", [])?;
-    http::revoke_imported_keys(&connection)?;
-    invitations::forget_tokens(&connection)?;
-    Ok(())
-}
-
-/// Installs the small format's file bundle: the bytes through the store, the
-/// index into `directory`, the Deployment's `files` folder.
-async fn restore_initial_files(
-    files_store: &file_store::Files,
-    deployment: &str,
-    directory: &Path,
-    encoded: &str,
-    maximum_bytes: usize,
-) -> Result<()> {
-    let bytes = decode_base64(encoded)?;
-    if bytes.len() > maximum_bytes {
-        anyhow::bail!("Initial file bundle exceeds 16 MiB.");
-    }
-    let bundle: Value = serde_json::from_slice(&bytes)?;
-    let files = bundle
-        .get("files")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("Initial file bundle has no files array."))?;
-    tokio::fs::create_dir_all(directory).await?;
-    let mut metadata = Vec::new();
-    let mut total = 0usize;
-    for file in files {
-        let id = file
-            .get("id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("Initial file has no id."))?;
-        if !valid_file_id(id) {
-            anyhow::bail!("Initial file id is invalid.");
-        }
-        let data = decode_base64(
-            file.get("dataBase64")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("Initial file data is missing."))?,
-        )?;
-        if data.len() as u64 > files_store.limits.max_file_bytes {
-            anyhow::bail!("An initial file exceeds the {} limit.", files_store.limits.max_file());
-        }
-        total += data.len();
-        if total > maximum_bytes {
-            anyhow::bail!("Initial files exceed the 16 MiB limit.");
-        }
-        let declared_size = file
-            .get("size")
-            .and_then(Value::as_u64)
-            .unwrap_or(data.len() as u64);
-        if declared_size != data.len() as u64 {
-            anyhow::bail!("Initial file size does not match its data.");
-        }
-        let name = file
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or("file")
-            .replace(['/', '\\'], "-")
-            .chars()
-            .take(180)
-            .collect::<String>();
-        let content_type = file
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or("application/octet-stream");
-        let created_at = file
-            .get("createdAt")
-            .and_then(Value::as_u64)
-            .unwrap_or_else(now_ms);
-        let visibility = file_visibility(file);
-        let mut restored = json!({
-            "id": id,
-            "name": name,
-            "type": content_type,
-            "size": data.len(),
-            "visibility": visibility,
-            "createdAt": created_at,
-        });
-        if let Some(owner) = file_owner(file).filter(|owner| accepted_owner_id(owner)) {
-            restored["ownerId"] = Value::String(owner.to_owned());
-        }
-        let source = directory.join(format!(".{id}.initial-{}", Uuid::new_v4()));
-        tokio::fs::write(&source, data).await?;
-        let stored = files_store.store.put(deployment, id, &source).await;
-        let _ = tokio::fs::remove_file(&source).await;
-        stored?;
-        metadata.push(restored);
-    }
-    write_atomic(&directory.join("index.json"), &serde_json::to_vec_pretty(&metadata)?).await?;
-    Ok(())
-}
-
 /// Writes a sibling temp file and renames it over `path`, so readers never see
 /// a truncated file.
 async fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -3888,20 +3523,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deploy_input_reads_camel_case_portable_state_fields() {
+    fn deploy_input_reads_the_initial_signup_policy() {
         let input: DeployInput = serde_json::from_value(json!({
             "project": { "id": "app_1", "name": "App", "slug": "app", "files": {}, "manifest": {} },
             "visibility": "public",
             "artifact": { "version": 1, "entrypoint": "index.html", "files": { "index.html": "<main></main>" } },
-            "initialDatabase": "ZGF0YQ==",
-            "initialIdentity": "aWRlbnRpdHk=",
-            "initialFiles": "eyJmaWxlcyI6W119",
             "initialSignupPolicy": { "mode": "closed", "allowlist": [] }
         })).unwrap();
 
-        assert_eq!(input.initial_database.as_deref(), Some("ZGF0YQ=="));
-        assert_eq!(input.initial_identity.as_deref(), Some("aWRlbnRpdHk="));
-        assert_eq!(input.initial_files.as_deref(), Some("eyJmaWxlcyI6W119"));
         assert_eq!(input.initial_signup_policy.unwrap().mode, SignupMode::Closed);
     }
 
@@ -4358,16 +3987,6 @@ mod tests {
         }
         drop(db);
 
-        // A database that arrives with a trigger is refused before it is installed.
-        let source = root.join("source.sqlite");
-        let db = Connection::open(&source).unwrap();
-        db.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY); CREATE TRIGGER copy AFTER INSERT ON items BEGIN DELETE FROM items; END;").unwrap();
-        drop(db);
-        let encoded = encode_base64(&std::fs::read(&source).unwrap());
-        let target = root.join("imported.sqlite");
-        let refused = initialize_database_from_base64(&target, &encoded, 16 * 1024 * 1024).unwrap_err().to_string();
-        assert_eq!(refused, "The database holds CREATE TRIGGER copy, and Konae runs no triggers or views. Drop it before importing.");
-        assert!(!target.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -4823,30 +4442,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_small_export_refuses_by_the_index_before_reading_any_bytes() {
-        let root = std::env::temp_dir().join(format!("konae-portable-{}", Uuid::new_v4()));
-        let (state, _) = login_test_state(&root, "public").await;
-        let deployment = state.deployments.read().await.values().next().unwrap().clone();
-        let files = crate::layout::files(&root, &deployment.id);
-        tokio::fs::create_dir_all(&files).await.unwrap();
-        let (kept, gone, large) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
-        tokio::fs::write(files.join(format!("{kept}.blob")), b"hello").await.unwrap();
-        let entry = |id: &str, size: u64| json!({"id": id, "name": "f.txt", "type": "text/plain", "size": size, "visibility": "private", "ownerId": "x"});
-        // A file deleted after the index was taken is left out, as a copy leaves it out.
-        tokio::fs::write(files.join("index.json"), serde_json::to_vec(&json!([entry(&kept, 5), entry(&gone, 5)])).unwrap()).await.unwrap();
-        let exported = portable_state(&state, &deployment).await.unwrap();
-        let bundle: Value = serde_json::from_slice(&decode_base64(exported["initialFiles"].as_str().unwrap()).unwrap()).unwrap();
-        assert_eq!(bundle["files"].as_array().unwrap().len(), 1);
-        assert_eq!(bundle["files"][0]["id"], kept.as_str());
-        // A file the index says is too large is refused without its bytes:
-        // the store holds none for it, so a read would fail with another message.
-        tokio::fs::write(files.join("index.json"), serde_json::to_vec(&json!([entry(&kept, 5), entry(&large, 13 * 1024 * 1024)])).unwrap()).await.unwrap();
-        let refused = portable_state(&state, &deployment).await.unwrap_err().to_string();
-        assert_eq!(refused, "Portable state exceeds the 16 MiB combined export limit.");
-        let _ = tokio::fs::remove_dir_all(root).await;
-    }
-
-    #[tokio::test]
     async fn republish_stops_serving_files_missing_from_the_new_artifact() {
         let root = std::env::temp_dir().join(format!("konae-republish-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
@@ -5186,20 +4781,6 @@ mod tests {
         );
         let (member, _) = signed_in(&private_state, &private_deployment.id, &private_headers, "member@example.test");
         assert_eq!(list_files(State(private_state), member).await.status(), StatusCode::OK);
-
-        let restored = crate::layout::files(&root, &"restored");
-        let kept = Uuid::new_v4().to_string();
-        let orphan = Uuid::new_v4().to_string();
-        let bundle = json!({"files": [
-            {"id": kept, "name": "kept.txt", "type": "text/plain", "size": 2, "visibility": "public", "ownerId": "user-1", "createdAt": 1, "dataBase64": "aGk="},
-            {"id": orphan, "name": "orphan.txt", "type": "text/plain", "size": 2, "visibility": "public", "createdAt": 1, "dataBase64": "aGk="}
-        ]});
-        restore_initial_files(&file_store::Files::local(&root), "restored", &restored, &encode_base64(bundle.to_string().as_bytes()), 16 * 1024 * 1024).await.unwrap();
-        let restored_index: Vec<Value> = serde_json::from_slice(&tokio::fs::read(restored.join("index.json")).await.unwrap()).unwrap();
-        assert_eq!(restored_index[0]["ownerId"], "user-1");
-        assert_eq!(restored_index[0]["visibility"], "public");
-        assert!(restored_index[1].get("ownerId").is_none());
-        assert_eq!(restored_index[1]["visibility"], "public");
 
         let _ = tokio::fs::remove_dir_all(root).await;
     }

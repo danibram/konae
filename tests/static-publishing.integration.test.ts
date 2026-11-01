@@ -45,10 +45,11 @@ const capsule: Record<string, string | Uint8Array> = {
 };
 
 async function capsuleOnDisk(name: string, files: Record<string, string | Uint8Array>) {
+  // An app folder: the sources go in app/.
   const directory = path.join(root, "capsules", name);
   for (const [file, contents] of Object.entries(files)) {
-    await mkdir(path.dirname(path.join(directory, file)), { recursive: true });
-    await writeFile(path.join(directory, file), contents);
+    await mkdir(path.dirname(path.join(directory, "app", file)), { recursive: true });
+    await writeFile(path.join(directory, "app", file), contents);
   }
   return directory;
 }
@@ -205,9 +206,9 @@ describe("other answers for a missing path", () => {
   });
 
   test('"routing": "spa" serves index.html for every path the artifact does not hold', async () => {
-    const files = { "index.html": page("Single page", ""), "styles.css": "", "actions.json": capsule["actions.json"], "konae.json": "" };
+    const files = { "index.html": page("Single page", ""), "styles.css": "", "actions.json": capsule["actions.json"] };
     const directory = await capsuleOnDisk("spa", files);
-    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ url, project: { id: "static_spa", name: "spa", slug: "spa", manifest: { routing: "spa" } } }));
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "static_spa", name: "spa", slug: "spa", visibility: "public", signupPolicy: { mode: "open" }, signInMethods: ["password"], kernel: "0.1.0", manifest: { routing: "spa" } }));
     const { artifact } = await buildLocal(directory);
     await release("static_spa", artifact, { routing: "spa" });
     for (const pathname of ["/", "/boards/7", "/about", "/about/"]) {

@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient } from "../src/mcp/client";
-import { INIT_TEMPLATES, initLocal, publishLocal, setDevSecrets } from "../scripts/konae";
+import { INIT_TEMPLATES, configOf, initLocal, publishLocal, setDevSecrets } from "../scripts/konae";
 import { installPulledAlone, pullLocal, readPulled } from "../scripts/pull";
 
 // init, publish, pull and the first release of a Development Kernel, on two
@@ -71,7 +71,7 @@ describe("every template init offers", () => {
   for (const template of INIT_TEMPLATES) {
     test(`${template} publishes on a Kernel with no data and serves its page`, async () => {
       const folder = path.join(root, `template-${template}`);
-      const config = await initLocal(folder, { name: `Template ${template}`, template });
+      const config = configOf(await initLocal(folder, { name: `Template ${template}`, template }));
       const admin = new McpClient(`${local.url}/mcp`, { token: local.token });
       const { signupPolicy: _, ...manifest } = config.project.manifest;
       const set = await setDevSecrets(folder, admin, { ...config.project, manifest });
@@ -88,15 +88,15 @@ describe("every template init offers", () => {
 
 describe("a project starts the same through MCP and through init", () => {
   test("project_create answers the files init writes, the default and a named template, with the template's visibility", async () => {
-    const read = async (folder: string) => Object.fromEntries(await Promise.all(["actions.json", "app.js", "index.html", "schema.sql", "styles.css"].map(async (name) => [name, await readFile(path.join(folder, name), "utf8")])));
+    const read = async (folder: string) => Object.fromEntries(await Promise.all(["actions.json", "app.js", "index.html", "schema.sql", "styles.css"].map(async (name) => [name, await readFile(path.join(folder, "app", name), "utf8")])));
     const notes = path.join(root, "mcp-notes");
-    await initLocal(notes);
+    configOf(await initLocal(notes));
     const created = await origin.owner.call<{ files: Record<string, string>; manifest: { visibility: string } }>("project_create", { name: "From MCP" });
     expect(created.files).toEqual(await read(notes));
     expect(created).toMatchObject({ manifest: { visibility: "private" } });
 
     const tasks = path.join(root, "mcp-tasks");
-    const config = await initLocal(tasks, { template: "tasks" });
+    const config = configOf(await initLocal(tasks, { template: "tasks" }));
     const shared = await origin.owner.call<{ files: Record<string, string>; manifest: { visibility: string } }>("project_create", { name: "Shared from MCP", template: "tasks" });
     expect(shared.files).toEqual(await read(tasks));
     expect(shared.manifest.visibility).toBe(config.project.manifest.visibility);
@@ -111,7 +111,7 @@ describe("init, publish, pull, dev", () => {
 
   test("a project init wrote without a Kernel publishes, and its rows and accounts arrive on a Kernel with no data", async () => {
     app = path.join(root, "app");
-    config = await initLocal(app, { name: "Pulled notes" });
+    config = configOf(await initLocal(app, { name: "Pulled notes" }));
     expect(config.url).toBeUndefined();
 
     const published = await publishLocal(app, { ...config, url: origin.url }, origin.token);
@@ -147,17 +147,17 @@ describe("init, publish, pull, dev", () => {
     expect((await readPulled(app))?.manifest.projectId).toBe(config.project.id);
   }, 60_000);
 
-  test("actions that need a newer schema than the copy are refused, the copy installs alone, and the same SQL then lets the app publish", async () => {
+  test("actions that need a newer schema than the exported data are refused, the data imports alone, and the same SQL then lets the app publish", async () => {
     const next = path.join(root, "next");
-    const born = await initLocal(next, { name: "Next version" });
+    const born = configOf(await initLocal(next, { name: "Next version" }));
     const published = await publishLocal(next, { ...born, url: origin.url }, origin.token);
     await origin.owner.call("signup_policy_set", { deploymentId: published.id, mode: "open" });
     await (await member(origin, hostOf(published), "signup")).call("actions_invoke", { name: "notes.create", input: { title: "Before the column" } });
     const pulled = await pullLocal(next, new McpClient(`${origin.url}/mcp`, { token: origin.token }), origin.url, born.project.id);
 
-    const actions = await readFile(path.join(next, "actions.json"), "utf8");
+    const actions = await readFile(path.join(next, "app", "actions.json"), "utf8");
     expect(actions).toContain("SELECT id, title, created_at FROM notes");
-    await writeFile(path.join(next, "actions.json"), actions.replace("SELECT id, title, created_at FROM notes", "SELECT id, title, pinned, created_at FROM notes"));
+    await writeFile(path.join(next, "app", "actions.json"), actions.replace("SELECT id, title, created_at FROM notes", "SELECT id, title, pinned, created_at FROM notes"));
 
     const admin = new McpClient(`${local.url}/mcp`, { token: local.token });
     await expect(publishLocal(next, { ...born, url: local.url }, local.token, () => {}, pulled)).rejects.toThrow("no such column: pinned");

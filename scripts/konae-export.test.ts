@@ -1,118 +1,115 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
+import { createTar } from "../src/lib/tar";
 import { exportLocal } from "./konae";
 
-const config = {
-  url: "http://127.0.0.1:1",
-  project: { id: "offline_export", name: "Offline export", slug: "offline-export", manifest: { version: 1 } },
+const settings = {
+  id: "offline_export", name: "Offline export", slug: "offline-export", visibility: "private",
+  signupPolicy: { mode: "invitation", allowlist: [] }, signInMethods: ["password"], kernel: "0.1.0", manifest: { version: 1 },
 };
 
-test("CLI exports a source-only kit offline, keeps it private and refuses overwrite", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "konae-cli-export-"));
-  const output = path.join(root, "selfhost.tar");
+/** An app folder with konae.json and app/, as init writes it. */
+async function appFolder(prefix: string) {
+  const root = await mkdtemp(path.join(tmpdir(), prefix));
+  await mkdir(path.join(root, "app"));
+  await writeFile(path.join(root, "konae.json"), JSON.stringify(settings));
+  await writeFile(path.join(root, "app", "app.js"), "console.log('portable');");
+  await writeFile(path.join(root, "app", "schema.sql"), "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY);");
+  await writeFile(path.join(root, "app", "actions.json"), JSON.stringify({ version: 1, actions: {} }));
+  await mkdir(path.join(root, ".konae"));
+  await writeFile(path.join(root, ".konae", "credentials.json"), "{}");
+  return root;
+}
+
+async function listed(root: string, prefix = ""): Promise<string[]> {
+  const result: string[] = [];
+  for (const entry of await readdir(path.join(root, prefix), { withFileTypes: true })) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) result.push(...await listed(root, relative)); else result.push(relative);
+  }
+  return result.sort();
+}
+
+test("export writes the app folder offline: settings, sources, dist and the generated files, never .konae", async () => {
+  const root = await appFolder("konae-cli-export-");
+  const output = path.join(root, "..", `${path.basename(root)}-out`);
   try {
-    await writeFile(path.join(root, "app.js"), "console.log('portable');");
-    await writeFile(path.join(root, "schema.sql"), "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY);");
-    await writeFile(path.join(root, "actions.json"), JSON.stringify({ version: 1, actions: {} }));
-    expect(await exportLocal(root, config, output)).toBe(output);
-    expect((await stat(output)).mode & 0o777).toBe(0o600);
-    const archive = await readFile(output);
-    const tar = archive.toString("utf8");
-    const names: string[] = [];
-    for (let offset = 0; offset + 512 <= archive.length && archive[offset] !== 0;) {
-      names.push(archive.subarray(offset, offset + 100).toString("utf8").split("\0")[0]);
-      const size = Number.parseInt(archive.subarray(offset + 124, offset + 136).toString("utf8"), 8);
-      offset += 512 + Math.ceil(size / 512) * 512;
-    }
-    expect(tar).toContain("kernel-rs/src/limits.rs");
-    expect(tar).toContain('"visibility": "private"');
-    expect(tar).toContain("console.log('portable')");
-    expect(names).not.toContain("konae/initial-identity.sqlite");
-    await expect(exportLocal(root, config, output)).rejects.toMatchObject({ code: "EEXIST" });
+    expect(await exportLocal(root, output)).toEqual({ output, data: false });
+    const files = await listed(output);
+    expect(files).toEqual(expect.arrayContaining([
+      "konae.json", "app/app.js", "app/actions.json", "app/schema.sql", "dist/index.html",
+      "AGENTS.md", "action-contract.md", "compose.yaml", ".env.example", ".gitignore", "package.json", "scripts/build.mjs",
+    ]));
+    expect(files.some((file) => file.startsWith(".konae") || file.startsWith("data/"))).toBe(false);
+    expect(JSON.parse(await readFile(path.join(output, "konae.json"), "utf8"))).toEqual(settings);
+    expect(await readFile(path.join(output, "dist/index.html"), "utf8")).toContain("<script data-konae-runtime>");
+    await expect(exportLocal(root, output)).rejects.toThrow("Refusing to overwrite");
   } finally {
     await rm(root, { recursive: true, force: true });
+    await rm(output, { recursive: true, force: true });
   }
 }, 30_000);
 
-function readArchive(archive: Buffer) {
-  const files = new Map<string, Buffer>();
-  for (let offset = 0; offset + 512 <= archive.length && archive[offset] !== 0;) {
-    const name = archive.subarray(offset, offset + 100).toString("utf8").split("\0")[0];
-    const size = Number.parseInt(archive.subarray(offset + 124, offset + 136).toString("utf8"), 8);
-    files.set(name, archive.subarray(offset + 512, offset + 512 + size));
-    offset += 512 + Math.ceil(size / 512) * 512;
-  }
-  return files;
-}
-
-async function packageServer(visibility: unknown, refuse = false) {
+/** A Kernel stand-in that answers project_export with one database and the folder download. */
+async function exportServer(refuse = false) {
   const database = new TextEncoder().encode("SQLite snapshot");
-  const sha256 = Buffer.from(await crypto.subtle.digest("SHA-256", database)).toString("hex");
+  const filesTar = createTar([{ path: "index.json", contents: "[]" }]);
+  const digest = async (bytes: Uint8Array) => Buffer.from(await crypto.subtle.digest("SHA-256", bytes)).toString("hex");
   const manifest = {
-    format: "konae-package", version: 1, packageId: "package-1", createdAt: 1, deploymentId: "deployed-private", projectId: "offline_export",
-    visibility, signupPolicy: { mode: "closed", allowlist: [] }, publishedRevision: 3, contents: [{ name: "database", size: database.length, sha256 }], excluded: [],
+    format: "konae-package", version: 1, packageId: "package-1", createdAt: 1, deploymentId: "offline_export", projectId: "offline_export",
+    visibility: "private", signupPolicy: { mode: "closed", allowlist: [] }, publishedRevision: 3,
+    contents: [{ name: "database", size: database.length, sha256: await digest(database) }, { name: "files", size: filesTar.length, sha256: await digest(filesTar) }], excluded: [],
   };
+  const bodies: Record<string, Uint8Array> = { database, files: filesTar };
   const calls: string[] = [];
   const server = Bun.serve({
     port: 0, hostname: "127.0.0.1",
     async fetch(request) {
-      const message = await request.json() as { id?: string; method: string; params?: { name: string } };
+      const message = await request.json() as { id?: string; method: string; params?: { name: string; arguments: { transferId?: string } } };
       if (!message.id) return new Response(null, { status: 202 });
       if (message.method === "initialize") return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-11-25" } });
       const name = message.params?.name ?? "";
       calls.push(name);
-      if (name === "package_export" && refuse) return Response.json({ jsonrpc: "2.0", id: message.id, error: { code: -32602, message: "Unknown tool or insufficient permission." } });
-      const result = name === "project_inspect" ? { deployment: { id: "deployed-private", manifest: { version: 1, visibility: "public" } } }
-        : name === "package_export" ? { manifest, downloads: { database: { transferId: "database", size: database.length, sha256, chunkBytes: 65536 } } }
-        : name === "transfer_read" ? { data: Buffer.from(database).toString("base64"), offset: 0, nextOffset: database.length } : {};
+      if (name === "project_export" && refuse) return Response.json({ jsonrpc: "2.0", id: message.id, error: { code: -32602, message: "Unknown tool or insufficient permission." } });
+      const transfer = async (id: string) => ({ transferId: id, size: bodies[id].length, sha256: await digest(bodies[id]), chunkBytes: 65536 });
+      const result = name === "project_inspect" ? { deployment: { id: "offline_export" } }
+        : name === "project_export" ? { manifest, downloads: { database: await transfer("database"), files: await transfer("files") }, folder: { transferId: "folder", size: 1, sha256: "0".repeat(64), chunkBytes: 65536 }, sourcesAhead: false }
+        : name === "transfer_read" ? (() => { const body = bodies[message.params!.arguments.transferId!]; return { data: Buffer.from(body).toString("base64"), offset: 0, nextOffset: body.length }; })() : {};
       return Response.json({ jsonrpc: "2.0", id: message.id, result: { structuredContent: { result } } });
     },
   });
   return { server, calls, database };
 }
 
-async function exportWith(visibility: unknown, refuse = false) {
-  const { server, calls, database } = await packageServer(visibility, refuse);
-  const root = await mkdtemp(path.join(tmpdir(), "konae-cli-live-export-"));
-  await writeFile(path.join(root, "app.js"), "console.log('private');");
-  await writeFile(path.join(root, "schema.sql"), "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY);");
-  await writeFile(path.join(root, "actions.json"), JSON.stringify({ version: 1, actions: {} }));
-  const output = path.join(root, "selfhost.tar");
-  const stale = { ...config, url: `http://127.0.0.1:${server.port}`, project: { ...config.project, manifest: { version: 1, visibility: "public" } } };
-  const done = async () => { server.stop(true); await rm(root, { recursive: true, force: true }); };
-  return { run: () => exportLocal(root, stale, output, "owner-token"), output, calls, database, done };
-}
-
-test("export --with-data writes the package manifest and streams each component into the kit", async () => {
-  const { run, output, calls, database, done } = await exportWith("private");
+test("export --with-data writes the published app's data into data/ and releases every download", async () => {
+  const { server, calls, database } = await exportServer();
+  const root = await appFolder("konae-cli-live-export-");
+  const output = `${root}-out`;
   try {
-    await run();
-    expect((await stat(output)).mode & 0o777).toBe(0o600);
-    const files = readArchive(await readFile(output));
-    expect(JSON.parse(files.get("konae/project.json")!.toString()).manifest.visibility).toBe("private");
-    expect(JSON.parse(files.get("konae/package/manifest.json")!.toString())).toMatchObject({ version: 1, publishedRevision: 3, signupPolicy: { mode: "closed" } });
-    expect(new Uint8Array(files.get("konae/package/database.sqlite")!)).toEqual(database);
-    expect(files.has("konae/initial-database.sqlite")).toBe(false);
-    expect(calls).toEqual(["project_inspect", "package_export", "transfer_read", "transfer_cancel", "transfer_cancel"]);
-  } finally { await done(); }
-}, 30_000);
-
-for (const visibility of [undefined, "invalid"]) test(`export --with-data refuses a package with ${visibility ?? "no"} visibility`, async () => {
-  const { run, output, calls, done } = await exportWith(visibility);
-  try {
-    await expect(run()).rejects.toThrow("no valid visibility");
-    await expect(stat(output)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(calls).toEqual(["project_inspect", "package_export", "transfer_cancel"]);
-  } finally { await done(); }
+    expect(await exportLocal(root, output, { url: `http://127.0.0.1:${server.port}`, token: "owner-token" })).toEqual({ output, data: true });
+    expect(new Uint8Array(await readFile(path.join(output, "data/database.sqlite")))).toEqual(database);
+    expect(await readFile(path.join(output, "data/files/index.json"), "utf8")).toBe("[]");
+    // The two data downloads and the folder download are each released.
+    expect(calls.filter((call) => call === "transfer_cancel").length).toBeGreaterThanOrEqual(3);
+  } finally {
+    server.stop(true);
+    await rm(root, { recursive: true, force: true });
+    await rm(output, { recursive: true, force: true });
+  }
 }, 30_000);
 
 test("export --with-data names export_data when the credential lacks it", async () => {
-  const { run, output, calls, done } = await exportWith("private", true);
+  const { server, calls } = await exportServer(true);
+  const root = await appFolder("konae-cli-refused-export-");
+  const output = `${root}-out`;
   try {
-    await expect(run()).rejects.toThrow("export_data");
-    await expect(stat(output)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(calls).toEqual(["project_inspect", "package_export"]);
-  } finally { await done(); }
+    await expect(exportLocal(root, output, { url: `http://127.0.0.1:${server.port}`, token: "owner-token" })).rejects.toThrow("export_data");
+    expect(calls).toEqual(["project_inspect", "project_export"]);
+  } finally {
+    server.stop(true);
+    await rm(root, { recursive: true, force: true });
+    await rm(output, { recursive: true, force: true });
+  }
 }, 30_000);
