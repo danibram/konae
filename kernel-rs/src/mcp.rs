@@ -191,9 +191,17 @@ pub(super) fn owned_project(state: &AppState, owner: &Owner, id: &str, scope: &s
     Ok((serde_json::from_str(&body)?, revision))
 }
 
-/// A project ID names the app's folder, so it holds only letters, digits, "_" and "-".
+/// Lock names the Kernel takes besides an app's ID.
+const RESERVED_IDS: [&str; 4] = ["domains", "paths", "owner-auth", "transfer-quota"];
+
+/// A project ID names the app's folder and its lock, so it holds only
+/// lowercase letters, digits, "_" and "-": two IDs that differ in case would
+/// share a folder on a volume that ignores case.
 pub(super) fn valid_app_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 100 && id.bytes().all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
+    !id.is_empty()
+        && id.len() <= 100
+        && id.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_-".contains(&c))
+        && !RESERVED_IDS.contains(&id)
 }
 
 pub(super) const DELETE_NAME_MISMATCH: &str = "The name does not match this project. Type the project's name exactly to delete it.";
@@ -279,8 +287,10 @@ async fn park(folder: &Path, trash: &Path, id: &str) -> Result<()> {
 
 fn validate_sources(source: &Value, id: &str) -> Result<()> {
     let string = |value: &Value, max: usize| value.as_str().is_some_and(|s| s.len() <= max);
+    // A name starting with a dot is a temporary file to the Kernel, which a copy leaves behind.
     let path = |value: &str| value.len() <= 240 && value.trim() == value
-        && safe_relative_path(value) && !value.chars().any(|c| c.is_control());
+        && safe_relative_path(value) && !value.chars().any(|c| c.is_control())
+        && !value.split('/').any(|part| part.starts_with('.'));
     anyhow::ensure!(source["id"] == id && string(&source["name"], 80)
         && source["name"].as_str().is_some_and(|s| !s.trim().is_empty())
         && string(&source["slug"], 100) && source["updatedAt"].as_u64().is_some(), "Invalid project metadata. Send {{ id, name, slug, files, directories, manifest, updatedAt }} with the project's own id, a name of 1 to 80 characters, a slug of up to 100 and updatedAt in milliseconds.");
@@ -1280,13 +1290,7 @@ async fn admin_call(
                 .map(str::to_owned)
                 .unwrap_or_else(|| format!("app_{}", Uuid::new_v4()));
             owner.require("write", Some(&id))?;
-            anyhow::ensure!(
-                id.len() <= 100
-                    && id
-                        .bytes()
-                        .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c)),
-                "Invalid project ID."
-            );
+            anyhow::ensure!(valid_app_id(&id), "Invalid project ID. Use lowercase letters, digits, \"_\" and \"-\".");
             let initial_sources = if let Some(transfer_id) = a["sourcesTransferId"].as_str() {
                 let upload = transfer(state, principal, &json!({"transferId":transfer_id}))?;
                 anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload"
@@ -1332,6 +1336,10 @@ async fn admin_call(
                     .values()
                     .any(|d| d.project_id == id),
                 "Existing deployments must be claimed by their original operator."
+            );
+            anyhow::ensure!(
+                !crate::layout::folder(&state.data_root, &id).exists(),
+                "An app folder with this ID already exists on this installation. Choose another project ID."
             );
             let template = project_template(a["template"].as_str())?;
             let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"manifest":a.get("manifest").cloned().unwrap_or(json!({"version":1,"visibility":template["visibility"]})),"files":template["files"]});
@@ -2592,6 +2600,14 @@ mod tests {
         let again = call("project_delete", json!({"projectId": draft, "name": "Draft"})).await.unwrap_err();
         assert_eq!(again.to_string(), "Project not found or access denied.");
         let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[test]
+    fn an_app_id_is_lowercase_and_never_a_lock_the_kernel_keeps() {
+        assert!(valid_app_id("app_0f2c-notes"));
+        for refused in ["", "App_x", "app/x", "app.x", "domains", "paths", &"a".repeat(101)] {
+            assert!(!valid_app_id(refused), "{refused}");
+        }
     }
 
     #[tokio::test]

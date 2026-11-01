@@ -751,7 +751,8 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         .as_ref()
         .map(|item| item.hostname.clone())
         .unwrap_or_else(|| {
-            let short_id = mcp::digest(id.as_bytes()).chars().take(6).collect::<String>();
+            // Random, so no project ID can be chosen to land on another app's address.
+            let short_id = Uuid::new_v4().simple().to_string().chars().take(6).collect::<String>();
             format!(
                 "{}-{}.{}",
                 safe_slug(&input.project.slug),

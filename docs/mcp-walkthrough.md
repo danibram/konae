@@ -336,11 +336,11 @@ bun run konae -- dev --dir /tmp/orders --port 8796
 ```
 
 ```text
-http://orders-<suffix>.localhost:8796
+http://orders-<dev suffix>.localhost:8796
 ```
 
 ```sh
-curl -i 'http://orders-<suffix>.localhost:8796/'
+curl -i 'http://orders-<dev suffix>.localhost:8796/'
 ```
 
 ```text
@@ -1545,8 +1545,8 @@ Built .konae/artifact.json
 {
   "result": {
     "id": "<project id>",
-    "hostname": "orders-<suffix>.localhost",
-    "url": "http://orders-<suffix>.localhost:4174",
+    "hostname": "orders-<destination suffix>.localhost",
+    "url": "http://orders-<destination suffix>.localhost:4174",
     "signupPolicy": {
       "allowlist": [],
       "mode": "invitation"
@@ -1560,7 +1560,7 @@ Sessions and email links stay behind, so the member signs in again with the same
 
 <!-- walkthrough:import-check -->
 ```sh
-curl -i -X POST 'http://orders-<suffix>.localhost:4174/_konae/auth/login' -H 'content-type: application/json' --data '{"email":"member@walkthrough.test","password":"walkthrough-member-password"}'
+curl -i -X POST 'http://orders-<destination suffix>.localhost:4174/_konae/auth/login' -H 'content-type: application/json' --data '{"email":"member@walkthrough.test","password":"walkthrough-member-password"}'
 ```
 
 ```text
