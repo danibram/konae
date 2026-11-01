@@ -192,50 +192,35 @@ pub(super) fn owned_project(state: &AppState, owner: &Owner, id: &str, scope: &s
     Ok((serde_json::from_str(&body)?, revision))
 }
 
+/// A project ID names the app's folder, so it holds only letters, digits, "_" and "-".
+pub(super) fn valid_app_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 100 && id.bytes().all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
+}
+
 pub(super) const DELETE_NAME_MISMATCH: &str = "The name does not match this project. Type the project's name exactly to delete it.";
 
-/// Removes a project and every Deployment of it. Each Deployment leaves the
-/// routing map first, so its address stops answering, and its folder is
-/// renamed out of `deployments/` before anything is deleted: a Kernel that
-/// stops halfway never reloads half a Deployment. The registry rows go last,
-/// so a failure leaves a project the owner can see and delete again.
+/// Removes a project, its app folder and its Deployment. The Deployment
+/// leaves the routing map first, so its address stops answering, and the
+/// folder is renamed out of `apps/` before anything is deleted: a Kernel that
+/// stops halfway never reloads half an app. The registry rows go last, so a
+/// failure leaves a project the owner can see and delete again.
 async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
-    let removed: Vec<Deployment> = {
+    let published = {
         let mut deployments = state.deployments.write().await;
-        let hosts: Vec<String> = deployments.iter().filter(|(_, d)| d.project_id == id).map(|(host, _)| host.clone()).collect();
-        hosts.into_iter().filter_map(|host| deployments.remove(&host)).collect()
+        let hosts: Vec<String> = deployments.iter().filter(|(_, d)| d.id == id).map(|(host, _)| host.clone()).collect();
+        hosts.into_iter().filter_map(|host| deployments.remove(&host)).count() > 0
     };
-    // A Deployment the map never loaded still owns a folder with its project ID.
-    let mut ids: Vec<String> = removed.iter().map(|d| d.id.clone()).collect();
-    if let Ok(mut entries) = tokio::fs::read_dir(crate::layout::apps(&state.data_root)).await {
-        while let Some(entry) = entries.next_entry().await? {
-            let Ok(bytes) = tokio::fs::read(entry.path().join("deployment.json")).await else { continue };
-            let Ok(record) = serde_json::from_slice::<Value>(&bytes) else { continue };
-            if record["projectId"] == id {
-                if let Some(name) = entry.file_name().to_str() {
-                    if !ids.iter().any(|known| known == name) { ids.push(name.to_owned()); }
-                }
-            }
-        }
-    }
+    // A Deployment the map never loaded still has its record in the folder.
+    let ids: Vec<String> = if published || tokio::fs::try_exists(crate::layout::record(&state.data_root, id)).await? { vec![id.to_owned()] } else { Vec::new() };
     let trash = state.data_root.join("deleted");
     tokio::fs::create_dir_all(&trash).await?;
+    let folder = crate::layout::folder(&state.data_root, id);
     for deployment in &ids {
         let _data = database_lock(state, deployment).await;
         let _identity = database_lock(state, &format!("identity:{deployment}")).await;
         super::domain::forget(state, deployment).await?;
         super::path::forget(state, deployment).await?;
-        let folder = deployment_dir(state, deployment);
-        let parked = trash.join(format!("{deployment}-{}", Uuid::new_v4().simple()));
-        match tokio::fs::rename(&folder, &parked).await {
-            Ok(()) => {
-                if let Err(error_value) = tokio::fs::remove_dir_all(&parked).await {
-                    eprintln!("Could not remove deleted Deployment {}: {error_value}", parked.display());
-                }
-            }
-            Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error_value) => return Err(error_value.into()),
-        }
+        park(&folder, &trash, deployment).await?;
         // The folder held the index, so no file of this Deployment is readable
         // any more; a failure here leaves objects for files-reconcile.
         super::file_store::forget_deployment(state.files.store.as_ref(), deployment).await;
@@ -246,6 +231,8 @@ async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
             }
         }
     }
+    // A project that was never published still has a folder with its sources.
+    park(&folder, &trash, id).await?;
     let mut db = store(state)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     for (table, column) in [("project_sources", "project"), ("plans", "project"), ("package_imports", "project"), ("project_secrets", "project")] {
@@ -257,6 +244,21 @@ async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
     tx.execute("DELETE FROM projects WHERE id=?1", [id])?;
     tx.commit()?;
     Ok(ids)
+}
+
+/// Renames the folder into the trash, then deletes it there.
+async fn park(folder: &Path, trash: &Path, id: &str) -> Result<()> {
+    let parked = trash.join(format!("{id}-{}", Uuid::new_v4().simple()));
+    match tokio::fs::rename(folder, &parked).await {
+        Ok(()) => {
+            if let Err(error_value) = tokio::fs::remove_dir_all(&parked).await {
+                eprintln!("Could not remove deleted app {}: {error_value}", parked.display());
+            }
+            Ok(())
+        }
+        Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error_value) => Err(error_value.into()),
+    }
 }
 
 fn validate_sources(source: &Value, id: &str) -> Result<()> {
@@ -2676,7 +2678,7 @@ mod tests {
                 guards: Arc::new(Guards::new(Vec::new())),
             };
             let mut deployment: Deployment = serde_json::from_value(json!({
-                "id": "d1", "projectId": "p1", "projectName": "Practice", "url": "http://practice.localhost:8790", "createdAt": 0,
+                "id": "p1", "projectId": "p1", "projectName": "Practice", "slug": "practice", "artifactVersion": "v1", "signupPolicy": {"mode": "closed"}, "signInMethods": ["password"], "url": "http://practice.localhost:8790", "createdAt": 0,
                 "manifest": {"visibility": "private"}, "hostname": "practice.localhost", "actions": "{\"version\":1,\"actions\":{}}"
             }))
             .unwrap();
@@ -2729,7 +2731,7 @@ mod tests {
             guards: Arc::new(Guards::new(Vec::new())),
         };
         let mut deployment: Deployment = serde_json::from_value(json!({
-            "id": "d1", "projectId": "p1", "projectName": "Practice", "url": "http://practice.localhost:8790", "createdAt": 0,
+            "id": "p1", "projectId": "p1", "projectName": "Practice", "slug": "practice", "artifactVersion": "v1", "signupPolicy": {"mode": "closed"}, "signInMethods": ["password"], "url": "http://practice.localhost:8790", "createdAt": 0,
             "manifest": {"visibility": "private"}, "hostname": "practice.localhost", "actions": "{}"
         }))
         .unwrap();

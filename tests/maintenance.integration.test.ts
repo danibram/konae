@@ -5,7 +5,7 @@ import path from "node:path";
 import { appFetch, buildKernel, release, startKernel, type Kernel } from "./kernel-harness";
 
 // An app in maintenance takes no writes. kernel-rs/src/maintenance.rs reads
-// deployments/<id>/maintenance.json at startup; no tool writes it yet, so the
+// apps/<id>/.konae/maintenance.json at startup; no tool writes it yet, so the
 // test writes the file while the Kernel is stopped, as an operator would.
 let root: string;
 let kernel: Kernel;
@@ -41,7 +41,7 @@ test("an app in maintenance serves its page, refuses writes and owner changes, a
   expect((await invoke("notes.add", { body: "before" })).status).toBe(200);
 
   await kernel.stop();
-  await writeFile(path.join(kernel.data, "deployments", receipt.id, "maintenance.json"), JSON.stringify({ since: Date.now() }));
+  await writeFile(path.join(kernel.data, "apps", receipt.id, ".konae", "maintenance.json"), JSON.stringify({ since: Date.now() }));
   await kernel.start();
 
   const page = await appFetch(kernel, receipt.hostname, "/", { headers: { accept: "text/html" } });

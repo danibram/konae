@@ -85,7 +85,7 @@ fn load_index(root: &Path) -> Index {
     let Ok(entries) = std::fs::read_dir(crate::layout::apps(&root)) else { return index };
     for entry in entries.flatten() {
         let Some(id) = entry.file_name().to_str().map(str::to_owned) else { continue };
-        let Some(record) = std::fs::read(entry.path().join(RECORD_FILE)).ok().and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok()) else {
+        let Some(record) = std::fs::read(crate::layout::private(root, &id).join(RECORD_FILE)).ok().and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok()) else {
             continue;
         };
         if record.enabled {
@@ -234,14 +234,14 @@ pub(crate) fn foreign_referer(state: &AppState, headers: &HeaderMap, deployment_
 // Records
 
 pub(super) fn read_record(state: &AppState, id: &str) -> Option<Record> {
-    let bytes = std::fs::read(deployment_dir(state, id).join(RECORD_FILE)).ok()?;
+    let bytes = std::fs::read(crate::layout::private(&state.data_root, id).join(RECORD_FILE)).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
 /// Writes or removes the record and moves the index to match. Callers hold
 /// the `paths` lock.
 async fn write_record(state: &AppState, id: &str, record: Option<&Record>) -> Result<()> {
-    let path = deployment_dir(state, id).join(RECORD_FILE);
+    let path = crate::layout::private(&state.data_root, id).join(RECORD_FILE);
     let previous = read_record(state, id);
     match record {
         Some(record) => write_atomic(&path, &serde_json::to_vec_pretty(record)?).await?,

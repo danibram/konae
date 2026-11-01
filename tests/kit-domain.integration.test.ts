@@ -69,7 +69,7 @@ test("portable export carries only the domain name and an import remains pending
   const pending = await client.call<{ status: string; record: { value: string } }>("domain_read", { deploymentId: imported.id });
   expect(pending.status).toBe("pending");
   expect(pending.record.value).not.toBe(domain.record.value);
-  const persisted = JSON.parse(await readFile(path.join(root, "deployments", imported.id, "domain.json"), "utf8"));
+  const persisted = JSON.parse(await readFile(path.join(root, "apps", imported.id, ".konae", "domain.json"), "utf8"));
   expect(persisted.verified).toBe(false);
 });
 

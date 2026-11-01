@@ -950,21 +950,23 @@ mod tests {
         let mut deployments = HashMap::new();
         for host in [APP, OTHER] {
             let hostname = host.split(':').next().unwrap();
+            let app_id = Uuid::new_v4().to_string();
             let item = Deployment {
-                id: Uuid::new_v4().to_string(),
-                project_id: Uuid::new_v4().to_string(),
+                id: app_id.clone(),
+                project_id: app_id,
                 project_name: "Practice".into(),
+                slug: "app".into(),
                 url: format!("http://{host}"),
                 created_at: now_ms(),
                 manifest: json!({"visibility": "private"}),
                 hostname: hostname.into(),
                 actions: "{}".into(),
-                artifact_version: None,
+                artifact_version: "v1".into(),
                 signup_policy: SignupPolicy::from_input(mode, &["@practice.example".into()]).unwrap(),
                 sign_in_methods: vec![SignInMethod::Password, SignInMethod::Google],
                 contact_email: None,
             };
-            std::fs::create_dir_all(crate::layout::folder(&root, &item.id)).unwrap();
+            std::fs::create_dir_all(crate::layout::data(&root, &item.id)).unwrap();
             deployments.insert(hostname.to_owned(), item);
         }
         let state = AppState {
@@ -1145,7 +1147,8 @@ mod tests {
         assert!(shown.contains(&query["redirect_uri"]));
         // A verified custom domain adds its own callback, and starts there send it.
         let record = domain::Record { hostname: "practice.example.com".into(), token: "t".into(), verified: true, verified_at: Some(1), created_at: 1 };
-        std::fs::write(crate::layout::folder(&fixture.root, &app.id).join(domain::RECORD_FILE), serde_json::to_vec(&record).unwrap()).unwrap();
+        std::fs::create_dir_all(crate::layout::private(&fixture.root, &app.id)).unwrap();
+        std::fs::write(crate::layout::private(&fixture.root, &app.id).join(domain::RECORD_FILE), serde_json::to_vec(&record).unwrap()).unwrap();
         let shown = redirect_uris(&fixture.state, &app);
         assert_eq!(shown[1], format!("http://practice.example.com:8790{CALLBACK_PATH}"));
         // A host whose callback the owner was not shown does not start a flow.

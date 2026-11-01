@@ -834,21 +834,23 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-invitations-{}", Uuid::new_v4()));
         let mut deployments = HashMap::new();
         for host in [APP_HOST, OTHER_HOST] {
+            let app_id = Uuid::new_v4().to_string();
             let item = Deployment {
-                id: Uuid::new_v4().to_string(),
-                project_id: Uuid::new_v4().to_string(),
+                id: app_id.clone(),
+                project_id: app_id,
                 project_name: "Invitation test".into(),
+                slug: "app".into(),
                 url: format!("http://{host}"),
                 created_at: now_ms(),
                 manifest: json!({"visibility": "private"}),
                 hostname: host.into(),
                 actions: "{}".into(),
-                artifact_version: None,
+                artifact_version: "v1".into(),
                 signup_policy: SignupPolicy::from_input(mode, &[]).unwrap(),
                 sign_in_methods: default_sign_in_methods(),
                 contact_email: None,
             };
-            std::fs::create_dir_all(crate::layout::folder(&root, &item.id)).unwrap();
+            std::fs::create_dir_all(crate::layout::data(&root, &item.id)).unwrap();
             deployments.insert(host.to_owned(), item);
         }
         let mailbox = Arc::new(MemoryMailbox::default());
@@ -1303,9 +1305,9 @@ mod tests {
         drop(copy);
 
         let imported_id = Uuid::new_v4().to_string();
-        let directory = crate::layout::folder(&fixture.root, &imported_id);
+        let directory = crate::layout::data(&fixture.root, &imported_id);
         std::fs::create_dir_all(&directory).unwrap();
-        super::super::initialize_identity_from_base64(&directory.join("identity.sqlite"), exported["initialIdentity"].as_str().unwrap(), 16 << 20).unwrap();
+        super::super::initialize_identity_from_base64(&crate::layout::identity(&fixture.root, &imported_id), exported["initialIdentity"].as_str().unwrap(), 16 << 20).unwrap();
         let imported = Deployment { id: imported_id, hostname: "invite-imported.localhost".into(), url: "http://invite-imported.localhost".into(), ..app.clone() };
         fixture.state.deployments.write().await.insert(imported.hostname.clone(), imported.clone());
         let answer = |token: String| {

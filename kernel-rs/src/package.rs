@@ -220,7 +220,7 @@ pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id:
         "A package export needs {} free transfers. Cancel completed transfers first.",
         COMPONENT_NAMES.len()
     );
-    let folder = deployment_dir(state, &deployment.id);
+    let folder = crate::layout::data(&state.data_root, &deployment.id);
     let scratch = state.data_root.join("transfers").join(format!(".package-{}", Uuid::new_v4()));
     let captured = {
         let _project = database_lock(state, &format!("project:{}", deployment.project_id)).await;
@@ -262,7 +262,7 @@ pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id:
         signup_policy: Some(deployment.signup_policy.clone()),
         sign_in_methods: Some(deployment.sign_in_methods.clone()),
         published_revision,
-        artifact_version: deployment.artifact_version.clone(),
+        artifact_version: Some(deployment.artifact_version.clone()),
         sources_revision,
         contents: components.iter().map(|(name, _, size, sha256)| Content { name: name.clone(), size: *size, sha256: sha256.clone() }).collect(),
         excluded: EXCLUDED.iter().map(|item| (*item).to_owned()).collect(),
@@ -647,12 +647,12 @@ pub(super) fn copy_database(state: &AppState, package: &InitialPackage, target: 
 /// its record does. Copies each component in, checking its SHA-256 as it
 /// goes, revokes sessions, links and keys, and unpacks the files. The
 /// uploads stay intact, so a failed release can be retried.
-pub(super) async fn install(state: &AppState, package: &InitialPackage, project_id: &str, directory: &Path) -> Result<()> {
-    let uploads = component_uploads(state, None, project_id, package)?;
-    let folder = directory.to_owned();
-    let directory = directory.to_owned();
+/// Copies the components into the `data/` of the app `id`.
+pub(super) async fn install(state: &AppState, package: &InitialPackage, id: &str) -> Result<()> {
+    let uploads = component_uploads(state, None, id, package)?;
+    let directory = crate::layout::data(&state.data_root, id);
     let file_limits = state.files.limits;
-    let deployment_id = directory.file_name().and_then(|name| name.to_str()).context("The Deployment folder has no name.")?;
+    let deployment_id = id;
     let blobs = file_store::BlockingFiles::new(state.files.store.clone(), deployment_id);
     tokio::task::spawn_blocking(move || {
         let find = |name: &str| uploads.iter().find(|(c, _)| c.name == name);
@@ -677,7 +677,7 @@ pub(super) async fn install(state: &AppState, package: &InitialPackage, project_
         Ok::<_, anyhow::Error>(())
     })
     .await??;
-    super::domain::arrive(state, &folder, package.manifest.domain.as_deref()).await
+    super::domain::arrive(state, id, package.manifest.domain.as_deref()).await
 }
 
 fn copy_verified(source: &Path, target: &Path, content: &Content) -> Result<()> {
@@ -762,7 +762,7 @@ mod tests {
             signup_policy: None,
             sign_in_methods: None,
             published_revision: 1,
-            artifact_version: None,
+            artifact_version: Some("v1".into()),
             sources_revision: None,
             contents: vec![Content { name: "database".into(), size: 4096, sha256: "a".repeat(64) }],
             excluded: vec![],

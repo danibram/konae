@@ -1779,12 +1779,13 @@ mod tests {
             id: Uuid::new_v4().to_string(),
             project_id: project.into(),
             project_name: "Tasks <b>& co</b>".into(),
+            slug: "app".into(),
             url: format!("http://{host}"),
             created_at: now_ms(),
             manifest: json!({"visibility": "public"}),
             hostname: host.into(),
             actions: "{}".into(),
-            artifact_version: None,
+            artifact_version: "v1".into(),
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
             contact_email: Some("owner@example.test".into()),
@@ -1801,7 +1802,7 @@ mod tests {
         let other = deployment("notes.localhost", "project-b");
         let mut deployments = HashMap::new();
         for item in [&app, &other] {
-            std::fs::create_dir_all(crate::layout::folder(&root, &item.id)).unwrap();
+            std::fs::create_dir_all(crate::layout::data(&root, &item.id)).unwrap();
             deployments.insert(item.hostname.clone(), item.clone());
         }
         // Both projects belong to one creator.
@@ -2636,7 +2637,7 @@ mod tests {
     /// The `notify` lines of the app's Usage, by name.
     fn notice_usage(fixture: &Fixture) -> Vec<(String, i64)> {
         super::super::usage::flush();
-        let db = Connection::open(crate::layout::folder(&fixture.root, &fixture.app.id).join("usage.sqlite")).unwrap();
+        let db = Connection::open(crate::layout::usage(&fixture.root, &fixture.app.id)).unwrap();
         let mut statement = db.prepare("SELECT name, SUM(count) FROM usage_daily WHERE kind = 'notify' GROUP BY name ORDER BY name").unwrap();
         statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
     }

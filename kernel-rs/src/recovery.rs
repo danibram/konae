@@ -371,12 +371,12 @@ mod tests {
     #[test]
     fn a_restore_never_revives_a_suspended_account_or_a_revoked_key() {
         let root = scratch();
-        let folder = root.join("deployments/app-1");
-        std::fs::create_dir_all(&folder).unwrap();
-        let app = AuthService::open(folder.join("identity.sqlite")).unwrap();
+        let folder = crate::layout::folder(&root, "app-1");
+        std::fs::create_dir_all(folder.join("data")).unwrap();
+        let app = AuthService::open(folder.join("data/identity.sqlite")).unwrap();
         let kept = app.signup("kept@example.test", "correct horse battery").unwrap();
         let gone = app.signup("gone@example.test", "correct horse battery").unwrap();
-        Connection::open(folder.join("identity.sqlite"))
+        Connection::open(folder.join("data/identity.sqlite"))
             .unwrap()
             .execute_batch("CREATE TABLE api_keys(id TEXT PRIMARY KEY, revoked_at INTEGER); INSERT INTO api_keys VALUES('key-1', NULL), ('key-2', NULL);")
             .unwrap();
@@ -393,16 +393,16 @@ mod tests {
         let state = |path: &Path, id: &str| -> String {
             Connection::open(path).unwrap().query_row("SELECT state FROM app_users WHERE id=?1", [id], |r| r.get(0)).unwrap()
         };
-        assert_eq!(state(&folder.join("identity.sqlite"), &gone.user.user_id), "suspended");
-        assert_ne!(state(&folder.join("identity.sqlite"), &kept.user.user_id), "suspended");
+        assert_eq!(state(&folder.join("data/identity.sqlite"), &gone.user.user_id), "suspended");
+        assert_ne!(state(&folder.join("data/identity.sqlite"), &kept.user.user_id), "suspended");
         assert_eq!(state(&root.join("owners.sqlite"), &creator.user.user_id), "suspended");
-        let sessions: i64 = Connection::open(folder.join("identity.sqlite"))
+        let sessions: i64 = Connection::open(folder.join("data/identity.sqlite"))
             .unwrap()
             .query_row("SELECT COUNT(*) FROM app_sessions WHERE user_id=?1", [&gone.user.user_id], |r| r.get(0))
             .unwrap();
         assert_eq!(sessions, 0);
         let revoked: Vec<(String, Option<i64>)> = {
-            let db = Connection::open(folder.join("identity.sqlite")).unwrap();
+            let db = Connection::open(folder.join("data/identity.sqlite")).unwrap();
             let mut query = db.prepare("SELECT id, revoked_at FROM api_keys ORDER BY id").unwrap();
             query.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
         };

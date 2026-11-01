@@ -64,7 +64,7 @@ async fn change(state: &AppState, headers: &HeaderMap, id: &str, change: Change<
         return not_found();
     }
     let _guard = database_lock(state, &deployment.id).await;
-    let directory = deployment_dir(state, &deployment.id).join("files");
+    let directory = crate::layout::files(&state.data_root, &deployment.id);
     let mut files = match tokio::fs::read(directory.join("index.json")).await {
         Ok(bytes) => match serde_json::from_slice::<Vec<Value>>(&bytes) {
             Ok(files) => files,

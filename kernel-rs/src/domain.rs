@@ -126,7 +126,7 @@ fn load_index(root: &Path) -> Index {
     let Ok(entries) = std::fs::read_dir(crate::layout::apps(&root)) else { return index };
     for entry in entries.flatten() {
         let Some(id) = entry.file_name().to_str().map(str::to_owned) else { continue };
-        if let Some(record) = std::fs::read(entry.path().join(RECORD_FILE)).ok().and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok()) {
+        if let Some(record) = std::fs::read(crate::layout::private(root, &id).join(RECORD_FILE)).ok().and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok()) {
             // Two folders cannot both hold a verified claim on one name, but a
             // hand-edited volume might; the first one read keeps it.
             let keep = index.get(&record.hostname).is_none_or(|(_, verified)| !verified && record.verified);
@@ -145,12 +145,12 @@ pub(super) async fn forget(state: &AppState, id: &str) -> Result<()> {
 }
 
 pub(super) fn read_record(state: &AppState, id: &str) -> Option<Record> {
-    let bytes = std::fs::read(deployment_dir(state, id).join(RECORD_FILE)).ok()?;
+    let bytes = std::fs::read(crate::layout::private(&state.data_root, id).join(RECORD_FILE)).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
 async fn write_record(state: &AppState, id: &str, record: Option<&Record>) -> Result<()> {
-    let path = deployment_dir(state, id).join(RECORD_FILE);
+    let path = crate::layout::private(&state.data_root, id).join(RECORD_FILE);
     let previous = read_record(state, id);
     match record {
         Some(record) => write_atomic(&path, &serde_json::to_vec_pretty(record)?).await?,
@@ -482,9 +482,8 @@ pub(super) fn for_package(state: &AppState, id: &str) -> Option<String> {
 /// Records a package's hostname on the Deployment it is installed as, with a
 /// token this Kernel issues. It serves only after `domain_set` finds the new
 /// token in DNS.
-pub(super) async fn arrive(state: &AppState, directory: &Path, hostname: Option<&str>) -> Result<()> {
+pub(super) async fn arrive(state: &AppState, id: &str, hostname: Option<&str>) -> Result<()> {
     let Some(raw) = hostname else { return Ok(()) };
-    let id = directory.file_name().and_then(|name| name.to_str()).context("The Deployment folder has no name.")?.to_owned();
     let hostname = check_hostname(raw, &Rules::of(state)).map_err(|message| anyhow::anyhow!("The package's custom domain: {message}"))?;
     let _domains = database_lock(state, "domains").await;
     ensure_free(state, &id, &hostname).await?;
@@ -697,7 +696,7 @@ mod tests {
         // Nor can a package that names it.
         let arriving = deployment_dir(&state, "arriving");
         tokio::fs::create_dir_all(&arriving).await.unwrap();
-        assert_eq!(arrive(&state, &arriving, Some("notes.example.org")).await.unwrap_err().to_string(), taken);
+        assert_eq!(arrive(&state, "arriving", Some("notes.example.org")).await.unwrap_err().to_string(), taken);
 
         // Clearing stops the alias; the generated hostname keeps answering.
         let cleared = admin_call(&state, &owner, "domain_clear", &json!({"deploymentId": notes.id})).await.unwrap();
@@ -709,7 +708,7 @@ mod tests {
         // A package's name arrives pending with a token this Kernel issues,
         // so a token copied from DNS into a manifest proves nothing.
         assert_eq!(for_package(&state, &notes.id), None);
-        arrive(&state, &arriving, Some("notes.example.org")).await.unwrap();
+        arrive(&state, "arriving", Some("notes.example.org")).await.unwrap();
         let arrived = read_record(&state, "arriving").unwrap();
         assert!(!arrived.verified);
         assert_ne!(arrived.token, token);

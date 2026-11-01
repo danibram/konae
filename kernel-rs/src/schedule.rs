@@ -245,7 +245,7 @@ async fn run_due(
     now: &(dyn Fn() -> u64 + Sync),
 ) -> anyhow::Result<()> {
     let id = &deployment.id;
-    let folder = crate::layout::folder(&state.data_root, &id);
+    let folder = crate::layout::data(&state.data_root, id);
     if !folder.is_dir() {
         return Ok(());
     }

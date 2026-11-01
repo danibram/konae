@@ -133,7 +133,7 @@ fn enqueue(message: Message) {
 }
 
 fn folder(data_root: &Path, deployment_id: &str) -> PathBuf {
-    crate::layout::folder(&data_root, &deployment_id)
+    crate::layout::data(data_root, deployment_id)
 }
 
 /// Counts one authorized operation. Call it only after the operation succeeded.
@@ -845,7 +845,7 @@ mod tests {
     fn the_writer_counts_and_records_off_the_request_path() {
         let root = scratch("writer");
         let id = "deployment-a";
-        std::fs::create_dir_all(crate::layout::folder(&root, &id)).unwrap();
+        std::fs::create_dir_all(crate::layout::data(&root, &id)).unwrap();
         let program = program(&json!({
             "orders.place": {"kind": "mutation", "access": "anonymous", "statement": "INSERT INTO orders (id, note) VALUES (?1, ?2)",
               "bindings": [{"source": "input", "key": "id", "type": "string"}, {"source": "input", "key": "note", "type": "string", "nullable": true}],
@@ -874,7 +874,7 @@ mod tests {
         assert_eq!(recorded["note"], Value::Null, "an omitted nullable input records null");
         let kept = recorded["id"].as_str().unwrap();
         assert!(kept.len() <= MAX_PROPERTY_BYTES && kept.chars().all(|c| c == 'é'), "cut at a character boundary");
-        assert!(!root.join("deployments/deployment-gone").exists());
+        assert!(!crate::layout::folder(&root, "deployment-gone").exists());
         assert_eq!(read_signals(&path, Some("other.name"), None).unwrap()["signals"], json!([]));
         let _ = std::fs::remove_dir_all(root);
     }

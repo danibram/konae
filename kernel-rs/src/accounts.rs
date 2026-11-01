@@ -807,16 +807,18 @@ mod tests {
     const PASSWORD: &str = "correct horse battery";
 
     fn deployment(host: &str) -> Deployment {
+        let app_id = Uuid::new_v4().to_string();
         Deployment {
-            id: Uuid::new_v4().to_string(),
-            project_id: Uuid::new_v4().to_string(),
+            id: app_id.clone(),
+            project_id: app_id,
             project_name: "Accounts test".into(),
+            slug: "app".into(),
             url: format!("http://{host}"),
             created_at: now_ms(),
             manifest: json!({"visibility": "public"}),
             hostname: host.into(),
             actions: "{}".into(),
-            artifact_version: None,
+            artifact_version: "v1".into(),
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
             contact_email: None,
@@ -840,7 +842,7 @@ mod tests {
         let mut deployments = HashMap::new();
         for host in [APP_HOST, OTHER_HOST] {
             let item = deployment(host);
-            std::fs::create_dir_all(crate::layout::folder(&root, &item.id)).unwrap();
+            std::fs::create_dir_all(crate::layout::data(&root, &item.id)).unwrap();
             deployments.insert(host.to_owned(), item);
         }
         let mailbox = Arc::new(MemoryMailbox::default());

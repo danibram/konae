@@ -176,7 +176,7 @@ describe("Usage and Signals", () => {
     ]);
     const liked = await owner.call<{ signals: unknown[] }>("signals_read", { deploymentId, name: "page.liked" });
     expect(liked.signals).toHaveLength(2);
-    expect((await stat(path.join(root, "deployments", deploymentId, "usage.sqlite"))).isFile()).toBe(true);
+    expect((await stat(path.join(root, "apps", deploymentId, "data", "usage.sqlite"))).isFile()).toBe(true);
   });
 
   test("a refused call counts nothing and records no Signal", async () => {

@@ -5,7 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::Credentials;
 use aws_sdk_s3::{Client as S3Client, config::Builder as S3ConfigBuilder, primitives::ByteStream};
@@ -88,22 +88,21 @@ struct AppState {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", from = "DeploymentRecord")]
+#[serde(rename_all = "camelCase")]
 struct Deployment {
+    /// The app's ID. It names the app's folder, and the project in Konae.
     id: String,
     project_id: String,
     project_name: String,
+    slug: String,
     url: String,
     created_at: u64,
     manifest: Value,
     hostname: String,
     actions: String,
-    /// Folder under the deployment's artifact prefix that holds the live files.
-    /// Deployments published before versioning keep their files at the prefix root.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    artifact_version: Option<String>,
-    /// Who may create an account. Records written before this field existed
-    /// get the default for their visibility when they load.
+    /// The release whose files `dist/` holds. It tags them for browser caches.
+    artifact_version: String,
+    /// Who may create an account.
     signup_policy: SignupPolicy,
     /// How people sign in. Password always; Google when the owner turned it on.
     sign_in_methods: Vec<SignInMethod>,
@@ -113,55 +112,96 @@ struct Deployment {
     contact_email: Option<String>,
 }
 
-/// The stored form of a Deployment, where the signup policy may be missing.
-#[derive(Deserialize)]
+/// `konae.json`: the app's settings, the part of an app an export hands over
+/// and `konae init` writes.
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DeploymentRecord {
+struct Settings {
     id: String,
-    project_id: String,
-    project_name: String,
-    url: String,
-    created_at: u64,
-    manifest: Value,
-    hostname: String,
-    actions: String,
-    #[serde(default)]
-    artifact_version: Option<String>,
-    #[serde(default)]
-    signup_policy: Option<SignupPolicy>,
-    #[serde(default)]
-    sign_in_methods: Option<Vec<SignInMethod>>,
-    #[serde(default)]
+    name: String,
+    slug: String,
+    visibility: String,
+    signup_policy: SignupPolicy,
+    sign_in_methods: Vec<SignInMethod>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     contact_email: Option<String>,
+    /// The version of the Kernel that wrote the file.
+    kernel: String,
+    /// The Capsule manifest without its visibility: routing, connects and the declared actions.
+    manifest: Value,
 }
 
-impl From<DeploymentRecord> for Deployment {
-    fn from(record: DeploymentRecord) -> Self {
-        let signup_policy = record.signup_policy.unwrap_or_else(|| {
-            SignupPolicy::initial(
-                record
-                    .manifest
-                    .get("visibility")
-                    .and_then(Value::as_str)
-                    .unwrap_or("private"),
-            )
-        });
+/// `.konae/deployment.json`: what this installation adds to the settings to
+/// serve the app. It never leaves the installation.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Installed {
+    hostname: String,
+    created_at: u64,
+    /// The `actions.json` of the release `dist/` holds.
+    actions: String,
+    artifact_version: String,
+}
+
+const KERNEL_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+impl Settings {
+    fn new(id: &str, name: &str, slug: &str, manifest: &Value) -> Self {
+        let visibility = manifest["visibility"].as_str().unwrap_or("private").to_owned();
+        let mut manifest = manifest.clone();
+        if let Some(object) = manifest.as_object_mut() {
+            object.remove("visibility");
+        }
         Self {
-            id: record.id,
-            project_id: record.project_id,
-            project_name: record.project_name,
-            url: record.url,
-            created_at: record.created_at,
-            manifest: record.manifest,
-            hostname: record.hostname,
-            actions: record.actions,
-            artifact_version: record.artifact_version,
-            signup_policy,
-            sign_in_methods: record
-                .sign_in_methods
-                .and_then(|methods| sign_in_methods_from_input(&methods).ok())
-                .unwrap_or_else(default_sign_in_methods),
-            contact_email: record.contact_email,
+            id: id.into(),
+            name: name.into(),
+            slug: slug.into(),
+            signup_policy: SignupPolicy::initial(&visibility),
+            visibility,
+            sign_in_methods: default_sign_in_methods(),
+            contact_email: None,
+            kernel: KERNEL_VERSION.into(),
+            manifest,
+        }
+    }
+
+    fn of(deployment: &Deployment) -> Self {
+        Self {
+            signup_policy: deployment.signup_policy.clone(),
+            sign_in_methods: deployment.sign_in_methods.clone(),
+            contact_email: deployment.contact_email.clone(),
+            ..Self::new(&deployment.id, &deployment.project_name, &deployment.slug, &deployment.manifest)
+        }
+    }
+
+    fn read(root: &Path, id: &str) -> Result<Self> {
+        Ok(serde_json::from_slice(&std::fs::read(layout::settings(root, id))?)?)
+    }
+
+    async fn write(&self, root: &Path) -> Result<()> {
+        write_atomic(&layout::settings(root, &self.id), &serde_json::to_vec_pretty(self)?).await?;
+        Ok(())
+    }
+
+    fn deployment(self, installed: Installed, public_origin: &str) -> Deployment {
+        let mut manifest = self.manifest;
+        if let Some(object) = manifest.as_object_mut() {
+            object.insert("visibility".into(), Value::String(self.visibility));
+        }
+        Deployment {
+            project_id: self.id.clone(),
+            id: self.id,
+            project_name: self.name,
+            slug: self.slug,
+            url: deployment_url(public_origin, &installed.hostname),
+            created_at: installed.created_at,
+            manifest,
+            hostname: installed.hostname,
+            actions: installed.actions,
+            artifact_version: installed.artifact_version,
+            signup_policy: self.signup_policy,
+            sign_in_methods: self.sign_in_methods,
+            contact_email: self.contact_email,
         }
     }
 }
@@ -438,9 +478,6 @@ async fn main() -> Result<()> {
     // Held until the process exits, so files-migrate and files-reconcile
     // refuse while this Kernel serves.
     let _running = file_store::hold_kernel_lock(&data_root)?;
-    for line in copies::migrate_layout(&data_root)? {
-        println!("Layout migration: moved {line}");
-    }
     let account_settings = accounts::AccountSettings::from_env(&data_root, &admin_key, &public_origin)?;
     let s3 = s3_client_from_env().await;
     let artifact_bucket = env("KONAE_ARTIFACT_BUCKET", "konae-apps");
@@ -556,12 +593,8 @@ fn deployment_dir(state: &AppState, id: &str) -> PathBuf {
     crate::layout::folder(&state.data_root, &id)
 }
 
-fn artifact_root(state: &AppState, id: &str) -> PathBuf {
-    deployment_dir(state, id).join("artifact")
-}
-
 fn backup_dir(state: &AppState, id: &str) -> PathBuf {
-    deployment_dir(state, id).join("backups")
+    layout::backups(&state.data_root, id)
 }
 
 async fn test_storage(State(state): State<AppState>, request: Request) -> Response {
@@ -713,15 +746,16 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             );
         }
     }
-    let id = existing
-        .as_ref()
-        .map(|item| item.id.clone())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    // The app keeps one ID: its folder, its project and its Deployment share it.
+    let id = input.project.id.clone();
+    if !mcp::valid_app_id(&id) {
+        return error(StatusCode::BAD_REQUEST, "Invalid project ID.");
+    }
     let hostname = existing
         .as_ref()
         .map(|item| item.hostname.clone())
         .unwrap_or_else(|| {
-            let short_id = id.replace('-', "").chars().take(6).collect::<String>();
+            let short_id = mcp::digest(id.as_bytes()).chars().take(6).collect::<String>();
             format!(
                 "{}-{}.{}",
                 safe_slug(&input.project.slug),
@@ -740,6 +774,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         id: id.clone(),
         project_id: input.project.id,
         project_name: input.project.name,
+        slug: input.project.slug.clone(),
         url,
         created_at: existing
             .as_ref()
@@ -748,7 +783,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         manifest,
         hostname: hostname.clone(),
         actions,
-        artifact_version: Some(artifact_version.clone()),
+        artifact_version: artifact_version.clone(),
         signup_policy: match existing.as_ref() {
             Some(item) => item.signup_policy.for_republish(is_private(item), &input.visibility),
             None => initial_signup_policy.unwrap_or_else(|| SignupPolicy::initial(&input.visibility)),
@@ -759,17 +794,17 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         },
         contact_email: input.contact_email.clone(),
     };
-    let directory = crate::layout::folder(&state.data_root, &id);
-    if let Err(error_value) = tokio::fs::create_dir_all(&directory).await {
+    let data = layout::data(&state.data_root, &id);
+    if let Err(error_value) = tokio::fs::create_dir_all(&data).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
     let _database_guard = database_lock(&state, &id).await;
     let mut notices = Vec::new();
     if let Some(package) = input.initial_package.as_ref() {
-        if let Err(error_value) = package::install(&state, package, &deployment.project_id, &directory)
+        if let Err(error_value) = package::install(&state, package, &id)
             .await
         {
-            let _ = tokio::fs::remove_dir_all(&directory).await;
+            let _ = tokio::fs::remove_dir_all(&data).await;
             file_store::forget_deployment(state.files.store.as_ref(), &id).await;
             return error(StatusCode::BAD_REQUEST, &format!("Package import failed: {error_value:#}"));
         }
@@ -777,17 +812,17 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         match path::arrive(&state, &deployment, package.manifest.path.as_ref()).await {
             Ok(lines) => notices = lines,
             Err(error_value) => {
-                let _ = tokio::fs::remove_dir_all(&directory).await;
+                let _ = tokio::fs::remove_dir_all(&data).await;
                 return error(StatusCode::BAD_REQUEST, &format!("Package import failed: {error_value:#}"));
             }
         }
     }
     if input.initial_package.is_none() {
-        if let Err(error_value) = domain::arrive(&state, &directory, input.initial_domain.as_deref()).await {
+        if let Err(error_value) = domain::arrive(&state, &id, input.initial_domain.as_deref()).await {
             return error(StatusCode::BAD_REQUEST, &error_value.to_string());
         }
     }
-    let db_path = directory.join("database.sqlite");
+    let db_path = layout::database(&state.data_root, &id);
     let schema = input
         .project
         .files
@@ -813,7 +848,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             &format!("Schema update failed: {error_value}"),
         );
     }
-    let identity_path = directory.join("identity.sqlite");
+    let identity_path = layout::identity(&state.data_root, &id);
     if !identity_path.exists() {
         if let Some(snapshot) = input.initial_identity.as_ref() {
             if let Err(error_value) =
@@ -829,7 +864,7 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
         }
     }
     if let Some(files) = input.initial_files.as_ref() {
-        let files_dir = directory.join("files");
+        let files_dir = layout::files(&state.data_root, &id);
         if let Err(error_value) = restore_initial_files(&state.files, &id, &files_dir, files, 16 * 1024 * 1024).await {
             return error(
                 StatusCode::BAD_REQUEST,
@@ -837,8 +872,8 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             );
         }
     }
-    // New files go into a fresh version folder. Readers keep the previous
-    // version until the deployment record switches to this one below.
+    // New files go into a staging folder beside dist/. Readers keep the
+    // previous files until the record names this release and dist/ switches.
     if let Err(error_value) =
         stage_local_artifact(&state, &id, &artifact_version, &artifact_files).await
     {
@@ -857,6 +892,9 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
     if let Err(error_value) = persist_deployment(&state, &deployment).await {
         remove_artifact_version(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
+    }
+    if let Err(error_value) = switch_dist(&state, &id, &artifact_version).await {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The new files could not take the place of dist/: {error_value}"));
     }
     state
         .deployments
@@ -881,7 +919,7 @@ async fn stage_local_artifact(
     version: &str,
     files: &HashMap<String, Vec<u8>>,
 ) -> Result<()> {
-    let root = artifact_root(state, id).join(version);
+    let root = staged_dist(state, id, version);
     for (path, contents) in files {
         let local_path = root.join(path);
         if let Some(parent) = local_path.parent() {
@@ -921,9 +959,25 @@ async fn upload_artifact(
     Ok(())
 }
 
-/// Best-effort removal of a version that never went live.
+/// Where a release's files wait until they become `dist/`.
+fn staged_dist(state: &AppState, id: &str, version: &str) -> PathBuf {
+    layout::private(&state.data_root, id).join(format!("dist-{version}"))
+}
+
+/// Moves the staged files into `dist/` and the previous ones aside, for
+/// `remove_stale_artifacts` to delete.
+async fn switch_dist(state: &AppState, id: &str, version: &str) -> std::io::Result<()> {
+    let dist = layout::dist(&state.data_root, id);
+    if tokio::fs::try_exists(&dist).await? {
+        let retired = layout::private(&state.data_root, id).join(format!("dist-retired-{}", Uuid::new_v4().simple()));
+        tokio::fs::rename(&dist, &retired).await?;
+    }
+    tokio::fs::rename(staged_dist(state, id, version), &dist).await
+}
+
+/// Best-effort removal of a release that never went live.
 async fn remove_artifact_version(state: &AppState, id: &str, version: &str) {
-    let _ = tokio::fs::remove_dir_all(artifact_root(state, id).join(version)).await;
+    let _ = tokio::fs::remove_dir_all(staged_dist(state, id, version)).await;
     if let Some(s3) = state.s3.as_ref() {
         let prefix = format!("deployments/{id}/{version}/");
         if let Ok(keys) = list_s3_keys(s3, &state.artifact_bucket, &prefix).await {
@@ -934,14 +988,13 @@ async fn remove_artifact_version(state: &AppState, id: &str, version: &str) {
     }
 }
 
-/// Deletes every artifact file outside the live version, including files that
-/// older deployments stored at the prefix root. Failures are logged because the
-/// new version is already live.
+/// Deletes the files of every release but the live one: retired or staged
+/// folders beside `dist/`, and S3 keys outside the live version. Failures are
+/// logged because the new release is already live.
 async fn remove_stale_artifacts(state: &AppState, id: &str, version: &str) {
-    let root = artifact_root(state, id);
-    if let Ok(mut entries) = tokio::fs::read_dir(&root).await {
+    if let Ok(mut entries) = tokio::fs::read_dir(layout::private(&state.data_root, id)).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
-            if entry.file_name().to_str() == Some(version) {
+            if !entry.file_name().to_str().is_some_and(|name| name.starts_with("dist-")) {
                 continue;
             }
             let removed = match entry.file_type().await {
@@ -1487,7 +1540,7 @@ async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upload<
     if size == 0 || size > state.files.limits.max_file_bytes {
         return error(StatusCode::PAYLOAD_TOO_LARGE, &state.files.limits.file_size_refused());
     }
-    let directory = deployment_dir(state, &deployment.id).join("files");
+    let directory = crate::layout::files(&state.data_root, &deployment.id);
     {
         let _guard = database_lock(state, &deployment.id).await;
         match read_file_index(&directory).await {
@@ -1561,7 +1614,7 @@ async fn serve_file(
     if !valid_file_id(&id) {
         return error(StatusCode::NOT_FOUND, "File not found.");
     }
-    let directory = deployment_dir(&state, &deployment.id).join("files");
+    let directory = crate::layout::files(&&state.data_root, &deployment.id);
     let index = match tokio::fs::read(directory.join("index.json")).await {
         Ok(bytes) => serde_json::from_slice::<Vec<Value>>(&bytes).unwrap_or_default(),
         Err(_) => return error(StatusCode::NOT_FOUND, "File not found."),
@@ -1725,8 +1778,8 @@ async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Respons
         .get("sec-fetch-dest")
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.eq_ignore_ascii_case("document"));
-    if !navigation && cache.version_tag().is_some_and(|tag| etag_matches(&headers, &tag)) {
-        return cache.not_modified(cache.version_tag().unwrap());
+    if !navigation && etag_matches(&headers, &cache.version_tag()) {
+        return cache.not_modified(cache.version_tag());
     }
     let routing = artifact::routing(&deployment.manifest);
     for candidate in artifact::candidates(&path, routing) {
@@ -1785,18 +1838,14 @@ async fn read_artifact(state: &AppState, deployment: &Deployment, path: &str) ->
     if !safe_relative_path(path) {
         anyhow::bail!("invalid artifact path");
     }
-    let relative = match deployment.artifact_version.as_deref() {
-        Some(version) => format!("{version}/{path}"),
-        None => path.to_owned(),
-    };
-    let local = artifact_root(state, &deployment.id).join(&relative);
+    let local = layout::dist(&state.data_root, &deployment.id).join(path);
     match tokio::fs::read(local).await {
         Ok(bytes) => Ok(bytes),
         Err(local_error) => {
             let Some(s3) = state.s3.as_ref() else {
                 return Err(local_error.into());
             };
-            let key = format!("deployments/{}/{}", deployment.id, relative);
+            let key = format!("deployments/{}/{}/{path}", deployment.id, deployment.artifact_version);
             let object = s3
                 .get_object()
                 .bucket(&state.artifact_bucket)
@@ -1869,7 +1918,7 @@ fn private_login_page(policy: &SignupPolicy, verification: auth::Verification, g
 /// cache holds a page that sits behind its login. File names are not
 /// guaranteed to carry a content hash, so nothing is marked `immutable`.
 struct ArtifactCache {
-    version: Option<String>,
+    version: String,
     private: bool,
 }
 
@@ -1878,8 +1927,8 @@ impl ArtifactCache {
         Self { version: deployment.artifact_version.clone(), private: is_private(deployment) }
     }
 
-    fn version_tag(&self) -> Option<String> {
-        self.version.as_deref().map(|version| format!("\"{version}\""))
+    fn version_tag(&self) -> String {
+        format!("\"{}\"", self.version)
     }
 
     fn control(&self) -> HeaderValue {
@@ -1895,12 +1944,8 @@ impl ArtifactCache {
         response
     }
 
-    /// A Deployment without an artifact version tags each file by its bytes.
     fn respond(&self, headers: &HeaderMap, bytes: Vec<u8>, path: &str) -> Response {
-        use sha2::{Digest, Sha256};
-        let tag = self
-            .version_tag()
-            .unwrap_or_else(|| format!("\"{}\"", hex::encode(&Sha256::digest(&bytes)[..16])));
+        let tag = self.version_tag();
         if etag_matches(headers, &tag) {
             return self.not_modified(tag);
         }
@@ -3245,6 +3290,9 @@ async fn restore_initial_files(
 /// Writes a sibling temp file and renames it over `path`, so readers never see
 /// a truncated file.
 async fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
     let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("file");
     let temp = path.with_file_name(format!(".{name}.tmp-{}", Uuid::new_v4()));
     if let Err(error_value) = tokio::fs::write(&temp, bytes).await {
@@ -3369,25 +3417,48 @@ fn safe_relative_path(path: &str) -> bool {
             .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
+/// Writes the app's settings to `konae.json` and the installation's part to
+/// `.konae/deployment.json`.
 async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Result<()> {
-    let bytes = serde_json::to_vec_pretty(deployment)?;
-    write_atomic(&deployment_dir(state, &deployment.id).join("deployment.json"), &bytes).await?;
+    Settings::of(deployment).write(&state.data_root).await?;
+    let installed = Installed {
+        hostname: deployment.hostname.clone(),
+        created_at: deployment.created_at,
+        actions: deployment.actions.clone(),
+        artifact_version: deployment.artifact_version.clone(),
+    };
+    tokio::fs::create_dir_all(layout::private(&state.data_root, &deployment.id)).await?;
+    write_atomic(&layout::record(&state.data_root, &deployment.id), &serde_json::to_vec_pretty(&installed)?).await?;
     Ok(())
 }
 
-/// Reads every Deployment record on the volume. A Kernel on a fresh volume
+/// Writes the Deployment's two files without a runtime, for tests that seed a volume.
+#[cfg(test)]
+pub(crate) fn write_record_for_test(root: &Path, deployment: &Deployment) {
+    let installed = Installed {
+        hostname: deployment.hostname.clone(),
+        created_at: deployment.created_at,
+        actions: deployment.actions.clone(),
+        artifact_version: deployment.artifact_version.clone(),
+    };
+    std::fs::create_dir_all(layout::private(root, &deployment.id)).unwrap();
+    std::fs::write(layout::settings(root, &deployment.id), serde_json::to_vec(&Settings::of(deployment)).unwrap()).unwrap();
+    std::fs::write(layout::record(root, &deployment.id), serde_json::to_vec(&installed).unwrap()).unwrap();
+}
+
+/// Reads every published app on the volume. A folder without a Deployment
+/// record is an app that was never published. A Kernel on a fresh volume
 /// starts empty; `konae-kernel restore` installs copied folders first.
 async fn load_deployments(root: &Path, public_origin: &str) -> Result<HashMap<String, Deployment>> {
     let mut result = HashMap::new();
-    let mut entries = tokio::fs::read_dir(crate::layout::apps(&root)).await?;
+    let mut entries = tokio::fs::read_dir(layout::apps(root)).await?;
     while let Some(entry) = entries.next_entry().await? {
-        let path = entry.path().join("deployment.json");
-        if let Ok(bytes) = tokio::fs::read(path).await {
-            if let Ok(mut deployment) = serde_json::from_slice::<Deployment>(&bytes) {
-                deployment.url = deployment_url(public_origin, &deployment.hostname);
-                result.insert(deployment.hostname.clone(), deployment);
-            }
-        }
+        let Some(id) = entry.file_name().to_str().map(str::to_owned) else { continue };
+        let Ok(bytes) = tokio::fs::read(layout::record(root, &id)).await else { continue };
+        let installed: Installed = serde_json::from_slice(&bytes).with_context(|| format!("{} is not a Deployment record.", layout::record(root, &id).display()))?;
+        let settings = Settings::read(root, &id).with_context(|| format!("{} is not readable.", layout::settings(root, &id).display()))?;
+        let deployment = settings.deployment(installed, public_origin);
+        result.insert(deployment.hostname.clone(), deployment);
     }
     Ok(result)
 }
@@ -3838,21 +3909,23 @@ mod tests {
     }
 
     pub(crate) async fn login_test_state(root: &Path, visibility: &str) -> (AppState, HeaderMap) {
+        let app_id = Uuid::new_v4().to_string();
         let deployment = Deployment {
-            id: Uuid::new_v4().to_string(),
-            project_id: Uuid::new_v4().to_string(),
+            id: app_id.clone(),
+            project_id: app_id,
             project_name: "Login test".into(),
+            slug: "app".into(),
             url: "http://login-test.localhost".into(),
             created_at: now_ms(),
             manifest: json!({"visibility": visibility}),
             hostname: "login-test.localhost".into(),
             actions: "{}".into(),
-            artifact_version: None,
+            artifact_version: "v1".into(),
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
             contact_email: None,
         };
-        tokio::fs::create_dir_all(crate::layout::folder(&root, &deployment.id))
+        tokio::fs::create_dir_all(crate::layout::data(&root, &deployment.id))
             .await
             .unwrap();
         let state = AppState {
@@ -4051,39 +4124,6 @@ mod tests {
         assert!(SignupPolicy::from_input(SignupMode::Allowlist, &too_many).is_err());
     }
 
-    #[test]
-    fn deployment_records_without_a_policy_load_with_the_default_for_their_visibility() {
-        let legacy = |manifest: Value| -> Deployment {
-            serde_json::from_value(json!({
-                "id": "d", "projectId": "p", "projectName": "Legacy", "url": "http://legacy.localhost",
-                "createdAt": 1, "manifest": manifest, "hostname": "legacy.localhost",
-                "actions": "{}"
-            }))
-            .unwrap()
-        };
-        let private = legacy(json!({"visibility": "private"}));
-        assert_eq!(private.signup_policy.mode, SignupMode::Closed);
-        let saved = serde_json::to_value(&private).unwrap();
-        assert_eq!(saved["signupPolicy"], json!({"mode": "closed", "allowlist": []}));
-        assert_eq!(legacy(json!({"visibility": "public"})).signup_policy.mode, SignupMode::Open);
-        assert_eq!(legacy(json!({})).signup_policy.mode, SignupMode::Closed);
-        assert_eq!(legacy(json!({"visibility": "Public"})).signup_policy.mode, SignupMode::Closed);
-        assert_eq!(legacy(json!({})).sign_in_methods, vec![SignInMethod::Password], "older records sign in with a password");
-        let mut stored = serde_json::to_value(legacy(json!({}))).unwrap();
-        stored["signInMethods"] = json!(["password", "google"]);
-        let with_google: Deployment = serde_json::from_value(stored).unwrap();
-        assert_eq!(with_google.sign_in_methods, vec![SignInMethod::Password, SignInMethod::Google]);
-
-        // A stored policy always wins over the visibility default.
-        let stored: Deployment = serde_json::from_value(json!({
-            "id": "d", "projectId": "p", "projectName": "Kept", "url": "http://kept.localhost",
-            "createdAt": 1, "manifest": {"visibility": "private"}, "hostname": "kept.localhost",
-            "actions": "{}", "signupPolicy": {"mode": "open", "allowlist": []}
-        }))
-        .unwrap();
-        assert_eq!(stored.signup_policy.mode, SignupMode::Open);
-    }
-
     #[tokio::test]
     async fn signup_follows_the_deployment_policy() {
         let root = std::env::temp_dir().join(format!("konae-signup-{}", Uuid::new_v4()));
@@ -4164,7 +4204,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-fail-closed-{}", Uuid::new_v4()));
         let (state, headers) = login_test_state(&root, "public").await;
         let id = state.deployments.read().await.values().next().unwrap().id.clone();
-        let artifact = artifact_root(&state, &id);
+        let artifact = layout::dist(&state.data_root, &id);
         tokio::fs::create_dir_all(&artifact).await.unwrap();
         tokio::fs::write(artifact.join("report.txt"), "secret").await.unwrap();
         let read = |manifest: Value| {
@@ -4749,7 +4789,7 @@ mod tests {
         assert_eq!(first.status(), StatusCode::OK);
         assert_eq!(first.headers()[header::CACHE_CONTROL], "public, no-cache");
         let tag = first.headers()[header::ETAG].to_str().unwrap().to_owned();
-        assert_eq!(tag, format!("\"{}\"", deployment.artifact_version.clone().unwrap()));
+        assert_eq!(tag, format!("\"{}\"", deployment.artifact_version.clone()));
 
         let again = get("app.js", vec![("if-none-match", tag.clone())]).await;
         assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
@@ -4778,31 +4818,11 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    #[tokio::test]
-    async fn an_unversioned_deployment_tags_files_by_their_bytes() {
-        let root = std::env::temp_dir().join(format!("konae-etag-bytes-{}", Uuid::new_v4()));
-        let (state, mut headers) = login_test_state(&root, "public").await;
-        let id = state.deployments.read().await.values().next().unwrap().id.clone();
-        for deployment in state.deployments.write().await.values_mut() {
-            deployment.artifact_version = None;
-        }
-        let artifact = artifact_root(&state, &id);
-        tokio::fs::create_dir_all(&artifact).await.unwrap();
-        tokio::fs::write(artifact.join("report.txt"), "secret").await.unwrap();
-        let first = serve_key(state.clone(), headers.clone(), "report.txt".into()).await;
-        assert_eq!(first.status(), StatusCode::OK);
-        assert_eq!(first.headers()[header::CACHE_CONTROL], "public, no-cache");
-        let tag = first.headers()[header::ETAG].clone();
-        headers.insert(header::IF_NONE_MATCH, tag.clone());
-        assert_eq!(serve_key(state.clone(), headers.clone(), "report.txt".into()).await.status(), StatusCode::NOT_MODIFIED);
-        tokio::fs::write(artifact.join("report.txt"), "changed").await.unwrap();
-        let changed = serve_key(state.clone(), headers, "report.txt".into()).await;
-        assert_eq!(changed.status(), StatusCode::OK);
-        assert_ne!(changed.headers()[header::ETAG], tag);
-        // A private app's files stay out of shared caches.
-        let deployment = Deployment { manifest: json!({}), ..state.deployments.read().await.values().next().unwrap().clone() };
+    #[test]
+    fn a_private_apps_files_stay_out_of_shared_caches() {
+        let deployment = Settings::new("app", "App", "app", &json!({"visibility": "private"}))
+            .deployment(Installed { hostname: "app.localhost".into(), created_at: 1, actions: "{}".into(), artifact_version: "v1".into() }, "http://localhost");
         assert_eq!(ArtifactCache::of(&deployment).control(), "private, no-cache");
-        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]
@@ -4850,12 +4870,7 @@ mod tests {
         assert_eq!(read_artifact(&state, &deployment, "new.js").await.unwrap(), b"2");
         assert!(read_artifact(&state, &deployment, "old.js").await.is_err());
         assert!(read_artifact(&state, &deployment, "assets/old.css").await.is_err());
-        let mut entries = std::fs::read_dir(crate::layout::artifact(&root, &id))
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-            .collect::<Vec<_>>();
-        entries.sort();
-        assert_eq!(entries, vec![deployment.artifact_version.clone().unwrap()]);
+        assert!(staged_or_retired(&root, &id).is_empty(), "only dist/ holds files");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
@@ -4872,10 +4887,7 @@ mod tests {
             let second = deploy_with_visibility(&state, json!({"index.html": "<p>two</p>"}), visibility).await;
             assert_eq!(second["signupPolicy"], json!({"mode": "allowlist", "allowlist": ["@example.test"]}));
             let id = second["id"].as_str().unwrap();
-            let stored: Deployment = serde_json::from_slice(
-                &tokio::fs::read(crate::layout::record(&root, &id)).await.unwrap(),
-            )
-            .unwrap();
+            let stored = Settings::read(&root, id).unwrap();
             assert_eq!(stored.signup_policy.mode, SignupMode::Allowlist);
             let _ = tokio::fs::remove_dir_all(root).await;
         }
@@ -4908,10 +4920,7 @@ mod tests {
             let republished = deploy_with_visibility(&state, json!({"index.html": "<p>two</p>"}), second).await;
             assert_eq!(republished["signupPolicy"], expected, "{first} {chosen:?} -> {second}");
             let id = republished["id"].as_str().unwrap();
-            let stored: Deployment = serde_json::from_slice(
-                &tokio::fs::read(crate::layout::record(&root, &id)).await.unwrap(),
-            )
-            .unwrap();
+            let stored = Settings::read(&root, id).unwrap();
             assert_eq!(serde_json::to_value(&stored.signup_policy).unwrap(), expected);
             let _ = tokio::fs::remove_dir_all(root).await;
         }
@@ -4975,6 +4984,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Release folders beside `dist/` that a publish left behind.
+    fn staged_or_retired(root: &Path, id: &str) -> Vec<String> {
+        std::fs::read_dir(layout::private(root, id))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.starts_with("dist-"))
+            .collect()
+    }
+
     #[tokio::test]
     async fn a_failed_record_write_removes_the_new_artifact_version() {
         let root = std::env::temp_dir().join(format!("konae-orphan-{}", Uuid::new_v4()));
@@ -4998,22 +5016,9 @@ mod tests {
             .body(Body::from(body.to_string()))
             .unwrap();
         assert_eq!(deploy(State(state.clone()), request).await.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let versions = std::fs::read_dir(crate::layout::artifact(&root, &id)).unwrap().count();
-        assert_eq!(versions, 1, "only the live version remains");
+        assert!(staged_or_retired(&root, &id).is_empty(), "the staged files are gone");
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         assert_eq!(read_artifact(&state, &deployment, "index.html").await.unwrap(), b"<p>one</p>");
-        let _ = tokio::fs::remove_dir_all(root).await;
-    }
-
-    #[tokio::test]
-    async fn legacy_artifacts_without_a_version_are_still_served() {
-        let root = std::env::temp_dir().join(format!("konae-legacy-{}", Uuid::new_v4()));
-        let (state, _) = login_test_state(&root, "public").await;
-        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
-        let directory = crate::layout::artifact(&root, &deployment.id);
-        tokio::fs::create_dir_all(&directory).await.unwrap();
-        tokio::fs::write(directory.join("index.html"), "legacy").await.unwrap();
-        assert_eq!(read_artifact(&state, &deployment, "index.html").await.unwrap(), b"legacy");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

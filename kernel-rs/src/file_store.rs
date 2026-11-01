@@ -68,18 +68,18 @@ pub(crate) struct StoredObject {
     pub(crate) modified_ms: Option<u64>,
 }
 
-/// Today's layout: the bytes sit beside the index in the Deployment's folder.
+/// The bytes sit beside the index in the app's `data/files/`.
 pub(crate) struct LocalFolder {
-    deployments: PathBuf,
+    root: PathBuf,
 }
 
 impl LocalFolder {
     pub(crate) fn new(data_root: &Path) -> Self {
-        Self { deployments: crate::layout::apps(&data_root) }
+        Self { root: data_root.to_owned() }
     }
 
     fn path(&self, deployment: &str, file: &str) -> PathBuf {
-        self.deployments.join(deployment).join("files").join(format!("{file}.blob"))
+        crate::layout::files(&self.root, deployment).join(format!("{file}.blob"))
     }
 }
 
@@ -135,7 +135,7 @@ impl FileStore for LocalFolder {
     fn objects<'a>(&'a self, deployment: &'a str) -> BoxFuture<'a, Result<Vec<StoredObject>>> {
         Box::pin(async move {
             let mut objects = Vec::new();
-            let mut entries = match tokio::fs::read_dir(self.deployments.join(deployment).join("files")).await {
+            let mut entries = match tokio::fs::read_dir(crate::layout::files(&self.root, deployment)).await {
                 Ok(entries) => entries,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(objects),
                 Err(error) => return Err(error.into()),
@@ -162,7 +162,7 @@ impl FileStore for LocalFolder {
     fn deployments(&self) -> BoxFuture<'_, Result<Vec<String>>> {
         Box::pin(async move {
             let mut ids = Vec::new();
-            let mut entries = match tokio::fs::read_dir(&self.deployments).await {
+            let mut entries = match tokio::fs::read_dir(crate::layout::apps(&self.root)).await {
                 Ok(entries) => entries,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(ids),
                 Err(error) => return Err(error.into()),

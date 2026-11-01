@@ -36,10 +36,11 @@ use crate::{
     safe_relative_path,
 };
 
-/// SQLite files in a Deployment folder. Each is copied with `VACUUM INTO`,
+/// SQLite files in an app's `data/`. Each is copied with `VACUUM INTO`,
 /// never byte for byte, so a WAL database copies consistently.
 /// `usage.sqlite` is ADR-0010's store; it is copied when it exists.
-const DEPLOYMENT_DATABASES: [&str; 3] = ["database.sqlite", "identity.sqlite", "usage.sqlite"];
+/// `secrets.sqlite` stays on this installation and in its copies, never in an export.
+const DEPLOYMENT_DATABASES: [&str; 4] = ["database.sqlite", "identity.sqlite", "usage.sqlite", crate::layout::SECRETS_DATABASE];
 /// `mail.sqlite` is the email queue (`mail.rs`); its links stay sealed in a copy.
 /// `calls.sqlite` is the call actions' queue and outbox (`calls.rs`).
 const ROOT_DATABASES: [&str; 4] = ["owners.sqlite", "mcp.sqlite", crate::mail::MAIL_DATABASE, crate::calls::CALLS_DATABASE];
@@ -50,67 +51,6 @@ const KEEP_RECENT: usize = 24;
 const KEEP_DAILY_DAYS: u64 = 30;
 const DAY_MS: u64 = 86_400_000;
 const DEFAULT_INTERVAL_SECONDS: u64 = 3600;
-
-// ---------------------------------------------------------------------------
-// Layout migration
-
-/// Moves `artifacts/<id>` and `backups/<id>` from the layout before
-/// Deployment folders into `deployments/<id>/artifact` and
-/// `deployments/<id>/backups`. Each move is one rename, so a Kernel stopped
-/// halfway resumes on the next start. Returns one line per move. Refuses when
-/// a destination already holds files, because one of the two copies would be
-/// lost.
-pub fn migrate_layout(root: &Path) -> Result<Vec<String>> {
-    let mut moved = Vec::new();
-    for (old, new) in [("artifacts", "artifact"), ("backups", "backups")] {
-        let old_root = root.join(old);
-        let entries = match std::fs::read_dir(&old_root) {
-            Ok(entries) => entries,
-            Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error_value) => {
-                return Err(error_value).with_context(|| format!("Layout migration could not read {}.", old_root.display()));
-            }
-        };
-        for entry in entries {
-            let entry = entry?;
-            let source = entry.path();
-            let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
-                eprintln!("Layout migration left {} in place: the name is not UTF-8.", source.display());
-                continue;
-            };
-            if !entry.file_type()?.is_dir() {
-                eprintln!("Layout migration left {} in place: it is not a Deployment folder.", source.display());
-                continue;
-            }
-            let target = crate::layout::folder(&root, &id).join(new);
-            if target.exists() {
-                let empty = std::fs::read_dir(&target).map(|mut entries| entries.next().is_none()).unwrap_or(false);
-                if !empty {
-                    bail!(
-                        "Layout migration stopped: {} and {} both exist. Keep the one that holds the Deployment's files, delete the other, and start the Kernel again. Already moved: {}.",
-                        source.display(),
-                        target.display(),
-                        if moved.is_empty() { "nothing".to_owned() } else { moved.join("; ") }
-                    );
-                }
-                std::fs::remove_dir(&target)?;
-            }
-            std::fs::create_dir_all(target.parent().expect("target has a parent"))?;
-            std::fs::rename(&source, &target).with_context(|| {
-                format!(
-                    "Layout migration stopped: moving {} to {} failed. Already moved: {}.",
-                    source.display(),
-                    target.display(),
-                    if moved.is_empty() { "nothing".to_owned() } else { moved.join("; ") }
-                )
-            })?;
-            moved.push(format!("{} -> {}", source.display(), target.display()));
-        }
-        // Succeeds only when nothing was left behind.
-        let _ = std::fs::remove_dir(&old_root);
-    }
-    Ok(moved)
-}
 
 // ---------------------------------------------------------------------------
 // Configuration and status
@@ -497,23 +437,40 @@ async fn copy_file_bytes(state: &AppState, deployment: &str, files: &Path) -> Re
     Ok(())
 }
 
+/// Copies one app folder: settings, sources, built files and the
+/// installation's record as they are, the databases with `VACUUM INTO`, and
+/// the file index. The maintenance state travels, so a restore never revives
+/// an app that was in maintenance, and so do the custom domain and the path.
 fn copy_deployment(source: &Path, target: &Path) -> Result<()> {
     std::fs::create_dir_all(target)?;
     for entry in std::fs::read_dir(source)? {
         let entry = entry?;
         let kind = entry.file_type()?;
         let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let (from, to) = (entry.path(), target.join(&*name));
-        match &*name {
-            // The maintenance state travels, so a restore never revives an
-            // app that was in maintenance. The custom
-            // domain travels too, so a restored app keeps its alias.
-            "deployment.json" | crate::maintenance::MARKER_FILE | crate::domain::RECORD_FILE | crate::path::RECORD_FILE if kind.is_file() => {
+        let (from, to) = (entry.path(), target.join(&name));
+        match &*name.to_string_lossy() {
+            crate::layout::SETTINGS_FILE if kind.is_file() => {
                 std::fs::copy(&from, &to)?;
             }
+            "app" | "dist" if kind.is_dir() => copy_tree(&from, &to)?,
+            "data" if kind.is_dir() => copy_data(&from, &to)?,
+            ".konae" if kind.is_dir() => copy_private(&from, &to)?,
+            // Anything unknown stays behind.
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn copy_data(source: &Path, target: &Path) -> Result<()> {
+    std::fs::create_dir_all(target)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let name = entry.file_name();
+        let (from, to) = (entry.path(), target.join(&name));
+        match &*name.to_string_lossy() {
             database if kind.is_file() && DEPLOYMENT_DATABASES.contains(&database) => vacuum_into(&from, &to)?,
-            "artifact" if kind.is_dir() => copy_tree(&from, &to)?,
             // Only the index is taken under the locks; `copy_file_bytes`
             // reads the bytes from the store once they are released.
             "files" if kind.is_dir() => {
@@ -521,6 +478,24 @@ fn copy_deployment(source: &Path, target: &Path) -> Result<()> {
                 if from.join("index.json").is_file() {
                     std::fs::copy(from.join("index.json"), to.join("index.json"))?;
                 }
+            }
+            // WAL and journal files, temporary files and anything unknown stay behind.
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn copy_private(source: &Path, target: &Path) -> Result<()> {
+    std::fs::create_dir_all(target)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let name = entry.file_name();
+        let (from, to) = (entry.path(), target.join(&name));
+        match &*name.to_string_lossy() {
+            "deployment.json" | crate::layout::SOURCES_METADATA | crate::maintenance::MARKER_FILE | crate::domain::RECORD_FILE | crate::path::RECORD_FILE if kind.is_file() => {
+                std::fs::copy(&from, &to)?;
             }
             "backups" if kind.is_dir() => {
                 std::fs::create_dir_all(&to)?;
@@ -532,7 +507,7 @@ fn copy_deployment(source: &Path, target: &Path) -> Result<()> {
                     }
                 }
             }
-            // WAL and journal files, temporary files and anything unknown stay behind.
+            // Staged and retired release folders and anything unknown stay behind.
             _ => {}
         }
     }
@@ -562,7 +537,8 @@ fn copy_tree(source: &Path, target: &Path) -> Result<()> {
     for entry in std::fs::read_dir(source)? {
         let entry = entry?;
         let name = entry.file_name();
-        if name.to_string_lossy().starts_with('.') {
+        // Temporary files start with a dot. `.konae/` is the installation's part of an app.
+        if name.to_string_lossy().starts_with('.') && name != ".konae" {
             continue;
         }
         let kind = entry.file_type()?;
@@ -999,7 +975,7 @@ async fn restore(source: &Source, copy: Option<&str>, destination: &Path, key: O
         );
     }
     for file in &manifest.files {
-        let allowed = ROOT_DATABASES.contains(&file.path.as_str()) || file.path.starts_with("deployments/");
+        let allowed = ROOT_DATABASES.contains(&file.path.as_str()) || file.path.starts_with("apps/");
         ensure!(
             safe_relative_path(&file.path) && allowed,
             "The copy's manifest names a path outside a data directory: {}",
@@ -1084,10 +1060,10 @@ fn sqlite_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut paths = ROOT_DATABASES.iter().map(|name| root.join(name)).filter(|path| path.is_file()).collect::<Vec<_>>();
     if let Ok(entries) = std::fs::read_dir(crate::layout::apps(&root)) {
         for entry in entries {
-            let folder = entry?.path();
+            let data = entry?.path().join("data");
             for name in DEPLOYMENT_DATABASES {
-                if folder.join(name).is_file() {
-                    paths.push(folder.join(name));
+                if data.join(name).is_file() {
+                    paths.push(data.join(name));
                 }
             }
         }
@@ -1133,7 +1109,7 @@ fn invalidate_sessions(root: &Path) -> Result<usize> {
     }
     if let Ok(entries) = std::fs::read_dir(crate::layout::apps(&root)) {
         for entry in entries {
-            let identity = entry?.path().join("identity.sqlite");
+            let identity = entry?.path().join("data").join("identity.sqlite");
             if identity.is_file() {
                 clear(&identity, &["app_sessions", "account_challenges"])?;
             }
@@ -1155,11 +1131,12 @@ mod tests {
     fn a_copy_carries_the_custom_domain_with_the_record_and_the_maintenance_state() {
         let root = std::env::temp_dir().join(format!("konae-copy-domain-{}", uuid::Uuid::new_v4()));
         let (source, target) = (root.join("source"), root.join("target"));
-        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(source.join(".konae")).unwrap();
         for name in ["deployment.json", crate::maintenance::MARKER_FILE, crate::domain::RECORD_FILE, crate::path::RECORD_FILE, "stray.tmp"] {
-            std::fs::write(source.join(name), "{}").unwrap();
+            std::fs::write(source.join(".konae").join(name), "{}").unwrap();
         }
-        copy_deployment(&source, &target).unwrap();
+        let target = target.join(".konae");
+        copy_deployment(&source, &target.parent().unwrap()).unwrap();
         assert!(target.join("deployment.json").exists());
         assert!(target.join(crate::domain::RECORD_FILE).exists());
         assert!(target.join(crate::path::RECORD_FILE).exists());
@@ -1201,42 +1178,45 @@ mod tests {
     /// A data directory with one published app: artifact, rows, an account,
     /// a live session and an uploaded file, plus an owner with a session.
     fn seed(root: &Path) -> (Deployment, String) {
+        let app_id = uuid::Uuid::new_v4().to_string();
         let deployment = Deployment {
-            id: uuid::Uuid::new_v4().to_string(),
-            project_id: "app_copy".into(),
+            id: app_id.clone(),
+            project_id: app_id,
             project_name: "Copy test".into(),
+            slug: "app".into(),
             url: "http://copy-test.localhost".into(),
             created_at: now_ms(),
             manifest: json!({"visibility": "public"}),
             hostname: "copy-test.localhost".into(),
             actions: "{}".into(),
-            artifact_version: Some("v1".into()),
+            artifact_version: "v1".into(),
             signup_policy: SignupPolicy::default(),
             sign_in_methods: crate::default_sign_in_methods(),
             contact_email: None,
         };
         let folder = crate::layout::folder(&root, &deployment.id);
-        std::fs::create_dir_all(folder.join("artifact/v1")).unwrap();
-        std::fs::write(folder.join("artifact/v1/index.html"), "<main>copied app</main>").unwrap();
-        std::fs::write(folder.join("deployment.json"), serde_json::to_vec(&deployment).unwrap()).unwrap();
-        initialize_database(&folder.join("database.sqlite")).unwrap();
-        Connection::open(folder.join("database.sqlite"))
+        std::fs::create_dir_all(folder.join("dist")).unwrap();
+        std::fs::write(folder.join("dist/index.html"), "<main>copied app</main>").unwrap();
+        crate::write_record_for_test(root, &deployment);
+        std::fs::create_dir_all(folder.join("data")).unwrap();
+        initialize_database(&folder.join("data/database.sqlite")).unwrap();
+        Connection::open(folder.join("data/database.sqlite"))
             .unwrap()
             .execute_batch("CREATE TABLE notes(body TEXT); INSERT INTO notes VALUES ('kept');")
             .unwrap();
-        let session = AuthService::open(folder.join("identity.sqlite"))
+        let session = AuthService::open(folder.join("data/identity.sqlite"))
             .unwrap()
             .signup("writer@copy.test", "correct horse battery")
             .unwrap();
-        std::fs::create_dir_all(folder.join("files")).unwrap();
+        std::fs::create_dir_all(folder.join("data/files")).unwrap();
         let file_id = uuid::Uuid::new_v4().to_string();
-        std::fs::write(folder.join("files").join(format!("{file_id}.blob")), b"attachment").unwrap();
-        std::fs::write(folder.join("files/index.json"), json!([{"id": file_id}]).to_string()).unwrap();
-        std::fs::write(folder.join("files/.index.json.tmp-x"), "temporary").unwrap();
-        std::fs::create_dir_all(folder.join("backups")).unwrap();
+        std::fs::write(folder.join("data/files").join(format!("{file_id}.blob")), b"attachment").unwrap();
+        std::fs::write(folder.join("data/files/index.json"), json!([{"id": file_id}]).to_string()).unwrap();
+        std::fs::write(folder.join("data/files/.index.json.tmp-x"), "temporary").unwrap();
+        std::fs::create_dir_all(folder.join(".konae/backups")).unwrap();
         let backup_id = uuid::Uuid::new_v4();
-        std::fs::write(folder.join("backups").join(format!("{backup_id}.json")), "{}").unwrap();
-        std::fs::write(folder.join("backups/portable-data-x.sqlite"), "scratch").unwrap();
+        std::fs::write(folder.join(".konae/backups").join(format!("{backup_id}.json")), "{}").unwrap();
+        std::fs::write(folder.join(".konae/backups/portable-data-x.sqlite"), "scratch").unwrap();
         AuthService::open(root.join("owners.sqlite"))
             .unwrap()
             .signup("owner@copy.test", "correct horse battery")
@@ -1246,38 +1226,6 @@ mod tests {
 
     fn count(path: &Path, sql: &str) -> i64 {
         Connection::open(path).unwrap().query_row(sql, [], |row| row.get(0)).unwrap()
-    }
-
-    #[test]
-    fn the_old_layout_moves_into_deployment_folders_once() {
-        let root = scratch("migrate");
-        std::fs::create_dir_all(root.join("artifacts/app-1/v1")).unwrap();
-        std::fs::write(root.join("artifacts/app-1/v1/index.html"), "one").unwrap();
-        std::fs::create_dir_all(root.join("backups/app-1")).unwrap();
-        std::fs::write(root.join("backups/app-1/b.json"), "{}").unwrap();
-        std::fs::create_dir_all(root.join("deployments/app-1/backups")).unwrap();
-        std::fs::write(root.join("artifacts/stray.txt"), "not a folder").unwrap();
-
-        let moved = migrate_layout(&root).unwrap();
-        assert_eq!(moved.len(), 2, "{moved:?}");
-        assert_eq!(std::fs::read(root.join("deployments/app-1/artifact/v1/index.html")).unwrap(), b"one");
-        assert!(root.join("deployments/app-1/backups/b.json").is_file());
-        assert!(!root.join("backups").exists(), "an emptied old root is removed");
-        assert!(root.join("artifacts/stray.txt").is_file(), "a stray file stays where it was");
-        assert!(migrate_layout(&root).unwrap().is_empty(), "a second start moves nothing");
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn the_migration_refuses_to_start_when_both_layouts_hold_files() {
-        let root = scratch("migrate-conflict");
-        std::fs::create_dir_all(root.join("artifacts/app-1/v1")).unwrap();
-        std::fs::create_dir_all(root.join("deployments/app-1/artifact/v2")).unwrap();
-        let message = migrate_layout(&root).unwrap_err().to_string();
-        assert!(message.contains("both exist"), "{message}");
-        assert!(root.join("artifacts/app-1/v1").is_dir(), "nothing moved");
-        assert!(root.join("deployments/app-1/artifact/v2").is_dir());
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1375,8 +1323,8 @@ mod tests {
         let served = loaded.get("copy-test.localhost").expect("the restored Kernel knows the app");
         assert_eq!(read_artifact(&self::state(&restored), served, "index.html").await.unwrap(), b"<main>copied app</main>");
         let folder = crate::layout::folder(&restored, &deployment.id);
-        assert_eq!(count(&folder.join("database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
-        let identity = AuthService::open(folder.join("identity.sqlite")).unwrap();
+        assert_eq!(count(&folder.join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
+        let identity = AuthService::open(folder.join("data/identity.sqlite")).unwrap();
         assert!(matches!(identity.authenticate(Some(&old_token)), Ok(None)), "the old session is gone");
         identity.login("writer@copy.test", "correct horse battery").expect("the account and password survive");
         AuthService::open(restored.join("owners.sqlite"))
@@ -1384,10 +1332,10 @@ mod tests {
             .login("owner@copy.test", "correct horse battery")
             .expect("the owner account survives");
         assert_eq!(count(&restored.join("owners.sqlite"), "SELECT COUNT(*) FROM app_sessions"), 1, "only the new login");
-        let index: Value = serde_json::from_slice(&std::fs::read(folder.join("files/index.json")).unwrap()).unwrap();
+        let index: Value = serde_json::from_slice(&std::fs::read(folder.join("data/files/index.json")).unwrap()).unwrap();
         let file_id = index[0]["id"].as_str().unwrap();
-        assert_eq!(std::fs::read(folder.join("files").join(format!("{file_id}.blob"))).unwrap(), b"attachment");
-        assert_eq!(std::fs::read_dir(folder.join("backups")).unwrap().count(), 1, "the saved backup travels");
+        assert_eq!(std::fs::read(folder.join("data/files").join(format!("{file_id}.blob"))).unwrap(), b"attachment");
+        assert_eq!(std::fs::read_dir(folder.join(".konae/backups")).unwrap().count(), 1, "the saved backup travels");
         assert!(std::fs::read_dir(&restored).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with(".restore-")));
 
         let message = restore(&Source::Directory(copies.clone()), None, &restored, None).await.err().unwrap().to_string();
@@ -1416,7 +1364,7 @@ mod tests {
         assert!(summary.reconciled.as_ref().is_ok_and(|changed| *changed >= 1), "{:?}", summary.reconciled);
         assert!(recovery::hold(&restored).is_none());
         let folder = crate::layout::folder(&restored, &deployment.id);
-        let restored_auth = AuthService::open(folder.join("identity.sqlite")).unwrap();
+        let restored_auth = AuthService::open(folder.join("data/identity.sqlite")).unwrap();
         assert!(restored_auth.login("writer@copy.test", "correct horse battery").is_err(), "the suspension survives the restore");
 
         std::fs::remove_file(copies.join(recovery::LEDGER_DIR).join(recovery::LEDGER_START)).unwrap();
@@ -1435,7 +1383,8 @@ mod tests {
     async fn a_copy_carries_the_maintenance_state() {
         let (source, copies, restored) = (scratch("marker-source"), scratch("marker-target"), scratch("marker-restored"));
         let (deployment, _) = seed(&source);
-        std::fs::write(crate::layout::folder(&source, &deployment.id).join(crate::maintenance::MARKER_FILE), json!({"since": 1}).to_string()).unwrap();
+        std::fs::create_dir_all(crate::layout::private(&source, &deployment.id)).unwrap();
+        std::fs::write(crate::layout::private(&source, &deployment.id).join(crate::maintenance::MARKER_FILE), json!({"since": 1}).to_string()).unwrap();
         run_copy(&state(&source), &[Target::Directory(copies.clone())]).await.unwrap();
         restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
         let message = crate::maintenance::pause(&restored, &deployment.id).expect("the restored app stays in maintenance");
@@ -1466,7 +1415,7 @@ mod tests {
         let id = run_copy(&state(&source), &[Target::Directory(plain.clone())]).await.unwrap();
         let key = CopyKey::derive("a copy secret that is long enough for tests");
         seal_copy(&plain, &sealed, &id, &key);
-        let database = format!("deployments/{}/database.sqlite", deployment.id);
+        let database = format!("apps/{}/data/database.sqlite", deployment.id);
         let bytes = std::fs::read(sealed.join(&id).join(&database)).unwrap();
         assert!(!bytes.windows(4).any(|w| w == b"kept"), "rows are not readable at rest");
 
@@ -1478,7 +1427,7 @@ mod tests {
         assert!(refused.contains("does not open"), "{refused}");
 
         // A sealed file moved to another path does not open.
-        let identity = format!("deployments/{}/identity.sqlite", deployment.id);
+        let identity = format!("apps/{}/data/identity.sqlite", deployment.id);
         let moved = scratch("sealed-moved-copy");
         copy_tree(&sealed, &moved).unwrap();
         std::fs::copy(moved.join(&id).join(&identity), moved.join(&id).join(&database)).unwrap();
@@ -1488,8 +1437,8 @@ mod tests {
         let restored = scratch("sealed-restored");
         restore(&Source::Directory(sealed.clone()), Some(&id), &restored, Some(&key)).await.unwrap();
         let folder = crate::layout::folder(&restored, &deployment.id);
-        assert_eq!(count(&folder.join("database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
-        AuthService::open(folder.join("identity.sqlite")).unwrap().login("writer@copy.test", "correct horse battery").unwrap();
+        assert_eq!(count(&folder.join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
+        AuthService::open(folder.join("data/identity.sqlite")).unwrap().login("writer@copy.test", "correct horse battery").unwrap();
         assert_eq!(std::fs::read_dir(&refused_root).unwrap().count(), 0, "a refused restore installs nothing");
         for path in [source, plain, sealed, restored, moved, refused_root] {
             let _ = std::fs::remove_dir_all(path);
@@ -1504,7 +1453,7 @@ mod tests {
         let (source, copies, restored) = (scratch("keys-source"), scratch("keys-target"), scratch("keys-restored"));
         let (deployment, _) = seed(&source);
         let folder = crate::layout::folder(&source, &deployment.id);
-        Connection::open(folder.join("identity.sqlite"))
+        Connection::open(folder.join("data/identity.sqlite"))
             .unwrap()
             .execute_batch(
                 "CREATE TABLE IF NOT EXISTS api_keys(
@@ -1521,10 +1470,10 @@ mod tests {
         restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
 
         let restored_folder = crate::layout::folder(&restored, &deployment.id);
-        let identity = restored_folder.join("identity.sqlite");
+        let identity = restored_folder.join("data/identity.sqlite");
         assert_eq!(count(&identity, "SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL"), 1, "the live key stays live");
         assert_eq!(count(&identity, "SELECT COUNT(*) FROM api_keys WHERE id='key-revoked' AND revoked_at=2"), 1);
-        assert_eq!(count(&restored_folder.join(crate::usage::USAGE_DATABASE), "SELECT SUM(count) FROM usage_daily WHERE kind='login'"), 1);
+        assert_eq!(count(&restored_folder.join("data").join(crate::usage::USAGE_DATABASE), "SELECT SUM(count) FROM usage_daily WHERE kind='login'"), 1);
 
         // The two import paths, on copies of the same accounts file.
         let small = restored.join("small-import.sqlite");
@@ -1591,7 +1540,7 @@ mod tests {
         let message = restore(&Source::Directory(copies.clone()), Some(named), &empty, None).await.err().unwrap().to_string();
         assert!(message.contains("incomplete"), "{message}");
 
-        let artifact = crate::layout::artifact(&copies.join(&id), &deployment.id).join("v1/index.html");
+        let artifact = crate::layout::dist(&copies.join(&id), &deployment.id).join("index.html");
         std::fs::write(&artifact, "<main>tampered</main>").unwrap();
         let message = restore(&Source::Directory(copies.join(&id)), None, &empty, None).await.err().unwrap().to_string();
         assert!(message.contains("does not match its checksum"), "{message}");

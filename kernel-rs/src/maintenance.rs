@@ -56,7 +56,7 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn marker_path(data_root: &Path, id: &str) -> PathBuf {
-    crate::layout::folder(&data_root, &id).join(MARKER_FILE)
+    crate::layout::private(data_root, id).join(MARKER_FILE)
 }
 
 fn marker(data_root: &Path, id: &str) -> Option<Arc<Marker>> {
@@ -83,6 +83,7 @@ fn marker(data_root: &Path, id: &str) -> Option<Arc<Marker>> {
 pub(crate) fn pause_for_test(data_root: &Path, id: &str, paused: bool) {
     let path = marker_path(data_root, id);
     if paused {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, serde_json::to_vec(&Marker { since: now_ms(), unreadable: false }).unwrap()).unwrap();
     } else {
         let _ = std::fs::remove_file(&path);
@@ -243,8 +244,8 @@ mod tests {
 
     fn scratch() -> PathBuf {
         let root = std::env::temp_dir().join(format!("konae-maintenance-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(root.join("deployments/app-1")).unwrap();
-        std::fs::create_dir_all(root.join("deployments/app-2")).unwrap();
+        std::fs::create_dir_all(crate::layout::data(&root, "app-1")).unwrap();
+        std::fs::create_dir_all(crate::layout::data(&root, "app-2")).unwrap();
         root
     }
 

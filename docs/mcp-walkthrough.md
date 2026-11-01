@@ -336,11 +336,11 @@ bun run konae -- dev --dir /tmp/orders --port 8796
 ```
 
 ```text
-http://orders-<dev suffix>.localhost:8796
+http://orders-<suffix>.localhost:8796
 ```
 
 ```sh
-curl -i 'http://orders-<dev suffix>.localhost:8796/'
+curl -i 'http://orders-<suffix>.localhost:8796/'
 ```
 
 ```text
@@ -585,7 +585,7 @@ http://orders-<suffix>.localhost:4173
 {
   "name": "signup_policy_read",
   "arguments": {
-    "deploymentId": "<deployment id>"
+    "deploymentId": "<project id>"
   }
 }
 ```
@@ -594,7 +594,7 @@ http://orders-<suffix>.localhost:4173
 {
   "result": {
     "allowlist": [],
-    "deploymentId": "<deployment id>",
+    "deploymentId": "<project id>",
     "mode": "invitation",
     "visibility": "private"
   }
@@ -628,7 +628,7 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
 {
   "name": "app_invitations_create",
   "arguments": {
-    "deploymentId": "<deployment id>",
+    "deploymentId": "<project id>",
     "emails": [
       "member@walkthrough.test"
     ],
@@ -667,7 +667,7 @@ Check that the installation sends email, then invite. Call `app_invitations_crea
 {
   "name": "app_invitations_create",
   "arguments": {
-    "deploymentId": "<deployment id>",
+    "deploymentId": "<project id>",
     "emails": [
       "member@walkthrough.test"
     ],
@@ -679,7 +679,7 @@ Check that the installation sends email, then invite. Call `app_invitations_crea
 ```json
 {
   "result": {
-    "deploymentId": "<deployment id>",
+    "deploymentId": "<project id>",
     "policy": "invitation",
     "results": [
       {
@@ -704,7 +704,7 @@ tail -n 1 /tmp/kernel-a/mailbox.jsonl
 ```
 
 ```json
-{"to":"member@walkthrough.test","purpose":"invitation","scope":"deployment:<deployment id>","link":"http://orders-<suffix>.localhost:4173/_konae/invitation#invitation=<invitation token>","expiresAt": <unix seconds>}
+{"to":"member@walkthrough.test","purpose":"invitation","scope":"deployment:<project id>","link":"http://orders-<suffix>.localhost:4173/_konae/invitation#invitation=<invitation token>","expiresAt": <unix seconds>}
 ```
 
 ```sh
@@ -988,7 +988,7 @@ content-type: application/json
 {
   "name": "api_keys_create",
   "arguments": {
-    "deploymentId": "<deployment id>",
+    "deploymentId": "<project id>",
     "name": "Accounting export",
     "actions": [
       "orders.feed"
@@ -1096,7 +1096,7 @@ PASS routes: refuses a POST to a path no action binds. Answered 405 "No route ac
 {
   "name": "usage_read",
   "arguments": {
-    "deploymentId": "<deployment id>",
+    "deploymentId": "<project id>",
     "from": "<today>",
     "to": "<today>"
   }
@@ -1167,7 +1167,7 @@ PASS routes: refuses a POST to a path no action binds. Answered 405 "No route ac
 {
   "name": "signals_read",
   "arguments": {
-    "deploymentId": "<deployment id>"
+    "deploymentId": "<project id>"
   }
 }
 ```
@@ -1214,7 +1214,7 @@ Exporting needs `export_data`, which OAuth does not grant:
 {
   "name": "package_export",
   "arguments": {
-    "deploymentId": "<deployment id>"
+    "deploymentId": "<project id>"
   }
 }
 ```
@@ -1233,7 +1233,7 @@ Exporting needs `export_data`, which OAuth does not grant:
 {
   "name": "package_export",
   "arguments": {
-    "deploymentId": "<deployment id>"
+    "deploymentId": "<project id>"
   }
 }
 ```
@@ -1296,7 +1296,7 @@ Exporting needs `export_data`, which OAuth does not grant:
         }
       ],
       "createdAt": <time ms>,
-      "deploymentId": "<deployment id>",
+      "deploymentId": "<project id>",
       "excluded": [
         "app sessions",
         "verification, recovery and invitation links",
@@ -1544,9 +1544,9 @@ Built .konae/artifact.json
 ```json
 {
   "result": {
-    "id": "<destination deployment id>",
-    "hostname": "orders-<destination suffix>.localhost",
-    "url": "http://orders-<destination suffix>.localhost:4174",
+    "id": "<project id>",
+    "hostname": "orders-<suffix>.localhost",
+    "url": "http://orders-<suffix>.localhost:4174",
     "signupPolicy": {
       "allowlist": [],
       "mode": "invitation"
@@ -1560,7 +1560,7 @@ Sessions and email links stay behind, so the member signs in again with the same
 
 <!-- walkthrough:import-check -->
 ```sh
-curl -i -X POST 'http://orders-<destination suffix>.localhost:4174/_konae/auth/login' -H 'content-type: application/json' --data '{"email":"member@walkthrough.test","password":"walkthrough-member-password"}'
+curl -i -X POST 'http://orders-<suffix>.localhost:4174/_konae/auth/login' -H 'content-type: application/json' --data '{"email":"member@walkthrough.test","password":"walkthrough-member-password"}'
 ```
 
 ```text
@@ -1602,7 +1602,7 @@ content-type: application/json
 {
   "name": "api_keys_list",
   "arguments": {
-    "deploymentId": "<destination deployment id>"
+    "deploymentId": "<project id>"
   }
 }
 ```
@@ -1610,7 +1610,7 @@ content-type: application/json
 ```json
 {
   "result": {
-    "deploymentId": "<destination deployment id>",
+    "deploymentId": "<project id>",
     "keys": [
       {
         "actions": [

@@ -474,7 +474,7 @@ fn identity_connection(state: &AppState, deployment: &Deployment) -> Result<Conn
     // Opening the store installs the account tables an import or a fresh
     // Deployment may not have yet.
     open_auth(state, deployment).map_err(|error_value| anyhow::anyhow!(error_value.to_string()))?;
-    let db = Connection::open(deployment_dir(state, &deployment.id).join("identity.sqlite"))?;
+    let db = Connection::open(crate::layout::identity(&state.data_root, &deployment.id))?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
     keys_table(&db)?;
     Ok(db)
@@ -863,7 +863,7 @@ fn cache_table(deployment: &Deployment) -> Arc<RouteTable> {
         table: table.clone(),
         parses: 0,
     });
-    entry.revision = deployment.artifact_version.clone();
+    entry.revision = Some(deployment.artifact_version.clone());
     entry.table = table.clone();
     entry.parses += 1;
     table
@@ -875,7 +875,7 @@ fn cache_table(deployment: &Deployment) -> Arc<RouteTable> {
 fn route_table(deployment: &Deployment) -> Arc<RouteTable> {
     {
         let cache = route_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(cached) = cache.get(&deployment.id).filter(|cached| cached.revision == deployment.artifact_version) {
+        if let Some(cached) = cache.get(&deployment.id).filter(|cached| cached.revision.as_deref() == Some(deployment.artifact_version.as_str())) {
             return cached.table.clone();
         }
     }
@@ -1231,7 +1231,7 @@ async fn read_file_as_key(state: &AppState, deployment: &Deployment, key: &ApiKe
     if !valid_file_id(id) {
         return not_found();
     }
-    let directory = deployment_dir(state, &deployment.id).join("files");
+    let directory = crate::layout::files(&state.data_root, &deployment.id);
     let index = match tokio::fs::read(directory.join("index.json")).await {
         Ok(bytes) => serde_json::from_slice::<Vec<Value>>(&bytes).unwrap_or_default(),
         Err(_) => return not_found(),
@@ -1434,7 +1434,7 @@ mod tests {
         // A table cached for another revision is not used: a Kernel that
         // loads the record without a publish parses on the first request.
         let mut restarted = second.clone();
-        restarted.artifact_version = Some("v-restarted".into());
+        restarted.artifact_version = "v-restarted".into();
         state.deployments.write().await.insert(restarted.hostname.clone(), restarted.clone());
         assert_eq!(get(&state, &restarted, "/api/total").await.0, StatusCode::OK);
         assert_eq!(route_parses(&second.id), 3);

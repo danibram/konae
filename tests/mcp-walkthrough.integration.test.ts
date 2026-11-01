@@ -280,7 +280,8 @@ describe("the MCP walkthrough", () => {
         printed += new TextDecoder().decode(value);
       }
       const url = printed.match(/http:\/\/(\S+\.localhost):\d+/)!;
-      r.name(url[1].split(".")[0], "orders-<dev suffix>");
+      // The address comes from the app's ID, so the local app and the published one share it.
+      r.name(url[1].split(".")[0], "orders-<suffix>");
       r.add("sh", shownCommand(["dev", "--dir", app(), "--port", "8796"]));
       r.add("text", printed.trim().split("\n").filter((line) => line.includes(".localhost:")).join("\n"));
       const { response } = await http("GET", { url: `http://127.0.0.1:${ports.dev}`, port: ports.dev }, "/", { host: url[1] });
@@ -317,8 +318,6 @@ describe("the MCP walkthrough", () => {
     expect((await run(["publish", "--dir", app()])).code).toBe(0);
     const receipt = JSON.parse(await readFile(path.join(app(), ".konae/deployment.json"), "utf8"));
     Object.assign(s, { deploymentId: receipt.id, hostname: receipt.hostname });
-    r.name(receipt.id, "<deployment id>");
-    r.name(receipt.hostname.split(".")[0], "orders-<suffix>");
     const policy = await tool("signup_policy_read", { deploymentId: s.deploymentId });
     expect((policy.result as any).mode).toBe("invitation");
     await http("GET", a, "/about", { host: s.hostname });
@@ -481,8 +480,6 @@ describe("the MCP walkthrough", () => {
     r.name((plan.result as any).planId, "<plan id>");
     const applied = await tool("release_apply", { planId: (plan.result as any).planId }, { token: s.tokenB, kernel: b, pick: (value) => ({ id: value.id, hostname: value.hostname, url: value.url, signupPolicy: value.signupPolicy }) });
     Object.assign(s, { deploymentB: (applied.result as any).id, hostnameB: (applied.result as any).hostname });
-    r.name(s.deploymentB, "<destination deployment id>");
-    r.name(s.hostnameB.split(".")[0], "orders-<destination suffix>");
     for (const id of [...Object.values(uploads), release.transferId]) await client.cancel(id).catch(() => {});
 
     r.step("import-check");
