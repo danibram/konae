@@ -394,13 +394,15 @@ async fn stage_copy(state: &AppState, staging: &Path, id: &str, created_at: u64)
             continue;
         }
         let Some(deployment) = entry.file_name().to_str().map(str::to_owned) else { continue };
+        // An editor save swaps app/ under the project lock.
+        let _project = database_lock(state, &format!("project:{deployment}")).await;
         let _data = database_lock(state, &deployment).await;
         let _identity = database_lock(state, &format!("identity:{deployment}")).await;
         let (source, target) = (entry.path(), crate::layout::folder(&staging, &deployment));
         tokio::task::spawn_blocking(move || copy_deployment(&source, &target))
             .await?
             .with_context(|| format!("Deployment {deployment}"))?;
-        drop((_data, _identity));
+        drop((_project, _data, _identity));
         copy_file_bytes(state, &deployment, &crate::layout::files(&staging, &deployment))
             .await
             .with_context(|| format!("The files of Deployment {deployment}"))?;

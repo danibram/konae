@@ -135,7 +135,7 @@ function packageManifest(settings: AppSettings) {
 function agentsGuide(settings: AppSettings, secrets: string[]) {
   return `# ${settings.name}
 
-This folder is one Konae app. A Konae Kernel serves it as it is: the pages in \`dist/\`, the Server Actions in \`app/actions.json\` on the database in \`data/\`.
+This folder is one Konae app. A Konae Kernel serves the pages in \`dist/\` and runs the Server Actions in \`app/actions.json\` on the database in \`data/\`.
 
 ## Layout
 
@@ -155,10 +155,10 @@ This folder is one Konae app. A Konae Kernel serves it as it is: the pages in \`
 ## Run it
 
 1. \`npm install\`, then \`npm run build\` to write \`dist/\`.
-2. From a Konae checkout: \`bun run konae -- dev --dir <this folder>\`. It serves the app on this machine and republishes when a file in \`app/\` changes.
+2. From a Konae checkout: \`bun run konae -- dev --dir <this folder>\`. It serves the app on this machine with local data of its own, not \`data/\`, and republishes when a file in \`app/\` changes.
 3. To publish on a Konae installation: \`bun run konae -- login --dir <this folder> --url <installation>\`, then \`bun run konae -- publish --dir <this folder>\`.
-${secrets.length ? `\nThe app's routes and calls sign with ${secrets.length === 1 ? "the secret" : "the secrets"} ${secrets.join(", ")}. A secret never travels with the folder: set each on the installation that serves the app with \`secret_set\`. \`konae dev\` sets a local value itself.\n` : ""}
-\`compose.yaml\` names the Kernel image, which is not published yet.
+${secrets.length ? `\nThe app's routes and calls sign with ${secrets.length === 1 ? "the secret" : "the secrets"} ${secrets.join(", ")}. A secret never travels with the folder, so set each on the installation that serves the app with \`secret_set\`. \`konae dev\` sets a local value itself.\n` : ""}
+\`compose.yaml\` names the Kernel image, which is not published yet. No command loads \`data/\` into a Kernel yet.
 `;
 }
 
@@ -166,10 +166,11 @@ ${secrets.length ? `\nThe app's routes and calls sign with ${secrets.length === 
 // editor and `konae build` run too.
 const buildScript = `import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { assembleStaticArtifact } from './static-artifact.mjs';
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = path.join(root, 'app');
 const dist = path.join(root, 'dist');
 const settings = JSON.parse(await readFile(path.join(root, 'konae.json'), 'utf8'));

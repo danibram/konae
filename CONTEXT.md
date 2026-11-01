@@ -68,6 +68,10 @@ _Avoid_: OAuth app, installation Google client (there is none)
 A Project Owner's revocable delegation that permits an external agent to perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity. Its permissions are `read`, `write`, `publish`, `manage_users` and `export_data`. Only `manage_users` lists, suspends and invites app accounts or changes a Signup Policy, and only `export_data` downloads accounts and data. An OAuth client may hold the first four. A call it may not make is refused with the permission it needs.
 _Avoid_: Runtime session, setup key
 
+**Development Kernel**:
+The local development authority that `konae dev` starts on the developer's machine. It reproduces the Kernel interfaces without granting an application access to production resources, and keeps its own data under `.konae/dev-data`.
+_Avoid_: Production proxy, mock API
+
 **App Folder**:
 Everything an app is, in one layout that is the same on a laptop, inside Konae and in an export: `konae.json` (name, visibility, Signup Policy, sign-in methods, contact email and Kernel version), `app/` (the Capsule), `dist/` (the Build Artifact), `data/` (database, accounts, Usage and uploaded files), and beside them `AGENTS.md`, `action-contract.md`, `compose.yaml`, `.env.example` and a `package.json` whose `npm run build` writes `dist/`. `konae init` writes it, `konae build` and `npm run build` fill `dist/`, and the Kernel keeps one per app. Secrets and the installation's `.konae/` never leave the machine that holds them (ADR-0027).
 _Avoid_: kit, workspace, repo

@@ -19,24 +19,8 @@ pub(crate) async fn write(root: &Path, id: &str, source: &Value) -> Result<()> {
     let private = layout::private(root, id);
     let staged = private.join(format!("app-{}", Uuid::new_v4().simple()));
     let result = async {
-        tokio::fs::create_dir_all(&staged).await?;
-        for directory in source["directories"].as_array().into_iter().flatten().filter_map(Value::as_str) {
-            tokio::fs::create_dir_all(staged.join(directory)).await?;
-        }
-        for (path, text) in source["files"].as_object().into_iter().flatten() {
-            let target = staged.join(path);
-            if let Some(parent) = target.parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-            tokio::fs::write(&target, text.as_str().unwrap_or_default()).await?;
-        }
-        let app = layout::sources(root, id);
-        let retired = private.join(format!("app-retired-{}", Uuid::new_v4().simple()));
-        if tokio::fs::try_exists(&app).await? {
-            tokio::fs::rename(&app, &retired).await?;
-        }
-        tokio::fs::rename(&staged, &app).await?;
-        let _ = tokio::fs::remove_dir_all(&retired).await;
+        stage(&staged, source).await?;
+        swap(root, id, &staged).await?;
         let metadata = json!({
             "name": source["name"], "slug": source["slug"], "manifest": source["manifest"],
             "directories": source["directories"], "updatedAt": source["updatedAt"],
@@ -47,6 +31,53 @@ pub(crate) async fn write(root: &Path, id: &str, source: &Value) -> Result<()> {
     .await;
     let _ = tokio::fs::remove_dir_all(&staged).await;
     result
+}
+
+/// Writes a release's files into `app/` when the editor never saved
+/// sources for the app, so an app published from a folder or over MCP has
+/// its sources in its folder too. Saved sources are never replaced.
+pub(crate) async fn write_release(root: &Path, id: &str, files: &std::collections::HashMap<String, String>) -> Result<()> {
+    if tokio::fs::try_exists(layout::private(root, id).join(layout::SOURCES_METADATA)).await? {
+        return Ok(());
+    }
+    let source = json!({"files": files, "directories": []});
+    let private = layout::private(root, id);
+    let staged = private.join(format!("app-{}", Uuid::new_v4().simple()));
+    let result = async {
+        stage(&staged, &source).await?;
+        swap(root, id, &staged).await
+    }
+    .await;
+    let _ = tokio::fs::remove_dir_all(&staged).await;
+    result
+}
+
+async fn stage(staged: &Path, source: &Value) -> Result<()> {
+    tokio::fs::create_dir_all(staged).await?;
+    for directory in source["directories"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        tokio::fs::create_dir_all(staged.join(directory)).await?;
+    }
+    for (path, text) in source["files"].as_object().into_iter().flatten() {
+        anyhow::ensure!(crate::safe_relative_path(path), "{path} is not a path inside app/.");
+        let target = staged.join(path);
+        if let Some(parent) = target.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(&target, text.as_str().unwrap_or_default()).await?;
+    }
+    Ok(())
+}
+
+/// Puts the staged files in the place of `app/`.
+async fn swap(root: &Path, id: &str, staged: &Path) -> Result<()> {
+    let app = layout::sources(root, id);
+    let retired = layout::private(root, id).join(format!("app-retired-{}", Uuid::new_v4().simple()));
+    if tokio::fs::try_exists(&app).await? {
+        tokio::fs::rename(&app, &retired).await?;
+    }
+    tokio::fs::rename(staged, &app).await?;
+    let _ = tokio::fs::remove_dir_all(&retired).await;
+    Ok(())
 }
 
 /// The saved sources as the editor sent them, or `None` when the app has none.

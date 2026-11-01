@@ -267,8 +267,8 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   const downloadEvent = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export", exact: true }).click();
   const download = await downloadEvent;
-  expect(download.suggestedFilename()).toMatch(/-selfhost\.tar$/);
-  await download.saveAs(testInfo.outputPath("selfhost.tar"));
+  expect(download.suggestedFilename()).toMatch(/\.tar$/);
+  await download.saveAs(testInfo.outputPath("app-folder.tar"));
   await app.screenshot({ path: testInfo.outputPath("published-app.png"), fullPage: true });
 });
 
@@ -329,7 +329,7 @@ test("public notes authenticate users and isolate private rows", async ({ page, 
   const downloadEvent = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export", exact: true }).click();
   const download = await downloadEvent;
-  await download.saveAs(testInfo.outputPath("notes-selfhost.tar"));
+  await download.saveAs(testInfo.outputPath("notes-app-folder.tar"));
 });
 
 // playwright.local.config.ts starts the Kernel with KONAE_MAIL_TRANSPORT=development,

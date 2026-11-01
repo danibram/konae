@@ -254,7 +254,8 @@ pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id:
             .query_row("SELECT sources FROM projects WHERE id=?1", [&deployment.project_id], |r| r.get(0))
             .optional()?
             .filter(|saves: &u64| *saves > 0);
-        // The editor saves sources between releases, so app/ may be ahead of what dist/ and the record serve.
+        // The editor saves sources between releases. app/actions.json that differs from the
+        // actions the release runs says app/ is ahead of what dist/ and the record serve.
         let saved_actions = tokio::fs::read_to_string(crate::layout::sources(&state.data_root, &deployment.id).join("actions.json")).await.ok();
         let sources_ahead = saved_actions.is_some_and(|saved| saved != deployment.actions);
         components.map(|components| (components, deployment, published_revision, sources_revision, sources_ahead))

@@ -42,12 +42,12 @@ my-app/
     bun run konae -- export --dir /tmp/my-app --out /tmp/my-app-export --with-data
     ```
 
-3. Or, in the editor, choose Export. A published app downloads as a tar of the folder with its data; an app not published yet downloads its sources and build. When the editor saved sources after the last publish, `app/` holds the newer sources while `dist/` and `data/` are the published app's, and the editor says so.
-4. Or over MCP, call `project_export` with the `deploymentId`. It returns `folder`, a download of `konae.json`, `app/` and `dist/`, and a manifest with one download per part of `data/`: `database`, `identity`, `files` and, when the app recorded any, `usage`. `sourcesAhead` is true when `app/` holds sources saved after the release. Read each download with `transfer_read` and its `transferId` and `offset` until `nextOffset` equals `size`. Check its SHA-256, then call `transfer_cancel`.
+3. Or, in the editor, choose Export. A published app downloads as a tar of the folder with its data; an app not published yet downloads its sources and build. When `app/actions.json` differs from the actions the published app runs, the editor says that `app/` is ahead of `dist/` and `data/`.
+4. Or over MCP, call `project_export` with the `deploymentId`. It returns `folder`, a download of `konae.json`, `app/` and `dist/`, and a manifest with one download per part of `data/`: `database`, `identity`, `files` and, when the app recorded any, `usage`. `sourcesAhead` is true when `app/actions.json` differs from the actions the release runs. Read each download with `transfer_read` and its `transferId` and `offset` until `nextOffset` equals `size`. Check its SHA-256, then call `transfer_cancel`.
 
 ## Run it on your own machine
 
-`compose.yaml` names the Kernel image, which is not published yet. Until it is, run the folder with `konae dev` from a Konae checkout: `bun run konae -- dev --dir /tmp/my-app-export`. A Konae installation takes the folder with an import, below.
+`compose.yaml` names the Kernel image, which is not published yet, and no command loads an exported `data/` into a Kernel yet. Until both come, `bun run konae -- dev --dir /tmp/my-app-export` from a Konae checkout runs the folder's sources on a local Kernel with data of its own, and the import below moves the data between installations from `project_export`'s downloads.
 
 ## Serve the app on its own domain
 
@@ -64,7 +64,7 @@ An export carries the custom hostname without its verification token, so the des
 3. Upload the release JSON built from `app/` and `dist/`, with `initialPackage` holding the `manifest` and a `components` map of part name to `transferId`. Then call `release_plan` and `release_apply`. An import installs only into a project that has no Deployment yet. The same data imported again returns the first import.
 4. Issue new API keys. `api_keys_list` shows each key revoked at import.
 
-`konae pull` and `konae dev --reset` are the same export and import for a laptop: `pull` exports the published app's data into `.konae/pull`, and `dev --reset` imports it into the local Kernel.
+`konae pull` and `konae dev --reset` are the same export and import for a laptop. `pull` exports the published app's data into `.konae/pull`, and `dev --reset` imports it into the local Kernel.
 
 ## Check it worked
 

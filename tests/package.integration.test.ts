@@ -153,7 +153,8 @@ describe("chunked package", () => {
     expect(manifest.excluded).toContain("app sessions");
     // The folder download is the rest of the app folder, and never a secret or the installation's records.
     const folder = folders.at(-1)!;
-    expect(folder).toEqual(expect.arrayContaining(["konae.json", "dist/index.html"]));
+    // An app published without an editor save keeps its release's sources in app/.
+    expect(folder).toEqual(expect.arrayContaining(["konae.json", "app/actions.json", "app/schema.sql", "dist/index.html"]));
     expect(folder.every((entry) => entry === "konae.json" || entry.startsWith("app/") || entry.startsWith("dist/"))).toBe(true);
     expect(manifest.excluded).not.toContain("Usage and Signals");
     for (const content of manifest.contents) expect(await checksum(new Uint8Array(await readFile(files[content.name])))).toBe(content.sha256);

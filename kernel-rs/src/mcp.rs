@@ -1330,23 +1330,35 @@ async fn admin_call(
             let template = project_template(a["template"].as_str())?;
             let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"manifest":a.get("manifest").cloned().unwrap_or(json!({"version":1,"visibility":template["visibility"]})),"files":template["files"]});
             // The app's folder exists from the start: konae.json, and app/ once sources are saved.
-            super::Settings::new(&id, project["name"].as_str().unwrap_or_default(), project["slug"].as_str().unwrap_or_default(), &project["manifest"])
-                .write(&state.data_root)
-                .await?;
-            if let Some(source) = initial_sources.as_ref() {
-                super::sources::write(&state.data_root, &id, source).await?;
-                project["sourcesRevision"] = json!(1);
+            // A step that fails takes the folder away again, so a retry with the same ID works.
+            let created = async {
+                super::Settings::new(&id, project["name"].as_str().unwrap_or_default(), project["slug"].as_str().unwrap_or_default(), &project["manifest"])
+                    .write(&state.data_root)
+                    .await?;
+                if let Some(source) = initial_sources.as_ref() {
+                    super::sources::write(&state.data_root, &id, source).await?;
+                    project["sourcesRevision"] = json!(1);
+                }
+                Ok::<_, anyhow::Error>(())
             }
-            db.execute(
-                "INSERT INTO projects(id,owner,body,sources) VALUES(?1,?2,?3,?4)",
-                params![id, owner.id, {
-                    let mut metadata = project.clone();
-                    let object = metadata.as_object_mut().unwrap();
-                    object.remove("files");
-                    object.remove("sourcesRevision");
-                    metadata.to_string()
-                }, u64::from(initial_sources.is_some())],
-            )?;
+            .await
+            .and_then(|()| {
+                db.execute(
+                    "INSERT INTO projects(id,owner,body,sources) VALUES(?1,?2,?3,?4)",
+                    params![id, owner.id, {
+                        let mut metadata = project.clone();
+                        let object = metadata.as_object_mut().unwrap();
+                        object.remove("files");
+                        object.remove("sourcesRevision");
+                        metadata.to_string()
+                    }, u64::from(initial_sources.is_some())],
+                )?;
+                Ok(())
+            });
+            if let Err(error_value) = created {
+                let _ = tokio::fs::remove_dir_all(crate::layout::folder(&state.data_root, &id)).await;
+                return Err(error_value);
+            }
             Ok(project)
         }
         "project_inspect" => {
@@ -1359,6 +1371,8 @@ async fn admin_call(
         "project_sources_read" => {
             let id = a["projectId"].as_str().unwrap();
             owned_project(state, owner, id, "read")?;
+            // A save swaps app/ under this lock, so a read never sees half of one.
+            let _guard = database_lock(state, &format!("project:{id}")).await;
             let revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
             match super::sources::read(&state.data_root, id).await? {
                 Some(source) if revision > 0 => Ok(json!({"revision":revision,"transfer":download(state, principal, &serde_json::to_vec(&source)?, Some(id)).await?})),
@@ -2559,6 +2573,30 @@ mod tests {
         for refused in ["", "App_x", "app/x", "app.x", "domains", "paths", &"a".repeat(101)] {
             assert!(!valid_app_id(refused), "{refused}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_project_create_that_fails_leaves_no_folder_and_a_retry_works() {
+        let root = std::env::temp_dir().join(format!("konae-create-retry-{}", Uuid::new_v4()));
+        let (state, _) = crate::tests::login_test_state(&root, "public").await;
+        let owner = Owner { id: "ana".into(), display: None, scopes: vec!["read".into(), "write".into()], projects: vec![], session: false };
+        let manifest = json!({"version": 1, "visibility": "private", "runtime": {"database": {"mode": "declared-actions", "actions": []}, "auth": {"mode": "required"}, "files": {"access": "deployment"}}});
+        let create = |files: Value| {
+            let (state, owner, manifest) = (state.clone(), owner.clone(), manifest.clone());
+            async move {
+                let source = json!({"id": "app_retry", "name": "Retry", "slug": "retry", "files": files, "directories": [], "manifest": manifest, "updatedAt": 1});
+                let upload = new_transfer(&state, "owner:ana", json!({"direction": "upload", "size": 0, "sha256": "", "complete": true, "projectId": null})).await.unwrap();
+                let id = upload["transferId"].as_str().unwrap().to_owned();
+                tokio::fs::write(transfer_path(&state, &id).unwrap(), serde_json::to_vec(&source).unwrap()).await.unwrap();
+                admin_call(&state, &owner, "owner:ana", "project_create", json!({"projectId": "app_retry", "name": "Retry", "slug": "retry", "manifest": manifest, "sourcesTransferId": id})).await
+            }
+        };
+        // A file and a folder of the same name cannot both be written into app/.
+        assert!(create(json!({"page": "<main></main>", "page/nested.html": "<main></main>"})).await.is_err());
+        assert!(!crate::layout::folder(&root, "app_retry").exists(), "the failed create left no folder");
+        create(json!({"index.html": "<main></main>"})).await.unwrap();
+        assert!(crate::layout::sources(&root, "app_retry").join("index.html").is_file());
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]

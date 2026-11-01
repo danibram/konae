@@ -828,6 +828,10 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
     if let Err(error_value) = switch_dist(&state, &id, &artifact_version).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The new files could not take the place of dist/: {error_value}"));
     }
+    // An app the editor never saved keeps the release's sources in app/, so its folder is whole.
+    if let Err(error_value) = sources::write_release(&state.data_root, &id, &input.project.files).await {
+        eprintln!("Could not write the sources of release {artifact_version} to app/: {error_value:#}");
+    }
     state
         .deployments
         .write()
