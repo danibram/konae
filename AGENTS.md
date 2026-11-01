@@ -57,7 +57,7 @@ These are not bugs to paper over. Say them when they matter.
 - The editor preview has no Google sign-in. `miniapp.auth.signInWithGoogle()` refuses there; try it on a published Deployment once its owner has set the app's Google client and turned Google on.
 - The editor's build reads npm packages from esm.sh; `konae build` and the export kit read them from `node_modules`. Both use the exact versions in `package.json`, but the bundles are not byte-identical.
 - The Validation Gate checks schema and `actions.json`. A page that names a missing file fails at build or release, not at `validate_capsule`.
-- The editor preview re-runs `schema.sql` on its own test rows and never changes a table it already has. A Kernel derives the change at publish. When the preview lacks a table or column `schema.sql` declares, the Gate warns and passes; reset the project data to try the change there.
+- The editor preview re-runs `schema.sql` on its own test rows and never changes a table it already has. A Kernel derives the change at publish. When the preview lacks a table or column `schema.sql` declares, the Gate warns and passes. Try such a change on `konae dev` or a published Deployment.
 
 ## Where the work lives
 

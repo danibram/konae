@@ -15,7 +15,7 @@ export const ACTION_TYPES_FILE = "actions.d.ts";
 export function renderActionTypes(contract: ActionContract): string {
   const callable = contract.actions.filter(callableFromPage);
   const lines = [
-    "// Generated from actions.json and schema.sql. Do not edit: konae dev, konae contract and the export write it again.",
+    "// Generated from actions.json and schema.sql. Do not edit it, because konae dev, konae contract and the export write it again.",
     "// It types miniapp.actions.call by action name, input and the columns a query returns.",
     "",
     "export interface KonaeActions {",

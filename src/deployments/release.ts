@@ -10,7 +10,8 @@ export type SchemaLoss = { table: string; column: string | null; sentence: strin
  */
 export type SchemaChange = { statements: string[]; losses: SchemaLoss[]; confirmation: string | null };
 
-export type ReleasePlan = { planId: string; projectId: string; expectedRevision: number; schema: SchemaChange };
+/** `schema` is absent when release_plan replays a package import it already applied. */
+export type ReleasePlan = { planId: string; projectId: string; expectedRevision: number; schema?: SchemaChange };
 
 /** Asks the owner about a schema change that loses data. False stops the release. */
 export type ConfirmSchema = (change: SchemaChange) => Promise<boolean>;
@@ -30,13 +31,13 @@ export class SchemaChangeDeclined extends Error {
  */
 export async function release<Receipt>(client: Pick<McpClient, "call">, transferId: string, confirm: ConfirmSchema): Promise<{ plan: ReleasePlan; receipt: Receipt }> {
   const plan = await client.call<ReleasePlan>("release_plan", { transferId });
-  const confirmation = plan.schema.confirmation;
-  if (confirmation && !await confirm(plan.schema)) throw new SchemaChangeDeclined(plan.schema);
+  const confirmation = plan.schema?.confirmation;
+  if (plan.schema && confirmation && !await confirm(plan.schema)) throw new SchemaChangeDeclined(plan.schema);
   const receipt = await client.call<Receipt>("release_apply", { planId: plan.planId, ...(confirmation ? { confirmSchema: confirmation } : {}) });
   return { plan, receipt };
 }
 
-/** The plan in lines for a terminal: what it loses, then the statements. */
+/** The plan in lines for a terminal, with what it loses and then the statements. */
 export function describeSchemaChange(change: SchemaChange): string[] {
   return [
     "This release changes the database and loses data:",

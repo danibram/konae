@@ -43,8 +43,8 @@ pub(crate) struct Change {
 }
 
 impl Change {
-    /// The confirmation a change that loses something needs: a digest of its
-    /// statements, so a confirmation fits only the plan it was given for.
+    /// The confirmation a change that loses something needs. It is a digest
+    /// of the statements, so a confirmation fits only the plan it was given for.
     pub(crate) fn confirmation(&self) -> Option<String> {
         (!self.losses.is_empty()).then(|| hex::encode(Sha256::digest(self.statements.join(";\n").as_bytes())))
     }
@@ -65,7 +65,7 @@ pub(crate) enum Mode<'a> {
     /// Apply what loses nothing, and what loses something only when the
     /// confirmation matches.
     Apply(Option<&'a str>),
-    /// Apply everything: the caller holds a copy it will throw away and wants
+    /// Apply everything. The caller holds a copy it will throw away and wants
     /// the plan.
     Plan,
 }
@@ -106,8 +106,8 @@ pub(crate) fn apply(path: &Path, schema: &str, program: &ActionProgram, mode: Mo
     if foreign_key_violations(&transaction)?.iter().any(|(key, count)| *count > violations_before.get(key).copied().unwrap_or(0)) {
         anyhow::bail!("schema.sql changes a table so that rows no longer match a foreign key. Keep the referenced columns, or change the rows first.");
     }
-    // Actions prepare as before this change: the runtime's own authorizer
-    // refuses a denied function when the action runs.
+    // Actions prepare without the authorizer, as they always did. The
+    // runtime's own authorizer refuses a denied function when the action runs.
     transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
     for (name, action) in program.actions.iter().filter(|(_, action)| action.kind != "signal") {
         let statement = transaction.prepare(&action.statement).map_err(|error| {
@@ -172,8 +172,9 @@ fn derive(transaction: &Connection, scratch: &Scratch, change: &mut Change) -> R
     Ok(())
 }
 
-/// A table whose definition changed: new columns at the end with ADD COLUMN
-/// when SQLite takes them and the result matches, else a rebuild.
+/// Changes a table whose definition changed. New columns at the end go in
+/// with ADD COLUMN when SQLite takes them and the result matches, and
+/// anything else is a rebuild.
 fn change_table(transaction: &Connection, scratch: &Scratch, current: &Table, wanted: &Table, change: &mut Change) -> Result<()> {
     let stored = |table: &Table| table.columns.iter().filter(|column| column.stored).map(|column| column.name.to_lowercase()).collect::<Vec<_>>();
     let wanted_stored = stored(wanted);
@@ -296,7 +297,8 @@ fn foreign_key_violations(connection: &Connection) -> Result<HashMap<(String, St
 }
 
 /// `schema.sql` run into an empty database in memory, under the rules the
-/// Kernel always held it to: tables and indexes only, no denied function.
+/// Kernel always held it to, so it holds tables and indexes and calls no
+/// denied function.
 struct Scratch {
     connection: Connection,
     schema: Schema,
@@ -486,8 +488,9 @@ fn tokens(sql: &str) -> Vec<Token> {
     tokens
 }
 
-/// Two CREATE statements define the same thing: the same tokens once
-/// whitespace, comments, quoting, letter case and IF NOT EXISTS are set aside.
+/// Whether two CREATE statements define the same thing. They do when their
+/// tokens match once whitespace, comments, quoting, letter case and IF NOT
+/// EXISTS are set aside.
 fn same_sql(a: &str, b: &str) -> bool {
     fn normal(sql: &str) -> Vec<String> {
         let mut words: Vec<String> = tokens(sql).into_iter().map(|token| token.text).collect();
@@ -680,7 +683,7 @@ mod tests {
             CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, list_id INTEGER NOT NULL REFERENCES lists(id), label TEXT);";
         apply(&path, schema, &program(&[]), Mode::Apply(None)).unwrap();
         Connection::open(&path).unwrap().execute_batch("INSERT INTO lists VALUES (1, 'home'); INSERT INTO items VALUES (1, 1, 'milk');").unwrap();
-        // The parent is rebuilt: the child's reference still holds afterwards.
+        // The parent is rebuilt, and the child's reference still holds afterwards.
         let reordered = "CREATE TABLE IF NOT EXISTS lists (name TEXT NOT NULL, id INTEGER PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, list_id INTEGER NOT NULL REFERENCES lists(id), label TEXT);";
         apply(&path, reordered, &program(&[]), Mode::Apply(None)).unwrap();

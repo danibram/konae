@@ -328,7 +328,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
   return Object.assign(receipt, { first });
 }
 
-/** Keeps the data: a schema change that loses some is not applied. */
+/** Keeps the data, so a schema change that loses some is not applied. */
 async function keepData() { return false; }
 
 /**
@@ -425,8 +425,8 @@ export async function writeActionTypes(out: string, contract: ActionContract) {
 }
 
 /**
- * What dev writes on each start and change: actions.d.ts from the folder's
- * own actions.json and schema.sql. When they do not parse, the last one stays.
+ * Writes actions.d.ts from the folder's own actions.json and schema.sql, as
+ * dev does on each start and change. When they do not parse, the last one stays.
  */
 async function refreshActionTypes(root: string) {
   const actionsSource = await readFile(path.join(root, "actions.json"), "utf8").catch(() => undefined);

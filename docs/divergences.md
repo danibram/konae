@@ -31,7 +31,7 @@ The editor's build reads npm packages from esm.sh. `konae build` and the export 
 
 ## Preview database and schema.sql
 
-The editor preview re-runs `schema.sql` on its own test rows and never changes a table it already has. A Kernel derives the change at publish and asks before one that deletes data. When the preview lacks a table or column `schema.sql` declares, the Gate warns and passes. Reset the project data from the editor menu to try the change in the preview.
+The editor preview re-runs `schema.sql` on its own test rows and never changes a table it already has. A Kernel derives the change at publish and asks before one that deletes data. When the preview lacks a table or column `schema.sql` declares, the Gate warns and passes. Try such a change on `konae dev` or a published Deployment.
 
 ## Gate and publish builders
 

@@ -33,7 +33,7 @@ Observe the result through the same door you wrote through, before you tell anyo
 
 ## Data and republishing
 
-Use Data to choose the local or deployed database, browse and edit rows, run SQL, create backups and restore them. `schema.sql` is the only model. A publish changes the published database to match it, and asks before it deletes a table or a column. The preview keeps its own test rows, so reset the project data to try a changed table there. Publishing the same project keeps its URL and database, and the republished app stops serving files that the new artifact no longer contains.
+Use Data to choose the local or deployed database, browse and edit rows, run SQL, create backups and restore them. `schema.sql` is the only model. A publish changes the published database to match it, and asks before it deletes a table or a column. The preview keeps its own test rows and does not change a table it already has, so try a changed table on the published app or with `konae dev`. Publishing the same project keeps its URL and database, and the republished app stops serving files that the new artifact no longer contains.
 
 The Auth panel lets you try the app as Guest, Alice and Bob in the preview. A published app uses its own accounts.
 

@@ -40,7 +40,7 @@ export const loadBrowserSqlJs: SqlJsLoader = () => {
 
 /** Who clears a release refusal, beside the Kernel's sentence. */
 const RELEASE_OWNER = "Deploy refuses this until the owner sets the secret in Auth > Integrations. No edit to the files clears it.";
-const PREVIEW_BEHIND = "The preview's test database is behind schema.sql, so the preview cannot run the actions that need the change. Publishing applies it to the published database. To try it here, reset the project data from the editor menu.";
+const PREVIEW_BEHIND = "The preview's test database is behind schema.sql, so the preview cannot run the actions that need the change. Publishing applies it to the published database, so try the change on konae dev or a published Deployment.";
 const RELEASE_AUTHOR = "The Kernel refuses this at publish. Change actions.json.";
 
 export function createCapsuleValidator(loadSql: SqlJsLoader = loadBrowserSqlJs): CapsuleValidator {

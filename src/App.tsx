@@ -43,7 +43,7 @@ import { closePanel, isOpen, isVisible, loadLayout, movePanel, openPanel, panelI
 import { inTextEntry, shortcutFor } from "./ui/shortcuts";
 import { DeployDialog } from "./components/DeployDialog";
 import { SchemaChangeDialog } from "./components/SchemaChangeDialog";
-import type { SchemaChange } from "./deployments/release";
+import { SchemaChangeDeclined, type SchemaChange } from "./deployments/release";
 import { ExplorerTree } from "./components/ExplorerTree";
 import { ActionContractView } from "./components/ActionContractView";
 import { useActionContract } from "./components/useActionContract";
@@ -785,6 +785,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       resolveAgentPublish.current?.({ status: "published", url: record.url, visibility: record.manifest.visibility });
       resolveAgentPublish.current = null;
     } catch (error) {
+      // The owner kept the data: nothing was published and nothing failed.
+      if (error instanceof SchemaChangeDeclined) return;
       if (isSignedOutError(error)) refreshOwnerSession();
       setDeployError(error instanceof Error ? error.message : String(error));
       setDeployErrorCode(error instanceof McpError ? error.refusal?.code : undefined);

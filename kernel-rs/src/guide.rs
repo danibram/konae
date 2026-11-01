@@ -170,7 +170,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "Build static HTML/CSS/JS locally. Inject the SDK using the local builder.",
                 "Upload JSON {project:{id,name,slug,files,manifest},visibility,artifact:{version:1,entrypoint:'index.html',files:{...}}} using transfer_begin with projectId, byte size and sha256, then transfer_write and transfer_complete.",
                 "Call release_plan with transferId, inspect its planId, expectedRevision and schema, then call release_apply with planId.",
-                "schema is the change the Kernel derived from schema.sql to the live database: statements, losses and confirmation. A new table, column or index applies. When losses is not empty (a dropped table, a dropped column, a changed column type), show the owner each loss's sentence and pass confirmation as confirmSchema only after the owner agrees. Without it release_apply refuses with schema.confirmation-required and changes nothing.",
+                "schema is the change the Kernel derived from schema.sql to the live database, with statements, losses and confirmation. A new table, column or index applies. When losses is not empty (a dropped table, a dropped column, a changed column type), show the owner each loss's sentence and pass confirmation as confirmSchema only after the owner agrees. Without it release_apply refuses with schema.confirmation-required and changes nothing.",
                 "Save the receipt and cancel the temporary transfer. Read the live Deployment with project_inspect."
             ],
             "cli": "bun run konae -- publish --dir <folder> runs these steps with the credential from login and sends project.manifest.signupPolicy from konae.json as initialSignupPolicy on the first release.",
