@@ -462,15 +462,15 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             tool("api_keys_revoke", "Revoke a deployment's API key by its ID.", json!({"deploymentId":text,"keyId":text}), &["deploymentId","keyId"], false),
             tool(
                 "release_plan",
-                "Validate a completed artifact transfer and pin the current project revision.",
+                "Validate a completed artifact transfer, pin the current project revision and answer the schema change the release makes: its statements, what they lose, and the confirmation release_apply needs when they lose data.",
                 json!({"transferId":text}),
                 &["transferId"],
                 false,
             ),
             tool(
                 "release_apply",
-                "Apply a current release plan. Repeating an applied plan returns its receipt.",
-                json!({"planId":text}),
+                "Apply a current release plan. Repeating an applied plan returns its receipt. When the plan's schema change loses data, pass its schema.confirmation as confirmSchema.",
+                json!({"planId":text,"confirmSchema":{"type":"string","minLength":64,"maxLength":64}}),
                 &["planId"],
                 false,
             ),
@@ -1618,7 +1618,7 @@ async fn admin_call(
                 }
                 super::package::verify(state, principal, &input.project.id, package).await?;
             }
-            validate_release(state, &input).await?;
+            let schema = validate_release(state, &input).await?;
             let id = Uuid::new_v4().to_string();
             let expires = now_ms() + 900_000;
             store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires) VALUES(?1,?2,?3,?4,?5,?6)",params![id,owner.id,input.project.id,revision,a["transferId"].as_str().unwrap(),expires])?;
@@ -1626,7 +1626,7 @@ async fn admin_call(
                 super::package::remember_import(state, &package.manifest.package_id, &input.project.id, &id)?;
             }
             Ok(
-                json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"artifactSha256":transfer["sha256"],"visibility":input.visibility,"expiresAt":expires}),
+                json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"artifactSha256":transfer["sha256"],"visibility":input.visibility,"expiresAt":expires,"schema":schema.to_json()}),
             )
         }
         "release_apply" => {
@@ -1651,6 +1651,9 @@ async fn admin_call(
             // The owner's email is where notify to the owner sends. It comes
             // from Konae's owner record, never from the payload.
             payload["contactEmail"] = owner_email(state, &owner.id).map_or(Value::Null, Value::String);
+            // A schema change that loses data applies only with the
+            // confirmation release_plan gave for it.
+            payload["schemaConfirmation"] = a.get("confirmSchema").cloned().unwrap_or(Value::Null);
             for key in ["name", "slug", "manifest"] {
                 if let Some(value) = payload["project"].get(key) {
                     metadata[key] = value.clone();
@@ -1750,7 +1753,9 @@ fn tool_error(error: &anyhow::Error) -> Value {
     }
 }
 
-pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> Result<()> {
+/// Checks a release as the deploy would take it, and answers the schema
+/// change it makes, derived on a copy of the live database.
+pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> Result<super::schema_change::Change> {
     if let Some(hostname) = &input.initial_domain {
         super::domain::check_hostname(hostname, &super::domain::Rules::of(state))?;
         anyhow::ensure!(input.initial_package.is_none(), "Send the domain in the package manifest when importing a package.");
@@ -1811,7 +1816,7 @@ pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> R
     let temp = state
         .data_root
         .join(format!("validate-{}.sqlite", Uuid::new_v4()));
-    let result = (|| -> Result<()> {
+    let result = (|| -> Result<super::schema_change::Change> {
         if let Some(ref deployment) = existing {
             let connection = Connection::open(database_path(state, &deployment.id))?;
             connection.execute("VACUUM INTO ?1", [temp.to_string_lossy().as_ref()])?;
@@ -1822,7 +1827,7 @@ pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> R
         } else {
             initialize_database(&temp)?;
         }
-        apply_additive_schema(
+        super::schema_change::apply(
             &temp,
             input
                 .project
@@ -1831,6 +1836,7 @@ pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> R
                 .map(String::as_str)
                 .unwrap_or(""),
             &program,
+            super::schema_change::Mode::Plan,
         )
     })();
     let _ = tokio::fs::remove_file(temp).await;

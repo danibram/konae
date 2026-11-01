@@ -1527,6 +1527,11 @@ Built .konae/artifact.json
     "expiresAt": <time ms>,
     "planId": "<plan id>",
     "projectId": "<project id>",
+    "schema": {
+      "confirmation": null,
+      "losses": [],
+      "statements": []
+    },
     "visibility": "private"
   }
 }
