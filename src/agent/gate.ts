@@ -40,6 +40,7 @@ export const loadBrowserSqlJs: SqlJsLoader = () => {
 
 /** Who clears a release refusal, beside the Kernel's sentence. */
 const RELEASE_OWNER = "Deploy refuses this until the owner sets the secret in Auth > Integrations. No edit to the files clears it.";
+const PREVIEW_BEHIND = "The preview's test database is behind schema.sql, so the preview cannot run the actions that need the change. Publishing applies it to the published database. To try it here, reset the project data from the editor menu.";
 const RELEASE_AUTHOR = "The Kernel refuses this at publish. Change actions.json.";
 
 export function createCapsuleValidator(loadSql: SqlJsLoader = loadBrowserSqlJs): CapsuleValidator {
@@ -49,21 +50,19 @@ export function createCapsuleValidator(loadSql: SqlJsLoader = loadBrowserSqlJs):
 /**
  * The Validation Gate. Three stages, all in-process on sql.js:
  *
- * 1. `schema`   — schema.sql must execute on a fresh database, twice: the
- *                 runtime re-runs it on every database open, so a
- *                 non-idempotent statement kills the app on the next load. It
- *                 may only hold CREATE TABLE and CREATE [UNIQUE] INDEX, the
- *                 same allowlist the Kernel's schema authorizer enforces at
- *                 deploy: it is the one file that runs against the owner's
- *                 live data.
+ * 1. `schema`   — schema.sql must execute on a fresh database, twice, because
+ *                 the preview re-runs it on every open and the Kernel runs it
+ *                 twice in its scratch database too. It may only hold CREATE
+ *                 TABLE and CREATE [UNIQUE] INDEX, the same allowlist the
+ *                 Kernel's scratch database enforces.
  * 2. `actions`  — actions.json must parse, every binding must resolve, and every
  *                 statement must prepare against the schema it declares.
- * 3. `migration`— only when the live database could be read: schema.sql must
- *                 also run on a clone of it, the clone must end up carrying every
- *                 table and column the fresh schema declares, and every action
- *                 must prepare against that clone. Authoring a real migration
- *                 script is a later slice; v1 relies on the idempotent
- *                 `CREATE TABLE IF NOT EXISTS` schema and reports divergence.
+ * 3. `migration`— only when the preview's database could be read: schema.sql
+ *                 runs on a clone of it. When the clone then carries every table
+ *                 and column the fresh schema declares, every action must
+ *                 prepare against it. When it does not, the preview is behind:
+ *                 the Gate warns and passes, because the Kernel derives the
+ *                 change at publish (kernel-rs/src/schema_change.rs).
  *
  * The result names the stages that actually ran, because a stage that was
  * skipped must never be reported as one that held.
@@ -91,9 +90,8 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
           message: `schema.sql may only create tables and indexes, but it contains ${refused.join(", ")}.`,
           detail:
             "The Kernel applies schema.sql with an authorizer that allows CREATE TABLE and CREATE [UNIQUE] INDEX and nothing else, " +
-            "and refuses the functions that load extensions or read and write host files, so any of these fails at deploy. schema.sql is also re-run against the owner's live database on every open, so a " +
-            "statement that writes rows would rewrite real data each time. Use CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS, " +
-            "and leave data changes to server actions.",
+            "and refuses the functions that load extensions or read and write host files, so any of these fails at deploy. " +
+            "schema.sql states what the database should be, and the Kernel derives the change to the published database from it. Rows change through server actions.",
         });
       }
 
@@ -115,7 +113,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
         return failure({
           stage: "schema",
           message: "schema.sql is not idempotent: it fails when it is run a second time.",
-          detail: `${describe(error)}. schema.sql runs again on every database open, so use CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS and never ALTER an existing table here.`,
+          detail: `${describe(error)}. The preview runs schema.sql again on every open, so use CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS.`,
         });
       }
       checked.push("schema");
@@ -157,21 +155,18 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
           errors.push({ stage: "migration", message: "The current database export could not be opened.", detail: describe(error) });
         }
         if (clone) {
-          let migrated = true;
+          // The preview re-runs schema.sql on its own test rows and changes no
+          // table it already has. A Kernel derives the change at publish, so a
+          // preview that is behind is a warning about the preview, not a refusal.
+          let behind: string[];
           try {
             clone.run(files["schema.sql"]);
+            behind = divergence(fresh, clone);
           } catch (error) {
-            migrated = false;
-            errors.push({
-              stage: "migration",
-              message: "schema.sql does not run on the current database.",
-              detail: describe(error),
-            });
+            behind = [`schema.sql does not run on it: ${describe(error)}.`];
           }
-          if (migrated) {
-            errors.push(...divergence(fresh, clone));
-            if (program) errors.push(...checkActions(clone, program, "migration"));
-          }
+          if (behind.length > 0) warnings.push({ stage: "migration", message: PREVIEW_BEHIND, detail: behind.join(" ") });
+          else if (program) errors.push(...checkActions(clone, program, "migration"));
           checked.push("migration");
         }
       }
@@ -188,7 +183,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
 
 /**
  * What schema.sql may not run, named for the error. The allowlist matches the
- * Kernel's schema authorizer (kernel-rs/src/main.rs, `apply_additive_schema`):
+ * authorizer of the Kernel's scratch database (kernel-rs/src/schema_change.rs):
  * CREATE TABLE and CREATE [UNIQUE] INDEX, nothing else. INSERT, PRAGMA and
  * transaction statements run fine in sql.js but are refused at deploy. SQL
  * functions are allowed (a CHECK, an index expression, a partial index, a
@@ -341,30 +336,20 @@ export function notifyColumnsRefusal(db: Database, action: ServerActionDefinitio
 }
 
 /** Tables and columns the fresh schema declares but the migrated clone does not carry. */
-function divergence(fresh: Database, clone: Database): ValidationError[] {
-  const errors: ValidationError[] = [];
+/** What the preview's test database lacks of what schema.sql declares, one sentence each. */
+function divergence(fresh: Database, clone: Database): string[] {
+  const found: string[] = [];
   const cloneTables = new Set(userTables(clone));
-
   for (const table of userTables(fresh)) {
     if (!cloneTables.has(table)) {
-      errors.push({
-        stage: "migration",
-        message: `Table ${table} is declared in schema.sql but missing from the current database.`,
-      });
+      found.push(`It has no table ${table}.`);
       continue;
     }
     const existing = new Set(tableColumns(clone, table));
     const missing = tableColumns(fresh, table).filter((column) => !existing.has(column));
-    if (missing.length > 0) {
-      errors.push({
-        stage: "migration",
-        message: `Table ${table} in the current database is missing: ${missing.join(", ")}.`,
-        detail: "CREATE TABLE IF NOT EXISTS cannot add columns to an existing table, so this change needs a migration before it can be applied.",
-      });
-    }
+    if (missing.length > 0) found.push(`Its table ${table} has no ${missing.join(", ")}.`);
   }
-
-  return errors;
+  return found;
 }
 
 /**

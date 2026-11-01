@@ -236,7 +236,7 @@ describe("validation gate", () => {
     expect(result.ok).toBe(true);
   });
 
-  test("stage migration reports a live table that cannot converge on its own", async () => {
+  test("stage migration warns that the preview is behind a column the Kernel adds at publish, and passes", async () => {
     const live = await exportDatabase("CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL);");
     const result = await validator.validate(capsule({
       "schema.sql": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, due_at INTEGER);",
@@ -253,12 +253,10 @@ describe("validation gate", () => {
       }),
     }), loaded(live));
 
-    expect(result.ok).toBe(false);
-    const stages = result.errors.map((error) => error.stage);
-    expect(stages).toContain("migration");
-    expect(stages).not.toContain("actions");
-    expect(result.errors.find((error) => error.message.includes("due_at"))?.detail).toContain("migration");
-    expect(result.errors.some((error) => error.message.includes("does not prepare against the current database"))).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.checked).toContain("migration");
+    expect(result.warnings).toEqual([expect.objectContaining({ stage: "migration", message: expect.stringContaining("Publishing applies it"), detail: "Its table tasks has no due_at." })]);
   });
 
   test("stage schema rejects a schema that cannot be re-run, with or without a live database", async () => {
@@ -427,16 +425,15 @@ END;`,
     expect(unreadable.errors[0].detail).toContain("wasm heap");
   });
 
-  test("stage migration reports a live table an idempotent schema cannot converge with", async () => {
-    // Runs twice on an empty database, but the live tasks table predates the index's column.
+  test("stage migration warns when schema.sql does not run on the preview's older table", async () => {
+    // Runs twice on an empty database, but the preview's tasks table predates the index's column.
     const live = await exportDatabase("CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL);");
     const result = await validator.validate(capsule({
       "schema.sql": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, due_at INTEGER);\nCREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks (due_at);",
     }), loaded(live));
 
-    expect(result.ok).toBe(false);
-    expect(result.errors.map((error) => error.stage)).toContain("migration");
-    expect(result.errors.some((error) => error.message.includes("does not run on the current database"))).toBe(true);
+    expect(result.errors.map((error) => error.stage)).not.toContain("migration");
+    expect(result.warnings?.find((warning) => warning.stage === "migration")?.detail).toContain("schema.sql does not run on it");
   });
 });
 
