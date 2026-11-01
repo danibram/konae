@@ -54,7 +54,7 @@ flowchart LR
   K -->|"private: require app login"| C
   C --> B["browser mini-app"]
   B -->|"named Server Actions"| RI
-  K --> DB["deployments/<id>/: record, artifact, SQLite, files, backups, Usage"]
+  K --> DB["apps/<id>/: konae.json, app/, dist/, data/, .konae/"]
   K --> MQ["mail.sqlite queue"]
   MQ -.->|"worker"| MP["Resend, SMTP or development mailbox"]
   K --> CQ["calls.sqlite queue"]
@@ -71,22 +71,29 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 ```text
 <KONAE_DATA_DIR>/
 ├── owners.sqlite           # creator accounts, sessions, challenges and invitation codes
-├── mcp.sqlite              # projects, saved sources, agent credentials, OAuth, signing secrets, audit
+├── mcp.sqlite              # projects and their save counts, agent credentials, OAuth, audit
 ├── mail.sqlite             # the account email queue, ADR-0012
 ├── calls.sqlite            # the call actions' queue and outbox, ADR-0019
 ├── mailbox.jsonl           # the development mailbox, only with KONAE_MAIL_TRANSPORT=development
 ├── transfers/              # unfinished MCP uploads and downloads
 ├── recovery-hold.json      # only after a restore that could not read the revocation record
-└── deployments/<id>/
-    ├── deployment.json     # record, visibility, signup policy
-    ├── artifact/           # the Build Artifact it serves
-    ├── database.sqlite     # the app's rows, in WAL mode (ADR-0023)
-    ├── identity.sqlite     # app accounts, sessions, challenges, invitations, API keys, accepted route signatures
-    ├── usage.sqlite        # Usage and Signals, ADR-0010
-    ├── files/              # index.json, and the uploads unless a bucket holds them (ADR-0025)
-    ├── backups/            # Data panel snapshots and the recovery point before a schema migration
-    ├── domain.json         # the custom domain and its proof, ADR-0015
-    └── maintenance.json    # only while the app is in maintenance, ADR-0027
+└── apps/<id>/              # one app folder, the project's ID, ADR-0027
+    ├── konae.json          # name, visibility, Signup Policy, sign-in methods, contact email, Kernel version
+    ├── app/                # the sources the editor saved
+    ├── dist/               # the Build Artifact it serves
+    ├── data/
+    │   ├── database.sqlite # the app's rows, in WAL mode (ADR-0023)
+    │   ├── identity.sqlite # app accounts, sessions, challenges, invitations, API keys, accepted route signatures
+    │   ├── usage.sqlite    # Usage and Signals, ADR-0010
+    │   ├── files/          # index.json, and the uploads unless a bucket holds them (ADR-0025)
+    │   └── secrets.sqlite  # signing secrets and the Google client; a copy carries it, an export never does
+    └── .konae/             # this installation's part, never exported
+        ├── deployment.json # hostname, release and published actions.json
+        ├── sources.json    # the editor's name, manifest and folders of app/
+        ├── backups/        # Data panel snapshots
+        ├── domain.json     # the custom domain and its proof, ADR-0015
+        ├── path.json       # the path address
+        └── maintenance.json # only while the app is in maintenance
 ```
 
 ### The Kernel's modules
@@ -117,23 +124,23 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 | `copies.rs` | Scheduled copies and `konae-kernel restore` |
 | `schedule.rs` | A mutation's schedule, the timer that runs it and the record of each run ([ADR-0017](./adr/0017-the-kernel-runs-a-declared-schedule.md)) |
 | `recovery.rs` | The revocation record and `konae-kernel reconcile` |
-| `package.rs` | The chunked package, `package_export` and its import |
+| `layout.rs` | Where each part of an app folder lives |
+| `sources.rs` | The editor's saved sources as the files of `app/` |
+| `package.rs` | `project_export`, the one export of an app folder, and the import of its data |
 | `maintenance.rs` | The maintenance state and its guards |
 | `domain.rs` | Custom domains: the hostname rules, the TXT proof through the Kernel's own DNS lookup, and the alias index |
-
-`src/lib/export-project-sources.ts` lists every one of these files, so an exported kit compiles the same Kernel.
 
 ### Two doors, one set of refusals
 
 A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before anything is applied. The Kernel parses the same `actions.json` and `schema.sql` again at `release_plan`, on every installation, including one unpacked from an export. Where both refuse a declaration they use the same words, and each rule has one case file that both test suites run: `sql-rule-cases.json` for statements, `http-binding-cases.json` for routes and their callers, `signal-cases.json` for Signals, `guard-cases.json` for guards, `signature-cases.json` for route signatures, `schedule-cases.json` for schedules and `call-cases.json` for call actions and `connects`, all in `kernel-rs/src`. The query bound is `src/lib/query-bound.ts` on one side and its port in `main.rs` on the other ([ADR-0009](./adr/0009-the-gate-and-the-kernel-share-one-query-bound.md)). The Action Contract written from a Capsule lists the refusals a third backend would have to give.
 
-An artifact holds pages and the files they load. `kernel-rs/src/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page; under `spa` it serves `index.html`. The rules for which Capsule files become the artifact live in one file, `src/lib/static-artifact.js`, which the CLI, the editor and the exported kit all run. The [MCP guide](./mcp.md#what-the-build-publishes) lists both.
+An artifact holds pages and the files they load. `kernel-rs/src/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page; under `spa` it serves `index.html`. The rules for which Capsule files become the artifact live in one file, `src/lib/static-artifact.js`, which the CLI, the editor and an exported app folder's `npm run build` all run. The [MCP guide](./mcp.md#what-the-build-publishes) lists both.
 
 A scheduled copy takes each Deployment's data and identity locks, snapshots its SQLite files with `VACUUM INTO`, copies the rest of its folder and writes a manifest of SHA-256 checksums last. It sends the result to a directory on another disk, an S3 prefix in the data bucket, or both, and keeps 24 recent and 30 daily copies. Copy failures are logged and reported under `copies` in `/_konae/health`; they never block serving. `konae-kernel restore` is the only way back: it installs one copy into an empty data directory, verifies every checksum, signs out every session and agent credential and ends every open email link. App API keys stay valid, because a restore brings back the same installation for the same owner; an import into another installation revokes them. Suspensions and key revocations made after the copy are written to each copy target as they happen, and restore applies them, or starts the installation in maintenance when it cannot read them ([ADR-0014](./adr/0014-an-app-migrates-with-one-writer-at-a-time.md)). With `KONAE_COPY_SECRET` the files sent to S3 are encrypted.
 
-A Deployment in maintenance, by its own state or after an unreconciled restore, keeps that state in `deployments/<id>/maintenance.json` or the data directory's `recovery-hold.json`. One middleware answers its host with a maintenance page or a 503, the administrative tools that would change it refuse, and the mail worker holds its email. The Kernel reads nothing from the data bucket at startup.
+A Deployment in maintenance, by its own state or after an unreconciled restore, keeps that state in `apps/<id>/.konae/maintenance.json` or the data directory's `recovery-hold.json`. One middleware answers its host with a maintenance page or a 503, the administrative tools that would change it refuse, and the mail worker holds its email. The Kernel reads nothing from the data bucket at startup.
 
-A copy moves a whole installation for the same owner; a package moves one app, possibly to another owner, so its import revokes API keys and a restore keeps them.
+A copy moves a whole installation for the same owner; an export moves one app, possibly to another owner, so its import revokes API keys and a restore keeps them.
 
 ### Account email
 
@@ -212,7 +219,7 @@ An adapter would not receive authority to make access decisions. The Kernel woul
 - The self-hosted adapter is the Rust Kernel in `kernel-rs/`: one process with SQLite files and local disk, plus optional S3 for artifacts. It spawns no other process.
 - A Railway adapter may provide a shared Node runtime and an escape hatch for applications that need Docker or unrestricted server packages.
 
-All adapters implement the same Kernel seams. Provider identity products may optionally protect infrastructure administration, but they are never the application session or grant authority. The exported kit holds the sources, the manifest, the Rust Kernel and, with live state, a package of the standard SQLite files and uploads. Provider-specific identifiers must not appear in application code. Only the self-hosted adapter exists today.
+All adapters implement the same Kernel seams. Provider identity products may optionally protect infrastructure administration, but they are never the application session or grant authority. An export holds the app folder: the sources, `konae.json`, the built files and, with live state, the standard SQLite files and uploads. Provider-specific identifiers must not appear in application code. Only the self-hosted adapter exists today.
 
 ## Isolation of hosted code
 

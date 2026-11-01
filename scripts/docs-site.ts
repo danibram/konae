@@ -181,15 +181,14 @@ export async function writeSite(site: Site) {
   await write("seed.sql", `-- The search rows, one per section. bun run docs:site --seed loads them.\n${seedStatements(site).join(";\n")};\n`);
 }
 
-/** Runs each statement on the published app with the credential `konae login` saved in the app's folder. */
-async function seed(site: Site) {
-  const missing = () => { throw Error("The app is not published from this folder yet. examples/docs-site/README.md has the commands."); };
-  const config = JSON.parse(await readFile(path.join(appRoot, "konae.json"), "utf8").catch(missing));
+/** Runs each statement on the published app from the app folder `folder`, with the credential `konae login` saved there. */
+async function seed(site: Site, folder: string) {
+  const missing = () => { throw Error(`The docs are not published from ${folder} yet. examples/docs-site/README.md has the commands.`); };
   // konae publish saves the Deployment it wrote, and database_execute names a Deployment.
-  const deployment = JSON.parse(await readFile(path.join(appRoot, ".konae/deployment.json"), "utf8").catch(missing));
-  const token = process.env.KONAE_MCP_TOKEN ?? JSON.parse(await readFile(path.join(appRoot, ".konae/credentials.json"), "utf8").catch(() => "{}")).token;
-  if (!token) throw Error("No credential. Run bun run konae -- login --dir examples/docs-site, or set KONAE_MCP_TOKEN.");
-  const client = new McpClient(`${config.url.replace(/\/$/, "")}/mcp`, { token });
+  const deployment = JSON.parse(await readFile(path.join(folder, ".konae/deployment.json"), "utf8").catch(missing));
+  const saved = JSON.parse(await readFile(path.join(folder, ".konae/credentials.json"), "utf8").catch(missing)) as { url: string; token: string };
+  const token = process.env.KONAE_MCP_TOKEN ?? saved.token;
+  const client = new McpClient(`${saved.url.replace(/\/$/, "")}/mcp`, { token });
   const call = (name: string, args: object) => client.call<{ rows?: unknown[] }>(name, args);
   for (const sql of seedStatements(site)) await call("database_execute", { deploymentId: deployment.id, operation: "sql", input: { sql } });
   const count = await call("database_execute", { deploymentId: deployment.id, operation: "sql", input: { sql: "SELECT count(*) AS sections FROM sections LIMIT 1" } });
@@ -200,5 +199,10 @@ if (import.meta.main) {
   const site = await readSite();
   await writeSite(site);
   console.log(`Wrote ${site.pages.length} pages into ${path.relative(repo, appRoot) || appRoot}.`);
-  if (process.argv.includes("--seed")) await seed(site);
+  const seedAt = process.argv.indexOf("--seed");
+  if (seedAt >= 0) {
+    const folder = process.argv[seedAt + 1];
+    if (!folder) throw Error("Name the app folder the docs publish from: bun run docs:site --seed /tmp/konae-docs");
+    await seed(site, path.resolve(folder));
+  }
 }

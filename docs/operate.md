@@ -79,7 +79,7 @@ The Kernel reads these at startup. Defaults are the values in `kernel-rs/src` un
 | `KONAE_FILES_S3_PREFIX` | empty | Prefix inside the file bucket, such as `files/`. |
 | `KONAE_FILES_S3_PATH_STYLE` | `1` | `1` addresses the bucket as `<endpoint>/<bucket>`, `0` as `<bucket>.<endpoint host>`. |
 | `KONAE_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses whose `X-Forwarded-For` header the Kernel trusts for rate limiting. CIDR ranges are rejected. |
-| `KONAE_DATA_DIR` | `/data` (`data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory: one folder per Deployment under `deployments/<id>/`, plus `owners.sqlite`, `mcp.sqlite`, `mail.sqlite` and `calls.sqlite`. |
+| `KONAE_DATA_DIR` | `/data` (`data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory: one app folder per project under `apps/<id>/`, plus `owners.sqlite`, `mcp.sqlite`, `mail.sqlite` and `calls.sqlite`. |
 | `KONAE_DOMAIN` | unset | Derives the installation's hosts from one domain (ADR-0024). The public and MCP origin become `<scheme>://app.<domain>` and the app suffix becomes `<domain>`. Each of `KONAE_PUBLIC_ORIGIN`, `KONAE_MCP_ORIGIN` and `KONAE_HOST_SUFFIX` still wins when it is set. The Kernel refuses to start when `KONAE_PUBLIC_ORIGIN` or `KONAE_MCP_ORIGIN` has the bare domain as its host, because the home and path addresses answer there. The local stack sets `localhost` with port `8080`. |
 | `KONAE_SCHEME` | `http` for `localhost`, `https` otherwise | Scheme of the derived origins, `http` or `https`. Read only with `KONAE_DOMAIN`. Any other value stops the Kernel. |
 | `KONAE_PUBLIC_PORT` | unset | Port appended to the derived origins, such as `8080`. Read only with `KONAE_DOMAIN`. A value that is not a port number stops the Kernel. |
@@ -118,8 +118,7 @@ The editor, the `konae` CLI and the test configurations read these:
 | `KONAE_INVITATION_CODE` | `konae login` | unset | Invitation code that creates the account when it does not exist yet. Under required verification, add `--verify-from <data folder>/mailbox.jsonl` on a development Kernel to answer the emailed link in the same run. |
 | `KONAE_EDITOR_URL` | `playwright.local.config.ts` | `http://127.0.0.1:4176` | Editor the local end-to-end suite opens. When set outside CI, the suite reuses a server that is already running. |
 | `KONAE_TEST_KERNEL_PORT` | `playwright.local.config.ts` | `8794` | Kernel port for the local end-to-end suite. |
-| `KONAE_PORT` | exported self-host kit | `8787` | Port the exported Kernel publishes, read from the kit's `.env`. |
-| `KONAE_APP_DOMAIN` | exported self-host kit | unset | The app's own hostname, read from the kit's `.env`. Each `npm run deploy` calls `domain_set` with it until its TXT record verifies. With `KONAE_PUBLIC_ORIGIN` and `KONAE_HOST_SUFFIX` in the same `.env`, the kit's Kernel answers on your domain; see [Serve the app on its own domain](./guides/take-the-app-elsewhere.md#serve-the-app-on-its-own-domain). |
+| `KONAE_PORT` | an exported app folder's `compose.yaml` | `8787` | Port the folder's Kernel publishes, read from its `.env`. |
 
 `konae dev` ignores every `KONAE_` and `VITE_` variable from your shell. It starts its own Kernel on `127.0.0.1` with a generated setup key and data under `.konae/dev-data`, and opens signup on the local Deployment so you can create test accounts. It sets a local value for each signing secret `actions.json` names and prints it, and it serves a page of the email, calls, scheduled runs and Signals the app produced on the port after the app's, on this machine only.
 
@@ -130,23 +129,19 @@ Each app is one folder in the Kernel's data directory. A copy of that folder, wi
 ```text
 data/
 ├── owners.sqlite           # creator accounts, sessions and invitation codes
-├── mcp.sqlite              # projects, sources, agent credentials, signing secrets, audit
+├── mcp.sqlite              # projects and their save counts, agent credentials, audit
 ├── mail.sqlite             # the account email queue
 ├── calls.sqlite            # the call actions' queue and outbox
 ├── transfers/              # unfinished MCP uploads and downloads
-└── deployments/<id>/
-    ├── deployment.json     # record, visibility, signup policy
-    ├── artifact/           # the static files the Deployment serves
-    ├── database.sqlite     # the app's rows
-    ├── identity.sqlite     # its accounts, sessions, invitations and API keys
-    ├── usage.sqlite        # Usage and Signals
-    ├── files/              # the file index, and the uploads unless a bucket holds them
-    └── backups/            # snapshots made from the Data panel
+└── apps/<id>/              # one app folder (ADR-0027)
+    ├── konae.json          # name, visibility, Signup Policy, sign-in methods, contact email
+    ├── app/                # the saved sources
+    ├── dist/               # the static files the Deployment serves
+    ├── data/               # database.sqlite, identity.sqlite, usage.sqlite, files/, secrets.sqlite
+    └── .konae/             # the Deployment record, address markers, maintenance and Data panel backups
 ```
 
 [The architecture](./architecture.md#current-self-hosted-topology) lists the files that appear only in maintenance, after a restore or with the development mailbox.
-
-A Kernel that finds the older layout, with `artifacts/<id>/` and `backups/<id>/` at the top of the data directory, moves both into the Deployment's folder when it starts and logs each move. It refuses to start when the old and new locations both hold files, and names the two paths.
 
 Set `KONAE_COPY_DIR`, `KONAE_COPY_S3_PREFIX` or both to copy the data directory off the volume, by default every hour. Each copy takes every Deployment's data and identity locks in turn, snapshots its SQLite files with `VACUUM INTO`, copies its folder, then writes `manifest.json` with the size and SHA-256 of every file. A directory copy appears under its final name only when complete; an S3 copy is complete once its manifest is uploaded. The Kernel keeps the 24 newest copies and the newest copy of each day for 30 days on each target. The copy is staged under `.copy-staging/` in the data directory, so the volume needs room for one more copy.
 
@@ -268,4 +263,4 @@ Each app database is capped at 256 MiB and each identity database at 64 MiB. Wri
 - Every Deployment gets a separate SQLite working file. The Kernel writes mutations transactionally and stores backups on explicit requests and before migrations.
 - Action inputs are typed, parameterized and quota-limited; structural SQL is rejected from runtime actions.
 - Owners use first-party sessions and delegated credentials. `KONAE_ADMIN_KEY` is an installation setup key that creates the first owner and never enters the editor bundle; later creators need an operator-issued invitation code. The Kernel binds to `127.0.0.1` by default and refuses a non-loopback bind with the default setup key. Remote installations must configure their public origin, TLS and setup key.
-- The repository's two Docker images run as unprivileged users. The Dockerfile in an exported self-host kit still runs the Kernel as root.
+- The repository's two Docker images run as unprivileged users.

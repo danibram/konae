@@ -30,10 +30,10 @@ A delegated token cannot widen itself later, so the flags are the only way the C
 ## init
 
 ```sh
-bun run konae -- init --dir ./my-app [--name 'My app'] [--template <id>] [--url <Kernel URL>]
+bun run konae -- init --dir ./my-app [--name 'My app'] [--template <id>]
 ```
 
-Writes a template and `konae.json` into an empty folder, without a credential or a Kernel. The templates are the editor's: `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` and `gallery`. Its first `publish` registers the project on the installation.
+Writes an app folder into an empty folder, without a credential or a Kernel: `konae.json`, the template in `app/`, `AGENTS.md` for a coding agent, `action-contract.md`, `compose.yaml`, `.env.example`, and a `package.json` whose `npm run build` writes `dist/`. `.gitignore` keeps `data/`, `.env` and `.konae/` out of Git. The templates are the editor's: `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` and `gallery`. Its first `publish` registers the project on the installation.
 
 ## dev
 
@@ -41,7 +41,7 @@ Writes a template and `konae.json` into an empty folder, without a credential or
 bun run konae -- dev --dir ./my-app [--port 8796] [--events-port 8797] [--reset]
 ```
 
-Compiles and starts the Rust Kernel with data under `.konae/dev-data`, with its own identities and no link to production. It publishes the build there, sets the signup policy to Open so test accounts can sign up, and rebuilds when the sources change. Its email, notices included, goes to `.konae/dev-data/mailbox.jsonl`. When the command exits, the Kernel stops and the data stays in the folder. `--reset` deletes that data first. A Development Kernel with no data starts from the copy `pull` left, when there is one.
+Compiles and starts the Rust Kernel with data under `.konae/dev-data`, with its own identities and no link to production. It publishes the build there, sets the signup policy to Open so test accounts can sign up, and rebuilds when the sources change. Its email, notices included, goes to `.konae/dev-data/mailbox.jsonl`. When the command exits, the Kernel stops and the data stays in the folder. `--reset` deletes that data first. A Development Kernel with no data imports the data `pull` exported, when there is some.
 
 ## pull
 
@@ -49,7 +49,7 @@ Compiles and starts the Rust Kernel with data under `.konae/dev-data`, with its 
 bun run konae -- pull --dir ./my-app [--url <Kernel URL>]
 ```
 
-Downloads the published app's database, accounts and files into `.konae/pull`. Needs a credential from `login --export-data`. Run `dev --reset` to start the local app from the copy. Nothing travels back to the published app.
+Exports the published app's data, its database, accounts, files and Usage, into `.konae/pull`. Needs a credential from `login --export-data`. `dev --reset` imports it into the local app. Nothing travels back to the published app.
 
 ## sql
 
@@ -57,7 +57,7 @@ Downloads the published app's database, accounts and files into `.konae/pull`. N
 bun run konae -- sql --dir ./my-app [--prod] [--url <Kernel URL>] ("<statement>" | --file <file.sql>)
 ```
 
-Runs SQL on the app's database through `database_execute`, on the Development Kernel that `dev` is running for the folder. That is where to rehearse a schema change on a pulled copy. Only `--prod` reaches the published Deployment.
+Runs SQL on the app's database through `database_execute`, on the Development Kernel that `dev` is running for the folder. That is where to rehearse a schema change on data `pull` exported. Only `--prod` reaches the published Deployment.
 
 ## events
 
@@ -73,7 +73,7 @@ Lists what the app did besides answer its page: email, calls to other services, 
 bun run konae -- build --dir ./my-app
 ```
 
-Writes `.konae/artifact.json`.
+Builds `app/` into `dist/` by the same rules as the editor's Publish and the folder's `npm run build`.
 
 ## contract
 
@@ -81,7 +81,7 @@ Writes `.konae/artifact.json`.
 bun run konae -- contract --dir ./my-app [--out <folder>]
 ```
 
-Writes `action-contract.json`, its schema and `action-contract.md`, from `actions.json` and `schema.sql`.
+Writes `action-contract.json`, its schema and `action-contract.md`, from `app/actions.json` and `app/schema.sql`.
 
 ## publish
 
@@ -89,7 +89,7 @@ Writes `action-contract.json`, its schema and `action-contract.md`, from `action
 bun run konae -- publish --dir ./my-app [--url <Kernel URL>]
 ```
 
-Builds and publishes to the installation `konae.json` names, or `--url`, or the one `login` saved. Set each signing secret with `secret_set` first, because a release that signs with an unset secret is refused. On a first release it sends `project.manifest.signupPolicy` from `konae.json`.
+Builds and publishes to `--url` or the installation `login` saved. Set each signing secret with `secret_set` first, because a release that signs with an unset secret is refused. On a first release it sends `signupPolicy` from `konae.json`.
 
 ## conform
 
@@ -102,10 +102,10 @@ Calls every action and checks the answers against the contract. It runs each mut
 ## export
 
 ```sh
-bun run konae -- export --dir ./my-app [--out <file>] [--with-data]
+bun run konae -- export --dir ./my-app --out <empty folder> [--with-data]
 ```
 
-Writes a self-hosted kit. `--with-data` adds the live package and needs a credential from `login --export-data`.
+Writes the app folder into an empty folder: `konae.json`, `app/`, a fresh `dist/` and the files `init` writes. `--with-data` adds the published app's `data/` from `project_export` and needs a credential from `login --export-data`. Secrets and `.konae/` never go with it.
 
 ## domain
 

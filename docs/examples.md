@@ -37,7 +37,7 @@ bun run examples/product-fit/smoke.ts
 To start from one of them, create a new project with `konae init`, then copy the example's sources over the template and keep the generated `konae.json`.
 
 ```sh
-bun run konae -- init --dir /tmp/my-journal --name "My journal" --url http://localhost:4173
+bun run konae -- init --dir /tmp/my-journal --name "My journal"
 cp -R examples/product-fit/journal/. /tmp/my-journal/
 bun run konae -- dev --dir /tmp/my-journal --port 8796
 ```

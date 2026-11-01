@@ -33,18 +33,18 @@ Run these from the repository root, with an owner account on the installation.
 (cd examples/docs-site && bun install)
 bun run docs:site
 KONAE_EMAIL=you@example.com KONAE_PASSWORD=... bun run konae -- login --dir /tmp/konae-docs --url http://localhost:4173
-bun run konae -- init --dir /tmp/konae-docs --name "Konae docs" --url http://localhost:4173
-cp -R /tmp/konae-docs/konae.json /tmp/konae-docs/.konae examples/docs-site/
+bun run konae -- init --dir /tmp/konae-docs --name "Konae docs"
+rm -rf /tmp/konae-docs/app && cp -R examples/docs-site /tmp/konae-docs/app
 ```
 
-`init` needs an empty folder, so it writes the project in `/tmp/konae-docs` and the last line brings its `konae.json` and its credential here. The first publish registers the project on the installation. `konae.json` names a project on one Kernel, so git ignores it. Before the first publish, set `project.manifest.visibility` to `"public"` and `project.manifest.signupPolicy` to `{ "mode": "closed" }` in it, so anyone can read the docs and nobody can create an account.
+`init` writes an app folder in `/tmp/konae-docs`, and the last line puts this app's sources in its `app/`. The first publish registers the project on the installation. Before the first publish, set `visibility` to `"public"` and `signupPolicy` to `{ "mode": "closed" }` in `/tmp/konae-docs/konae.json`, so anyone can read the docs and nobody can create an account.
 
 ```sh
-bun run konae -- publish --dir examples/docs-site
-bun run docs:site --seed
+bun run konae -- publish --dir /tmp/konae-docs
+bun run docs:site --seed /tmp/konae-docs
 ```
 
-`publish` sends the pages and the markdown. `--seed` loads the search rows, one per `## ` section, with `database_execute`, and reads the count back. Run both again when a page changes.
+`publish` sends the pages and the markdown. `--seed` loads the search rows, one per `## ` section, with `database_execute`, and reads the count back. When a page changes, run `bun run docs:site`, copy `examples/docs-site` into `/tmp/konae-docs/app` again, and run both again.
 
 ## Add or change a page
 

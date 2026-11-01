@@ -51,8 +51,8 @@ By hand, against a Kernel you started with `bun run dev:local`:
 
 ```sh
 KONAE_EMAIL=you@example.com KONAE_PASSWORD=... bun run konae -- login --dir /tmp/starter --url http://localhost:4173
-bun run konae -- init --dir /tmp/starter --name Starter --url http://localhost:4173
-cp examples/showcase/starter/{index.html,styles.css,app.js,favicon.svg,schema.sql,actions.json} /tmp/starter/
+bun run konae -- init --dir /tmp/starter --name Starter
+cp examples/showcase/starter/{index.html,styles.css,app.js,favicon.svg,schema.sql,actions.json} /tmp/starter/app/
 # In /tmp/starter/konae.json set "visibility": "public" and "signupPolicy": { "mode": "open" },
 # and delete the template's other files.
 # Set the webhook's secret before the first publish: in the editor's Auth > Integrations view, or over MCP

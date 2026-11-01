@@ -12,7 +12,7 @@ It is built for two people making the same app, one who does not write code and 
 - **Accounts per app.** Each app has its own users, sign-in page and signup policy, which is Open, Invitation only, Closed or an Allowlist. The owner invites people by email and can add Google sign-in with the app's own Google client.
 - **A Kernel that serves the apps.** One Rust server holds every published app as one folder with its static files, SQLite database, accounts, uploads and backups. It serves each app on its own hostname, on a custom domain, or on a path of the installation's domain.
 - **Two ways to work.** The editor is one. The `konae` CLI is the other, with `init`, `dev` and `publish` run from a folder of files in your own Git repository. Agents operate the platform over authenticated MCP, with the same tools the editor calls.
-- **A way out.** An owner exports an app as a package with its database, accounts and files, and imports it on another Kernel.
+- **A way out.** An owner exports an app as one folder, `konae.json`, its sources, its built files and its database, accounts and files, and imports it on another Kernel.
 
 [The docs overview](./docs/README.md) has the five jobs Konae is measured against, and [Concepts](./docs/concepts.md) defines the words.
 
@@ -63,14 +63,14 @@ bun run konae -- init --dir /tmp/my-app --name "My app"
 bun run konae -- dev --dir /tmp/my-app
 ```
 
-`dev` runs the app on a local Development Kernel with its own accounts and data. To publish, `login` saves a credential and the installation's address in the folder, and the first `publish` registers the project and writes that address into `konae.json`:
+`dev` runs the app on a local Development Kernel with its own accounts and data. To publish, `login` saves a credential and the installation's address in the folder, and the first `publish` registers the project there. `init` writes the app folder: `konae.json`, the sources in `app/`, `AGENTS.md`, `action-contract.md` and a `package.json` whose `npm run build` writes `dist/`:
 
 ```sh
 KONAE_EMAIL=you@example.com KONAE_PASSWORD=... bun run konae -- login --dir /tmp/my-app --url http://localhost:4173 --export-data
 bun run konae -- publish --dir /tmp/my-app
 ```
 
-`publish` deploys the app as private unless `konae.json` says otherwise. To debug against what the published app holds, or to try the next version on it, `pull` copies its database, accounts and files to `.konae/pull` and `dev --reset` starts the local Kernel from the copy. Nothing travels back:
+`publish` deploys the app as private unless `konae.json` says otherwise. To debug against what the published app holds, or to try the next version on it, `pull` exports its database, accounts and files to `.konae/pull` and `dev --reset` imports them into the local Kernel. Nothing travels back:
 
 ```sh
 bun run konae -- pull --dir /tmp/my-app

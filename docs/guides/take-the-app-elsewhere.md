@@ -1,17 +1,33 @@
 # Take the app elsewhere
 
-Export a package to move one app's accounts, data and rules to another machine.
+Export the app folder to move one app's accounts, data and rules to another machine.
 
 ## Pick the right move
 
 | You want | Use | Why |
 | --- | --- | --- |
-| A copy of one app on another machine | Package export and import | It moves one Deployment's database, accounts, files and, when present, Usage and Signals. |
+| A copy of one app on another machine | Export and import of the app folder | It moves one Deployment's settings, sources, built files, database, accounts, files and, when present, Usage and Signals. |
 | To move a whole installation | Copy | A copy moves an installation, not one app. It is operator work, not an app feature. |
 
-A package never moves sessions, email links or live API keys. People sign in again with their passwords, and each API key arrives revoked, so you issue new ones. Signing secrets do not travel either, so set them again on the destination.
+An export never moves sessions, email links, live API keys or signing secrets. People sign in again with their passwords, each API key arrives revoked so you issue new ones, and you set each secret again on the destination.
 
-## Export a package
+## What the folder holds
+
+```text
+my-app/
+  konae.json      name, visibility, Signup Policy, sign-in methods, contact email, Kernel version
+  app/            the sources: pages, actions.json, schema.sql
+  dist/           the built files the Kernel serves
+  data/           database.sqlite, identity.sqlite, usage.sqlite, files/
+  AGENTS.md       what a coding agent needs to work on the folder
+  action-contract.md
+  compose.yaml, .env.example
+  package.json    npm run build writes dist/ from app/
+```
+
+`data/` holds password hashes and uploaded files, so keep an export with data private. The folder's `.gitignore` keeps `data/` and `.env` out of Git.
+
+## Export the app
 
 1. Log in with `export_data`.
 
@@ -20,89 +36,39 @@ A package never moves sessions, email links or live API keys. People sign in aga
     bun run konae -- login --dir /tmp/my-app --url http://localhost:4173 --export-data
     ```
 
-2. For a self-hosted kit that includes the live data, run `export` with `--with-data`. It refuses to overwrite an archive. Exports with live state hold password hashes and uploaded files, so keep them private.
+2. Write the folder, with the published app's data, into an empty folder. Without `--with-data` it writes the folder without `data/` and needs no credential.
 
     ```sh
-    bun run konae -- export --dir /tmp/my-app --out /tmp/my-app-with-data.tar --with-data
+    bun run konae -- export --dir /tmp/my-app --out /tmp/my-app-export --with-data
     ```
 
-3. Or over MCP, call `package_export` with the `deploymentId`. It returns a manifest and one download per component, `database`, `identity`, `files` and, when the app recorded any, `usage`.
-4. Read each download with `transfer_read` and its `transferId` and `offset` until `nextOffset` equals `size`. Check its SHA-256, then call `transfer_cancel`.
+3. Or, in the editor, choose Export. A published app downloads as a tar of the folder with its data; an app not published yet downloads its sources and build. When the editor saved sources after the last publish, `app/` holds the newer sources while `dist/` and `data/` are the published app's, and the editor says so.
+4. Or over MCP, call `project_export` with the `deploymentId`. It returns `folder`, a download of `konae.json`, `app/` and `dist/`, and a manifest with one download per part of `data/`: `database`, `identity`, `files` and, when the app recorded any, `usage`. `sourcesAhead` is true when `app/` holds sources saved after the release. Read each download with `transfer_read` and its `transferId` and `offset` until `nextOffset` equals `size`. Check its SHA-256, then call `transfer_cancel`.
 
-## The self-host kit
+## Run it on your own machine
 
-Export project downloads a tar archive with source files, a built frontend, the Rust Kernel and startup scripts. For a published app it also includes the database, users and uploads. Imported users keep their password hashes, while sessions are cleared. The editor still builds this archive in the browser in the small format, so its combined state limit is 16 MiB and each file is limited to 2 MiB; the CLI below has no such limit. The archive documents two ways to run it: Docker, or native Cargo with Rust 1.91 or newer. Its `deploy.mjs` publishes the app as private unless the exported project manifest sets `visibility` to `"public"`. The kit starts on localhost. To serve the app on a domain you control, set its names in `.env` before the first deploy, as [Serve the app on its own domain](#serve-the-app-on-its-own-domain) describes.
-
-`--with-data` downloads the app as a package. It holds a manifest and one file each for the database, the accounts and the files, streamed in 64 KiB blocks, so an app at its 256 MiB database and its file quota exports whole. The kit's `deploy.mjs` uploads the package the same way and the target Kernel checks it before it creates the app. [The MCP guide](../mcp.md#export-and-import-an-app) describes the format. The command refuses to overwrite an archive and writes it with owner-only permissions. Live-state exports retain the deployed visibility and signup policy. The target installs that policy with its first deployment. Exports with live state contain password hashes and attachments; keep them private. Extracted snapshots have owner-only permissions and the kit's Git rules exclude them.
+`compose.yaml` names the Kernel image, which is not published yet. Until it is, run the folder with `konae dev` from a Konae checkout: `bun run konae -- dev --dir /tmp/my-app-export`. A Konae installation takes the folder with an import, below.
 
 ## Serve the app on its own domain
 
-An app runs on the installation it was published on. There are two ways to give it a domain of its own, and both keep the same Kernel API: the same Server Actions, the same Validation Gate and the same row limit.
-
-- **Stay on the installation.** Give the Deployment a custom domain with `bun run konae -- domain --dir /tmp/notes --deployment <id> --set notes.example.org` or `domain_set`, add the TXT record it prints, and run it again. The installation's operator routes the name to the Kernel and terminates TLS for it.
-- **Run it on your own machine.** Export a self-host kit with the app's data and run its Kernel behind your own proxy. The rest of this section is this path.
+An app on an installation can answer on a domain of its own. Give the Deployment a custom domain with `bun run konae -- domain --dir /tmp/notes --deployment <id> --set notes.example.org` or `domain_set`, add the TXT record it prints, and run it again. The installation's operator routes the name to the Kernel and terminates TLS for it.
 
 The page and its Server Actions answer from the same host. The SDK calls `/_konae/mcp` on the page's own host and the Kernel refuses an `Origin` that is not the app's, so you cannot serve the page from another host and call the Kernel across origins.
 
-1. Export the kit with the live data. The credential needs `export_data`.
-
-    ```sh
-    bun run konae -- login --dir /tmp/notes --url http://localhost:4173 --export-data
-    bun run konae -- export --dir /tmp/notes --out /tmp/notes-kit.tar --with-data
-    ```
-
-2. On the new machine, unpack the kit and write `.env` before the first deploy. The Kernel names the app's generated address when it creates the app, so these names have to be set first.
-
-    ```sh
-    KONAE_PORT=8787
-    KONAE_ADMIN_KEY=<a long random key>
-    KONAE_PUBLIC_ORIGIN=https://konae.example.org
-    KONAE_HOST_SUFFIX=apps.example.org
-    KONAE_APP_DOMAIN=notes.example.org
-    ```
-
-    `KONAE_PUBLIC_ORIGIN` is the Kernel's own host. Owner sign-in answers only there, and the deploy script names it while it talks to the Kernel on 127.0.0.1, so the deploy does not need it to be public. `KONAE_HOST_SUFFIX` is where generated app addresses go. `KONAE_APP_DOMAIN` is the app's hostname, which cannot be the Kernel's host or sit under the suffix. An `https` origin turns on `__Host-` session cookies and HSTS.
-3. Point `notes.example.org` at the machine and put a proxy in front of the Kernel. It terminates TLS for the app's hostname and forwards to `127.0.0.1:8787` with the Host header unchanged. The Kernel issues no certificate. `ops/nginx.local.conf` shows a second host reaching the Kernel.
-4. Run `./start.sh`. It imports the accounts, rows and files, publishes the code and prints a TXT record, `_konae.notes.example.org` with a token this Kernel issued. A token from the old installation does not carry over.
-5. Add the record at your DNS provider and run `npm run deploy` again. A value the old installation needed can stay in the same record; the run reports that it found another value and prints the record again until yours is there. Once the Kernel finds the token, the script prints `The app also answers at https://notes.example.org.`
-
-After a change to the code under `app/`, run `npm run build` and `npm run deploy`. The rows and the domain stay.
-
-Sessions, email links, live API keys and signing secrets do not travel. People sign in again with their passwords. Sessions do not cross between the generated address and the app's hostname either, so a person signs in on each.
-
-To issue new API keys or set signing secrets with `secret_set`, sign in as the kit's owner on the Kernel's own host. That host then has to reach the Kernel through your proxy as well, because the Kernel refuses owner sign-in on any other host, `127.0.0.1` included. The owner is `owner@selfhost.local` and the password is the setup key.
-
-```sh
-KONAE_EMAIL=owner@selfhost.local KONAE_PASSWORD=<setup key> \
-bun run konae -- login --dir /tmp/notes-admin --url https://konae.example.org
-```
-
-For an app whose HTTP routes check a signature, `npm run deploy` stops at `release_plan` with the name of each secret it needs. Set them this way and run `npm run deploy` again.
-
-### Check the domain
-
-- The last `npm run deploy` prints the app's hostname as an address it answers at. Before the TXT record is found it prints the record again.
-- Open `https://notes.example.org`, sign in with an account from the old installation and open one row it wrote there.
-- `tests/self-host-domain.integration.test.ts` runs the whole path on two local Kernels with a DNS stub.
+An export carries the custom hostname without its verification token, so the destination issues a new token and the name verifies again there.
 
 ## Import on the destination
 
 1. Run `project_create` with the same `projectId`. Then run `secret_set` for every secret the app's routes sign with. A release that signs with an unset secret is refused.
-2. For each component, call `transfer_begin` with `size`, `sha256`, `projectId` and the component's name. Call `transfer_write` for each block, then `transfer_complete`.
-3. Build the folder and upload the release JSON, with `initialPackage` holding the `manifest` and a `components` map of component name to `transferId`. Then call `release_plan` and `release_apply`. An import installs only into a project that has no Deployment yet. The same package imported again returns the first import.
+2. For each part of the data the manifest lists, call `transfer_begin` with `size`, `sha256`, `projectId` and its name as `component`. Call `transfer_write` for each block, then `transfer_complete`.
+3. Upload the release JSON built from `app/` and `dist/`, with `initialPackage` holding the `manifest` and a `components` map of part name to `transferId`. Then call `release_plan` and `release_apply`. An import installs only into a project that has no Deployment yet. The same data imported again returns the first import.
 4. Issue new API keys. `api_keys_list` shows each key revoked at import.
+
+`konae pull` and `konae dev --reset` are the same export and import for a laptop: `pull` exports the published app's data into `.konae/pull`, and `dev --reset` imports it into the local Kernel.
 
 ## Check it worked
 
-- After `package_export`, `project_export` or `database_export`, the read-back is `transfer_read`. Verify the size and SHA-256 of every component.
+- After `project_export`, the read-back is `transfer_read`. Verify the size and SHA-256 of every download.
 - After `transfer_begin`, `transfer_write` or `transfer_complete`, the read-back is `transfer_status`. Bytes in an open transfer are not a Deployment.
 - After `release_apply` on the destination, the read-back is `project_inspect`.
 - On the destination, sign in with an existing password and open one row the app owned.
-
-The editor preview is not a Deployment, so it has no database to package. Test the whole move on two `konae dev` Kernels or two real installations.
-
-## Read next
-
-- [Invite people](./invite-people.md)
-- [Pick the smallest piece](../pieces.md)
-- [Concepts](../concepts.md)

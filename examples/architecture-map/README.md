@@ -6,9 +6,9 @@ Publish it from the repository root, with an owner account on the installation:
 
 ```sh
 KONAE_EMAIL=you@example.com KONAE_PASSWORD=... bun run konae -- login --dir /tmp/konae-map --url http://localhost:4173
-bun run konae -- init --dir /tmp/konae-map --name "Konae architecture" --url http://localhost:4173
-cp -R /tmp/konae-map/konae.json /tmp/konae-map/.konae examples/architecture-map/
-bun run konae -- publish --dir examples/architecture-map
+bun run konae -- init --dir /tmp/konae-map --name "Konae architecture"
+rm -rf /tmp/konae-map/app && cp -R examples/architecture-map /tmp/konae-map/app
+bun run konae -- publish --dir /tmp/konae-map
 ```
 
-`konae.json` names a project on one Kernel, so git ignores it. To let anyone open the map without an account, set `project.manifest.visibility` to `"public"` and `project.manifest.signupPolicy` to `{ "mode": "closed" }` in it before the first publish.
+`init` writes an app folder, and the second line puts this app's sources in its `app/`. To let anyone open the map without an account, set `visibility` to `"public"` and `signupPolicy` to `{ "mode": "closed" }` in `/tmp/konae-map/konae.json` before the first publish.

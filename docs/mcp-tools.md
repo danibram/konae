@@ -39,7 +39,7 @@ The catalog of tools depends on the credential. A call to a tool the credential 
 | `write` | `project_create`, `project_sources_save`, `project_delete` and `database_execute` changes |
 | `publish` | `release_plan`, `release_apply`, `secret_set`, `secret_delete`, `api_keys_create`, `api_keys_revoke`, `domain_set`, `domain_clear`, `path_set`, `path_clear`, and `initialSignupPolicy` on a first release |
 | `manage_users` | `signup_policy_set`, `sign_in_methods_set`, `app_users_list`, `app_user_suspend`, `app_user_resume` and the `app_invitations` tools |
-| `export_data` | `package_export`, `project_export` and `database_export` |
+| `export_data` | `project_export` |
 
 A delegated token cannot create tokens or add permissions to itself. Run `login` again with the flag.
 
@@ -50,7 +50,7 @@ A delegated token cannot create tokens or add permissions to itself. Run `login`
 | Discovery | `platform_describe`, `platform_guide`, `session_inspect`, `mail_status`, `projects_list`, `project_inspect` |
 | Projects | `project_create`, `project_sources_read`, `project_sources_save`, `project_delete` |
 | Owner data | `database_execute`, `storage_test` |
-| App export | `package_export`, `project_export`, `database_export` |
+| App export | `project_export` |
 | Publishing | `release_plan`, `release_apply` |
 | Signup policy | `signup_policy_read`, `signup_policy_set` |
 | Sign-in methods | `sign_in_methods_read`, `sign_in_methods_set` |
@@ -101,9 +101,7 @@ Every tool that writes has a tool that observes its effect through the same door
 | `transfer_write` | `transfer_status` |
 | `transfer_complete` | `transfer_status` |
 | `transfer_cancel` | `transfer_status` |
-| `package_export` | `transfer_read` |
 | `project_export` | `transfer_read` |
-| `database_export` | `transfer_read` |
 | `token_create` | `tokens_list` |
 | `token_revoke` | `tokens_list` |
 | `auth_logout` | `auth_session` |

@@ -8,7 +8,7 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
 
 ## Steps
 
-1. Create the project. `init` needs an empty folder and no credential. It writes a template and a `konae.json` with a project ID it makes itself. It writes the app private, with signup policy Invitation only.
+1. Create the app folder. `init` needs an empty folder and no credential. It writes the template into `app/`, a `konae.json` with a project ID it makes itself, `AGENTS.md` for a coding agent, `action-contract.md`, `compose.yaml`, `.env.example` and a `package.json` whose `npm run build` writes `dist/`. It writes the app private, with signup policy Invitation only.
 
     ```sh
     bun run konae -- init --dir /tmp/my-app --name 'My app'
@@ -20,7 +20,7 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
     bun run konae -- dev --dir /tmp/my-app
     ```
 
-3. Edit the Capsule files in the folder. Open the URL `dev` prints and reload after each change. Email, notices included, goes to `.konae/dev-data/mailbox.jsonl`.
+3. Edit the Capsule files in `app/`. Open the URL `dev` prints and reload after each change. Email, notices included, goes to `.konae/dev-data/mailbox.jsonl`.
 4. Optional. Write the Action Contract and, against a test Deployment, check every action's answers.
 
     ```sh
@@ -36,7 +36,7 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
     bun run konae -- login --dir /tmp/my-app --url http://localhost:4173
     ```
 
-6. Publish. This builds the folder and publishes it with the credential from `login`, to the installation `login` saved. The first publish registers the project there and writes the address into `konae.json`. It prints the Deployment URL.
+6. Publish. This builds the folder and publishes it with the credential from `login`, to the installation `login` saved. The first publish registers the project there. It prints the Deployment URL.
 
     ```sh
     bun run konae -- publish --dir /tmp/my-app
@@ -46,7 +46,7 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
 
 ## Visibility and signup
 
-`publish` deploys the app as private unless `konae.json` sets `project.manifest.visibility` to `"public"`. `project.manifest.signupPolicy` names who may create an app account on the first release. A later publish that names another policy warns and changes nothing. Change it in the editor's Auth > Users view or with `signup_policy_set`.
+`publish` deploys the app as private unless `konae.json` sets `visibility` to `"public"`. `signupPolicy` in the same file names who may create an app account on the first release. A later publish that names another policy warns and changes nothing. Change it in the editor's Auth > Users view or with `signup_policy_set`.
 
 ## Check it worked
 

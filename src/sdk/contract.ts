@@ -524,7 +524,7 @@ export const sdkContract = {
         {
           file: "manifest",
           key: "connects",
-          summary: "\"connects\": [\"https://api.example.com\"] in the project manifest, or project.manifest.connects in konae.json. Each origin is added to the page's connect-src, so the page may fetch it directly: another app's public GET route, which answers with Access-Control-Allow-Origin: *, or an outside API that allows the app's origin. Nothing else is loosened. A key or a secret never goes to the browser: a request that needs one is a call action, which the Kernel sends.",
+          summary: "\"connects\": [\"https://api.example.com\"] in the project manifest, or manifest.connects in konae.json. Each origin is added to the page's connect-src, so the page may fetch it directly: another app's public GET route, which answers with Access-Control-Allow-Origin: *, or an outside API that allows the app's origin. Nothing else is loosened. A key or a secret never goes to the browser: a request that needs one is a call action, which the Kernel sends.",
           errors: [
             { message: "connects must be a list of at most 10 origins, such as [\"https://api.example.com\"].", when: "connects is not a list of strings or lists more than 10", source: "kernel" },
             { message: "connects lists <key>, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost.", when: "an entry is not exactly an origin: http to a host outside localhost, a path or trailing slash, a wildcard, capitals, or the default port written out", source: "kernel" },

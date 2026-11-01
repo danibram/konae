@@ -90,7 +90,7 @@ describe("the words of CONTEXT.md", () => {
 
   test("the terms introduced with the HTTP module, copies, maintenance, accounts and mail each have one entry", () => {
     const introduced = [
-      "API Key", "Signing Secret", "Guard", "Callers", "Package", "Copy", "Maintenance", "Revocation Record",
+      "API Key", "Signing Secret", "Guard", "Callers", "Export", "Copy", "Maintenance", "Revocation Record",
       "Invitation", "Invitation Code", "Email Job", "Sender Preflight", "Action Contract", "SDK Module", "Usage", "Signal",
     ];
     const entries = [...context.matchAll(/^\*\*([^*]+)\*\*:$/gm)].map((match) => match[1]);

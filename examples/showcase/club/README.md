@@ -19,7 +19,7 @@ Club is a members-only book club. The Project Owner invites people by email. Mem
 - `api_keys_create` with `files: ["public"]`, used with `Authorization: Bearer`.
 - Roles in SQL. The Project Owner promotes an organizer with `database_execute` after finding her user ID with `app_users_list`.
 - `POST /_konae/auth/recover` and `POST /_konae/auth/reset`.
-- `package_export`, then `McpClient.upload` with `component`, and a first release with `initialPackage` on a second Kernel under a second Project Owner.
+- `project_export`, then `McpClient.upload` with `component`, and a first release with `initialPackage` on a second Kernel under a second Project Owner.
 - `konae contract` and `konae conform`.
 
 ## Run the replay

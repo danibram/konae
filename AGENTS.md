@@ -14,7 +14,7 @@ That sentence is the yardstick. A review that scores polish without it can call 
 
 ## How to decide
 
-A new capability belongs in the product only when the Validation Gate and the Kernel refuse it with the same words, and a package can carry the app's accounts, data and rules. Anything else is operator work on the installation, not an App feature.
+A new capability belongs in the product only when the Validation Gate and the Kernel refuse it with the same words, and an export of the app folder can carry the app's accounts, data and rules. Anything else is operator work on the installation, not an App feature.
 
 After any write through MCP or the editor, observe the effect through the same door before retrying or telling the owner it worked. `platform_guide` topic `rules` lists the read-back for each write tool. Decide what this credential may do from `session_inspect`'s `can` map, not from memory of login flags.
 
@@ -33,8 +33,8 @@ After any write through MCP or the editor, observe the effect through the same d
 | Uploaded files | `miniapp.files` | Large bytes in a SQLite column |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | A short link on the installation's domain | path address (`path_set`) | A custom domain when DNS is not yours |
-| Take the app elsewhere | package export and import | Copy (moves the installation) |
-| Debug, or try the next version, on what the published app holds | `konae pull` + `dev --reset` | Publishing to find out |
+| Take the app elsewhere | export and import of the app folder | Copy (moves the installation) |
+| Debug, or try the next version, on what the published app holds | `konae pull` (an export of the data) + `dev --reset` (its import) | Publishing to find out |
 | See the email, calls, scheduled runs and Signals of a local run | `konae events` | Reading the Kernel's files by hand |
 
 A Deployment folder on the Kernel is the app. Prefer a declaration inside the Capsule over a new platform resource. Topic `pieces` of `platform_guide` is the same table for agents.

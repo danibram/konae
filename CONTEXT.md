@@ -6,7 +6,7 @@ Konae is the guardrail that lets a person who does not write code, and a person 
 
 The terms come in two halves. Read "Words an app author uses" to make an app, edit its files or take it elsewhere; its first part names the words met before an app runs. Read "Words for running an installation" only to operate the Kernel, its accounts, its mail and its copies.
 
-Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, package, copy, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, path address, notice, schedule, signature scheme, call action, outbox, SDK module, sign-in methods, Google client and file store. Usage, Signal and Action Contract keep their capitals, as the older terms do.
+Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, app folder, copy, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, path address, notice, schedule, signature scheme, call action, outbox, SDK module, sign-in methods, Google client and file store. Usage, Signal and Action Contract keep their capitals, as the older terms do.
 
 ## Words an app author uses
 
@@ -33,7 +33,7 @@ The validated, immutable static output of a Project revision that a Deployment s
 _Avoid_: Project source, build cache
 
 **Deployment**:
-The published, addressable instance of a Project with its own hostname, an optional custom domain, visibility, signup policy and database. Everything it is lives in one folder on the Kernel volume: its record, Build Artifact, databases, file index and backups. The bytes of its files live in the installation's file store, which is that folder unless the operator points the Kernel at an S3 bucket; the index in the folder decides which files exist and who may read them, and a package carries the bytes either way (ADR-0025). Republishing replaces its Build Artifact and keeps its hostname and data; immutable release history does not exist yet.
+The published, addressable instance of a Project with its own hostname, an optional custom domain, visibility, signup policy and database. It shares the Project's ID, and everything it is lives in the app folder `apps/<id>/` on the Kernel volume: `konae.json`, the saved sources in `app/`, the Build Artifact in `dist/`, the databases, file index and secrets in `data/`, and the installation's record, address markers and backups in `.konae/`. The bytes of its files live in the installation's file store, which is that folder unless the operator points the Kernel at an S3 bucket; the index in the folder decides which files exist and who may read them, and a package carries the bytes either way (ADR-0025). Republishing replaces its Build Artifact and keeps its hostname and data; immutable release history does not exist yet.
 _Avoid_: Project, preview
 
 **Public Deployment**:
@@ -57,24 +57,20 @@ The per-Deployment rule for who may create a Runtime Actor account: Open (anyone
 _Avoid_: Invite list, access grant
 
 **Sign-in Methods**:
-The per-Deployment list of ways an app account signs in: `password` always, and `google` when the Project Owner turns on Continue with Google in Auth > Users or with `sign_in_methods_set`. Google needs the app's own Google client, which the owner sets as two signing secrets with `"use": "google"`; until both are set it cannot be turned on, and an imported Deployment that asks for Google keeps the setting and offers only the password. A Google sign-in reaches the account that holds the same verified email, and only for an address Google manages (Gmail, or a Workspace domain the token names). The Signup Policy decides whether a new account may exist. A package carries the list and the accounts, never the client.
+The per-Deployment list of ways an app account signs in: `password` always, and `google` when the Project Owner turns on Continue with Google in Auth > Users or with `sign_in_methods_set`. Google needs the app's own Google client, which the owner sets as two signing secrets with `"use": "google"`; until both are set it cannot be turned on, and an imported Deployment that asks for Google keeps the setting and offers only the password. A Google sign-in reaches the account that holds the same verified email, and only for an address Google manages (Gmail, or a Workspace domain the token names). The Signup Policy decides whether a new account may exist. An export carries the list and the accounts, never the client.
 _Avoid_: Social login, SSO
 
 **Google Client**:
-An app's own Google OAuth client, which its Project Owner makes in their own Google Cloud console and sets as the two signing secrets `google_client_id` and `google_client_secret` with `"use": "google"`. The owner registers one redirect URI per address the app answers on: its generated host, a verified custom domain, and its path address by id. The values never leave the Kernel and never travel in a package (ADR-0026).
+An app's own Google OAuth client, which its Project Owner makes in their own Google Cloud console and sets as the two signing secrets `google_client_id` and `google_client_secret` with `"use": "google"`. The owner registers one redirect URI per address the app answers on: its generated host, a verified custom domain, and its path address by id. The values never leave the Kernel and never travel in an export (ADR-0026).
 _Avoid_: OAuth app, installation Google client (there is none)
 
 **Agent Credential**:
 A Project Owner's revocable delegation that permits an external agent to perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity. Its permissions are `read`, `write`, `publish`, `manage_users` and `export_data`. Only `manage_users` lists, suspends and invites app accounts or changes a Signup Policy, and only `export_data` downloads accounts and data. An OAuth client may hold the first four. A call it may not make is refused with the permission it needs.
 _Avoid_: Runtime session, setup key
 
-**Development Kernel**:
-The local development authority that reproduces the Kernel interfaces without granting an application access to production resources.
-_Avoid_: Production proxy, mock API
-
-**Pulled Copy**:
-A package of a published app's database, accounts and files that `konae pull` keeps in the project folder, and that a Development Kernel with no data starts from. It moves one way, from the Deployment to the developer's machine.
-_Avoid_: Sync, mirror, staging database
+**App Folder**:
+Everything an app is, in one layout that is the same on a laptop, inside Konae and in an export: `konae.json` (name, visibility, Signup Policy, sign-in methods, contact email and Kernel version), `app/` (the Capsule), `dist/` (the Build Artifact), `data/` (database, accounts, Usage and uploaded files), and beside them `AGENTS.md`, `action-contract.md`, `compose.yaml`, `.env.example` and a `package.json` whose `npm run build` writes `dist/`. `konae init` writes it, `konae build` and `npm run build` fill `dist/`, and the Kernel keeps one per app. Secrets and the installation's `.konae/` never leave the machine that holds them (ADR-0027).
+_Avoid_: kit, workspace, repo
 
 ### As the app grows
 
@@ -99,7 +95,7 @@ The Kernel-owned daily totals for one Deployment's authorized Runtime Interface 
 _Avoid_: analytics, telemetry, audit, metric
 
 **Invitation**:
-The Project Owner's offer of an account on one Deployment to one email, sent as a seven-day Challenge. Accepting sets the password and activates the account in the transaction that rechecks the Signup Policy and the account's state. It never changes an active account's password or resumes a suspended one. A package, a portable export and a restore keep the invitation as history without its link, and the owner resends it.
+The Project Owner's offer of an account on one Deployment to one email, sent as a seven-day Challenge. Accepting sets the password and activates the account in the transaction that rechecks the Signup Policy and the account's state. It never changes an active account's password or resumes a suspended one. An export and a restore keep the invitation as history without its link, and the owner resends it.
 _Avoid_: invite code (that names creator admission), allowlist entry
 
 **Callers**:
@@ -111,11 +107,11 @@ How a route's signature is computed and where it travels, declared as `"scheme"`
 _Avoid_: webhook format, provider adapter
 
 **Signing Secret**:
-A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. One set with `"use": "call"` instead signs, or holds the API key for, the Project's call actions, and may repeat another project's route secret. The two set with `"use": "google"`, `google_client_id` and `google_client_secret`, hold the app's own Google client for its sign-in methods; no route or call reads them. In Konae's own signature scheme a sender proves a request with an HMAC under it of a timestamp, a nonce, the method, the path, the canonical query string and the body; in a provider's scheme, with the HMAC that provider computes. It never appears in `actions.json`, a Build Artifact or an export.
+A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. It lives in the app's `data/secrets.sqlite` and a copy carries it; an export never does, and one owner's two apps never hold the same route secret. One set with `"use": "call"` instead signs, or holds the API key for, the Project's call actions, and may repeat another project's route secret. The two set with `"use": "google"`, `google_client_id` and `google_client_secret`, hold the app's own Google client for its sign-in methods; no route or call reads them. In Konae's own signature scheme a sender proves a request with an HMAC under it of a timestamp, a nonce, the method, the path, the canonical query string and the body; in a provider's scheme, with the HMAC that provider computes. It never appears in `actions.json`, a Build Artifact or an export.
 _Avoid_: webhook token, API key
 
 **API Key**:
-A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It names the Server Actions it may call over their HTTP routes and the file visibilities it may read, and on a public Deployment it also reads public files as a visitor does. It is sent as `Authorization: Bearer`. The runtime endpoint refuses it. The Kernel stores its hash only. A package or a portable export carries its name, scope and hash, and the import marks it revoked at import, so the destination's owner sees which programs to issue new keys for; a restore of a copy keeps it valid.
+A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It names the Server Actions it may call over their HTTP routes and the file visibilities it may read, and on a public Deployment it also reads public files as a visitor does. It is sent as `Authorization: Bearer`. The runtime endpoint refuses it. The Kernel stores its hash only. An export carries its name, scope and hash, and the import marks it revoked at import, so the destination's owner sees which programs to issue new keys for; a restore of a copy keeps it valid.
 _Avoid_: token (an Agent Credential), service account
 
 **Call Action**:
@@ -135,27 +131,27 @@ The generated description of a Capsule's Server Actions, `action-contract.json` 
 _Avoid_: API spec, OpenAPI document, schema dump
 
 **Custom Domain**:
-A hostname its owner controls on which one Deployment answers next to its generated hostname, which keeps answering. The owner sets it with `domain_set`, which needs `publish`, and proves control with a TXT record `_konae.<hostname>` holding a token the Kernel issued; the Kernel looks the record up itself and the alias serves only once it holds the token. One name serves one Deployment. On it the app has its own origin: its own cookies, the same policy, routes, file path and maintenance page. The operator's proxy terminates TLS and forwards `Host` unchanged. A package carries the name without the token, and the destination issues its own.
+A hostname its owner controls on which one Deployment answers next to its generated hostname, which keeps answering. The owner sets it with `domain_set`, which needs `publish`, and proves control with a TXT record `_konae.<hostname>` holding a token the Kernel issued; the Kernel looks the record up itself and the alias serves only once it holds the token. One name serves one Deployment. On it the app has its own origin: its own cookies, the same policy, routes, file path and maintenance page. The operator's proxy terminates TLS and forwards `Host` unchanged. An export carries the name without the token, and the destination issues its own.
 _Avoid_: vanity URL, CNAME (that is one way to point the name), domain mapping
 
 **Path Address**:
-A path on the installation's domain on which one Deployment answers: `<domain>/p/<id>`, and `<domain>/p/<name>` once the owner names it. The owner turns it on with `path_set`, which needs `publish`. The app whose path holds the name `konae-home` is the home and also answers `<domain>/`. Every path and the home share the origin `<domain>`, so an app with accounts or a private app needs the owner's `acceptSharedOrigin` before its path turns on. It needs `KONAE_DOMAIN`. A package carries the name and the path's state, never the id.
+A path on the installation's domain on which one Deployment answers: `<domain>/p/<id>`, and `<domain>/p/<name>` once the owner names it. The owner turns it on with `path_set`, which needs `publish`. The app whose path holds the name `konae-home` is the home and also answers `<domain>/`. Every path and the home share the origin `<domain>`, so an app with accounts or a private app needs the owner's `acceptSharedOrigin` before its path turns on. It needs `KONAE_DOMAIN`. An export carries the name and the path's state, never the id.
 _Avoid_: short link, vanity path, app URL
 
 **File Store**:
-Where the installation keeps the bytes of app files: each Deployment's folder, or an S3-compatible bucket the operator names with `KONAE_FILES_S3_*`. The file index in the Deployment's folder decides which files exist either way, and `files-migrate` moves the bytes between the two while no Kernel runs (ADR-0025).
+Where the installation keeps the bytes of app files: each app folder's `data/files/`, or an S3-compatible bucket the operator names with `KONAE_FILES_S3_*`. The file index in the app folder decides which files exist either way, and `files-migrate` moves the bytes between the two while no Kernel runs (ADR-0025).
 _Avoid_: bucket (one kind of store), storage
 
-**Package**:
-The export of one Deployment's state: its database, its accounts without sessions or email links, its API keys revoked at import, its files, and its Usage and Signals when it has any, captured under the Deployment's locks. A versioned manifest lists each component with its size and SHA-256 and names the published revision. Each component travels as its own transfer, so no step holds a whole component in memory. An import verifies every component and installs the package only into a project that has no Deployment yet; the same package imported again returns the first import. Downloading one needs the `export_data` permission.
-_Avoid_: dump, full backup, export file (the kit that carries it is the export)
+**Export**:
+The app folder handed over: `konae.json`, `app/` and `dist/` in one download, and the data as one download per part of `data/`, its database, its accounts without sessions or email links, its API keys revoked at import, its files, and its Usage and Signals when it has any, captured under the Deployment's locks. A versioned manifest lists each part of the data with its size and SHA-256 and names the published revision. Each part travels as its own transfer, so no step holds a whole part in memory. An import verifies every part and installs the data only into a project that has no Deployment yet; the same data imported again returns the first import. `project_export`, `konae export`, `konae pull` and the editor's Export are the one export, and exporting needs the `export_data` permission. It carries nothing of Konae: no owner, credential, project record or secret.
+_Avoid_: package, kit, dump, full backup
 
 **Maintenance**:
-The state of a Deployment that takes no writes. Its host shows a maintenance page and refuses actions, uploads, signups, sign-ins, recovery, invitations and HTTP routes, the owner cannot change it, its email waits, and its calls and schedules wait. The state lives in the Deployment's folder, `maintenance.json`, so a restart, a copy or a restore keeps it. A restore that cannot read the revocation record keeps it for the whole installation in `recovery-hold.json` until `konae-kernel reconcile` runs.
+The state of a Deployment that takes no writes. Its host shows a maintenance page and refuses actions, uploads, signups, sign-ins, recovery, invitations and HTTP routes, the owner cannot change it, its email waits, and its calls and schedules wait. The state lives in the app folder, `.konae/maintenance.json`, so a restart, a copy or a restore keeps it. A restore that cannot read the revocation record keeps it for the whole installation in `recovery-hold.json` until `konae-kernel reconcile` runs.
 _Avoid_: downtime, read-only mode (reads stop too)
 
 **Declared Dependencies**:
-The npm packages a Capsule imports by name, listed with exact versions under `dependencies` in its `package.json`. The editor's build fetches each one from esm.sh at that version and links it into the app's bundle; `konae build` and the exported kit read the same list from `node_modules` after `npm install`. Either way the published app holds the package's code and loads nothing from another origin. A version range is refused, so every build reads the same code.
+The npm packages a Capsule imports by name, listed with exact versions under `dependencies` in its `package.json`. The editor's build fetches each one from esm.sh at that version and links it into the app's bundle; `konae build` and an exported app folder's `npm run build` read the same list from `node_modules` after `npm install`. Either way the published app holds the package's code and loads nothing from another origin. A version range is refused, so every build reads the same code.
 _Avoid_: library allowlist, vendored copy
 
 ## Words for running an installation
@@ -221,7 +217,7 @@ The Kernel's check that its mail transport may send as the configured sender, su
 _Avoid_: email health
 
 **Copy**:
-A consistent snapshot of every Deployment folder, with the owner, MCP and mail stores, sent off the Kernel volume to a second disk or an S3 prefix on a schedule. With a copy secret, the files sent to S3 are encrypted. Each copy target also keeps the revocation record. Restore installs one copy into an empty data directory, signs everyone out, ends every open Challenge and applies the revocation record, or holds the installation in maintenance when it cannot read it. A copy moves an installation; a package moves one app.
+A consistent snapshot of every app folder, secrets included, with the owner, MCP and mail stores, sent off the Kernel volume to a second disk or an S3 prefix on a schedule. With a copy secret, the files sent to S3 are encrypted. Each copy target also keeps the revocation record. Restore installs one copy into an empty data directory, signs everyone out, ends every open Challenge and applies the revocation record, or holds the installation in maintenance when it cannot read it. A copy moves an installation; an export moves one app.
 _Avoid_: backup (a Data panel snapshot of one app database), replica, mirror
 
 **Revocation Record**:

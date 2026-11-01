@@ -579,7 +579,7 @@ A signing secret belongs to the project, never leaves the Kernel and is not part
 ```
 <!-- /walkthrough:secret -->
 
-`publish` builds the folder, uploads the release and applies it. On the first release it sends `project.manifest.signupPolicy` from `konae.json` as `initialSignupPolicy`, so the app starts as Invitation only. A visitor without a session gets the sign-in page on every path of a private app.
+`publish` builds the folder, uploads the release and applies it. On the first release it sends `signupPolicy` from `konae.json` as `initialSignupPolicy`, so the app starts as Invitation only. A visitor without a session gets the sign-in page on every path of a private app.
 
 <!-- walkthrough:publish -->
 ```sh
@@ -1235,7 +1235,7 @@ Exporting needs `export_data`, which OAuth does not grant:
 ```
 <!-- /walkthrough:export-refused -->
 
-`package_export` captures the database, the accounts, the files and the Usage store under the app's locks, and returns a manifest with one download per component. Read each with `transfer_read` from offset 0 until `nextOffset` equals `size`, check the SHA-256, then `transfer_cancel` it.
+`project_export` hands over the app folder: `konae.json`, `app/` and `dist/` in the `folder` download, and the database, the accounts, the files and the Usage store, captured under the app's locks, with a manifest and one download per part of `data/`. Read each with `transfer_read` from offset 0 until `nextOffset` equals `size`, check the SHA-256, then `transfer_cancel` it.
 
 <!-- walkthrough:export -->
 ```json
@@ -1490,7 +1490,7 @@ Upload each component with `transfer_begin` and its `component` name, so the upl
 ```
 <!-- /walkthrough:import-upload -->
 
-Build the folder, then upload a release payload: the project, its visibility, the artifact from `.konae/artifact.json`, and `initialPackage` with the manifest and the component uploads. `release_plan` checks every component before anything is created, and `release_apply` installs them. The signup policy comes from the manifest.
+Build the folder, then upload a release payload: the project, its visibility, the built files of `dist/`, and `initialPackage` with the manifest and the component uploads. `release_plan` checks every component before anything is created, and `release_apply` installs them. The signup policy comes from the manifest.
 
 <!-- walkthrough:import-release -->
 ```sh

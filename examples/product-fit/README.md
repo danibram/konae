@@ -29,14 +29,14 @@ Since 2026-11-07 every mutation a person can be refused by declares a guard, so 
 
 ## Use one example in another project
 
-The fixture folders contain source files only. They carry no existing project ID or server URL. Create a new project with the CLI, then copy an example's sources over its template while retaining the generated `konae.json`.
+The fixture folders contain source files only. They carry no existing project ID or server URL. Create an app folder with the CLI, then copy an example's sources over the template in its `app/`, keeping the generated `konae.json`.
 
 ```sh
-bun run konae -- init --dir /tmp/my-journal --name "My journal" --url http://localhost:4173
-cp -R examples/product-fit/journal/. /tmp/my-journal/
+bun run konae -- init --dir /tmp/my-journal --name "My journal"
+cp -R examples/product-fit/journal/. /tmp/my-journal/app/
 bun run konae -- dev --dir /tmp/my-journal --port 8796
 ```
 
-`init` needs an owner credential, as described in [the MCP guide](../../docs/mcp.md). The local development command uses its own accounts and data. The docs fixture publishes with the normal CLI builder: its guide pages sit under `pages/` and its `sitemap.xml` and `robots.txt` under `public/`.
+`init` needs no credential. The local development command uses its own accounts and data. The docs fixture publishes with the normal CLI builder: its guide pages sit under `pages/` and its `sitemap.xml` and `robots.txt` under `public/`.
 
 The gallery's inline image is the copy a visitor sees when the photo stayed private to the uploader. A file uploaded as public can be read without that copy. The team board likewise demonstrates authorization with SQL predicates; display names are not verified identity.

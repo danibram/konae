@@ -213,7 +213,7 @@ Limits:
 - no redirect is followed: a 3xx is the answer
 - the outbox keeps the newest 1000 finished calls per app and the first 1 KiB of each answer
 
-Declared with "connects" in manifest: "connects": ["https://api.example.com"] in the project manifest, or project.manifest.connects in konae.json. Each origin is added to the page's connect-src, so the page may fetch it directly: another app's public GET route, which answers with Access-Control-Allow-Origin: *, or an outside API that allows the app's origin. Nothing else is loosened. A key or a secret never goes to the browser: a request that needs one is a call action, which the Kernel sends.
+Declared with "connects" in manifest: "connects": ["https://api.example.com"] in the project manifest, or manifest.connects in konae.json. Each origin is added to the page's connect-src, so the page may fetch it directly: another app's public GET route, which answers with Access-Control-Allow-Origin: *, or an outside API that allows the app's origin. Nothing else is loosened. A key or a secret never goes to the browser: a request that needs one is a call action, which the Kernel sends.
 Limits:
 - 10 origins
 

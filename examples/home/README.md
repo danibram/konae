@@ -22,14 +22,14 @@ Run these from the repository root, with an owner account on the installation.
 
 ```sh
 KONAE_EMAIL=you@example.com KONAE_PASSWORD=... bun run konae -- login --dir /tmp/konae-home --url https://app.<domain>
-bun run konae -- init --dir /tmp/konae-home --name "Konae home" --url https://app.<domain>
-cp -R /tmp/konae-home/konae.json /tmp/konae-home/.konae examples/home/
+bun run konae -- init --dir /tmp/konae-home --name "Konae home"
+rm -rf /tmp/konae-home/app && cp -R examples/home /tmp/konae-home/app
 ```
 
-Before the first publish, set `project.manifest.visibility` to `"public"` and `project.manifest.signupPolicy` to `{ "mode": "closed" }` in `konae.json`. Then publish, give it the name and read it back over MCP:
+`init` writes an app folder, and the second line puts this app's sources in its `app/`. Before the first publish, set `visibility` to `"public"` and `signupPolicy` to `{ "mode": "closed" }` in `/tmp/konae-home/konae.json`. Then publish, give it the name and read it back over MCP:
 
 ```sh
-bun run konae -- publish --dir examples/home
+bun run konae -- publish --dir /tmp/konae-home
 ```
 
 ```text
