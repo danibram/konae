@@ -526,7 +526,7 @@ mod tests {
 
     /// A folder for a Deployment that holds a path record, without a Deployment behind it.
     async fn folder(state: &AppState, id: &str) {
-        tokio::fs::create_dir_all(deployment_dir(state, id)).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::data(&state.data_root, id)).await.unwrap();
     }
 
     async fn publish(state: &AppState, project: &str) -> Deployment {

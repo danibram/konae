@@ -240,8 +240,9 @@ pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id:
         let blobs = file_store::BlockingFiles::new(state.files.store.clone(), &deployment.id);
         let components = tokio::task::spawn_blocking(move || capture(&source, &target, &blobs)).await?;
         let sources_revision: Option<u64> = store(state)?
-            .query_row("SELECT revision FROM project_sources WHERE project=?1", [&deployment.project_id], |r| r.get(0))
-            .optional()?;
+            .query_row("SELECT sources FROM projects WHERE id=?1", [&deployment.project_id], |r| r.get(0))
+            .optional()?
+            .filter(|saves: &u64| *saves > 0);
         components.map(|components| (components, deployment, published_revision, sources_revision))
     };
     let (components, deployment, published_revision, sources_revision) = match captured {

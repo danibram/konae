@@ -57,6 +57,7 @@ mod provider;
 mod recovery;
 mod refusal;
 mod schedule;
+mod sources;
 mod security;
 mod sql_rules;
 #[cfg(test)]
@@ -586,11 +587,6 @@ async fn s3_client_from_env() -> Option<S3Client> {
         .force_path_style(true)
         .build();
     Some(S3Client::from_conf(s3_config))
-}
-
-/// The Deployment's folder: its record, artifact, databases, files and backups.
-fn deployment_dir(state: &AppState, id: &str) -> PathBuf {
-    crate::layout::folder(&state.data_root, &id)
 }
 
 fn backup_dir(state: &AppState, id: &str) -> PathBuf {

@@ -47,8 +47,7 @@ pub(super) fn store(state: &AppState) -> Result<Connection> {
     let db = Connection::open(state.data_root.join("mcp.sqlite"))?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
     db.execute_batch("PRAGMA journal_mode=WAL;
-        CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS project_sources(project TEXT PRIMARY KEY REFERENCES projects(id), body BLOB NOT NULL, revision INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, sources INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS credentials(hash TEXT PRIMARY KEY, owner TEXT NOT NULL, scopes TEXT NOT NULL, projects TEXT NOT NULL, expires INTEGER NOT NULL, audience TEXT);
         CREATE TABLE IF NOT EXISTS transfers(id TEXT PRIMARY KEY, principal TEXT NOT NULL, body TEXT NOT NULL, expires INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, owner TEXT NOT NULL, project TEXT NOT NULL, revision INTEGER NOT NULL, transfer TEXT NOT NULL, expires INTEGER NOT NULL, receipt TEXT);
@@ -235,7 +234,7 @@ async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
     park(&folder, &trash, id).await?;
     let mut db = store(state)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    for (table, column) in [("project_sources", "project"), ("plans", "project"), ("package_imports", "project"), ("project_secrets", "project")] {
+    for (table, column) in [("plans", "project"), ("package_imports", "project"), ("project_secrets", "project")] {
         let present: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)", [table], |r| r.get(0))?;
         if present {
             tx.execute(&format!("DELETE FROM {table} WHERE {column}=?1"), [id])?;
@@ -1281,10 +1280,10 @@ async fn admin_call(
                 anyhow::ensure!(source["name"] == a["name"]
                     && a.get("slug").is_none_or(|slug| *slug == source["slug"])
                     && a.get("manifest").is_none_or(|manifest| *manifest == source["manifest"]), "Initial files must match the project metadata.");
-                Some(bytes)
+                Some(source)
             } else { None };
             let _guard = database_lock(state, &format!("project:{id}")).await;
-            let mut db = store(state)?;
+            let db = store(state)?;
             let existing: Option<String> = db
                 .query_row("SELECT owner FROM projects WHERE id=?1", [&id], |r| {
                     r.get(0)
@@ -1293,19 +1292,17 @@ async fn admin_call(
             if let Some(existing) = existing {
                 anyhow::ensure!(existing == owner.id, "Project not found or access denied.");
                 let mut project = owned_project(state, owner, &id, "read")?.0;
-                if let Some(bytes) = initial_sources {
-                    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-                    let saved: Option<(Vec<u8>, u64)> = tx.query_row(
-                        "SELECT body,revision FROM project_sources WHERE project=?1", [&id], |r| Ok((r.get(0)?, r.get(1)?)),
-                    ).optional()?;
-                    let revision = if let Some((saved, revision)) = saved {
-                        anyhow::ensure!(saved == bytes, "This project already has saved sources. Reload before saving.");
+                if let Some(source) = initial_sources {
+                    let revision: u64 = db.query_row("SELECT sources FROM projects WHERE id=?1", [&id], |r| r.get(0))?;
+                    let revision = if revision > 0 {
+                        let saved = super::sources::read(&state.data_root, &id).await?;
+                        anyhow::ensure!(saved.as_ref() == Some(&source), "This project already has saved sources. Reload before saving.");
                         revision
                     } else {
-                        tx.execute("INSERT INTO project_sources(project,body,revision) VALUES(?1,?2,1)", params![id,bytes])?;
+                        super::sources::write(&state.data_root, &id, &source).await?;
+                        db.execute("UPDATE projects SET sources=1 WHERE id=?1", [&id])?;
                         1
                     };
-                    tx.commit()?;
                     project["sourcesRevision"] = json!(revision);
                 }
                 return Ok(project);
@@ -1321,42 +1318,40 @@ async fn admin_call(
             );
             let template = project_template(a["template"].as_str())?;
             let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"manifest":a.get("manifest").cloned().unwrap_or(json!({"version":1,"visibility":template["visibility"]})),"files":template["files"]});
-            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            tx.execute(
-                "INSERT INTO projects(id,owner,body) VALUES(?1,?2,?3)",
-                params![id, owner.id, {
-                    let mut metadata = project.clone();
-                    metadata.as_object_mut().unwrap().remove("files");
-                    metadata.to_string()
-                }],
-            )?;
-            if let Some(bytes) = initial_sources {
-                tx.execute("INSERT INTO project_sources(project,body,revision) VALUES(?1,?2,1)", params![id,bytes])?;
+            // The app's folder exists from the start: konae.json, and app/ once sources are saved.
+            super::Settings::new(&id, project["name"].as_str().unwrap_or_default(), project["slug"].as_str().unwrap_or_default(), &project["manifest"])
+                .write(&state.data_root)
+                .await?;
+            if let Some(source) = initial_sources.as_ref() {
+                super::sources::write(&state.data_root, &id, source).await?;
                 project["sourcesRevision"] = json!(1);
             }
-            tx.commit()?;
+            db.execute(
+                "INSERT INTO projects(id,owner,body,sources) VALUES(?1,?2,?3,?4)",
+                params![id, owner.id, {
+                    let mut metadata = project.clone();
+                    let object = metadata.as_object_mut().unwrap();
+                    object.remove("files");
+                    object.remove("sourcesRevision");
+                    metadata.to_string()
+                }, u64::from(initial_sources.is_some())],
+            )?;
             Ok(project)
         }
         "project_inspect" => {
             let id = a["projectId"].as_str().unwrap();
             let (project, revision) = owned_project(state, owner, id, "read")?;
             let deployment = find_project_deployment(&*state.deployments.read().await, id);
-            let sources_revision: u64 = store(state)?
-                .query_row("SELECT revision FROM project_sources WHERE project=?1", [id], |r| r.get(0))
-                .optional()?
-                .unwrap_or(0);
+            let sources_revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
             Ok(json!({"project":project,"revision":revision,"sourcesRevision":sources_revision,"deployment":deployment}))
         }
         "project_sources_read" => {
             let id = a["projectId"].as_str().unwrap();
             owned_project(state, owner, id, "read")?;
-            let row: Option<(Vec<u8>, u64)> = store(state)?.query_row(
-                "SELECT body,revision FROM project_sources WHERE project=?1", [id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            ).optional()?;
-            match row {
-                Some((bytes, revision)) => Ok(json!({"revision":revision,"transfer":download(state, principal, &bytes, Some(id)).await?})),
-                None => Ok(json!({"revision":0,"transfer":null})),
+            let revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
+            match super::sources::read(&state.data_root, id).await? {
+                Some(source) if revision > 0 => Ok(json!({"revision":revision,"transfer":download(state, principal, &serde_json::to_vec(&source)?, Some(id)).await?})),
+                _ => Ok(json!({"revision":0,"transfer":null})),
             }
         }
         "project_sources_save" => {
@@ -1369,13 +1364,12 @@ async fn admin_call(
             validate_sources(&source, id)?;
             let _guard = database_lock(state, &format!("project:{id}")).await;
             owned_project(state, owner, id, "write")?;
-            let mut db = store(state)?;
-            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let current: u64 = tx.query_row("SELECT revision FROM project_sources WHERE project=?1", [id], |r| r.get(0)).optional()?.unwrap_or(0);
+            let db = store(state)?;
+            let current: u64 = db.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
             anyhow::ensure!(current == a["expectedRevision"].as_u64().unwrap(), "Source revision conflict. Reload the saved project before writing.");
             let revision = current.checked_add(1).ok_or_else(|| anyhow::anyhow!("Source revision exhausted."))?;
-            tx.execute("INSERT INTO project_sources(project,body,revision) VALUES(?1,?2,?3) ON CONFLICT(project) DO UPDATE SET body=excluded.body,revision=excluded.revision", params![id,bytes,revision])?;
-            tx.commit()?;
+            super::sources::write(&state.data_root, id, &source).await?;
+            db.execute("UPDATE projects SET sources=?2 WHERE id=?1", params![id, revision])?;
             Ok(json!({"revision":revision}))
         }
         "project_delete" => {
@@ -2547,7 +2541,7 @@ mod tests {
         let (state, _) = crate::tests::login_test_state(&root, "public").await;
         let deployment = state.deployments.read().await.values().next().unwrap().clone();
         persist_deployment(&state, &deployment).await.unwrap();
-        tokio::fs::write(deployment_dir(&state, &deployment.id).join("database.sqlite"), b"rows").await.unwrap();
+        tokio::fs::write(crate::layout::database(&state.data_root, &deployment.id), b"rows").await.unwrap();
         let owner = Owner { id: "o".into(), display: None, scopes: vec!["read".into(), "write".into()], projects: vec![], session: false };
         let published = deployment.project_id.clone();
         let draft = "app_draft";
@@ -2556,8 +2550,10 @@ mod tests {
             for (id, name) in [(published.as_str(), "Notes"), (draft, "Draft")] {
                 db.execute("INSERT INTO projects(id,owner,body) VALUES(?1,'o',?2)", params![id, json!({"id": id, "name": name}).to_string()]).unwrap();
             }
-            db.execute("INSERT INTO project_sources(project,body,revision) VALUES(?1,x'7b7d',1)", [draft]).unwrap();
+            db.execute("UPDATE projects SET sources=1 WHERE id=?1", [draft]).unwrap();
         }
+        let saved = json!({"id": draft, "name": "Draft", "slug": "draft", "files": {"index.html": "<main></main>"}, "directories": [], "manifest": {}, "updatedAt": 1});
+        crate::sources::write(&state.data_root, draft, &saved).await.unwrap();
         let call = |name: &'static str, a: Value| { let (state, owner) = (state.clone(), owner.clone()); async move { admin_call(&state, &owner, "owner:o", name, a).await } };
 
         let refused = call("project_delete", json!({"projectId": published, "name": "notes"})).await.unwrap_err();
@@ -2567,13 +2563,12 @@ mod tests {
         let deleted = call("project_delete", json!({"projectId": published, "name": "Notes"})).await.unwrap();
         assert_eq!(deleted["deployments"], json!([deployment.id]));
         assert!(state.deployments.read().await.is_empty(), "the address stops answering");
-        assert!(!deployment_dir(&state, &deployment.id).exists(), "its data is gone");
+        assert!(!crate::layout::folder(&state.data_root, &deployment.id).exists(), "its folder is gone");
 
         call("project_delete", json!({"projectId": draft, "name": "Draft"})).await.unwrap();
         let listed = call("projects_list", json!({})).await.unwrap();
         assert_eq!(listed["projects"], json!([]));
-        let sources: i64 = store(&state).unwrap().query_row("SELECT COUNT(*) FROM project_sources", [], |r| r.get(0)).unwrap();
-        assert_eq!(sources, 0);
+        assert!(!crate::layout::folder(&state.data_root, draft).exists(), "a project never published leaves no folder");
         let again = call("project_delete", json!({"projectId": draft, "name": "Draft"})).await.unwrap_err();
         assert_eq!(again.to_string(), "Project not found or access denied.");
         let _ = tokio::fs::remove_dir_all(root).await;

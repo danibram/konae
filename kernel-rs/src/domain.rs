@@ -694,7 +694,7 @@ mod tests {
         let taken = set(&other.id, "notes.example.org").await.unwrap_err().to_string();
         assert_eq!(taken, "notes.example.org already serves another Deployment on this installation. Clear it there with domain_clear first.");
         // Nor can a package that names it.
-        let arriving = deployment_dir(&state, "arriving");
+        let arriving = crate::layout::data(&state.data_root, "arriving");
         tokio::fs::create_dir_all(&arriving).await.unwrap();
         assert_eq!(arrive(&state, "arriving", Some("notes.example.org")).await.unwrap_err().to_string(), taken);
 
