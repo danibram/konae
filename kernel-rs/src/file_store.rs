@@ -868,8 +868,9 @@ pub(crate) async fn operator_command() -> Result<bool> {
     }
 }
 
-/// Reads a whole blob into memory, for the small export format, whose bundle
-/// is capped at 16 MiB. The file path and the MCP read stream instead.
+/// Reads a whole blob into memory, for tests that compare stored bytes. The
+/// file path and the MCP read stream instead.
+#[cfg(test)]
 pub(crate) async fn read_all(store: &dyn FileStore, deployment: &str, file: &str) -> Result<Option<Vec<u8>>> {
     let Some(mut blob) = store.get(deployment, file, None).await? else { return Ok(None) };
     let mut bytes = Vec::with_capacity(blob.length as usize);
