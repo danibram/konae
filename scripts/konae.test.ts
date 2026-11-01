@@ -31,7 +31,7 @@ beforeAll(() => {
       const results: Record<string, unknown> = {
         project_create: { id: "app_test", name: "Test", slug: "test", manifest: {}, files: { "app.js": "" } },
         transfer_begin: { transferId: "transfer_1", size: 0, sha256: "", chunkBytes: 65_536 },
-        release_plan: { planId: "plan_1" },
+        release_plan: { planId: "plan_1", schema: { statements: [], losses: [], confirmation: null } },
         release_apply: { id: "dep_1", url: "http://test.localhost/" },
       };
       return reply({ isError: false, structuredContent: { result: answers[name] ?? results[name] ?? {} } });

@@ -4,6 +4,7 @@ import type { SqlValue } from "sql.js";
 import type { DeploymentRecord, DeploymentVisibility } from "./manifest";
 import type { BuildArtifact } from "../runtime/artifact";
 import { platformMcp, decodeBase64, type Transfer } from "../mcp/client";
+import { release, type ConfirmSchema } from "./release";
 
 export type DeploymentReceipt = DeploymentRecord & { accessCode?: string };
 
@@ -17,15 +18,15 @@ export type PortableProjectState = {
 };
 
 /**
- * Publishes the project. `initialSignupPolicy` goes only with a first release:
- * the Kernel installs it before the app serves, and refuses it on a republish.
+ * Publishes the project. `confirmSchema` is asked when the schema change loses
+ * data. `initialSignupPolicy` goes only with a first release: the Kernel
+ * installs it before the app serves, and refuses it on a republish.
  */
-export async function deployProject(project: MiniAppProject, visibility: DeploymentVisibility, artifact: BuildArtifact, initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">): Promise<DeploymentReceipt> {
+export async function deployProject(project: MiniAppProject, visibility: DeploymentVisibility, artifact: BuildArtifact, confirmSchema: ConfirmSchema, initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">): Promise<DeploymentReceipt> {
   await platformMcp.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
   const transfer = await platformMcp.upload(new TextEncoder().encode(JSON.stringify({ project, visibility, artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}) })), project.id);
   try {
-    const plan = await platformMcp.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
-    return await platformMcp.call<DeploymentReceipt>("release_apply", { planId: plan.planId });
+    return (await release<DeploymentReceipt>(platformMcp, transfer.transferId, confirmSchema)).receipt;
   } finally {
     await platformMcp.cancel(transfer.transferId).catch(() => {});
   }

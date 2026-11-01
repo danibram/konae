@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient } from "../src/mcp/client";
 import { INIT_TEMPLATES, initLocal, publishLocal, setDevSecrets } from "../scripts/konae";
-import { installPulledAlone, pullLocal, readPulled } from "../scripts/pull";
+import { pullLocal, readPulled } from "../scripts/pull";
 
 // init, publish, pull and the first release of a Development Kernel, on two
 // real Kernels: `origin` stands for the installation an app is published to
@@ -147,7 +147,7 @@ describe("init, publish, pull, dev", () => {
     expect((await readPulled(app))?.manifest.projectId).toBe(config.project.id);
   }, 60_000);
 
-  test("actions that need a newer schema than the copy are refused, the copy installs alone, and the same SQL then lets the app publish", async () => {
+  test("a folder whose schema.sql is ahead of the copy publishes on it, and the Kernel adds the column with every row kept", async () => {
     const next = path.join(root, "next");
     const born = await initLocal(next, { name: "Next version" });
     const published = await publishLocal(next, { ...born, url: origin.url }, origin.token);
@@ -158,16 +158,14 @@ describe("init, publish, pull, dev", () => {
     const actions = await readFile(path.join(next, "actions.json"), "utf8");
     expect(actions).toContain("SELECT id, title, created_at FROM notes");
     await writeFile(path.join(next, "actions.json"), actions.replace("SELECT id, title, created_at FROM notes", "SELECT id, title, pinned, created_at FROM notes"));
+    const schema = await readFile(path.join(next, "schema.sql"), "utf8");
+    expect(schema).toMatch(/created_at[^,\n]*\n\s*\);/);
+    await writeFile(path.join(next, "schema.sql"), schema.replace(/(created_at[^,\n]*)\n(\s*\);)/, "$1,\n  pinned INTEGER NOT NULL DEFAULT 0\n$2"));
 
-    const admin = new McpClient(`${local.url}/mcp`, { token: local.token });
-    await expect(publishLocal(next, { ...born, url: local.url }, local.token, () => {}, pulled)).rejects.toThrow("no such column: pinned");
-    expect((await admin.call<{ deployment: unknown }>("project_inspect", { projectId: born.project.id })).deployment).toBeNull();
-
-    const { signupPolicy: _, ...manifest } = born.project.manifest;
-    const alone = await installPulledAlone(admin, next, pulled, { ...born.project, manifest });
-    await admin.call("database_execute", { deploymentId: alone.id, operation: "sql", input: { sql: "ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0" } });
-    const released = await publishLocal(next, { ...born, url: local.url }, local.token, () => {});
-    expect(released.id).toBe(alone.id);
+    const released = await publishLocal(next, { ...born, url: local.url }, local.token, () => {}, pulled);
+    expect(JSON.parse(await readFile(path.join(next, ".konae/release-plan.json"), "utf8")).schema).toMatchObject({
+      losses: [], confirmation: null, statements: [expect.stringContaining("ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")],
+    });
     const there = await member(local, hostOf(released), "login");
     expect(await there.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Before the column", pinned: 0 }]);
   }, 120_000);

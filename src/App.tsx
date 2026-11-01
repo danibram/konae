@@ -42,6 +42,8 @@ import { focusPanelTab, WorkbenchLayout, type PanelRender } from "./components/W
 import { closePanel, isOpen, isVisible, loadLayout, movePanel, openPanel, panelIds, resetLayout, saveLayout, stack, togglePanel, type LayoutState, type PanelId } from "./ui/layout";
 import { inTextEntry, shortcutFor } from "./ui/shortcuts";
 import { DeployDialog } from "./components/DeployDialog";
+import { SchemaChangeDialog } from "./components/SchemaChangeDialog";
+import type { SchemaChange } from "./deployments/release";
 import { ExplorerTree } from "./components/ExplorerTree";
 import { ActionContractView } from "./components/ActionContractView";
 import { useActionContract } from "./components/useActionContract";
@@ -206,6 +208,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [publishing, setPublishing] = useState(false);
   const [deployError, setDeployError] = useState("");
   const [deployErrorCode, setDeployErrorCode] = useState<string | undefined>();
+  const [schemaChange, setSchemaChange] = useState<{ change: SchemaChange; resolve: (confirmed: boolean) => void } | null>(null);
   const [saved, setSaved] = useState(true);
   const [saveError, setSaveError] = useState("");
   const [operationError, setOperationError] = useState("");
@@ -774,7 +777,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       const artifact = await buildProjectInBrowser(project);
       // The signup policy goes only with a first release; the Kernel keeps it on a republish.
       const initialSignupPolicy = !activeDeployment && signupMode ? { mode: signupMode, allowlist: [] } : undefined;
-      const record = await deployProject(project, visibility, artifact, initialSignupPolicy);
+      const confirmSchema = (change: SchemaChange) => new Promise<boolean>((resolve) => setSchemaChange({ change, resolve }));
+      const record = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy);
       setProject((current) => ({ ...current, manifest: record.manifest, updatedAt: Date.now() }));
       setDeployment(record);
       setDeployments((current) => ({ ...current, [project.id]: record }));
@@ -1314,6 +1318,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         <Button variant="primary" onClick={() => { resolvePlatformConfirmation.current?.(true); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }}>Allow</Button>
       </>}><div className="ui-dialog-body"><p style={{ overflowWrap: "anywhere" }}>{platformConfirmation.summary}</p><p>It runs as you, on this app only, through <code>{platformConfirmation.tool}</code>.</p></div></Dialog>}
 
+      {schemaChange && <SchemaChangeDialog change={schemaChange.change} onAnswer={(confirmed) => { schemaChange.resolve(confirmed); setSchemaChange(null); }} />}
       {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
 
       <Dialog

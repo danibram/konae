@@ -109,7 +109,15 @@ try {
         importState.planId = plan.planId;
         await writeFile(importStatePath, JSON.stringify(importState, null, 2) + '\n', { mode: 0o600 });
       }
-      deployment = await call('release_apply', { planId: plan.planId });
+      // A schema change that loses data applies only with its confirmation,
+      // which the plan prints and KONAE_CONFIRM_SCHEMA in the environment gives back.
+      const confirmation = plan.schema?.confirmation;
+      if (confirmation && process.env.KONAE_CONFIRM_SCHEMA !== confirmation) {
+        console.log('This release changes the database and loses data:');
+        for (const loss of plan.schema.losses) console.log('  ' + loss.sentence);
+        throw Error('Nothing was published. To apply it, run KONAE_CONFIRM_SCHEMA=' + confirmation + ' npm run deploy.');
+      }
+      deployment = await call('release_apply', { planId: plan.planId, ...(confirmation ? { confirmSchema: confirmation } : {}) });
     } finally {
       try { await call('transfer_cancel', { transferId: transfer.transferId }); }
       catch (error) { console.warn('Could not release the upload: ' + error.message); }

@@ -1559,3 +1559,8 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
   .project-card footer a:hover { color: #171910; background: #f4f2ea; }
   .project-card .project-poster .poster-line { color: #f4f2ea; }
 }
+
+.schema-change { display: grid; gap: 14px; }
+.schema-change-losses { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; line-height: 1.5; }
+.schema-change summary { cursor: pointer; color: var(--ds-muted); font-size: 13px; }
+.schema-change pre { margin: 8px 0 0; padding: 12px; max-height: 220px; overflow: auto; border: 1px solid var(--ds-line); border-radius: 8px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
