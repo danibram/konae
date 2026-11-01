@@ -101,9 +101,9 @@ KONAE_ADMIN_KEY=
 `;
 
 function composeFile(settings: AppSettings) {
-  return `# Runs the Konae Kernel on this folder. The image konae/kernel is not
-# published yet; until it is, serve the folder with \`konae dev\` from a Konae
-# checkout. AGENTS.md says how.
+  return `# Runs the Konae Kernel on this folder, which it keeps under apps/<id> of
+# its data directory. The image konae/kernel is not published yet; until it
+# is, serve the folder with \`konae dev\` from a Konae checkout. AGENTS.md says how.
 services:
   kernel:
     image: konae/kernel:${settings.kernel}
@@ -112,11 +112,10 @@ services:
       KONAE_BIND: "0.0.0.0"
       KONAE_KERNEL_PORT: "8787"
       KONAE_DATA_DIR: /kernel
-      KONAE_APP_FOLDER: /app
     ports:
       - "127.0.0.1:\${KONAE_PORT:-8787}:8787"
     volumes:
-      - ./:/app
+      - ./:/kernel/apps/${settings.id}
       - kernel:/kernel
 volumes:
   kernel:
