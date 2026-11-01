@@ -234,7 +234,7 @@ async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
     park(&folder, &trash, id).await?;
     let mut db = store(state)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    for (table, column) in [("plans", "project"), ("package_imports", "project"), ("project_secrets", "project")] {
+    for (table, column) in [("plans", "project"), ("package_imports", "project")] {
         let present: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)", [table], |r| r.get(0))?;
         if present {
             tx.execute(&format!("DELETE FROM {table} WHERE {column}=?1"), [id])?;
@@ -243,6 +243,23 @@ async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
     tx.execute("DELETE FROM projects WHERE id=?1", [id])?;
     tx.commit()?;
     Ok(ids)
+}
+
+/// Whether another app of this owner holds `value` as a route secret. A
+/// signature names no app, so a request signed for one app would be accepted
+/// by another that holds the same value. A secret for calls only verifies
+/// nothing, so it may hold the value of another app's route secret: that is
+/// how one app signs a call to another.
+fn route_secret_reused(state: &AppState, owner: &str, project: &str, value: &str) -> Result<bool> {
+    let db = store(state)?;
+    let mut query = db.prepare("SELECT id FROM projects WHERE owner = ?1 AND id <> ?2")?;
+    let others = query.query_map(params![owner, project], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    for other in others {
+        if crate::layout::secrets(&state.data_root, &other).is_file() && super::http::holds_route_secret(&super::http::secrets_store(&state.data_root, &other)?, value)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Renames the folder into the trash, then deletes it there.
@@ -1425,7 +1442,10 @@ async fn admin_call(
             // Releases hold this lock, so a delete cannot pass between a release's check and its apply.
             let _guard = database_lock(state, &format!("project:{id}")).await;
             let deployment = find_project_deployment(&*state.deployments.read().await, id);
-            super::http::secrets_call(&store(state)?, id, deployment.as_ref(), name, &a)
+            if name == "secret_set" && super::http::sets_route_secret(&a) {
+                anyhow::ensure!(!route_secret_reused(state, &owner.id, id, a["value"].as_str().unwrap_or(""))?, super::http::SECRET_REUSED);
+            }
+            super::http::secrets_call(&super::http::secrets_store(&state.data_root, id)?, id, deployment.as_ref(), name, &a)
         }
         "api_keys_list" | "api_keys_create" | "api_keys_revoke" => {
             let id = a["deploymentId"].as_str().unwrap();
@@ -1789,7 +1809,7 @@ pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> R
     )?;
     anyhow::ensure!(program.version == 1, "Unsupported action version.");
     super::action_shape::check_program(&program)?;
-    super::calls::check_release(&super::domain::Rules::of(state), &store(state)?, &input.project.id, &program)?;
+    super::calls::check_release(&super::domain::Rules::of(state), &super::http::secrets_store(&state.data_root, &input.project.id)?, &program)?;
     let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
     let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
     anyhow::ensure!(
@@ -2575,6 +2595,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn one_owner_cannot_give_two_apps_the_same_route_secret() {
+        let root = std::env::temp_dir().join(format!("konae-secret-reuse-{}", Uuid::new_v4()));
+        let (state, _) = crate::tests::login_test_state(&root, "public").await;
+        let owner = |id: &str| Owner { id: id.into(), display: None, scopes: vec!["read".into(), "write".into(), "publish".into()], projects: vec![], session: false };
+        {
+            let db = store(&state).unwrap();
+            for (id, who) in [("app_a", "ana"), ("app_b", "ana"), ("app_c", "ben")] {
+                db.execute("INSERT INTO projects(id,owner,body) VALUES(?1,?2,?3)", params![id, who, json!({"id": id, "name": id}).to_string()]).unwrap();
+            }
+        }
+        let set = |who: &'static str, project: &'static str, name: &'static str, usage: &'static str| {
+            let state = state.clone();
+            async move {
+                admin_call(&state, &owner(who), &format!("owner:{who}"), "secret_set", json!({"projectId": project, "name": name, "value": "a-long-enough-secret", "use": usage})).await
+            }
+        };
+        set("ana", "app_a", "hook", "route").await.unwrap();
+        assert_eq!(set("ana", "app_b", "hook", "route").await.unwrap_err().to_string(), super::super::http::SECRET_REUSED);
+        set("ana", "app_b", "outgoing", "call").await.unwrap();
+        set("ben", "app_c", "hook", "route").await.unwrap();
+        assert!(crate::layout::secrets(&root, "app_a").is_file(), "the secret lives in the app's data");
+        let registry: i64 = store(&state).unwrap()
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name LIKE '%secret%'", [], |r| r.get(0)).unwrap();
+        assert_eq!(registry, 0, "mcp.sqlite holds no secret");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn app_users_cannot_push_an_owners_rows_out_of_the_audit_log() {
         let root = std::env::temp_dir().join(format!("konae-audit-{}", Uuid::new_v4()));
         let (state, _) = crate::tests::login_test_state(&root, "public").await;
@@ -2677,7 +2725,7 @@ mod tests {
                 "manifest": {"visibility": "private"}, "hostname": "practice.localhost", "actions": "{\"version\":1,\"actions\":{}}"
             }))
             .unwrap();
-            let db = store(&state).unwrap();
+            let db = super::super::http::secrets_store(&state.data_root, "p1").unwrap();
             if case["clientSet"] == true {
                 for (secret, value) in [("google_client_id", client_id), ("google_client_secret", client_secret)] {
                     super::super::http::secrets_call(&db, "p1", None, "secret_set", &json!({"name": secret, "value": value, "use": "google"})).unwrap();
@@ -2735,7 +2783,7 @@ mod tests {
         assert_eq!(refused(&state, &deployment, json!(["google"])), PASSWORD_REQUIRED);
         assert_eq!(refused(&state, &deployment, json!(["password", "facebook"])), "Name the methods as password and google.");
         assert_eq!(requested_sign_in_methods(&state, &deployment, &json!(["password"])).unwrap(), vec![SignInMethod::Password]);
-        let db = store(&state).unwrap();
+        let db = super::super::http::secrets_store(&state.data_root, "p1").unwrap();
         let set = |name: &str, value: &str| super::super::http::secrets_call(&db, "p1", None, "secret_set", &json!({"name": name, "value": value, "use": "google"}));
         set("google_client_id", "1001-practice.apps.googleusercontent.com").unwrap();
         assert_eq!(refused(&state, &deployment, json!(["password", "google"])), "Set this app's Google client ID and client secret before turning Google on.");
@@ -2755,7 +2803,7 @@ mod tests {
         let deleted = super::super::http::secrets_call(&db, "p1", Some(&deployment), "secret_delete", &json!({"name": "google_client_secret"}));
         assert_eq!(deleted.unwrap_err().to_string(), "Google sign-in is on for this app and needs google_client_secret. Turn Google off before deleting it.");
         // Without its client, as after an import, the app keeps the setting and says why.
-        db.execute("DELETE FROM project_secrets WHERE project = 'p1'", []).unwrap();
+        db.execute("DELETE FROM secrets", []).unwrap();
         let value = sign_in_methods_value(&state, &deployment);
         assert_eq!((value["methods"].clone(), value["offered"].clone()), (json!(["password", "google"]), json!(["password"])));
         assert_eq!(value["notice"], GOOGLE_CLIENT_MISSING);

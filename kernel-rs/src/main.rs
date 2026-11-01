@@ -657,8 +657,11 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
     if let Err(refused) = action_shape::check_program(&program) {
         return refusal_error(&refused);
     }
-    if let Err(error_value) = mcp::store(&state).and_then(|db| {
-        calls::check_release(&domain::Rules::of(&state), &db, &input.project.id, &program)
+    if !mcp::valid_app_id(&input.project.id) {
+        return error(StatusCode::BAD_REQUEST, "Invalid project ID.");
+    }
+    if let Err(error_value) = http::secrets_store(&state.data_root, &input.project.id).and_then(|db| {
+        calls::check_release(&domain::Rules::of(&state), &db, &program)
     }) {
         return match refusal::of(&error_value) {
             Some(refused) => refusal_error(refused),
@@ -744,9 +747,6 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
     }
     // The app keeps one ID: its folder, its project and its Deployment share it.
     let id = input.project.id.clone();
-    if !mcp::valid_app_id(&id) {
-        return error(StatusCode::BAD_REQUEST, "Invalid project ID.");
-    }
     let hostname = existing
         .as_ref()
         .map(|item| item.hostname.clone())

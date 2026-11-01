@@ -396,8 +396,8 @@ fn client(state: &AppState, deployment: &Deployment) -> Option<Client> {
 }
 
 fn stored_client(state: &AppState, deployment: &Deployment) -> StoredClient {
-    mcp::store(state)
-        .and_then(|db| http::google_client(&db, &deployment.project_id))
+    http::secrets_store(&state.data_root, &deployment.id)
+        .and_then(|db| http::google_client(&db))
         .unwrap_or_default()
 }
 
@@ -938,7 +938,7 @@ mod tests {
     }
 
     fn set_client(state: &AppState, project: &str, client_id: &str) {
-        let db = mcp::store(state).unwrap();
+        let db = http::secrets_store(&state.data_root, project).unwrap();
         http::secrets_call(&db, project, None, "secret_set", &json!({"name": CLIENT_ID, "value": client_id, "use": "google"})).unwrap();
         http::secrets_call(&db, project, None, "secret_set", &json!({"name": CLIENT_SECRET, "value": CLIENT_SECRET_VALUE})).unwrap();
     }
@@ -1452,7 +1452,7 @@ mod tests {
             item.sign_in_methods = vec![SignInMethod::Password, SignInMethod::Google];
         }
         let app = fixture.deployment(APP).await;
-        mcp::store(&fixture.state).unwrap().execute("DELETE FROM project_secrets WHERE project = ?1 AND name = ?2", [&app.project_id, CLIENT_SECRET]).unwrap();
+        http::secrets_store(&fixture.state.data_root, &app.id).unwrap().execute("DELETE FROM secrets WHERE name = ?1", [CLIENT_SECRET]).unwrap();
         assert!(!offered(&fixture.state, &app));
         assert_eq!(client_set(&fixture.state, &app), ClientSet { id: true, secret: false });
         assert!(text(start(fixture.state.clone()).await).await.contains(&escape(NOT_ON)));

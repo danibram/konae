@@ -205,70 +205,74 @@ pub(super) fn validate_routes(program: &ActionProgram) -> Result<(), Refusal> {
 }
 
 // ---------------------------------------------------------------------------
-// Secrets. They belong to the Project, in mcp.sqlite next to the project
-// registry, because a first publish must find them before its Deployment
-// exists. Values never leave the Kernel: not in a listing, an export or a log.
+// Secrets. They belong to the app, in `data/secrets.sqlite`, so a first
+// publish finds them before its Deployment exists and a copy carries them.
+// Values never leave the Kernel: not in a listing, an export or a log.
 
-fn secrets_table(db: &Connection) -> rusqlite::Result<()> {
-    db.execute_batch(
-        "CREATE TABLE IF NOT EXISTS project_secrets(
-           project TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, updated_at INTEGER NOT NULL,
-           PRIMARY KEY(project, name))",
-    )?;
-    // A secret set with "use": "call" only signs or carries the project's
-    // outgoing calls (ADR-0019). Stores written before calls lack the column.
-    let present: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('project_secrets') WHERE name='use')",
-        [],
-        |row| row.get(0),
-    )?;
-    if !present {
-        db.execute_batch("ALTER TABLE project_secrets ADD COLUMN use TEXT NOT NULL DEFAULT 'route'")?;
+/// Opens the app's secrets.
+pub(super) fn secrets_store(root: &Path, project: &str) -> Result<Connection> {
+    let path = crate::layout::secrets(root, project);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
     }
-    Ok(())
+    let db = Connection::open(path)?;
+    db.busy_timeout(std::time::Duration::from_secs(5))?;
+    // `use` is "route", "call" (ADR-0019) or "google".
+    db.execute_batch("CREATE TABLE IF NOT EXISTS secrets(name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL, use TEXT NOT NULL)")?;
+    Ok(db)
 }
 
 /// A secret's value, for a call that signs with it or sends the key it holds.
-pub(super) fn project_secret(db: &Connection, project: &str, name: &str) -> Result<Option<String>> {
-    secret_value(db, project, name)
+pub(super) fn project_secret(db: &Connection, name: &str) -> Result<Option<String>> {
+    secret_value(db, name)
 }
 
-fn secret_for_calls_only(db: &Connection, project: &str, name: &str) -> Result<bool> {
-    secrets_table(db)?;
+fn secret_for_calls_only(db: &Connection, name: &str) -> Result<bool> {
     Ok(db
-        .query_row("SELECT use = 'call' FROM project_secrets WHERE project=?1 AND name=?2", params_from_iter([project, name]), |row| row.get(0))
+        .query_row("SELECT use = 'call' FROM secrets WHERE name=?1", [name], |row| row.get(0))
         .optional()?
         .unwrap_or(false))
 }
 
 /// A secret a route or a call may use. The app's Google client is never one.
-fn secret_value(db: &Connection, project: &str, name: &str) -> Result<Option<String>> {
-    stored_secret(db, project, name, false)
+fn secret_value(db: &Connection, name: &str) -> Result<Option<String>> {
+    stored_secret(db, name, false)
 }
 
 /// One stored value. With `google` it is a half of the app's Google client,
 /// otherwise a secret a route or a call may use. Neither kind ever reads the other.
-fn stored_secret(db: &Connection, project: &str, name: &str, google: bool) -> Result<Option<String>> {
-    secrets_table(db)?;
+fn stored_secret(db: &Connection, name: &str, google: bool) -> Result<Option<String>> {
     Ok(db
         .query_row(
-            "SELECT value FROM project_secrets WHERE project=?1 AND name=?2 AND (use = 'google') = ?3",
-            rusqlite::params![project, name, google],
+            "SELECT value FROM secrets WHERE name=?1 AND (use = 'google') = ?2",
+            rusqlite::params![name, google],
             |row| row.get(0),
         )
         .optional()?)
 }
 
+/// Whether the app holds `value` as a route secret. Konae asks this of an
+/// owner's other apps before it sets a route secret.
+pub(super) fn holds_route_secret(db: &Connection, value: &str) -> Result<bool> {
+    Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM secrets WHERE value = ?1 AND use = 'route')", [value], |row| row.get(0))?)
+}
+
+/// Whether `secret_set` with these arguments sets a route secret, the only
+/// kind whose value one owner may not reuse across apps.
+pub(super) fn sets_route_secret(a: &Value) -> bool {
+    !super::google::is_client_name(a["name"].as_str().unwrap_or("")) && matches!(a.get("use").and_then(Value::as_str), None | Some("route"))
+}
+
 /// The app's Google OAuth client ID and secret, each when the owner set it.
-pub(super) fn google_client(db: &Connection, project: &str) -> Result<super::google::StoredClient> {
+pub(super) fn google_client(db: &Connection) -> Result<super::google::StoredClient> {
     Ok(super::google::StoredClient {
-        id: stored_secret(db, project, super::google::CLIENT_ID, true)?,
-        secret: stored_secret(db, project, super::google::CLIENT_SECRET, true)?,
+        id: stored_secret(db, super::google::CLIENT_ID, true)?,
+        secret: stored_secret(db, super::google::CLIENT_SECRET, true)?,
     })
 }
 
 /// Refuses a release whose signed bindings name a secret the project does not have.
-pub(super) fn require_secrets(db: &Connection, project: &str, program: &ActionProgram) -> Result<()> {
+pub(super) fn require_secrets(db: &Connection, program: &ActionProgram) -> Result<()> {
     let mut names = program.actions.keys().collect::<Vec<_>>();
     names.sort();
     let mut actions = Vec::new();
@@ -277,14 +281,14 @@ pub(super) fn require_secrets(db: &Connection, project: &str, program: &ActionPr
         let Ok(Some(HttpBinding { signature: Some(signature), .. })) = binding(name, &program.actions[name]) else {
             continue;
         };
-        if secret_for_calls_only(db, project, &signature.secret)? {
+        if secret_for_calls_only(db, &signature.secret)? {
             let secret = &signature.secret;
             anyhow::bail!(refuse(
                 "route.signature-secret-call-only",
                 format!("Action {name} signs its route with the secret {secret}, which is set for calls only. Set a route secret with a value of its own."),
             ));
         }
-        match secret_value(db, project, &signature.secret)? {
+        match secret_value(db, &signature.secret)? {
             None => {
                 actions.push(name.clone());
                 if !secrets.contains(&signature.secret) {
@@ -333,17 +337,18 @@ fn unset_secrets_message(actions: &[String], secrets: &[String]) -> Option<Strin
 pub(super) const VALUE_INVALID: &str = "A secret value is 16 to 512 printable ASCII characters without spaces.";
 pub(super) const SECRET_REUSED: &str = "Another of your projects already uses this secret value. A signature does not name the app, so a request signed for one would be accepted by the other. Set a different value.";
 
-/// `secrets_list`, `secret_set` and `secret_delete`. The caller has checked
-/// that the owner may act on `project` and holds the project lock.
+/// `secrets_list`, `secret_set` and `secret_delete` on the app's secrets.
+/// The caller has checked that the owner may act on the app, that a route
+/// secret's value is not one of the owner's other apps' (`SECRET_REUSED`),
+/// and holds the project lock.
 pub(super) fn secrets_call(db: &Connection, project: &str, deployment: Option<&Deployment>, name: &str, a: &Value) -> Result<Value> {
-    secrets_table(db)?;
     match name {
         "secrets_list" => {
             // svixKey says whether the value decodes as a svix key, so the
             // editor can refuse a svix route before publish without the value.
-            let mut query = db.prepare("SELECT name, updated_at, use, value FROM project_secrets WHERE project=?1 ORDER BY name")?;
+            let mut query = db.prepare("SELECT name, updated_at, use, value FROM secrets ORDER BY name")?;
             let secrets = query
-                .query_map([project], |row| {
+                .query_map([], |row| {
                     Ok(json!({
                         "name": row.get::<_, String>(0)?,
                         "updatedAt": row.get::<_, i64>(1)?,
@@ -373,24 +378,10 @@ pub(super) fn secrets_call(db: &Connection, project: &str, deployment: Option<&D
             if secret == super::google::CLIENT_ID && value.starts_with("GOCSPX-") {
                 return Err(refuse("secret.google-id-looks-like-secret", super::google::ID_LOOKS_LIKE_SECRET).into());
             }
-            // A signature names no app, so a request signed for one project
-            // would be accepted by another that holds the same value. A
-            // secret for calls only verifies nothing, so it may hold the value
-            // of another project's route secret: that is how one app signs a
-            // call to another.
-            let reused: bool = usage == "route"
-                && db.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM project_secrets s JOIN projects p ON p.id = s.project
-                       WHERE s.value = ?1 AND s.project <> ?2 AND s.use = 'route'
-                         AND p.owner = (SELECT owner FROM projects WHERE id = ?2))",
-                    rusqlite::params![value, project],
-                    |row| row.get(0),
-                )?;
-            anyhow::ensure!(!reused, SECRET_REUSED);
             db.execute(
-                "INSERT INTO project_secrets(project, name, value, updated_at, use) VALUES(?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(project, name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, use=excluded.use",
-                rusqlite::params![project, secret, value, now_ms() as i64, usage],
+                "INSERT INTO secrets(name, value, updated_at, use) VALUES(?1, ?2, ?3, ?4)
+                 ON CONFLICT(name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, use=excluded.use",
+                rusqlite::params![secret, value, now_ms() as i64, usage],
             )?;
             Ok(json!({"projectId": project, "name": secret, "updatedAt": now_ms(), "use": usage}))
         }
@@ -424,7 +415,7 @@ pub(super) fn secrets_call(db: &Connection, project: &str, deployment: Option<&D
                     callers.join(", ")
                 );
             }
-            let removed = db.execute("DELETE FROM project_secrets WHERE project=?1 AND name=?2", params_from_iter([project, secret]))?;
+            let removed = db.execute("DELETE FROM secrets WHERE name=?1", [secret])?;
             Ok(json!({"projectId": project, "name": secret, "deleted": removed > 0}))
         }
         _ => anyhow::bail!("Unknown tool."),
@@ -1058,7 +1049,7 @@ async fn run_route(
     // Konae's own scheme here; a provider's scheme below.
     let konae = http.signature.as_ref().filter(|signature| signature.scheme == super::provider::Scheme::Konae);
     if let (Some(signature), true) = (konae, signs) {
-        let secret = match super::mcp::store(state).and_then(|db| secret_value(&db, &deployment.project_id, &signature.secret)) {
+        let secret = match secrets_store(&state.data_root, &deployment.id).and_then(|db| secret_value(&db, &signature.secret)) {
             Ok(Some(secret)) => secret,
             Ok(None) => return refusal(StatusCode::SERVICE_UNAVAILABLE, "The route's signing secret is not set."),
             Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
@@ -1081,7 +1072,7 @@ async fn run_route(
     let mut delivery = None;
     if let (Some(signature), true) = (&http.signature, signs) {
         if signature.scheme != super::provider::Scheme::Konae {
-            let secret = match super::mcp::store(state).and_then(|db| secret_value(&db, &deployment.project_id, &signature.secret)) {
+            let secret = match secrets_store(&state.data_root, &deployment.id).and_then(|db| secret_value(&db, &signature.secret)) {
                 Ok(Some(secret)) => secret,
                 Ok(None) => return refusal(StatusCode::SERVICE_UNAVAILABLE, "The route's signing secret is not set."),
                 Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
@@ -1452,7 +1443,7 @@ mod tests {
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root);
         let secret = "github-route-secret-0123";
-        secrets_call(&super::super::mcp::store(&state).unwrap(), "provider_route", None, "secret_set", &json!({"name": "github_webhook", "value": secret})).unwrap();
+        secrets_call(&secrets_store(&state.data_root, "provider_route").unwrap(), "provider_route", None, "secret_set", &json!({"name": "github_webhook", "value": secret})).unwrap();
         let actions = json!({"version": 1, "actions": {"issues.receive": {"kind": "mutation", "access": "anonymous",
             "statement": "INSERT INTO issues (node_id, title) VALUES (?1, ?2)",
             "bindings": [{"source": "input", "key": "id", "type": "string"}, {"source": "input", "key": "title", "type": "string"}],
@@ -1513,15 +1504,14 @@ mod tests {
 
     #[test]
     fn the_apps_google_client_has_fixed_names_and_no_route_or_call_reads_it() {
-        let db = Connection::open_in_memory().unwrap();
-        db.execute_batch("CREATE TABLE projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL);
-            INSERT INTO projects VALUES ('project_a', 'ana', '{}'), ('project_b', 'ana', '{}');").unwrap();
+        let root = std::env::temp_dir().join(format!("konae-google-secrets-{}", uuid::Uuid::new_v4()));
+        let store = |project: &str| secrets_store(&root, project).unwrap();
         let set = |project: &str, name: &str, value: &str, usage: Option<&str>| {
             let mut input = json!({"name": name, "value": value});
             if let Some(usage) = usage {
                 input["use"] = json!(usage);
             }
-            secrets_call(&db, project, None, "secret_set", &input).map_err(|error| error.to_string())
+            secrets_call(&store(project), project, None, "secret_set", &input).map_err(|error| error.to_string())
         };
         let id = "1001-practice.apps.googleusercontent.com";
         assert_eq!(set("project_a", "google_client_id", id, Some("route")).unwrap_err(), super::super::google::NAMES_RESERVED);
@@ -1531,65 +1521,64 @@ mod tests {
         assert_eq!(set("project_a", "google_client_id", id, None).unwrap()["use"], "google");
         set("project_a", "google_client_secret", "GOCSPX-shared-secret-value", Some("google")).unwrap();
         set("project_b", "google_client_secret", "GOCSPX-shared-secret-value", Some("google")).unwrap();
-        let client = google_client(&db, "project_a").unwrap();
+        let client = google_client(&store("project_a")).unwrap();
         assert_eq!((client.id.as_deref(), client.secret.as_deref()), (Some(id), Some("GOCSPX-shared-secret-value")));
-        let client = google_client(&db, "project_b").unwrap();
+        let client = google_client(&store("project_b")).unwrap();
         assert_eq!((client.id.as_deref(), client.secret.as_deref()), (None, Some("GOCSPX-shared-secret-value")));
         // secrets_list answers each one's use; a route or a call never reads its value.
-        let listed = secrets_call(&db, "project_a", None, "secrets_list", &json!({})).unwrap();
+        let listed = secrets_call(&store("project_a"), "project_a", None, "secrets_list", &json!({})).unwrap();
         assert_eq!(listed["secrets"].as_array().unwrap().iter().map(|row| row["use"].clone()).collect::<Vec<_>>(), vec![json!("google"), json!("google")]);
         assert!(!listed.to_string().contains("GOCSPX"));
-        assert_eq!(project_secret(&db, "project_a", "google_client_secret").unwrap(), None);
+        assert_eq!(project_secret(&store("project_a"), "google_client_secret").unwrap(), None);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn an_unset_secret_refuses_the_release() {
-        let db = Connection::open_in_memory().unwrap();
-        db.execute_batch("CREATE TABLE projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL);
-            INSERT INTO projects VALUES ('project_a', 'ana', '{}'), ('project_b', 'ana', '{}'), ('project_c', 'ben', '{}');").unwrap();
+        let root = std::env::temp_dir().join(format!("konae-secrets-{}", uuid::Uuid::new_v4()));
+        let db = secrets_store(&root, "project_a").unwrap();
+        let other = secrets_store(&root, "project_b").unwrap();
         let signed = program(&json!({"orders.receive": {"kind": "mutation", "access": "anonymous",
             "statement": "INSERT INTO orders (external_id) VALUES (?1)", "bindings": [{"source": "input", "key": "id", "type": "string"}],
             "http": {"method": "POST", "path": "/hooks/orders", "signature": {"header": "X-Signature", "secret": "orders_webhook"}}}}));
         assert_eq!(
-            require_secrets(&db, "project_a", &signed).unwrap_err().to_string(),
+            require_secrets(&db, &signed).unwrap_err().to_string(),
             "Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing."
         );
         secrets_call(&db, "project_a", None, "secret_set", &json!({"name": "orders_webhook", "value": "a-long-enough-secret"})).unwrap();
-        require_secrets(&db, "project_a", &signed).unwrap();
+        require_secrets(&db, &signed).unwrap();
         let route = |path: &str, secret: &str| json!({"kind": "mutation", "access": "anonymous",
             "statement": "INSERT INTO orders (external_id) VALUES (?1)", "bindings": [{"source": "input", "key": "id", "type": "string"}],
             "http": {"method": "POST", "path": path, "signature": {"header": "X-Signature", "secret": secret}}});
         let shared = program(&json!({"a.one": route("/one", "hook"), "b.two": route("/two", "hook")}));
         assert_eq!(
-            require_secrets(&db, "project_a", &shared).unwrap_err().to_string(),
+            require_secrets(&db, &shared).unwrap_err().to_string(),
             "Actions a.one and b.two sign with the secret hook, which is not set for this project. Set it with secret_set before publishing."
         );
         let three = program(&json!({"a.one": route("/one", "feed"), "b.two": route("/two", "orders_webhook"),
             "c.three": route("/three", "hook"), "d.four": route("/four", "feed")}));
         assert_eq!(
-            require_secrets(&db, "project_a", &three).unwrap_err().to_string(),
+            require_secrets(&db, &three).unwrap_err().to_string(),
             "Actions a.one, c.three and d.four sign with the secrets feed and hook, which are not set for this project. Set each with secret_set before publishing.",
             "one refusal names every unset secret and leaves out the one that is set"
         );
-        assert!(require_secrets(&db, "project_b", &signed).is_err(), "secrets belong to one project");
+        assert!(require_secrets(&other, &signed).is_err(), "secrets belong to one app");
         let listed = secrets_call(&db, "project_a", None, "secrets_list", &json!({})).unwrap();
         assert!(!listed.to_string().contains("a-long-enough-secret"), "a listing never shows a value");
         assert!(secrets_call(&db, "project_a", None, "secret_set", &json!({"name": "orders_webhook", "value": "short"})).is_err());
-        // One owner cannot give two projects the same value; another owner may hold it.
-        let reuse = secrets_call(&db, "project_b", None, "secret_set", &json!({"name": "hook", "value": "a-long-enough-secret"}));
-        assert_eq!(reuse.unwrap_err().to_string(), SECRET_REUSED);
-        secrets_call(&db, "project_c", None, "secret_set", &json!({"name": "hook", "value": "a-long-enough-secret"})).unwrap();
-        secrets_call(&db, "project_a", None, "secret_set", &json!({"name": "second", "value": "a-long-enough-secret"})).unwrap();
+        assert!(holds_route_secret(&db, "a-long-enough-secret").unwrap(), "Konae asks this before another app of the owner takes the value");
+        assert!(!holds_route_secret(&other, "a-long-enough-secret").unwrap());
         // A svix secret is a base64 key, so a value that does not decode is refused at publish.
         let svix = program(&json!({"emails.receive": {"kind": "mutation", "access": "anonymous",
             "statement": "INSERT INTO orders (external_id) VALUES (?1)", "bindings": [{"source": "input", "key": "id", "type": "string"}],
             "http": {"method": "POST", "path": "/hooks/email", "signature": {"scheme": "svix", "secret": "resend_webhook"}}}}));
         secrets_call(&db, "project_a", None, "secret_set", &json!({"name": "resend_webhook", "value": "whsec_not*base64*at*all"})).unwrap();
         assert_eq!(
-            require_secrets(&db, "project_a", &svix).unwrap_err().to_string(),
+            require_secrets(&db, &svix).unwrap_err().to_string(),
             "Action emails.receive verifies svix signatures with the secret resend_webhook, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_."
         );
         secrets_call(&db, "project_a", None, "secret_set", &json!({"name": "resend_webhook", "value": "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"})).unwrap();
-        require_secrets(&db, "project_a", &svix).unwrap();
+        require_secrets(&db, &svix).unwrap();
+        let _ = std::fs::remove_dir_all(root);
     }
 }

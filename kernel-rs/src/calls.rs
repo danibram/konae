@@ -576,14 +576,15 @@ fn installation_host(rules: &super::domain::Rules, host: &str) -> bool {
 /// anything, in order: route secrets (http.rs `require_secrets`), then
 /// calls. The cases are in release-cases.json, which the Validation Gate
 /// runs too.
-pub(crate) fn check_release(rules: &super::domain::Rules, db: &Connection, project: &str, program: &ActionProgram) -> Result<()> {
-    super::http::require_secrets(db, project, program)?;
-    check_calls(rules, db, project, program)
+/// `secrets` is the app's secrets store (`http::secrets_store`).
+pub(crate) fn check_release(rules: &super::domain::Rules, secrets: &Connection, program: &ActionProgram) -> Result<()> {
+    super::http::require_secrets(secrets, program)?;
+    check_calls(rules, secrets, program)
 }
 
 /// Refuses a release whose calls reach the editor, use http outside this
 /// installation, or use a secret the project does not have.
-fn check_calls(rules: &super::domain::Rules, db: &Connection, project: &str, program: &ActionProgram) -> Result<()> {
+fn check_calls(rules: &super::domain::Rules, db: &Connection, program: &ActionProgram) -> Result<()> {
     let mut names = program.actions.keys().collect::<Vec<_>>();
     names.sort();
     for name in names {
@@ -600,7 +601,7 @@ fn check_calls(rules: &super::domain::Rules, db: &Connection, project: &str, pro
         if let Some(auth) = &call.auth {
             let secret = auth.secret();
             anyhow::ensure!(
-                super::http::project_secret(db, project, secret)?.is_some(),
+                super::http::project_secret(db, secret)?.is_some(),
                 refuse(
                     "call.secret-unset",
                     format!("Action {name} calls with the secret {secret}, which is not set for this project. Set it with secret_set before publishing.")
@@ -1128,7 +1129,7 @@ async fn send(
     let secret = match &call.auth {
         None => None,
         Some(auth) => {
-            let found = super::mcp::store(state).and_then(|db| super::http::project_secret(&db, &deployment.project_id, auth.secret()));
+            let found = super::http::secrets_store(&state.data_root, &deployment.id).and_then(|db| super::http::project_secret(&db, auth.secret()));
             match found {
                 Ok(Some(value)) => Some(value),
                 Ok(None) => return Err(("secret-unset", false)),
@@ -1401,9 +1402,8 @@ mod tests {
         assert!(cases.len() >= 20);
         for case in cases {
             let name = case["case"].as_str().unwrap();
-            let db = Connection::open_in_memory().unwrap();
-            db.execute_batch("CREATE TABLE projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL);
-                INSERT INTO projects VALUES ('project_a', 'ana', '{}');").unwrap();
+            let root = std::env::temp_dir().join(format!("konae-release-case-{}", uuid::Uuid::new_v4()));
+            let db = super::super::http::secrets_store(&root, "project_a").unwrap();
             for (index, secret) in case["secrets"].as_array().unwrap().iter().enumerate() {
                 // A value that is not base64 when the case says it is no svix key.
                 let value = if secret["svixKey"] == json!(false) {
@@ -1422,9 +1422,10 @@ mod tests {
                     assert_eq!(&row["svixKey"], flag, "{name}: secrets_list answers whether the value is a svix key");
                 }
             }
-            let outcome = check_release(&rules, &db, "project_a", &program(&case["actions"]))
+            let outcome = check_release(&rules, &db, &program(&case["actions"]))
                 .map_err(|error| crate::refusal::of(&error).cloned().unwrap_or_else(|| panic!("{name}: {error} carries no code")));
             crate::refusal::assert_case(case, outcome);
+            let _ = std::fs::remove_dir_all(root);
         }
     }
 

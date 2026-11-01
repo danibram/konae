@@ -1217,6 +1217,7 @@ mod tests {
         let backup_id = uuid::Uuid::new_v4();
         std::fs::write(folder.join(".konae/backups").join(format!("{backup_id}.json")), "{}").unwrap();
         std::fs::write(folder.join(".konae/backups/portable-data-x.sqlite"), "scratch").unwrap();
+        crate::http::secrets_call(&crate::http::secrets_store(root, &deployment.id).unwrap(), &deployment.id, None, "secret_set", &json!({"name": "hook", "value": "a-copied-route-secret"})).unwrap();
         AuthService::open(root.join("owners.sqlite"))
             .unwrap()
             .signup("owner@copy.test", "correct horse battery")
@@ -1336,6 +1337,7 @@ mod tests {
         let file_id = index[0]["id"].as_str().unwrap();
         assert_eq!(std::fs::read(folder.join("data/files").join(format!("{file_id}.blob"))).unwrap(), b"attachment");
         assert_eq!(std::fs::read_dir(folder.join(".konae/backups")).unwrap().count(), 1, "the saved backup travels");
+        assert!(crate::http::holds_route_secret(&crate::http::secrets_store(&restored, &deployment.id).unwrap(), "a-copied-route-secret").unwrap(), "the app's secrets travel in a copy");
         assert!(std::fs::read_dir(&restored).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with(".restore-")));
 
         let message = restore(&Source::Directory(copies.clone()), None, &restored, None).await.err().unwrap().to_string();
