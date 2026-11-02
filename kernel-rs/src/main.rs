@@ -57,8 +57,9 @@ mod provider;
 mod recovery;
 mod refusal;
 mod schedule;
-mod sources;
+mod schema_change;
 mod security;
+mod sources;
 mod sql_rules;
 #[cfg(test)]
 mod sqlite_bench;
@@ -359,6 +360,10 @@ struct DeployInput {
     /// The email `notify` to the owner reaches. Konae's release_apply sets it.
     #[serde(default)]
     contact_email: Option<String>,
+    /// The confirmation of a schema change that loses data, as release_plan
+    /// gave it. release_apply sets it from its confirmSchema argument.
+    #[serde(default)]
+    schema_confirmation: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -792,11 +797,12 @@ async fn deploy(State(state): State<AppState>, request: Request) -> Response {
             );
         }
     }
-    if let Err(error_value) = apply_additive_schema(&db_path, &schema, &program) {
-        return error(
-            StatusCode::BAD_REQUEST,
-            &format!("Schema update failed: {error_value}"),
-        );
+    let mode = schema_change::Mode::Apply(input.schema_confirmation.as_deref());
+    if let Err(error_value) = schema_change::apply(&db_path, &schema, &program, mode) {
+        return match refusal::of(&error_value) {
+            Some(refused) => refusal_error(refused),
+            None => error(StatusCode::BAD_REQUEST, &format!("Schema update failed: {error_value}")),
+        };
     }
     let identity_path = layout::identity(&state.data_root, &id);
     if !identity_path.exists() {
@@ -2867,62 +2873,6 @@ fn replace_database_file(replacement: &Path, path: &Path) -> std::io::Result<()>
     std::fs::rename(replacement, path)
 }
 
-fn apply_additive_schema(path: &Path, schema: &str, program: &ActionProgram) -> Result<()> {
-    let mut connection = Connection::open(path)?;
-    // Runs before the authorizer below, which refuses every pragma.
-    limit_database_size(&connection, MAX_APP_DATABASE_BYTES)?;
-    // An expression index or a CHECK runs once per stored row while the
-    // schema applies, so a value has the runtime's size limit here too, and
-    // the whole schema a deadline long enough to index a full database.
-    connection.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 2 * 1024 * 1024)?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    connection.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
-    if let Some(refusal) = sql_rules::schema_refusal(schema) {
-        anyhow::bail!(refusal);
-    }
-    let transaction = connection.transaction()?;
-    transaction.authorizer(Some(|context: AuthContext<'_>| match context.action {
-        AuthAction::CreateTable { .. } | AuthAction::CreateIndex { .. } => Authorization::Allow,
-        // CHECK constraints, expression and partial indexes, and generated
-        // columns call SQL functions. The runtime denylist still applies.
-        AuthAction::Function { function_name } if denied_function(function_name) => Authorization::Deny,
-        AuthAction::Function { .. } => Authorization::Allow,
-        AuthAction::Insert {
-            table_name: "sqlite_master",
-        } => Authorization::Allow,
-        AuthAction::Update {
-            table_name: "sqlite_master",
-            ..
-        } => Authorization::Allow,
-        AuthAction::Read { .. } => Authorization::Allow,
-        AuthAction::Reindex { .. } => Authorization::Allow,
-        _ => Authorization::Deny,
-    }));
-    let first_result = transaction.execute_batch(schema);
-    let second_result = if first_result.is_ok() {
-        transaction.execute_batch(schema)
-    } else {
-        Ok(())
-    };
-    transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
-    first_result
-        .map_err(|error| anyhow::anyhow!("schema may only create tables and indexes: {error}"))?;
-    second_result
-        .map_err(|error| anyhow::anyhow!("schema must be idempotent and additive: {error}"))?;
-    for (name, action) in program.actions.iter().filter(|(_, action)| action.kind != "signal") {
-        let statement = transaction.prepare(&action.statement).map_err(|error| {
-            anyhow::anyhow!("action {name} does not match the deployed schema: {error}")
-        })?;
-        if action.kind == "mutation" && statement.column_count() > 0 {
-            anyhow::bail!("Action {name} cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.");
-        }
-        drop(statement);
-        notify::check_columns(&transaction, name, action)?;
-    }
-    transaction.commit()?;
-    Ok(())
-}
-
 /// Writes a sibling temp file and renames it over `path`, so readers never see
 /// a truncated file.
 async fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -3603,6 +3553,10 @@ mod tests {
         }
     }
 
+    fn apply_schema(path: &Path, schema: &str, program: &ActionProgram) -> Result<schema_change::Change> {
+        schema_change::apply(path, schema, program, schema_change::Mode::Apply(None))
+    }
+
     fn action_program(actions: &[(&str, &str)]) -> ActionProgram {
         ActionProgram {
             version: 1,
@@ -3886,7 +3840,7 @@ mod tests {
 
         let initial = "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL); CREATE INDEX IF NOT EXISTS tasks_title ON tasks(title);";
         let original_action = action_program(&[("tasks.list", "SELECT id, title FROM tasks")]);
-        apply_additive_schema(&path, initial, &original_action).unwrap();
+        apply_schema(&path, initial, &original_action).unwrap();
         Connection::open(&path)
             .unwrap()
             .execute("INSERT INTO tasks(title) VALUES ('Keep this row')", [])
@@ -3899,8 +3853,8 @@ mod tests {
             ("tasks.list", "SELECT id, title FROM tasks"),
             ("notes.list", "SELECT id, body FROM notes"),
         ]);
-        apply_additive_schema(&path, &extended, &extended_actions).unwrap();
-        apply_additive_schema(&path, &extended, &extended_actions).unwrap();
+        apply_schema(&path, &extended, &extended_actions).unwrap();
+        apply_schema(&path, &extended, &extended_actions).unwrap();
 
         let connection = Connection::open(&path).unwrap();
         let title: String = connection
@@ -3916,7 +3870,7 @@ mod tests {
             .unwrap());
         drop(connection);
 
-        assert!(apply_additive_schema(&path, "DROP TABLE tasks;", &extended_actions).is_err());
+        assert!(apply_schema(&path, "DROP TABLE tasks;", &extended_actions).is_err());
         let connection = Connection::open(&path).unwrap();
         let title: String = connection
             .query_row("SELECT title FROM tasks", [], |row| row.get(0))
@@ -3941,7 +3895,7 @@ mod tests {
             CREATE INDEX IF NOT EXISTS items_title ON items(lower(title));
             CREATE INDEX IF NOT EXISTS items_named ON items(name) WHERE length(name) > 0;";
         let actions = action_program(&[("items.list", "SELECT id, name, slug FROM items")]);
-        apply_additive_schema(&path, schema, &actions).unwrap();
+        apply_schema(&path, schema, &actions).unwrap();
         let connection = Connection::open(&path).unwrap();
         assert!(connection.execute("INSERT INTO items(name) VALUES ('')", []).is_err(), "the CHECK constraint runs");
         connection.execute("INSERT INTO items(name) VALUES ('Mixed')", []).unwrap();
@@ -3953,11 +3907,12 @@ mod tests {
             let schema = format!(
                 "CREATE TABLE IF NOT EXISTS evil_{function} (id INTEGER PRIMARY KEY, path TEXT CHECK ({function}(path) IS NULL));"
             );
-            let error = apply_additive_schema(&path, &schema, &actions).unwrap_err().to_string();
+            let error = apply_schema(&path, &schema, &actions).unwrap_err().to_string();
             assert!(error.contains("schema may only"), "{function}: {error}");
         }
-        let schema = "CREATE INDEX IF NOT EXISTS evil_index ON items(load_extension(name));";
-        assert!(apply_additive_schema(&path, schema, &actions).is_err());
+        let evil = format!("{schema} CREATE INDEX IF NOT EXISTS evil_index ON items(load_extension(name));");
+        let error = apply_schema(&path, &evil, &actions).unwrap_err().to_string();
+        assert!(error.contains("not authorized"), "{error}");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -3968,14 +3923,14 @@ mod tests {
         let path = root.join("database.sqlite");
         initialize_database(&path).unwrap();
         let actions = action_program(&[("items.list", "SELECT id FROM items LIMIT 5")]);
-        apply_additive_schema(&path, "CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT);", &actions).unwrap();
+        apply_schema(&path, "CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT);", &actions).unwrap();
         let connection = Connection::open(&path).unwrap();
         connection.execute("INSERT INTO items(name) VALUES ('a')", []).unwrap();
         drop(connection);
         // An index whose expression builds a 200 MB value per row hits the
         // value limit instead of the memory of the Kernel.
-        let heavy = "CREATE INDEX IF NOT EXISTS heavy ON items(length(hex(zeroblob(200000000))));";
-        let error = apply_additive_schema(&path, heavy, &actions).unwrap_err().to_string();
+        let heavy = "CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT); CREATE INDEX IF NOT EXISTS heavy ON items(length(hex(zeroblob(200000000))));";
+        let error = apply_schema(&path, heavy, &actions).unwrap_err().to_string();
         assert!(error.contains("too big"), "{error}");
 
         let db = Connection::open(&path).unwrap();
@@ -4038,7 +3993,7 @@ mod tests {
         initialize_database(&path).unwrap();
         let invalid_action = action_program(&[("tasks.list", "SELECT missing FROM tasks")]);
         assert!(
-            apply_additive_schema(
+            apply_schema(
                 &path,
                 "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY);",
                 &invalid_action,
@@ -4136,7 +4091,7 @@ mod tests {
             "DELETE FROM notes RETURNING *",
         ] {
             let program = ActionProgram { version: 1, actions: HashMap::from([("notes.write".into(), action("mutation", sql, vec![]))]) };
-            assert!(apply_additive_schema(&path, schema, &program).unwrap_err().to_string().contains("cannot use RETURNING"));
+            assert!(apply_schema(&path, schema, &program).unwrap_err().to_string().contains("cannot use RETURNING"));
         }
         for sql in [
             "INSERT INTO notes(body) VALUES ('RETURNING')",
@@ -4144,7 +4099,7 @@ mod tests {
             "UPDATE notes SET \"RETURNING\"=1",
         ] {
             let program = ActionProgram { version: 1, actions: HashMap::from([("notes.write".into(), action("mutation", sql, vec![]))]) };
-            apply_additive_schema(&path, schema, &program).unwrap();
+            apply_schema(&path, schema, &program).unwrap();
         }
         let count: i64 = Connection::open(&path).unwrap().query_row("SELECT count(*) FROM notes", [], |row| row.get(0)).unwrap();
         assert_eq!(count, 0);

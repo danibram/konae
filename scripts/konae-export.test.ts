@@ -40,7 +40,7 @@ test("export writes the app folder offline: settings, sources, dist and the gene
     const files = await listed(output);
     expect(files).toEqual(expect.arrayContaining([
       "konae.json", "app/app.js", "app/actions.json", "app/schema.sql", "dist/index.html",
-      "AGENTS.md", "action-contract.md", "compose.yaml", ".env.example", ".gitignore", "package.json", "scripts/build.mjs",
+      "AGENTS.md", "action-contract.md", "actions.d.ts", "compose.yaml", ".env.example", ".gitignore", "package.json", "scripts/build.mjs",
     ]));
     expect(files.some((file) => file.startsWith(".konae") || file.startsWith("data/"))).toBe(false);
     expect(JSON.parse(await readFile(path.join(output, "konae.json"), "utf8"))).toEqual(settings);

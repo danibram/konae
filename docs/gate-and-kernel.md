@@ -11,7 +11,7 @@ The app has to leave with its rules unchanged. If the editor accepted a statemen
 | Validation Gate | `src/agent/gate.ts`, with the parser in `src/kernel/actions.ts` | Before an agent-proposed change is applied to a Project |
 | Kernel | `kernel-rs/src/main.rs` and the modules beside it | At `release_plan`, on every Kernel |
 
-The Gate checks that the schema is valid, that a schema change comes with a migration that converges, and that every Server Action that runs SQL stays executable against the migrated schema.
+The Gate checks that the schema is valid and that every Server Action that runs SQL prepares against it. `schema.sql` states what the database should be. At `release_plan` the Kernel loads it into a scratch database, compares tables, columns and indexes with the live database and returns the change (`kernel-rs/src/schema_change.rs`). A new table, column or index applies. A dropped table, a dropped column or a retyped column comes back as a plan with its statements and what they lose, and `release_apply` runs it only with that plan's `confirmSchema`. A table SQLite cannot change in place is rebuilt in one transaction, following the SQLite page on ALTER TABLE, and every column that still exists keeps its values. The preview keeps its own test rows and only re-runs `schema.sql`, so when it lacks a table or column the file declares, the Gate warns and passes.
 
 ## Shared case files
 

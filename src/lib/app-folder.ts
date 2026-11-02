@@ -5,10 +5,11 @@
 //   app/            the sources: pages, actions.json, schema.sql
 //   dist/           the built static files the Kernel serves
 //   data/           database.sqlite, identity.sqlite, usage.sqlite, files/
-//   compose.yaml, .env.example, AGENTS.md, action-contract.md, package.json, scripts/
+//   compose.yaml, .env.example, AGENTS.md, action-contract.md, actions.d.ts, package.json, scripts/
 //
 // The CLI writes these entries to disk and the editor packs them in a tar.
 import { generateActionContract, renderActionContractMarkdown } from "./action-contract";
+import { ACTION_TYPES_FILE, renderActionTypes } from "./action-types";
 import type { PackageComponentName } from "./portable-package";
 import { readTar } from "./tar";
 
@@ -79,6 +80,7 @@ export function generatedFiles(input: { settings: AppSettings; actionsSource: st
     { path: ".gitignore", contents: gitignore },
     { path: "AGENTS.md", contents: agentsGuide(settings, secretNames(input.actionsSource)) },
     { path: "action-contract.md", contents: renderActionContractMarkdown(contract) },
+    { path: ACTION_TYPES_FILE, contents: renderActionTypes(contract) },
     { path: "package.json", contents: packageManifest(settings) },
     { path: "scripts/build.mjs", contents: buildScript },
     { path: "scripts/static-artifact.mjs", contents: input.staticArtifact },
@@ -144,6 +146,7 @@ This folder is one Konae app. A Konae Kernel serves the pages in \`dist/\` and r
 - \`dist/\`: the built files. \`npm run build\` writes it from \`app/\`. Edit \`app/\`, never \`dist/\`.
 - \`data/\`: \`database.sqlite\`, the app accounts in \`identity.sqlite\`, Usage in \`usage.sqlite\` and uploads in \`files/\`. It holds people's accounts, so it never goes into Git.
 - \`action-contract.md\`: every Server Action with its inputs and the columns it returns.
+- \`actions.d.ts\`: the types of \`miniapp.actions.call\` for each action a page may call.
 
 ## Rules the Kernel checks
 

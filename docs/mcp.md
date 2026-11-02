@@ -263,12 +263,10 @@ bun run konae -- dev --dir /tmp/my-app --reset
 
 `dev --reset` is the import. It deletes `.konae/dev-data`, and a Development Kernel that holds no data imports the exported data by sending it as `initialPackage` with its first release, the import that [Export and import an app](#export-and-import-an-app) describes. Only a project without a Deployment takes an import, so `dev` never replaces data it already has; without `--reset` it says exported data is waiting and keeps the local data. Sessions do not travel and API keys arrive revoked. An account signs in with the password it has on the published app, and a password reset asked on the local app lands in `.konae/dev-data/mailbox.jsonl`. Nothing travels back. No command writes local data to a published app, and the local Kernel sends no email.
 
-The exported database has the schema of the published app. A release only creates tables and indexes, so when the folder's actions need a column the data lacks, the release is refused with the sentence `publish` would get, such as `action notes.list does not match the deployed schema: no such column: pinned`. `dev` then imports the data without the app and keeps running. Change the database through the owner's door, and repeat the statement on the published app before publishing there:
+The exported database has the schema of the published app. When the folder's `app/schema.sql` is ahead of it, the first release brings the exported data to that schema the way a publish brings the published database. A new table, column or index applies with every row kept, and a change that deletes data prints its plan and asks. So a column the next version adds is tried on the published rows before the published app sees it, and `publish` then makes the same change there.
 
 ```sh
-bun run konae -- sql --dir /tmp/my-app "ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
-bun run konae -- sql --dir /tmp/my-app --prod "ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
-bun run konae -- publish --dir /tmp/my-app
+bun run konae -- sql --dir /tmp/my-app "SELECT id, title, pinned FROM notes LIMIT 5"
 ```
 
 `sql` runs `database_execute` with `operation: "sql"` on the Development Kernel that `dev` is running for the folder, and after it a saved file makes `dev` publish the app again. Only `--prod` reaches the published Deployment, which needs `write`. With no Development Kernel running, `sql` stops and says so instead of falling through to the published database. `--file <file.sql>` reads the statement from a file.
@@ -875,6 +873,18 @@ A published app runs under the Kernel's Content Security Policy, described in [t
 
 The build is `dist/`. Publishing transfers it over MCP, validates a plan against the project revision and applies it. The tool saves the plan and the receipt in `.konae`. The Kernel rejects a stale plan. Repeating a plan that was already applied returns its receipt. `publish` deploys as private unless `konae.json` sets `visibility` to `"public"`. A republish keeps the URL and database and stops serving files that the new artifact no longer contains.
 
+### The schema change
+
+`schema.sql` states what the database should be. `release_plan` loads it into a scratch SQLite database, compares tables, columns and indexes with a copy of the live database and answers the change under `schema`:
+
+```json
+{ "statements": ["DROP TABLE \"notes\""],
+  "losses": [{ "table": "notes", "column": null, "sentence": "Drops table notes and its 2 rows." }],
+  "confirmation": "<64 hex characters>" }
+```
+
+A new table, a new column and a new index apply and keep every row; `losses` is empty and `confirmation` is null. A dropped table, a dropped column or a changed column type fills `losses`, and `release_apply` runs the change only with `confirmSchema` set to that `confirmation`. Without it, or with the confirmation of another plan, `release_apply` refuses with `schema.confirmation-required` and changes nothing. A dropped or changed index loses no row and applies. Where SQLite cannot add a column in place, or a table's definition changed in another way, the Kernel rebuilds the table as the SQLite page on ALTER TABLE describes: with foreign keys off, in one transaction, it creates the new table under another name, copies every column that still exists, drops the old one, renames the new one, recreates its indexes and checks that no row now breaks a foreign key. A copy that a new constraint refuses, such as a NOT NULL column without a default on a table with rows, stops the release and changes nothing. A renamed column is a dropped column and a new one. The editor shows the losses in a dialog before it publishes, and `publish` and `dev` print them and ask.
+
 `signupPolicy` in `konae.json` names who may create an app account when the first release goes out, with the modes of [Signup policy](#signup-policy):
 
 ```json
@@ -988,7 +998,9 @@ bun run konae -- contract --dir /tmp/my-app
 bun run konae -- conform --url http://my-app-ab12.localhost:8796 --contract /tmp/my-app/action-contract.json --token <app session token>
 ```
 
-`contract` reads `app/actions.json` and `app/schema.sql` and writes three files beside `konae.json`, or into `--out`: `action-contract.json`, its JSON Schema `action-contract.schema.json`, and `action-contract.md` for a person to read. The Markdown has a Signal section for each action that records one, naming its properties and when it is recorded. `build` and `publish` never upload them. The export kit carries the same three under `konae/`, and the editor shows the Markdown in Files as `action-contract.md`, generated and read-only. `src/lib/action-contract.ts` writes all of them.
+`contract` reads `app/actions.json` and `app/schema.sql` and writes four files beside `konae.json`, or into `--out`: `action-contract.json`, its JSON Schema `action-contract.schema.json`, `action-contract.md` for a person to read, and `actions.d.ts`. The Markdown has a Signal section for each action that records one, naming its properties and when it is recorded. `build` and `publish` never upload them. Every app folder carries `action-contract.md` and `actions.d.ts` beside `konae.json`, `dev` writes `actions.d.ts` on every start and change, and the editor shows the Markdown in Files as `action-contract.md`, generated and read-only. `src/lib/action-contract.ts` writes the contract and `src/lib/action-types.ts` the declarations.
+
+`actions.d.ts` declares the global `miniapp` so that `miniapp.actions.call` takes only the name of an action a page may call, the input that action declares, and answers its type. A query answers rows with each column typed from `schema.sql`, and a mutation answers `{ changes, lastInsertId }`. A scheduled mutation, a call's `then` mutation and an action whose route is its only door are left out, because a page cannot call them. A column whose type the generator cannot tell is `any`, and the other modules of `miniapp` stay untyped.
 
 For each Server Action the contract states:
 

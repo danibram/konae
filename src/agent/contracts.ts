@@ -105,10 +105,9 @@ export type ValidationResult = {
 };
 
 /**
- * The Validation Gate. Runs entirely in the browser on sql.js: `schema.sql`
- * must execute, a schema change must come with a migration that converges
- * against a clone of the current database, and every Server Action statement
- * must prepare against the migrated schema.
+ * The Validation Gate. It runs in the browser on sql.js. `schema.sql` must
+ * execute, and every Server Action statement must prepare against it and
+ * against the preview's database when that database is not behind.
  */
 export interface CapsuleValidator {
   validate(files: CapsuleFiles, live?: LiveDatabase, facts?: ReleaseFacts): Promise<ValidationResult>;

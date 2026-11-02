@@ -5,21 +5,25 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { createInterface } from "node:readline/promises";
 import { McpClient, type Transfer } from "../src/mcp/client";
 import type { PackageComponentName } from "../src/lib/portable-package";
 import {
   DIST_FOLDER, KERNEL_VERSION, SETTINGS_FILE, SOURCES_FOLDER, dataEntries, generatedFiles, gitignore,
   type AppSettings, type FolderEntry,
 } from "../src/lib/app-folder";
+import { describeSchemaChange, release, type ConfirmSchema } from "../src/deployments/release";
 import { PROJECT_TEMPLATES_FILE, type ProjectTemplates } from "./project-templates";
 import type { AppEvent } from "./events";
-import { PULL_DIRECTORY, describePulled, downloadPackage, installPulledAlone, pullLocal, readPulled, uploadPulled, type Pulled } from "./pull";
+import { PULL_DIRECTORY, describePulled, downloadPackage, pullLocal, readPulled, uploadPulled, type Pulled } from "./pull";
 import {
   ACTION_CONTRACT_FILE, ACTION_CONTRACT_MARKDOWN, ACTION_CONTRACT_SCHEMA_FILE,
   actionContractSchema, generateActionContract, renderActionContractMarkdown, serializeActionContract,
+  type ActionContract,
 } from "../src/lib/action-contract";
 import { checkHostname, type DomainRules } from "../src/lib/domain-name";
 import { assembleStaticArtifact } from "../src/lib/static-artifact.js";
+import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
 
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
@@ -102,14 +106,15 @@ init      --dir <empty folder> [--name <name>] [--template <id>]
           compose.yaml, .env.example and package.json, whose npm run build writes dist/. It needs no
           credential and no Kernel, and the first publish registers the project.
           Templates: ${INIT_TEMPLATES.join(", ")}.
-dev       --dir <folder> [--port 8796] [--events-port 8797] [--reset]
+dev       --dir <folder> [--port 8796] [--events-port 8797] [--reset] [--confirm-schema <confirmation>]
           Runs the app on a local Development Kernel and republishes on change.
           Its email, notices included, goes to <folder>/.konae/dev-data/mailbox.jsonl.
           It sets and prints a local value for each signing secret actions.json names, and serves a
           page of what the app did (email, calls, scheduled runs, Signals) on the next port.
           KONAE_KERNEL_BIN names a built Kernel binary to run instead of compiling one.
           --reset deletes <folder>/.konae/dev-data first. A Development Kernel with no data imports
-          the data pull exported, when there is some.
+          the data pull exported, when there is some. A schema change that loses data asks first,
+          as publish does. Writes actions.d.ts, which types miniapp.actions.call.
 sql       --dir <folder> [--prod] [--url <Kernel URL>] ("<statement>" | --file <file.sql>)
           Runs SQL on the app's database through database_execute, the owner's door, on the
           Development Kernel that dev is running for this folder. Only --prod reaches the published
@@ -123,10 +128,13 @@ pull      --dir <folder> [--url <Kernel URL>]
           Exports the published app's data (database, accounts, files, Usage) into
           <folder>/.konae/pull. Needs a credential from login --export-data. dev --reset imports it.
 build     --dir <folder>                 Builds app/ into dist/.
-contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its schema and action-contract.md.
-publish   --dir <folder> [--url <Kernel URL>]
+contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its schema, action-contract.md and
+          actions.d.ts, which types miniapp.actions.call.
+publish   --dir <folder> [--url <Kernel URL>] [--confirm-schema <confirmation>]
           Builds and publishes to --url or the installation login saved. Set each signing secret
-          with secret_set first.
+          with secret_set first. The Kernel changes the database to what schema.sql states. A
+          change that drops a table or a column, or changes a column's type, prints its plan and
+          asks; without a terminal, pass the plan's confirmation.
 conform   --url <app URL> --contract <file> [--token <app session>] [--key <API key>]
           [--secret <name>=<value>] [--inputs <file>]
           Calls every action and checks the answers against the contract. It runs each mutation once,
@@ -299,7 +307,7 @@ export async function buildLocal(root: string) {
  * goes as `initialSignupPolicy`; on a later one the Kernel keeps the app's
  * policy and `warn` gets one line when konae.json names another.
  */
-export async function publishLocal(root: string, config: Config, token: string, warn: (message: string) => void = console.warn, pulled?: Pulled) {
+export async function publishLocal(root: string, config: Config, token: string, warn: (message: string) => void = console.warn, pulled?: Pulled, confirm: ConfirmSchema = keepData) {
   if (!config.url) throw Error(NO_INSTALLATION);
   const client = new McpClient(endpoint(config.url), { token });
   const wanted = manifestSignupPolicy(config.project.manifest);
@@ -321,10 +329,10 @@ export async function publishLocal(root: string, config: Config, token: string, 
   let transfer: Transfer | undefined;
   try {
     transfer = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), project.id);
-    const plan = await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+    const released = await release<{ id: string; url: string }>(client, transfer.transferId, confirm);
     await mkdir(path.join(root, ".konae"), { recursive: true });
-    await writeFile(path.join(root, ".konae/release-plan.json"), JSON.stringify(plan, null, 2));
-    receipt = await client.call<{ id: string; url: string }>("release_apply", { planId: plan.planId });
+    await writeFile(path.join(root, ".konae/release-plan.json"), JSON.stringify(released.plan, null, 2));
+    receipt = released.receipt;
     await writeFile(path.join(root, ".konae/deployment.json"), JSON.stringify(receipt, null, 2));
   } finally {
     for (const id of Object.values(components ?? {})) await client.cancel(id).catch(() => {});
@@ -337,6 +345,27 @@ export async function publishLocal(root: string, config: Config, token: string, 
     if (warning) warn(warning);
   }
   return Object.assign(receipt, { first });
+}
+
+/** Keeps the data, so a schema change that loses some is not applied. */
+async function keepData() { return false; }
+
+/**
+ * Asks on the terminal before a schema change that loses data. The plan is
+ * printed with its confirmation; `--confirm-schema <confirmation>` answers
+ * yes to that plan only, and without a terminal the answer is no.
+ */
+export function confirmOnTerminal(accepted?: string): ConfirmSchema {
+  return async (change) => {
+    for (const line of describeSchemaChange(change)) console.log(line);
+    if (accepted !== undefined) return accepted === change.confirmation;
+    if (!process.stdin.isTTY) {
+      console.log(`To apply it, run the command again with --confirm-schema ${change.confirmation}`);
+      return false;
+    }
+    const prompt = createInterface({ input: process.stdin, output: process.stdout });
+    try { return /^y(?:es)?$/i.test((await prompt.question("Apply this change? [y/N] ")).trim()); } finally { prompt.close(); }
+  };
 }
 
 /** Replaces `dist/` with the built artifact's files. */
@@ -420,7 +449,30 @@ export async function writeContract(root: string, out = root) {
   await writeFile(path.join(out, ACTION_CONTRACT_FILE), serializeActionContract(contract));
   await writeFile(path.join(out, ACTION_CONTRACT_SCHEMA_FILE), `${JSON.stringify(actionContractSchema, null, 2)}\n`);
   await writeFile(path.join(out, ACTION_CONTRACT_MARKDOWN), renderActionContractMarkdown(contract));
+  await writeActionTypes(out, contract);
   return { contract, warnings, file: path.join(out, ACTION_CONTRACT_FILE) };
+}
+
+/** Writes actions.d.ts into `out` when its text changed, so a watcher that sees the file sees a real change. */
+export async function writeActionTypes(out: string, contract: ActionContract) {
+  const file = path.join(out, ACTION_TYPES_FILE);
+  const text = renderActionTypes(contract);
+  if (await readFile(file, "utf8").catch(() => undefined) !== text) await writeFile(file, text);
+}
+
+/**
+ * Writes actions.d.ts beside konae.json from app/actions.json and
+ * app/schema.sql, as dev does on each start and change. When they do not parse, the last one stays.
+ */
+async function refreshActionTypes(root: string) {
+  const actionsSource = await readFile(path.join(appDir(root), "actions.json"), "utf8").catch(() => undefined);
+  if (actionsSource === undefined) return;
+  const schemaSource = await readFile(path.join(appDir(root), "schema.sql"), "utf8").catch(() => "");
+  try {
+    await writeActionTypes(root, generateActionContract({ actionsSource, schemaSource }).contract);
+  } catch (error) {
+    console.warn(`${ACTION_TYPES_FILE} stays as it was: ${error instanceof Error ? error.message : error}`);
+  }
 }
 
 /** Add each entry to .gitignore unless a line already names it. */
@@ -605,7 +657,7 @@ async function main() {
   }
   if (command === "publish") {
     const url = await installation();
-    console.log((await publishLocal(root, { ...config, url }, await credentials(root))).url);
+    console.log((await publishLocal(root, { ...config, url }, await credentials(root), console.warn, undefined, confirmOnTerminal(option("confirm-schema")))).url);
     return;
   }
   // sql and events reach the Development Kernel dev is running for the folder, and the published Deployment only with --prod.
@@ -706,21 +758,12 @@ async function main() {
     try {
       const admin = new McpClient(endpoint(url), { token });
       const pulled = await readPulled(root);
+      const confirm = confirmOnTerminal(option("confirm-schema"));
       const { signupPolicy: _, ...manifest } = devConfig.project.manifest;
-      let first: { id: string; url: string; first: boolean };
       const secrets = async () => { for (const line of await setDevSecrets(root, admin, { ...devConfig.project, manifest })) console.log(line); };
-      try {
-        await secrets();
-        first = await publishLocal(root, devConfig, token, console.warn, pulled);
-      } catch (error) {
-        // A refused first release leaves no Deployment. When the refusal is a schema the exported data
-        // does not have yet, import the data alone and keep serving until it is migrated.
-        const schemaBehind = error instanceof Error && error.message.includes("does not match the deployed schema");
-        const remote = pulled && schemaBehind ? await admin.call<{ deployment?: unknown }>("project_inspect", { projectId: config.project.id }).catch(() => undefined) : undefined;
-        if (!pulled || !remote || remote.deployment) throw error;
-        first = { ...await installPulledAlone(admin, root, pulled, { ...devConfig.project, manifest }), first: true };
-        console.error(`${error instanceof Error ? error.message : error}\nThe exported data is imported without the app. Change its database the way the published one must change, for example: bun run konae -- sql --dir ${root} "ALTER TABLE ..." Then save a file and dev publishes the app again.`);
-      }
+      await secrets();
+      await refreshActionTypes(root);
+      const first = await publishLocal(root, devConfig, token, console.warn, pulled, confirm);
       // The marker sits in dev-data, so --reset removes it with the data it describes.
       const marker = path.join(dataDirectory, "pulled.json");
       if (pulled && first.first) {
@@ -746,7 +789,7 @@ async function main() {
       let working = false; let queued = false;
       const rebuild = async () => {
         if (working) { queued = true; return; } working = true;
-        do { queued = false; try { await secrets(); console.log(`Updated ${(await publishLocal(root, devConfig, token)).url}. Reload the app to see changes.`); } catch (e) { console.error(e instanceof Error ? e.message : e); } } while (queued);
+        do { queued = false; try { await secrets(); await refreshActionTypes(root); console.log(`Updated ${(await publishLocal(root, devConfig, token, console.warn, undefined, confirm)).url}. Reload the app to see changes.`); } catch (e) { console.error(e instanceof Error ? e.message : e); } } while (queued);
         working = false;
       };
       let timer: ReturnType<typeof setTimeout>;

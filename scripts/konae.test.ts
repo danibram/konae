@@ -31,7 +31,7 @@ beforeAll(() => {
       const results: Record<string, unknown> = {
         project_create: { id: "app_test", name: "Test", slug: "test", manifest: {}, files: { "app.js": "" } },
         transfer_begin: { transferId: "transfer_1", size: 0, sha256: "", chunkBytes: 65_536 },
-        release_plan: { planId: "plan_1" },
+        release_plan: { planId: "plan_1", schema: { statements: [], losses: [], confirmation: null } },
         release_apply: { id: "dep_1", url: "http://test.localhost/" },
       };
       return reply({ isError: false, structuredContent: { result: answers[name] ?? results[name] ?? {} } });
@@ -260,7 +260,7 @@ describe("konae CLI", () => {
     expect(written).toMatchObject({ name: "Field Notes!", slug: "field-notes", kernel: "0.1.0" });
     expect(written.id).toMatch(/^app_[0-9a-f-]{36}$/);
     for (const file of ["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]) expect((await readFile(path.join(directory, "app", file), "utf8")).length).toBeGreaterThan(0);
-    for (const file of ["AGENTS.md", "action-contract.md", "compose.yaml", ".env.example", "package.json", "scripts/build.mjs", "scripts/static-artifact.mjs", "scripts/runtime.js"]) {
+    for (const file of ["AGENTS.md", "action-contract.md", "actions.d.ts", "compose.yaml", ".env.example", "package.json", "scripts/build.mjs", "scripts/static-artifact.mjs", "scripts/runtime.js"]) {
       expect((await readFile(path.join(directory, file), "utf8")).length).toBeGreaterThan(0);
     }
     expect(await readFile(path.join(directory, ".gitignore"), "utf8")).toContain("data/");

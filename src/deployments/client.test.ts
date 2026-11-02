@@ -30,6 +30,29 @@ describe("signup policy", () => {
   });
 });
 
+const noChange = { statements: [], losses: [], confirmation: null };
+const askNever = async () => { throw Error("asked about a change that loses nothing"); };
+
+describe("a schema change that loses data", () => {
+  const artifact = { version: 1 as const, entrypoint: "index.html", files: { "index.html": "<main>Test</main>" } };
+  const dropping = { statements: ["DROP TABLE \"notes\""], losses: [{ table: "notes", column: null, sentence: "Drops table notes and its 2 rows." }], confirmation: "c".repeat(64) };
+
+  test("is asked about, and its confirmation goes to release_apply", async () => {
+    const calls = fakeKernel((name, args) => name === "transfer_begin" ? { transferId: "t", size: args.size, sha256: args.sha256, chunkBytes: 1 << 20 } : name === "release_plan" ? { planId: "p", schema: dropping } : {});
+    const asked: unknown[] = [];
+    await deployProject(starterProject, "public", artifact, async (change) => { asked.push(change); return true; });
+    expect(asked).toEqual([dropping]);
+    expect(calls.find((call) => call.name === "release_apply")?.args).toEqual({ planId: "p", confirmSchema: "c".repeat(64) });
+  });
+
+  test("publishes nothing when the owner keeps the data", async () => {
+    const calls = fakeKernel((name, args) => name === "transfer_begin" ? { transferId: "t", size: args.size, sha256: args.sha256, chunkBytes: 1 << 20 } : name === "release_plan" ? { planId: "p", schema: dropping } : {});
+    await expect(deployProject(starterProject, "public", artifact, async () => false)).rejects.toThrow("Nothing was published. Drops table notes and its 2 rows.");
+    expect(calls.map((call) => call.name)).not.toContain("release_apply");
+    expect(calls.at(-1)?.name).toBe("transfer_cancel");
+  });
+});
+
 describe("deployment transfer cleanup", () => {
   for (const failedTool of ["release_plan", "release_apply"]) {
     test(`cancels its upload after ${failedTool} fails`, async () => {
@@ -45,13 +68,13 @@ describe("deployment transfer cleanup", () => {
         else {
           let value: unknown = {};
           if (name === "transfer_begin") value = { transferId: "publish-upload", size: args.size, sha256: args.sha256, chunkBytes: 65_536 };
-          if (name === "release_plan") value = { planId: "publish-plan" };
+          if (name === "release_plan") value = { planId: "publish-plan", schema: noChange };
           if (name === "transfer_cancel") expect(args.transferId).toBe("publish-upload");
           result = { structuredContent: { result: value }, content: [], isError: false };
         }
         return Response.json({ jsonrpc: "2.0", id: request.id, result });
       }) as typeof fetch;
-      await expect(deployProject(starterProject, "public", { version: 1, entrypoint: "index.html", files: { "index.html": "<main>Test</main>" } })).rejects.toThrow(`${failedTool} refused`);
+      await expect(deployProject(starterProject, "public", { version: 1, entrypoint: "index.html", files: { "index.html": "<main>Test</main>" } }, askNever)).rejects.toThrow(`${failedTool} refused`);
       expect(calls.at(-1)).toBe("transfer_cancel");
       expect(calls.filter((name) => name === "transfer_cancel")).toHaveLength(1);
       if (failedTool === "release_plan") expect(calls).not.toContain("release_apply");
@@ -81,10 +104,10 @@ describe("first publish signup policy", () => {
     fakeKernel((name, args) => {
       if (name === "transfer_begin") return { transferId: "t", size: args.size, sha256: args.sha256, chunkBytes: 1 << 20 };
       if (name === "transfer_write") payload = JSON.parse(new TextDecoder().decode(decodeBase64(String(args.data))));
-      if (name === "release_plan") return { planId: "p" };
+      if (name === "release_plan") return { planId: "p", schema: noChange };
       return {};
     });
-    await deployProject(starterProject, "private", artifact, initialSignupPolicy);
+    await deployProject(starterProject, "private", artifact, askNever, initialSignupPolicy);
     return payload;
   }
 

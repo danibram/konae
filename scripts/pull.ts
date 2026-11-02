@@ -93,31 +93,6 @@ export async function uploadPulled(client: McpClient, root: string, pulled: Pull
   }
 }
 
-/**
- * Imports the exported data as a project's first Deployment under a Capsule
- * with no actions and one page. `dev` falls back to it when the folder's own
- * actions need a schema the data does not have yet, so the data is there to
- * migrate. The caller holds a project without a Deployment.
- */
-export async function installPulledAlone(client: McpClient, root: string, pulled: Pulled, project: { id: string; name: string; slug: string; manifest: Record<string, unknown> }) {
-  const components = await uploadPulled(client, root, pulled, project.id);
-  const page = "<!doctype html><title>Waiting for a migration</title><main><h1>Waiting for a migration</h1><p>This Development Kernel holds the imported data. The app's actions need a newer schema than the data has. Apply the change with konae sql, then save a file.</p></main>";
-  const payload = {
-    project: { ...project, files: { "actions.json": '{"version":1,"actions":{}}', "schema.sql": "" } },
-    visibility: pulled.manifest.visibility,
-    artifact: { version: 1, entrypoint: "index.html", files: { "index.html": page } },
-    initialPackage: { manifest: pulled.manifest, components },
-  };
-  let transfer: Transfer | undefined;
-  try {
-    transfer = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), project.id);
-    const plan = await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
-    return await client.call<{ id: string; url: string }>("release_apply", { planId: plan.planId });
-  } finally {
-    for (const id of [...Object.values(components), ...(transfer ? [transfer.transferId] : [])]) await client.cancel(id).catch(() => {});
-  }
-}
-
 /** One phrase for the exported data: where it came from, when, and each component with its size. */
 export function describePulled(pulled: Pulled) {
   const size = (bytes: number) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;

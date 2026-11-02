@@ -15,13 +15,12 @@ You need to be signed in as the owner. Open **Platform access** in the editor to
 3. Read the proposed change. The files stay as they are until you press **Apply**.
 4. Press **Apply**. The Validation Gate, the editor's check, reads the change before it reaches the project. A refusal names what to change. The Gate refuses the change when:
    - the schema is not valid;
-   - a schema change has no migration, or its migration does not converge;
-   - a Server Action's SQL no longer runs against the migrated schema;
+   - a Server Action's SQL does not run against the schema;
    - a query reads rows without a LIMIT.
 5. Try the app in the preview. Ask for changes in the same panel and apply each one.
 6. Press **Deploy**. The dialog is headed **Deploy** followed by the app's name. It shows "Every query names its LIMIT. It can leave." when nothing blocks the release.
 7. Choose who can open the app, **Public** (anyone can open it) or **Private** (people with an app account). Then choose who can create an app account. The dialog preselects Open for a public app and Invitation only for a private one.
-8. Confirm with the button that names your choice, **Deploy public** or **Deploy private**. The dialog then shows **Published publicly** or **Published privately** with the Deployment URL.
+8. Confirm with the button that names your choice, **Deploy public** or **Deploy private**. The dialog then shows **Published publicly** or **Published privately** with the Deployment URL. When a republish removes a table or a column from the published database, or changes a column's type, a dialog titled **This publish deletes data** lists what goes first. **Keep the data** publishes nothing, and **Publish and delete** applies it.
 9. Open the Deployment URL and use the app once. That calls a Server Action on the Kernel.
 
 ## Check it worked
@@ -34,7 +33,7 @@ Observe the result through the same door you wrote through, before you tell anyo
 
 ## Data and republishing
 
-Use Data to choose the local or deployed database, browse and edit rows, run SQL, create backups and restore them. `schema.sql` is the only model. A publish adds the tables and indexes it declares, and a changed or removed column needs an `ALTER TABLE` in SQL, on the preview and on the published app. Publishing the same project keeps its URL and database, and the republished app stops serving files that the new artifact no longer contains.
+Use Data to choose the local or deployed database, browse and edit rows, run SQL, create backups and restore them. `schema.sql` is the only model. A publish changes the published database to match it, and asks before it deletes a table or a column. The preview keeps its own test rows and does not change a table it already has, so try a changed table on the published app or with `konae dev`. Publishing the same project keeps its URL and database, and the republished app stops serving files that the new artifact no longer contains.
 
 The Auth panel lets you try the app as Guest, Alice and Bob in the preview. A published app uses its own accounts.
 

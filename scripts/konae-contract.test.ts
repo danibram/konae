@@ -22,6 +22,7 @@ describe("konae contract", () => {
       expect(contract.project).toEqual({ id: "app_feed", name: "Status feed" });
       expect(await readFile(path.join(root, "action-contract.md"), "utf8")).toContain("# Action Contract for Status feed");
       expect(JSON.parse(await readFile(path.join(root, "action-contract.schema.json"), "utf8")).$defs.action).toBeDefined();
+      expect(await readFile(path.join(root, "actions.d.ts"), "utf8")).toContain("call<Name extends keyof KonaeActions>");
       const { files } = await buildLocal(root);
       expect(Object.keys(files).filter((file) => file.startsWith("action-contract") || file === "konae.json")).toEqual([]);
       expect(files["actions.json"]).toBeDefined();

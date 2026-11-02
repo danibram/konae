@@ -321,6 +321,7 @@ ls /tmp/orders /tmp/orders/app
 ```text
 AGENTS.md
 action-contract.md
+actions.d.ts
 app
 compose.yaml
 konae.json
@@ -1544,6 +1545,11 @@ Built /tmp/orders/dist
     "expiresAt": <time ms>,
     "planId": "<plan id>",
     "projectId": "<project id>",
+    "schema": {
+      "confirmation": null,
+      "losses": [],
+      "statements": []
+    },
     "visibility": "private"
   }
 }
