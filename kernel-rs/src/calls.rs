@@ -1063,7 +1063,7 @@ fn nonce() -> String {
 /// unique-local IPv6 address whose /64 is derived from the caller's ID; no
 /// packet is ever sent to it.
 fn caller_address(deployment_id: &str) -> IpAddr {
-    let digest = super::mcp::digest(deployment_id.as_bytes());
+    let digest = super::digest(deployment_id.as_bytes());
     let bytes = hex::decode(&digest[..14]).unwrap_or_default();
     let mut octets = [0u8; 16];
     octets[0] = 0xfd;

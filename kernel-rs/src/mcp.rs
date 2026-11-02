@@ -1,11 +1,8 @@
 use super::*;
+use super::transfers::{CHUNK, MAX_TRANSFER, download, download_body, transfer, transfer_call, transfer_path};
 use rusqlite::params;
-use sha2::{Digest, Sha256};
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 const VERSION: &str = "2025-11-25";
-pub(super) const CHUNK: usize = 64 * 1024;
-const MAX_TRANSFER: usize = 32 * 1024 * 1024;
 pub(super) fn owner_cookie_name(state: &AppState) -> &'static str {
     let mcp_https = state.mcp_origin.as_deref().is_some_and(|origin| origin.starts_with("https://"));
     if state.public_origin.starts_with("https://") || mcp_https {
@@ -14,18 +11,6 @@ pub(super) fn owner_cookie_name(state: &AppState) -> &'static str {
         "konae_owner_session"
     }
 }
-const MAX_OWNER_TRANSFERS: usize = 128;
-const MAX_DEPLOYMENT_TRANSFERS: usize = 32;
-/// Active transfers the signed-out visitors of one Deployment share, apart
-/// from the signed-in users' pool.
-const MAX_VISITOR_TRANSFERS: usize = 16;
-/// Active transfers one owner credential may hold.
-pub(super) const MAX_OWNER_PRINCIPAL_TRANSFERS: usize = 8;
-/// Active transfers one app user may hold. Files are at most 2 MiB, so an app
-/// needs one upload or download at a time; two allows a retry.
-const MAX_RUNTIME_PRINCIPAL_TRANSFERS: usize = 2;
-const OWNER_TRANSFER_TTL_MS: u64 = 60 * 60 * 1000;
-const RUNTIME_TRANSFER_TTL_MS: u64 = 10 * 60 * 1000;
 const AUDIT_MAX_ROWS: i64 = 10_000;
 const AUDIT_PRUNE_INTERVAL: i64 = 128;
 const AUDIT_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1000;
@@ -49,11 +34,9 @@ pub(super) fn store(state: &AppState) -> Result<Connection> {
     db.execute_batch("PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, sources INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS credentials(hash TEXT PRIMARY KEY, owner TEXT NOT NULL, scopes TEXT NOT NULL, projects TEXT NOT NULL, expires INTEGER NOT NULL, audience TEXT);
-        CREATE TABLE IF NOT EXISTS transfers(id TEXT PRIMARY KEY, principal TEXT NOT NULL, body TEXT NOT NULL, expires INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, owner TEXT NOT NULL, project TEXT NOT NULL, revision INTEGER NOT NULL, transfer TEXT NOT NULL, expires INTEGER NOT NULL, receipt TEXT);
         CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, at INTEGER NOT NULL, actor TEXT NOT NULL, tool TEXT NOT NULL, target TEXT, ok INTEGER NOT NULL);
-        CREATE INDEX IF NOT EXISTS audit_actor ON audit(actor, id);
-        CREATE TABLE IF NOT EXISTS file_receipts(transfer_id TEXT PRIMARY KEY, principal TEXT NOT NULL, request_hash TEXT NOT NULL, body TEXT NOT NULL);")?;
+        CREATE INDEX IF NOT EXISTS audit_actor ON audit(actor, id);")?;
     let has_audience: bool = db
         .prepare("PRAGMA table_info(credentials)")?
         .query_map([], |r| r.get::<_, String>(1))?
@@ -76,10 +59,6 @@ pub(super) fn store(state: &AppState) -> Result<Connection> {
     super::oauth::install(&db)?;
     super::package::install_imports(&db)?;
     Ok(db)
-}
-
-pub(super) fn digest(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
 }
 
 #[derive(Clone)]
@@ -1899,7 +1878,7 @@ async fn runtime_call(
             transfer_path(state, id)?;
             let _guard = database_lock(state, &format!("transfer:{id}")).await;
             let request_hash = digest(a.to_string().as_bytes());
-            let previous: Option<(String,String)>=store(state)?.query_row("SELECT request_hash,body FROM file_receipts WHERE transfer_id=?1 AND principal=?2",params![id,principal],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+            let previous: Option<(String,String)>=super::transfers::store(state)?.query_row("SELECT request_hash,body FROM file_receipts WHERE transfer_id=?1 AND principal=?2",params![id,principal],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
             if let Some((hash, body)) = previous {
                 anyhow::ensure!(hash == request_hash, "Upload retry changed its metadata.");
                 return Ok(serde_json::from_str(&body)?);
@@ -1919,7 +1898,7 @@ async fn runtime_call(
                 response_value(super::upload_from_path(state, headers, upload, &source).await)
                     .await?;
             result.as_object_mut().unwrap().remove("url");
-            store(state)?.execute("INSERT INTO file_receipts(transfer_id,principal,request_hash,body) VALUES(?1,?2,?3,?4)",params![id,principal,request_hash,result.to_string()])?;
+            super::transfers::store(state)?.execute("INSERT INTO file_receipts(transfer_id,principal,request_hash,body) VALUES(?1,?2,?3,?4)",params![id,principal,request_hash,result.to_string()])?;
             if let Some(deployment) = app {
                 super::usage::count(&state.data_root, deployment, super::usage::Operation::Upload);
             }
@@ -1941,279 +1920,6 @@ async fn runtime_call(
             result
         }
         _ => anyhow::bail!("Unknown runtime tool."),
-    }
-}
-
-pub(super) fn transfer_path(state: &AppState, id: &str) -> Result<PathBuf> {
-    anyhow::ensure!(Uuid::parse_str(id).is_ok(), "Invalid transfer ID.");
-    Ok(state.data_root.join("transfers").join(id))
-}
-
-pub(super) fn transfer(state: &AppState, principal: &str, a: &Value) -> Result<Value> {
-    let id = a["transferId"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("Transfer ID required."))?;
-    transfer_path(state, id)?;
-    let body: Option<String> = store(state)?
-        .query_row(
-            "SELECT body FROM transfers WHERE id=?1 AND principal=?2 AND expires>?3",
-            params![id, principal, now_ms()],
-            |r| r.get(0),
-        )
-        .optional()?;
-    Ok(serde_json::from_str(&body.ok_or_else(|| {
-        anyhow::anyhow!("Transfer not found or expired.")
-    })?)?)
-}
-
-async fn cleanup_transfers(state: &AppState) -> Result<()> {
-    let ids = {
-        let db = store(state)?;
-        let mut query = db.prepare("SELECT id FROM transfers WHERE expires<=?1")?;
-        query
-            .query_map([now_ms()], |r| r.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    for id in ids {
-        let _ = tokio::fs::remove_file(transfer_path(state, &id)?).await;
-        store(state)?.execute(
-            "DELETE FROM transfers WHERE id=?1 AND expires<=?2",
-            params![id, now_ms()],
-        )?;
-    }
-    Ok(())
-}
-
-pub(super) async fn new_transfer(state: &AppState, principal: &str, value: Value) -> Result<Value> {
-    cleanup_transfers(state).await?;
-    let _guard = database_lock(state, "transfer-quota").await;
-    let db = store(state)?;
-    let count: usize = db.query_row(
-        "SELECT COUNT(*) FROM transfers WHERE principal=?1",
-        [principal],
-        |r| r.get(0),
-    )?;
-    // App users share one pool per deployment and owners share another, so
-    // runtime traffic cannot exhaust the slots owners need for releases and exports.
-    // App user transfers also expire sooner, so abandoned ones free the
-    // Deployment's pool quickly.
-    // Signed-out visitors of a public app, one principal per client address,
-    // share a smaller pool of their own, so visitors from a handful of
-    // networks cannot hold the slots signed-in users upload with.
-    let (pool, excluded, limit, per_principal, ttl) = match principal.strip_prefix("runtime:") {
-        Some(rest) => {
-            let deployment = rest.split(':').next().unwrap_or("");
-            let visitors = format!("runtime:{deployment}:anon:");
-            if principal.starts_with(&visitors) {
-                (visitors, None, MAX_VISITOR_TRANSFERS, MAX_RUNTIME_PRINCIPAL_TRANSFERS, RUNTIME_TRANSFER_TTL_MS)
-            } else {
-                (format!("runtime:{deployment}:"), Some(visitors), MAX_DEPLOYMENT_TRANSFERS, MAX_RUNTIME_PRINCIPAL_TRANSFERS, RUNTIME_TRANSFER_TTL_MS)
-            }
-        }
-        None => ("owner:".to_owned(), None, MAX_OWNER_TRANSFERS, MAX_OWNER_PRINCIPAL_TRANSFERS, OWNER_TRANSFER_TTL_MS),
-    };
-    let total: usize = db.query_row(
-        "SELECT COUNT(*) FROM transfers WHERE substr(principal,1,length(?1))=?1
-           AND (?2 IS NULL OR substr(principal,1,length(?2))<>?2)",
-        params![&pool, excluded],
-        |r| r.get(0),
-    )?;
-    anyhow::ensure!(
-        count < per_principal && total < limit,
-        "Too many active transfers. Cancel completed transfers before starting another."
-    );
-    let id = Uuid::new_v4().to_string();
-    let expires = now_ms() + ttl;
-    tokio::fs::create_dir_all(state.data_root.join("transfers")).await?;
-    tokio::fs::write(transfer_path(state, &id)?, []).await?;
-    db.execute(
-        "INSERT INTO transfers(id,principal,body,expires) VALUES(?1,?2,?3,?4)",
-        params![id, principal, value.to_string(), expires],
-    )?;
-    Ok(
-        json!({"transferId":id,"size":value["size"],"sha256":value["sha256"],"chunkBytes":CHUNK,"expiresAt":expires}),
-    )
-}
-
-pub(super) async fn download(
-    state: &AppState,
-    principal: &str,
-    bytes: &[u8],
-    project: Option<&str>,
-) -> Result<Value> {
-    anyhow::ensure!(
-        bytes.len() <= MAX_TRANSFER,
-        "Download exceeds transfer limit."
-    );
-    let result=new_transfer(state,principal,json!({"direction":"download","size":bytes.len(),"sha256":digest(bytes),"complete":true,"projectId":project})).await?;
-    tokio::fs::write(
-        transfer_path(state, result["transferId"].as_str().unwrap())?,
-        bytes,
-    )
-    .await?;
-    Ok(result)
-}
-
-/// Streams a response body into a new download transfer, hashing it on the
-/// way, so a file is never held in memory whole.
-async fn download_body(state: &AppState, principal: &str, body: Body) -> Result<Value> {
-    use futures_util::StreamExt;
-    use tokio::io::AsyncWriteExt;
-    let directory = state.data_root.join("transfers");
-    tokio::fs::create_dir_all(&directory).await?;
-    let scratch = directory.join(format!(".download-{}", Uuid::new_v4()));
-    let written = async {
-        let mut output = tokio::fs::File::create(&scratch).await?;
-        let mut hasher = sha2::Sha256::default();
-        let mut size = 0u64;
-        let mut stream = body.into_data_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            sha2::Digest::update(&mut hasher, &chunk);
-            output.write_all(&chunk).await?;
-            size += chunk.len() as u64;
-        }
-        output.flush().await?;
-        Ok::<_, anyhow::Error>((size, hex::encode(sha2::Digest::finalize(hasher))))
-    }
-    .await;
-    let created = match written {
-        Ok((size, sha256)) => new_transfer(state, principal, json!({"direction":"download","size":size,"sha256":sha256,"complete":true,"projectId":null})).await,
-        Err(error_value) => Err(error_value),
-    };
-    let moved = match created {
-        Ok(created) => match tokio::fs::rename(&scratch, transfer_path(state, created["transferId"].as_str().unwrap_or_default())?).await {
-            Ok(()) => return Ok(created),
-            Err(error_value) => Err(error_value.into()),
-        },
-        Err(error_value) => Err(error_value),
-    };
-    let _ = tokio::fs::remove_file(&scratch).await;
-    moved
-}
-
-async fn transfer_call(
-    state: &AppState,
-    principal: &str,
-    name: &str,
-    a: &Value,
-    runtime: bool,
-) -> Result<Value> {
-    if name == "transfer_begin" {
-        let size = a["size"].as_u64().unwrap_or(0);
-        let hash = a["sha256"].as_str().unwrap_or("");
-        let component = a["component"].as_str().filter(|_| !runtime);
-        let limit = match component {
-            _ if runtime => state.files.limits.max_file_bytes,
-            Some(component) => super::package::component_limit(component, &state.files.limits)?,
-            None => MAX_TRANSFER as u64,
-        };
-        match component {
-            Some(component) => anyhow::ensure!(
-                size > 0 && size <= limit,
-                "Transfer size is outside the limit of {limit} bytes for the {component} component."
-            ),
-            None if runtime => anyhow::ensure!(size > 0 && size <= limit, "{}", state.files.limits.file_size_refused()),
-            None => anyhow::ensure!(size > 0 && size <= limit, "Transfer size is outside the limit."),
-        }
-        anyhow::ensure!(
-            hash.len() == 64
-                && hash
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
-            "Invalid SHA-256 checksum."
-        );
-        let mut body = json!({"direction":"upload","size":size,"sha256":hash,"complete":false,"projectId":a["projectId"]});
-        if let Some(component) = component {
-            super::package::ensure_upload_space(state, size)?;
-            body["component"] = json!(component);
-        }
-        return new_transfer(state, principal, body).await;
-    }
-    let id = a["transferId"].as_str().unwrap();
-    let path = transfer_path(state, id)?;
-    let _guard = database_lock(state, &format!("transfer:{id}")).await;
-    let mut t = transfer(state, principal, a)?;
-    match name {
-        "transfer_cancel" => {
-            store(state)?.execute(
-                "DELETE FROM transfers WHERE id=?1 AND principal=?2",
-                params![id, principal],
-            )?;
-            let _ = tokio::fs::remove_file(path).await;
-            Ok(json!({"ok":true}))
-        }
-        "transfer_status" => Ok(
-            json!({"transferId":id,"offset":tokio::fs::metadata(path).await?.len(),"complete":t["complete"],"size":t["size"],"sha256":t["sha256"]}),
-        ),
-        "transfer_read" => {
-            anyhow::ensure!(t["complete"] == true, "Transfer is incomplete.");
-            let offset = a["offset"].as_u64().unwrap();
-            let size = t["size"].as_u64().unwrap();
-            anyhow::ensure!(offset <= size, "Offset exceeds transfer size.");
-            let mut file = tokio::fs::File::open(path).await?;
-            file.seek(std::io::SeekFrom::Start(offset)).await?;
-            let mut data = vec![0; CHUNK.min((size - offset) as usize)];
-            file.read_exact(&mut data).await?;
-            Ok(
-                json!({"data":encode_base64(&data),"offset":offset,"nextOffset":offset+data.len() as u64,"size":size,"sha256":t["sha256"]}),
-            )
-        }
-        "transfer_write" => {
-            anyhow::ensure!(
-                t["direction"] == "upload" && t["complete"] != true,
-                "Transfer is immutable."
-            );
-            let encoded = a["data"].as_str().unwrap();
-            let bytes = decode_base64(encoded)?;
-            anyhow::ensure!(
-                !bytes.is_empty() && bytes.len() <= CHUNK && encode_base64(&bytes) == encoded,
-                "Invalid base64 block."
-            );
-            let offset = a["offset"].as_u64().unwrap();
-            let size = t["size"].as_u64().unwrap();
-            let mut file = tokio::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(path)
-                .await?;
-            let length = file.metadata().await?.len();
-            anyhow::ensure!(
-                offset <= length && offset + bytes.len() as u64 <= size,
-                "Invalid block offset or size."
-            );
-            file.seek(std::io::SeekFrom::Start(offset)).await?;
-            if offset < length {
-                anyhow::ensure!(
-                    offset + bytes.len() as u64 <= length,
-                    "Retry overlaps the upload head."
-                );
-                let mut previous = vec![0; bytes.len()];
-                file.read_exact(&mut previous).await?;
-                anyhow::ensure!(previous == bytes, "Retry does not match the stored block.");
-            } else {
-                file.write_all(&bytes).await?;
-                file.sync_data().await?;
-            }
-            Ok(json!({"nextOffset":file.metadata().await?.len()}))
-        }
-        "transfer_complete" => {
-            anyhow::ensure!(t["direction"] == "upload", "Not an upload.");
-            // Hashes in 64 KiB reads, so a package component never sits in memory.
-            let (size, sha256) =
-                tokio::task::spawn_blocking(move || super::copies::checksum_file(&path)).await??;
-            anyhow::ensure!(
-                size == t["size"].as_u64().unwrap() && sha256 == t["sha256"],
-                "Upload size or SHA-256 mismatch."
-            );
-            t["complete"] = json!(true);
-            store(state)?.execute(
-                "UPDATE transfers SET body=?1 WHERE id=?2",
-                params![t.to_string(), id],
-            )?;
-            Ok(json!({"transferId":id,"complete":true,"sha256":t["sha256"]}))
-        }
-        _ => anyhow::bail!("Unknown transfer tool."),
     }
 }
 
@@ -2493,27 +2199,6 @@ mod tests {
         assert_eq!(other, json!({"content": [{"type": "text", "text": "Upload is not complete."}], "isError": true}));
     }
 
-    #[tokio::test]
-    async fn visitors_cannot_hold_the_transfers_signed_in_users_need() {
-        let root = std::env::temp_dir().join(format!("konae-visitor-transfers-{}", Uuid::new_v4()));
-        let (state, _) = crate::tests::login_test_state(&root, "public").await;
-        let begin = |principal: String| { let state = state.clone(); async move { new_transfer(&state, &principal, json!({"direction": "download", "size": 1})).await } };
-        for client in 0..MAX_VISITOR_TRANSFERS / MAX_RUNTIME_PRINCIPAL_TRANSFERS {
-            for _ in 0..MAX_RUNTIME_PRINCIPAL_TRANSFERS {
-                begin(format!("runtime:d1:anon:198.51.100.{client}")).await.unwrap();
-            }
-        }
-        let refused = begin("runtime:d1:anon:203.0.113.9".into()).await.unwrap_err().to_string();
-        assert!(refused.contains("Too many active transfers"), "{refused}");
-        // Signed-in users still have their whole pool.
-        for user in 0..MAX_DEPLOYMENT_TRANSFERS / MAX_RUNTIME_PRINCIPAL_TRANSFERS {
-            for _ in 0..MAX_RUNTIME_PRINCIPAL_TRANSFERS {
-                begin(format!("runtime:d1:user-{user}")).await.unwrap();
-            }
-        }
-        assert!(begin("runtime:d1:user-extra".into()).await.is_err());
-        let _ = tokio::fs::remove_dir_all(root).await;
-    }
 
     /// The runtime schema leaves the size bound to the handler, which knows
     /// the installation's per-file limit and names it.
@@ -2591,7 +2276,7 @@ mod tests {
             let (state, owner, manifest) = (state.clone(), owner.clone(), manifest.clone());
             async move {
                 let source = json!({"id": "app_retry", "name": "Retry", "slug": "retry", "files": files, "directories": [], "manifest": manifest, "updatedAt": 1});
-                let upload = new_transfer(&state, "owner:ana", json!({"direction": "upload", "size": 0, "sha256": "", "complete": true, "projectId": null})).await.unwrap();
+                let upload = super::super::transfers::new_transfer(&state, "owner:ana", json!({"direction": "upload", "size": 0, "sha256": "", "complete": true, "projectId": null})).await.unwrap();
                 let id = upload["transferId"].as_str().unwrap().to_owned();
                 tokio::fs::write(transfer_path(&state, &id).unwrap(), serde_json::to_vec(&source).unwrap()).await.unwrap();
                 admin_call(&state, &owner, "owner:ana", "project_create", json!({"projectId": "app_retry", "name": "Retry", "slug": "retry", "manifest": manifest, "sourcesTransferId": id})).await
@@ -2795,38 +2480,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[tokio::test]
-    async fn app_users_cannot_take_the_transfer_slots_owners_need() {
-        let root = std::env::temp_dir().join(format!("konae-quota-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(&root).await.unwrap();
-        let state = AppState::for_test(&root);
-        let body = || json!({"direction":"download","size":1,"sha256":"00","complete":true});
-        let per_user = MAX_RUNTIME_PRINCIPAL_TRANSFERS;
-        for _ in 0..per_user {
-            new_transfer(&state, "runtime:app-a:user-0", body()).await.unwrap();
-        }
-        assert!(
-            new_transfer(&state, "runtime:app-a:user-0", body()).await.is_err(),
-            "one app user holds at most {per_user} transfers"
-        );
-        for user in 1..MAX_DEPLOYMENT_TRANSFERS / per_user {
-            for _ in 0..per_user {
-                new_transfer(&state, &format!("runtime:app-a:user-{user}"), body()).await.unwrap();
-            }
-        }
-        assert!(new_transfer(&state, "runtime:app-a:another", body()).await.is_err());
-        new_transfer(&state, "runtime:app-b:user", body()).await.unwrap();
-        let owner = new_transfer(&state, "owner:alice", body()).await.unwrap();
-        let runtime = new_transfer(&state, "runtime:app-c:user", body()).await.unwrap();
-        let ttl = |t: &Value| t["expiresAt"].as_u64().unwrap() - now_ms();
-        assert!(ttl(&runtime) <= RUNTIME_TRANSFER_TTL_MS);
-        assert!(ttl(&owner) > RUNTIME_TRANSFER_TTL_MS);
-        for _ in 1..MAX_OWNER_PRINCIPAL_TRANSFERS {
-            new_transfer(&state, "owner:alice", body()).await.unwrap();
-        }
-        assert!(new_transfer(&state, "owner:alice", body()).await.is_err());
-        let _ = tokio::fs::remove_dir_all(root).await;
-    }
 
     /// A refused source save says what the editor's format holds, so an agent
     /// that saves sources over MCP can correct the JSON it uploaded.

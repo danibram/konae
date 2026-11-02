@@ -320,7 +320,7 @@ async fn authorize_page(
                 .into_response();
         }
     };
-    let csrf = mcp::digest(format!("{}:{}", state.admin_key, owner.id).as_bytes());
+    let csrf = crate::digest(format!("{}:{}", state.admin_key, owner.id).as_bytes());
     let fields = a
         .iter()
         .map(|(key, value)| {
@@ -378,7 +378,7 @@ async fn authorize(
             .ok_or_else(|| anyhow::anyhow!("Sign in first."))?;
         anyhow::ensure!(
             a.get("csrf")
-                == Some(&mcp::digest(
+                == Some(&crate::digest(
                     format!("{}:{}", state.admin_key, owner.id).as_bytes()
                 )),
             "Invalid consent token."
@@ -418,7 +418,7 @@ fn issue_code(db: &mut Connection, client_id: &str, code: &str, body: &Value) ->
     );
     tx.execute(
         "INSERT INTO oauth_codes(hash,body,expires) VALUES(?1,?2,?3)",
-        params![mcp::digest(code.as_bytes()), body.to_string(), now_ms() + 120_000],
+        params![crate::digest(code.as_bytes()), body.to_string(), now_ms() + 120_000],
     )?;
     tx.commit()?;
     Ok(())
@@ -442,7 +442,7 @@ async fn token(
         let tx = db.transaction()?;
         let body: String = tx.query_row(
             "SELECT body FROM oauth_codes WHERE hash=?1 AND expires>?2",
-            params![mcp::digest(get("code").as_bytes()), now_ms()],
+            params![crate::digest(get("code").as_bytes()), now_ms()],
             |r| r.get(0),
         )?;
         let code: Value = serde_json::from_str(&body)?;
@@ -481,14 +481,14 @@ async fn token(
             .unwrap()
             .split_whitespace()
             .collect::<Vec<_>>();
-        tx.execute("INSERT INTO credentials(hash,owner,scopes,projects,expires,audience,client) VALUES(?1,?2,?3,'[]',?4,?5,?6)",params![mcp::digest(token.as_bytes()),code["owner"].as_str().unwrap(),serde_json::to_string(&scopes)?,now_ms()+3_600_000,get("resource"),get("client_id")])?;
+        tx.execute("INSERT INTO credentials(hash,owner,scopes,projects,expires,audience,client) VALUES(?1,?2,?3,'[]',?4,?5,?6)",params![crate::digest(token.as_bytes()),code["owner"].as_str().unwrap(),serde_json::to_string(&scopes)?,now_ms()+3_600_000,get("resource"),get("client_id")])?;
         tx.execute(
             "UPDATE oauth_clients SET last_used=?2 WHERE id=?1",
             params![get("client_id"), now_ms()],
         )?;
         tx.execute(
             "DELETE FROM oauth_codes WHERE hash=?1",
-            [mcp::digest(get("code").as_bytes())],
+            [crate::digest(get("code").as_bytes())],
         )?;
         tx.commit()?;
         Ok(

@@ -61,6 +61,7 @@ mod schema_change;
 mod security;
 mod sources;
 mod sql_rules;
+mod transfers;
 #[cfg(test)]
 mod sqlite_bench;
 mod usage;
@@ -3478,6 +3479,11 @@ fn is_local_host(host: &str) -> bool {
             .parse::<std::net::IpAddr>()
             .is_ok_and(|address| address.is_loopback())
 }
+pub(crate) fn digest(bytes: &[u8]) -> String {
+    hex::encode(<sha2::Sha256 as sha2::Digest>::digest(bytes))
+}
+
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

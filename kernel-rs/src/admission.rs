@@ -131,7 +131,7 @@ pub(crate) fn read(state: &AppState, body: &Value) -> std::result::Result<Admiss
             .ok_or(AuthError::AdmissionRefused(CODE_REFUSED));
     }
     let key = body["setupKey"].as_str().unwrap_or("");
-    if !key.is_empty() && mcp::digest(key.as_bytes()) == mcp::digest(state.admin_key.as_bytes()) {
+    if !key.is_empty() && crate::digest(key.as_bytes()) == crate::digest(state.admin_key.as_bytes()) {
         return Ok(Admission::SetupKey { development: state.admin_key == DEFAULT_ADMIN_KEY });
     }
     Err(AuthError::AdmissionRefused(match mode(state) {

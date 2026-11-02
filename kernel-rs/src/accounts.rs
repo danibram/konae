@@ -1246,7 +1246,7 @@ mod tests {
         let bearer = "creator-bearer-token";
         mcp::store(&fixture.state).unwrap().execute(
             "INSERT INTO credentials(hash, owner, scopes, projects, expires) VALUES (?1, ?2, '[\"read\"]', '[]', ?3)",
-            rusqlite::params![mcp::digest(bearer.as_bytes()), session.id, now_ms() + 60_000],
+            rusqlite::params![crate::digest(bearer.as_bytes()), session.id, now_ms() + 60_000],
         ).unwrap();
         assert!(mcp::authenticate_owner(&fixture.state, &owner_headers(None, Some(bearer))).unwrap().is_some());
 

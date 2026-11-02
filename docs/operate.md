@@ -79,7 +79,7 @@ The Kernel reads these at startup. Defaults are the values in `kernel-rs/src` un
 | `KONAE_FILES_S3_PREFIX` | empty | Prefix inside the file bucket, such as `files/`. |
 | `KONAE_FILES_S3_PATH_STYLE` | `1` | `1` addresses the bucket as `<endpoint>/<bucket>`, `0` as `<bucket>.<endpoint host>`. |
 | `KONAE_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses whose `X-Forwarded-For` header the Kernel trusts for rate limiting. CIDR ranges are rejected. |
-| `KONAE_DATA_DIR` | `/data` (`data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory: one app folder per project under `apps/<id>/`, plus `owners.sqlite`, `mcp.sqlite`, `mail.sqlite` and `calls.sqlite`. |
+| `KONAE_DATA_DIR` | `/data` (`data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory: one app folder per project under `apps/<id>/`, plus `owners.sqlite`, `mcp.sqlite`, `mail.sqlite`, `calls.sqlite` and `transfers.sqlite`. |
 | `KONAE_DOMAIN` | unset | Derives the installation's hosts from one domain (ADR-0024). The public and MCP origin become `<scheme>://app.<domain>` and the app suffix becomes `<domain>`. Each of `KONAE_PUBLIC_ORIGIN`, `KONAE_MCP_ORIGIN` and `KONAE_HOST_SUFFIX` still wins when it is set. The Kernel refuses to start when `KONAE_PUBLIC_ORIGIN` or `KONAE_MCP_ORIGIN` has the bare domain as its host, because the home and path addresses answer there. The local stack sets `localhost` with port `8080`. |
 | `KONAE_SCHEME` | `http` for `localhost`, `https` otherwise | Scheme of the derived origins, `http` or `https`. Read only with `KONAE_DOMAIN`. Any other value stops the Kernel. |
 | `KONAE_PUBLIC_PORT` | unset | Port appended to the derived origins, such as `8080`. Read only with `KONAE_DOMAIN`. A value that is not a port number stops the Kernel. |
@@ -132,7 +132,8 @@ data/
 ├── mcp.sqlite              # projects and their save counts, agent credentials, audit
 ├── mail.sqlite             # the account email queue
 ├── calls.sqlite            # the call actions' queue and outbox
-├── transfers/              # unfinished MCP uploads and downloads
+├── transfers.sqlite        # unfinished MCP transfers and the receipts of file uploads
+├── transfers/              # the bytes of unfinished MCP uploads and downloads
 └── apps/<id>/              # one app folder (ADR-0027)
     ├── konae.json          # name, visibility, Signup Policy, sign-in methods, contact email
     ├── app/                # the saved sources

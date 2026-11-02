@@ -26,10 +26,8 @@ use std::{
 use anyhow::{Context, bail, ensure};
 use rusqlite::params;
 
-use super::mcp::{
-    MAX_OWNER_PRINCIPAL_TRANSFERS, Owner, new_transfer, owned_deployment, owned_project, store,
-    transfer, transfer_path,
-};
+use super::mcp::{Owner, owned_deployment, owned_project, store};
+use super::transfers::{MAX_ADMIN_PRINCIPAL_TRANSFERS, new_transfer, transfer, transfer_path};
 use super::*;
 
 pub(super) const PACKAGE_FORMAT: &str = "konae-package";
@@ -215,13 +213,13 @@ fn free_bytes(_path: &Path) -> Result<u64> {
 /// locks, so no write, signup, policy change or release lands halfway.
 pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id: &str) -> Result<Value> {
     let deployment = owned_deployment(state, owner, id, "export_data").await?;
-    let held: usize = store(state)?.query_row(
+    let held: usize = super::transfers::store(state)?.query_row(
         "SELECT COUNT(*) FROM transfers WHERE principal=?1 AND expires>?2",
         params![principal, now_ms()],
         |r| r.get(0),
     )?;
     ensure!(
-        held + COMPONENT_NAMES.len() + 1 <= MAX_OWNER_PRINCIPAL_TRANSFERS,
+        held + COMPONENT_NAMES.len() + 1 <= MAX_ADMIN_PRINCIPAL_TRANSFERS,
         "An export needs {} free transfers. Cancel completed transfers first.",
         COMPONENT_NAMES.len() + 1
     );
@@ -314,7 +312,7 @@ pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id:
     if let Some(error_value) = failure {
         for created in downloads.values() {
             let id = created["transferId"].as_str().unwrap_or_default();
-            store(state)?.execute("DELETE FROM transfers WHERE id=?1 AND principal=?2", params![id, principal])?;
+            super::transfers::store(state)?.execute("DELETE FROM transfers WHERE id=?1 AND principal=?2", params![id, principal])?;
             let _ = tokio::fs::remove_file(transfer_path(state, id)?).await;
         }
         return Err(error_value);
@@ -634,7 +632,7 @@ fn component_uploads(state: &AppState, principal: Option<&str>, project_id: &str
         let upload = match principal {
             Some(principal) => transfer(state, principal, &json!({"transferId": id}))?,
             None => {
-                let body: Option<String> = store(state)?
+                let body: Option<String> = super::transfers::store(state)?
                     .query_row("SELECT body FROM transfers WHERE id=?1 AND expires>?2", params![id, now_ms()], |r| r.get(0))
                     .optional()?;
                 serde_json::from_str(&body.with_context(|| format!("The {name} upload has expired."))?)?
@@ -976,7 +974,7 @@ mod tests {
         for id in [a, b] {
             let sent = file_store::read_all(source.as_ref(), &deployment, id).await.unwrap().unwrap();
             let arrived = file_store::read_all(target.as_ref(), &arrival, id).await.unwrap().unwrap();
-            assert_eq!(super::mcp::digest(&arrived), super::mcp::digest(&sent), "{id}");
+            assert_eq!(super::digest(&arrived), super::digest(&sent), "{id}");
         }
         let restored: Vec<Value> = serde_json::from_slice(&std::fs::read(target_dir.join("index.json")).unwrap()).unwrap();
         assert_eq!(restored[0]["ownerId"], "u1");

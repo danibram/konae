@@ -472,7 +472,7 @@ fn identity_connection(state: &AppState, deployment: &Deployment) -> Result<Conn
 }
 
 fn key_hash(token: &str) -> String {
-    super::mcp::digest(token.as_bytes())
+    super::digest(token.as_bytes())
 }
 
 /// The key a bearer token names, if it is a live key of this Deployment.

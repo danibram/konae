@@ -43,7 +43,8 @@ use crate::{
 const DEPLOYMENT_DATABASES: [&str; 4] = ["database.sqlite", "identity.sqlite", "usage.sqlite", crate::layout::SECRETS_DATABASE];
 /// `mail.sqlite` is the email queue (`mail.rs`); its links stay sealed in a copy.
 /// `calls.sqlite` is the call actions' queue and outbox (`calls.rs`).
-const ROOT_DATABASES: [&str; 4] = ["owners.sqlite", "mcp.sqlite", crate::mail::MAIL_DATABASE, crate::calls::CALLS_DATABASE];
+/// `transfers.sqlite` holds unfinished transfers (`transfers.rs`).
+const ROOT_DATABASES: [&str; 5] = ["owners.sqlite", "mcp.sqlite", crate::mail::MAIL_DATABASE, crate::calls::CALLS_DATABASE, crate::transfers::TRANSFERS_DATABASE];
 const MANIFEST: &str = "manifest.json";
 /// The only cipher a copy names in its manifest.
 const ENCRYPTION: &str = "AES-256-GCM";
@@ -1086,9 +1087,10 @@ fn check_databases(root: &Path) -> Result<()> {
 /// release plans. A session revoked after the copy was taken must not come
 /// back, and the transfer files never leave the old volume.
 fn invalidate_sessions(root: &Path) -> Result<usize> {
-    let tables: [(&str, &[&str]); 2] = [
+    let tables: [(&str, &[&str]); 3] = [
         ("owners.sqlite", &["app_sessions", "creator_sessions", "account_challenges"]),
-        ("mcp.sqlite", &["credentials", "oauth_codes", "transfers", "plans"]),
+        ("mcp.sqlite", &["credentials", "oauth_codes", "plans"]),
+        (crate::transfers::TRANSFERS_DATABASE, &["transfers"]),
     ];
     let mut removed = 0;
     let mut clear = |path: &Path, names: &[&str]| -> Result<()> {

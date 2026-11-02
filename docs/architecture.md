@@ -75,7 +75,8 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 ├── mail.sqlite             # the account email queue, ADR-0012
 ├── calls.sqlite            # the call actions' queue and outbox, ADR-0019
 ├── mailbox.jsonl           # the development mailbox, only with KONAE_MAIL_TRANSPORT=development
-├── transfers/              # unfinished MCP uploads and downloads
+├── transfers.sqlite        # unfinished MCP transfers and the receipts of file uploads
+├── transfers/              # the bytes of unfinished MCP uploads and downloads
 ├── recovery-hold.json      # only after a restore that could not read the revocation record
 └── apps/<id>/              # one app folder, the project's ID, ADR-0027
     ├── konae.json          # name, visibility, Signup Policy, sign-in methods, contact email, Kernel version
