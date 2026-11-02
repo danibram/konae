@@ -1147,34 +1147,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
     use crate::{
-        Deployment, LockMap, SignupPolicy, auth::AuthService, initialize_database, limits::Guards,
-        load_deployments, read_artifact,
+        Deployment, SignupPolicy, auth::AuthService, initialize_database, load_deployments, read_artifact,
     };
-    use std::{collections::HashMap, sync::Arc};
-    use tokio::sync::RwLock;
+    use std::sync::Arc;
 
     fn scratch(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!("konae-{label}-{}", uuid::Uuid::new_v4()))
     }
 
     fn state(root: &Path) -> AppState {
-        AppState {
-            deployments: Arc::new(RwLock::new(HashMap::new())),
-            db_locks: LockMap::default(),
-            s3: None,
-            artifact_bucket: "artifacts".into(),
-            data_bucket: "data".into(),
-            files: crate::file_store::Files::local(&root),
-            data_root: root.into(),
-            copies: Arc::new(CopyStatus::default()),
-            accounts: crate::accounts::AccountSettings::local(),
-            admin_key: "test-admin".into(),
-            public_origin: "http://localhost".into(),
-            mcp_origin: None,
-            path_origin: None,
-            host_suffix: "localhost".into(),
-            guards: Arc::new(Guards::new(Vec::new())),
-        }
+        AppState::for_test(&root)
     }
 
     /// A data directory with one published app: artifact, rows, an account,

@@ -856,25 +856,13 @@ mod tests {
         let mailbox = Arc::new(MemoryMailbox::default());
         let state = AppState {
             deployments: Arc::new(RwLock::new(deployments)),
-            db_locks: LockMap::default(),
-            s3: None,
-            artifact_bucket: "artifacts".into(),
-            data_bucket: "data".into(),
-            files: crate::file_store::Files::local(&root),
-            data_root: root.clone(),
-            copies: Default::default(),
-            admin_key: "test-admin".into(),
             accounts: AccountSettings {
                 verification: Verification::Required,
                 mail: Some(mailbox.clone() as Arc<dyn AccountMail>),
                 queue: None,
                 google: Arc::new(crate::google::Google::real()),
             },
-            public_origin: "http://localhost".into(),
-            mcp_origin: None,
-            path_origin: None,
-            host_suffix: "localhost".into(),
-            guards: Arc::new(Guards::new(Vec::new())),
+            ..AppState::for_test(&root)
         };
         Fixture { state, mailbox, root }
     }

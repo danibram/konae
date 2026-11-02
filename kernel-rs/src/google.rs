@@ -971,14 +971,6 @@ mod tests {
         }
         let state = AppState {
             deployments: Arc::new(RwLock::new(deployments)),
-            db_locks: LockMap::default(),
-            s3: None,
-            artifact_bucket: "artifacts".into(),
-            data_bucket: "data".into(),
-            data_root: root.clone(),
-            files: crate::file_store::Files::local(&root),
-            copies: Default::default(),
-            admin_key: "test-admin".into(),
             accounts: AccountSettings {
                 verification: auth::Verification::Required,
                 mail: None,
@@ -986,10 +978,8 @@ mod tests {
                 google: Arc::new(Google::for_test(&base)),
             },
             public_origin: KERNEL.into(),
-            mcp_origin: None,
             path_origin: Some(PATH_ORIGIN.into()),
-            host_suffix: "localhost".into(),
-            guards: Arc::new(limits::Guards::new(Vec::new())),
+            ..AppState::for_test(&root)
         };
         let fixture = Fixture { state, fake, base, root };
         set_client(&fixture.state, &fixture.deployment(APP).await.project_id, APP_CLIENT);

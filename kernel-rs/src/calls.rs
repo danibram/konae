@@ -1574,21 +1574,9 @@ mod tests {
 
     fn test_state(root: &Path, public_origin: &str) -> AppState {
         AppState {
-            deployments: Arc::new(RwLock::new(HashMap::new())),
-            db_locks: LockMap::default(),
-            s3: None,
-            artifact_bucket: "artifacts".into(),
-            data_bucket: "data".into(),
-            files: crate::file_store::Files::local(&root),
-            data_root: root.into(),
-            copies: Arc::new(super::super::copies::CopyStatus::default()),
-            admin_key: "test-admin".into(),
-            accounts: super::super::accounts::AccountSettings::local(),
             public_origin: public_origin.into(),
-            mcp_origin: None,
-            path_origin: None,
             host_suffix: "apps.example.org".into(),
-            guards: Arc::new(super::super::limits::Guards::new(Vec::new())),
+            ..AppState::for_test(&root)
         }
     }
 

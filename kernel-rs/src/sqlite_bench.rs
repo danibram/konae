@@ -8,21 +8,8 @@ use std::time::{Duration, Instant};
 
 fn state(root: &Path) -> AppState {
     AppState {
-        deployments: Arc::new(RwLock::new(HashMap::new())),
-        db_locks: LockMap::default(),
-        s3: None,
-        artifact_bucket: "artifacts".into(),
-        data_bucket: "data".into(),
-        files: crate::file_store::Files::local(&root),
-        data_root: root.into(),
-        copies: Arc::new(copies::CopyStatus::default()),
         admin_key: "bench".into(),
-        accounts: accounts::AccountSettings::local(),
-        public_origin: "http://localhost".into(),
-        mcp_origin: None,
-        path_origin: None,
-        host_suffix: "localhost".into(),
-        guards: Arc::new(Guards::new(Vec::new())),
+        ..AppState::for_test(&root)
     }
 }
 

@@ -1817,25 +1817,13 @@ mod tests {
         queue.run_preflight().await;
         let state = AppState {
             deployments: Arc::new(RwLock::new(deployments)),
-            db_locks: LockMap::default(),
-            s3: None,
-            artifact_bucket: "artifacts".into(),
-            data_bucket: "data".into(),
-            files: crate::file_store::Files::local(&root),
-            data_root: root.clone(),
-            copies: Default::default(),
-            admin_key: "test-admin".into(),
             accounts: accounts::AccountSettings {
                 verification: auth::Verification::Required,
                 mail: None,
                 queue: Some(queue),
                 google: Arc::new(crate::google::Google::real()),
             },
-            public_origin: "http://localhost".into(),
-            mcp_origin: None,
-            path_origin: None,
-            host_suffix: "localhost".into(),
-            guards: Arc::new(limits::Guards::new(Vec::new())),
+            ..AppState::for_test(&root)
         };
         Fixture { state, root, app, other }
     }

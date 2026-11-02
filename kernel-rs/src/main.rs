@@ -89,6 +89,31 @@ struct AppState {
     accounts: accounts::AccountSettings,
 }
 
+#[cfg(test)]
+impl AppState {
+    /// A Kernel on `root` with no Deployments, local files, no mail and the
+    /// `localhost` names. A test changes the fields it needs with `..`.
+    pub(crate) fn for_test(root: &Path) -> Self {
+        Self {
+            deployments: Arc::new(RwLock::new(HashMap::new())),
+            db_locks: LockMap::default(),
+            s3: None,
+            artifact_bucket: "artifacts".into(),
+            data_bucket: "data".into(),
+            files: file_store::Files::local(root),
+            data_root: root.into(),
+            copies: Default::default(),
+            admin_key: "test-admin".into(),
+            accounts: accounts::AccountSettings::local(),
+            public_origin: "http://localhost".into(),
+            mcp_origin: None,
+            path_origin: None,
+            host_suffix: "localhost".into(),
+            guards: Arc::new(Guards::new(Vec::new())),
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Deployment {
@@ -3513,20 +3538,7 @@ mod tests {
                 deployment.hostname.clone(),
                 deployment,
             )]))),
-            db_locks: LockMap::default(),
-            s3: None,
-            artifact_bucket: "artifacts".into(),
-            data_bucket: "data".into(),
-            files: crate::file_store::Files::local(&root),
-            data_root: root.into(),
-            copies: Arc::new(copies::CopyStatus::default()),
-            admin_key: "test-admin".into(),
-            accounts: accounts::AccountSettings::local(),
-            public_origin: "http://localhost".into(),
-            mcp_origin: None,
-            path_origin: None,
-            host_suffix: "localhost".into(),
-            guards: Arc::new(Guards::new(Vec::new())),
+            ..AppState::for_test(&root)
         };
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -4012,23 +4024,7 @@ mod tests {
     }
 
     fn test_state(root: &Path) -> AppState {
-        AppState {
-            deployments: Arc::new(RwLock::new(HashMap::new())),
-            db_locks: LockMap::default(),
-            s3: None,
-            artifact_bucket: "artifacts".into(),
-            data_bucket: "data".into(),
-            files: crate::file_store::Files::local(&root),
-            data_root: root.into(),
-            copies: Arc::new(copies::CopyStatus::default()),
-            admin_key: "test-admin".into(),
-            accounts: accounts::AccountSettings::local(),
-            public_origin: "http://localhost".into(),
-            mcp_origin: None,
-            path_origin: None,
-            host_suffix: "localhost".into(),
-            guards: Arc::new(Guards::new(Vec::new())),
-        }
+        AppState::for_test(&root)
     }
 
     fn input_binding(key: &str, value_type: &str, max_length: Option<usize>) -> ActionBinding {

@@ -2715,21 +2715,8 @@ mod tests {
             let root = std::env::temp_dir().join(format!("konae-google-cases-{}", Uuid::new_v4()));
             std::fs::create_dir_all(&root).unwrap();
             let state = AppState {
-                deployments: Arc::new(RwLock::new(HashMap::new())),
-                db_locks: LockMap::default(),
-                s3: None,
-                artifact_bucket: "artifacts".into(),
-                data_bucket: "data".into(),
-                data_root: root.clone(),
-                files: crate::file_store::Files::local(&root),
-                copies: Default::default(),
-                admin_key: "test-admin".into(),
-                accounts: super::accounts::AccountSettings::local(),
                 public_origin: "http://localhost:8790".into(),
-                mcp_origin: None,
-                path_origin: None,
-                host_suffix: "localhost".into(),
-                guards: Arc::new(Guards::new(Vec::new())),
+                ..AppState::for_test(&root)
             };
             let mut deployment: Deployment = serde_json::from_value(json!({
                 "id": "p1", "projectId": "p1", "projectName": "Practice", "slug": "practice", "artifactVersion": "v1", "signupPolicy": {"mode": "closed"}, "signInMethods": ["password"], "url": "http://practice.localhost:8790", "createdAt": 0,
@@ -2768,21 +2755,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-methods-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let state = AppState {
-            deployments: Arc::new(RwLock::new(HashMap::new())),
-            db_locks: LockMap::default(),
-            s3: None,
-            artifact_bucket: "artifacts".into(),
-            data_bucket: "data".into(),
-            data_root: root.clone(),
-            files: crate::file_store::Files::local(&root),
-            copies: Default::default(),
-            admin_key: "test-admin".into(),
-            accounts: super::accounts::AccountSettings::local(),
             public_origin: "http://localhost:8790".into(),
-            mcp_origin: None,
-            path_origin: None,
-            host_suffix: "localhost".into(),
-            guards: Arc::new(Guards::new(Vec::new())),
+            ..AppState::for_test(&root)
         };
         let mut deployment: Deployment = serde_json::from_value(json!({
             "id": "p1", "projectId": "p1", "projectName": "Practice", "slug": "practice", "artifactVersion": "v1", "signupPolicy": {"mode": "closed"}, "signInMethods": ["password"], "url": "http://practice.localhost:8790", "createdAt": 0,
@@ -2825,23 +2799,7 @@ mod tests {
     async fn app_users_cannot_take_the_transfer_slots_owners_need() {
         let root = std::env::temp_dir().join(format!("konae-quota-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&root).await.unwrap();
-        let state = AppState {
-            deployments: Arc::new(RwLock::new(HashMap::new())),
-            db_locks: LockMap::default(),
-            s3: None,
-            artifact_bucket: "artifacts".into(),
-            data_bucket: "data".into(),
-            files: crate::file_store::Files::local(&root),
-            data_root: root.clone(),
-            copies: Default::default(),
-            admin_key: "test-admin".into(),
-            accounts: super::accounts::AccountSettings::local(),
-            public_origin: "http://localhost".into(),
-            mcp_origin: None,
-            path_origin: None,
-            host_suffix: "localhost".into(),
-            guards: Arc::new(Guards::new(Vec::new())),
-        };
+        let state = AppState::for_test(&root);
         let body = || json!({"direction":"download","size":1,"sha256":"00","complete":true});
         let per_user = MAX_RUNTIME_PRINCIPAL_TRANSFERS;
         for _ in 0..per_user {
@@ -2889,23 +2847,7 @@ mod tests {
     #[tokio::test]
     async fn platform_guide_sdk_topic_is_the_rendered_contract() {
         let root = std::env::temp_dir().join(format!("konae-guide-{}", Uuid::new_v4()));
-        let state = AppState {
-            deployments: Arc::new(RwLock::new(HashMap::new())),
-            db_locks: LockMap::default(),
-            s3: None,
-            artifact_bucket: "artifacts".into(),
-            data_bucket: "data".into(),
-            files: crate::file_store::Files::local(&root),
-            data_root: root.clone(),
-            copies: Default::default(),
-            accounts: super::accounts::AccountSettings::local(),
-            admin_key: "test-admin".into(),
-            public_origin: "http://localhost".into(),
-            mcp_origin: None,
-            path_origin: None,
-            host_suffix: "localhost".into(),
-            guards: Arc::new(Guards::new(Vec::new())),
-        };
+        let state = AppState::for_test(&root);
         let owner = Owner { id: "o".into(), display: None, scopes: vec!["read".into()], projects: vec![], session: false };
         let guide = admin_call(&state, &owner, "owner:o", "platform_guide", json!({"topic":"sdk"})).await.unwrap();
         let rendered: Value = serde_json::from_str(include_str!("sdk-guide.json")).unwrap();

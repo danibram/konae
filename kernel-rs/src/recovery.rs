@@ -331,21 +331,8 @@ mod tests {
     fn state_with(root: &Path, target: &Path) -> AppState {
         let config = copies::CopyConfig { targets: vec![Target::Directory(target.to_owned())], interval: std::time::Duration::from_secs(3600) };
         AppState {
-            deployments: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            db_locks: LockMap::default(),
-            s3: None,
-            artifact_bucket: "artifacts".into(),
-            data_bucket: "data".into(),
-            files: crate::file_store::Files::local(&root),
-            data_root: root.into(),
             copies: Arc::new(copies::CopyStatus::new(Some(&config))),
-            accounts: accounts::AccountSettings::local(),
-            admin_key: "test-admin".into(),
-            public_origin: "http://localhost".into(),
-            mcp_origin: None,
-            path_origin: None,
-            host_suffix: "localhost".into(),
-            guards: Arc::new(limits::Guards::new(Vec::new())),
+            ..AppState::for_test(&root)
         }
     }
 

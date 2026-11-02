@@ -575,21 +575,9 @@ mod tests {
 
     fn test_state(root: &Path) -> AppState {
         AppState {
-            deployments: Arc::new(RwLock::new(HashMap::new())),
-            db_locks: LockMap::default(),
-            s3: None,
-            artifact_bucket: "artifacts".into(),
-            data_bucket: "data".into(),
-            files: crate::file_store::Files::local(&root),
-            data_root: root.into(),
-            copies: Arc::new(copies::CopyStatus::default()),
-            admin_key: "test-admin".into(),
-            accounts: accounts::AccountSettings::local(),
             public_origin: "https://konae.example.com".into(),
-            mcp_origin: None,
-            path_origin: None,
             host_suffix: "apps.example.com".into(),
-            guards: Arc::new(limits::Guards::new(Vec::new())),
+            ..AppState::for_test(&root)
         }
     }
 
