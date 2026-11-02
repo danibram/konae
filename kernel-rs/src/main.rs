@@ -41,6 +41,7 @@ mod google;
 mod guard;
 mod guide;
 mod hosts;
+mod installation;
 mod http;
 mod invitations;
 mod layout;
@@ -88,6 +89,8 @@ struct AppState {
     path_origin: Option<String>,
     guards: Arc<Guards>,
     accounts: accounts::AccountSettings,
+    /// The stores at the data root besides the app folders.
+    installation: Arc<installation::Installation>,
 }
 
 #[cfg(test)]
@@ -111,6 +114,7 @@ impl AppState {
             path_origin: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
+            installation: Arc::new(mcp::installation()),
         }
     }
 }
@@ -481,9 +485,10 @@ struct ActionBinding {
 #[tokio::main]
 async fn main() -> Result<()> {
     if clerk::operator_command()? { return Ok(()); }
-    if copies::operator_command().await? { return Ok(()); }
+    let installation = mcp::installation();
+    if copies::operator_command(&installation).await? { return Ok(()); }
     if file_store::operator_command().await? { return Ok(()); }
-    if recovery::operator_command().await? { return Ok(()); }
+    if recovery::operator_command(&installation).await? { return Ok(()); }
     if accounts::operator_command()? { return Ok(()); }
     if admission::operator_command()? { return Ok(()); }
     let port = env("KONAE_KERNEL_PORT", "8787").parse::<u16>()?;
@@ -502,7 +507,7 @@ async fn main() -> Result<()> {
     // Held until the process exits, so files-migrate and files-reconcile
     // refuse while this Kernel serves.
     let _running = file_store::hold_kernel_lock(&data_root)?;
-    let account_settings = accounts::AccountSettings::from_env(&data_root, &admin_key, &public_origin)?;
+    let account_settings = accounts::AccountSettings::from_env(&data_root, &admin_key, &public_origin, &installation)?;
     let s3 = s3_client_from_env().await;
     let artifact_bucket = env("KONAE_ARTIFACT_BUCKET", "konae-apps");
     let data_bucket = env("KONAE_DATA_BUCKET", "konae-data");
@@ -528,6 +533,7 @@ async fn main() -> Result<()> {
             &std::env::var("KONAE_TRUSTED_PROXIES").unwrap_or_default(),
         )?)),
         accounts: account_settings,
+        installation: Arc::new(installation),
     };
     path::load(&state);
     if let Some(config) = copy_config {

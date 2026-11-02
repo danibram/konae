@@ -28,6 +28,32 @@ pub fn routes() -> Router<AppState> {
         .route("/_konae/owner/clerk", post(owner_clerk))
 }
 
+/// The Kernel's stores and Konae's: the owner accounts in `owners.sqlite`
+/// and the project list, credentials and audit in `mcp.sqlite`. A restore
+/// signs out owner and app sessions, Clerk creator sessions, agent
+/// credentials and OAuth tokens, and unfinished OAuth codes and release plans.
+pub(super) fn installation() -> super::installation::Installation {
+    use super::installation::{AccountDatabase, RootDatabase};
+    let mut installation = super::installation::Installation::kernel();
+    installation.databases.splice(0..0, [
+        RootDatabase { file: "owners.sqlite", sign_out: &["app_sessions", "creator_sessions", "account_challenges"] },
+        RootDatabase { file: "mcp.sqlite", sign_out: &["credentials", "oauth_codes", "plans"] },
+    ]);
+    installation.accounts.push(AccountDatabase { scope: auth::CREATOR_SCOPE, kind: "creator", file: "owners.sqlite" });
+    installation.mail_group = project_owner;
+    installation
+}
+
+/// The owner of a project, for the daily email allowance of the owner's apps.
+fn project_owner(root: &Path, project_id: &str) -> Option<String> {
+    let connection = Connection::open_with_flags(root.join("mcp.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    connection
+        .query_row("SELECT owner FROM projects WHERE id = ?1", [project_id], |row| row.get(0))
+        .optional()
+        .ok()
+        .flatten()
+}
+
 pub(super) fn store(state: &AppState) -> Result<Connection> {
     let db = Connection::open(state.data_root.join("mcp.sqlite"))?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -1645,6 +1671,16 @@ async fn admin_call(
         name if name.starts_with("path_") => super::path::admin_call(state, owner, name, &a).await,
         _ => anyhow::bail!("Unknown tool."),
     }
+}
+
+/// The email of the owner account that invites, for the message. Owners
+/// signed in through Clerk keep no email in Konae, so their invitations name
+/// only the app. The file is opened read-only, so a lookup never creates the
+/// account tables.
+pub(super) fn inviter_email(state: &AppState, owner_id: &str) -> Option<String> {
+    let db = Connection::open_with_flags(state.data_root.join("owners.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    db.busy_timeout(std::time::Duration::from_secs(5)).ok()?;
+    db.query_row("SELECT email FROM app_users WHERE id = ?1", [owner_id], |row| row.get(0)).optional().ok().flatten()
 }
 
 /// The email of the owner's active account, when Konae keeps one. An owner

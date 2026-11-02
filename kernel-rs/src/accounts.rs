@@ -41,9 +41,9 @@ impl AccountSettings {
     /// Reads `KONAE_ACCOUNT_VERIFICATION` and the mail transport
     /// (`mail::MailQueue::from_env`). Every transport, including
     /// `development`, sends through the queue.
-    pub(crate) fn from_env(data_root: &Path, admin_key: &str, public_origin: &str) -> Result<Self> {
+    pub(crate) fn from_env(data_root: &Path, admin_key: &str, public_origin: &str, installation: &crate::installation::Installation) -> Result<Self> {
         let verification = Verification::from_env().map_err(anyhow::Error::msg)?;
-        let queue = mail::MailQueue::from_env(data_root, admin_key)?;
+        let queue = mail::MailQueue::from_env(data_root, admin_key, installation)?;
         let google = Arc::new(google::Google::from_env(public_origin)?);
         Ok(Self { verification, mail: None, queue, google })
     }
@@ -275,15 +275,10 @@ async fn issue_and_send(
     }
 }
 
-/// The creator who owns a Deployment's project, for the per-creator limit.
+/// Who answers for a Deployment's daily email allowance, as the
+/// installation names it.
 pub(crate) fn project_creator(state: &AppState, project_id: &str) -> Option<String> {
-    let path = state.data_root.join("mcp.sqlite");
-    let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
-    connection
-        .query_row("SELECT owner FROM projects WHERE id = ?1", [project_id], |row| row.get(0))
-        .optional()
-        .ok()
-        .flatten()
+    (state.installation.mail_group)(&state.data_root, project_id)
 }
 
 fn app_delivery(state: &AppState, deployment: &Deployment, email: &str, client: std::net::IpAddr) -> Delivery {

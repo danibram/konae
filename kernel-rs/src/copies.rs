@@ -1,7 +1,7 @@
 //! One folder per Deployment, copied off the volume.
 //!
-//! The data directory holds `owners.sqlite`, `mcp.sqlite`, `mail.sqlite`, `calls.sqlite` and one folder per
-//! Deployment under `deployments/<id>/`. A copy is a consistent snapshot of
+//! The data directory holds the databases its `Installation` lists and one
+//! app folder per Deployment under `apps/<id>/`. A copy is a consistent snapshot of
 //! those, written to a directory target, an S3 prefix, or both, with a
 //! `manifest.json` that lists every file with its size and SHA-256. The
 //! `restore` subcommand installs one copy into an empty data directory.
@@ -11,6 +11,7 @@
 //! same secret to open it. Every target also keeps the revocation record of
 //! `recovery.rs`, which `restore` applies before the Kernel serves.
 
+use crate::installation::Installation;
 use std::{
     collections::{HashMap, HashSet},
     io::Read,
@@ -41,10 +42,8 @@ use crate::{
 /// `usage.sqlite` is ADR-0010's store; it is copied when it exists.
 /// `secrets.sqlite` stays on this installation and in its copies, never in an export.
 const DEPLOYMENT_DATABASES: [&str; 4] = ["database.sqlite", "identity.sqlite", "usage.sqlite", crate::layout::SECRETS_DATABASE];
-/// `mail.sqlite` is the email queue (`mail.rs`); its links stay sealed in a copy.
-/// `calls.sqlite` is the call actions' queue and outbox (`calls.rs`).
-/// `transfers.sqlite` holds unfinished transfers (`transfers.rs`).
-const ROOT_DATABASES: [&str; 5] = ["owners.sqlite", "mcp.sqlite", crate::mail::MAIL_DATABASE, crate::calls::CALLS_DATABASE, crate::transfers::TRANSFERS_DATABASE];
+/// The databases at the data root come from the `Installation` the Kernel
+/// was started with; `mail.sqlite` keeps its links sealed in a copy.
 const MANIFEST: &str = "manifest.json";
 /// The only cipher a copy names in its manifest.
 const ENCRYPTION: &str = "AES-256-GCM";
@@ -382,7 +381,7 @@ async fn send(state: &AppState, target: &Target, staging: &Path, manifest: &Mani
 /// a publish take, so its databases, files and artifact agree with each other.
 async fn stage_copy(state: &AppState, staging: &Path, id: &str, created_at: u64) -> Result<Manifest> {
     tokio::fs::create_dir_all(crate::layout::apps(&staging)).await?;
-    for name in ROOT_DATABASES {
+    for name in state.installation.databases.iter().map(|database| database.file) {
         let source = state.data_root.join(name);
         if source.exists() {
             let target = staging.join(name);
@@ -796,7 +795,7 @@ const RESTORE_USAGE: &str =
     "Usage: konae-kernel restore --from <copy directory | s3://bucket/prefix> [--copy <copy ID>]";
 
 /// Handles `konae-kernel restore`. Returns false for any other command.
-pub async fn operator_command() -> Result<bool> {
+pub async fn operator_command(installation: &Installation) -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) != Some("restore") {
         return Ok(false);
@@ -814,7 +813,7 @@ pub async fn operator_command() -> Result<bool> {
     let from = from.context(RESTORE_USAGE)?;
     let destination = PathBuf::from(std::env::var("KONAE_DATA_DIR").unwrap_or_else(|_| "/data".into()));
     let source = source_for(&from).await?;
-    let summary = restore(&source, copy.as_deref(), &destination, CopyKey::from_env()?.as_ref()).await?;
+    let summary = restore(&source, copy.as_deref(), &destination, CopyKey::from_env()?.as_ref(), installation).await?;
     println!(
         "Restored copy {} into {}: {} Deployments, {} files, checksums verified. Signed out {} sessions and credentials and ended every open email link; owners, agents and app users sign in again.",
         summary.copy_id,
@@ -941,7 +940,7 @@ struct RestoreSummary {
     reconciled: std::result::Result<usize, String>,
 }
 
-async fn restore(source: &Source, copy: Option<&str>, destination: &Path, key: Option<&CopyKey>) -> Result<RestoreSummary> {
+async fn restore(source: &Source, copy: Option<&str>, destination: &Path, key: Option<&CopyKey>, installation: &Installation) -> Result<RestoreSummary> {
     ensure_empty(destination)?;
     // A directory that is itself one copy.
     let direct;
@@ -978,7 +977,7 @@ async fn restore(source: &Source, copy: Option<&str>, destination: &Path, key: O
         );
     }
     for file in &manifest.files {
-        let allowed = ROOT_DATABASES.contains(&file.path.as_str()) || file.path.starts_with("apps/");
+        let allowed = installation.holds(&file.path) || file.path.starts_with("apps/");
         ensure!(
             safe_relative_path(&file.path) && allowed,
             "The copy's manifest names a path outside a data directory: {}",
@@ -1004,15 +1003,17 @@ async fn restore(source: &Source, copy: Option<&str>, destination: &Path, key: O
             tokio::fs::write(&target, &bytes).await?;
         }
         let root = staging.clone();
+        let stores = installation.clone();
         let removed = tokio::task::spawn_blocking(move || -> Result<usize> {
-            check_databases(&root)?;
-            invalidate_sessions(&root)
+            check_databases(&root, &stores)?;
+            invalidate_sessions(&root, &stores)
         })
         .await??;
         // Applied before anything is in place, or the installation holds.
         let record = source.record().await;
         let root = staging.clone();
-        let reconciled = tokio::task::spawn_blocking(move || recovery::apply_or_hold(&root, record)).await??;
+        let stores = installation.clone();
+        let reconciled = tokio::task::spawn_blocking(move || recovery::apply_or_hold(&root, &stores, record)).await??;
         Ok((removed, reconciled))
     }
     .await;
@@ -1059,8 +1060,8 @@ fn ensure_empty(destination: &Path) -> Result<()> {
     }
 }
 
-fn sqlite_files(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut paths = ROOT_DATABASES.iter().map(|name| root.join(name)).filter(|path| path.is_file()).collect::<Vec<_>>();
+fn sqlite_files(root: &Path, installation: &Installation) -> Result<Vec<PathBuf>> {
+    let mut paths = installation.databases.iter().map(|database| root.join(database.file)).filter(|path| path.is_file()).collect::<Vec<_>>();
     if let Ok(entries) = std::fs::read_dir(crate::layout::apps(&root)) {
         for entry in entries {
             let data = entry?.path().join("data");
@@ -1074,24 +1075,20 @@ fn sqlite_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
-fn check_databases(root: &Path) -> Result<()> {
-    for path in sqlite_files(root)? {
+fn check_databases(root: &Path, installation: &Installation) -> Result<()> {
+    for path in sqlite_files(root, installation)? {
         let result: String = Connection::open(&path)?.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
         ensure!(result == "ok", "{} failed SQLite's integrity check.", path.display());
     }
     Ok(())
 }
 
-/// Signs out everyone: owner and app sessions, Clerk creator sessions, agent
-/// credentials and OAuth tokens, and unfinished OAuth codes, transfers and
-/// release plans. A session revoked after the copy was taken must not come
-/// back, and the transfer files never leave the old volume.
-fn invalidate_sessions(root: &Path) -> Result<usize> {
-    let tables: [(&str, &[&str]); 3] = [
-        ("owners.sqlite", &["app_sessions", "creator_sessions", "account_challenges"]),
-        ("mcp.sqlite", &["credentials", "oauth_codes", "plans"]),
-        (crate::transfers::TRANSFERS_DATABASE, &["transfers"]),
-    ];
+/// Signs out everyone: app sessions and open links, unfinished transfers,
+/// and whatever each database of the installation lists to sign out. A
+/// session revoked after the copy was taken must not come back, and the
+/// transfer files never leave the old volume.
+fn invalidate_sessions(root: &Path, installation: &Installation) -> Result<usize> {
+    let tables = installation.databases.iter().map(|database| (database.file, database.sign_out));
     let mut removed = 0;
     let mut clear = |path: &Path, names: &[&str]| -> Result<()> {
         let connection = Connection::open(path)?;
@@ -1279,7 +1276,7 @@ mod tests {
         std::fs::write(files.join("index.json"), json!([{"id": kept}, {"id": vanished}]).to_string()).unwrap();
 
         run_copy(&state, &[Target::Directory(copies.clone())]).await.unwrap();
-        restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
+        restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::mcp::installation()).await.unwrap();
         let folder = crate::layout::files(&restored, &deployment.id);
         assert_eq!(std::fs::read(folder.join(format!("{kept}.blob"))).unwrap(), b"attachment");
         let index: Value = serde_json::from_slice(&std::fs::read(folder.join("index.json")).unwrap()).unwrap();
@@ -1304,7 +1301,7 @@ mod tests {
         assert!(!copied.join("files/.index.json.tmp-x").exists(), "temporary files stay behind");
         assert!(!copied.join("backups/portable-data-x.sqlite").exists(), "export scratch stays behind");
 
-        let summary = restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
+        let summary = restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::mcp::installation()).await.unwrap();
         assert_eq!((summary.copy_id.as_str(), summary.deployments), (id.as_str(), 1));
         let loaded = load_deployments(&restored, "http://localhost").await.unwrap();
         let served = loaded.get("copy-test.localhost").expect("the restored Kernel knows the app");
@@ -1326,7 +1323,7 @@ mod tests {
         assert!(crate::http::holds_route_secret(&crate::http::secrets_store(&restored, &deployment.id).unwrap(), "a-copied-route-secret").unwrap(), "the app's secrets travel in a copy");
         assert!(std::fs::read_dir(&restored).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with(".restore-")));
 
-        let message = restore(&Source::Directory(copies.clone()), None, &restored, None).await.err().unwrap().to_string();
+        let message = restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::mcp::installation()).await.err().unwrap().to_string();
         assert!(message.contains("not empty"), "{message}");
         for path in [source, copies, restored] {
             let _ = std::fs::remove_dir_all(path);
@@ -1348,7 +1345,7 @@ mod tests {
         let entry = recovery::Entry::new("app-user", Some(&deployment.id), &user, "suspended");
         recovery::write(&[Target::Directory(copies.clone())], None, "data", &entry).await.unwrap();
 
-        let summary = restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
+        let summary = restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::mcp::installation()).await.unwrap();
         assert!(summary.reconciled.as_ref().is_ok_and(|changed| *changed >= 1), "{:?}", summary.reconciled);
         assert!(recovery::hold(&restored).is_none());
         let folder = crate::layout::folder(&restored, &deployment.id);
@@ -1356,7 +1353,7 @@ mod tests {
         assert!(restored_auth.login("writer@copy.test", "correct horse battery").is_err(), "the suspension survives the restore");
 
         std::fs::remove_file(copies.join(recovery::LEDGER_DIR).join(recovery::LEDGER_START)).unwrap();
-        let summary = restore(&Source::Directory(copies.clone()), None, &held, None).await.unwrap();
+        let summary = restore(&Source::Directory(copies.clone()), None, &held, None, &crate::mcp::installation()).await.unwrap();
         assert!(summary.reconciled.as_ref().is_err_and(|reason| reason.contains("started.json")));
         assert!(recovery::hold(&held).is_some(), "an unreadable record keeps the installation in maintenance");
         assert!(crate::maintenance::pause(&held, &deployment.id).is_some());
@@ -1374,7 +1371,7 @@ mod tests {
         std::fs::create_dir_all(crate::layout::private(&source, &deployment.id)).unwrap();
         std::fs::write(crate::layout::private(&source, &deployment.id).join(crate::maintenance::MARKER_FILE), json!({"since": 1}).to_string()).unwrap();
         run_copy(&state(&source), &[Target::Directory(copies.clone())]).await.unwrap();
-        restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
+        restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::mcp::installation()).await.unwrap();
         let message = crate::maintenance::pause(&restored, &deployment.id).expect("the restored app stays in maintenance");
         assert!(message.contains("in maintenance"));
         for path in [source, copies, restored] {
@@ -1408,10 +1405,10 @@ mod tests {
         assert!(!bytes.windows(4).any(|w| w == b"kept"), "rows are not readable at rest");
 
         let refused_root = scratch("sealed-refused");
-        let without = restore(&Source::Directory(sealed.clone()), None, &refused_root, None).await.err().unwrap().to_string();
+        let without = restore(&Source::Directory(sealed.clone()), None, &refused_root, None, &crate::mcp::installation()).await.err().unwrap().to_string();
         assert!(without.contains("is encrypted") && without.contains("KONAE_COPY_SECRET"), "{without}");
         let wrong = CopyKey::derive("another secret that is long enough for tests");
-        let refused = restore(&Source::Directory(sealed.clone()), None, &refused_root, Some(&wrong)).await.err().unwrap().to_string();
+        let refused = restore(&Source::Directory(sealed.clone()), None, &refused_root, Some(&wrong), &crate::mcp::installation()).await.err().unwrap().to_string();
         assert!(refused.contains("does not open"), "{refused}");
 
         // A sealed file moved to another path does not open.
@@ -1419,11 +1416,11 @@ mod tests {
         let moved = scratch("sealed-moved-copy");
         copy_tree(&sealed, &moved).unwrap();
         std::fs::copy(moved.join(&id).join(&identity), moved.join(&id).join(&database)).unwrap();
-        let damaged = restore(&Source::Directory(moved.clone()), Some(&id), &refused_root, Some(&key)).await.err().unwrap().to_string();
+        let damaged = restore(&Source::Directory(moved.clone()), Some(&id), &refused_root, Some(&key), &crate::mcp::installation()).await.err().unwrap().to_string();
         assert!(damaged.contains("does not decrypt"), "{damaged}");
 
         let restored = scratch("sealed-restored");
-        restore(&Source::Directory(sealed.clone()), Some(&id), &restored, Some(&key)).await.unwrap();
+        restore(&Source::Directory(sealed.clone()), Some(&id), &restored, Some(&key), &crate::mcp::installation()).await.unwrap();
         let folder = crate::layout::folder(&restored, &deployment.id);
         assert_eq!(count(&folder.join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
         AuthService::open(folder.join("data/identity.sqlite")).unwrap().login("writer@copy.test", "correct horse battery").unwrap();
@@ -1455,7 +1452,7 @@ mod tests {
         crate::usage::flush();
         let id = run_copy(&state(&source), &[Target::Directory(copies.clone())]).await.unwrap();
         assert!(crate::layout::usage(&copies.join(&id), &deployment.id).is_file());
-        restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
+        restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::mcp::installation()).await.unwrap();
 
         let restored_folder = crate::layout::folder(&restored, &deployment.id);
         let identity = restored_folder.join("data/identity.sqlite");
@@ -1495,7 +1492,7 @@ mod tests {
         drop(mail);
         let id = run_copy(&state(&source), &[Target::Directory(copies.clone())]).await.unwrap();
         assert!(copies.join(&id).join(crate::mail::MAIL_DATABASE).is_file());
-        restore(&Source::Directory(copies.clone()), None, &restored, None).await.unwrap();
+        restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::mcp::installation()).await.unwrap();
         let restored_mail = restored.join(crate::mail::MAIL_DATABASE);
         let states: Vec<(String, String, bool)> = Connection::open(&restored_mail)
             .unwrap()
@@ -1521,16 +1518,16 @@ mod tests {
         copy_tree(&copies.join(&id), &unfinished).unwrap();
         std::fs::remove_file(unfinished.join(MANIFEST)).unwrap();
         let destination = scratch("damaged-restore");
-        let latest = restore(&Source::Directory(copies.clone()), None, &destination, None).await.unwrap();
+        let latest = restore(&Source::Directory(copies.clone()), None, &destination, None, &crate::mcp::installation()).await.unwrap();
         assert_eq!(latest.copy_id, id, "a copy without a manifest is never picked");
         let named = unfinished.file_name().unwrap().to_str().unwrap();
         let empty = scratch("damaged-empty");
-        let message = restore(&Source::Directory(copies.clone()), Some(named), &empty, None).await.err().unwrap().to_string();
+        let message = restore(&Source::Directory(copies.clone()), Some(named), &empty, None, &crate::mcp::installation()).await.err().unwrap().to_string();
         assert!(message.contains("incomplete"), "{message}");
 
         let artifact = crate::layout::dist(&copies.join(&id), &deployment.id).join("index.html");
         std::fs::write(&artifact, "<main>tampered</main>").unwrap();
-        let message = restore(&Source::Directory(copies.join(&id)), None, &empty, None).await.err().unwrap().to_string();
+        let message = restore(&Source::Directory(copies.join(&id)), None, &empty, None, &crate::mcp::installation()).await.err().unwrap().to_string();
         assert!(message.contains("does not match its checksum"), "{message}");
         assert_eq!(std::fs::read_dir(&empty).unwrap().count(), 0, "a refused restore leaves the directory empty");
 
@@ -1538,7 +1535,7 @@ mod tests {
         let mut manifest: Value = serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
         manifest["files"][0]["path"] = json!("../outside.sqlite");
         std::fs::write(&manifest_path, manifest.to_string()).unwrap();
-        let message = restore(&Source::Directory(copies.join(&id)), None, &empty, None).await.err().unwrap().to_string();
+        let message = restore(&Source::Directory(copies.join(&id)), None, &empty, None, &crate::mcp::installation()).await.err().unwrap().to_string();
         assert!(message.contains("outside a data directory"), "{message}");
         for path in [source, copies, destination, empty] {
             let _ = std::fs::remove_dir_all(path);

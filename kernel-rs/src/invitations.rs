@@ -341,7 +341,15 @@ pub(crate) fn admin_tools() -> Vec<Value> {
 pub(crate) async fn admin_call(state: &AppState, owner: &Owner, name: &str, arguments: &Value) -> Result<Value> {
     let id = arguments["deploymentId"].as_str().unwrap_or_default();
     let deployment = mcp::owned_deployment(state, owner, id, "manage_users").await?;
-    run(state, &deployment, &owner.id, name, arguments).await
+    let inviter = Inviter { id: owner.id.clone(), email: mcp::inviter_email(state, &owner.id) };
+    run(state, &deployment, &inviter, name, arguments).await
+}
+
+/// Who sends an invitation: the ID its idempotency keys and rows record, and
+/// the email the message names, when there is one.
+pub(crate) struct Inviter {
+    pub(crate) id: String,
+    pub(crate) email: Option<String>,
 }
 
 /// A refusal that names what the owner should do instead, or a storage error.
@@ -389,7 +397,8 @@ async fn off<T: Send + 'static>(work: impl FnOnce() -> Result<T> + Send + 'stati
 }
 
 /// Runs one owner tool on a Deployment the caller already authorized.
-async fn run(state: &AppState, deployment: &Deployment, inviter: &str, name: &str, a: &Value) -> Result<Value> {
+async fn run(state: &AppState, deployment: &Deployment, sender: &Inviter, name: &str, a: &Value) -> Result<Value> {
+    let inviter = sender.id.as_str();
     let limit = a["limit"].as_u64().map_or(50, |value| value as usize).clamp(1, MAX_PAGE);
     let cursor = a["cursor"].as_str().map(str::to_owned);
     let text = |key: &str| a[key].as_str().unwrap_or_default().to_owned();
@@ -438,7 +447,7 @@ async fn run(state: &AppState, deployment: &Deployment, inviter: &str, name: &st
             // message leaves, so a retry with the same key finds them. Each
             // message then goes through the account mail outbox and its budgets.
             let page = format!("{}/_konae/invitation", super::domain::app_url(state, deployment));
-            let invited_by = inviter_display(state, &inviter);
+            let invited_by = sender.email.clone();
             let mut outcomes: HashMap<String, &'static str> = HashMap::new();
             for (invitation, challenge) in issued {
                 let scope = challenge.scope.clone();
@@ -478,17 +487,6 @@ async fn run(state: &AppState, deployment: &Deployment, inviter: &str, name: &st
         }
         _ => anyhow::bail!("Unknown tool."),
     }
-}
-
-/// The email of the owner account that invites, for the message. Owners
-/// signed in through Clerk keep no email in the Kernel, so their invitations
-/// name only the app. The file is opened read-only, so a lookup never
-/// creates the account tables.
-fn inviter_display(state: &AppState, owner_id: &str) -> Option<String> {
-    let path = state.data_root.join("owners.sqlite");
-    let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
-    db.busy_timeout(std::time::Duration::from_secs(5)).ok()?;
-    db.query_row("SELECT email FROM app_users WHERE id = ?1", [owner_id], |row| row.get(0)).optional().ok().flatten()
 }
 
 /// The answer to a create or resend, the links to send once the rows that
@@ -822,6 +820,7 @@ mod tests {
         state: AppState,
         mailbox: Arc<MemoryMailbox>,
         root: PathBuf,
+        inviter_email: Option<String>,
     }
 
     impl Drop for Fixture {
@@ -864,7 +863,7 @@ mod tests {
             },
             ..AppState::for_test(&root)
         };
-        Fixture { state, mailbox, root }
+        Fixture { state, mailbox, root, inviter_email: None }
     }
 
     impl Fixture {
@@ -874,7 +873,7 @@ mod tests {
 
         async fn call(&self, name: &str, arguments: Value) -> Result<Value> {
             let app = self.app(APP_HOST).await;
-            run(&self.state, &app, OWNER, name, &arguments).await
+            run(&self.state, &app, &Inviter { id: OWNER.into(), email: self.inviter_email.clone() }, name, &arguments).await
         }
 
         async fn invite(&self, emails: &[&str], key: &str) -> Value {
@@ -987,11 +986,7 @@ mod tests {
         );
         queue.run_preflight().await;
         fixture.state.accounts = AccountSettings { verification: Verification::Required, mail: None, queue: Some(queue.clone()), google: Arc::new(crate::google::Google::real()) };
-        // The owner record as the creator store keeps it.
-        Connection::open(fixture.root.join("owners.sqlite"))
-            .unwrap()
-            .execute_batch("PRAGMA journal_mode = WAL; CREATE TABLE app_users(id TEXT PRIMARY KEY, email TEXT NOT NULL); INSERT INTO app_users VALUES ('owner-1', 'o''neil&co@example.test');")
-            .unwrap();
+        fixture.inviter_email = Some("o'neil&co@example.test".into());
 
         let answer = fixture.invite(&["ana@example.test"], "inviter-key-1").await;
         assert_eq!(answer["results"][0]["delivery"], "queued");
@@ -1006,9 +1001,9 @@ mod tests {
         assert!(sent[0].text.starts_with("o'neil&co@example.test invited you to join Invitation test with this email address."));
         assert!(sent[0].html.contains("<p>o&#39;neil&amp;co@example.test invited you to join Invitation test with this email address.</p>"));
 
-        // An owner with no email in the Kernel, as a Clerk owner, is not named.
+        // An inviter with no email, as a Clerk owner, is not named.
         let app = fixture.app(APP_HOST).await;
-        run(&fixture.state, &app, "clerk-owner", "app_invitations_create",
+        run(&fixture.state, &app, &Inviter { id: "clerk-owner".into(), email: None }, "app_invitations_create",
             &json!({"emails": ["ben@example.test"], "idempotencyKey": "inviter-key-2"})).await.unwrap();
         assert_eq!(queue.run_once().await.unwrap(), 1);
         assert_eq!(transport.0.lock().unwrap()[1].subject, "You are invited to Invitation test");
@@ -1303,8 +1298,8 @@ mod tests {
             async move { accept(&state, &imported, &token, PASSWORD).await }
         };
         assert!(matches!(answer(pending.clone()).await, Err(AuthError::InvalidChallenge)), "the old link fails at the destination");
-        let listed = run(&fixture.state, &imported, OWNER, "app_invitations_list", &json!({"limit": 1})).await.unwrap();
-        let rest = run(&fixture.state, &imported, OWNER, "app_invitations_list", &json!({"cursor": listed["nextCursor"]})).await.unwrap();
+        let listed = run(&fixture.state, &imported, &Inviter { id: OWNER.into(), email: None }, "app_invitations_list", &json!({"limit": 1})).await.unwrap();
+        let rest = run(&fixture.state, &imported, &Inviter { id: OWNER.into(), email: None }, "app_invitations_list", &json!({"cursor": listed["nextCursor"]})).await.unwrap();
         let mut statuses: Vec<(String, String)> = [&listed, &rest]
             .iter()
             .flat_map(|page| page["invitations"].as_array().unwrap().clone())
@@ -1317,7 +1312,7 @@ mod tests {
         // The destination resends with its own link and the recipient enters.
         let bo = rest["invitations"].as_array().unwrap().iter().chain(listed["invitations"].as_array().unwrap())
             .find(|row| row["email"] == "bo@example.test").unwrap()["invitationId"].as_str().unwrap().to_owned();
-        let resent = run(&fixture.state, &imported, OWNER, "app_invitation_resend", &json!({"invitationId": bo, "idempotencyKey": "copy-resend"})).await.unwrap();
+        let resent = run(&fixture.state, &imported, &Inviter { id: OWNER.into(), email: None }, "app_invitation_resend", &json!({"invitationId": bo, "idempotencyKey": "copy-resend"})).await.unwrap();
         assert_eq!(resent["delivery"], "queued");
         let link = fixture.mailbox.0.lock().unwrap().last().unwrap().link.clone();
         assert!(link.starts_with("http://invite-imported.localhost/_konae/invitation#invitation="));

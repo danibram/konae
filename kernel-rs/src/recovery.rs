@@ -13,6 +13,7 @@
 //! The first copy writes `revocations/started.json`, so a target without it
 //! counts as unreadable, not as empty.
 
+use crate::installation::Installation;
 use std::sync::{LazyLock, RwLock as SyncRwLock};
 
 use anyhow::{Context, bail};
@@ -212,7 +213,7 @@ pub(crate) fn parse(files: &[Vec<u8>]) -> Result<Vec<Entry>> {
 /// newest entry for each account or key counts, and only a suspension or a
 /// revocation changes anything: a restore never lifts a suspension.
 /// Returns how many rows changed.
-pub(crate) fn reconcile(root: &Path, entries: &[Entry]) -> Result<usize> {
+pub(crate) fn reconcile(root: &Path, installation: &Installation, entries: &[Entry]) -> Result<usize> {
     let mut latest: HashMap<(String, Option<String>, String), &Entry> = HashMap::new();
     for entry in entries {
         let key = (entry.kind.clone(), entry.deployment_id.clone(), entry.subject.clone());
@@ -224,7 +225,7 @@ pub(crate) fn reconcile(root: &Path, entries: &[Entry]) -> Result<usize> {
     let mut changed = 0;
     for entry in latest.values() {
         let identity = match (entry.kind.as_str(), entry.deployment_id.as_deref()) {
-            ("creator", _) => root.join("owners.sqlite"),
+            (kind, _) if installation.account_for_kind(kind).is_some() => root.join(installation.account_for_kind(kind).unwrap().file),
             (_, Some(deployment)) if !deployment.is_empty() && !deployment.contains(['/', '\\', '.']) => {
                 crate::layout::identity(&root, &deployment)
             }
@@ -235,7 +236,7 @@ pub(crate) fn reconcile(root: &Path, entries: &[Entry]) -> Result<usize> {
         }
         let db = Connection::open(&identity)?;
         changed += match (entry.kind.as_str(), entry.state.as_str()) {
-            ("app-user" | "creator", "suspended") => {
+            (kind, "suspended") if kind == "app-user" || installation.account_for_kind(kind).is_some() => {
                 let mut rows = db.execute("UPDATE app_users SET state='suspended' WHERE id=?1 AND state<>'suspended'", [&entry.subject])?;
                 rows += db.execute("DELETE FROM app_sessions WHERE user_id=?1", [&entry.subject])?;
                 if table_exists(&db, "account_challenges")? {
@@ -255,9 +256,9 @@ pub(crate) fn reconcile(root: &Path, entries: &[Entry]) -> Result<usize> {
 
 /// Applies the record read from a copy source, or holds the installation.
 /// Returns how many rows changed, or the reason it held.
-pub(crate) fn apply_or_hold(root: &Path, record: Result<Option<Vec<Vec<u8>>>>) -> Result<std::result::Result<usize, String>> {
+pub(crate) fn apply_or_hold(root: &Path, installation: &Installation, record: Result<Option<Vec<Vec<u8>>>>) -> Result<std::result::Result<usize, String>> {
     let reason = match record {
-        Ok(Some(files)) => match parse(&files).and_then(|entries| reconcile(root, &entries)) {
+        Ok(Some(files)) => match parse(&files).and_then(|entries| reconcile(root, installation, &entries)) {
             Ok(changed) => return Ok(Ok(changed)),
             Err(error_value) => format!("{error_value:#}"),
         },
@@ -269,7 +270,7 @@ pub(crate) fn apply_or_hold(root: &Path, record: Result<Option<Vec<Vec<u8>>>>) -
 }
 
 /// `konae-kernel reconcile`. Returns false for any other command.
-pub async fn operator_command() -> Result<bool> {
+pub async fn operator_command(installation: &Installation) -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) != Some("reconcile") {
         return Ok(false);
@@ -285,7 +286,7 @@ pub async fn operator_command() -> Result<bool> {
         }
         Some("--from") if args.len() == 3 => {
             let record = copies::read_record(&args[2]).await;
-            match apply_or_hold(&root, record)? {
+            match apply_or_hold(&root, installation, record)? {
                 Ok(changed) => {
                     clear_hold(&root)?;
                     println!(
@@ -376,7 +377,7 @@ mod tests {
             // An entry for another app or an unsafe path changes nothing.
             Entry::new("app-user", Some("../app-1"), &kept.user.user_id, "suspended"),
         ];
-        assert!(reconcile(&root, &entries).unwrap() >= 4);
+        assert!(reconcile(&root, &crate::mcp::installation(), &entries).unwrap() >= 4);
         let state = |path: &Path, id: &str| -> String {
             Connection::open(path).unwrap().query_row("SELECT state FROM app_users WHERE id=?1", [id], |r| r.get(0)).unwrap()
         };
@@ -395,7 +396,7 @@ mod tests {
         };
         assert!(revoked[0].1.is_some() && revoked[1].1.is_none());
         // Applying the same record twice changes nothing more.
-        assert_eq!(reconcile(&root, &entries).unwrap(), 0);
+        assert_eq!(reconcile(&root, &crate::mcp::installation(), &entries).unwrap(), 0);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -403,16 +404,16 @@ mod tests {
     fn an_unreadable_record_holds_the_installation_until_reconciled() {
         let root = scratch();
         std::fs::create_dir_all(&root).unwrap();
-        let reason = apply_or_hold(&root, Ok(None)).unwrap().unwrap_err();
+        let reason = apply_or_hold(&root, &crate::mcp::installation(), Ok(None)).unwrap().unwrap_err();
         assert!(reason.contains("started.json"));
         assert!(hold(&root).unwrap().contains("reconcile"));
         assert!(super::super::maintenance::pause(&root, "any-app").is_some());
         assert!(super::super::maintenance::holds_mail(&root, "creator"));
-        let broken = apply_or_hold(&root, Ok(Some(vec![b"{not json".to_vec()]))).unwrap().unwrap_err();
+        let broken = apply_or_hold(&root, &crate::mcp::installation(), Ok(Some(vec![b"{not json".to_vec()]))).unwrap().unwrap_err();
         assert!(broken.contains("does not parse"));
-        let failed = apply_or_hold(&root, Err(anyhow::anyhow!("bucket unreachable"))).unwrap().unwrap_err();
+        let failed = apply_or_hold(&root, &crate::mcp::installation(), Err(anyhow::anyhow!("bucket unreachable"))).unwrap().unwrap_err();
         assert!(failed.contains("bucket unreachable"));
-        assert_eq!(apply_or_hold(&root, Ok(Some(Vec::new()))).unwrap(), Ok(0));
+        assert_eq!(apply_or_hold(&root, &crate::mcp::installation(), Ok(Some(Vec::new()))).unwrap(), Ok(0));
         clear_hold(&root).unwrap();
         assert!(hold(&root).is_none());
         std::fs::remove_dir_all(root).unwrap();

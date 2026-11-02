@@ -708,6 +708,8 @@ pub(crate) struct MailQueue {
     preflight: SyncMutex<Preflight>,
     wake: tokio::sync::Notify,
     interval: Duration,
+    /// The account databases at the data root, by the scope of their challenges.
+    pub(crate) accounts: Vec<crate::installation::AccountDatabase>,
 }
 
 /// A job claimed by the worker.
@@ -764,7 +766,7 @@ fn storage(error_value: rusqlite::Error) -> AuthError {
 impl MailQueue {
     /// Builds the queue from the environment, or None when no transport is
     /// configured.
-    pub(crate) fn from_env(data_root: &Path, admin_key: &str) -> Result<Option<Arc<Self>>> {
+    pub(crate) fn from_env(data_root: &Path, admin_key: &str, installation: &crate::installation::Installation) -> Result<Option<Arc<Self>>> {
         let Some((transport, from)) = transport_from_env(data_root)? else {
             return Ok(None);
         };
@@ -773,7 +775,7 @@ impl MailQueue {
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(5000);
-        let queue = Self::open(
+        let mut queue = Self::open(
             data_root,
             transport,
             &from,
@@ -781,6 +783,7 @@ impl MailQueue {
             Limits::from_env()?,
             Duration::from_millis(interval.max(50)),
         )?;
+        queue.accounts = installation.accounts.clone();
         Ok(Some(Arc::new(queue)))
     }
 
@@ -802,6 +805,7 @@ impl MailQueue {
             preflight: SyncMutex::new(Preflight { state: "checking", reason: None, checked_at: None }),
             wake: tokio::sync::Notify::new(),
             interval,
+            accounts: Vec::new(),
         };
         install(&queue.connection()?)?;
         Ok(queue)
@@ -1025,8 +1029,8 @@ impl MailQueue {
 
     /// The identity database that holds a scope's challenges.
     fn identity_path(&self, scope: &str) -> Option<PathBuf> {
-        if scope == auth::CREATOR_SCOPE {
-            return Some(self.data_root.join("owners.sqlite"));
+        if let Some(account) = self.accounts.iter().find(|account| account.scope == scope) {
+            return Some(self.data_root.join(account.file));
         }
         let id = scope.strip_prefix("deployment:")?;
         (!id.is_empty() && !id.contains(['/', '\\', '.'])).then(|| crate::layout::identity(&self.data_root, &id))
