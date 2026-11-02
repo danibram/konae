@@ -1148,13 +1148,6 @@ fn validate_arguments(value: &Value, schema: &Value) -> Result<()> {
     Ok(())
 }
 
-fn internal_request(state: &AppState, body: Value) -> Request {
-    Request::builder()
-        .header("x-konae-admin-key", &state.admin_key)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(body.to_string()))
-        .unwrap()
-}
 
 async fn response_value(response: Response) -> Result<Value> {
     let status = response.status();
@@ -1543,7 +1536,7 @@ async fn admin_call(
         "storage_test" => {
             owner.require("read", None)?;
             response_value(
-                test_storage(State(state.clone()), internal_request(state, json!({}))).await,
+                test_storage(state).await,
             )
             .await
         }
@@ -1560,11 +1553,7 @@ async fn admin_call(
             anyhow::ensure!(input.is_object(), "Input must be an object.");
             input["operation"] = json!(op);
             response_value(
-                admin_database(
-                    State(state.clone()),
-                    AxumPath(id.to_owned()),
-                    internal_request(state, input),
-                )
+                admin_database(state, id, input.to_string().as_bytes())
                 .await,
             )
             .await
@@ -1638,7 +1627,7 @@ async fn admin_call(
                 }
             }
             let receipt = response_value(
-                deploy(State(state.clone()), internal_request(state, payload)).await,
+                deploy(state, payload.to_string().as_bytes()).await,
             )
             .await?;
             let mut db = store(state)?;

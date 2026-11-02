@@ -1587,8 +1587,7 @@ mod tests {
             "visibility": "public",
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>caller</p>"}}
         });
-        let request = Request::builder().header("x-konae-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
-        let response = deploy(State(state.clone()), request).await;
+        let response = deploy(&state, body.to_string().as_bytes()).await;
         if response.status() != StatusCode::OK {
             let bytes = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
             return Err(serde_json::from_slice::<Value>(&bytes).unwrap()["error"].as_str().unwrap_or("").to_owned());

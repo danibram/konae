@@ -616,10 +616,8 @@ fn backup_dir(state: &AppState, id: &str) -> PathBuf {
     layout::backups(&state.data_root, id)
 }
 
-async fn test_storage(State(state): State<AppState>, request: Request) -> Response {
-    if !is_admin(&state, request.headers()) {
-        return error(StatusCode::UNAUTHORIZED, "Admin authorization required.");
-    }
+/// Whether the artifact store answers.
+async fn test_storage(state: &AppState) -> Response {
     let Some(s3) = state.s3.as_ref() else {
         return Json(json!({"result": {"ok": true, "adapter": "filesystem"}})).into_response();
     };
@@ -629,15 +627,13 @@ async fn test_storage(State(state): State<AppState>, request: Request) -> Respon
     }
 }
 
-async fn deploy(State(state): State<AppState>, request: Request) -> Response {
-    if !is_admin(&state, request.headers()) {
-        return error(StatusCode::UNAUTHORIZED, "Admin authorization required.");
+/// Installs a release from its JSON payload: the project, the build and
+/// what a first release imports.
+async fn deploy(state: &AppState, body: &[u8]) -> Response {
+    if body.len() > 26_000_000 {
+        return error(StatusCode::BAD_REQUEST, "Deployment request is too large.");
     }
-    let body = match axum::body::to_bytes(request.into_body(), 26_000_000).await {
-        Ok(bytes) => bytes,
-        Err(_) => return error(StatusCode::BAD_REQUEST, "Deployment request is too large."),
-    };
-    let input: DeployInput = match serde_json::from_slice(&body) {
+    let input: DeployInput = match serde_json::from_slice(body) {
         Ok(value) => value,
         Err(error_value) => {
             return error(
@@ -1953,14 +1949,9 @@ fn artifact_response(bytes: Vec<u8>, path: &str) -> Response {
 
 /// The small export's whole budget: databases plus the base64 file bundle.
 
-async fn admin_database(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-    request: Request,
-) -> Response {
-    if !is_admin(&state, request.headers()) {
-        return error(StatusCode::UNAUTHORIZED, "Admin authorization required.");
-    }
+/// Runs one operation of the owner's database door on a Deployment: inspect,
+/// browse, SQL, row edits and backups. `body` is its JSON input.
+async fn admin_database(state: &AppState, id: &str, body: &[u8]) -> Response {
     let Some(deployment) = state
         .deployments
         .read()
@@ -1971,16 +1962,10 @@ async fn admin_database(
     else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
-    let bytes = match axum::body::to_bytes(request.into_body(), 200_000).await {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return error(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "Database request is too large.",
-            );
-        }
-    };
-    let body: Value = match serde_json::from_slice(&bytes) {
+    if body.len() > 200_000 {
+        return error(StatusCode::PAYLOAD_TOO_LARGE, "Database request is too large.");
+    }
+    let body: Value = match serde_json::from_slice(body) {
         Ok(value) => value,
         Err(_) => {
             return error(
@@ -3153,12 +3138,6 @@ fn is_private(deployment: &Deployment) -> bool {
         != Some("public")
 }
 
-fn is_admin(state: &AppState, headers: &HeaderMap) -> bool {
-    headers
-        .get("x-konae-admin-key")
-        .and_then(|value| value.to_str().ok())
-        == Some(state.admin_key.as_str())
-}
 
 fn open_auth(
     state: &AppState,
@@ -4286,11 +4265,7 @@ mod tests {
             "visibility": visibility,
             "artifact": {"version": 1, "entrypoint": "index.html", "files": files}
         });
-        let request = Request::builder()
-            .header("x-konae-admin-key", "test-admin")
-            .body(Body::from(body.to_string()))
-            .unwrap();
-        let response = deploy(State(state.clone()), request).await;
+        let response = deploy(&state, body.to_string().as_bytes()).await;
         let status = response.status();
         let bytes = axum::body::to_bytes(response.into_body(), 1_000_000).await.unwrap();
         assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&bytes));
@@ -4564,11 +4539,7 @@ mod tests {
             "visibility": "public",
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>two</p>"}}
         });
-        let request = Request::builder()
-            .header("x-konae-admin-key", "test-admin")
-            .body(Body::from(body.to_string()))
-            .unwrap();
-        assert_eq!(deploy(State(state.clone()), request).await.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert!(staged_or_retired(&root, &id).is_empty(), "the staged files are gone");
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         assert_eq!(read_artifact(&state, &deployment, "index.html").await.unwrap(), b"<p>one</p>");

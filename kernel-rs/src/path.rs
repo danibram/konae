@@ -527,8 +527,7 @@ mod tests {
             "visibility": "public",
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}
         });
-        let request = Request::builder().header("x-konae-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
-        assert_eq!(deploy(State(state.clone()), request).await.status(), StatusCode::OK);
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
         mcp::store(state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES(?1,'o','{}')", [project]).unwrap();
         state.deployments.read().await.values().find(|d| d.project_id == project).cloned().unwrap()
     }

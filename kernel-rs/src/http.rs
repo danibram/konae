@@ -1361,8 +1361,7 @@ mod tests {
             "visibility": "public",
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>", "app.js": "app"}}
         });
-        let request = Request::builder().header("x-konae-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
-        assert_eq!(deploy(State(state.clone()), request).await.status(), StatusCode::OK);
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
         state.deployments.read().await.values().next().cloned().unwrap()
     }
 
@@ -1440,8 +1439,7 @@ mod tests {
             "visibility": "public",
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}
         });
-        let request = Request::builder().header("x-konae-admin-key", "test-admin").body(Body::from(body.to_string())).unwrap();
-        let deployed = deploy(State(state.clone()), request).await;
+        let deployed = deploy(&state, body.to_string().as_bytes()).await;
         let status = deployed.status();
         let text = axum::body::to_bytes(deployed.into_body(), 100_000).await.unwrap();
         assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&text));
