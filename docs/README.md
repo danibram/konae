@@ -26,7 +26,7 @@ The editor runs at `http://localhost:4173` after `bun run dev:local`, at `http:/
 
 ### 1. Sign in
 
-The first owner of an installation signs up in **Platform access** with the setup key. On a local install that key is `local-development-key`. Every later creator needs an invitation code, which the operator issues with `konae-kernel creator-code-create` (see [Creator admission](./operate.md#creator-admission)). From the CLI, `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD`, plus `KONAE_SETUP_KEY` for the first owner or `KONAE_INVITATION_CODE` for a later one.
+The first owner of an installation signs up in **Platform access** with the setup key. On a local install that key is `local-development-key`. Every later creator needs an invitation code, which the operator issues with `konae creator-code-create` (see [Creator admission](./operate.md#creator-admission)). From the CLI, `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD`, plus `KONAE_SETUP_KEY` for the first owner or `KONAE_INVITATION_CODE` for a later one.
 
 ### 2. Make an app in the editor
 

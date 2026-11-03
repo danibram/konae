@@ -1,9 +1,9 @@
 // A refusal of a Capsule carries a stable code beside its sentence
 // (docs/adr/0020-a-refusal-carries-a-stable-code.md). The site that refuses
 // names the code, so a reworded sentence keeps its code and the editor
-// branches on the code, never on the text. kernel-rs/src/refusal.rs is the
+// branches on the code, never on the text. kernel-rs/kernel/src/refusal.rs is the
 // Kernel's twin and reads the same table.
-import codes from "../../kernel-rs/src/refusal-codes.json";
+import codes from "../../kernel-rs/kernel/src/refusal-codes.json";
 
 export type RefusalCode = keyof typeof codes;
 
@@ -42,7 +42,7 @@ export function refusal(code: RefusalCode, message: string): RefusalError {
 /**
  * Several refusals named at once, such as every wrong key of a route's
  * signature, are one refusal: their sentences joined by a space, under the
- * first one's code. kernel-rs/src/refusal.rs `Refusal::join` does the same.
+ * first one's code. kernel-rs/kernel/src/refusal.rs `Refusal::join` does the same.
  */
 export function joinRefusals(refusals: readonly RefusalError[]): RefusalError {
   return new RefusalError(refusals[0].code, refusals.map((item) => item.message).join(" "));

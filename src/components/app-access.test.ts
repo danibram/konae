@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { signupModes } from "../deployments/client";
-import googleCases from "../../kernel-rs/src/google-client-cases.json";
+import googleCases from "../../kernel-rs/kernel/src/google-client-cases.json";
 import { ownerFixes } from "../kernel/refusal";
 import { McpError } from "../mcp/client";
 import {

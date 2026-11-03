@@ -8,9 +8,9 @@ import { expectedOutcome, outcomeOf } from "./refusal-cases";
 type SqlRuleCase = { case: string; actions?: Record<string, unknown>; schema?: string; error: string | null; code?: string };
 
 describe("SQL rules", () => {
-  // kernel-rs/src/sql_rules.rs runs the same cases against the Kernel.
+  // kernel-rs/kernel/src/sql_rules.rs runs the same cases against the Kernel.
   test("refuse the same statements and schemas as the Kernel, with the same messages", async () => {
-    const cases: SqlRuleCase[] = await Bun.file(new URL("../../kernel-rs/src/sql-rule-cases.json", import.meta.url)).json();
+    const cases: SqlRuleCase[] = await Bun.file(new URL("../../kernel-rs/kernel/src/sql-rule-cases.json", import.meta.url)).json();
     expect(cases.length).toBeGreaterThanOrEqual(12);
     const gate = createCapsuleValidator(() => initSqlJs());
     for (const item of cases) {

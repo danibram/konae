@@ -97,23 +97,27 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
         └── maintenance.json # only while the app is in maintenance
 ```
 
-### The Kernel's modules
+### The Kernel and Konae
 
-`kernel-rs/src/main.rs` holds the server, the Server Action parser and runner, publishing, the static file path and the operator subcommands that are not listed here. The other modules each own one part:
+`kernel-rs` is a Cargo workspace of two crates ([ADR-0027](./adr/0027-an-app-is-one-folder-that-the-kernel-serves-with-or-without-konae.md), decision 4).
+
+- `kernel` is a library and the `kernel` binary. The binary serves every app folder under `apps/` with all its primitives and answers `restore`, `reconcile`, `files-migrate` and `files-reconcile`. It keeps the runtime endpoint `/_konae/mcp` that the browser SDK calls, and never opens `owners.sqlite` or `mcp.sqlite`.
+- `konae` is the `konae` binary. It links the library and adds the owner's MCP on `/mcp`, OAuth, Clerk, owner accounts and admission, the guide, and the project list in `mcp.sqlite`. It starts the Kernel with an `Installation` that adds `owners.sqlite` and `mcp.sqlite` to the stores a copy carries, and holds the setup key, the MCP origin and the owner verification mode in its own state.
+
+`kernel-rs/kernel/src/lib.rs` holds the server, the Server Action parser and runner, publishing and the static file path. The other modules of `kernel` each own one part:
 
 | Module | Owns |
 | --- | --- |
-| `mcp.rs` | The admin and runtime MCP endpoints, the tool catalogue, scopes, transfers and the audit log |
-| `oauth.rs` | OAuth discovery, registration, consent and tokens for MCP clients |
-| `auth.rs` | The account core of both scopes: states, passwords, sessions and challenges |
-| `accounts.rs` | Signup, verification, recovery and the pages a challenge link opens, and creator suspension |
-| `admission.rs` | Invitation codes and the setup key's one use |
-| `clerk.rs` | The optional hosted creator sign-in adapter |
-| `invitations.rs` | App invitations and the owner's user tools behind `manage_users` |
+| `runtime.rs` | The runtime endpoint, its tools and `runtime_call`, the host checks and the JSON-RPC helpers every MCP door uses |
+| `transfers.rs` | Chunked transfers and file upload receipts in `transfers.sqlite` |
+| `installation.rs` | The stores at the data root that a copy carries, and the account databases outside the apps |
+| `auth.rs` | The account core: states, passwords, sessions and challenges |
+| `accounts.rs` | App account signup, verification, recovery and the pages a challenge link opens |
+| `invitations.rs` | App invitations and the user tools, run on a Deployment the caller authorized |
 | `mail.rs` | The email queue, its worker, the Resend, SMTP and development transports, the sender preflight and the limits |
 | `http.rs` | HTTP routes, their callers and signatures, signing secrets, API keys and `GET /_konae/files/<id>` |
 | `provider.rs` | A provider's signature schemes, a route's `fields` and the memory of accepted deliveries ([ADR-0018](./adr/0018-a-route-verifies-a-providers-own-signature.md)) |
-| `calls.rs` | Call actions, their queue and worker in `calls.sqlite`, the address rules, `then` mutations, `calls_read` and the manifest's `connects` |
+| `calls.rs` | Call actions, their queue and worker in `calls.sqlite`, the address rules, `then` mutations, the outbox read and the manifest's `connects` |
 | `guard.rs` | A mutation's guard |
 | `sql_rules.rs` | The statement rules both doors share |
 | `usage.rs` | Usage and Signals |
@@ -122,22 +126,34 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 | `artifact.rs` | Which artifact file answers a path, and binary files in an artifact |
 | `security.rs` | The response headers of every host |
 | `limits.rs` | Per-client limits on unauthenticated requests |
-| `copies.rs` | Scheduled copies and `konae-kernel restore` |
+| `copies.rs` | Scheduled copies and `restore` |
 | `schedule.rs` | A mutation's schedule, the timer that runs it and the record of each run ([ADR-0017](./adr/0017-the-kernel-runs-a-declared-schedule.md)) |
-| `recovery.rs` | The revocation record and `konae-kernel reconcile` |
+| `recovery.rs` | The revocation record and `reconcile` |
 | `layout.rs` | Where each part of an app folder lives |
 | `sources.rs` | The editor's saved sources as the files of `app/` |
-| `package.rs` | `project_export`, the one export of an app folder, and the import of its data |
-| `maintenance.rs` | The maintenance state and its guards |
+| `package.rs` | The capture of an app folder for `project_export`, and the import of its data |
+| `maintenance.rs` | The maintenance state and its guard |
 | `domain.rs` | Custom domains: the hostname rules, the TXT proof through the Kernel's own DNS lookup, and the alias index |
+
+The modules of `konae`:
+
+| Module | Owns |
+| --- | --- |
+| `mcp.rs` | The owner's MCP on `/mcp`: the tool catalogue, scopes, owner permissions, the project list, release plans and the audit log |
+| `oauth.rs` | OAuth discovery, registration, consent and tokens for MCP clients |
+| `owners.rs` | Owner signup, verification and recovery, and `creator-account-suspend` |
+| `admission.rs` | Invitation codes and the setup key's one use |
+| `clerk.rs` | The optional hosted creator sign-in adapter |
+| `guide.rs` | What `platform_guide` answers |
+| `state.rs` | Konae's state beside the Kernel's |
 
 ### Two doors, one set of refusals
 
-A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before anything is applied. The Kernel parses the same `actions.json` and `schema.sql` again at `release_plan`, on every installation, including one unpacked from an export. Where both refuse a declaration they use the same words, and each rule has one case file that both test suites run: `sql-rule-cases.json` for statements, `http-binding-cases.json` for routes and their callers, `signal-cases.json` for Signals, `guard-cases.json` for guards, `signature-cases.json` for route signatures, `schedule-cases.json` for schedules and `call-cases.json` for call actions and `connects`, all in `kernel-rs/src`. The query bound is `src/lib/query-bound.ts` on one side and its port in `main.rs` on the other ([ADR-0009](./adr/0009-the-gate-and-the-kernel-share-one-query-bound.md)). The Action Contract written from a Capsule lists the refusals a third backend would have to give.
+A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before anything is applied. The Kernel parses the same `actions.json` and `schema.sql` again at `release_plan`, on every installation, including one unpacked from an export. Where both refuse a declaration they use the same words, and each rule has one case file that both test suites run: `sql-rule-cases.json` for statements, `http-binding-cases.json` for routes and their callers, `signal-cases.json` for Signals, `guard-cases.json` for guards, `signature-cases.json` for route signatures, `schedule-cases.json` for schedules and `call-cases.json` for call actions and `connects`, all in `kernel-rs/kernel/src`. The query bound is `src/lib/query-bound.ts` on one side and its port in `lib.rs` on the other ([ADR-0009](./adr/0009-the-gate-and-the-kernel-share-one-query-bound.md)). The Action Contract written from a Capsule lists the refusals a third backend would have to give.
 
-An artifact holds pages and the files they load. `kernel-rs/src/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page; under `spa` it serves `index.html`. The rules for which Capsule files become the artifact live in one file, `src/lib/static-artifact.js`, which the CLI, the editor and an exported app folder's `npm run build` all run. The [MCP guide](./mcp.md#what-the-build-publishes) lists both.
+An artifact holds pages and the files they load. `kernel-rs/kernel/src/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page; under `spa` it serves `index.html`. The rules for which Capsule files become the artifact live in one file, `src/lib/static-artifact.js`, which the CLI, the editor and an exported app folder's `npm run build` all run. The [MCP guide](./mcp.md#what-the-build-publishes) lists both.
 
-A scheduled copy takes each Deployment's data and identity locks, snapshots its SQLite files with `VACUUM INTO`, copies the rest of its folder and writes a manifest of SHA-256 checksums last. It sends the result to a directory on another disk, an S3 prefix in the data bucket, or both, and keeps 24 recent and 30 daily copies. Copy failures are logged and reported under `copies` in `/_konae/health`; they never block serving. `konae-kernel restore` is the only way back: it installs one copy into an empty data directory, verifies every checksum, signs out every session and agent credential and ends every open email link. App API keys stay valid, because a restore brings back the same installation for the same owner; an import into another installation revokes them. Suspensions and key revocations made after the copy are written to each copy target as they happen, and restore applies them, or starts the installation in maintenance when it cannot read them ([ADR-0014](./adr/0014-an-app-migrates-with-one-writer-at-a-time.md)). With `KONAE_COPY_SECRET` the files sent to S3 are encrypted.
+A scheduled copy takes each Deployment's data and identity locks, snapshots its SQLite files with `VACUUM INTO`, copies the rest of its folder and writes a manifest of SHA-256 checksums last. It sends the result to a directory on another disk, an S3 prefix in the data bucket, or both, and keeps 24 recent and 30 daily copies. Copy failures are logged and reported under `copies` in `/_konae/health`; they never block serving. `restore` is the only way back: it installs one copy into an empty data directory, verifies every checksum, signs out every session and agent credential and ends every open email link. App API keys stay valid, because a restore brings back the same installation for the same owner; an import into another installation revokes them. Suspensions and key revocations made after the copy are written to each copy target as they happen, and restore applies them, or starts the installation in maintenance when it cannot read them ([ADR-0014](./adr/0014-an-app-migrates-with-one-writer-at-a-time.md)). With `KONAE_COPY_SECRET` the files sent to S3 are encrypted.
 
 A Deployment in maintenance, by its own state or after an unreconciled restore, keeps that state in `apps/<id>/.konae/maintenance.json` or the data directory's `recovery-hold.json`. One middleware answers its host with a maintenance page or a 503, the administrative tools that would change it refuse, and the mail worker holds its email. The Kernel reads nothing from the data bucket at startup.
 
@@ -158,11 +174,11 @@ Deployment visibility and data authorization are deliberately independent:
 | Public | Anyone | Only actors allowed by each server action |
 | Private | Signed-in app accounts, created under the Deployment's signup policy | Only actors allowed by each server action |
 
-On a public Deployment a signed-out visitor may call the actions declared `anonymous`, and may list and read files marked public. Uploads, private files, and authenticated actions require an app session. On a private Deployment nothing loads or runs without a login, except the HTTP routes of actions declared `anonymous`: a route answers the callers it takes, a signed route its signature or an API key and an unsigned route an API key or a session, and an action whose route does not answer anyone answers only there ([ADR-0011](./adr/0011-one-verified-account-core-for-creators-and-app-users.md), updates of 2026-11-06). Each Deployment's signup policy (Open, Invitation only, Closed or Allowlist) decides who can create an app account; public Deployments start Open and private ones start Closed. Under Invitation only an account comes only from an emailed invitation, which `kernel-rs/src/invitations.rs` issues and accepts.
+On a public Deployment a signed-out visitor may call the actions declared `anonymous`, and may list and read files marked public. Uploads, private files, and authenticated actions require an app session. On a private Deployment nothing loads or runs without a login, except the HTTP routes of actions declared `anonymous`: a route answers the callers it takes, a signed route its signature or an API key and an unsigned route an API key or a session, and an action whose route does not answer anyone answers only there ([ADR-0011](./adr/0011-one-verified-account-core-for-creators-and-app-users.md), updates of 2026-11-06). Each Deployment's signup policy (Open, Invitation only, Closed or Allowlist) decides who can create an app account; public Deployments start Open and private ones start Closed. Under Invitation only an account comes only from an emailed invitation, which `kernel-rs/kernel/src/invitations.rs` issues and accepts.
 
 A public deployment may contain private user records. Public means its HTML, CSS and JavaScript are public; it never means the database is public. A private deployment also protects the application shell, but still requires per-action authorization because authenticated users need not share the same data.
 
-An upload is private to the uploading app user unless the upload sets visibility to public. Another account cannot read a private file. On a public Deployment, visitors can read public files. On a private Deployment, any signed-in app user can read public files. `GET /_konae/files/<id>` serves a file to a caller allowed to read it: a signed-in user from the app's own origin, a visitor for a public file of a public Deployment, or an API key that names the file's visibility; `miniapp.files.url` returns that path. Only the uploader changes a file's visibility or deletes it, with `files_update` and `files_delete` in `kernel-rs/src/files.rs`, and a deleted file frees its share of the quota. There is no unauthenticated object URL, and nothing is served from the bucket.
+An upload is private to the uploading app user unless the upload sets visibility to public. Another account cannot read a private file. On a public Deployment, visitors can read public files. On a private Deployment, any signed-in app user can read public files. `GET /_konae/files/<id>` serves a file to a caller allowed to read it: a signed-in user from the app's own origin, a visitor for a public file of a public Deployment, or an API key that names the file's visibility; `miniapp.files.url` returns that path. Only the uploader changes a file's visibility or deletes it, with `files_update` and `files_delete` in `kernel-rs/kernel/src/files.rs`, and a deleted file frees its share of the quota. There is no unauthenticated object URL, and nothing is served from the bucket.
 
 ### Database boundary
 
@@ -182,7 +198,7 @@ The browser calls named server actions. An action declared `anonymous` may also 
 | A program the owner wrote | An API key that names the action, sent as `Authorization: Bearer` | A Runtime Actor of kind service, with the key's ID |
 | A signed-in person | The app session cookie | The app user |
 
-The route's `callers` list names which it takes; `kernel-rs/src/http.rs` resolves the caller before any SQL runs. An action whose route does not answer anyone answers only there, never through `actions_invoke`. The Kernel resolves the deployment and actor from trusted server-side state, validates the action input, applies authorization and quotas, then executes parameterized statements through an adapter. Developer tools can replay any browser request, so security cannot depend on hiding SDK methods or UI controls.
+The route's `callers` list names which it takes; `kernel-rs/kernel/src/http.rs` resolves the caller before any SQL runs. An action whose route does not answer anyone answers only there, never through `actions_invoke`. The Kernel resolves the deployment and actor from trusted server-side state, validates the action input, applies authorization and quotas, then executes parameterized statements through an adapter. Developer tools can replay any browser request, so security cannot depend on hiding SDK methods or UI controls.
 
 The editor is a different trust domain. SQL Studio, schema migrations, backups and database export are served only through the Kernel Admin Interface after owner/workspace authorization, with audit logging and stronger checks for destructive operations. Runtime sessions are never accepted by admin operations.
 
@@ -224,7 +240,7 @@ All adapters implement the same Kernel seams. Provider identity products may opt
 
 ## Isolation of hosted code
 
-Every app runs on its own host, `<slug>-<id>.<KONAE_HOST_SUFFIX>`, and the editor runs on a host no app shares (`app.<domain>` when `KONAE_DOMAIN` is set, ADR-0024). An app may also answer on one custom domain its owner proved with a TXT record ([ADR-0015](./adr/0015-a-deployment-answers-on-one-custom-domain.md)); the Kernel resolves it to the same Deployment, so it is that app's origin too, and no other app or the editor can take it. One layer in `kernel-rs/src/security.rs` adds the headers below to every Kernel response, so an exported Kernel sends them too.
+Every app runs on its own host, `<slug>-<id>.<KONAE_HOST_SUFFIX>`, and the editor runs on a host no app shares (`app.<domain>` when `KONAE_DOMAIN` is set, ADR-0024). An app may also answer on one custom domain its owner proved with a TXT record ([ADR-0015](./adr/0015-a-deployment-answers-on-one-custom-domain.md)); the Kernel resolves it to the same Deployment, so it is that app's origin too, and no other app or the editor can take it. One layer in `kernel-rs/kernel/src/security.rs` adds the headers below to every Kernel response, so an exported Kernel sends them too.
 
 `<domain>` is one origin that the home and every path address share ([ADR-0024](./adr/0024-an-installation-names-its-hosts-from-one-domain-and-an-app-may-answer-on-a-path.md)). An app on a path address answers its pages, routes and runtime under `<domain>/p/<id>` or `<domain>/p/<name>`, and every such app shares that origin with the others and with the home. A script of one app can therefore open another app's page in the same origin, read its DOM through `window.open`, and send another app's session cookie with a request to its runtime. The Kernel refuses a runtime call whose Referer names another app's path, but only when the browser sends a Referer, so that check is not a boundary. The owner accepts this when turning a path on for an app with accounts or a private app. The isolation this section describes holds for generated hostnames and aliases only.
 

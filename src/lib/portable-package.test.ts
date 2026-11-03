@@ -7,7 +7,7 @@ const manifest = () => ({
   contents: [{ name: "database", size: 4096, sha256: "a".repeat(64) }],
 });
 
-// The same cases as `manifests_name_their_version_components_and_limits` in kernel-rs/src/package.rs.
+// The same cases as `manifests_name_their_version_components_and_limits` in kernel-rs/kernel/src/package.rs.
 describe("package manifests", () => {
   test("accept version 1 with a database", () => {
     expect(checkPackageManifest(manifest()).contents[0].name).toBe("database");

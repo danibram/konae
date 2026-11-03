@@ -203,7 +203,7 @@ export type ActionContract = {
 export type ContractWarning = { action: string; message: string };
 
 // The numbers below are the Kernel's. src/lib/action-contract.test.ts reads
-// kernel-rs/src/limits.rs and main.rs and fails when they move.
+// kernel-rs/kernel/src/limits.rs and main.rs and fails when they move.
 const RATE = [
   { caller: "visitor, per client address and Deployment", calls: 30, seconds: 10 },
   { caller: "signed-in person or API key, each", calls: 120, seconds: 10 },
@@ -219,7 +219,7 @@ const SIGNATURE_SCHEME = "t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256, keyed 
 const SVIX_WINDOW = 300;
 const FAILED_DELIVERY = "a delivery whose action fails is not remembered, so the provider's retry runs";
 
-/** The contract's description of a route's signature. kernel-rs/src/provider.rs verifies the provider schemes. */
+/** The contract's description of a route's signature. kernel-rs/kernel/src/provider.rs verifies the provider schemes. */
 function contractSignature(signature: RouteSignature): ContractSignature {
   const base = { header: signature.header, secret: signature.secret, acceptedOnce: true as const };
   if (signature.scheme === "hmac-body") {

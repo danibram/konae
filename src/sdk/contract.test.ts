@@ -88,7 +88,9 @@ describe("runtime.js and the preview client expose exactly the contract", () => 
 });
 
 describe("every documented message is one the code returns", () => {
-  const kernel = readdirSync(path.join(root, "kernel-rs/src")).filter((file) => file.endsWith(".rs")).map((file) => read(`kernel-rs/src/${file}`)).join("\n");
+  const kernel = ["kernel-rs/kernel/src", "kernel-rs/konae/src"]
+    .flatMap((dir) => readdirSync(path.join(root, dir)).filter((file) => file.endsWith(".rs")).map((file) => read(`${dir}/${file}`)))
+    .join("\n");
   const preview = ["src/runtime/host.ts", "src/runtime/security.ts", "src/kernel/actions.ts", "src/mcp/preview.ts"].map(read).join("\n");
 
   /**
@@ -157,10 +159,10 @@ describe("the rendered readers", () => {
   });
 
   test("platform_guide serves the rendered JSON, and the starter app in mcp.rs uses only contract calls", () => {
-    const mcp = read("kernel-rs/src/mcp.rs");
+    const mcp = read("kernel-rs/konae/src/mcp.rs");
     // platform_guide's topics live in guide.rs; mcp.rs hands the call to it.
     expect(mcp).toContain(`"platform_guide" => super::guide::topic(`);
-    expect(read("kernel-rs/src/guide.rs")).toContain(`"sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,`);
+    expect(read("kernel-rs/konae/src/guide.rs")).toContain(`"sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,`);
     expect(drift(namedCalls(mcp)).notInContract).toEqual([]);
     const guide = JSON.parse(read(renderedPaths.guide)) as { modules: { calls: { call: string }[] }[] };
     expect(drift(guide.modules.flatMap((module) => module.calls.map((call) => call.call.replace(/^miniapp\./, ""))))).toEqual(agreed);

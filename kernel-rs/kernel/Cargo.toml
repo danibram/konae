@@ -1,0 +1,38 @@
+[package]
+name = "kernel"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+
+[features]
+# The test helpers, for the konae crate's tests.
+testing = []
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+aws-config.workspace = true
+aws-credential-types.workspace = true
+aws-sdk-s3.workspace = true
+axum.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+lettre.workspace = true
+libc.workspace = true
+rusqlite.workspace = true
+reqwest.workspace = true
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tower.workspace = true
+uuid.workspace = true
+url.workspace = true

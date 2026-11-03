@@ -9,7 +9,7 @@ import { McpClient } from "../src/mcp/client";
 // its mail to a development mailbox. The operator commands run as the real
 // executable against the live data directory.
 
-const binary = "kernel-rs/target/debug/konae-kernel";
+const binary = "kernel-rs/target/debug/konae";
 const setupKey = "admission-integration-setup-secret";
 const password = "admission-password-2026";
 let root: string;

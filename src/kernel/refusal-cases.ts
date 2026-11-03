@@ -1,6 +1,6 @@
 // What the editor's case runners compare for each case of a shape case file
-// in kernel-rs/src: null for a case that passes, else the code and the
-// sentence. kernel-rs/src/refusal.rs `assert_case` is the Kernel's twin.
+// in kernel-rs/kernel/src: null for a case that passes, else the code and the
+// sentence. kernel-rs/kernel/src/refusal.rs `assert_case` is the Kernel's twin.
 import { RefusalError } from "./refusal";
 
 export type Outcome = { code: string; message: string } | null;

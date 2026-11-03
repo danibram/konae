@@ -84,7 +84,7 @@ This changes the contract. `signup_policy_set` needed `publish` before `manage_u
 
 Listing signing secrets and API keys needs the `read` scope; setting, creating and revoking them needs `publish`. `domain_read` needs `read`; `domain_set` and `domain_clear` need `publish`. `path_read` needs `read`; `path_set` and `path_clear` need `publish`. `usage_read`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read` and `notices_read` need `read`.
 
-`project_create` registers a project and returns a template. The template is one of `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` and `gallery`, named with `template`, and its files are the ones `konae init` writes, because both read `kernel-rs/src/project-templates.json`, which `bun run templates:render` writes from the editor's templates. Without a `manifest` the project takes the template's visibility. A publish from a folder does not change the sources the editor saved; `project_inspect` returns metadata, the Deployment and `sourcesRevision`, the number of editor saves.
+`project_create` registers a project and returns a template. The template is one of `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` and `gallery`, named with `template`, and its files are the ones `konae init` writes, because both read `kernel-rs/konae/src/project-templates.json`, which `bun run templates:render` writes from the editor's templates. Without a `manifest` the project takes the template's visibility. A publish from a folder does not change the sources the editor saved; `project_inspect` returns metadata, the Deployment and `sourcesRevision`, the number of editor saves.
 
 The editor uploads a new app's JSON without a `projectId`, then calls `project_create` with `sourcesTransferId`. The Kernel validates the files and saves the project registry entry and files in one transaction, returning `sourcesRevision: 1`. A failed upload or validation leaves no project entry. Repeating the same initial files returns the saved revision; different files cannot overwrite an existing save through `project_create`. Subsequent edits use `project_sources_save` with that revision.
 
@@ -178,7 +178,7 @@ The runtime MCP tools `auth_signup`, `auth_verify`, `auth_recover` and `auth_res
 
 ## Creator admission
 
-A creator account needs an invitation code, except the installation's first owner, which the setup key creates. The operator issues codes on the server with `konae-kernel creator-code-create [--expires-in 14d] [--note TEXT]`, lists them with `creator-code-list` and stops an open one with `creator-code-revoke <id>`; the README's operator section has the details. A code is single use, expires after 14 days by default, and is stored as a SHA-256 hash in `owners.sqlite`.
+A creator account needs an invitation code, except the installation's first owner, which the setup key creates. The operator issues codes on the server with `konae creator-code-create [--expires-in 14d] [--note TEXT]`, lists them with `creator-code-list` and stops an open one with `creator-code-revoke <id>`; the README's operator section has the details. A code is single use, expires after 14 days by default, and is stored as a SHA-256 hash in `owners.sqlite`.
 
 `POST /_konae/owner/signup` takes `{ "email", "code" }`, plus `"password"` in local mode. The Kernel consumes the code in the transaction that creates the account: a pending account with a verification link in required mode, an active account with a session in local mode. A code for an email whose account is pending is consumed and sends a fresh link to that account. A code for an active or suspended email is consumed and creates nothing, and the answer is the same 202 a new email gets. In local mode a taken email answers 409 `An account with that email already exists.` only to a valid code, which stays unused; a made-up code gets the same 403 a new email gets, so it says nothing about who has an account. When both `code` and `setupKey` are sent, the code decides.
 
@@ -200,7 +200,7 @@ Suspending a creator with `creator-account-suspend` deletes their sessions, open
 
 ## Account email
 
-Every account link, and every notice a mutation declares with [`notify`](#notices), leaves through the queue in `mail.sqlite` (`kernel-rs/src/mail.rs`). [Operate an installation](./operate.md#account-email) lists the transports and their variables. What a client sees:
+Every account link, and every notice a mutation declares with [`notify`](#notices), leaves through the queue in `mail.sqlite` (`kernel-rs/kernel/src/mail.rs`). [Operate an installation](./operate.md#account-email) lists the transports and their variables. What a client sees:
 
 - Signup and recovery store the challenge and its email job in one transaction and answer at once. The worker sends the job on its own task.
 - A job is `pending`, `accepted` (the provider took it), `delivered` (the provider reported delivery to the recipient's server) or `failed`. No job state activates an account; only the person answering the link does.
@@ -315,7 +315,7 @@ Calling this action with `{}` returns the actor's rows up to the limit; `{ "q": 
 
 ### Statement rules
 
-An action runs one SQL statement. A query starts with `SELECT` and a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, after any leading comment. The Validation Gate and the Kernel refuse a statement that breaks a rule with the same message, from one case file, `kernel-rs/src/sql-rule-cases.json`, that both test suites run. `kernel-rs/src/sql_rules.rs` and `src/kernel/sql-rules.ts` hold the checks.
+An action runs one SQL statement. A query starts with `SELECT` and a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, after any leading comment. The Validation Gate and the Kernel refuse a statement that breaks a rule with the same message, from one case file, `kernel-rs/kernel/src/sql-rule-cases.json`, that both test suites run. `kernel-rs/kernel/src/sql_rules.rs` and `src/kernel/sql-rules.ts` hold the checks.
 
 | Statement | Message |
 | --- | --- |
@@ -332,7 +332,7 @@ A `WITH` clause is allowed inside the statement: `INSERT INTO bookings (room_id,
 
 ### Action shape
 
-Before it reads a statement, each door checks the action's name, access, kind, bindings and size, in that order, and the number of actions. Both check the actions in sorted name order, so with two bad actions both name the same one. `kernel-rs/src/action-cases.json` holds the cases both test suites run, and `kernel-rs/src/action_shape.rs` and `parseServerActionSource` in `src/kernel/actions.ts` hold the checks.
+Before it reads a statement, each door checks the action's name, access, kind, bindings and size, in that order, and the number of actions. Both check the actions in sorted name order, so with two bad actions both name the same one. `kernel-rs/kernel/src/action-cases.json` holds the cases both test suites run, and `kernel-rs/kernel/src/action_shape.rs` and `parseServerActionSource` in `src/kernel/actions.ts` hold the checks.
 
 | Declaration | Message |
 | --- | --- |
@@ -362,7 +362,7 @@ A field of the wrong JSON type, such as `"bindings": {}` or a missing `kind`, is
 
 ## HTTP routes
 
-An action declared `anonymous` may answer one method and path on its Deployment's host. This is how a project receives a webhook or serves a JSON endpoint without a server of its own. `kernel-rs/src/http.rs` implements it; the [ADR-0011 updates of 2026-11-06](./adr/0011-one-verified-account-core-for-creators-and-app-users.md) record the decisions.
+An action declared `anonymous` may answer one method and path on its Deployment's host. This is how a project receives a webhook or serves a JSON endpoint without a server of its own. `kernel-rs/kernel/src/http.rs` implements it; the [ADR-0011 updates of 2026-11-06](./adr/0011-one-verified-account-core-for-creators-and-app-users.md) record the decisions.
 
 ```json
 "orders.receive": {
@@ -377,7 +377,7 @@ An action declared `anonymous` may answer one method and path on its Deployment'
 }
 ```
 
-A query binds `GET` and a mutation binds `POST`. An optional `"callers"` list, described under [Who may call a route](#who-may-call-a-route), names the proofs the route takes. A path starts with `/` and has segments of letters, digits, `.`, `_`, `~` and `-`, up to 200 characters, with no `.` or `..` segment and no trailing slash. Paths under `/_konae`, `/oauth`, `/.well-known` and `/mcp` belong to the Kernel. Two actions may share a path only with different methods. A binding wins over an artifact file at the same path for its method; every other `GET` still serves the Build Artifact, and a `POST` to a path no action binds answers 405. A `HEAD` on a `GET` route answers 405 rather than running the query to drop its rows. The Kernel reads a Deployment's routes from `actions.json` once per release, so a request for a static file does not parse it. The Validation Gate and the Kernel refuse the same declarations with the same messages, from one case file, `kernel-rs/src/http-binding-cases.json`, that both test suites run. An `authenticated` action may not declare `http`.
+A query binds `GET` and a mutation binds `POST`. An optional `"callers"` list, described under [Who may call a route](#who-may-call-a-route), names the proofs the route takes. A path starts with `/` and has segments of letters, digits, `.`, `_`, `~` and `-`, up to 200 characters, with no `.` or `..` segment and no trailing slash. Paths under `/_konae`, `/oauth`, `/.well-known` and `/mcp` belong to the Kernel. Two actions may share a path only with different methods. A binding wins over an artifact file at the same path for its method; every other `GET` still serves the Build Artifact, and a `POST` to a path no action binds answers 405. A `HEAD` on a `GET` route answers 405 rather than running the query to drop its rows. The Kernel reads a Deployment's routes from `actions.json` once per release, so a request for a static file does not parse it. The Validation Gate and the Kernel refuse the same declarations with the same messages, from one case file, `kernel-rs/kernel/src/http-binding-cases.json`, that both test suites run. An `authenticated` action may not declare `http`.
 
 The route answers to the callers it takes, described below, and on a private app an unsigned route takes an API key or a session, never a caller with neither. The action keeps its bindings, its query bound and the runtime endpoint's rate limits. A call that succeeds counts in [Usage](#usage-and-signals) under the route's method and path, and records the action's Signal if it declares one. A `GET` maps the query string onto the input bindings by their declared type, so `?min=10` binds the number 10; a `POST` reads a JSON object of at most 64 KiB. Inputs the action does not declare are refused, as with `miniapp.actions.call`, unless the route declares `fields`, described under [Webhooks from outside services](#webhooks-from-outside-services): then each input is read from its JSON path or its own key and the body's other keys are left out.
 
@@ -428,7 +428,7 @@ A key the route does not take is refused with 403. A session the route does not 
 
 An action whose route does not answer anyone answers only there. `actions_invoke`, and so `miniapp.actions.call`, refuses it with `Action <name> answers only on its HTTP route, <method> <path>.`: always for a signed route or one that declares `callers`, and on a private Deployment for an unsigned one. A webhook action is therefore not a second door for members or visitors, and the app's own page reads a private route with `fetch`, which sends the session cookie. The editor preview has no visibility and refuses the first two cases only.
 
-The Validation Gate and the Kernel refuse the same `callers` declarations with the same messages, from `kernel-rs/src/http-binding-cases.json`:
+The Validation Gate and the Kernel refuse the same `callers` declarations with the same messages, from `kernel-rs/kernel/src/http-binding-cases.json`:
 
 | Declaration | Message |
 | --- | --- |
@@ -438,7 +438,7 @@ The Validation Gate and the Kernel refuse the same `callers` declarations with t
 
 ### Signatures
 
-The owner sets the secret for the project before publishing. A release whose signature names an unset secret is refused when planned and again when applied, with `Action <name> signs with the secret <secret>, which is not set for this project. Set it with secret_set before publishing.` When several are unset, one refusal names every action and every secret: `Actions events.feed and events.receive sign with the secrets events_feed and events_webhook, which are not set for this project. Set each with secret_set before publishing.` The Validation Gate makes the same refusals before Deploy from `secrets_list`, which answers names and never values, and, once the app is published, the installation rules of [calls](#where-a-call-may-go) from `domain_read`. The cases are in `kernel-rs/src/release-cases.json`, which `cargo test` and `bun test` both run.
+The owner sets the secret for the project before publishing. A release whose signature names an unset secret is refused when planned and again when applied, with `Action <name> signs with the secret <secret>, which is not set for this project. Set it with secret_set before publishing.` When several are unset, one refusal names every action and every secret: `Actions events.feed and events.receive sign with the secrets events_feed and events_webhook, which are not set for this project. Set each with secret_set before publishing.` The Validation Gate makes the same refusals before Deploy from `secrets_list`, which answers names and never values, and, once the app is published, the installation rules of [calls](#where-a-call-may-go) from `domain_read`. The cases are in `kernel-rs/kernel/src/release-cases.json`, which `cargo test` and `bun test` both run.
 
 ```text
 secret_set   { "projectId", "name": "orders_webhook", "value": "<16 to 512 printable characters, no spaces>", "use"?: "route" | "call" }
@@ -459,7 +459,7 @@ t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256, keyed with the secret, of:
 
 The nonce is 1 to 64 letters, digits, `-` and `_`, fresh for each request, so two requests in one second differ and a retry is signed again rather than refused as a replay. The canonical query string is the request's query pairs sorted by key, then value, and written as `application/x-www-form-urlencoded`: spaces as `+`, and every byte but letters, digits, `*`, `-`, `.` and `_` as `%XX`. It is empty for a request with no query. The method and the path are the route's, so a signature for one route or one query does not fit another.
 
-The Kernel refuses a `t` more than 300 seconds before or after its clock with `stale-timestamp` before it looks at the MAC. It then recomputes the MAC over the exact bytes it received, compares it in constant time, and remembers each accepted signature for 600 seconds so a replay inside the window answers 409. `src/lib/route-signature.ts` signs the same way, and `kernel-rs/src/signature-cases.json` holds vectors both sides check. The memory is a `route_signatures` table in the Deployment's `identity.sqlite`, so a Kernel restart does not forget it, and an export carries it with the accounts, so the destination refuses a request captured on its way to the origin. `t` and the nonce are inside the MAC, so changing either invalidates the signature. Two `v1=` values may be sent while a secret rotates. A header with more than two 32-byte values answers `invalid-signature` before any MAC is computed, and a value that is not 32 bytes of hex is ignored, so a sender cannot make the Kernel compute one MAC per value. A shell sender with OpenSSL:
+The Kernel refuses a `t` more than 300 seconds before or after its clock with `stale-timestamp` before it looks at the MAC. It then recomputes the MAC over the exact bytes it received, compares it in constant time, and remembers each accepted signature for 600 seconds so a replay inside the window answers 409. `src/lib/route-signature.ts` signs the same way, and `kernel-rs/kernel/src/signature-cases.json` holds vectors both sides check. The memory is a `route_signatures` table in the Deployment's `identity.sqlite`, so a Kernel restart does not forget it, and an export carries it with the accounts, so the destination refuses a request captured on its way to the origin. `t` and the nonce are inside the MAC, so changing either invalidates the signature. Two `v1=` values may be sent while a secret rotates. A header with more than two 32-byte values answers `invalid-signature` before any MAC is computed, and a value that is not 32 bytes of hex is ignored, so a sender cannot make the Kernel compute one MAC per value. A shell sender with OpenSSL:
 
 ```sh
 body='{"id":"A-1","total":12}'
@@ -470,11 +470,11 @@ curl -X POST "https://orders-1a2b3c.example.net/hooks/orders" \
   -H 'Content-Type: application/json' -H "X-Signature: t=$t,n=$n,v1=$sig" --data-binary "$body"
 ```
 
-A service with its own fixed signing scheme declares it instead, as described next. `konae-kernel restore` brings back the table as the copy held it, so a signature accepted after that copy is accepted once more if it is replayed while its `t` is still within 300 seconds of the Kernel's clock.
+A service with its own fixed signing scheme declares it instead, as described next. `konae restore` brings back the table as the copy held it, so a signature accepted after that copy is accepted once more if it is replayed while its `t` is still within 300 seconds of the Kernel's clock.
 
 ### Webhooks from outside services
 
-A service the owner does not control, such as a code host, a shop or a payment provider, signs its webhook its own way and posts its own nested JSON. A route takes it as it arrives when its signature names the provider's `"scheme"` and its `"fields"` say where each input sits in the body. `kernel-rs/src/provider.rs` implements it and [ADR-0018](./adr/0018-a-route-verifies-a-providers-own-signature.md) records the decision.
+A service the owner does not control, such as a code host, a shop or a payment provider, signs its webhook its own way and posts its own nested JSON. A route takes it as it arrives when its signature names the provider's `"scheme"` and its `"fields"` say where each input sits in the body. `kernel-rs/kernel/src/provider.rs` implements it and [ADR-0018](./adr/0018-a-route-verifies-a-providers-own-signature.md) records the decision.
 
 ```json
 "issues.receive": {
@@ -506,7 +506,7 @@ The Kernel records an accepted delivery before the action runs, in a `route_deli
 
 `fields` maps an input key to a JSON path into the POST body: `$`, then 1 to 16 steps of `.name` (letters, digits, `_` and `-`) or `[index]`, up to 200 characters, such as `$.data.object.id` or `$.commits[0].id`. With it the route reads each input fields names from its path and every other input from the body's key of the same name, and leaves out every other key of the body. A path the body does not have leaves its input out, so a required input answers `Missing action input: <key>` and a nullable one binds `NULL`. A value of the wrong type is refused as any input is, such as `id must be a non-empty string.` for a number; declare a number input for a provider's numeric ID. `fields` works on any POST route, signed or not, and a key or a session caller sends the same nested body. Without `fields` a route keeps refusing undeclared keys.
 
-The Validation Gate and the Kernel refuse the same declarations with the same messages, from `kernel-rs/src/http-binding-cases.json`, checking the scheme, the keys it takes, the method, the header, the secret and the scheme's settings in that order, then `fields` in sorted key order:
+The Validation Gate and the Kernel refuse the same declarations with the same messages, from `kernel-rs/kernel/src/http-binding-cases.json`, checking the scheme, the keys it takes, the method, the header, the secret and the scheme's settings in that order, then `fields` in sorted key order:
 
 | Declaration | Message |
 | --- | --- |
@@ -525,7 +525,7 @@ The Validation Gate and the Kernel refuse the same declarations with the same me
 | A key no input binding declares | `Action <name> maps <key>, which is not one of its input bindings.` |
 | A path that is not text, lacks `$`, is `$` alone or has another step | `Action <name> maps <key> to an invalid JSON path. Use "$" and then ".name" or "[index]" steps, such as "$.data.object.id".` |
 
-`src/lib/provider-signature.ts` signs the way each provider does, and `kernel-rs/src/provider-signature-cases.json` holds vectors both sides check, GitHub's and Svix's published examples among them. A body is read up to 64 KiB, so a large delivery such as a push with many commits answers 413. A form-encoded body, as Slack's slash commands and Twilio send, still answers 400, and a scheme with the timestamp in a header of its own, as Slack's, is not one of the four.
+`src/lib/provider-signature.ts` signs the way each provider does, and `kernel-rs/kernel/src/provider-signature-cases.json` holds vectors both sides check, GitHub's and Svix's published examples among them. A body is read up to 64 KiB, so a large delivery such as a push with many commits answers 413. A form-encoded body, as Slack's slash commands and Twilio send, still answers 400, and a scheme with the timestamp in a header of its own, as Slack's, is not one of the four.
 
 ### API keys
 
@@ -537,7 +537,7 @@ api_keys_revoke { "deploymentId", "keyId" }
 
 The editor's Auth > Integrations view sets, lists and deletes secrets by name and creates, lists and revokes keys, showing a new key once with a curl for each route it names and for the file read path.
 
-`api_keys_create` returns the key once. A key belongs to one Deployment and never to the owner, grants no administrative tool, and works only on HTTP routes and the file read path. The runtime MCP endpoint refuses a request that carries one with 403 `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.`, so a misconfigured program learns why instead of getting a visitor's answers. It may name actions that have an HTTP route and the file visibilities `public` and `private`. A key that names `private` reads every private file of its Deployment, because the owner who issues it can already read them through `project_export`. A Deployment holds at most 50 live keys. Each unknown or revoked key a client presents counts against that client address, as a wrong password does: after 10 in a minute on one Deployment, the Kernel answers `rate-limited` to every key from that address without looking it up, so guessing keys costs no more than one bucket per address. A valid key never uses the bucket up. The Kernel stores the SHA-256 hash in the Deployment's `identity.sqlite`, so `project_export` carries the keys' metadata and hashes with the accounts. A package leaves with every live key already revoked, and an import of either format marks any live key revoked, as it deletes sessions and challenges. `api_keys_list` on the destination shows each such key with `revokedReason: "import"`, its name, actions and file visibilities, so the owner knows which programs to issue a new key for; the editor's Integrations view lists them under "Revoked at import". A key the owner revoked has `revokedReason: null` and keeps its time. `konae-kernel restore` keeps keys live, since it restores the same installation.
+`api_keys_create` returns the key once. A key belongs to one Deployment and never to the owner, grants no administrative tool, and works only on HTTP routes and the file read path. The runtime MCP endpoint refuses a request that carries one with 403 `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.`, so a misconfigured program learns why instead of getting a visitor's answers. It may name actions that have an HTTP route and the file visibilities `public` and `private`. A key that names `private` reads every private file of its Deployment, because the owner who issues it can already read them through `project_export`. A Deployment holds at most 50 live keys. Each unknown or revoked key a client presents counts against that client address, as a wrong password does: after 10 in a minute on one Deployment, the Kernel answers `rate-limited` to every key from that address without looking it up, so guessing keys costs no more than one bucket per address. A valid key never uses the bucket up. The Kernel stores the SHA-256 hash in the Deployment's `identity.sqlite`, so `project_export` carries the keys' metadata and hashes with the accounts. A package leaves with every live key already revoked, and an import of either format marks any live key revoked, as it deletes sessions and challenges. `api_keys_list` on the destination shows each such key with `revokedReason: "import"`, its name, actions and file visibilities, so the owner knows which programs to issue a new key for; the editor's Integrations view lists them under "Revoked at import". A key the owner revoked has `revokedReason: null` and keeps its time. `konae restore` keeps keys live, since it restores the same installation.
 
 ### The file read path
 
@@ -547,7 +547,7 @@ The editor preview serves no routes. Try them on a Development Kernel with `kona
 
 ## Calls between apps
 
-An action of `"kind": "call"` sends one HTTP request to another app or an outside service. The Kernel sends it from its own process, never from the browser, so a signing secret or an API key the request needs stays in the Kernel. [ADR-0019](./adr/0019-an-app-calls-another-from-the-kernel.md) records the decision; `kernel-rs/src/calls.rs` implements it.
+An action of `"kind": "call"` sends one HTTP request to another app or an outside service. The Kernel sends it from its own process, never from the browser, so a signing secret or an API key the request needs stays in the Kernel. [ADR-0019](./adr/0019-an-app-calls-another-from-the-kernel.md) records the decision; `kernel-rs/kernel/src/calls.rs` implements it.
 
 ```json
 "tasks.escalate": {
@@ -630,7 +630,7 @@ A call's `then` mutation processes its declared `notify` when it changes a row, 
 
 ### Declarations both doors refuse
 
-The Validation Gate and the Kernel parse calls and `connects` from one case file, `kernel-rs/src/call-cases.json`, with these messages besides the URL rules above:
+The Validation Gate and the Kernel parse calls and `connects` from one case file, `kernel-rs/kernel/src/call-cases.json`, with these messages besides the URL rules above:
 
 | Declaration | Message |
 | --- | --- |
@@ -666,7 +666,7 @@ Both tools accept inclusive UTC dates and the same 400-day range limit as `usage
 
 Coverage includes `queueFlushed` to say whether earlier queued records finished writing before the read. A false value means recent activity may be missing. Coverage also names when new aggregates began, the earliest retained metric day, and the last day affected by pruning as `prunedThrough`. A null capture start means the old store has not received a new write. Earlier operation counters may exist. Dropped-entry and write-error counts cover the installation since restart. Retained call and mail states describe jobs created in the requested period; records already removed cannot contribute. These tools return neither Signal properties nor request bodies.
 
-Each Deployment keeps Usage and Signals in its own `usage.sqlite`, next to its database and accounts. [ADR-0010](./adr/0010-kernel-owns-usage-and-signals.md) records the decision; `kernel-rs/src/usage.rs` implements it. Only the owner reads them, through two tools that need `read` and the project grant. The runtime endpoint does not list them, so an app cannot read its own Usage.
+Each Deployment keeps Usage and Signals in its own `usage.sqlite`, next to its database and accounts. [ADR-0010](./adr/0010-kernel-owns-usage-and-signals.md) records the decision; `kernel-rs/kernel/src/usage.rs` implements it. Only the owner reads them, through two tools that need `read` and the project grant. The runtime endpoint does not list them, so an app cannot read its own Usage.
 
 ```text
 usage_read   { "deploymentId", "from": "2026-11-01", "to": "2026-11-06" }
@@ -729,7 +729,7 @@ A mutation may declare `signal` too, and records it after its statement changes 
 | `usage_read` over more than 400 days | `Usage covers at most 400 days at a time.` |
 | `signals_read` with a cursor it did not return | `Invalid cursor. Pass back the nextCursor of an earlier page.` |
 
-The Validation Gate and the Kernel refuse the same declarations with the same messages, from one case file, `kernel-rs/src/signal-cases.json`, that both test suites run. A signal action counts toward the action limit.
+The Validation Gate and the Kernel refuse the same declarations with the same messages, from one case file, `kernel-rs/kernel/src/signal-cases.json`, that both test suites run. A signal action counts toward the action limit.
 
 ### Guards
 
@@ -753,7 +753,7 @@ When the statement changes no row, the Kernel answers the guard as a refusal: a 
 | `guard` on a signal action | `Action <name> is a signal action, so it cannot declare a guard. Declare it on a mutation.` |
 | A guard that is not a string of 1 to 200 characters on one line | `Action <name> has an invalid guard. Use a message of 1 to 200 characters on one line.` |
 
-The Validation Gate and the Kernel parse the same cases from `kernel-rs/src/guard-cases.json`; `kernel-rs/src/guard.rs` holds the Kernel's side.
+The Validation Gate and the Kernel parse the same cases from `kernel-rs/kernel/src/guard-cases.json`; `kernel-rs/kernel/src/guard.rs` holds the Kernel's side.
 
 The store keeps 400 days and at most 100,000 rows of totals, the newest 50,000 Signals and the newest 10,000 scheduled runs; past those bounds the oldest rows go first. A string property keeps its first 128 bytes. The scheduled copy and `project_export` carry the store. A Development Kernel started with `bun run konae -- dev` records the same way, in `.konae/dev-data/apps/<id>/data/usage.sqlite`. The editor preview has no store: a signal action there returns `{ "recorded": true }` and nothing is kept.
 
@@ -799,11 +799,11 @@ Nothing is pushed to a page. A page that shows new rows polls a query with an `a
 | `daily` that is not a time from `00:00` to `23:59` | `Action <name> has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59.` |
 | `subscribe` on any action | `Action <name> declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead.` |
 
-The Validation Gate and the Kernel parse the same cases from `kernel-rs/src/schedule-cases.json`; `kernel-rs/src/schedule.rs` holds the Kernel's side, the timer and the run.
+The Validation Gate and the Kernel parse the same cases from `kernel-rs/kernel/src/schedule-cases.json`; `kernel-rs/kernel/src/schedule.rs` holds the Kernel's side, the timer and the run.
 
 ### Notices
 
-A mutation may send one email when its statement changes a row. [ADR-0016](./adr/0016-a-mutation-may-notify-the-owner-or-the-actor.md) records the decision; `kernel-rs/src/notify.rs` implements it.
+A mutation may send one email when its statement changes a row. [ADR-0016](./adr/0016-a-mutation-may-notify-the-owner-or-the-actor.md) records the decision; `kernel-rs/kernel/src/notify.rs` implements it.
 
 ```json
 "bookings.create": {
@@ -860,7 +860,7 @@ A queued notice is a job in the same queue as account email, with purpose `notif
 | A `changes` or `to` column the changed table does not have, checked against the schema | `Action <name> names a notify column its statement cannot return. Name columns of the table the statement changes.` |
 | A `{` with no `}` after it | `Action <name> has an unclosed placeholder in its notify <subject or body>. Close it with "}".` |
 
-The Validation Gate and the Kernel parse the same cases from `kernel-rs/src/notify-cases.json`, and check columns against a schema from `kernel-rs/src/notify-column-cases.json`.
+The Validation Gate and the Kernel parse the same cases from `kernel-rs/kernel/src/notify-cases.json`, and check columns against a schema from `kernel-rs/kernel/src/notify-column-cases.json`.
 
 ## Build and publish
 
@@ -976,7 +976,7 @@ On the alias the app has its own origin. The runtime endpoint takes requests who
 | A name another Deployment serves | `<name> already serves another Deployment on this installation. Clear it there with domain_clear first.` |
 | `domain_set` or `domain_clear` without `publish` | `Unknown tool or insufficient permission. domain_set needs a credential with publish. …` |
 
-Two Deployments may both wait on a name; the first whose token appears in the record gets it, and the other is then refused. `kernel-rs/src/domain-cases.json` lists every rule with its message.
+Two Deployments may both wait on a name; the first whose token appears in the record gets it, and the other is then refused. `kernel-rs/kernel/src/domain-cases.json` lists every rule with its message.
 
 ## Path address
 
@@ -989,7 +989,7 @@ A Deployment can answer on the installation's domain at `<domain>/p/<id>`, and a
 
 The app whose path holds the name `konae-home` also answers `<domain>/`.
 
-An omitted `name` or `acceptSharedOrigin` keeps the stored value, and `name: null` removes the name while the path stays as `enabled` says. `path_read` answers `domainConfigured: false` when the installation sets no `KONAE_DOMAIN`. A package carries `enabled`, `name` and `acceptSharedOrigin`, never the Deployment id. On import a name another app holds is dropped, and the release receipt's `notices` says so. A path that would turn on without the acceptance stays off. Without `KONAE_DOMAIN` the path has no address, and `path_set` with `enabled: true` refuses. `kernel-rs/src/path-cases.json` and `kernel-rs/src/path-state-cases.json` list the rules and their messages.
+An omitted `name` or `acceptSharedOrigin` keeps the stored value, and `name: null` removes the name while the path stays as `enabled` says. `path_read` answers `domainConfigured: false` when the installation sets no `KONAE_DOMAIN`. A package carries `enabled`, `name` and `acceptSharedOrigin`, never the Deployment id. On import a name another app holds is dropped, and the release receipt's `notices` says so. A path that would turn on without the acceptance stays off. Without `KONAE_DOMAIN` the path has no address, and `path_set` with `enabled: true` refuses. `kernel-rs/kernel/src/path-cases.json` and `kernel-rs/kernel/src/path-state-cases.json` list the rules and their messages.
 
 ## Action Contract
 
@@ -1089,7 +1089,7 @@ To import on another Kernel, first create the project there with `project_create
 
 The release payload is the one `release_plan` always takes, `project`, `visibility` and the `artifact` built from `app/` into `dist/`, plus `initialPackage`. No CLI command imports a package into a Kernel you already run; [the walkthrough](mcp-walkthrough.md#14-import-on-a-second-kernel) shows the tool calls.
 
-The CLI's `export --dir <folder> --out <empty folder> --with-data` writes the same app folder on disk, with the data in `data/`. `src/lib/portable-package.ts` checks the manifest on the client with the same limits as `kernel-rs/src/package.rs`.
+The CLI's `export --dir <folder> --out <empty folder> --with-data` writes the same app folder on disk, with the data in `data/`. `src/lib/portable-package.ts` checks the manifest on the client with the same limits as `kernel-rs/kernel/src/package.rs`.
 
 ## Maintenance
 
@@ -1105,7 +1105,7 @@ The state is the file `apps/<id>/.konae/maintenance.json`. A restart keeps it, a
 
 ### Restore and the revocation record
 
-A restore brings back an installation from its last copy, up to an hour old. So that it cannot bring back an account suspended or an API key revoked since then, `app_user_suspend`, `api_keys_revoke` and `konae-kernel creator-account-suspend` write each change to every copy target, under `revocations/`, before they report success. If a target cannot be written the tool reports `The change holds on this server, but it could not be recorded at the copy target, so a restore could undo it …`; repeating the same request records it. `konae-kernel restore` applies the record before it installs the copy. When the record cannot be read, the restored installation starts in maintenance: every app serves its maintenance page and every owner change is refused with `This installation was restored from a copy and stays in maintenance …` until the operator runs `konae-kernel reconcile`. The README's section on copies gives the commands.
+A restore brings back an installation from its last copy, up to an hour old. So that it cannot bring back an account suspended or an API key revoked since then, `app_user_suspend`, `api_keys_revoke` and `konae creator-account-suspend` write each change to every copy target, under `revocations/`, before they report success. If a target cannot be written the tool reports `The change holds on this server, but it could not be recorded at the copy target, so a restore could undo it …`; repeating the same request records it. `konae restore` applies the record before it installs the copy. When the record cannot be read, the restored installation starts in maintenance: every app serves its maintenance page and every owner change is refused with `This installation was restored from a copy and stays in maintenance …` until the operator runs `konae reconcile`. The README's section on copies gives the commands.
 
 ## Transfers and limits
 
@@ -1135,6 +1135,6 @@ Each entry of `secrets_list` also carries `svixKey`, true when the value decodes
 
 The editor preview still stores its test data in the browser, including uploads, which it keeps as data URLs in local storage. It uses MCP over a MessageChannel with an ephemeral preview credential. The registry of published projects and the credentials live in the Kernel.
 
-Remote development environments, teams with Workspace membership and immutable artifact history are outside this release. Publishing keeps the project's URL and database, matching the Kernel's current behavior. Each app is one folder on the Kernel volume, `apps/<id>/`, with `konae.json`, its sources, its built files, its data and the installation's record. Scheduled copies send those folders to a second disk or an S3 prefix, and `konae-kernel restore` installs a copy on a fresh volume; the README's section on the data directory and copies describes both.
+Remote development environments, teams with Workspace membership and immutable artifact history are outside this release. Publishing keeps the project's URL and database, matching the Kernel's current behavior. Each app is one folder on the Kernel volume, `apps/<id>/`, with `konae.json`, its sources, its built files, its data and the installation's record. Scheduled copies send those folders to a second disk or an S3 prefix, and `konae restore` installs a copy on a fresh volume; the README's section on the data directory and copies describes both.
 
 An export carries the custom domain's hostname, without its verification token, as `manifest.domain`. The import creates a pending claim with a new token issued by the destination, and `domain_read` there prints the TXT record to add. Imported files never establish domain ownership.

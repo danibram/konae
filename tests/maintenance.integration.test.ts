@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { appFetch, buildKernel, release, startKernel, type Kernel } from "./kernel-harness";
 
-// An app in maintenance takes no writes. kernel-rs/src/maintenance.rs reads
+// An app in maintenance takes no writes. kernel-rs/kernel/src/maintenance.rs reads
 // apps/<id>/.konae/maintenance.json at startup; no tool writes it yet, so the
 // test writes the file while the Kernel is stopped, as an operator would.
 let root: string;

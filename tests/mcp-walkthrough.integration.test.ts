@@ -174,13 +174,13 @@ describe("the MCP walkthrough", () => {
     r.step("operator");
     const first = await cli(["login", "--dir", path.join(root, "operator"), "--url", a.url], { KONAE_EMAIL: "operator@walkthrough.test", KONAE_PASSWORD: password, KONAE_SETUP_KEY: setupKey });
     expect(first.code).toBe(0);
-    const issued = Bun.spawnSync([path.join(repo, "kernel-rs/target/debug/konae-kernel"), "creator-code-create", "--note", "Walkthrough agent"], { env: { PATH: process.env.PATH ?? "", KONAE_DATA_DIR: a.data } });
+    const issued = Bun.spawnSync([path.join(repo, "kernel-rs/target/debug/konae"), "creator-code-create", "--note", "Walkthrough agent"], { env: { PATH: process.env.PATH ?? "", KONAE_DATA_DIR: a.data } });
     const printed = issued.stdout.toString().trim();
     s.code = printed.match(/shown once: (\S+)/)![1];
     r.name(s.code, "<invitation code>");
     r.name(printed.match(/ID: (\S+)/)![1], "<code id>");
     r.name(printed.match(/Expires: (.+)/)![1], "<expiry>");
-    r.add("sh", "konae-kernel creator-code-create --note 'Walkthrough agent'");
+    r.add("sh", "konae creator-code-create --note 'Walkthrough agent'");
     r.add("text", printed);
 
     r.step("login");

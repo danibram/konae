@@ -454,10 +454,10 @@ describe("the gate and the Kernel refuse the same actions.json", () => {
     "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT, assignee_id TEXT, due_day TEXT, reminded_at INTEGER, a, b, c, d, e, f, g, h);",
   ].join("\n");
 
-  // kernel-rs/src/notify.rs runs the same file against a schema in SQLite.
-  test("every case in kernel-rs/src/notify-column-cases.json", async () => {
+  // kernel-rs/kernel/src/notify.rs runs the same file against a schema in SQLite.
+  test("every case in kernel-rs/kernel/src/notify-column-cases.json", async () => {
     const cases: { case: string; schema: string; actions: Record<string, unknown>; error: string | null; code?: string }[] =
-      await Bun.file(new URL("../../kernel-rs/src/notify-column-cases.json", import.meta.url)).json();
+      await Bun.file(new URL("../../kernel-rs/kernel/src/notify-column-cases.json", import.meta.url)).json();
     expect(cases.length).toBeGreaterThanOrEqual(8);
     for (const item of cases) {
       const result = await validator.validate(capsule({ "schema.sql": item.schema, "actions.json": actions({ version: 1, actions: item.actions }) }));
@@ -471,9 +471,9 @@ describe("the gate and the Kernel refuse the same actions.json", () => {
   const files = ["action-cases.json", "sql-rule-cases.json", "http-binding-cases.json", "signal-cases.json", "guard-cases.json", "notify-cases.json", "schedule-cases.json"];
 
   for (const file of files) {
-    test(`every case in kernel-rs/src/${file}`, async () => {
+    test(`every case in kernel-rs/kernel/src/${file}`, async () => {
       const cases: { case: string; actions?: Record<string, unknown>; schema?: string; error: string | null; code?: string }[] =
-        await Bun.file(new URL(`../../kernel-rs/src/${file}`, import.meta.url)).json();
+        await Bun.file(new URL(`../../kernel-rs/kernel/src/${file}`, import.meta.url)).json();
       expect(cases.length).toBeGreaterThan(5);
       for (const item of cases) {
         if (item.schema !== undefined) {

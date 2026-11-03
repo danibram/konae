@@ -72,7 +72,7 @@ try {
   // ---------------------------------------------------------------- Kernel
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
   assert.equal(await build.exited, 0, "The Kernel must compile.");
-  kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/konae-kernel")], {
+  kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/konae")], {
     cwd: repo,
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),

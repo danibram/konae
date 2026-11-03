@@ -9,13 +9,13 @@ The app has to leave with its rules unchanged. If the editor accepted a statemen
 | Door | Where | When |
 | --- | --- | --- |
 | Validation Gate | `src/agent/gate.ts`, with the parser in `src/kernel/actions.ts` | Before an agent-proposed change is applied to a Project |
-| Kernel | `kernel-rs/src/main.rs` and the modules beside it | At `release_plan`, on every Kernel |
+| Kernel | `kernel-rs/kernel/src/lib.rs` and the modules beside it | At `release_plan`, on every Kernel |
 
-The Gate checks that the schema is valid and that every Server Action that runs SQL prepares against it. `schema.sql` states what the database should be. At `release_plan` the Kernel loads it into a scratch database, compares tables, columns and indexes with the live database and returns the change (`kernel-rs/src/schema_change.rs`). A new table, column or index applies. A dropped table, a dropped column or a retyped column comes back as a plan with its statements and what they lose, and `release_apply` runs it only with that plan's `confirmSchema`. A table SQLite cannot change in place is rebuilt in one transaction, following the SQLite page on ALTER TABLE, and every column that still exists keeps its values. The preview keeps its own test rows and only re-runs `schema.sql`, so when it lacks a table or column the file declares, the Gate warns and passes.
+The Gate checks that the schema is valid and that every Server Action that runs SQL prepares against it. `schema.sql` states what the database should be. At `release_plan` the Kernel loads it into a scratch database, compares tables, columns and indexes with the live database and returns the change (`kernel-rs/kernel/src/schema_change.rs`). A new table, column or index applies. A dropped table, a dropped column or a retyped column comes back as a plan with its statements and what they lose, and `release_apply` runs it only with that plan's `confirmSchema`. A table SQLite cannot change in place is rebuilt in one transaction, following the SQLite page on ALTER TABLE, and every column that still exists keeps its values. The preview keeps its own test rows and only re-runs `schema.sql`, so when it lacks a table or column the file declares, the Gate warns and passes.
 
 ## Shared case files
 
-These files live in `kernel-rs/src`, and both sides parse the same cases. They include the following.
+These files live in `kernel-rs/kernel/src`, and both sides parse the same cases. They include the following.
 
 - `sql-rule-cases.json`, for statements
 - `action-cases.json`, for an action's name, access, kind, bindings and size
@@ -26,7 +26,7 @@ These files live in `kernel-rs/src`, and both sides parse the same cases. They i
 - `schedule-cases.json`, for schedules
 - `call-cases.json`, for call actions and `connects`
 
-The query bound is `src/lib/query-bound.ts` on one side and its port in `kernel-rs/src/main.rs` on the other (ADR-0009).
+The query bound is `src/lib/query-bound.ts` on one side and its port in `kernel-rs/kernel/src/lib.rs` on the other (ADR-0009).
 
 ## The LIMIT rule
 

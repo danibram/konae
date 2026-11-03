@@ -89,7 +89,7 @@ Which guard answers depends on who writes:
 
 The replay sends conflicting `bookings.create` calls from two staff sessions with `Promise.allSettled`. Exactly one wins every time, and the loser is refused with the create guard.
 
-The guarantee comes from two places. The Kernel holds a per-Deployment database lock around every action statement, on the runtime endpoint (`kernel-rs/src/main.rs:852`) and on HTTP routes (`kernel-rs/src/http.rs:778`), so the `NOT EXISTS` check and the insert of one request never interleave with another's. The partial unique index holds even without the lock, because SQLite checks it inside the statement. The Action Contract does not state that actions are serialized. A replacement backend that runs statements in parallel would still refuse the second holder, but the loser would see SQLite's `UNIQUE constraint failed` text instead of the guard, and `conform` would not notice the difference.
+The guarantee comes from two places. The Kernel holds a per-Deployment database lock around every action statement, on the runtime endpoint (`kernel-rs/kernel/src/lib.rs:852`) and on HTTP routes (`kernel-rs/kernel/src/http.rs:778`), so the `NOT EXISTS` check and the insert of one request never interleave with another's. The partial unique index holds even without the lock, because SQLite checks it inside the statement. The Action Contract does not state that actions are serialized. A replacement backend that runs statements in parallel would still refuse the second holder, but the loser would see SQLite's `UNIQUE constraint failed` text instead of the guard, and `conform` would not notice the difference.
 
 ## Notifying staff
 

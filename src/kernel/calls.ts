@@ -1,8 +1,8 @@
 // Calls between apps, docs/adr/0019-an-app-calls-another-from-the-kernel.md.
 //
 // The same checks, in the same order and with the same messages, as
-// kernel-rs/src/calls.rs `declaration`, `check_program` and `check_connects`.
-// kernel-rs/src/call-cases.json holds the cases both test suites run. The
+// kernel-rs/kernel/src/calls.rs `declaration`, `check_program` and `check_connects`.
+// kernel-rs/kernel/src/call-cases.json holds the cases both test suites run. The
 // checks that need the installation, http only to its own apps and never the
 // editor's host, and the secrets a call names, run in the Kernel at publish
 // and in src/agent/release-check.ts when the editor has those facts.

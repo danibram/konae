@@ -98,7 +98,7 @@ describe("what happened", () => {
       if (["superseded", "link-expired", "secret-unavailable"].includes(kind)) continue; // account links only
       expect(noticeFailures[kind], kind).toBeDefined();
     }
-    const calls = readFileSync(new URL("../../kernel-rs/src/calls.rs", import.meta.url), "utf8");
+    const calls = readFileSync(new URL("../../kernel-rs/kernel/src/calls.rs", import.meta.url), "utf8");
     for (const [, kind] of calls.matchAll(/(?:Err\(\(|error: Some\()"([a-z-]+)"/g)) expect(callFailures[kind], kind).toBeDefined();
   });
 });

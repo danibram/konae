@@ -19,7 +19,7 @@ beforeAll(async () => {
   root = await mkdtemp(path.join(tmpdir(), "konae-http-security-"));
   const port = 19660 + Math.floor(Math.random() * 20);
   url = `http://127.0.0.1:${port}`;
-  kernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
+  kernel = Bun.spawn(["kernel-rs/target/debug/konae"], {
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
       KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,

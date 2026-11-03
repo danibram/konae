@@ -328,9 +328,9 @@ describe("schema check", () => {
   });
 
   test("the limits it states are the Kernel's", () => {
-    const limits = readFileSync(path.join(repo, "kernel-rs/src/limits.rs"), "utf8");
-    const main = readFileSync(path.join(repo, "kernel-rs/src/main.rs"), "utf8");
-    const http = readFileSync(path.join(repo, "kernel-rs/src/http.rs"), "utf8");
+    const limits = readFileSync(path.join(repo, "kernel-rs/kernel/src/limits.rs"), "utf8");
+    const main = readFileSync(path.join(repo, "kernel-rs/kernel/src/lib.rs"), "utf8");
+    const http = readFileSync(path.join(repo, "kernel-rs/kernel/src/http.rs"), "utf8");
     expect(limits).toContain("ANONYMOUS_ACTIONS: u32 = 30;");
     expect(limits).toContain("ANONYMOUS_ACTIONS_PERIOD: Duration = Duration::from_secs(10);");
     expect(limits).toContain("SIGNED_IN_ACTIONS: u32 = 120;");

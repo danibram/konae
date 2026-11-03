@@ -47,7 +47,7 @@ try {
   assert.equal(await build.exited, 0, "The Kernel must compile.");
   const taken = await fetch(`${url}/_konae/health`).then(() => true, () => false);
   assert(!taken, `Port ${port} already answers. Set KONAE_SHOWCASE_PORT to a free port.`);
-  kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/konae-kernel")], {
+  kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/konae")], {
     cwd: repo,
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),

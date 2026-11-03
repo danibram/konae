@@ -72,7 +72,7 @@ console.log(`Konae editor: http://localhost:${editorPort}`);
 console.log(`Konae Kernel: ${kernelUrl}`);
 console.log(`Local app data: ${dataRoot}`);
 
-start("cargo", ["run", "--manifest-path", path.join(root, "kernel-rs", "Cargo.toml")], kernelEnv);
+start("cargo", ["run", "--manifest-path", path.join(root, "kernel-rs", "Cargo.toml"), "--bin", "konae"], kernelEnv);
 start(process.execPath, ["run", "dev", "--", "--host", "127.0.0.1", "--port", editorPort, "--strictPort"], editorEnv);
 
 const exitCode = await runFinished;

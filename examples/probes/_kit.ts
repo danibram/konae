@@ -61,7 +61,7 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
     try { await fetch(`${url}/_konae/health`); throw Error(`Something already answers on port ${port}. Set KONAE_PROBE_PORT.`); }
     catch (error) { if (error instanceof Error && error.message.startsWith("Something")) throw error; }
     // KONAE_KERNEL_BIN runs a Kernel binary already built from these sources instead of compiling one.
-    const binary = process.env.KONAE_KERNEL_BIN ?? path.join(repo, "kernel-rs/target/debug/konae-kernel");
+    const binary = process.env.KONAE_KERNEL_BIN ?? path.join(repo, "kernel-rs/target/debug/konae");
     if (!process.env.KONAE_KERNEL_BIN) {
       const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
       assert.equal(await build.exited, 0, "The Kernel must compile.");

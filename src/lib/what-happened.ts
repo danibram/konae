@@ -2,7 +2,7 @@
 // mutations queued, the calls its call actions sent, its scheduled runs, its
 // HTTP routes and its Signals. Each outcome says who must act and where when
 // it failed. The words for a refusal's fix come from the shared refusal table
-// (kernel-rs/src/refusal-codes.json) where a code exists.
+// (kernel-rs/kernel/src/refusal-codes.json) where a code exists.
 import { platformMcp } from "../mcp/client";
 import { hintOf, type RefusalCode } from "../kernel/refusal";
 import { usageRange, type UsageSummary } from "./usage";

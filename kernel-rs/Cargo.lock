@@ -1446,7 +1446,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "konae-kernel"
+name = "kernel"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1457,6 +1457,34 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "hex",
+ "lettre",
+ "libc",
+ "reqwest",
+ "ring",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "konae"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-s3",
+ "axum",
+ "base64 0.22.1",
+ "futures-util",
+ "hex",
+ "kernel",
  "lettre",
  "libc",
  "reqwest",

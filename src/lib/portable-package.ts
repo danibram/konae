@@ -1,5 +1,5 @@
 // The data part of an export: the manifest `project_export` returns and a
-// release imports as `initialPackage`. kernel-rs/src/package.rs checks the same manifest with
+// release imports as `initialPackage`. kernel-rs/kernel/src/package.rs checks the same manifest with
 // the same limits; a change here lands there too.
 
 export const packageFormat = "konae-package";

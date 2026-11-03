@@ -28,7 +28,7 @@ const port = Number(process.env.KONAE_SHOWCASE_PORT ?? 23450);
 assert(Number.isInteger(port) && port >= 1024 && port + 1 <= 65535, "Set KONAE_SHOWCASE_PORT to a free local port; the replay also uses the next one.");
 const scratch = await mkdtemp(path.join(tmpdir(), "konae-showcase-starter-"));
 const shots = process.env.KONAE_SHOWCASE_SCREENSHOTS;
-const binary = path.join(repo, "kernel-rs/target/debug/konae-kernel");
+const binary = path.join(repo, "kernel-rs/target/debug/konae");
 const ownerEmail = "owner@starter.test";
 const passwords = { owner: `owner-${crypto.randomUUID()}`, ana: `ana-${crypto.randomUUID()}`, ben: `ben-${crypto.randomUUID()}`, olga: `olga-${crypto.randomUUID()}` };
 const people = { ana: "ana@starter.test", ben: "ben@starter.test", olga: ownerEmail };

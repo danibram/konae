@@ -221,7 +221,7 @@ export type GoogleField = "clientId" | "clientSecret";
  * the card shows it: the Kernel's own sentence, and the field it belongs to
  * when the refusal is about the value saved there. The editor does not check
  * the values itself, so its words cannot drift from the Kernel's; the codes
- * and sentences are in kernel-rs/src/google-client-cases.json. Null for an
+ * and sentences are in kernel-rs/kernel/src/google-client-cases.json. Null for an
  * answer that is not an owner's refusal, which the card shows as it is.
  */
 export function googleRefusal(cause: unknown, saving?: GoogleField): { message: string; field?: GoogleField } | null {

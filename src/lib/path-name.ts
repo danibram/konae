@@ -1,6 +1,6 @@
 // The name an app may answer on under <domain>/p/<name> (ADR-0024). The
-// Kernel's kernel-rs/src/path_name.rs applies the same rules with the same
-// words, and both test suites run kernel-rs/src/path-cases.json.
+// Kernel's kernel-rs/kernel/src/path_name.rs applies the same rules with the same
+// words, and both test suites run kernel-rs/kernel/src/path-cases.json.
 
 import type { RefusalCode } from "../kernel/refusal";
 

@@ -3,7 +3,7 @@ import { sdkContract, type SdkCall, type SdkContract, type SdkError, type SdkMod
 /** The checked-in files `bun run sdk:render` writes, relative to the repository root. */
 export const renderedPaths = {
   prompt: "src/agent/sdk-section.generated.ts",
-  guide: "kernel-rs/src/sdk-guide.json",
+  guide: "kernel-rs/konae/src/sdk-guide.json",
   docs: "docs/sdk.md",
 } as const;
 

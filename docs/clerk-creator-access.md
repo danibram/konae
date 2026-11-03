@@ -36,7 +36,7 @@ The operator can suspend a creator on the server using the same Kernel executabl
 
 ```sh
 KONAE_DATA_DIR=/data KONAE_CLERK_ISSUER=https://example.clerk.accounts.dev \
-  konae-kernel creator-suspend user_example
+  konae creator-suspend user_example
 ```
 
 This command locates the owner by issuer and subject, suspends the identity and deletes its Kernel sessions in one transaction. It then deletes the owner's MCP credentials and pending OAuth codes. It does not start a server. If MCP cleanup fails, suspension remains in force because each administrative request checks the identity. There is no command to reverse suspension in this delivery. The operator must investigate the account before changing its stored status.

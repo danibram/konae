@@ -22,9 +22,9 @@ export type ReleaseFacts = {
 
 /**
  * The first sentence release_plan would refuse a parsed program with, from
- * names alone: kernel-rs/src/http.rs `require_secrets`, then calls.rs
+ * names alone: kernel-rs/kernel/src/http.rs `require_secrets`, then calls.rs
  * `check_release`, each over actions in name order. The cases are in
- * kernel-rs/src/release-cases.json. A svix route is refused for its key only
+ * kernel-rs/kernel/src/release-cases.json. A svix route is refused for its key only
  * when `secrets_list` says the value does not decode, since the editor never
  * reads the value.
  */
@@ -75,7 +75,7 @@ export function releaseRefusal(program: ServerActionProgram, facts: ReleaseFacts
   return null;
 }
 
-/** kernel-rs/src/http.rs `unset_secrets_message`: one sentence for every unset route secret. */
+/** kernel-rs/kernel/src/http.rs `unset_secrets_message`: one sentence for every unset route secret. */
 function unsetSecretsSentence(actions: string[], secrets: string[]): string | null {
   const list = (items: string[]) => items.length === 1 ? items[0] : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
   if (actions.length === 0) return null;

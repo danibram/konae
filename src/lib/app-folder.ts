@@ -17,7 +17,7 @@ export type FolderEntry = { path: string; contents: string | Uint8Array };
 
 export type SignupPolicy = { mode: "open" | "invitation" | "closed" | "allowlist"; allowlist?: string[] };
 
-/** konae.json, as kernel-rs/src/main.rs `Settings` writes and reads it. */
+/** konae.json, as kernel-rs/kernel/src/lib.rs `Settings` writes and reads it. */
 export type AppSettings = {
   id: string;
   name: string;

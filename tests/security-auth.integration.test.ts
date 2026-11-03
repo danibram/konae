@@ -28,7 +28,7 @@ async function installation(https: boolean, separateMcp = false) {
   const root = await mkdtemp(path.join(tmpdir(), "konae-security-auth-"));
   roots.push(root);
   const key = crypto.randomUUID();
-  const child = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
+  const child = Bun.spawn(["kernel-rs/target/debug/konae"], {
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("KONAE_") && !name.startsWith("VITE_"))),
       KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_DATA_DIR: root,

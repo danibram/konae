@@ -6,7 +6,7 @@ import { McpClient, type Transfer } from "../src/mcp/client";
 
 // Delivery 2's condition: a Kernel started on an empty volume from a copy
 // serves the same app with its artifact, rows, accounts and files.
-const binary = "kernel-rs/target/debug/konae-kernel";
+const binary = "kernel-rs/target/debug/konae";
 const setupKey = "copy-restore-setup-secret";
 const password = "copy-restore-password-2026";
 const attachment = new TextEncoder().encode("Attachment survives the copy");

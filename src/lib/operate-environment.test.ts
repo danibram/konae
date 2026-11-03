@@ -6,16 +6,16 @@ import path from "node:path";
 // A variable the Kernel reads and the page does not name is a setting nobody can find.
 
 const root = path.resolve(import.meta.dir, "../..");
-const kernel = path.join(root, "kernel-rs/src");
+const crates = ["kernel", "konae"].map((crate) => path.join(root, "kernel-rs", crate, "src"));
 
 test("docs/operate.md names every KONAE_ variable the Kernel reads", () => {
   const read = new Set(
-    readdirSync(kernel)
+    crates.flatMap((dir) => readdirSync(dir)
       .filter((name) => name.endsWith(".rs"))
       .flatMap((name) => {
-        const source = readFileSync(path.join(kernel, name), "utf8").split("#[cfg(test)]")[0];
+        const source = readFileSync(path.join(dir, name), "utf8").split("#[cfg(test)]")[0];
         return [...source.matchAll(/"(KONAE_[A-Z0-9_]+)"/g)].map((match) => match[1]);
-      }),
+      })),
   );
   expect(read.size).toBeGreaterThan(30);
   const page = readFileSync(path.join(root, "docs/operate.md"), "utf8");

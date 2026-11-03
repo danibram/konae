@@ -5,7 +5,7 @@ export type SchemaLoss = { table: string; column: string | null; sentence: strin
 
 /**
  * The change `release_plan` derives from the app's live database to the one
- * schema.sql states (kernel-rs/src/schema_change.rs). `confirmation` is set
+ * schema.sql states (kernel-rs/kernel/src/schema_change.rs). `confirmation` is set
  * only when the change loses data, and release_apply then needs it back.
  */
 export type SchemaChange = { statements: string[]; losses: SchemaLoss[]; confirmation: string | null };

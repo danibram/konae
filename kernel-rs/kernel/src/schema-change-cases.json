@@ -1,0 +1,9 @@
+{
+  "note": "What release_apply answers for a schema change, by the live database, the rows in it and the new schema.sql. kernel-rs/kernel/src/schema_change.rs runs each case.",
+  "cases": [
+    { "case": "a new column", "live": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT);", "rows": "INSERT INTO tasks(title) VALUES ('a');", "schema": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT, note TEXT);", "error": null },
+    { "case": "a dropped column without confirmation", "live": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT, note TEXT);", "rows": "INSERT INTO tasks(title, note) VALUES ('a', 'x'), ('b', NULL);", "schema": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT);", "error": "This schema change loses data. Drops column tasks.note and the 1 value it holds. Confirm the plan release_plan returns to apply it.", "code": "schema.confirmation-required" },
+    { "case": "a dropped table with a confirmation for another plan", "live": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY); CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY);", "rows": "INSERT INTO notes DEFAULT VALUES;", "schema": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY);", "confirmation": "0000000000000000000000000000000000000000000000000000000000000000", "error": "The schema change differs from the plan that was confirmed. Drops table notes and its 1 row. Confirm the plan release_plan returns to apply it.", "code": "schema.confirmation-required" },
+    { "case": "a dropped table with its plan's confirmation", "live": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY); CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY);", "rows": "INSERT INTO notes DEFAULT VALUES;", "schema": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY);", "confirmation": "plan", "error": null }
+  ]
+}

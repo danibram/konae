@@ -110,7 +110,7 @@ async function json(response: Response) {
 let port = 0;
 
 async function startKernel() {
-  kernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
+  kernel = Bun.spawn(["kernel-rs/target/debug/konae"], {
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
       KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,

@@ -5,7 +5,7 @@
 import { applyTemplate, templateChoices } from "../src/lib/templates";
 import { starterProject } from "../src/lib/starter";
 
-export const PROJECT_TEMPLATES_FILE = "kernel-rs/src/project-templates.json";
+export const PROJECT_TEMPLATES_FILE = "kernel-rs/konae/src/project-templates.json";
 
 /** The template a project gets when none is named: each person signs in and sees only their own rows. */
 export const DEFAULT_TEMPLATE = "notes";

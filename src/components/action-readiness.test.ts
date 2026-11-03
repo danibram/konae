@@ -87,7 +87,7 @@ describe("who an action line names", () => {
 });
 
 describe("a publish refusal that needs the owner", () => {
-  test("follows the code's fix in kernel-rs/src/refusal-codes.json, not the sentence", () => {
+  test("follows the code's fix in kernel-rs/kernel/src/refusal-codes.json, not the sentence", () => {
     for (const code of ["route.signature-secret-unset", "route.signature-secret-call-only", "route.signature-svix-secret-invalid", "call.secret-unset"]) {
       expect(ownerFixes(code), code).toBe(true);
     }

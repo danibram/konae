@@ -20,7 +20,7 @@ beforeAll(async () => {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
   expect(await build.exited).toBe(0);
   root = await mkdtemp(path.join(tmpdir(), "konae-security-mcp-"));
-  kernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
+  kernel = Bun.spawn(["kernel-rs/target/debug/konae"], {
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))),
       KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: origin,

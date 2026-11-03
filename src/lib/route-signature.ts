@@ -1,9 +1,9 @@
 /**
  * The signature a sender puts on a request to a signed HTTP route, as the
- * Kernel checks it in kernel-rs/src/http.rs. The header is
+ * Kernel checks it in kernel-rs/kernel/src/http.rs. The header is
  * `t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256>`, keyed with the secret,
  * over `t`, the nonce, the method, the path, the canonical query string and
- * the raw body, joined by "\n". kernel-rs/src/signature-cases.json holds
+ * the raw body, joined by "\n". kernel-rs/kernel/src/signature-cases.json holds
  * vectors both sides compute.
  */
 export type SignedRequest = { method: "GET" | "POST"; path: string; query?: string; body?: string };

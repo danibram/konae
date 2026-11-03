@@ -728,7 +728,7 @@ async function main() {
     const port = option("port", "8796")!;
     if (!/^\d+$/.test(port) || Number(port) < 1024 || Number(port) > 65535) throw Error("Choose a local port between 1024 and 65535.");
     // KONAE_KERNEL_BIN names a Kernel binary built from these sources, so dev runs without cargo.
-    const kernelBinary = process.env.KONAE_KERNEL_BIN ? path.resolve(process.env.KONAE_KERNEL_BIN) : path.join(toolRoot, "kernel-rs/target/debug/konae-kernel");
+    const kernelBinary = process.env.KONAE_KERNEL_BIN ? path.resolve(process.env.KONAE_KERNEL_BIN) : path.join(toolRoot, "kernel-rs/target/debug/konae");
     if (!process.env.KONAE_KERNEL_BIN) {
       const compilation = Bun.spawn(["cargo", "build", "--manifest-path", path.join(toolRoot, "kernel-rs/Cargo.toml")], { stdout: "inherit", stderr: "inherit" });
       if (await compilation.exited !== 0) throw Error("Could not build the Development Kernel. Install Rust, or set KONAE_KERNEL_BIN to a Kernel binary built from this checkout.");

@@ -63,10 +63,12 @@ describe("the docs site", () => {
   });
 
   test("the MCP reference names every tool the Kernel registers", () => {
-    const kernel = path.join(repo, "kernel-rs/src");
     const registered = new Set<string>();
-    for (const file of readdirSync(kernel).filter((name) => name.endsWith(".rs"))) {
-      for (const match of readFileSync(path.join(kernel, file), "utf8").matchAll(/\btool\(\s*"([a-z_]+)"/g)) registered.add(match[1]);
+    for (const crate of ["kernel", "konae"]) {
+      const dir = path.join(repo, "kernel-rs", crate, "src");
+      for (const file of readdirSync(dir).filter((name) => name.endsWith(".rs"))) {
+        for (const match of readFileSync(path.join(dir, file), "utf8").matchAll(/\btool\(\s*"([a-z_]+)"/g)) registered.add(match[1]);
+      }
     }
     expect(registered.size).toBeGreaterThan(60);
     const reference = readFileSync(path.join(docsRoot, "mcp-tools.md"), "utf8");

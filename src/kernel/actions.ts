@@ -39,7 +39,7 @@ const ROUTE_CALLERS: readonly RouteCaller[] = ["signature", "key", "session"];
  * The callers a route accepts on a Deployment of the given visibility, or
  * null when it answers anyone. An action whose route does not answer anyone
  * answers only there, never through actions_invoke (ADR-0011, update of
- * 2026-11-06). kernel-rs/src/http.rs `route_callers` is the same rule.
+ * 2026-11-06). kernel-rs/kernel/src/http.rs `route_callers` is the same rule.
  */
 export function routeCallers(http: HttpBinding, visibility: "public" | "private"): RouteCaller[] | null {
   if (http.callers) return http.callers;
@@ -110,7 +110,7 @@ export function parseServerActionSource(source: string): ServerActionProgram {
   }
 
   // The same checks, in the same order and with the same messages, as
-  // kernel-rs/src/action_shape.rs `check_program`. Sorted names make both doors
+  // kernel-rs/kernel/src/action_shape.rs `check_program`. Sorted names make both doors
   // name the same action when two are wrong.
   const declared = record.actions as Record<string, unknown>;
   if (Object.keys(declared).length > MAX_ACTIONS) throw refusal("action.count-over", `A project may declare at most ${MAX_ACTIONS} actions.`);
@@ -123,7 +123,7 @@ export function parseServerActionSource(source: string): ServerActionProgram {
   return { version: 1, actions };
 }
 
-// kernel-rs/src/action-cases.json holds the shape cases both test suites run.
+// kernel-rs/kernel/src/action-cases.json holds the shape cases both test suites run.
 const MAX_ACTIONS = 100;
 const MAX_ACTION_NAME = 100;
 const ACTION_NAME = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/;
@@ -161,7 +161,7 @@ export function resolveServerAction(
  * The top-level keys each kind takes. A key outside its kind's list is refused
  * after the action's other checks, so a key that has its own refusal, such as a
  * guard on a query, keeps it. `statement` on a signal action or a call may only
- * be empty. kernel-rs/src/action_shape.rs `check_keys` holds the same lists.
+ * be empty. kernel-rs/kernel/src/action_shape.rs `check_keys` holds the same lists.
  */
 const ACTION_KEYS: Record<ServerActionDefinition["kind"], readonly string[]> = {
   query: ["kind", "access", "statement", "bindings", "http"],
@@ -199,7 +199,7 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   if (kind !== "signal" && kind !== "call" && typeof candidate.statement !== "string") throw new Error(`Invalid server action: ${name}`);
   const statementBytes = typeof candidate.statement === "string" ? new TextEncoder().encode(candidate.statement).length : 0;
   if (statementBytes > MAX_STATEMENT_BYTES || bindings.length > MAX_BINDINGS) throw refusal("action.limits-exceeded", `Action ${name} exceeds statement or binding limits.`);
-  // A call runs no SQL; the Kernel's worker sends it (kernel-rs/src/calls.rs).
+  // A call runs no SQL; the Kernel's worker sends it (kernel-rs/kernel/src/calls.rs).
   if (kind === "call") return { name, kind, access, statement: "", bindings, call: parseCall(name, bindings, candidate) };
   assertNoCallKeys(name, kind, candidate);
   if (kind === "signal") {
@@ -236,8 +236,8 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
 }
 
 // The same checks, in the same order and with the same messages, as
-// kernel-rs/src/schedule.rs `check_subscribe` and `declaration`.
-// kernel-rs/src/schedule-cases.json holds the cases both test suites run.
+// kernel-rs/kernel/src/schedule.rs `check_subscribe` and `declaration`.
+// kernel-rs/kernel/src/schedule-cases.json holds the cases both test suites run.
 const MIN_SCHEDULE_MINUTES = 5;
 const MAX_SCHEDULE_MINUTES = 24 * 60;
 
@@ -273,8 +273,8 @@ function parseSchedule(name: string, kind: "query" | "mutation" | "signal", bind
   throw refusal("schedule.invalid", invalid);
 }
 
-// The same checks and messages as kernel-rs/src/guard.rs `declaration`.
-// kernel-rs/src/guard-cases.json holds the cases both test suites run.
+// The same checks and messages as kernel-rs/kernel/src/guard.rs `declaration`.
+// kernel-rs/kernel/src/guard-cases.json holds the cases both test suites run.
 const MAX_GUARD_LENGTH = 200;
 
 function parseGuard(name: string, kind: "query" | "mutation" | "signal", value: unknown): string | undefined {
@@ -288,7 +288,7 @@ function parseGuard(name: string, kind: "query" | "mutation" | "signal", value: 
 }
 
 // The same checks, in the same order and with the same messages, as
-// kernel-rs/src/notify.rs `declaration`. kernel-rs/src/notify-cases.json holds
+// kernel-rs/kernel/src/notify.rs `declaration`. kernel-rs/kernel/src/notify-cases.json holds
 // the cases both test suites run.
 const MAX_NOTIFY_SUBJECT = 120;
 const MAX_NOTIFY_BODY = 2000;
@@ -343,7 +343,7 @@ function notifyRecipient(value: unknown): NotifyDeclaration["to"] | undefined {
 
 /**
  * The statement with the Kernel's own RETURNING clause, as
- * kernel-rs/src/notify.rs `with_returning` writes it: a trailing ";" and what
+ * kernel-rs/kernel/src/notify.rs `with_returning` writes it: a trailing ";" and what
  * follows are cut, and each column is in brackets, because SQLite reads an
  * unknown "name" in double quotes as a string.
  */
@@ -352,7 +352,7 @@ export function notifyReturningStatement(statement: string, columns: readonly st
   return `${statement.slice(0, end).trimEnd()}\nRETURNING ${columns.map((column) => `[${column}]`).join(", ")}`;
 }
 
-/** The refusal for a notify column the statement cannot return (kernel-rs/src/notify-column-cases.json). */
+/** The refusal for a notify column the statement cannot return (kernel-rs/kernel/src/notify-column-cases.json). */
 export function notifyColumnRefusal(name: string) {
   return refusal("notify.column-unknown", `Action ${name} names a notify column its statement cannot return. Name columns of the table the statement changes.`);
 }
@@ -360,7 +360,7 @@ export function notifyColumnRefusal(name: string) {
 /**
  * The columns the Kernel appends as RETURNING so a notice can list and
  * address the changed rows: the changes list, then the recipient column.
- * kernel-rs/src/notify.rs `Declaration::returning` is the twin.
+ * kernel-rs/kernel/src/notify.rs `Declaration::returning` is the twin.
  */
 export function notifyReturning(notify: NotifyDeclaration | undefined): string[] {
   if (!notify) return [];
@@ -390,7 +390,7 @@ function assertPlaceholders(name: string, field: "subject" | "body", template: s
 }
 
 // The same checks, in the same order and with the same messages, as
-// kernel-rs/src/usage.rs `declaration`. kernel-rs/src/signal-cases.json holds
+// kernel-rs/kernel/src/usage.rs `declaration`. kernel-rs/kernel/src/signal-cases.json holds
 // the cases both test suites run.
 const SIGNAL_NAME = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/;
 const MAX_SIGNAL_PROPERTIES = 8;
@@ -431,7 +431,7 @@ function parseSignal(name: string, kind: "query" | "mutation" | "signal", bindin
 }
 
 // The same checks, in the same order and with the same messages, as
-// kernel-rs/src/http.rs `binding`. kernel-rs/src/http-binding-cases.json
+// kernel-rs/kernel/src/http.rs `binding`. kernel-rs/kernel/src/http-binding-cases.json
 // holds the cases both test suites run.
 const HTTP_PATH = /^(\/[A-Za-z0-9._~-]+)+$/;
 const RESERVED_SEGMENTS = new Set(["_konae", "oauth", ".well-known", "mcp"]);
@@ -527,7 +527,7 @@ function resolveBinding(binding: ActionBinding, input: Record<string, unknown>, 
   }
   const value = input[binding.key];
   if (binding.nullable && (value === undefined || value === null)) return null;
-  // The Kernel's words, kernel-rs/src/main.rs `resolve_bindings`, so the preview refuses as a Deployment does.
+  // The Kernel's words, kernel-rs/kernel/src/lib.rs `resolve_bindings`, so the preview refuses as a Deployment does.
   if (value === undefined) throw new Error(`Missing action input: ${binding.key}`);
   if (binding.type === "string") {
     if (typeof value !== "string" || !value.trim()) throw new Error(`${binding.key} must be a non-empty string.`);

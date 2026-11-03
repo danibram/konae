@@ -25,7 +25,7 @@ The app is a product probe. It uses Konae's primitives the way a creator would, 
 - Guards: the twenty-first habit is refused with `You already track 20 habits. Archive one first.`, and an archive that changes nothing with `This habit is already archived, or it is not yours.`
 - The editor's path, simulated over MCP: `project_create`, `project_sources_save`, then `release_plan` and `release_apply` with the editor's payload.
 - `konae publish` from a folder that holds the same project's files.
-- A scheduled copy to `KONAE_COPY_DIR` and `konae-kernel restore` into an empty data directory.
+- A scheduled copy to `KONAE_COPY_DIR` and `konae restore` into an empty data directory.
 - `konae contract` and `konae conform`.
 - The editor's Validation Gate (`src/agent/gate.ts` on sql.js) on the same files the Kernel receives.
 

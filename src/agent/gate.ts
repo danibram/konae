@@ -62,7 +62,7 @@ export function createCapsuleValidator(loadSql: SqlJsLoader = loadBrowserSqlJs):
  *                 and column the fresh schema declares, every action must
  *                 prepare against it. When it does not, the preview is behind:
  *                 the Gate warns and passes, because the Kernel derives the
- *                 change at publish (kernel-rs/src/schema_change.rs).
+ *                 change at publish (kernel-rs/kernel/src/schema_change.rs).
  *
  * The result names the stages that actually ran, because a stage that was
  * skipped must never be reported as one that held.
@@ -183,7 +183,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
 
 /**
  * What schema.sql may not run, named for the error. The allowlist matches the
- * authorizer of the Kernel's scratch database (kernel-rs/src/schema_change.rs):
+ * authorizer of the Kernel's scratch database (kernel-rs/kernel/src/schema_change.rs):
  * CREATE TABLE and CREATE [UNIQUE] INDEX, nothing else. INSERT, PRAGMA and
  * transaction statements run fine in sql.js but are refused at deploy. SQL
  * functions are allowed (a CHECK, an index expression, a partial index, a
@@ -318,7 +318,7 @@ function checkActions(db: Database, program: ServerActionProgram, stage: "action
 
 /**
  * A notify column the statement cannot return, checked by preparing the
- * statement with the Kernel's own RETURNING clause, as kernel-rs/src/notify.rs
+ * statement with the Kernel's own RETURNING clause, as kernel-rs/kernel/src/notify.rs
  * `check_columns` does at publish (ADR-0021).
  */
 export function notifyColumnsRefusal(db: Database, action: ServerActionDefinition) {

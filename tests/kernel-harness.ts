@@ -6,7 +6,7 @@ import { McpClient, encodeBase64, type Transfer } from "../src/mcp/client";
 import type { PackageManifest } from "../src/lib/portable-package";
 
 const repo = path.resolve(import.meta.dir, "..");
-export const kernelBinary = path.join(repo, "kernel-rs/target/debug/konae-kernel");
+export const kernelBinary = path.join(repo, "kernel-rs/target/debug/konae");
 export const password = "kernel-harness-password";
 let nextClient = 0;
 /** A client address per request, so the signup and sign-in limits never trip. */

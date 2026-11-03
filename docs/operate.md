@@ -20,11 +20,15 @@ The local stack's S3 server is RustFS:
 - `konae-apps` receives a second copy of each static artifact.
 - `konae-data` receives scheduled copies of the data directory when `KONAE_COPY_S3_PREFIX` is set.
 
-The Kernel volume stays the authority. Every app's record, artifact, database, accounts, uploads and backups live there, and mutations run against the live database. A Kernel started on an empty volume serves nothing until `konae-kernel restore` installs a copy. See [Data directory and copies](#data-directory-and-copies).
+The Kernel volume stays the authority. Every app's record, artifact, database, accounts, uploads and backups live there, and mutations run against the live database. A Kernel started on an empty volume serves nothing until `konae restore` installs a copy. See [Data directory and copies](#data-directory-and-copies).
 
 If you ran the stack before the Kernel image became non-root, fix the volume once: `docker compose run --rm --user root --entrypoint chown kernel -R 10001:10001 /data`.
 
 The S3 buckets must already exist. The same S3 settings work with RustFS, MinIO, Cloudflare R2, Scaleway Object Storage and Hetzner Object Storage through their S3 endpoints.
+
+### Two binaries
+
+`kernel-rs` builds two binaries. `konae` is the installation: the Kernel with owner accounts, the owner's MCP, OAuth and the project list. The image, `bun run kernel` and `bun run dev:local` run it, and every command on this page is a `konae` command. `kernel` is the Kernel alone: it serves the app folders under `apps/` of its data directory, answers `restore`, `reconcile`, `files-migrate` and `files-reconcile`, and reads no owner, credential or project list.
 
 ## Before a Kernel is reachable
 
@@ -40,7 +44,7 @@ The defaults suit one machine. The Kernel refuses to start on a non-loopback add
 
 ## Environment variables
 
-The Kernel reads these at startup. Defaults are the values in `kernel-rs/src` unless a column says otherwise.
+The Kernel reads these at startup. Defaults are the values in `kernel-rs/kernel/src` and `kernel-rs/konae/src` unless a column says otherwise.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -155,19 +159,19 @@ With `KONAE_FILES_S3_BUCKET` set, the bytes of app files live in that bucket and
 `files-store.json` in the data directory records which store holds the bytes, and a Kernel whose settings name another store refuses to start. To move the bytes, stop the Kernel and run, with the `KONAE_FILES_S3_` settings set in both directions:
 
 ```sh
-KONAE_DATA_DIR=/data konae-kernel files-migrate --to s3
-KONAE_DATA_DIR=/data konae-kernel files-migrate --to local
+KONAE_DATA_DIR=/data konae files-migrate --to s3
+KONAE_DATA_DIR=/data konae files-migrate --to local
 ```
 
-It copies every indexed file, reads each back and compares its SHA-256, records the new store, and only then removes the old copies. A missing file or a mismatch stops it before anything switches. An upload writes its bytes before its index entry and a delete removes the entry first, so a crash can leave bytes no index names. `konae-kernel files-reconcile` removes those once they are an hour old, and `--dry-run` only counts them. A serving Kernel holds `kernel.lock` in the data directory, so both commands refuse while it runs, and a Kernel started during a migration refuses to start.
+It copies every indexed file, reads each back and compares its SHA-256, records the new store, and only then removes the old copies. A missing file or a mismatch stops it before anything switches. An upload writes its bytes before its index entry and a delete removes the entry first, so a crash can leave bytes no index names. `konae files-reconcile` removes those once they are an hour old, and `--dry-run` only counts them. A serving Kernel holds `kernel.lock` in the data directory, so both commands refuse while it runs, and a Kernel started during a migration refuses to start.
 
 A copy carries the file bytes, read from the bucket after the Deployment's locks are released, so a restore needs no bucket and lands the bytes in each folder. Run `files-migrate --to s3` after a restore to put them back in the bucket.
 
 To move to a new volume or machine, restore into an empty data directory, then start the Kernel:
 
 ```sh
-KONAE_DATA_DIR=/data konae-kernel restore --from /mnt/copies
-KONAE_DATA_DIR=/data konae-kernel restore --from s3://konae-data/copies/ --copy 2026-11-06T14-00-00.000Z
+KONAE_DATA_DIR=/data konae restore --from /mnt/copies
+KONAE_DATA_DIR=/data konae restore --from s3://konae-data/copies/ --copy 2026-11-06T14-00-00.000Z
 ```
 
 Restoring from `s3://` reads `KONAE_S3_ENDPOINT`, `KONAE_S3_REGION`, `KONAE_S3_ACCESS_KEY` and `KONAE_S3_SECRET_KEY` from the same shell, and `KONAE_COPY_SECRET` when the copies are encrypted. Without `--copy`, restore takes the newest complete copy. It refuses a data directory that holds anything besides `lost+found`, a copy without a manifest, any file whose size or checksum differs from the manifest, and an encrypted copy without its secret or with another one, and then installs nothing. It also runs SQLite's integrity check on every database. After installing, it signs everyone out: owner and app sessions, Clerk creator sessions, agent credentials, OAuth tokens and codes, open verification, recovery and invitation links, and unfinished transfers and release plans. Owners create new agent credentials after a restore.
@@ -175,8 +179,8 @@ Restoring from `s3://` reads `KONAE_S3_ENDPOINT`, `KONAE_S3_REGION`, `KONAE_S3_A
 A copy can be up to an hour old, so each copy target also keeps a record of what was revoked since: every app account suspension, creator suspension and API key revocation is written to `revocations/` on each target before the tool reports it done. Restore applies that record before installing, so a restored installation never brings back a suspended account or a revoked key. If the record cannot be read, because the target is unreachable or the source has no `revocations/started.json`, the restore still installs but the installation starts in maintenance: every app shows its maintenance page and owner changes are refused. Then either apply the record once it is reachable, or reopen without it after checking suspensions and keys by hand:
 
 ```sh
-KONAE_DATA_DIR=/data konae-kernel reconcile --from /mnt/copies
-KONAE_DATA_DIR=/data konae-kernel reconcile --without-record
+KONAE_DATA_DIR=/data konae reconcile --from /mnt/copies
+KONAE_DATA_DIR=/data konae reconcile --without-record
 ```
 
 Run `reconcile` with the Kernel stopped, or start it again afterwards: a running Kernel keeps the maintenance it read at startup.
@@ -221,8 +225,8 @@ The limits refuse a request with 429 and queue nothing. Each address takes at mo
 The operator suspends or resumes a local creator account from the server:
 
 ```sh
-konae-kernel creator-account-suspend owner@example.com
-konae-kernel creator-account-resume owner@example.com
+konae creator-account-suspend owner@example.com
+konae creator-account-resume owner@example.com
 ```
 
 Suspension ends the creator's sessions, open links, MCP credentials and OAuth codes. Projects and app accounts stay. A resumed account is active if it ever verified, and pending otherwise. [docs/mcp.md](./mcp.md#verified-accounts) lists the routes and tools.
@@ -234,9 +238,9 @@ A creator account is created with an invitation code the operator issues on the 
 Run these with the same `KONAE_DATA_DIR` as the Kernel; they work while it runs.
 
 ```sh
-konae-kernel creator-code-create --expires-in 14d --note "For Ada"
-konae-kernel creator-code-list
-konae-kernel creator-code-revoke code_1a2b3c4d5e6f
+konae creator-code-create --expires-in 14d --note "For Ada"
+konae creator-code-list
+konae creator-code-revoke code_1a2b3c4d5e6f
 ```
 
 `creator-code-create` prints the code once, with its ID and expiry. The Kernel stores only a SHA-256 hash of it in `owners.sqlite`. A code has 25 characters from Crockford's base32 alphabet, about 125 random bits; case, dashes and spaces do not matter. It expires after 14 days by default, and `--expires-in` takes hours or days from `1h` to `90d`. `creator-code-list` shows every code with its state (open, used, revoked or expired), its note and the creator it produced with that account's state. `creator-code-revoke` stops an open code; a used code cannot be revoked, so suspend its creator instead.

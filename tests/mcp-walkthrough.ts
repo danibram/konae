@@ -5,7 +5,7 @@
 import path from "node:path";
 
 const repo = path.resolve(import.meta.dir, "..");
-const kernelBinary = path.join(repo, "kernel-rs/target/debug/konae-kernel");
+const kernelBinary = path.join(repo, "kernel-rs/target/debug/konae");
 const PROTOCOL = "2025-11-25";
 
 /** The URLs the document shows, whatever ports the run used. */

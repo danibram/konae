@@ -63,8 +63,9 @@ These are not bugs to paper over. Say them when they matter.
 
 - `src/` is the editor. `src/components/ProjectDashboard.tsx` is the home, `src/components/AgentPanel.tsx` is the conversation, and `src/App.tsx` is the file editor.
 - `src/agent/system-prompt.ts` is what the build agent is told. `src/agent/gate.ts` is the Validation Gate. `src/lib/query-bound.ts` is the row limit both doors share.
-- `src/kernel/actions.ts` parses `actions.json` for the editor. `kernel-rs/src/main.rs` parses it again for every deployment, including an export.
-- `kernel-rs/src/guide.rs` is what `platform_guide` answers, including `rules` and `pieces`.
+- `kernel-rs/kernel` is the Kernel: a library and the `kernel` binary, which serves app folders alone. `kernel-rs/konae` is the `konae` binary, which links it and adds owners, the owner's MCP and the project list.
+- `src/kernel/actions.ts` parses `actions.json` for the editor. `kernel-rs/kernel/src/lib.rs` parses it again for every deployment, including an export.
+- `kernel-rs/konae/src/guide.rs` is what `platform_guide` answers, including `rules` and `pieces`.
 - `CONTEXT.md` holds the language. `docs/adr/` holds the decisions. `docs/architecture.md` is the shape. `examples/product-fit/` is the set of apps used to see what the Kernel can publish.
 - `docs/` is the documentation, in markdown, and its only source. `docs/site.json` is the navigation of the docs site. `bun run docs:site` copies the pages into `examples/docs-site`, the app that renders them, and `scripts/docs-site.test.ts` checks every link.
 - `examples/home` is the page an installation answers on its bare domain, once its path holds the name `konae-home`. `bun run ui:render` writes its `styles.css` from the design system.

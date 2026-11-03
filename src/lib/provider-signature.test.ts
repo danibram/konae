@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseRouteSignature } from "../kernel/route-declaration";
-import signaturePresets from "../../kernel-rs/src/signature-presets.json";
+import signaturePresets from "../../kernel-rs/kernel/src/signature-presets.json";
 import { signDelivery } from "./provider-signature";
 import { expectedOutcome, outcomeOf } from "../kernel/refusal-cases";
 
@@ -8,7 +8,7 @@ type Vector = { case: string; signature: unknown; secret: string; body: string; 
 
 describe("a provider's signature", () => {
   test("matches the vectors the Kernel verifies, GitHub's and Svix's published examples among them", async () => {
-    const vectors: Vector[] = await Bun.file(new URL("../../kernel-rs/src/provider-signature-cases.json", import.meta.url)).json();
+    const vectors: Vector[] = await Bun.file(new URL("../../kernel-rs/kernel/src/provider-signature-cases.json", import.meta.url)).json();
     expect(vectors.length).toBeGreaterThanOrEqual(5);
     for (const vector of vectors) {
       const signature = parseRouteSignature("hooks.receive", "POST", vector.signature);
@@ -17,7 +17,7 @@ describe("a provider's signature", () => {
   });
 
   test("every preset in the table signs a vector", async () => {
-    const vectors: Vector[] = await Bun.file(new URL("../../kernel-rs/src/provider-signature-cases.json", import.meta.url)).json();
+    const vectors: Vector[] = await Bun.file(new URL("../../kernel-rs/kernel/src/provider-signature-cases.json", import.meta.url)).json();
     for (const provider of Object.keys(signaturePresets)) {
       expect(vectors.some((vector) => (vector.signature as { provider?: string }).provider === provider), provider).toBe(true);
     }
@@ -25,7 +25,7 @@ describe("a provider's signature", () => {
 
   test("a preset expands to its long form and a refusal names every wrong key, as the Kernel does", async () => {
     type Case = { case: string; method: "GET" | "POST"; signature: unknown; error?: string; code?: string; expands?: unknown };
-    const cases: Case[] = await Bun.file(new URL("../../kernel-rs/src/signature-preset-cases.json", import.meta.url)).json();
+    const cases: Case[] = await Bun.file(new URL("../../kernel-rs/kernel/src/signature-preset-cases.json", import.meta.url)).json();
     expect(cases.length).toBeGreaterThanOrEqual(15);
     for (const item of cases) {
       const parse = (value: unknown) => () => parseRouteSignature("hooks.receive", item.method, value);

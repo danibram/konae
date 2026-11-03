@@ -42,7 +42,7 @@ export function validateRuntimeParams(params: unknown): SqlValue[] {
   return params as SqlValue[];
 }
 
-/** The Kernel's refusal for a result past the row or byte cap, kernel-rs/src/main.rs `bounded_rows`. */
+/** The Kernel's refusal for a result past the row or byte cap, kernel-rs/kernel/src/lib.rs `bounded_rows`. */
 export const queryResultTooLarge = "Query result exceeds 2 MiB or 1000 rows.";
 
 export function assertRuntimeResultWithinLimits(rows: Record<string, SqlValue>[]) {

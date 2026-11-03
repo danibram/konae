@@ -7,7 +7,7 @@ import { expectedOutcome, outcomeOf, type Outcome } from "./refusal-cases";
 import { normalizeManifest } from "../deployments/manifest";
 
 type Case = { case: string; actions?: Record<string, unknown>; connects?: unknown; error: string | null; code?: string };
-const cases: Case[] = await Bun.file(new URL("../../kernel-rs/src/call-cases.json", import.meta.url)).json();
+const cases: Case[] = await Bun.file(new URL("../../kernel-rs/kernel/src/call-cases.json", import.meta.url)).json();
 const schema = "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, notice TEXT, owner TEXT);";
 
 /** The answer one door gives a case: null when it passes, else its code and message. */
@@ -16,8 +16,8 @@ function editorAnswer(item: Case): Outcome {
 }
 
 describe("calls between apps at the editor's door", () => {
-  // kernel-rs/src/calls.rs runs the same file.
-  test("every case in kernel-rs/src/call-cases.json gets the Kernel's answer", () => {
+  // kernel-rs/kernel/src/calls.rs runs the same file.
+  test("every case in kernel-rs/kernel/src/call-cases.json gets the Kernel's answer", () => {
     expect(cases.length).toBeGreaterThanOrEqual(40);
     for (const item of cases) expect(editorAnswer(item), item.case).toEqual(expectedOutcome(item));
   });

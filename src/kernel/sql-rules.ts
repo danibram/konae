@@ -2,7 +2,7 @@ import { sqlTokens, type SqlToken } from "../lib/sql-tokens";
 import { refusal } from "./refusal";
 
 // The same checks, in the same order and with the same messages, as
-// kernel-rs/src/sql_rules.rs `check_statement`. kernel-rs/src/sql-rule-cases.json
+// kernel-rs/kernel/src/sql_rules.rs `check_statement`. kernel-rs/kernel/src/sql-rule-cases.json
 // holds the cases both test suites run, with the schema cases the Validation
 // Gate refuses in src/agent/gate.ts.
 

@@ -6,7 +6,7 @@ import { createCapsuleValidator, ownerFixes, releaseRefusal, type ReleaseFacts }
 import { expectedOutcome } from "../kernel/refusal-cases";
 
 type Case = { case: string; actions: Record<string, unknown>; secrets: NonNullable<ReleaseFacts["secrets"]>; error: string | null; code?: string };
-const file: { rules: DomainRules; cases: Case[] } = await Bun.file(new URL("../../kernel-rs/src/release-cases.json", import.meta.url)).json();
+const file: { rules: DomainRules; cases: Case[] } = await Bun.file(new URL("../../kernel-rs/kernel/src/release-cases.json", import.meta.url)).json();
 
 const schema = "CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, external_id TEXT);";
 const validator = createCapsuleValidator(() => initSqlJs());
@@ -16,8 +16,8 @@ function capsule(actions: Record<string, unknown>) {
 }
 
 describe("the release plan at the editor's door", () => {
-  // kernel-rs/src/http.rs `require_secrets` and calls.rs `check_release` give these answers at release_plan.
-  test("every case in kernel-rs/src/release-cases.json gets the Kernel's answer", () => {
+  // kernel-rs/kernel/src/http.rs `require_secrets` and calls.rs `check_release` give these answers at release_plan.
+  test("every case in kernel-rs/kernel/src/release-cases.json gets the Kernel's answer", () => {
     expect(file.cases.length).toBeGreaterThanOrEqual(20);
     for (const item of file.cases) {
       const program = parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }));

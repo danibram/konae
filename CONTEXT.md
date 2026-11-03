@@ -151,7 +151,7 @@ The app folder handed over: `konae.json`, `app/` and `dist/` in one download, an
 _Avoid_: package, kit, dump, full backup
 
 **Maintenance**:
-The state of a Deployment that takes no writes. Its host shows a maintenance page and refuses actions, uploads, signups, sign-ins, recovery, invitations and HTTP routes, the owner cannot change it, its email waits, and its calls and schedules wait. The state lives in the app folder, `.konae/maintenance.json`, so a restart, a copy or a restore keeps it. A restore that cannot read the revocation record keeps it for the whole installation in `recovery-hold.json` until `konae-kernel reconcile` runs.
+The state of a Deployment that takes no writes. Its host shows a maintenance page and refuses actions, uploads, signups, sign-ins, recovery, invitations and HTTP routes, the owner cannot change it, its email waits, and its calls and schedules wait. The state lives in the app folder, `.konae/maintenance.json`, so a restart, a copy or a restore keeps it. A restore that cannot read the revocation record keeps it for the whole installation in `recovery-hold.json` until `konae reconcile` runs.
 _Avoid_: downtime, read-only mode (reads stop too)
 
 **Declared Dependencies**:

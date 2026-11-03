@@ -61,7 +61,7 @@ const code = [
   "src/lib/action-contract.ts",
   "src/lib/action-conformance.ts",
   ...files("src/components", (file) => /\.tsx?$/.test(file) && !file.includes(".test.")),
-  ...files("kernel-rs/src", (file) => file.endsWith(".rs") || file.endsWith("-cases.json") || file.endsWith(".html")),
+  ...["kernel-rs/kernel/src", "kernel-rs/konae/src"].flatMap((dir) => files(dir, (file) => file.endsWith(".rs") || file.endsWith("-cases.json") || file.endsWith(".html"))),
 ];
 
 /** The text a person reads: CONTEXT.md without its headings, whole Markdown files, and string literals in code. */

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import cases from "../../kernel-rs/src/path-cases.json";
+import cases from "../../kernel-rs/kernel/src/path-cases.json";
 import { checkPathName } from "./path-name";
 
-// The Kernel runs the same file in kernel-rs/src/path_name.rs.
+// The Kernel runs the same file in kernel-rs/kernel/src/path_name.rs.
 describe("path address names", () => {
   test("the case file covers every rule", () => {
     expect(cases.cases.length).toBeGreaterThanOrEqual(30);

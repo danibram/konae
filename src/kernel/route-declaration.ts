@@ -1,11 +1,11 @@
 /**
  * A route's signature scheme and its `fields` map, as the Validation Gate
  * reads them (ADR-0018). The same checks, in the same order and with the same
- * messages, as kernel-rs/src/provider.rs `signature` and `fields`;
- * kernel-rs/src/http-binding-cases.json and signature-preset-cases.json hold
+ * messages, as kernel-rs/kernel/src/provider.rs `signature` and `fields`;
+ * kernel-rs/kernel/src/http-binding-cases.json and signature-preset-cases.json hold
  * the cases both test suites run.
  */
-import signaturePresets from "../../kernel-rs/src/signature-presets.json";
+import signaturePresets from "../../kernel-rs/kernel/src/signature-presets.json";
 import { joinRefusals, refusal, type RefusalError } from "./refusal";
 
 export type SignatureScheme = "konae" | "hmac-body" | "timestamped" | "svix";
@@ -56,7 +56,7 @@ function quotedList(keys: readonly string[]): string {
 
 /**
  * The providers a route may name instead of spelling out a scheme, each the
- * long form it stands for without its secret. kernel-rs/src/provider.rs reads
+ * long form it stands for without its secret. kernel-rs/kernel/src/provider.rs reads
  * the same file, so both doors expand a preset alike.
  */
 const PRESETS: Readonly<Record<string, Record<string, unknown>>> = signaturePresets;

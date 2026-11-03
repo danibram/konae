@@ -2,9 +2,15 @@ FROM rust:1.91-bookworm AS build
 
 WORKDIR /src
 COPY kernel-rs/Cargo.toml kernel-rs/Cargo.lock ./
-RUN mkdir src && printf 'fn main() {}\n' > src/main.rs && cargo build --release --locked
-COPY kernel-rs/src ./src
-RUN touch src/main.rs && cargo build --release --locked
+COPY kernel-rs/kernel/Cargo.toml kernel/Cargo.toml
+COPY kernel-rs/konae/Cargo.toml konae/Cargo.toml
+# Builds the dependencies once, on empty crates, so a source change rebuilds only Konae and the Kernel.
+RUN mkdir kernel/src konae/src \
+  && printf '' > kernel/src/lib.rs && printf 'fn main() {}\n' > kernel/src/main.rs && printf 'fn main() {}\n' > konae/src/main.rs \
+  && cargo build --release --locked --bin konae && rm -rf kernel/src konae/src
+COPY kernel-rs/kernel/src ./kernel/src
+COPY kernel-rs/konae/src ./konae/src
+RUN touch kernel/src/lib.rs kernel/src/main.rs konae/src/main.rs && cargo build --release --locked --bin konae
 
 FROM debian:bookworm-slim
 
@@ -16,7 +22,7 @@ RUN apt-get update \
   && mkdir -p /data \
   && chown konae:konae /data \
   && chmod 0700 /data
-COPY --from=build /src/target/release/konae-kernel /usr/local/bin/konae-kernel
+COPY --from=build /src/target/release/konae /usr/local/bin/konae
 COPY ops/kernel-entrypoint.sh /usr/local/bin/konae-entrypoint
 RUN chmod 755 /usr/local/bin/konae-entrypoint
 # The Kernel binds all interfaces here, so it refuses the local development

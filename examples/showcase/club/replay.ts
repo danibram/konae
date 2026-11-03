@@ -70,7 +70,7 @@ async function startKernel(port: number, name: string) {
   const url = `http://127.0.0.1:${port}`;
   const dataDir = path.join(scratch, name);
   const setupKey = crypto.randomUUID();
-  const kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/konae-kernel")], {
+  const kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/konae")], {
     cwd: repo,
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),

@@ -29,7 +29,7 @@ const freshClient = () => { nextClient++; return `198.18.${Math.floor(nextClient
 // invitation code the operator issues from the Kernel executable.
 function invitationCode() {
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_DATA_DIR: root };
-  const created = Bun.spawnSync(["kernel-rs/target/debug/konae-kernel", "creator-code-create"], { env });
+  const created = Bun.spawnSync(["kernel-rs/target/debug/konae", "creator-code-create"], { env });
   expect(created.exitCode).toBe(0);
   return created.stdout.toString().match(/shown once: (\S+)/)![1];
 }
@@ -57,7 +57,7 @@ beforeAll(async () => {
 }, 120_000);
 
 async function startKernel() {
-  kernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
+  kernel = Bun.spawn(["kernel-rs/target/debug/konae"], {
     env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_S3_"))), KONAE_DATA_DIR: root, KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development" },
     stdout: "ignore", stderr: "inherit",
   });
@@ -906,7 +906,7 @@ describe("app accounts under required verification", () => {
     // Its own range, so it never meets the admission suite's 19400 to 19489.
     const strictPort = Number(process.env.KONAE_MCP_STRICT_TEST_PORT) || 20400 + Math.floor(Math.random() * 90);
     strictUrl = `http://127.0.0.1:${strictPort}`;
-    strictKernel = Bun.spawn(["kernel-rs/target/debug/konae-kernel"], {
+    strictKernel = Bun.spawn(["kernel-rs/target/debug/konae"], {
       env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_DATA_DIR: strictRoot, KONAE_KERNEL_PORT: String(strictPort), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: strictUrl, KONAE_HOST_SUFFIX: "localhost", KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development", KONAE_ACCOUNT_VERIFICATION: "required" },
       stdout: "ignore", stderr: "inherit",
     });
