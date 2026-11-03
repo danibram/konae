@@ -525,7 +525,7 @@ mod tests {
 
         fn verify(&self, link: &str) -> std::result::Result<auth::AuthSession, AuthError> {
             let token = link.split_once("#verification=").unwrap().1;
-            accounts::creator_store(&self.state).unwrap().complete_challenge(
+            super::owners::creator_store(&self.state).unwrap().complete_challenge(
                 Purpose::Verification,
                 token,
                 NewPassword::prepare(PASSWORD).unwrap(),
@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn operator_commands_leave_the_kernels_verification_mode_alone() {
         let fixture = fixture(Verification::Required, KEY);
-        accounts::creator_store(&fixture.state).unwrap();
+        super::owners::creator_store(&fixture.state).unwrap();
         // The operator's shell does not set KONAE_ACCOUNT_VERIFICATION.
         fixture.cli(&["creator-code-create"]).unwrap();
         fixture.cli(&["creator-code-list"]).unwrap();

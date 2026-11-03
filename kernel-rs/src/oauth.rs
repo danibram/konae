@@ -411,7 +411,7 @@ async fn token(
             let owners = Connection::open(state.data_root.join("owners.sqlite"))?;
             anyhow::ensure!(super::clerk::owner_allowed(&owners, &config, code["owner"].as_str().unwrap_or(""))?, "Creator is not admitted.");
         } else {
-            anyhow::ensure!(super::accounts::creator_store(&state)?.is_active(code["owner"].as_str().unwrap_or(""))?, "Creator is not active.");
+            anyhow::ensure!(super::owners::creator_store(&state)?.is_active(code["owner"].as_str().unwrap_or(""))?, "Creator is not active.");
         }
         anyhow::ensure!(
             code["client_id"] == get("client_id")

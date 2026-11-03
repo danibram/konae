@@ -50,6 +50,7 @@ mod mail;
 mod mcp;
 mod maintenance;
 mod notify;
+mod owners;
 mod oauth;
 mod package;
 mod path;
@@ -493,7 +494,7 @@ async fn main() -> Result<()> {
     if copies::operator_command(&installation).await? { return Ok(()); }
     if file_store::operator_command().await? { return Ok(()); }
     if recovery::operator_command(&installation).await? { return Ok(()); }
-    if accounts::operator_command()? { return Ok(()); }
+    if owners::operator_command()? { return Ok(()); }
     if admission::operator_command()? { return Ok(()); }
     let port = env("KONAE_KERNEL_PORT", "8787").parse::<u16>()?;
     let bind = env("KONAE_BIND", "127.0.0.1");
@@ -552,7 +553,7 @@ async fn main() -> Result<()> {
     calls::spawn_worker(state.clone());
     // Apply the verification mode to creator accounts before serving, so a
     // switch to required revokes unverified sessions at startup.
-    accounts::creator_store(&state)?;
+    owners::creator_store(&state)?;
 
     let listener = tokio::net::TcpListener::bind((bind.as_str(), port)).await?;
     println!("Konae Rust Kernel listening on {port}");
@@ -579,6 +580,7 @@ fn stack(state: AppState) -> tower::util::BoxCloneService<Request, axum::respons
         .merge(oauth::routes())
         .merge(google::routes())
         .merge(accounts::routes())
+        .merge(owners::routes())
         .merge(http::routes())
         .merge(invitations::routes())
         .merge(mail::routes())

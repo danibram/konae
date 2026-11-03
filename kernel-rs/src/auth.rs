@@ -23,9 +23,6 @@ pub const VERIFICATION_TTL_SECONDS: i64 = 24 * 60 * 60;
 pub const INVITATION_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 /// A recovery link stays valid for 30 minutes.
 pub const RECOVERY_TTL_SECONDS: i64 = 30 * 60;
-/// The scope of creator accounts in `owners.sqlite`. App accounts use
-/// `deployment_scope(id)`, so the two can never collide.
-pub const CREATOR_SCOPE: &str = "creator";
 /// Stored as the password of an account created pending. It is not a valid
 /// encoding, so no password matches it; the person sets one when they verify.
 pub(crate) const NO_PASSWORD: &str = "unset";
@@ -1554,7 +1551,7 @@ mod tests {
         // Another Deployment's scope over the same file, the creator scope,
         // another Deployment's database, and the wrong purposes.
         assert!(refused(&app.scoped(&deployment_scope("app-two"), Verification::Required), Purpose::Verification));
-        assert!(refused(&app.scoped(CREATOR_SCOPE, Verification::Required), Purpose::Verification));
+        assert!(refused(&app.scoped("installation", Verification::Required), Purpose::Verification));
         assert!(refused(&AuthService::open(&app.0).unwrap(), Purpose::Verification));
         assert!(refused(&other_app.required(), Purpose::Verification));
         assert!(refused(&auth, Purpose::Recovery));

@@ -151,7 +151,7 @@ pub(super) fn installation() -> super::installation::Installation {
         RootDatabase { file: "owners.sqlite", sign_out: &["app_sessions", "creator_sessions", "account_challenges"] },
         RootDatabase { file: "mcp.sqlite", sign_out: &["credentials", "oauth_codes", "plans"] },
     ]);
-    installation.accounts.push(AccountDatabase { scope: auth::CREATOR_SCOPE, kind: "creator", file: "owners.sqlite" });
+    installation.accounts.push(AccountDatabase { scope: super::owners::CREATOR_SCOPE, kind: "creator", file: "owners.sqlite" });
     installation.mail_group = project_owner;
     installation
 }
@@ -251,7 +251,7 @@ pub(super) fn authenticate_owner(state: &AppState, headers: &HeaderMap) -> Resul
                     let db = Connection::open(state.data_root.join("owners.sqlite"))?;
                     anyhow::ensure!(super::clerk::owner_allowed(&db, config, &r.0)?, "Creator is not admitted.");
                 } else {
-                    anyhow::ensure!(super::accounts::creator_store(state)?.is_active(&r.0)?, "Creator is not active.");
+                    anyhow::ensure!(super::owners::creator_store(state)?.is_active(&r.0)?, "Creator is not active.");
                 }
                 Ok(Owner {
                     id: r.0,
@@ -268,7 +268,7 @@ pub(super) fn authenticate_owner(state: &AppState, headers: &HeaderMap) -> Resul
         let db = Connection::open(state.data_root.join("owners.sqlite"))?;
         super::clerk::authenticate(&db, config, cookie.as_deref(), (now_ms() / 1000) as i64)?
     } else {
-        super::accounts::creator_store(state)?.authenticate(cookie.as_deref())?
+        super::owners::creator_store(state)?.authenticate(cookie.as_deref())?
     };
     Ok(user
         .map(|user| Owner {
@@ -1710,7 +1710,7 @@ async fn owner_auth(state: AppState, request: Request, signup: bool) -> Response
             &origin(&state, &headers),
             super::admission::return_to(&a).as_deref(),
         );
-        return match super::accounts::signup_creator(&state, &email, &page, admission, client).await {
+        return match super::owners::signup_creator(&state, &email, &page, admission, client).await {
             Ok(created) => {
                 if let Some(user_id) = created {
                     claim_for_first_owner(&state, &user_id).await;
@@ -1726,7 +1726,7 @@ async fn owner_auth(state: AppState, request: Request, signup: bool) -> Response
         match blocking(move || auth::NewAccount::prepare(&email, &password)).await {
             Ok(account) => {
                 let guard = database_lock(&state, "owner-auth").await;
-                let auth = super::accounts::creator_store(&state);
+                let auth = super::owners::creator_store(&state);
                 let admit = super::admission::admit(admission);
                 (blocking(move || auth?.create_account_admitted(account, admit)).await, Some(guard))
             }
@@ -1734,7 +1734,7 @@ async fn owner_auth(state: AppState, request: Request, signup: bool) -> Response
         }
     } else {
         let failed_email = email.clone();
-        let auth = super::accounts::creator_store(&state);
+        let auth = super::owners::creator_store(&state);
         let result = blocking(move || auth?.login(&email, &password)).await;
         if matches!(result, Err(AuthError::InvalidCredentials)) {
             state.guards.auth_failed("owner", client, &failed_email);
@@ -1804,7 +1804,7 @@ async fn owner_logout(State(state): State<AppState>, headers: HeaderMap) -> Resp
             let _ = super::clerk::revoke(&db, cookie_value(&headers, cookie_name).as_deref());
         }
     }
-    if let Ok(auth) = super::accounts::creator_store(&state) {
+    if let Ok(auth) = super::owners::creator_store(&state) {
         let _ = auth.logout(cookie_value(&headers, cookie_name).as_deref());
     }
     let secure = if cookie_name.starts_with("__Host-") { "; Secure" } else { "" };
