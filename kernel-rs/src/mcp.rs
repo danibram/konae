@@ -1,8 +1,8 @@
 use super::*;
-use super::transfers::{CHUNK, MAX_TRANSFER, download, download_body, transfer, transfer_call, transfer_path};
+use super::runtime::*;
+use super::transfers::{CHUNK, MAX_TRANSFER, download, transfer, transfer_call, transfer_path};
 use rusqlite::params;
 
-const VERSION: &str = "2025-11-25";
 pub(super) fn owner_cookie_name(state: &AppState) -> &'static str {
     let mcp_https = state.mcp_origin.as_deref().is_some_and(|origin| origin.starts_with("https://"));
     if state.public_origin.starts_with("https://") || mcp_https {
@@ -19,7 +19,6 @@ const AUDIT_TEXT_CHARACTERS: usize = 128;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/mcp", post(admin))
-        .route("/_konae/mcp", post(runtime))
         .route("/_konae/owner/login", get(owner_page).post(owner_login))
         .route("/_konae/owner/signup", post(owner_signup))
         .route("/_konae/owner/logout", post(owner_logout))
@@ -168,7 +167,11 @@ fn project_owner(root: &Path, project_id: &str) -> Option<String> {
 }
 
 pub(super) fn store(state: &AppState) -> Result<Connection> {
-    let db = Connection::open(state.data_root.join("mcp.sqlite"))?;
+    store_at(&state.data_root)
+}
+
+fn store_at(root: &Path) -> Result<Connection> {
+    let db = Connection::open(root.join("mcp.sqlite"))?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
     db.execute_batch("PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, sources INTEGER NOT NULL DEFAULT 0);
@@ -225,17 +228,6 @@ impl Owner {
     }
 }
 
-/// The answer to an API key on the runtime endpoint.
-const API_KEY_ON_RUNTIME: &str =
-    "An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.";
-
-fn bearer(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(header::AUTHORIZATION)?
-        .to_str()
-        .ok()?
-        .strip_prefix("Bearer ")
-}
 
 pub(super) fn authenticate_owner(state: &AppState, headers: &HeaderMap) -> Result<Option<Owner>> {
     let clerk = super::clerk::ClerkConfig::from_env()?;
@@ -251,7 +243,7 @@ pub(super) fn authenticate_owner(state: &AppState, headers: &HeaderMap) -> Resul
             .filter(|r| {
                 r.3 > now_ms()
                     && r.4.as_ref().is_none_or(|audience| {
-                        audience == &format!("{}/mcp", super::oauth::origin(state, headers))
+                        audience == &format!("{}/mcp", origin(state, headers))
                     })
             })
             .map(|r| {
@@ -309,18 +301,6 @@ pub(super) fn owned_project(state: &AppState, owner: &Owner, id: &str, scope: &s
     Ok((serde_json::from_str(&body)?, revision))
 }
 
-/// Lock names the Kernel takes besides an app's ID.
-const RESERVED_IDS: [&str; 4] = ["domains", "paths", "owner-auth", "transfer-quota"];
-
-/// A project ID names the app's folder and its lock, so it holds only
-/// lowercase letters, digits, "_" and "-": two IDs that differ in case would
-/// share a folder on a volume that ignores case.
-pub(super) fn valid_app_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 100
-        && id.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_-".contains(&c))
-        && !RESERVED_IDS.contains(&id)
-}
 
 pub(super) const DELETE_NAME_MISMATCH: &str = "The name does not match this project. Type the project's name exactly to delete it.";
 
@@ -454,17 +434,6 @@ pub(super) async fn owned_deployment(
         .ok_or_else(|| anyhow::anyhow!("Deployment not found or access denied."))?;
     owned_project(state, owner, &deployment.project_id, scope)?;
     Ok(deployment)
-}
-
-pub(super) fn tool(
-    name: &str,
-    description: &str,
-    properties: Value,
-    required: &[&str],
-    read_only: bool,
-) -> Value {
-    json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},
-        "annotations":{"readOnlyHint":read_only,"destructiveHint":!read_only,"openWorldHint":false}})
 }
 
 pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
@@ -801,321 +770,44 @@ fn usage_tools() -> Vec<Value> {
     ]
 }
 
-pub(super) fn runtime_tools() -> Vec<Value> {
-    let mut tools = vec![
-        tool(
-            "auth_session",
-            "Read the current app user, or the anonymous state when no one is signed in.",
-            json!({}),
-            &[],
-            true,
-        ),
-        tool(
-            "auth_logout",
-            "Revoke the current app session.",
-            json!({}),
-            &[],
-            false,
-        ),
-        tool(
-            "actions_invoke",
-            "Invoke one declared Server Action as the current app user. Without a session only actions declared anonymous run.",
-            json!({"name":{"type":"string"},"input":{"type":"object"}}),
-            &["name"],
-            false,
-        ),
-        tool(
-            "files_list",
-            "List files visible to the current actor. Private files belong to the uploader. Public files are visible to signed-in users, and to visitors on a public deployment.",
-            json!({}),
-            &[],
-            true,
-        ),
-        tool(
-            "files_read",
-            "Open an immutable download transfer for a file this actor may read.",
-            json!({"fileId":{"type":"string"}}),
-            &["fileId"],
-            true,
-        ),
-        tool(
-            "files_upload",
-            "Save a completed file transfer. The file is private to the signed-in uploader unless visibility is public.",
-            json!({"transferId":{"type":"string"},"name":{"type":"string"},"type":{"type":"string"},"visibility":{"type":"string","enum":["private","public"]}}),
-            &["transferId", "name"],
-            false,
-        ),
-        tool(
-            "files_update",
-            "Make a file you uploaded public or private. Only its uploader may change it.",
-            json!({"fileId":{"type":"string"},"visibility":{"type":"string","enum":["private","public"]}}),
-            &["fileId", "visibility"],
-            false,
-        ),
-        tool(
-            "files_delete",
-            "Delete a file you uploaded. Its size stops counting against the Deployment's quota and a later read answers File not found. Only its uploader may delete it.",
-            json!({"fileId":{"type":"string"}}),
-            &["fileId"],
-            false,
-        ),
-    ];
-    tools.extend(transfer_tools(true));
-    tools.extend(account_tools());
-    tools
-}
-
-/// Account tools any visitor may call, also on a private deployment before
-/// signing in. Tokens arrive by email; no tool returns one.
-fn account_tools() -> Vec<Value> {
-    vec![
-        tool(
-            "auth_signup",
-            "Start an app account for an email. When the installation requires verification, this sends a link to that email and signs no one in; the person chooses the password when they open it. Otherwise it creates the account with this password and signs in. The answer does not reveal whether the email already has an account.",
-            json!({"email":{"type":"string","maxLength":254},"password":{"type":"string","maxLength":1024}}),
-            &["email"],
-            false,
-        ),
-        tool(
-            "auth_verify",
-            "Confirm an email with the token from its verification link and set the account's password. Signs in on success. A token works once.",
-            json!({"token":{"type":"string","maxLength":128},"password":{"type":"string","maxLength":1024}}),
-            &["token", "password"],
-            false,
-        ),
-        tool(
-            "auth_recover",
-            "Send a link to choose a new password. The answer is the same whether or not the email has an account.",
-            json!({"email":{"type":"string","maxLength":254}}),
-            &["email"],
-            false,
-        ),
-        tool(
-            "auth_reset",
-            "Set a new password with the token from a recovery link. Ends every earlier session of the account and signs in. A token works once.",
-            json!({"token":{"type":"string","maxLength":128},"password":{"type":"string","maxLength":1024}}),
-            &["token", "password"],
-            false,
-        ),
-    ]
-}
-
-/// Tools a visitor without a session may call on a public deployment.
-/// `actions_invoke` still refuses every action not declared anonymous.
-/// Uploads and the transfers that would create one stay signed-in only.
-fn anonymous_runtime_tools() -> Vec<Value> {
-    let allowed = [
-        "auth_session",
-        "actions_invoke",
-        "files_list",
-        "files_read",
-        "transfer_read",
-        "transfer_status",
-        "transfer_cancel",
-        "auth_signup",
-        "auth_verify",
-        "auth_recover",
-        "auth_reset",
-    ];
-    runtime_tools()
-        .into_iter()
-        .filter(|tool| allowed.contains(&tool["name"].as_str().unwrap_or("")))
-        .collect()
-}
-
-fn transfer_tools(runtime: bool) -> Vec<Value> {
-    let mut tools = vec![
-        tool(
-            "transfer_read",
-            "Read one bounded base64 block from a completed download.",
-            json!({"transferId":{"type":"string"},"offset":{"type":"integer","minimum":0}}),
-            &["transferId", "offset"],
-            true,
-        ),
-        tool(
-            "transfer_status",
-            "Inspect transfer progress for resuming an upload.",
-            json!({"transferId":{"type":"string"}}),
-            &["transferId"],
-            true,
-        ),
-        tool(
-            "transfer_cancel",
-            "Delete a transfer and its temporary bytes.",
-            json!({"transferId":{"type":"string"}}),
-            &["transferId"],
-            false,
-        ),
-        tool(
-            "transfer_begin",
-            if runtime {
-                "Start a size-bounded upload with an expected SHA-256 checksum. A file is at most the installation's per-file limit, which a refusal names."
-            } else {
-                "Start a size-bounded upload with an expected SHA-256 checksum. An upload is at most 32 MiB unless it names a package component, which may be as large as that component's quota."
-            },
-            // The bound depends on the installation's file limits, so the
-            // handler checks it and names the number.
-            json!({"size":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"projectId":{"type":"string"},"component":{"type":"string","enum":super::package::COMPONENT_NAMES}}),
-            &["size", "sha256"],
-            false,
-        ),
-        tool(
-            "transfer_write",
-            "Append a base64 block at an exact byte offset. Identical retries are accepted.",
-            json!({"transferId":{"type":"string"},"offset":{"type":"integer","minimum":0},"data":{"type":"string","maxLength":CHUNK.div_ceil(3)*4}}),
-            &["transferId", "offset", "data"],
-            false,
-        ),
-        tool(
-            "transfer_complete",
-            "Verify upload size and SHA-256 and make the bytes immutable.",
-            json!({"transferId":{"type":"string"}}),
-            &["transferId"],
-            false,
-        ),
-    ];
-    if runtime {
-        for t in &mut tools {
-            if t["name"] == "transfer_begin" {
-                let properties = t["inputSchema"]["properties"].as_object_mut().unwrap();
-                properties.remove("projectId");
-                properties.remove("component");
-            }
-        }
-    }
-    tools
-}
-
 async fn admin(State(state): State<AppState>, request: Request) -> Response {
-    handle(state, request, false).await
-}
-pub(super) async fn runtime(State(state): State<AppState>, request: Request) -> Response {
-    handle(state, request, true).await
-}
-
-fn rpc_error(id: Value, code: i64, message: &str) -> Response {
-    Json(json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})).into_response()
-}
-
-async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
     let headers = request.headers().clone();
-    let peer = request
-        .extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|info| info.0);
-    if !runtime && super::security::from_app_origin(&state, &headers).await {
+    if super::security::from_app_origin(&state, &headers).await {
         return error(StatusCode::FORBIDDEN, "Administration refuses requests from app origins.");
     }
-    let host_known = super::oauth::valid_host(&state, &headers)
-        || (runtime && (super::domain::is_alias_request(&state, &headers) || super::path::on_path_host(&state, &headers)));
-    if !same_origin(&headers) || !host_known {
+    if !same_origin(&headers) || !valid_host(&state, &headers) {
         return error(
             StatusCode::FORBIDDEN,
             "Cross-origin or unrecognized-host MCP request rejected.",
         );
     }
-    let owner;
-    let principal;
-    let tools;
-    let mut app: Option<String> = None;
-    let mut anonymous = false;
-    // A visitor on a private app reaches only the account tools.
-    let mut account_only = false;
-    if runtime {
-        let Some(deployment) = deployment_for(&state, &headers).await else {
-            return error(StatusCode::NOT_FOUND, "Deployment not found.");
-        };
-        if super::path::foreign_referer(&state, &headers, &deployment.id) {
-            return error(StatusCode::FORBIDDEN, "A page of another app's path address cannot call this app.");
-        }
-        // A key would otherwise read as an unknown session token, and the
-        // program would get a visitor's answers without knowing why.
-        if bearer(&headers).is_some_and(|token| token.starts_with("lbk_")) {
-            return error(StatusCode::FORBIDDEN, API_KEY_ON_RUNTIME);
-        }
-        match authenticate_deployment(&state, &deployment, &headers) {
-            Ok(Some(user)) => {
-                principal = format!("runtime:{}:{}", deployment.id, user.user_id);
-                tools = runtime_tools();
-            }
-            // A visitor without a session on a public app may read the anonymous
-            // session, run actions declared anonymous, and read public files.
-            // The transfer principal includes the client address so visitors
-            // do not share one quota. Private apps require sign-in for everything.
-            Ok(None) if !is_private(&deployment) => {
-                let client = limits::client_key(state.guards.client_ip(peer, &headers));
-                principal = format!("runtime:{}:anon:{client}", deployment.id);
-                tools = anonymous_runtime_tools();
-                anonymous = true;
-            }
-            Ok(None) => {
-                let client = limits::client_key(state.guards.client_ip(peer, &headers));
-                principal = format!("runtime:{}:anon:{client}", deployment.id);
-                tools = account_tools();
-                anonymous = true;
-                account_only = true;
-            }
-            Err(_) => return unauthorized(&state, &headers),
-        }
-        app = Some(deployment.id);
-        owner = None;
-    } else {
-        if !super::oauth::valid_owner_host(&state, &headers).await {
-            return error(
-                StatusCode::FORBIDDEN,
-                "Administration is unavailable on app hosts.",
-            );
-        }
-        let authenticated = match authenticate_owner(&state, &headers) {
-            Ok(Some(owner)) => owner,
-            _ => return unauthorized(&state, &headers),
-        };
-        if headers.get("x-konae-owner-id").is_some_and(|expected| expected.as_bytes() != authenticated.id.as_bytes()) {
-            return error(StatusCode::CONFLICT, "The signed-in owner changed. Reload before continuing.");
-        }
-        principal = format!("owner:{}", authenticated.id);
-        tools = admin_tools(&authenticated);
-        owner = Some(authenticated);
+    if !super::oauth::valid_owner_host(&state, &headers).await {
+        return error(
+            StatusCode::FORBIDDEN,
+            "Administration is unavailable on app hosts.",
+        );
     }
-    let bytes = match axum::body::to_bytes(request.into_body(), 200_000).await {
-        Ok(bytes) => bytes,
-        Err(_) => return error(StatusCode::PAYLOAD_TOO_LARGE, "MCP request exceeds 200 KB."),
+    let owner = match authenticate_owner(&state, &headers) {
+        Ok(Some(owner)) => owner,
+        _ => return unauthorized(&state, &headers),
     };
-    let call: Value = match serde_json::from_slice(&bytes) {
-        Ok(value) => value,
-        Err(_) => return rpc_error(Value::Null, -32700, "Invalid JSON."),
+    if headers.get("x-konae-owner-id").is_some_and(|expected| expected.as_bytes() != owner.id.as_bytes()) {
+        return error(StatusCode::CONFLICT, "The signed-in owner changed. Reload before continuing.");
+    }
+    let principal = format!("owner:{}", owner.id);
+    let tools = admin_tools(&owner);
+    let call = match read_call(request).await {
+        Ok(call) => call,
+        Err(response) => return response,
     };
     let id = call.get("id").cloned().unwrap_or(Value::Null);
-    if !call.is_object()
-        || call["jsonrpc"] != "2.0"
-        || !call["method"].is_string()
-        || call
-            .get("id")
-            .is_some_and(|id| !id.is_null() && !id.is_string() && !id.is_number())
-    {
-        return rpc_error(Value::Null, -32600, "Invalid JSON-RPC request.");
-    }
     let method = call["method"].as_str().unwrap();
-    if account_only
-        && !(["initialize", "ping"].contains(&method)
-            || method.starts_with("notifications/")
-            || (method == "tools/call"
-                && call["params"]["name"].as_str().is_some_and(|name| tools.iter().any(|t| t["name"] == name))))
-    {
-        return unauthorized(&state, &headers);
-    }
     if call.get("id").is_none() {
-        return if method.starts_with("notifications/") {
-            StatusCode::ACCEPTED.into_response()
-        } else {
-            rpc_error(Value::Null, -32600, "A request ID is required.")
-        };
+        return without_id(method);
     }
-    let mut clear_cookie = false;
-    let mut session_cookie: Option<HeaderValue> = None;
     let result = match method {
         "initialize" => Ok(
-            json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"konae","version":"0.1.0"},"instructions":"Use project-scoped credentials. Source and builds stay on your computer. Call platform_describe, then platform_guide topics rules and pieces before building. After every write, use the read-back that rules names."}),
+            json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"konae","version":"0.1.0"},"instructions":INSTRUCTIONS}),
         ),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools":tools})),
@@ -1124,13 +816,8 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
                 return rpc_error(id, -32602, "Tool name is required.");
             };
             let Some(definition) = tools.iter().find(|t| t["name"] == name) else {
-                // Tell a signed-out visitor the tool needs a session, so the SDK can
-                // send them to the login page.
-                if runtime && runtime_tools().iter().any(|t| t["name"] == name) {
-                    return Json(json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":"authentication-required"}],"isError":true}})).into_response();
-                }
                 // Name the permission an administrative tool needs, so the agent knows which credential to get.
-                let hint = owner.as_ref().and_then(|owner| super::guide::missing_permission(name, owner));
+                let hint = super::guide::missing_permission(name, &owner);
                 return rpc_error(id, -32602, &hint.map_or("Unknown tool or insufficient permission.".to_owned(), |hint| format!("Unknown tool or insufficient permission. {hint}")));
             };
             let arguments = call["params"]
@@ -1139,25 +826,6 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
                 .unwrap_or(json!({}));
             if let Err(e) = validate_arguments(&arguments, &definition["inputSchema"]) {
                 return rpc_error(id, -32602, &e.to_string());
-            }
-            if runtime && name == "actions_invoke" {
-                // Signed-out visitors share a bucket per client address and
-                // Deployment; each signed-in app user has their own.
-                let limited = if anonymous {
-                    let client = limits::client_key(state.guards.client_ip(peer, &headers));
-                    let key = format!("{}|{client}", app.as_deref().unwrap_or(""));
-                    state.guards.anonymous_actions.check(&key)
-                } else {
-                    state.guards.signed_in_actions.check(&principal)
-                };
-                if let Err(wait) = limited {
-                    let mut response = Json(json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":"rate-limited"}],"isError":true}})).into_response();
-                    response.headers_mut().insert(
-                        header::RETRY_AFTER,
-                        HeaderValue::from(wait.as_secs().max(1)),
-                    );
-                    return response;
-                }
             }
             let previous_mode = if name == "signup_policy_set" {
                 let deployments = state.deployments.read().await;
@@ -1171,124 +839,76 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
             // A package export's downloads hold accounts and data. Every
             // credential of one owner shares the transfer principal, so reading
             // them needs export_data, not the read scope that finds them.
-            let package_transfer = (owner.is_some() && name.starts_with("transfer_") && name != "transfer_begin")
+            let package_transfer = (name.starts_with("transfer_") && name != "transfer_begin")
                 .then(|| transfer(&state, &principal, &arguments).ok())
                 .flatten();
             let export_transfer = package_transfer.clone().filter(|t| t["exportData"] == true);
             let component_upload = name == "transfer_write" && package_transfer.is_some_and(|t| t["component"].is_string());
             let result = if name.starts_with("transfer_") {
-                let permission = if let Some(owner) = owner.as_ref() {
-                    let project = if name == "transfer_begin" {
-                        arguments["projectId"].as_str().map(str::to_owned)
-                    } else {
-                        transfer(&state, &principal, &arguments)
-                            .ok()
-                            .and_then(|t| t["projectId"].as_str().map(str::to_owned))
-                    };
-                    let scope = if export_transfer.is_some() && name != "transfer_cancel" {
-                        "export_data"
-                    } else if ["transfer_read", "transfer_status", "transfer_cancel"]
-                        .contains(&name)
-                    {
-                        "read"
-                    } else {
-                        "publish"
-                    };
-                    let authorize = |scope| match project.as_deref() {
-                        Some(id) => owned_project(&state, owner, id, scope).map(|_| ()),
-                        None => owner.require(scope, None),
-                    };
-                    // Check the first accepted scope the credential holds, so a
-                    // refusal names the project grant rather than a scope it never had.
-                    let held = |accepted: &[&'static str]| {
-                        accepted
-                            .iter()
-                            .copied()
-                            .find(|wanted| owner.scopes.iter().any(|s| s == wanted))
-                            .unwrap_or(accepted[0])
-                    };
-                    if name == "transfer_cancel" {
-                        authorize(held(&["read", "publish", "write", "export_data"]))
-                    } else if scope == "publish" {
-                        authorize(held(&["publish", "write"]))
-                    } else {
-                        authorize(scope)
-                    }
+                let project = if name == "transfer_begin" {
+                    arguments["projectId"].as_str().map(str::to_owned)
                 } else {
-                    Ok(())
+                    transfer(&state, &principal, &arguments)
+                        .ok()
+                        .and_then(|t| t["projectId"].as_str().map(str::to_owned))
+                };
+                let scope = if export_transfer.is_some() && name != "transfer_cancel" {
+                    "export_data"
+                } else if ["transfer_read", "transfer_status", "transfer_cancel"]
+                    .contains(&name)
+                {
+                    "read"
+                } else {
+                    "publish"
+                };
+                let authorize = |scope| match project.as_deref() {
+                    Some(id) => owned_project(&state, &owner, id, scope).map(|_| ()),
+                    None => owner.require(scope, None),
+                };
+                // Check the first accepted scope the credential holds, so a
+                // refusal names the project grant rather than a scope it never had.
+                let held = |accepted: &[&'static str]| {
+                    accepted
+                        .iter()
+                        .copied()
+                        .find(|wanted| owner.scopes.iter().any(|s| s == wanted))
+                        .unwrap_or(accepted[0])
+                };
+                let permission = if name == "transfer_cancel" {
+                    authorize(held(&["read", "publish", "write", "export_data"]))
+                } else if scope == "publish" {
+                    authorize(held(&["publish", "write"]))
+                } else {
+                    authorize(scope)
                 };
                 match permission {
-                    Ok(()) => transfer_call(&state, &principal, name, &arguments, runtime).await,
-                    Err(e) => Err(e),
-                }
-            } else if runtime && account_tools().iter().any(|t| t["name"] == name) {
-                let client = state.guards.client_ip(peer, &headers);
-                match super::accounts::runtime_tool(&state, &headers, client, name, &arguments).await {
-                    Ok((value, cookie)) => {
-                        session_cookie = cookie;
-                        Ok(value)
-                    }
-                    Err(e) => Err(e),
-                }
-            } else if let Some(owner) = owner.as_ref() {
-                match admin_guard(&state, name, &arguments).await {
-                    Ok(()) => admin_call(&state, owner, &principal, name, arguments.clone()).await,
+                    Ok(()) => transfer_call(&state, &principal, name, &arguments, false).await,
                     Err(e) => Err(e),
                 }
             } else {
-                runtime_call(&state, &headers, &principal, app.as_deref(), name, arguments.clone()).await
-            };
-            // Each audit row costs a write to the shared mcp.sqlite, so app users
-            // must not decide how fast it grows. Owner calls are audited here.
-            // Of the app-user calls, only an upload that stores a new file and
-            // a delete that removes one are, inside runtime_call: the transfer
-            // caps bound how often uploads happen, and each file goes once.
-            if !runtime {
-                match export_transfer.as_ref().filter(|_| name == "transfer_read") {
-                    // One row per component download, written at its first
-                    // block or on a refusal, so a 256 MiB database read in
-                    // 64 KiB blocks does not push the rest out of the log.
-                    Some(t) if arguments["offset"] == 0 || result.is_err() => {
-                        let target = json!({"deploymentId":t["deploymentId"],"component":t["component"]});
-                        audit(&state, &principal, "package_download", &target, None, None, &result);
-                    }
-                    Some(_) => {}
-                    // A package component upload is audited at its first block.
-                    None if component_upload && arguments["offset"] != 0 && result.is_ok() => {}
-                    None => audit(&state, &principal, name, &arguments, app.as_deref(), previous_mode, &result),
+                match admin_guard(&state, name, &arguments).await {
+                    Ok(()) => admin_call(&state, &owner, &principal, name, arguments.clone()).await,
+                    Err(e) => Err(e),
                 }
+            };
+            match export_transfer.as_ref().filter(|_| name == "transfer_read") {
+                // One row per component download, written at its first
+                // block or on a refusal, so a 256 MiB database read in
+                // 64 KiB blocks does not push the rest out of the log.
+                Some(t) if arguments["offset"] == 0 || result.is_err() => {
+                    let target = json!({"deploymentId":t["deploymentId"],"component":t["component"]});
+                    audit(&state, &principal, "package_download", &target, None, &result);
+                }
+                Some(_) => {}
+                // A package component upload is audited at its first block.
+                None if component_upload && arguments["offset"] != 0 && result.is_ok() => {}
+                None => audit(&state, &principal, name, &arguments, previous_mode, &result),
             }
-            // The session row is gone; the browser must drop its cookie too.
-            if runtime && name == "auth_logout" && result.is_ok() {
-                clear_cookie = true;
-            }
-            match result {
-                Ok(value) => Ok(
-                    json!({"content":[{"type":"text","text":serde_json::to_string(&value).unwrap()}],"structuredContent":{"result":value},"isError":false}),
-                ),
-                Err(e) => Ok(tool_error(&e)),
-            }
+            Ok(tool_result(result))
         }
         _ => return rpc_error(id, -32601, "Method not found."),
     };
-    let mut response = match result {
-        Ok::<Value, anyhow::Error>(result) => {
-            Json(json!({"jsonrpc":"2.0","id":id,"result":result})).into_response()
-        }
-        Err(e) => rpc_error(id, -32603, &e.to_string()),
-    };
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    if clear_cookie {
-        response
-            .headers_mut()
-            .insert(header::SET_COOKIE, super::cleared_app_cookie(&state, app.as_deref().unwrap_or_default(), &headers));
-    }
-    if let Some(cookie) = session_cookie {
-        response.headers_mut().insert(header::SET_COOKIE, cookie);
-    }
-    response
+    answer(id, result)
 }
 
 /// Records one tool call. The target is the project or Deployment the call
@@ -1298,13 +918,11 @@ fn audit(
     principal: &str,
     name: &str,
     arguments: &Value,
-    app: Option<&str>,
     previous_mode: Option<SignupMode>,
     result: &Result<Value>,
 ) {
     let mode = |value: &Value| value.as_str().map(str::to_owned).unwrap_or_else(|| value.to_string());
     let (target, detail): (Option<String>, Option<String>) = match name {
-        _ if app.is_some() => (app.map(str::to_owned), None),
         "release_apply" => {
             let project = store(state).ok().and_then(|db| {
                 db.query_row(
@@ -1344,11 +962,22 @@ fn audit(
             None,
         ),
     };
-    let written = store(state).and_then(|db| {
+    record_audit(&state.data_root, principal, name, target.as_deref(), detail.as_deref(), result.is_ok());
+}
+
+/// The sink for an app user's file uploads and deletes, which the runtime
+/// endpoint reports and the owner's audit log keeps beside owner calls.
+pub(super) fn runtime_audit(root: PathBuf) -> super::runtime::AuditSink {
+    Arc::new(move |principal: &str, name: &str, app: &str, ok: bool| record_audit(&root, principal, name, Some(app), None, ok))
+}
+
+/// Writes one audit row and keeps each owner's and each Deployment's newest rows.
+fn record_audit(root: &Path, principal: &str, name: &str, target: Option<&str>, detail: Option<&str>, ok: bool) {
+    let written = store_at(root).and_then(|db| {
         let text = |value: &str| value.chars().take(AUDIT_TEXT_CHARACTERS).collect::<String>();
         db.execute(
             "INSERT INTO audit(at,actor,tool,target,ok,detail) VALUES(?1,?2,?3,?4,?5,?6)",
-            params![now_ms(), text(principal), text(name), target.as_deref().map(text), result.is_ok(), detail.as_deref().map(text)],
+            params![now_ms(), text(principal), text(name), target.map(text), ok, detail.map(text)],
         )?;
         let id = db.last_insert_rowid();
         if id % AUDIT_PRUNE_INTERVAL == 0 {
@@ -1383,109 +1012,7 @@ fn audit_partition(actor: &str) -> (String, String) {
     (prefix, high)
 }
 
-fn unauthorized(state: &AppState, headers: &HeaderMap) -> Response {
-    let mut response = error(StatusCode::UNAUTHORIZED, "Sign in to use Konae MCP.");
-    let metadata = format!(
-        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"",
-        super::oauth::origin(state, headers)
-    );
-    response.headers_mut().insert(
-        header::WWW_AUTHENTICATE,
-        HeaderValue::from_str(&metadata).unwrap(),
-    );
-    response
-}
 
-fn validate_arguments(value: &Value, schema: &Value) -> Result<()> {
-    match schema["type"].as_str() {
-        Some("object") => {
-            let object = value
-                .as_object()
-                .ok_or_else(|| anyhow::anyhow!("Arguments must be an object."))?;
-            if let Some(required) = schema["required"].as_array() {
-                for key in required {
-                    anyhow::ensure!(
-                        object.contains_key(key.as_str().unwrap()),
-                        "Missing argument {}.",
-                        key
-                    );
-                }
-            }
-            if let Some(properties) = schema["properties"].as_object() {
-                for (key, value) in object {
-                    if let Some(property) = properties.get(key) {
-                        validate_arguments(value, property)?;
-                    } else {
-                        anyhow::ensure!(
-                            schema["additionalProperties"] != false,
-                            "Unknown argument {key}."
-                        );
-                    }
-                }
-            }
-        }
-        Some("string") => {
-            let s = value
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("Expected a string."))?;
-            anyhow::ensure!(
-                s.len() >= schema["minLength"].as_u64().unwrap_or(0) as usize
-                    && s.len() <= schema["maxLength"].as_u64().unwrap_or(120_000) as usize,
-                "String length is outside the allowed range."
-            );
-        }
-        Some("integer") => {
-            let n = value
-                .as_u64()
-                .ok_or_else(|| anyhow::anyhow!("Expected a nonnegative integer."))?;
-            anyhow::ensure!(
-                n >= schema["minimum"].as_u64().unwrap_or(0)
-                    && n <= schema["maximum"].as_u64().unwrap_or(u64::MAX),
-                "Integer is outside the allowed range."
-            );
-        }
-        Some("array") => {
-            let a = value
-                .as_array()
-                .ok_or_else(|| anyhow::anyhow!("Expected an array."))?;
-            anyhow::ensure!(
-                a.len() >= schema["minItems"].as_u64().unwrap_or(0) as usize && a.len() <= 100,
-                "Invalid array length."
-            );
-            for v in a {
-                validate_arguments(v, &schema["items"])?;
-            }
-        }
-        _ => {}
-    }
-    if let Some(allowed) = schema["enum"].as_array() {
-        anyhow::ensure!(
-            allowed.contains(value),
-            "Value is outside the allowed choices."
-        );
-    }
-    Ok(())
-}
-
-
-async fn response_value(response: Response) -> Result<Value> {
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), MAX_TRANSFER).await?;
-    let value: Value = serde_json::from_slice(&bytes)?;
-    if !status.is_success() {
-        if let Some(refused) = super::refusal::from_body(&value) {
-            return Err(refused.into());
-        }
-    }
-    anyhow::ensure!(
-        status.is_success(),
-        "{}",
-        value["error"]
-            .as_str()
-            .unwrap_or("Kernel operation failed.")
-    );
-    Ok(value["result"].clone())
-}
 
 async fn admin_call(
     state: &AppState,
@@ -2062,208 +1589,6 @@ fn project_template(id: Option<&str>) -> Result<Value> {
     Ok(template.clone())
 }
 
-/// A tool's failed result. The text stays the sentence clients read today; a
-/// refused Capsule also answers `{ error: { code, message, hint } }` (ADR-0020).
-fn tool_error(error: &anyhow::Error) -> Value {
-    let text = json!([{"type": "text", "text": error.to_string()}]);
-    match super::refusal::of(error) {
-        Some(refused) => json!({"content": text, "structuredContent": {"error": refused.to_json()}, "isError": true}),
-        None => json!({"content": text, "isError": true}),
-    }
-}
-
-/// Checks a release as the deploy would take it, and answers the schema
-/// change it makes, derived on a copy of the live database.
-pub(super) async fn validate_release(state: &AppState, input: &DeployInput) -> Result<super::schema_change::Change> {
-    anyhow::ensure!(
-        input.artifact.version == 1
-            && input.artifact.entrypoint == "index.html"
-            && input.artifact.files.contains_key("index.html"),
-        "Invalid Build Artifact."
-    );
-    anyhow::ensure!(
-        ["public", "private"].contains(&input.visibility.as_str()),
-        "Invalid visibility."
-    );
-    anyhow::ensure!(
-        input.artifact.files.len() <= 1000,
-        "Artifact has too many files."
-    );
-    for path in input.artifact.files.keys() {
-        anyhow::ensure!(
-            safe_relative_path(path)
-                && !path.starts_with("_konae/")
-                && !path.starts_with("oauth/")
-                && !path.starts_with(".well-known/")
-                && path != "mcp",
-            "Invalid or reserved artifact path."
-        );
-    }
-    super::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
-    super::calls::check_connects(&input.project.manifest)?;
-    // The limit counts the bytes the Kernel stores, after base64 is decoded.
-    let total: usize = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?.values().map(Vec::len).sum();
-    anyhow::ensure!(total <= 16 * 1024 * 1024, "Artifact exceeds 16 MiB.");
-    let program: ActionProgram = serde_json::from_str(
-        input
-            .project
-            .files
-            .get("actions.json")
-            .ok_or_else(|| anyhow::anyhow!("actions.json is required."))?,
-    )?;
-    anyhow::ensure!(program.version == 1, "Unsupported action version.");
-    super::action_shape::check_program(&program)?;
-    super::calls::check_release(&super::domain::Rules::of(state), &super::http::secrets_store(&state.data_root, &input.project.id)?, &program)?;
-    let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
-    let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
-    anyhow::ensure!(
-        existing.is_none() || (input.initial_signup_policy.is_none()
-            && input.initial_package.is_none()),
-        "Portable state can only be imported on the first deployment."
-    );
-    if let Some(policy) = input.initial_signup_policy.as_ref() {
-        SignupPolicy::from_input(policy.mode, &policy.allowlist).map_err(anyhow::Error::msg)?;
-    }
-    let temp = state
-        .data_root
-        .join(format!("validate-{}.sqlite", Uuid::new_v4()));
-    let result = (|| -> Result<super::schema_change::Change> {
-        if let Some(ref deployment) = existing {
-            let connection = Connection::open(database_path(state, &deployment.id))?;
-            connection.execute("VACUUM INTO ?1", [temp.to_string_lossy().as_ref()])?;
-        } else if let Some(package) = input.initial_package.as_ref() {
-            super::package::copy_database(state, package, &temp)?;
-        } else {
-            initialize_database(&temp)?;
-        }
-        super::schema_change::apply(
-            &temp,
-            input
-                .project
-                .files
-                .get("schema.sql")
-                .map(String::as_str)
-                .unwrap_or(""),
-            &program,
-            super::schema_change::Mode::Plan,
-        )
-    })();
-    let _ = tokio::fs::remove_file(temp).await;
-    result
-}
-
-async fn runtime_call(
-    state: &AppState,
-    headers: &HeaderMap,
-    principal: &str,
-    app: Option<&str>,
-    name: &str,
-    a: Value,
-) -> Result<Value> {
-    match name {
-        "auth_session" => {
-            let result = response_value(session(State(state.clone()), headers.clone()).await).await;
-            if let (Ok(_), Some(id)) = (&result, app) {
-                super::usage::count(&state.data_root, id, super::usage::Operation::Session);
-            }
-            result
-        }
-        "auth_logout" => response_value(logout(State(state.clone()), headers.clone()).await).await,
-        "actions_invoke" => {
-            response_value(
-                invoke_action(
-                    State(state.clone()),
-                    AxumPath(a["name"].as_str().unwrap().to_owned()),
-                    headers.clone(),
-                    Json(a.get("input").cloned().unwrap_or(json!({}))),
-                )
-                .await,
-            )
-            .await
-        }
-        "files_list" => {
-            let mut files =
-                response_value(list_files(State(state.clone()), headers.clone()).await).await?;
-            if let Some(files) = files.as_array_mut() {
-                for file in files {
-                    file.as_object_mut().unwrap().remove("url");
-                }
-            }
-            Ok(files)
-        }
-        "files_read" => {
-            // The whole file goes into the transfer, whatever range the request named.
-            let mut whole = headers.clone();
-            whole.remove(header::RANGE);
-            let response = serve_file(
-                State(state.clone()),
-                AxumPath(a["fileId"].as_str().unwrap().to_owned()),
-                whole,
-            )
-            .await;
-            anyhow::ensure!(response.status().is_success(), "File not found.");
-            let result = download_body(state, principal, response.into_body()).await;
-            if let (Ok(_), Some(id)) = (&result, app) {
-                super::usage::count(&state.data_root, id, super::usage::Operation::FileRead);
-            }
-            result
-        }
-        "files_upload" => {
-            let visibility = match a.get("visibility").and_then(Value::as_str) {
-                None | Some("private") => "private",
-                Some("public") => "public",
-                Some(_) => anyhow::bail!("File visibility must be private or public."),
-            };
-            let id = a["transferId"].as_str().unwrap();
-            // Validate before locking: the lock name comes from the caller.
-            transfer_path(state, id)?;
-            let _guard = database_lock(state, &format!("transfer:{id}")).await;
-            let request_hash = digest(a.to_string().as_bytes());
-            let previous: Option<(String,String)>=super::transfers::store(state)?.query_row("SELECT request_hash,body FROM file_receipts WHERE transfer_id=?1 AND principal=?2",params![id,principal],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
-            if let Some((hash, body)) = previous {
-                anyhow::ensure!(hash == request_hash, "Upload retry changed its metadata.");
-                return Ok(serde_json::from_str(&body)?);
-            }
-            let t = transfer(state, principal, &a)?;
-            anyhow::ensure!(
-                t["complete"] == true && t["direction"] == "upload",
-                "File upload is incomplete."
-            );
-            let upload = super::Upload {
-                name: a["name"].as_str(),
-                content_type: a.get("type").and_then(Value::as_str),
-                visibility: Some(visibility),
-            };
-            let source = transfer_path(state, id)?;
-            let mut result =
-                response_value(super::upload_from_path(state, headers, upload, &source).await)
-                    .await?;
-            result.as_object_mut().unwrap().remove("url");
-            super::transfers::store(state)?.execute("INSERT INTO file_receipts(transfer_id,principal,request_hash,body) VALUES(?1,?2,?3,?4)",params![id,principal,request_hash,result.to_string()])?;
-            if let Some(deployment) = app {
-                super::usage::count(&state.data_root, deployment, super::usage::Operation::Upload);
-            }
-            // Failed uploads and receipt replays leave no row.
-            let result = Ok(result);
-            audit(state, principal, name, &a, app, None, &result);
-            result
-        }
-        "files_update" => {
-            let response = super::files::update_file(state, headers, a["fileId"].as_str().unwrap(), a["visibility"].as_str()).await;
-            response_value(response).await
-        }
-        "files_delete" => {
-            let result = response_value(super::files::delete_file(state, headers, a["fileId"].as_str().unwrap()).await).await;
-            // Each file is deleted once, so like uploads these rows stay bounded.
-            if result.is_ok() {
-                audit(state, principal, name, &a, app, None, &result);
-            }
-            result
-        }
-        _ => anyhow::bail!("Unknown runtime tool."),
-    }
-}
-
 async fn owner_config(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if !super::oauth::valid_owner_host(&state, &headers).await { return StatusCode::FORBIDDEN.into_response(); }
     match super::clerk::ClerkConfig::from_env() {
@@ -2382,7 +1707,7 @@ async fn owner_auth(state: AppState, request: Request, signup: bool) -> Response
     let password = a["password"].as_str().unwrap_or("").to_owned();
     if let Some(admission) = admission.clone().filter(|_| state.accounts.verification == auth::Verification::Required) {
         let page = super::admission::login_page(
-            &super::oauth::origin(&state, &headers),
+            &origin(&state, &headers),
             super::admission::return_to(&a).as_deref(),
         );
         return match super::accounts::signup_creator(&state, &email, &page, admission, client).await {
@@ -2690,7 +2015,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-audit-{}", Uuid::new_v4()));
         let (state, _) = crate::tests::login_test_state(&root, "public").await;
         let ok: Result<Value> = Ok(json!({}));
-        audit(&state, "owner:ana", "project_create", &json!({"projectId": "p1"}), None, None, &ok);
+        audit(&state, "owner:ana", "project_create", &json!({"projectId": "p1"}), None, &ok);
         let rows = AUDIT_MAX_ROWS + 3 * AUDIT_PRUNE_INTERVAL;
         {
             let db = store(&state).unwrap();
@@ -2707,7 +2032,7 @@ mod tests {
                 db.execute("INSERT INTO audit(at,actor,tool,target,ok) VALUES(?1,'runtime:d1:user-x','files_delete','d1',1)", [now_ms()]).unwrap();
             }
         }
-        audit(&state, "runtime:d1:user-y", "files_upload", &json!({}), Some("d1"), None, &ok);
+        runtime_audit(root.clone())("runtime:d1:user-y", "files_upload", "d1", true);
         let db = store(&state).unwrap();
         let count = |actor: &str| db.query_row("SELECT COUNT(*) FROM audit WHERE actor LIKE ?1", [actor], |row| row.get::<_, i64>(0)).unwrap();
         assert_eq!(count("owner:ana"), 1, "the owner's row survives");

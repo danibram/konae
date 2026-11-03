@@ -1,4 +1,5 @@
 use super::*;
+use super::runtime::origin;
 use axum::Extension;
 use axum::extract::{ConnectInfo, Form, Query};
 use rusqlite::params;
@@ -65,30 +66,6 @@ pub(super) fn install(db: &Connection) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn valid_host(state: &AppState, headers: &HeaderMap) -> bool {
-    let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
-        return false;
-    };
-    let Ok(url) = url::Url::parse(&format!("http://{host}")) else {
-        return false;
-    };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let public = url::Url::parse(&state.public_origin).ok();
-    let configured = state.mcp_origin.as_deref().and_then(|s| url::Url::parse(s).ok());
-    ["localhost", "127.0.0.1", "[::1]", "app.localhost"].contains(&host)
-        || host.ends_with(".localhost")
-        || public.as_ref().is_some_and(|u| u.host_str() == Some(host))
-        || configured
-            .as_ref()
-            .is_some_and(|u| u.host_str() == Some(host))
-        || public
-            .as_ref()
-            .and_then(|u| u.host_str())
-            .is_some_and(|suffix| host.ends_with(&format!(".{suffix}")))
-}
-
 pub(super) async fn valid_owner_host(state: &AppState, headers: &HeaderMap) -> bool {
     // The path host serves apps and the home, so it never serves administration,
     // even when it is `localhost` on a local installation.
@@ -116,22 +93,6 @@ pub(super) async fn valid_owner_host(state: &AppState, headers: &HeaderMap) -> b
     (exact || local)
         && deployment_for(state, headers).await.is_none()
         && !super::security::from_app_origin(state, headers).await
-}
-
-pub(super) fn origin(state: &AppState, headers: &HeaderMap) -> String {
-    if let Some(origin) = &state.mcp_origin {
-        return origin.trim_end_matches('/').to_owned();
-    }
-    let scheme = if state.public_origin.starts_with("https://") {
-        "https"
-    } else {
-        "http"
-    };
-    let host = headers
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost");
-    format!("{scheme}://{host}")
 }
 
 async fn resource_metadata(State(state): State<AppState>, headers: HeaderMap) -> Response {

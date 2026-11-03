@@ -679,7 +679,7 @@ async fn creator_recover(State(state): State<AppState>, request: Request) -> Res
     if !creator_host(&state, request.headers()).await {
         return error(StatusCode::FORBIDDEN, "Owner authentication is unavailable on this origin.");
     }
-    let origin = oauth::origin(&state, request.headers());
+    let origin = super::runtime::origin(&state, request.headers());
     let (input, client): (RecoveryRequest, _) =
         match read_body(&state, request, "owner", |input: &RecoveryRequest| input.email.clone()).await {
             Ok(input) => input,
@@ -1143,7 +1143,7 @@ mod tests {
             builder = builder.header(header::COOKIE, cookie);
         }
         let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
-        mcp::runtime(State(fixture.state.clone()), builder.body(Body::from(body.to_string())).unwrap()).await
+        crate::runtime::runtime(State(fixture.state.clone()), builder.body(Body::from(body.to_string())).unwrap()).await
     }
 
     async fn rpc_json(response: Response) -> Value {

@@ -2,7 +2,8 @@
 //! docs/mcp.md is the long form of every topic; docs/mcp-walkthrough.md runs
 //! them in order against a Kernel.
 
-use super::mcp::{admin_tools, runtime_tools, Owner};
+use super::mcp::{admin_tools, Owner};
+use super::runtime::runtime_tools;
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 

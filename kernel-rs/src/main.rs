@@ -57,6 +57,7 @@ mod path_name;
 mod provider;
 mod recovery;
 mod refusal;
+mod runtime;
 mod schedule;
 mod schema_change;
 mod security;
@@ -91,6 +92,8 @@ struct AppState {
     accounts: accounts::AccountSettings,
     /// The stores at the data root besides the app folders.
     installation: Arc<installation::Installation>,
+    /// Where an app user's file uploads and deletes are recorded.
+    audit: Option<runtime::AuditSink>,
 }
 
 #[cfg(test)]
@@ -115,6 +118,7 @@ impl AppState {
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
             installation: Arc::new(mcp::installation()),
+            audit: None,
         }
     }
 }
@@ -515,6 +519,7 @@ async fn main() -> Result<()> {
     let schedule_clock = schedule::Clock::from_env(&bind)?;
     let deployments = load_deployments(&data_root, &public_origin).await?;
     let files = file_store::Files::from_env(&data_root).await?;
+    let audit = mcp::runtime_audit(data_root.clone());
     let state = AppState {
         deployments: Arc::new(RwLock::new(deployments)),
         db_locks: LockMap::default(),
@@ -533,6 +538,7 @@ async fn main() -> Result<()> {
             &std::env::var("KONAE_TRUSTED_PROXIES").unwrap_or_default(),
         )?)),
         accounts: account_settings,
+        audit: Some(audit),
         installation: Arc::new(installation),
     };
     path::load(&state);
@@ -568,6 +574,7 @@ fn stack(state: AppState) -> tower::util::BoxCloneService<Request, axum::respons
         .route("/_konae/auth/signup", post(signup))
         .route("/_konae/auth/login", post(login))
         .route("/_konae/login", get(login_page))
+        .merge(runtime::routes())
         .merge(mcp::routes())
         .merge(oauth::routes())
         .merge(google::routes())
@@ -648,7 +655,7 @@ async fn deploy(state: &AppState, body: &[u8]) -> Response {
             );
         }
     };
-    if let Err(error_value) = mcp::validate_release(&state, &input).await {
+    if let Err(error_value) = runtime::validate_release(&state, &input).await {
         return error(StatusCode::BAD_REQUEST, &error_value.to_string());
     }
     if input.artifact.version != 1
@@ -682,7 +689,7 @@ async fn deploy(state: &AppState, body: &[u8]) -> Response {
     if let Err(refused) = action_shape::check_program(&program) {
         return refusal_error(&refused);
     }
-    if !mcp::valid_app_id(&input.project.id) {
+    if !runtime::valid_app_id(&input.project.id) {
         return error(StatusCode::BAD_REQUEST, "Invalid project ID.");
     }
     if let Err(error_value) = http::secrets_store(&state.data_root, &input.project.id).and_then(|db| {
