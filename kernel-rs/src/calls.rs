@@ -1310,17 +1310,6 @@ async fn run_then(
 // The outbox. `mcp.rs` lists `calls_read` for every owner credential, since
 // it needs only `read`, and checks the Deployment's project grant.
 
-pub(crate) fn admin_tools() -> Vec<Value> {
-    let text = json!({"type": "string", "minLength": 1});
-    vec![super::mcp::tool(
-        "calls_read",
-        "Read a deployment's outbox: the calls its call actions queued, newest first, 50 at a time, with state (pending, delivered or failed), attempts, method, URL, HTTP status, error kind, the first 1 KiB of the answer and what the then mutation did. Pass nextCursor back as cursor for the next page.",
-        json!({"deploymentId": text, "cursor": {"type": "string", "minLength": 1, "maxLength": 20}}),
-        &["deploymentId"],
-        true,
-    )]
-}
-
 /// The row before which a page starts: `cursor` is the nextCursor of an
 /// earlier page. `notices_read` pages the same way.
 pub(crate) fn page_before(a: &Value) -> Result<i64> {

@@ -18,13 +18,12 @@
 use super::*;
 use accounts::app_store;
 use auth::{AuthSession, IssuedChallenge, NewPassword, Purpose};
-use mcp::Owner;
 use rusqlite::params;
 
 /// The most recipients one `app_invitations_create` call accepts.
 pub(crate) const MAX_BATCH: usize = 50;
 /// The most rows one page of `app_users_list` or `app_invitations_list` returns.
-const MAX_PAGE: usize = 100;
+pub(crate) const MAX_PAGE: usize = 100;
 /// How long the answer stored for an idempotency key is kept.
 const IDEMPOTENCY_SECONDS: i64 = 7 * 24 * 60 * 60;
 
@@ -277,74 +276,6 @@ $('#accept').addEventListener('submit',async e=>{e.preventDefault();try{await po
 // ---------------------------------------------------------------------------
 // Owner tools
 
-/// The admin MCP tools this module answers. `mcp.rs` lists them only for a
-/// credential that holds `manage_users`, and every call checks it again.
-pub(crate) fn admin_tools() -> Vec<Value> {
-    let text = json!({"type": "string", "minLength": 1});
-    let key = json!({"type": "string", "minLength": 8, "maxLength": 128});
-    let page = json!({"type": "integer", "minimum": 1, "maximum": MAX_PAGE});
-    vec![
-        mcp::tool(
-            "app_users_list",
-            "List a deployment's app accounts with their state and whether they verified their email, ordered by email. Pass nextCursor back as cursor for the next page.",
-            json!({"deploymentId": text, "limit": page, "cursor": text, "state": {"type": "string", "enum": ["pending", "active", "suspended"]}}),
-            &["deploymentId"],
-            true,
-        ),
-        mcp::tool(
-            "app_user_suspend",
-            "Suspend an app account. Its sessions and open links end at once; its ID, password and rows stay.",
-            json!({"deploymentId": text, "userId": text}),
-            &["deploymentId", "userId"],
-            false,
-        ),
-        mcp::tool(
-            "app_user_resume",
-            "Lift a suspension. The account is active again if it ever verified its email, otherwise pending until it does.",
-            json!({"deploymentId": text, "userId": text}),
-            &["deploymentId", "userId"],
-            false,
-        ),
-        mcp::tool(
-            "app_invitations_create",
-            "Invite people to a deployment by email. Each recipient gets an email with a link valid for seven days, so call this only when the owner asked for those invitations. Up to 50 recipients, each with its own result. Retrying with the same idempotencyKey returns the first answer and sends nothing.",
-            json!({"deploymentId": text, "emails": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 254}, "minItems": 1}, "idempotencyKey": key}),
-            &["deploymentId", "emails", "idempotencyKey"],
-            false,
-        ),
-        mcp::tool(
-            "app_invitations_list",
-            "List a deployment's invitations, newest first, with status (pending, expired, needs-resend, already-member, accepted, revoked), expiry and whether the mail transport took the message. Pass nextCursor back as cursor for the next page.",
-            json!({"deploymentId": text, "limit": page, "cursor": text}),
-            &["deploymentId"],
-            true,
-        ),
-        mcp::tool(
-            "app_invitation_resend",
-            "Email a pending, expired or imported invitation again with a new seven-day link. The earlier link stops working. Retrying with the same idempotencyKey sends nothing more.",
-            json!({"deploymentId": text, "invitationId": text, "idempotencyKey": key}),
-            &["deploymentId", "invitationId", "idempotencyKey"],
-            false,
-        ),
-        mcp::tool(
-            "app_invitation_revoke",
-            "Revoke a pending invitation so its link stops working.",
-            json!({"deploymentId": text, "invitationId": text}),
-            &["deploymentId", "invitationId"],
-            false,
-        ),
-    ]
-}
-
-/// Runs one of `admin_tools` for an owner credential: checks `manage_users`
-/// and the project grant for the Deployment, then runs the tool.
-pub(crate) async fn admin_call(state: &AppState, owner: &Owner, name: &str, arguments: &Value) -> Result<Value> {
-    let id = arguments["deploymentId"].as_str().unwrap_or_default();
-    let deployment = mcp::owned_deployment(state, owner, id, "manage_users").await?;
-    let inviter = Inviter { id: owner.id.clone(), email: mcp::inviter_email(state, &owner.id) };
-    run(state, &deployment, &inviter, name, arguments).await
-}
-
 /// Who sends an invitation: the ID its idempotency keys and rows record, and
 /// the email the message names, when there is one.
 pub(crate) struct Inviter {
@@ -354,7 +285,7 @@ pub(crate) struct Inviter {
 
 /// A refusal that names what the owner should do instead, or a storage error.
 enum Refusal {
-    Owner(&'static str),
+    Said(&'static str),
     Auth(AuthError),
 }
 
@@ -377,7 +308,7 @@ fn write<T>(auth: &AuthService, work: impl FnOnce(&rusqlite::Transaction<'_>) ->
     let result = auth.transaction(|tx| match work(tx) {
         Ok(value) => Ok(value),
         Err(Refusal::Auth(error_value)) => Err(error_value),
-        Err(Refusal::Owner(message)) => {
+        Err(Refusal::Said(message)) => {
             refused = Some(message);
             // Any error rolls the transaction back; the message replaces it.
             Err(AuthError::InvalidChallenge)
@@ -396,8 +327,9 @@ async fn off<T: Send + 'static>(work: impl FnOnce() -> Result<T> + Send + 'stati
         .map_err(|_| anyhow::anyhow!("The request did not complete."))?
 }
 
-/// Runs one owner tool on a Deployment the caller already authorized.
-async fn run(state: &AppState, deployment: &Deployment, sender: &Inviter, name: &str, a: &Value) -> Result<Value> {
+/// Runs one of the app user and invitation tools on a Deployment the caller
+/// already authorized.
+pub(crate) async fn run(state: &AppState, deployment: &Deployment, sender: &Inviter, name: &str, a: &Value) -> Result<Value> {
     let inviter = sender.id.as_str();
     let limit = a["limit"].as_u64().map_or(50, |value| value as usize).clamp(1, MAX_PAGE);
     let cursor = a["cursor"].as_str().map(str::to_owned);
@@ -515,7 +447,7 @@ fn replay(tx: &Connection, inviter: &str, key: &str, request: &str) -> Result<Op
     match stored {
         None => Ok(None),
         Some((previous, response)) if previous == request => Ok(Some(serde_json::from_str(&response).unwrap_or(Value::Null))),
-        Some(_) => Err(Refusal::Owner("This idempotencyKey was already used for a different request. Use a new key.")),
+        Some(_) => Err(Refusal::Said("This idempotencyKey was already used for a different request. Use a new key.")),
     }
 }
 
@@ -627,15 +559,15 @@ fn resend(
         )
         .optional()?;
     let Some((email, state, old_hash)) = row else {
-        return Err(Refusal::Owner("No invitation with that ID on this deployment."));
+        return Err(Refusal::Said("No invitation with that ID on this deployment."));
     };
     if state != "pending" {
-        return Err(Refusal::Owner("Only a pending invitation can be sent again."));
+        return Err(Refusal::Said("Only a pending invitation can be sent again."));
     }
     let (user_id, created_user) = match pending_account(tx, &email)? {
         Ok(account) => account,
-        Err("already-member") => return Err(Refusal::Owner("This email already has an active account. Ask the person to sign in.")),
-        Err(_) => return Err(Refusal::Owner("This account is suspended. Resume it before inviting it again.")),
+        Err("already-member") => return Err(Refusal::Said("This email already has an active account. Ask the person to sign in.")),
+        Err(_) => return Err(Refusal::Said("This account is suspended. Resume it before inviting it again.")),
     };
     // The new challenge replaces the account's open invitation challenge;
     // deleting the recorded one as well covers an account that changed.
@@ -662,12 +594,12 @@ fn revoke(tx: &rusqlite::Transaction<'_>, invitation: &str) -> Result<Value, Ref
         )
         .optional()?;
     let Some((email, state, token_hash, user_id, created_user)) = row else {
-        return Err(Refusal::Owner("No invitation with that ID on this deployment."));
+        return Err(Refusal::Said("No invitation with that ID on this deployment."));
     };
     let revoked = json!({"invitationId": invitation, "email": email, "status": "revoked"});
     match state.as_str() {
         "revoked" => return Ok(revoked),
-        "accepted" => return Err(Refusal::Owner("This invitation was already accepted. Suspend the account instead.")),
+        "accepted" => return Err(Refusal::Said("This invitation was already accepted. Suspend the account instead.")),
         _ => {}
     }
     if let Some(token_hash) = token_hash {

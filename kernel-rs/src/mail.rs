@@ -1292,21 +1292,6 @@ pub(crate) async fn status_tool(state: &AppState, refresh: bool) -> Result<Value
 /// Notices a page of `notices_read` holds.
 const NOTICE_PAGE: i64 = 50;
 
-/// The `notices_read` admin tool: one Deployment's notice jobs, newest first,
-/// 50 at a time, with state, attempts and failure kind. It names no recipient,
-/// as `mail_status` names none. A notice the Kernel did not queue is no job;
-/// Usage counts it under `notify` with its reason.
-pub(crate) fn admin_tools() -> Vec<Value> {
-    let text = json!({"type": "string", "minLength": 1});
-    vec![super::mcp::tool(
-        "notices_read",
-        "Read the email notices a deployment's mutations queued, newest first, 50 at a time: the action, state (pending, accepted, delivered or failed), attempts, failure kind and times. Names no recipient. Notices the Kernel did not queue are counted under notify by usage_read. Pass nextCursor back as cursor for the next page.",
-        json!({"deploymentId": text, "cursor": {"type": "string", "minLength": 1, "maxLength": 20}}),
-        &["deploymentId"],
-        true,
-    )]
-}
-
 pub(crate) async fn notices_tool(state: &AppState, deployment: &Deployment, a: &Value) -> Result<Value> {
     let before = super::calls::page_before(a)?;
     let path = state.data_root.join(MAIL_DATABASE);

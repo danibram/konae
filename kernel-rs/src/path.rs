@@ -330,40 +330,6 @@ async fn ensure_free(state: &AppState, id: &str, name: &str) -> std::result::Res
 // ---------------------------------------------------------------------------
 // Tools
 
-pub(super) fn read_tool() -> Value {
-    mcp::tool(
-        "path_read",
-        "Read a deployment's path address: whether it is on, its name, whether the owner accepted the shared origin, and the addresses it answers on.",
-        json!({"deploymentId":{"type":"string","minLength":1}}),
-        &["deploymentId"],
-        true,
-    )
-}
-
-pub(super) fn tools() -> Vec<Value> {
-    vec![
-        mcp::tool(
-            "path_set",
-            "Answer a deployment on <domain>/p/<id>, and on <domain>/p/<name> when it has a name. The path shares its origin with the home and every other path on this installation, so an app with accounts or a private app needs acceptSharedOrigin true before its path turns on. A name is 3 to 40 letters, digits and hyphens, and no other Deployment may hold it. An omitted name or acceptSharedOrigin keeps the stored value, a null name removes the name, and path_clear turns the path off and removes both. Read back with path_read. Requires publish.",
-            json!({
-                "deploymentId":{"type":"string","minLength":1},
-                "enabled":{"type":"boolean"},
-                "name":{"type":["string","null"],"minLength":1,"maxLength":260},
-                "acceptSharedOrigin":{"type":"boolean"}
-            }),
-            &["deploymentId", "enabled"],
-            false,
-        ),
-        mcp::tool(
-            "path_clear",
-            "Turn off a deployment's path address and forget its name. The generated hostname and any custom domain keep answering. Requires publish.",
-            json!({"deploymentId":{"type":"string","minLength":1}}),
-            &["deploymentId"],
-            false,
-        ),
-    ]
-}
-
 /// The state the owner reads. Addresses are listed only while the path is on
 /// and the installation names a domain.
 fn view(state: &AppState, id: &str, record: Option<Record>) -> Value {
@@ -393,27 +359,24 @@ fn view(state: &AppState, id: &str, record: Option<Record>) -> Value {
     value
 }
 
-pub(super) async fn admin_call(state: &AppState, owner: &mcp::Owner, name: &str, a: &Value) -> Result<Value> {
-    let id = a["deploymentId"].as_str().unwrap_or_default();
+/// Reads, sets or clears a Deployment's path address. The caller has
+/// checked who may.
+pub(crate) async fn admin_call(state: &AppState, deployment: &Deployment, name: &str, a: &Value) -> Result<Value> {
     match name {
         "path_read" => {
-            let deployment = mcp::owned_deployment(state, owner, id, "read").await?;
             Ok(view(state, &deployment.id, read_record(state, &deployment.id)))
         }
         "path_clear" => {
-            let deployment = mcp::owned_deployment(state, owner, id, "publish").await?;
             let _paths = database_lock(state, "paths").await;
             write_record(state, &deployment.id, None).await?;
             Ok(view(state, &deployment.id, None))
         }
-        "path_set" => set(state, owner, a).await,
+        "path_set" => set(state, deployment, a).await,
         _ => bail!("Unknown tool."),
     }
 }
 
-async fn set(state: &AppState, owner: &mcp::Owner, a: &Value) -> Result<Value> {
-    let id = a["deploymentId"].as_str().unwrap_or_default();
-    let deployment = mcp::owned_deployment(state, owner, id, "publish").await?;
+async fn set(state: &AppState, deployment: &Deployment, a: &Value) -> Result<Value> {
     let enabled = a["enabled"].as_bool().context("enabled must be true or false.")?;
     let _paths = database_lock(state, "paths").await;
     let previous = read_record(state, &deployment.id).unwrap_or_default();
@@ -528,18 +491,16 @@ mod tests {
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}
         });
         assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
-        mcp::store(state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES(?1,'o','{}')", [project]).unwrap();
         state.deployments.read().await.values().find(|d| d.project_id == project).cloned().unwrap()
     }
 
-    fn owner() -> mcp::Owner {
-        mcp::Owner { id: "o".into(), display: None, scopes: vec!["read".into(), "publish".into()], projects: vec![], session: false }
+    async fn tool(state: &AppState, id: &str, name: &str, a: Value) -> Result<Value> {
+        let deployment = deployment_by_id(state, id).await.unwrap();
+        admin_call(state, &deployment, name, &a).await
     }
 
     async fn set(state: &AppState, id: &str, args: Value) -> Result<Value> {
-        let mut a = args;
-        a["deploymentId"] = json!(id);
-        admin_call(state, &owner(), "path_set", &a).await
+        tool(state, id, "path_set", args).await
     }
 
     /// Only enabled ids and names answer, and a disabled path frees its name.
@@ -662,9 +623,9 @@ mod tests {
         assert_eq!(deployment_for_segment(&state, "spring-menu"), None);
 
         // path_read shows the stored state; path_clear forgets it.
-        let read = admin_call(&state, &owner(), "path_read", &json!({"deploymentId": other.id})).await.unwrap();
+        let read = tool(&state, &other.id, "path_read", json!({})).await.unwrap();
         assert_eq!((read["enabled"].clone(), read["acceptSharedOrigin"].clone()), (json!(true), json!(true)));
-        let cleared = admin_call(&state, &owner(), "path_clear", &json!({"deploymentId": other.id})).await.unwrap();
+        let cleared = tool(&state, &other.id, "path_clear", json!({})).await.unwrap();
         assert_eq!((cleared["enabled"].clone(), cleared["name"].clone()), (json!(false), Value::Null));
         assert_eq!(deployment_for_segment(&state, "spring-menu"), None);
         forget(&state, &notes.id).await.unwrap();
@@ -679,7 +640,7 @@ mod tests {
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root, None);
         let app = publish(&state, "solo").await;
-        let read = admin_call(&state, &owner(), "path_read", &json!({"deploymentId": app.id})).await.unwrap();
+        let read = tool(&state, &app.id, "path_read", json!({})).await.unwrap();
         assert_eq!(read["addresses"], json!([]));
         assert_eq!(read["next"], "Path addresses need KONAE_DOMAIN on this installation. Set it, then call path_set again.");
         let refused = set(&state, &app.id, json!({"enabled": true, "acceptSharedOrigin": true})).await.unwrap_err();

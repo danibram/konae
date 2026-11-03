@@ -562,29 +562,6 @@ fn valid_name(name: &str) -> bool {
 // needs only `read`, and checks the Deployment's project grant on every call.
 // The runtime endpoint never lists them.
 
-pub(crate) fn admin_tools() -> Vec<Value> {
-    let text = json!({"type": "string", "minLength": 1});
-    let date = json!({"type": "string", "minLength": 10, "maxLength": 10});
-    vec![
-        super::mcp::tool("usage_summary", "Read a deployment usage monitor with daily execution outcomes, Signal totals, published configuration and coverage. Owner read permission required.", json!({"deploymentId": text, "from": date, "to": date}), &["deploymentId", "from", "to"], true),
-        super::mcp::tool("usage_overview", "Read usage for this account projects only, including external and unpublished apps, 50 per page. Pass nextCursor back as cursor.", json!({"from": date, "to": date, "cursor": {"type": "string", "maxLength": 100}}), &["from", "to"], true),
-        super::mcp::tool(
-            "usage_read",
-            "Read a deployment's Usage: daily totals of the runtime operations the Kernel allowed (session, action, route, upload, file_read, signup, login, call), of guard refusals (refused, by action) and of scheduled runs (scheduled, by action) between two UTC dates written YYYY-MM-DD, both included, at most 400 days apart, and the newest 500 scheduled runs in that range with their outcome and changes.",
-            json!({"deploymentId": text, "from": date, "to": date}),
-            &["deploymentId", "from", "to"],
-            true,
-        ),
-        super::mcp::tool(
-            "signals_read",
-            "Read a deployment's Signals, newest first, 100 at a time, optionally of one name. Pass nextCursor back as cursor for the next page.",
-            json!({"deploymentId": text, "name": {"type": "string", "minLength": 1, "maxLength": 64}, "cursor": {"type": "string", "minLength": 1, "maxLength": 20}}),
-            &["deploymentId"],
-            true,
-        ),
-    ]
-}
-
 /// Answers `usage_read` and `signals_read` for a Deployment the caller may read.
 pub(crate) async fn admin_call(data_root: &Path, deployment: &Deployment, name: &str, a: &Value) -> Result<Value> {
     let path = crate::layout::usage(data_root, &deployment.id);

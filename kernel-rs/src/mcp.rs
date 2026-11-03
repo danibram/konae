@@ -28,6 +28,119 @@ pub fn routes() -> Router<AppState> {
         .route("/_konae/owner/clerk", post(owner_clerk))
 }
 
+/// Remembers which package each project imported, so a retried import
+/// returns its first receipt.
+fn install_imports(db: &Connection) -> Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS package_imports(package_id TEXT NOT NULL, project TEXT NOT NULL, plan TEXT NOT NULL, PRIMARY KEY(package_id, project));",
+    )?;
+    Ok(())
+}
+
+
+/// A second `release_plan` with a package this project already imported
+/// gets the first plan and its receipt instead of a refusal.
+fn replay_import(state: &AppState, owner: &Owner, project: &str, package_id: &str) -> Result<Option<Value>> {
+    let db = store(state)?;
+    let replay: Option<(String, String)> = db
+        .query_row(
+            "SELECT i.plan, p.receipt FROM package_imports i JOIN plans p ON p.id=i.plan
+             WHERE i.package_id=?1 AND i.project=?2 AND p.owner=?3 AND p.receipt IS NOT NULL",
+            params![package_id, project, owner.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(match replay {
+        Some((plan, receipt)) => Some(json!({
+            "planId": plan,
+            "projectId": project,
+            "applied": true,
+            "packageId": package_id,
+            "receipt": serde_json::from_str::<Value>(&receipt)?,
+        })),
+        None => None,
+    })
+}
+
+
+fn remember_import(state: &AppState, package_id: &str, project: &str, plan: &str) -> Result<()> {
+    store(state)?.execute(
+        "INSERT INTO package_imports(package_id,project,plan) VALUES(?1,?2,?3)
+         ON CONFLICT(package_id,project) DO UPDATE SET plan=excluded.plan",
+        params![package_id, project, plan],
+    )?;
+    Ok(())
+}
+
+
+/// Tools that change nothing a paused app serves. Every other tool that
+/// names a paused Deployment, its project or one of its plans is refused.
+const OPEN_TOOLS: [&str; 21] = [
+    "platform_guide",
+    "platform_describe",
+    "mail_status",
+    "session_inspect",
+    "projects_list",
+    "project_create",
+    "project_inspect",
+    "project_sources_read",
+    "project_sources_save",
+    "tokens_list",
+    "token_create",
+    "token_revoke",
+    "secrets_list",
+    "api_keys_list",
+    "usage_read",
+    "signals_read",
+    "signup_policy_read",
+    "sign_in_methods_read",
+    "storage_test",
+    "project_export",
+    "release_plan",
+];
+const READ_TOOLS_SUFFIX: [&str; 2] = ["_list", "_read"];
+
+/// Runs before every administrative tool.
+async fn admin_guard(state: &AppState, name: &str, a: &Value) -> Result<()> {
+    if name.starts_with("transfer_")
+        || OPEN_TOOLS.contains(&name)
+        || READ_TOOLS_SUFFIX.iter().any(|suffix| name.ends_with(suffix))
+        || (name == "database_execute" && ["inspect", "browse", "list-backups"].contains(&a["operation"].as_str().unwrap_or("")))
+    {
+        return Ok(());
+    }
+    if let Some(message) = super::recovery::hold(&state.data_root) {
+        anyhow::bail!(message);
+    }
+    let deployment = if let Some(id) = a["deploymentId"].as_str() {
+        Some(id.to_owned())
+    } else {
+        let project = match (a["projectId"].as_str(), a["planId"].as_str()) {
+            (Some(project), _) => Some(project.to_owned()),
+            (None, Some(plan)) if name == "release_apply" => {
+                let row: Option<(String, Option<String>)> = store(state)?
+                    .query_row("SELECT project,receipt FROM plans WHERE id=?1", [plan], |r| Ok((r.get(0)?, r.get(1)?)))
+                    .optional()?;
+                match row {
+                    // An applied plan only returns its receipt.
+                    Some((_, Some(_))) => return Ok(()),
+                    Some((project, None)) => Some(project),
+                    None => None,
+                }
+            }
+            _ => None,
+        };
+        match project {
+            Some(project) => find_project_deployment(&*state.deployments.read().await, &project).map(|d| d.id),
+            None => None,
+        }
+    };
+    if let Some(message) = deployment.and_then(|id| super::maintenance::pause(&state.data_root, &id)) {
+        anyhow::bail!(message);
+    }
+    Ok(())
+}
+
 /// The Kernel's stores and Konae's: the owner accounts in `owners.sqlite`
 /// and the project list, credentials and audit in `mcp.sqlite`. A restore
 /// signs out owner and app sessions, Clerk creator sessions, agent
@@ -83,7 +196,7 @@ pub(super) fn store(state: &AppState) -> Result<Connection> {
     }
     db.execute("CREATE INDEX IF NOT EXISTS audit_at ON audit(at)", [])?;
     super::oauth::install(&db)?;
-    super::package::install_imports(&db)?;
+    install_imports(&db)?;
     Ok(db)
 }
 
@@ -425,8 +538,8 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     tools.extend([
         tool("secrets_list", "List a project's signing secrets: each one's name, use and svixKey, which says whether its value decodes as a svix whsec_ key. Values are never returned.", json!({"projectId":text}), &["projectId"], true),
         tool("api_keys_list", "List a deployment's API keys without their secrets.", json!({"deploymentId":text}), &["deploymentId"], true),
-        super::domain::read_tool(),
-        super::path::read_tool(),
+        domain_read_tool(),
+        path_read_tool(),
     ]);
     if owner.scopes.iter().any(|s| s == "export_data") {
         tools.extend([
@@ -439,9 +552,9 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             ),
         ]);
     }
-    tools.extend(super::usage::admin_tools());
-    tools.extend(super::calls::admin_tools());
-    tools.extend(super::mail::admin_tools());
+    tools.extend(usage_tools());
+    tools.extend(calls_tools());
+    tools.extend(mail_tools());
     tools.push(tool(
         "signup_policy_read",
         "Read who may create an account on a deployment.",
@@ -471,7 +584,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             &["deploymentId", "mode"],
             false,
         ));
-        tools.extend(super::invitations::admin_tools());
+        tools.extend(invitations_tools());
     }
     if owner.scopes.iter().any(|s| s == "publish") {
         tools.extend([
@@ -494,8 +607,8 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
                 false,
             ),
         ]);
-        tools.extend(super::domain::tools());
-        tools.extend(super::path::tools());
+        tools.extend(domain_tools());
+        tools.extend(path_tools());
     }
     if owner.session {
         tools.extend([
@@ -506,6 +619,186 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     }
     tools.extend(transfer_tools(false));
     tools
+}
+
+// The tools of the Kernel modules an owner calls on one Deployment.
+
+fn calls_tools() -> Vec<Value> {
+    let text = json!({"type": "string", "minLength": 1});
+    vec![tool(
+        "calls_read",
+        "Read a deployment's outbox: the calls its call actions queued, newest first, 50 at a time, with state (pending, delivered or failed), attempts, method, URL, HTTP status, error kind, the first 1 KiB of the answer and what the then mutation did. Pass nextCursor back as cursor for the next page.",
+        json!({"deploymentId": text, "cursor": {"type": "string", "minLength": 1, "maxLength": 20}}),
+        &["deploymentId"],
+        true,
+    )]
+}
+
+
+fn domain_read_tool() -> Value {
+    tool(
+        "domain_read",
+        "Read a deployment's custom domain: the hostname, whether it serves yet, and the TXT record that proves control of it.",
+        json!({"deploymentId":{"type":"string","minLength":1}}),
+        &["deploymentId"],
+        true,
+    )
+}
+
+
+fn domain_tools() -> Vec<Value> {
+    vec![
+        tool(
+            "domain_set",
+            "Serve a deployment from a hostname you control as well as its generated one. The first call returns a TXT record, _konae.<hostname>, and the token it must hold; add it at your DNS provider, point the hostname at this installation's proxy, and call domain_set again with the same hostname. The Kernel looks the record up itself and the alias serves once it holds the token. The proxy terminates TLS and must forward Host unchanged. Requires publish.",
+            json!({"deploymentId":{"type":"string","minLength":1},"hostname":{"type":"string","minLength":1,"maxLength":260}}),
+            &["deploymentId", "hostname"],
+            false,
+        ),
+        tool(
+            "domain_clear",
+            "Stop serving a deployment from its custom domain. The generated hostname keeps answering. Requires publish.",
+            json!({"deploymentId":{"type":"string","minLength":1}}),
+            &["deploymentId"],
+            false,
+        ),
+    ]
+}
+
+
+/// The admin MCP tools this module answers. `mcp.rs` lists them only for a
+/// credential that holds `manage_users`, and every call checks it again.
+fn invitations_tools() -> Vec<Value> {
+    let text = json!({"type": "string", "minLength": 1});
+    let key = json!({"type": "string", "minLength": 8, "maxLength": 128});
+    let page = json!({"type": "integer", "minimum": 1, "maximum": super::invitations::MAX_PAGE});
+    vec![
+        tool(
+            "app_users_list",
+            "List a deployment's app accounts with their state and whether they verified their email, ordered by email. Pass nextCursor back as cursor for the next page.",
+            json!({"deploymentId": text, "limit": page, "cursor": text, "state": {"type": "string", "enum": ["pending", "active", "suspended"]}}),
+            &["deploymentId"],
+            true,
+        ),
+        tool(
+            "app_user_suspend",
+            "Suspend an app account. Its sessions and open links end at once; its ID, password and rows stay.",
+            json!({"deploymentId": text, "userId": text}),
+            &["deploymentId", "userId"],
+            false,
+        ),
+        tool(
+            "app_user_resume",
+            "Lift a suspension. The account is active again if it ever verified its email, otherwise pending until it does.",
+            json!({"deploymentId": text, "userId": text}),
+            &["deploymentId", "userId"],
+            false,
+        ),
+        tool(
+            "app_invitations_create",
+            "Invite people to a deployment by email. Each recipient gets an email with a link valid for seven days, so call this only when the owner asked for those invitations. Up to 50 recipients, each with its own result. Retrying with the same idempotencyKey returns the first answer and sends nothing.",
+            json!({"deploymentId": text, "emails": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 254}, "minItems": 1}, "idempotencyKey": key}),
+            &["deploymentId", "emails", "idempotencyKey"],
+            false,
+        ),
+        tool(
+            "app_invitations_list",
+            "List a deployment's invitations, newest first, with status (pending, expired, needs-resend, already-member, accepted, revoked), expiry and whether the mail transport took the message. Pass nextCursor back as cursor for the next page.",
+            json!({"deploymentId": text, "limit": page, "cursor": text}),
+            &["deploymentId"],
+            true,
+        ),
+        tool(
+            "app_invitation_resend",
+            "Email a pending, expired or imported invitation again with a new seven-day link. The earlier link stops working. Retrying with the same idempotencyKey sends nothing more.",
+            json!({"deploymentId": text, "invitationId": text, "idempotencyKey": key}),
+            &["deploymentId", "invitationId", "idempotencyKey"],
+            false,
+        ),
+        tool(
+            "app_invitation_revoke",
+            "Revoke a pending invitation so its link stops working.",
+            json!({"deploymentId": text, "invitationId": text}),
+            &["deploymentId", "invitationId"],
+            false,
+        ),
+    ]
+}
+
+
+/// The `notices_read` admin tool: one Deployment's notice jobs, newest first,
+/// 50 at a time, with state, attempts and failure kind. It names no recipient,
+/// as `mail_status` names none. A notice the Kernel did not queue is no job;
+/// Usage counts it under `notify` with its reason.
+fn mail_tools() -> Vec<Value> {
+    let text = json!({"type": "string", "minLength": 1});
+    vec![tool(
+        "notices_read",
+        "Read the email notices a deployment's mutations queued, newest first, 50 at a time: the action, state (pending, accepted, delivered or failed), attempts, failure kind and times. Names no recipient. Notices the Kernel did not queue are counted under notify by usage_read. Pass nextCursor back as cursor for the next page.",
+        json!({"deploymentId": text, "cursor": {"type": "string", "minLength": 1, "maxLength": 20}}),
+        &["deploymentId"],
+        true,
+    )]
+}
+
+
+fn path_read_tool() -> Value {
+    tool(
+        "path_read",
+        "Read a deployment's path address: whether it is on, its name, whether the owner accepted the shared origin, and the addresses it answers on.",
+        json!({"deploymentId":{"type":"string","minLength":1}}),
+        &["deploymentId"],
+        true,
+    )
+}
+
+
+fn path_tools() -> Vec<Value> {
+    vec![
+        tool(
+            "path_set",
+            "Answer a deployment on <domain>/p/<id>, and on <domain>/p/<name> when it has a name. The path shares its origin with the home and every other path on this installation, so an app with accounts or a private app needs acceptSharedOrigin true before its path turns on. A name is 3 to 40 letters, digits and hyphens, and no other Deployment may hold it. An omitted name or acceptSharedOrigin keeps the stored value, a null name removes the name, and path_clear turns the path off and removes both. Read back with path_read. Requires publish.",
+            json!({
+                "deploymentId":{"type":"string","minLength":1},
+                "enabled":{"type":"boolean"},
+                "name":{"type":["string","null"],"minLength":1,"maxLength":260},
+                "acceptSharedOrigin":{"type":"boolean"}
+            }),
+            &["deploymentId", "enabled"],
+            false,
+        ),
+        tool(
+            "path_clear",
+            "Turn off a deployment's path address and forget its name. The generated hostname and any custom domain keep answering. Requires publish.",
+            json!({"deploymentId":{"type":"string","minLength":1}}),
+            &["deploymentId"],
+            false,
+        ),
+    ]
+}
+
+
+fn usage_tools() -> Vec<Value> {
+    let text = json!({"type": "string", "minLength": 1});
+    let date = json!({"type": "string", "minLength": 10, "maxLength": 10});
+    vec![
+        tool("usage_summary", "Read a deployment usage monitor with daily execution outcomes, Signal totals, published configuration and coverage. Owner read permission required.", json!({"deploymentId": text, "from": date, "to": date}), &["deploymentId", "from", "to"], true),
+        tool("usage_overview", "Read usage for this account projects only, including external and unpublished apps, 50 per page. Pass nextCursor back as cursor.", json!({"from": date, "to": date, "cursor": {"type": "string", "maxLength": 100}}), &["from", "to"], true),
+        tool(
+            "usage_read",
+            "Read a deployment's Usage: daily totals of the runtime operations the Kernel allowed (session, action, route, upload, file_read, signup, login, call), of guard refusals (refused, by action) and of scheduled runs (scheduled, by action) between two UTC dates written YYYY-MM-DD, both included, at most 400 days apart, and the newest 500 scheduled runs in that range with their outcome and changes.",
+            json!({"deploymentId": text, "from": date, "to": date}),
+            &["deploymentId", "from", "to"],
+            true,
+        ),
+        tool(
+            "signals_read",
+            "Read a deployment's Signals, newest first, 100 at a time, optionally of one name. Pass nextCursor back as cursor for the next page.",
+            json!({"deploymentId": text, "name": {"type": "string", "minLength": 1, "maxLength": 64}, "cursor": {"type": "string", "minLength": 1, "maxLength": 20}}),
+            &["deploymentId"],
+            true,
+        ),
+    ]
 }
 
 pub(super) fn runtime_tools() -> Vec<Value> {
@@ -938,7 +1231,7 @@ async fn handle(state: AppState, request: Request, runtime: bool) -> Response {
                     Err(e) => Err(e),
                 }
             } else if let Some(owner) = owner.as_ref() {
-                match super::maintenance::admin_guard(&state, name, &arguments).await {
+                match admin_guard(&state, name, &arguments).await {
                     Ok(()) => admin_call(&state, owner, &principal, name, arguments.clone()).await,
                     Err(e) => Err(e),
                 }
@@ -1584,7 +1877,18 @@ async fn admin_call(
             )
             .await
         }
-        "project_export" => super::package::export(state, owner, principal, a["deploymentId"].as_str().unwrap()).await,
+        "project_export" => {
+            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "export_data").await?;
+            super::package::export(state, deployment, principal, |deployment| {
+                let (_, published) = owned_project(state, owner, &deployment.project_id, "export_data")?;
+                let sources: Option<u64> = store(state)?
+                    .query_row("SELECT sources FROM projects WHERE id=?1", [&deployment.project_id], |r| r.get(0))
+                    .optional()?
+                    .filter(|saves: &u64| *saves > 0);
+                Ok(super::package::Revisions { published, sources })
+            })
+            .await
+        }
         "release_plan" => {
             let transfer = transfer(state, principal, &json!({"transferId":a["transferId"]}))?;
             anyhow::ensure!(
@@ -1606,7 +1910,7 @@ async fn admin_call(
             );
             if let Some(package) = input.initial_package.as_ref() {
                 // The same package again answers with the first import.
-                if let Some(replay) = super::package::replay_import(state, owner, &input.project.id, &package.manifest.package_id)? {
+                if let Some(replay) = replay_import(state, owner, &input.project.id, &package.manifest.package_id)? {
                     return Ok(replay);
                 }
                 super::package::verify(state, principal, &input.project.id, package).await?;
@@ -1616,7 +1920,7 @@ async fn admin_call(
             let expires = now_ms() + 900_000;
             store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires) VALUES(?1,?2,?3,?4,?5,?6)",params![id,owner.id,input.project.id,revision,a["transferId"].as_str().unwrap(),expires])?;
             if let Some(package) = input.initial_package.as_ref() {
-                super::package::remember_import(state, &package.manifest.package_id, &input.project.id, &id)?;
+                remember_import(state, &package.manifest.package_id, &input.project.id, &id)?;
             }
             Ok(
                 json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"artifactSha256":transfer["sha256"],"visibility":input.visibility,"expiresAt":expires,"schema":schema.to_json()}),
@@ -1666,9 +1970,21 @@ async fn admin_call(
             tx.commit()?;
             Ok(receipt)
         }
-        name if name.starts_with("app_") => super::invitations::admin_call(state, owner, name, &a).await,
-        name if name.starts_with("domain_") => super::domain::admin_call(state, owner, name, &a).await,
-        name if name.starts_with("path_") => super::path::admin_call(state, owner, name, &a).await,
+        name if name.starts_with("app_") => {
+            // Every app user and invitation tool needs manage_users and the project grant.
+            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "manage_users").await?;
+            let inviter = super::invitations::Inviter { id: owner.id.clone(), email: inviter_email(state, &owner.id) };
+            super::invitations::run(state, &deployment, &inviter, name, &a).await
+        }
+        name if name.starts_with("domain_") || name.starts_with("path_") => {
+            let scope = if name.ends_with("_read") { "read" } else { "publish" };
+            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), scope).await?;
+            if name.starts_with("domain_") {
+                super::domain::admin_call(state, &deployment, name, &a).await
+            } else {
+                super::path::admin_call(state, &deployment, name, &a).await
+            }
+        }
         _ => anyhow::bail!("Unknown tool."),
     }
 }
@@ -2193,6 +2509,32 @@ async fn owner_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A domain or path tool reads with read and changes with publish.
+    #[tokio::test]
+    async fn a_reader_reads_but_cannot_set_a_domain_or_a_path() {
+        let root = std::env::temp_dir().join(format!("konae-tool-scope-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = AppState::for_test(&root);
+        let body = json!({
+            "project": {"id": "app_scope", "name": "Scope", "slug": "scope", "manifest": {},
+                "files": {"actions.json": "{\"version\":1,\"actions\":{}}", "schema.sql": ""}},
+            "visibility": "public",
+            "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}
+        });
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        store(&state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES('app_scope','o','{}')", []).unwrap();
+        let id = state.deployments.read().await.values().next().unwrap().id.clone();
+        let reader = Owner { id: "o".into(), display: None, scopes: vec!["read".into()], projects: vec![], session: false };
+        for name in ["domain_read", "path_read"] {
+            admin_call(&state, &reader, "owner:o", name, json!({"deploymentId": id})).await.unwrap();
+        }
+        for (name, arguments) in [("domain_set", json!({"deploymentId": id, "hostname": "scope.example.org"})), ("path_set", json!({"deploymentId": id, "enabled": true}))] {
+            let refused = admin_call(&state, &reader, "owner:o", name, arguments).await.unwrap_err().to_string();
+            assert_eq!(refused, "Permission denied for publish.", "{name}");
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
 
     /// A Kernel route that refuses with `refusal_error` keeps its code
     /// through a tool that calls the route.

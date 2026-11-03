@@ -16,10 +16,8 @@
 
 use std::sync::{LazyLock, RwLock as SyncRwLock};
 
-use anyhow::bail;
 use axum::{http::Method, middleware::Next};
 
-use super::mcp::store;
 use super::*;
 
 pub(crate) const MARKER_FILE: &str = "maintenance.json";
@@ -166,74 +164,6 @@ pub(super) async fn guard(State(state): State<AppState>, request: Request, next:
     } else {
         refusal(&message)
     }
-}
-
-/// Tools that change nothing a paused app serves. Every other tool that
-/// names a paused Deployment, its project or one of its plans is refused.
-const OPEN_TOOLS: [&str; 21] = [
-    "platform_guide",
-    "platform_describe",
-    "mail_status",
-    "session_inspect",
-    "projects_list",
-    "project_create",
-    "project_inspect",
-    "project_sources_read",
-    "project_sources_save",
-    "tokens_list",
-    "token_create",
-    "token_revoke",
-    "secrets_list",
-    "api_keys_list",
-    "usage_read",
-    "signals_read",
-    "signup_policy_read",
-    "sign_in_methods_read",
-    "storage_test",
-    "project_export",
-    "release_plan",
-];
-const READ_TOOLS_SUFFIX: [&str; 2] = ["_list", "_read"];
-
-/// Runs before every administrative tool.
-pub(super) async fn admin_guard(state: &AppState, name: &str, a: &Value) -> Result<()> {
-    if name.starts_with("transfer_")
-        || OPEN_TOOLS.contains(&name)
-        || READ_TOOLS_SUFFIX.iter().any(|suffix| name.ends_with(suffix))
-        || (name == "database_execute" && ["inspect", "browse", "list-backups"].contains(&a["operation"].as_str().unwrap_or("")))
-    {
-        return Ok(());
-    }
-    if let Some(message) = super::recovery::hold(&state.data_root) {
-        bail!(message);
-    }
-    let deployment = if let Some(id) = a["deploymentId"].as_str() {
-        Some(id.to_owned())
-    } else {
-        let project = match (a["projectId"].as_str(), a["planId"].as_str()) {
-            (Some(project), _) => Some(project.to_owned()),
-            (None, Some(plan)) if name == "release_apply" => {
-                let row: Option<(String, Option<String>)> = store(state)?
-                    .query_row("SELECT project,receipt FROM plans WHERE id=?1", [plan], |r| Ok((r.get(0)?, r.get(1)?)))
-                    .optional()?;
-                match row {
-                    // An applied plan only returns its receipt.
-                    Some((_, Some(_))) => return Ok(()),
-                    Some((project, None)) => Some(project),
-                    None => None,
-                }
-            }
-            _ => None,
-        };
-        match project {
-            Some(project) => find_project_deployment(&*state.deployments.read().await, &project).map(|d| d.id),
-            None => None,
-        }
-    };
-    if let Some(message) = deployment.and_then(|id| pause(&state.data_root, &id)) {
-        bail!(message);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -342,35 +342,6 @@ fn rand_u16() -> u16 {
 // ---------------------------------------------------------------------------
 // Tools
 
-pub(super) fn read_tool() -> Value {
-    mcp::tool(
-        "domain_read",
-        "Read a deployment's custom domain: the hostname, whether it serves yet, and the TXT record that proves control of it.",
-        json!({"deploymentId":{"type":"string","minLength":1}}),
-        &["deploymentId"],
-        true,
-    )
-}
-
-pub(super) fn tools() -> Vec<Value> {
-    vec![
-        mcp::tool(
-            "domain_set",
-            "Serve a deployment from a hostname you control as well as its generated one. The first call returns a TXT record, _konae.<hostname>, and the token it must hold; add it at your DNS provider, point the hostname at this installation's proxy, and call domain_set again with the same hostname. The Kernel looks the record up itself and the alias serves once it holds the token. The proxy terminates TLS and must forward Host unchanged. Requires publish.",
-            json!({"deploymentId":{"type":"string","minLength":1},"hostname":{"type":"string","minLength":1,"maxLength":260}}),
-            &["deploymentId", "hostname"],
-            false,
-        ),
-        mcp::tool(
-            "domain_clear",
-            "Stop serving a deployment from its custom domain. The generated hostname keeps answering. Requires publish.",
-            json!({"deploymentId":{"type":"string","minLength":1}}),
-            &["deploymentId"],
-            false,
-        ),
-    ]
-}
-
 fn view(state: &AppState, deployment: &Deployment, record: Option<&Record>, dns: Option<String>) -> Value {
     let Some(record) = record else {
         return json!({"deploymentId": deployment.id, "hostname": null, "status": "none", "generatedUrl": deployment.url});
@@ -396,11 +367,11 @@ fn view(state: &AppState, deployment: &Deployment, record: Option<&Record>, dns:
     value
 }
 
-pub(super) async fn admin_call(state: &AppState, owner: &mcp::Owner, name: &str, a: &Value) -> Result<Value> {
-    let id = a["deploymentId"].as_str().unwrap_or_default();
+/// Reads, sets or clears a Deployment's custom domain. The caller has
+/// checked who may.
+pub(crate) async fn admin_call(state: &AppState, deployment: &Deployment, name: &str, a: &Value) -> Result<Value> {
     match name {
         "domain_read" => {
-            let deployment = mcp::owned_deployment(state, owner, id, "read").await?;
             let mut value = view(state, &deployment, read_record(state, &deployment.id).as_ref(), None);
             // The CLI checks a name by these before it calls domain_set.
             let rules = Rules::of(state);
@@ -408,19 +379,17 @@ pub(super) async fn admin_call(state: &AppState, owner: &mcp::Owner, name: &str,
             Ok(value)
         }
         "domain_clear" => {
-            let deployment = mcp::owned_deployment(state, owner, id, "publish").await?;
             let _domains = database_lock(state, "domains").await;
             let previous = read_record(state, &deployment.id);
             write_record(state, &deployment.id, None).await?;
             Ok(json!({"deploymentId": deployment.id, "cleared": previous.map(|record| record.hostname), "status": "none", "generatedUrl": deployment.url}))
         }
-        "domain_set" => set(state, owner, id, a["hostname"].as_str().unwrap_or_default(), resolver()).await,
+        "domain_set" => set(state, deployment, a["hostname"].as_str().unwrap_or_default(), resolver()).await,
         _ => bail!("Unknown tool."),
     }
 }
 
-async fn set(state: &AppState, owner: &mcp::Owner, id: &str, raw: &str, server: Result<SocketAddr>) -> Result<Value> {
-    let deployment = mcp::owned_deployment(state, owner, id, "publish").await?;
+async fn set(state: &AppState, deployment: &Deployment, raw: &str, server: Result<SocketAddr>) -> Result<Value> {
     let hostname = check_hostname(raw, &Rules::of(state))?;
     let (record, fresh) = {
         let _domains = database_lock(state, "domains").await;
@@ -591,7 +560,6 @@ mod tests {
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}
         });
         assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
-        mcp::store(state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES(?1,'o','{}')", [project]).unwrap();
         state.deployments.read().await.values().find(|d| d.project_id == project).cloned().unwrap()
     }
 
@@ -611,12 +579,14 @@ mod tests {
         let state = test_state(&root);
         let notes = publish(&state, "notes").await;
         let other = publish(&state, "other").await;
-        let owner = mcp::Owner { id: "o".into(), display: None, scopes: vec!["read".into(), "publish".into()], projects: vec![], session: false };
         let records = zone(&[]);
         let server = fake_resolver(records.clone()).await;
         let set = |id: &str, hostname: &str| {
-            let (state, owner, id, hostname) = (state.clone(), owner.clone(), id.to_owned(), hostname.to_owned());
-            async move { set(&state, &owner, &id, &hostname, Ok(server)).await }
+            let (state, id, hostname) = (state.clone(), id.to_owned(), hostname.to_owned());
+            async move {
+                let deployment = deployment_by_id(&state, &id).await.unwrap();
+                set(&state, &deployment, &hostname, Ok(server)).await
+            }
         };
 
         // A name under the installation's suffix is refused before anything is stored.
@@ -625,9 +595,6 @@ mod tests {
             "notes.apps.example.com is under this installation's app suffix apps.example.com, where Konae names apps itself. Name a hostname outside it."
         );
         assert!(read_record(&state, &notes.id).is_none());
-        // A reader cannot set one.
-        let reader = mcp::Owner { scopes: vec!["read".into()], ..owner.clone() };
-        assert_eq!(super::set(&state, &reader, &notes.id, "notes.example.org", Ok(server)).await.unwrap_err().to_string(), "Permission denied for publish.");
 
         // The first call issues the token; the name does not serve yet.
         let pending = set(&notes.id, "Notes.Example.org.").await.unwrap();
@@ -686,7 +653,7 @@ mod tests {
         assert_eq!(arrive(&state, "arriving", Some("notes.example.org")).await.unwrap_err().to_string(), taken);
 
         // Clearing stops the alias; the generated hostname keeps answering.
-        let cleared = admin_call(&state, &owner, "domain_clear", &json!({"deploymentId": notes.id})).await.unwrap();
+        let cleared = admin_call(&state, &notes, "domain_clear", &json!({})).await.unwrap();
         assert_eq!(cleared["cleared"], "notes.example.org");
         assert!(deployment_for(&state, &host("notes.example.org")).await.is_none());
         assert!(!security::from_app_origin(&state, &from_alias).await);

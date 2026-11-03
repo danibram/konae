@@ -26,7 +26,6 @@ use std::{
 use anyhow::{Context, bail, ensure};
 use rusqlite::params;
 
-use super::mcp::{Owner, owned_deployment, owned_project, store};
 use super::transfers::{MAX_ADMIN_PRINCIPAL_TRANSFERS, new_transfer, transfer, transfer_path};
 use super::*;
 
@@ -208,11 +207,24 @@ fn free_bytes(_path: &Path) -> Result<u64> {
 // ---------------------------------------------------------------------------
 // Export
 
+/// The revisions an export's manifest names: the release the app serves
+/// and the saved sources, when the caller keeps a count of saves.
+pub(crate) struct Revisions {
+    pub(crate) published: u64,
+    pub(crate) sources: Option<u64>,
+}
+
 /// Captures one Deployment and returns its manifest and one download
 /// transfer per component. The capture holds the project, data and identity
 /// locks, so no write, signup, policy change or release lands halfway.
-pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id: &str) -> Result<Value> {
-    let deployment = owned_deployment(state, owner, id, "export_data").await?;
+/// `revisions` runs under those locks.
+pub(crate) async fn export(
+    state: &AppState,
+    deployment: Deployment,
+    principal: &str,
+    revisions: impl FnOnce(&Deployment) -> Result<Revisions>,
+) -> Result<Value> {
+    let id = deployment.id.clone();
     let held: usize = super::transfers::store(state)?.query_row(
         "SELECT COUNT(*) FROM transfers WHERE principal=?1 AND expires>?2",
         params![principal, now_ms()],
@@ -228,7 +240,7 @@ pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id:
     let captured = {
         let _project = database_lock(state, &format!("project:{}", deployment.project_id)).await;
         let deployment = state.deployments.read().await.values().find(|d| d.id == id).cloned().unwrap_or(deployment);
-        let (_, published_revision) = owned_project(state, owner, &deployment.project_id, "export_data")?;
+        let Revisions { published: published_revision, sources: sources_revision } = revisions(&deployment)?;
         let _data = database_lock(state, &deployment.id).await;
         let _identity = database_lock(state, &format!("identity:{}", deployment.id)).await;
         open_auth(state, &deployment)?;
@@ -248,10 +260,6 @@ pub(super) async fn export(state: &AppState, owner: &Owner, principal: &str, id:
             Ok::<_, anyhow::Error>(components)
         })
         .await?;
-        let sources_revision: Option<u64> = store(state)?
-            .query_row("SELECT sources FROM projects WHERE id=?1", [&deployment.project_id], |r| r.get(0))
-            .optional()?
-            .filter(|saves: &u64| *saves > 0);
         // The editor saves sources between releases. app/actions.json that differs from the
         // actions the release runs says app/ is ahead of what dist/ and the record serve.
         let saved_actions = tokio::fs::read_to_string(crate::layout::sources(&state.data_root, &deployment.id).join("actions.json")).await.ok();
@@ -778,48 +786,6 @@ fn copy_verified(source: &Path, target: &Path, content: &Content) -> Result<()> 
         "The {} component does not match the SHA-256 in the manifest.",
         content.name
     );
-    Ok(())
-}
-
-/// Remembers which package each project imported, so a retried import
-/// returns its first receipt.
-pub(super) fn install_imports(db: &Connection) -> Result<()> {
-    db.execute_batch(
-        "CREATE TABLE IF NOT EXISTS package_imports(package_id TEXT NOT NULL, project TEXT NOT NULL, plan TEXT NOT NULL, PRIMARY KEY(package_id, project));",
-    )?;
-    Ok(())
-}
-
-/// A second `release_plan` with a package this project already imported
-/// gets the first plan and its receipt instead of a refusal.
-pub(super) fn replay_import(state: &AppState, owner: &Owner, project: &str, package_id: &str) -> Result<Option<Value>> {
-    let db = store(state)?;
-    let replay: Option<(String, String)> = db
-        .query_row(
-            "SELECT i.plan, p.receipt FROM package_imports i JOIN plans p ON p.id=i.plan
-             WHERE i.package_id=?1 AND i.project=?2 AND p.owner=?3 AND p.receipt IS NOT NULL",
-            params![package_id, project, owner.id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
-    Ok(match replay {
-        Some((plan, receipt)) => Some(json!({
-            "planId": plan,
-            "projectId": project,
-            "applied": true,
-            "packageId": package_id,
-            "receipt": serde_json::from_str::<Value>(&receipt)?,
-        })),
-        None => None,
-    })
-}
-
-pub(super) fn remember_import(state: &AppState, package_id: &str, project: &str, plan: &str) -> Result<()> {
-    store(state)?.execute(
-        "INSERT INTO package_imports(package_id,project,plan) VALUES(?1,?2,?3)
-         ON CONFLICT(package_id,project) DO UPDATE SET plan=excluded.plan",
-        params![package_id, project, plan],
-    )?;
     Ok(())
 }
 
