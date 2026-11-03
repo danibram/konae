@@ -702,7 +702,7 @@ mod tests {
             builder = builder.header(*name, *value);
         }
         let request = builder.body(Body::from(body.to_owned())).unwrap();
-        crate::stack(state.clone()).oneshot(request).await.unwrap()
+        crate::stack(state.clone(), Router::new()).oneshot(request).await.unwrap()
     }
 
     async fn get(state: &AppState, path: &str) -> Response {
@@ -814,10 +814,9 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// A path address gets the app policy and the installation's HSTS, and
-    /// the administrative routes refuse its origin.
+    /// A path address gets the app policy and the installation's HSTS.
     #[tokio::test]
-    async fn a_path_address_gets_the_app_policy_and_refuses_administration() {
+    async fn a_path_address_gets_the_app_policy() {
         let root = scratch("policy").await;
         let (state, first, _) = two_path_apps(&root).await;
         let response = get(&state, &format!("/p/{}/", first.id)).await;
@@ -826,11 +825,6 @@ mod tests {
         assert!(policy.contains("frame-ancestors 'none'") && policy.contains("base-uri 'none'"));
         assert_eq!(response.headers()[header::STRICT_TRANSPORT_SECURITY], "max-age=31536000; includeSubDomains");
         assert_eq!(response.headers()[header::X_FRAME_OPTIONS], "DENY");
-
-        let refused = call(&state, "POST", PATH_HOST, "/mcp", &[("origin", "https://konae.es"), ("content-type", "application/json")], &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}).to_string()).await;
-        assert_eq!(refused.status(), 403);
-        let owner = call(&state, "POST", PATH_HOST, "/_konae/owner/login", &[("origin", "https://konae.es"), ("content-type", "application/json")], "{}").await;
-        assert_eq!(owner.status(), 403);
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

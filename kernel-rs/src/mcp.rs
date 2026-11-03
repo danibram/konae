@@ -3,7 +3,7 @@ use super::runtime::*;
 use super::transfers::{CHUNK, MAX_TRANSFER, download, transfer, transfer_call, transfer_path};
 use rusqlite::params;
 
-pub(super) fn owner_cookie_name(state: &AppState) -> &'static str {
+pub(super) fn owner_cookie_name(state: &Konae) -> &'static str {
     let mcp_https = state.mcp_origin.as_deref().is_some_and(|origin| origin.starts_with("https://"));
     if state.public_origin.starts_with("https://") || mcp_https {
         "__Host-konae_owner_session"
@@ -16,7 +16,7 @@ const AUDIT_PRUNE_INTERVAL: i64 = 128;
 const AUDIT_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 const AUDIT_TEXT_CHARACTERS: usize = 128;
 
-pub fn routes() -> Router<AppState> {
+pub fn routes() -> Router<Konae> {
     Router::new()
         .route("/mcp", post(admin))
         .route("/_konae/owner/login", get(owner_page).post(owner_login))
@@ -39,7 +39,7 @@ fn install_imports(db: &Connection) -> Result<()> {
 
 /// A second `release_plan` with a package this project already imported
 /// gets the first plan and its receipt instead of a refusal.
-fn replay_import(state: &AppState, owner: &Owner, project: &str, package_id: &str) -> Result<Option<Value>> {
+fn replay_import(state: &Konae, owner: &Owner, project: &str, package_id: &str) -> Result<Option<Value>> {
     let db = store(state)?;
     let replay: Option<(String, String)> = db
         .query_row(
@@ -62,7 +62,7 @@ fn replay_import(state: &AppState, owner: &Owner, project: &str, package_id: &st
 }
 
 
-fn remember_import(state: &AppState, package_id: &str, project: &str, plan: &str) -> Result<()> {
+fn remember_import(state: &Konae, package_id: &str, project: &str, plan: &str) -> Result<()> {
     store(state)?.execute(
         "INSERT INTO package_imports(package_id,project,plan) VALUES(?1,?2,?3)
          ON CONFLICT(package_id,project) DO UPDATE SET plan=excluded.plan",
@@ -100,7 +100,7 @@ const OPEN_TOOLS: [&str; 21] = [
 const READ_TOOLS_SUFFIX: [&str; 2] = ["_list", "_read"];
 
 /// Runs before every administrative tool.
-async fn admin_guard(state: &AppState, name: &str, a: &Value) -> Result<()> {
+async fn admin_guard(state: &Konae, name: &str, a: &Value) -> Result<()> {
     if name.starts_with("transfer_")
         || OPEN_TOOLS.contains(&name)
         || READ_TOOLS_SUFFIX.iter().any(|suffix| name.ends_with(suffix))
@@ -166,7 +166,7 @@ fn project_owner(root: &Path, project_id: &str) -> Option<String> {
         .flatten()
 }
 
-pub(super) fn store(state: &AppState) -> Result<Connection> {
+pub(super) fn store(state: &Konae) -> Result<Connection> {
     store_at(&state.data_root)
 }
 
@@ -229,7 +229,7 @@ impl Owner {
 }
 
 
-pub(super) fn authenticate_owner(state: &AppState, headers: &HeaderMap) -> Result<Option<Owner>> {
+pub(super) fn authenticate_owner(state: &Konae, headers: &HeaderMap) -> Result<Option<Owner>> {
     let clerk = super::clerk::ClerkConfig::from_env()?;
     if let Some(token) = bearer(headers) {
         let record: Option<(String, String, String, u64, Option<String>)> = store(state)?
@@ -287,7 +287,7 @@ pub(super) fn authenticate_owner(state: &AppState, headers: &HeaderMap) -> Resul
         }))
 }
 
-pub(super) fn owned_project(state: &AppState, owner: &Owner, id: &str, scope: &str) -> Result<(Value, u64)> {
+pub(super) fn owned_project(state: &Konae, owner: &Owner, id: &str, scope: &str) -> Result<(Value, u64)> {
     owner.require(scope, Some(id))?;
     let record: Option<(String, u64)> = store(state)?
         .query_row(
@@ -309,7 +309,7 @@ pub(super) const DELETE_NAME_MISMATCH: &str = "The name does not match this proj
 /// folder is renamed out of `apps/` before anything is deleted: a Kernel that
 /// stops halfway never reloads half an app. The registry rows go last, so a
 /// failure leaves a project the owner can see and delete again.
-async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
+async fn delete_project(state: &Konae, id: &str) -> Result<Vec<String>> {
     let published = {
         let mut deployments = state.deployments.write().await;
         let hosts: Vec<String> = deployments.iter().filter(|(_, d)| d.id == id).map(|(host, _)| host.clone()).collect();
@@ -356,7 +356,7 @@ async fn delete_project(state: &AppState, id: &str) -> Result<Vec<String>> {
 /// by another that holds the same value. A secret for calls only verifies
 /// nothing, so it may hold the value of another app's route secret: that is
 /// how one app signs a call to another.
-fn route_secret_reused(state: &AppState, owner: &str, project: &str, value: &str) -> Result<bool> {
+fn route_secret_reused(state: &Konae, owner: &str, project: &str, value: &str) -> Result<bool> {
     let db = store(state)?;
     let mut query = db.prepare("SELECT id FROM projects WHERE owner = ?1 AND id <> ?2")?;
     let others = query.query_map(params![owner, project], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -419,7 +419,7 @@ fn validate_sources(source: &Value, id: &str) -> Result<()> {
 }
 
 pub(super) async fn owned_deployment(
-    state: &AppState,
+    state: &Konae,
     owner: &Owner,
     id: &str,
     scope: &str,
@@ -770,7 +770,7 @@ fn usage_tools() -> Vec<Value> {
     ]
 }
 
-async fn admin(State(state): State<AppState>, request: Request) -> Response {
+async fn admin(State(state): State<Konae>, request: Request) -> Response {
     let headers = request.headers().clone();
     if super::security::from_app_origin(&state, &headers).await {
         return error(StatusCode::FORBIDDEN, "Administration refuses requests from app origins.");
@@ -914,7 +914,7 @@ async fn admin(State(state): State<AppState>, request: Request) -> Response {
 /// Records one tool call. The target is the project or Deployment the call
 /// acted on; `detail` adds what the arguments alone do not show.
 fn audit(
-    state: &AppState,
+    state: &Konae,
     principal: &str,
     name: &str,
     arguments: &Value,
@@ -1015,7 +1015,7 @@ fn audit_partition(actor: &str) -> (String, String) {
 
 
 async fn admin_call(
-    state: &AppState,
+    state: &Konae,
     owner: &Owner,
     principal: &str,
     name: &str,
@@ -1520,7 +1520,7 @@ async fn admin_call(
 /// signed in through Clerk keep no email in Konae, so their invitations name
 /// only the app. The file is opened read-only, so a lookup never creates the
 /// account tables.
-pub(super) fn inviter_email(state: &AppState, owner_id: &str) -> Option<String> {
+pub(super) fn inviter_email(state: &Konae, owner_id: &str) -> Option<String> {
     let db = Connection::open_with_flags(state.data_root.join("owners.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     db.busy_timeout(std::time::Duration::from_secs(5)).ok()?;
     db.query_row("SELECT email FROM app_users WHERE id = ?1", [owner_id], |row| row.get(0)).optional().ok().flatten()
@@ -1528,7 +1528,7 @@ pub(super) fn inviter_email(state: &AppState, owner_id: &str) -> Option<String> 
 
 /// The email of the owner's active account, when Konae keeps one. An owner
 /// who signs in through Clerk has none.
-fn owner_email(state: &AppState, owner: &str) -> Option<String> {
+fn owner_email(state: &Konae, owner: &str) -> Option<String> {
     let db = Connection::open_with_flags(state.data_root.join("owners.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     db.busy_timeout(std::time::Duration::from_secs(5)).ok()?;
     db.query_row("SELECT email FROM app_users WHERE id = ?1 AND state = 'active'", [owner], |row| row.get(0)).optional().ok().flatten()
@@ -1538,7 +1538,7 @@ const METHODS_INVALID: &str = "Name the methods as password and google.";
 
 /// The methods `sign_in_methods_set` may store: password always, and
 /// google only once the app's Google client ID and secret are both set.
-fn requested_sign_in_methods(state: &AppState, deployment: &Deployment, requested: &Value) -> Result<Vec<SignInMethod>> {
+fn requested_sign_in_methods(state: &Konae, deployment: &Deployment, requested: &Value) -> Result<Vec<SignInMethod>> {
     use super::refusal::refuse;
     let requested: Vec<SignInMethod> = serde_json::from_value(requested.clone())
         .map_err(|_| refuse("signin.methods-invalid", METHODS_INVALID))?;
@@ -1553,7 +1553,7 @@ fn requested_sign_in_methods(state: &AppState, deployment: &Deployment, requeste
 /// Google client is set (never its value) and the callbacks to register. A
 /// Deployment that asks for Google without its client here, as after an
 /// import, keeps the setting and offers only the password; `notice` says so.
-fn sign_in_methods_value(state: &AppState, deployment: &Deployment) -> Value {
+fn sign_in_methods_value(state: &Konae, deployment: &Deployment) -> Value {
     let client = super::google::client_set(state, deployment);
     let mut offered = vec![SignInMethod::Password];
     if super::google::offered(state, deployment) {
@@ -1589,7 +1589,7 @@ fn project_template(id: Option<&str>) -> Result<Value> {
     Ok(template.clone())
 }
 
-async fn owner_config(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn owner_config(State(state): State<Konae>, headers: HeaderMap) -> Response {
     if !super::oauth::valid_owner_host(&state, &headers).await { return StatusCode::FORBIDDEN.into_response(); }
     match super::clerk::ClerkConfig::from_env() {
         Ok(Some(config)) => Json(json!({"mode":"clerk","publishableKey":config.publishable_key})).into_response(),
@@ -1601,7 +1601,7 @@ async fn owner_config(State(state): State<AppState>, headers: HeaderMap) -> Resp
 /// Who the browser is signed in as. A signed-out visit answers 200 with
 /// `signedIn: false`, so the editor's first check is not a 401 in the console.
 /// `session_inspect` stays the tool that lists scopes.
-pub(super) async fn owner_session(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub(super) async fn owner_session(State(state): State<Konae>, headers: HeaderMap) -> Response {
     if !super::oauth::valid_owner_host(&state, &headers).await { return StatusCode::FORBIDDEN.into_response(); }
     let owner = match authenticate_owner(&state, &headers) {
         Ok(owner) => owner,
@@ -1616,7 +1616,7 @@ pub(super) async fn owner_session(State(state): State<AppState>, headers: Header
     response
 }
 
-async fn owner_clerk(State(state): State<AppState>, request: Request) -> Response {
+async fn owner_clerk(State(state): State<Konae>, request: Request) -> Response {
     let headers = request.headers().clone();
     if !same_origin(&headers) || !super::oauth::valid_owner_host(&state, &headers).await {
         return error(StatusCode::FORBIDDEN, "Cross-origin sign-in rejected.");
@@ -1646,14 +1646,14 @@ async fn owner_clerk(State(state): State<AppState>, request: Request) -> Respons
     response
 }
 
-pub(super) async fn owner_login(State(state): State<AppState>, request: Request) -> Response {
+pub(super) async fn owner_login(State(state): State<Konae>, request: Request) -> Response {
     owner_auth(state, request, false).await
 }
-pub(super) async fn owner_signup(State(state): State<AppState>, request: Request) -> Response {
+pub(super) async fn owner_signup(State(state): State<Konae>, request: Request) -> Response {
     owner_auth(state, request, true).await
 }
 
-async fn owner_auth(state: AppState, request: Request, signup: bool) -> Response {
+async fn owner_auth(state: Konae, request: Request, signup: bool) -> Response {
     match super::clerk::ClerkConfig::from_env() {
         Ok(None) => {},
         Ok(Some(_)) => return error(StatusCode::FORBIDDEN, "Local owner sign-in is disabled on this installation."),
@@ -1753,7 +1753,7 @@ async fn owner_auth(state: AppState, request: Request, signup: bool) -> Response
 }
 
 /// The installation operator claims legacy deployments during the first setup.
-async fn claim_for_first_owner(state: &AppState, user_id: &str) {
+async fn claim_for_first_owner(state: &Konae, user_id: &str) {
     if let Ok(db) = store(state) {
         let owner_db = Connection::open(state.data_root.join("owners.sqlite")).unwrap();
         let owners: u64 = owner_db
@@ -1768,7 +1768,7 @@ async fn claim_for_first_owner(state: &AppState, user_id: &str) {
 }
 
 /// The owner session cookie and body for a creator session just issued.
-pub(super) fn owner_session_response(state: &AppState, session: auth::AuthSession) -> Response {
+pub(super) fn owner_session_response(state: &Konae, session: auth::AuthSession) -> Response {
     let cookie_name = owner_cookie_name(state);
     let secure = if cookie_name.starts_with("__Host-") {
         "; Secure"
@@ -1792,7 +1792,7 @@ pub(super) fn owner_session_response(state: &AppState, session: auth::AuthSessio
     response
 }
 
-async fn owner_logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn owner_logout(State(state): State<Konae>, headers: HeaderMap) -> Response {
     if !same_origin(&headers)
         || !super::oauth::valid_owner_host(&state, &headers).await
     {
@@ -1816,7 +1816,7 @@ async fn owner_logout(State(state): State<AppState>, headers: HeaderMap) -> Resp
     response
 }
 
-async fn owner_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn owner_page(State(state): State<Konae>, headers: HeaderMap) -> Response {
     if !super::oauth::valid_owner_host(&state, &headers).await {
         return error(StatusCode::FORBIDDEN, "Owner authentication is unavailable on this origin.");
     }
@@ -1835,12 +1835,36 @@ async fn owner_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
 mod tests {
     use super::*;
 
+    /// The path host serves apps and the home, so the owner's MCP and owner
+    /// sign-in refuse it.
+    #[tokio::test]
+    async fn the_path_host_refuses_administration() {
+        use tower::ServiceExt;
+        let root = std::env::temp_dir().join(format!("konae-path-admin-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = AppState {
+            public_origin: "https://app.konae.es".into(),
+            host_suffix: "konae.es".into(),
+            path_origin: Some("https://konae.es".into()),
+            ..AppState::for_test(&root)
+        };
+        let konae = Konae::for_test(state.clone());
+        for (path, body) in [("/mcp", json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}).to_string()), ("/_konae/owner/login", "{}".to_owned())] {
+            let request = Request::builder().method("POST").uri(path).header(header::HOST, "konae.es")
+                .header(header::ORIGIN, "https://konae.es").header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body)).unwrap();
+            let response = crate::stack(state.clone(), crate::owner_routes(konae.clone())).oneshot(request).await.unwrap();
+            assert_eq!(response.status(), 403, "{path}");
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
     /// A domain or path tool reads with read and changes with publish.
     #[tokio::test]
     async fn a_reader_reads_but_cannot_set_a_domain_or_a_path() {
         let root = std::env::temp_dir().join(format!("konae-tool-scope-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
-        let state = AppState::for_test(&root);
+        let state = Konae::for_test(AppState::for_test(&root));
         let body = json!({
             "project": {"id": "app_scope", "name": "Scope", "slug": "scope", "manifest": {},
                 "files": {"actions.json": "{\"version\":1,\"actions\":{}}", "schema.sql": ""}},
@@ -1897,8 +1921,9 @@ mod tests {
     #[tokio::test]
     async fn a_runtime_upload_is_bounded_by_the_configured_per_file_limit() {
         let root = std::env::temp_dir().join(format!("konae-runtime-limit-{}", Uuid::new_v4()));
-        let (mut state, _) = crate::tests::login_test_state(&root, "public").await;
-        state.files.limits = crate::file_store::FileLimits::parse(Some("10485760"), Some("5242880")).unwrap();
+        let (state, _) = crate::tests::login_test_state(&root, "public").await;
+        let mut state = Konae::for_test(state);
+        state.kernel.files.limits = crate::file_store::FileLimits::parse(Some("10485760"), Some("5242880")).unwrap();
         let schema = transfer_tools(true).into_iter().find(|tool| tool["name"] == "transfer_begin").unwrap()["inputSchema"].clone();
         let sha = "0".repeat(64);
         let three_mib = json!({"size": 3 * 1024 * 1024, "sha256": sha});
@@ -1915,6 +1940,7 @@ mod tests {
     async fn deleting_a_project_takes_its_deployment_files_and_address_with_it() {
         let root = std::env::temp_dir().join(format!("konae-delete-{}", Uuid::new_v4()));
         let (state, _) = crate::tests::login_test_state(&root, "public").await;
+        let state = Konae::for_test(state);
         let deployment = state.deployments.read().await.values().next().unwrap().clone();
         persist_deployment(&state, &deployment).await.unwrap();
         tokio::fs::write(crate::layout::database(&state.data_root, &deployment.id), b"rows").await.unwrap();
@@ -1962,6 +1988,7 @@ mod tests {
     async fn a_project_create_that_fails_leaves_no_folder_and_a_retry_works() {
         let root = std::env::temp_dir().join(format!("konae-create-retry-{}", Uuid::new_v4()));
         let (state, _) = crate::tests::login_test_state(&root, "public").await;
+        let state = Konae::for_test(state);
         let owner = Owner { id: "ana".into(), display: None, scopes: vec!["read".into(), "write".into()], projects: vec![], session: false };
         let manifest = json!({"version": 1, "visibility": "private", "runtime": {"database": {"mode": "declared-actions", "actions": []}, "auth": {"mode": "required"}, "files": {"access": "deployment"}}});
         let create = |files: Value| {
@@ -1986,6 +2013,7 @@ mod tests {
     async fn one_owner_cannot_give_two_apps_the_same_route_secret() {
         let root = std::env::temp_dir().join(format!("konae-secret-reuse-{}", Uuid::new_v4()));
         let (state, _) = crate::tests::login_test_state(&root, "public").await;
+        let state = Konae::for_test(state);
         let owner = |id: &str| Owner { id: id.into(), display: None, scopes: vec!["read".into(), "write".into(), "publish".into()], projects: vec![], session: false };
         {
             let db = store(&state).unwrap();
@@ -2014,6 +2042,7 @@ mod tests {
     async fn app_users_cannot_push_an_owners_rows_out_of_the_audit_log() {
         let root = std::env::temp_dir().join(format!("konae-audit-{}", Uuid::new_v4()));
         let (state, _) = crate::tests::login_test_state(&root, "public").await;
+        let state = Konae::for_test(state);
         let ok: Result<Value> = Ok(json!({}));
         audit(&state, "owner:ana", "project_create", &json!({"projectId": "p1"}), None, &ok);
         let rows = AUDIT_MAX_ROWS + 3 * AUDIT_PRUNE_INTERVAL;
@@ -2091,10 +2120,10 @@ mod tests {
             let name = case["case"].as_str().unwrap();
             let root = std::env::temp_dir().join(format!("konae-google-cases-{}", Uuid::new_v4()));
             std::fs::create_dir_all(&root).unwrap();
-            let state = AppState {
+            let state = Konae::for_test(AppState {
                 public_origin: "http://localhost:8790".into(),
                 ..AppState::for_test(&root)
-            };
+            });
             let mut deployment: Deployment = serde_json::from_value(json!({
                 "id": "p1", "projectId": "p1", "projectName": "Practice", "slug": "practice", "artifactVersion": "v1", "signupPolicy": {"mode": "closed"}, "signInMethods": ["password"], "url": "http://practice.localhost:8790", "createdAt": 0,
                 "manifest": {"visibility": "private"}, "hostname": "practice.localhost", "actions": "{\"version\":1,\"actions\":{}}"
@@ -2131,16 +2160,16 @@ mod tests {
     fn sign_in_methods_set_keeps_password_and_refuses_google_without_the_apps_client() {
         let root = std::env::temp_dir().join(format!("konae-methods-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
-        let state = AppState {
+        let state = Konae::for_test(AppState {
             public_origin: "http://localhost:8790".into(),
             ..AppState::for_test(&root)
-        };
+        });
         let mut deployment: Deployment = serde_json::from_value(json!({
             "id": "p1", "projectId": "p1", "projectName": "Practice", "slug": "practice", "artifactVersion": "v1", "signupPolicy": {"mode": "closed"}, "signInMethods": ["password"], "url": "http://practice.localhost:8790", "createdAt": 0,
             "manifest": {"visibility": "private"}, "hostname": "practice.localhost", "actions": "{}"
         }))
         .unwrap();
-        let refused = |state: &AppState, deployment: &Deployment, methods: Value| requested_sign_in_methods(state, deployment, &methods).unwrap_err().to_string();
+        let refused = |state: &Konae, deployment: &Deployment, methods: Value| requested_sign_in_methods(state, deployment, &methods).unwrap_err().to_string();
         assert_eq!(refused(&state, &deployment, json!(["password", "google"])), "Set this app's Google client ID and client secret before turning Google on.");
         assert_eq!(refused(&state, &deployment, json!(["google"])), PASSWORD_REQUIRED);
         assert_eq!(refused(&state, &deployment, json!(["password", "facebook"])), "Name the methods as password and google.");
@@ -2192,7 +2221,7 @@ mod tests {
     #[tokio::test]
     async fn platform_guide_sdk_topic_is_the_rendered_contract() {
         let root = std::env::temp_dir().join(format!("konae-guide-{}", Uuid::new_v4()));
-        let state = AppState::for_test(&root);
+        let state = Konae::for_test(AppState::for_test(&root));
         let owner = Owner { id: "o".into(), display: None, scopes: vec!["read".into()], projects: vec![], session: false };
         let guide = admin_call(&state, &owner, "owner:o", "platform_guide", json!({"topic":"sdk"})).await.unwrap();
         let rendered: Value = serde_json::from_str(include_str!("sdk-guide.json")).unwrap();

@@ -1158,7 +1158,7 @@ mod tests {
         path::turn_on_for_test(&fixture.state, &app.id, Some("spring-practice")).await;
         let callback_uri = format!("{PATH_ORIGIN}/p/{}{CALLBACK_PATH}", app.id);
         assert_eq!(redirect_uris(&fixture.state, &app).last(), Some(&callback_uri));
-        let router = |state: AppState| crate::stack(state);
+        let router = |state: AppState| crate::stack(state, Router::new());
         let get = |uri: String, cookie: Option<String>| {
             let mut request = Request::builder().uri(uri).header(header::HOST, PATH_HOST);
             if let Some(cookie) = cookie {

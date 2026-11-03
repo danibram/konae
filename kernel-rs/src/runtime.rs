@@ -787,13 +787,13 @@ pub(crate) fn valid_host(state: &AppState, headers: &HeaderMap) -> bool {
         return false;
     };
     let public = url::Url::parse(&state.public_origin).ok();
-    let configured = state.mcp_origin.as_deref().and_then(|s| url::Url::parse(s).ok());
+    let configured: Vec<url::Url> = state.own_origins.iter().filter_map(|s| url::Url::parse(s).ok()).collect();
     ["localhost", "127.0.0.1", "[::1]", "app.localhost"].contains(&host)
         || host.ends_with(".localhost")
         || public.as_ref().is_some_and(|u| u.host_str() == Some(host))
         || configured
-            .as_ref()
-            .is_some_and(|u| u.host_str() == Some(host))
+            .iter()
+            .any(|u| u.host_str() == Some(host))
         || public
             .as_ref()
             .and_then(|u| u.host_str())
@@ -802,7 +802,7 @@ pub(crate) fn valid_host(state: &AppState, headers: &HeaderMap) -> bool {
 
 
 pub(crate) fn origin(state: &AppState, headers: &HeaderMap) -> String {
-    if let Some(origin) = &state.mcp_origin {
+    if let Some(origin) = state.own_origins.first() {
         return origin.trim_end_matches('/').to_owned();
     }
     let scheme = if state.public_origin.starts_with("https://") {

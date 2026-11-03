@@ -63,6 +63,7 @@ mod schedule;
 mod schema_change;
 mod security;
 mod sources;
+mod state;
 mod sql_rules;
 mod transfers;
 #[cfg(test)]
@@ -70,6 +71,7 @@ mod sqlite_bench;
 mod usage;
 use auth::{AuthError, AuthService, AuthUser};
 use limits::{Guards, trusted_proxies};
+use state::Konae;
 
 #[derive(Clone)]
 struct AppState {
@@ -82,10 +84,11 @@ struct AppState {
     /// Where file bytes live and how many a Deployment may hold.
     files: file_store::Files,
     copies: Arc<copies::CopyStatus>,
-    admin_key: String,
     public_origin: String,
-    /// `KONAE_MCP_ORIGIN` or its derived value; `None` keeps the request host.
-    mcp_origin: Option<String>,
+    /// The origins the installation answers on itself besides the public
+    /// origin, such as where Konae's MCP answers. The first is where a
+    /// client signs in.
+    own_origins: Vec<String>,
     host_suffix: String,
     /// `<scheme>://<domain>` where path addresses answer; `None` without `KONAE_DOMAIN`.
     path_origin: Option<String>,
@@ -111,10 +114,9 @@ impl AppState {
             files: file_store::Files::local(root),
             data_root: root.into(),
             copies: Default::default(),
-            admin_key: "test-admin".into(),
             accounts: accounts::AccountSettings::local(),
             public_origin: "http://localhost".into(),
-            mcp_origin: None,
+            own_origins: Vec::new(),
             path_origin: None,
             host_suffix: "localhost".into(),
             guards: Arc::new(Guards::new(Vec::new())),
@@ -530,9 +532,8 @@ async fn main() -> Result<()> {
         data_root,
         files,
         copies: Arc::new(copies::CopyStatus::new(copy_config.as_ref())),
-        admin_key,
         public_origin,
-        mcp_origin: hosts.mcp_origin,
+        own_origins: hosts.mcp_origin.iter().cloned().collect(),
         host_suffix: hosts.host_suffix,
         path_origin: hosts.path_origin,
         guards: Arc::new(Guards::new(trusted_proxies(
@@ -551,36 +552,51 @@ async fn main() -> Result<()> {
         mail::spawn_worker(queue);
     }
     calls::spawn_worker(state.clone());
+    let konae = Konae {
+        kernel: state.clone(),
+        admin_key,
+        mcp_origin: hosts.mcp_origin,
+        owner_verification: auth::Verification::from_env().map_err(anyhow::Error::msg)?,
+    };
     // Apply the verification mode to creator accounts before serving, so a
     // switch to required revokes unverified sessions at startup.
-    owners::creator_store(&state)?;
+    owners::creator_store(&konae)?;
 
     let listener = tokio::net::TcpListener::bind((bind.as_str(), port)).await?;
     println!("Konae Rust Kernel listening on {port}");
-    serve(listener, state).await?;
+    serve(listener, state, owner_routes(konae)).await?;
     Ok(())
 }
 
-/// Serves the Kernel on a bound listener.
-async fn serve(listener: tokio::net::TcpListener, state: AppState) -> std::io::Result<()> {
-    axum::serve(listener, ServiceExt::<Request>::into_make_service_with_connect_info::<std::net::SocketAddr>(stack(state))).await
+/// Konae's routes: the owner's MCP, OAuth and owner sign-in.
+fn owner_routes(konae: Konae) -> Router<AppState> {
+    Router::<Konae>::new()
+        .merge(mcp::routes())
+        .merge(oauth::routes())
+        .merge(owners::routes())
+        .with_state(konae)
+}
+
+/// Serves the Kernel, and `extra` beside its own routes, on a bound listener.
+async fn serve(listener: tokio::net::TcpListener, state: AppState, extra: Router<AppState>) -> std::io::Result<()> {
+    axum::serve(listener, ServiceExt::<Request>::into_make_service_with_connect_info::<std::net::SocketAddr>(stack(state, extra))).await
 }
 
 /// The Kernel's whole stack. The isolation headers and the path router wrap
 /// the routes, so a path address is rewritten before routing and the headers
 /// cover every response, the redirects included.
-fn stack(state: AppState) -> tower::util::BoxCloneService<Request, axum::response::Response, std::convert::Infallible> {
+/// `extra` holds the routes of whoever starts the Kernel; they answer
+/// before the Kernel's catch-all and inside the same layers.
+fn stack(state: AppState, extra: Router<AppState>) -> tower::util::BoxCloneService<Request, axum::response::Response, std::convert::Infallible> {
     let routes = Router::new()
         .route("/_konae/health", get(health))
         .route("/_konae/auth/signup", post(signup))
         .route("/_konae/auth/login", post(login))
         .route("/_konae/login", get(login_page))
         .merge(runtime::routes())
-        .merge(mcp::routes())
-        .merge(oauth::routes())
+        .merge(extra)
         .merge(google::routes())
         .merge(accounts::routes())
-        .merge(owners::routes())
         .merge(http::routes())
         .merge(invitations::routes())
         .merge(mail::routes())

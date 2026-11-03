@@ -54,9 +54,7 @@ impl Rules {
     pub(super) fn of(state: &AppState) -> Self {
         let host = |value: &str| url::Url::parse(value).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase));
         let mut installation_hosts: Vec<String> = host(&state.public_origin).into_iter().collect();
-        if let Some(mcp) = state.mcp_origin.as_deref().and_then(host) {
-            installation_hosts.push(mcp);
-        }
+        installation_hosts.extend(state.own_origins.iter().filter_map(|origin| host(origin)));
         Self { suffix: state.host_suffix.trim_start_matches('.').to_ascii_lowercase(), installation_hosts }
     }
 }

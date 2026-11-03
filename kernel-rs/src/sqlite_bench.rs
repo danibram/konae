@@ -7,10 +7,7 @@ use rusqlite::params;
 use std::time::{Duration, Instant};
 
 fn state(root: &Path) -> AppState {
-    AppState {
-        admin_key: "bench".into(),
-        ..AppState::for_test(&root)
-    }
+    AppState::for_test(root)
 }
 
 fn action(kind: &str, statement: &str) -> Arc<ActionDefinition> {

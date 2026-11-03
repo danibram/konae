@@ -88,7 +88,7 @@ pub(super) const HSTS_ALIAS: &str = "max-age=31536000";
 /// the `__Host-` cookie names.
 pub(super) fn https(state: &AppState) -> bool {
     state.public_origin.starts_with("https://")
-        || state.mcp_origin.as_deref().is_some_and(|origin| origin.starts_with("https://"))
+        || state.own_origins.iter().any(|origin| origin.starts_with("https://"))
 }
 
 /// The HSTS value for a request, or none over plain HTTP.
@@ -184,8 +184,8 @@ pub(super) async fn from_app_origin(state: &AppState, headers: &HeaderMap) -> bo
     }
     let configured = |value: &str| url::Url::parse(value).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase));
     let public = configured(&state.public_origin);
-    let mcp = state.mcp_origin.as_deref().and_then(configured);
-    if public.as_deref() == Some(host.as_str()) || mcp.as_deref() == Some(host.as_str()) {
+    let own = state.own_origins.iter().filter_map(|origin| configured(origin)).any(|own| own == host);
+    if public.as_deref() == Some(host.as_str()) || own {
         return false;
     }
     // The path host is `<domain>`, which holds the path addresses and the home.

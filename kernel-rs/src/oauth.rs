@@ -5,7 +5,7 @@ use axum::extract::{ConnectInfo, Form, Query};
 use rusqlite::params;
 use sha2::{Digest, Sha256};
 
-pub fn routes() -> Router<AppState> {
+pub fn routes() -> Router<Konae> {
     Router::new()
         .route(
             "/.well-known/oauth-protected-resource",
@@ -66,7 +66,7 @@ pub(super) fn install(db: &Connection) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn valid_owner_host(state: &AppState, headers: &HeaderMap) -> bool {
+pub(super) async fn valid_owner_host(state: &Konae, headers: &HeaderMap) -> bool {
     // The path host serves apps and the home, so it never serves administration,
     // even when it is `localhost` on a local installation.
     if super::path::on_path_host(state, headers) {
@@ -95,7 +95,7 @@ pub(super) async fn valid_owner_host(state: &AppState, headers: &HeaderMap) -> b
         && !super::security::from_app_origin(state, headers).await
 }
 
-async fn resource_metadata(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn resource_metadata(State(state): State<Konae>, headers: HeaderMap) -> Response {
     if !valid_owner_host(&state, &headers).await {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -103,7 +103,7 @@ async fn resource_metadata(State(state): State<AppState>, headers: HeaderMap) ->
     Json(json!({"resource":format!("{origin}/mcp"),"authorization_servers":[origin],"scopes_supported":["read","write","publish","manage_users"],"bearer_methods_supported":["header"]})).into_response()
 }
 
-async fn server_metadata(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn server_metadata(State(state): State<Konae>, headers: HeaderMap) -> Response {
     if !valid_owner_host(&state, &headers).await {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -124,7 +124,7 @@ fn valid_redirect(value: &str) -> bool {
 }
 
 async fn register(
-    State(state): State<AppState>,
+    State(state): State<Konae>,
     peer: Option<Extension<ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
     Json(a): Json<Value>,
@@ -205,7 +205,7 @@ fn expire_clients(db: &Connection) -> Result<()> {
 }
 
 fn authorization(
-    state: &AppState,
+    state: &Konae,
     headers: &HeaderMap,
     a: &HashMap<String, String>,
 ) -> Result<Value> {
@@ -252,7 +252,7 @@ fn authorization(
 }
 
 async fn authorize_page(
-    State(state): State<AppState>,
+    State(state): State<Konae>,
     headers: HeaderMap,
     Query(a): Query<HashMap<String, String>>,
 ) -> Response {
@@ -323,7 +323,7 @@ async fn authorize_page(
 }
 
 async fn authorize(
-    State(state): State<AppState>,
+    State(state): State<Konae>,
     headers: HeaderMap,
     Form(a): Form<HashMap<String, String>>,
 ) -> Response {
@@ -386,7 +386,7 @@ fn issue_code(db: &mut Connection, client_id: &str, code: &str, body: &Value) ->
 }
 
 async fn token(
-    State(state): State<AppState>,
+    State(state): State<Konae>,
     headers: HeaderMap,
     Form(a): Form<HashMap<String, String>>,
 ) -> Response {

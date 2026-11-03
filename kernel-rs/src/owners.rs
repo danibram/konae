@@ -11,7 +11,7 @@ use auth::{AuthSession, NewPassword, Purpose, Verification};
 /// `deployment:<id>`.
 pub(crate) const CREATOR_SCOPE: &str = "creator";
 
-pub fn routes() -> Router<AppState> {
+pub fn routes() -> Router<Konae> {
     Router::new()
         .route("/_konae/owner/verify", post(creator_verify))
         .route("/_konae/owner/reset", post(creator_reset))
@@ -19,11 +19,11 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// Opens the creator account store in this installation's mode.
-pub(crate) fn creator_store(state: &AppState) -> Result<AuthService, AuthError> {
+pub(crate) fn creator_store(state: &Konae) -> Result<AuthService, AuthError> {
     AuthService::open_in(
         state.data_root.join("owners.sqlite"),
         CREATOR_SCOPE,
-        state.accounts.verification,
+        state.owner_verification,
     )
 }
 
@@ -46,7 +46,7 @@ fn creator_delivery(email: &str, client: std::net::IpAddr, page: &str) -> Delive
 /// consumed in the transaction that creates the pending creator. `page` is
 /// the sign-in page the link opens. `client` feeds the mail limits.
 pub(crate) async fn signup_creator(
-    state: &AppState,
+    state: &Konae,
     email: &str,
     page: &str,
     admission: super::admission::Admission,
@@ -72,7 +72,7 @@ pub(crate) async fn signup_creator(
 }
 
 
-async fn complete_creator(state: &AppState, purpose: Purpose, token: &str, password: &str) -> Result<AuthSession, AuthError> {
+async fn complete_creator(state: &Konae, purpose: Purpose, token: &str, password: &str) -> Result<AuthSession, AuthError> {
     let password = password.to_owned();
     let chosen = blocking(move || NewPassword::prepare(&password)).await?;
     let _guard = database_lock(state, "owner-auth").await;
@@ -82,17 +82,17 @@ async fn complete_creator(state: &AppState, purpose: Purpose, token: &str, passw
 }
 
 
-async fn creator_verify(State(state): State<AppState>, request: Request) -> Response {
+async fn creator_verify(State(state): State<Konae>, request: Request) -> Response {
     creator_complete(state, request, Purpose::Verification).await
 }
 
 
-async fn creator_reset(State(state): State<AppState>, request: Request) -> Response {
+async fn creator_reset(State(state): State<Konae>, request: Request) -> Response {
     creator_complete(state, request, Purpose::Recovery).await
 }
 
 
-async fn creator_complete(state: AppState, request: Request, purpose: Purpose) -> Response {
+async fn creator_complete(state: Konae, request: Request, purpose: Purpose) -> Response {
     if !creator_host(&state, request.headers()).await {
         return error(StatusCode::FORBIDDEN, "Owner authentication is unavailable on this origin.");
     }
@@ -107,7 +107,7 @@ async fn creator_complete(state: AppState, request: Request, purpose: Purpose) -
 }
 
 
-async fn creator_recover(State(state): State<AppState>, request: Request) -> Response {
+async fn creator_recover(State(state): State<Konae>, request: Request) -> Response {
     if !creator_host(&state, request.headers()).await {
         return error(StatusCode::FORBIDDEN, "Owner authentication is unavailable on this origin.");
     }
@@ -136,7 +136,7 @@ async fn creator_recover(State(state): State<AppState>, request: Request) -> Res
 
 /// Creator accounts answer only on the editor host and only without the
 /// optional hosted identity adapter, which keeps its own accounts.
-async fn creator_host(state: &AppState, headers: &HeaderMap) -> bool {
+async fn creator_host(state: &Konae, headers: &HeaderMap) -> bool {
     super::oauth::valid_owner_host(state, headers).await && matches!(super::clerk::ClerkConfig::from_env(), Ok(None))
 }
 
@@ -212,7 +212,7 @@ mod tests {
         app_signup(&fixture, APP_HOST, "person@example.test").await;
         let (_, token) = fixture.last_link();
         let creator = creator_verify(
-            State(fixture.state.clone()),
+            State(Konae::for_test(fixture.state.clone())),
             request("POST", "localhost", "/_konae/owner/verify", json!({"token": token, "password": PASSWORD})),
         )
         .await;
@@ -223,11 +223,11 @@ mod tests {
     async fn owner(fixture: &Fixture, path: &str, body: Value) -> Response {
         let request = request("POST", "localhost", path, body);
         match path {
-            "/_konae/owner/signup" => mcp::owner_signup(State(fixture.state.clone()), request).await,
-            "/_konae/owner/login" => mcp::owner_login(State(fixture.state.clone()), request).await,
-            "/_konae/owner/verify" => creator_verify(State(fixture.state.clone()), request).await,
-            "/_konae/owner/reset" => creator_reset(State(fixture.state.clone()), request).await,
-            "/_konae/owner/recover" => creator_recover(State(fixture.state.clone()), request).await,
+            "/_konae/owner/signup" => mcp::owner_signup(State(Konae::for_test(fixture.state.clone())), request).await,
+            "/_konae/owner/login" => mcp::owner_login(State(Konae::for_test(fixture.state.clone())), request).await,
+            "/_konae/owner/verify" => creator_verify(State(Konae::for_test(fixture.state.clone())), request).await,
+            "/_konae/owner/reset" => creator_reset(State(Konae::for_test(fixture.state.clone())), request).await,
+            "/_konae/owner/recover" => creator_recover(State(Konae::for_test(fixture.state.clone())), request).await,
             _ => unreachable!(),
         }
     }
@@ -262,37 +262,37 @@ mod tests {
         let verified = owner(&fixture, "/_konae/owner/verify", json!({"token": token, "password": PASSWORD})).await;
         assert_eq!(verified.status(), StatusCode::OK);
         let cookie = cookie_of(&verified).unwrap();
-        let session = mcp::authenticate_owner(&fixture.state, &owner_headers(Some(&cookie), None)).unwrap().unwrap();
+        let session = mcp::authenticate_owner(&Konae::for_test(fixture.state.clone()), &owner_headers(Some(&cookie), None)).unwrap().unwrap();
         // The editor's first check answers 200 either way, so a signed-out visit logs no error.
-        let signed_out = mcp::owner_session(State(fixture.state.clone()), owner_headers(None, None)).await;
+        let signed_out = mcp::owner_session(State(Konae::for_test(fixture.state.clone())), owner_headers(None, None)).await;
         assert_eq!(signed_out.status(), StatusCode::OK);
         assert_eq!(rpc_json(signed_out).await, json!({"signedIn": false}));
-        let signed_in = mcp::owner_session(State(fixture.state.clone()), owner_headers(Some(&cookie), None)).await;
+        let signed_in = mcp::owner_session(State(Konae::for_test(fixture.state.clone())), owner_headers(Some(&cookie), None)).await;
         assert_eq!(signed_in.status(), StatusCode::OK);
         assert_eq!(rpc_json(signed_in).await, json!({"signedIn": true, "ownerId": session.id, "displayName": "creator@example.test"}));
         assert_eq!(owner(&fixture, "/_konae/owner/login", login.clone()).await.status(), StatusCode::OK);
 
         // A delegated MCP credential for this creator.
         let bearer = "creator-bearer-token";
-        mcp::store(&fixture.state).unwrap().execute(
+        mcp::store(&Konae::for_test(fixture.state.clone())).unwrap().execute(
             "INSERT INTO credentials(hash, owner, scopes, projects, expires) VALUES (?1, ?2, '[\"read\"]', '[]', ?3)",
             rusqlite::params![crate::digest(bearer.as_bytes()), session.id, now_ms() + 60_000],
         ).unwrap();
-        assert!(mcp::authenticate_owner(&fixture.state, &owner_headers(None, Some(bearer))).unwrap().is_some());
+        assert!(mcp::authenticate_owner(&Konae::for_test(fixture.state.clone()), &owner_headers(None, Some(bearer))).unwrap().is_some());
 
         // A credential that survives suspension is still refused, because
         // every use reads the creator's state.
-        creator_store(&fixture.state).unwrap().suspend("creator@example.test").unwrap();
-        assert!(mcp::authenticate_owner(&fixture.state, &owner_headers(None, Some(bearer))).is_err());
-        creator_store(&fixture.state).unwrap().resume("creator@example.test").unwrap();
-        assert!(mcp::authenticate_owner(&fixture.state, &owner_headers(None, Some(bearer))).unwrap().is_some());
+        creator_store(&Konae::for_test(fixture.state.clone())).unwrap().suspend("creator@example.test").unwrap();
+        assert!(mcp::authenticate_owner(&Konae::for_test(fixture.state.clone()), &owner_headers(None, Some(bearer))).is_err());
+        creator_store(&Konae::for_test(fixture.state.clone())).unwrap().resume("creator@example.test").unwrap();
+        assert!(mcp::authenticate_owner(&Konae::for_test(fixture.state.clone()), &owner_headers(None, Some(bearer))).unwrap().is_some());
 
         // The operator suspends the creator from the server.
         let message = run_operator_command(&fixture.root, true, "Creator@Example.test").unwrap();
         assert!(message.contains(&session.id));
-        assert!(mcp::authenticate_owner(&fixture.state, &owner_headers(Some(&cookie), None)).unwrap().is_none());
-        assert!(mcp::authenticate_owner(&fixture.state, &owner_headers(None, Some(bearer))).unwrap().is_none());
-        let credentials: i64 = mcp::store(&fixture.state).unwrap()
+        assert!(mcp::authenticate_owner(&Konae::for_test(fixture.state.clone()), &owner_headers(Some(&cookie), None)).unwrap().is_none());
+        assert!(mcp::authenticate_owner(&Konae::for_test(fixture.state.clone()), &owner_headers(None, Some(bearer))).unwrap().is_none());
+        let credentials: i64 = mcp::store(&Konae::for_test(fixture.state.clone())).unwrap()
             .query_row("SELECT COUNT(*) FROM credentials WHERE owner = ?1", [&session.id], |row| row.get(0))
             .unwrap();
         assert_eq!(credentials, 0);
@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(purpose, Purpose::Recovery);
         assert_eq!(owner(&fixture, "/_konae/owner/verify", json!({"token": token, "password": PASSWORD})).await.status(), StatusCode::GONE);
         assert_eq!(owner(&fixture, "/_konae/owner/reset", json!({"token": token, "password": "a new password"})).await.status(), StatusCode::OK);
-        assert!(mcp::authenticate_owner(&fixture.state, &owner_headers(Some(&first), None)).unwrap().is_none());
+        assert!(mcp::authenticate_owner(&Konae::for_test(fixture.state.clone()), &owner_headers(Some(&first), None)).unwrap().is_none());
         assert_eq!(owner(&fixture, "/_konae/owner/reset", json!({"token": token, "password": "third password"})).await.status(), StatusCode::GONE);
     }
 

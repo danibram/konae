@@ -123,7 +123,7 @@ fn owners_path(root: &Path) -> PathBuf {
 /// Reads the admission a signup body asks for. A non-empty `code` wins over
 /// `setupKey`. A wrong key is refused here, with a message that names the
 /// key only while the key can still create the first creator.
-pub(crate) fn read(state: &AppState, body: &Value) -> std::result::Result<Admission, AuthError> {
+pub(crate) fn read(state: &Konae, body: &Value) -> std::result::Result<Admission, AuthError> {
     let code = body["code"].as_str().unwrap_or("");
     if !code.trim().is_empty() {
         return normalize_code(code)
@@ -187,7 +187,7 @@ pub(crate) fn admit(
 
 /// `setup-key` while the installation key can still create a creator;
 /// `code` once any code exists or, for a configured key, any creator exists.
-pub(crate) fn mode(state: &AppState) -> Mode {
+pub(crate) fn mode(state: &Konae) -> Mode {
     let development = state.admin_key == DEFAULT_ADMIN_KEY;
     match store_counts(&state.data_root) {
         Ok((0, _)) if development => Mode::SetupKey,
@@ -456,7 +456,7 @@ mod tests {
     const PASSWORD: &str = "correct horse battery";
 
     struct Fixture {
-        state: AppState,
+        state: Konae,
         mailbox: Arc<MemoryMailbox>,
         root: PathBuf,
     }
@@ -471,8 +471,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-admission-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let mailbox = Arc::new(MemoryMailbox::default());
-        let state = AppState {
-            admin_key: key.into(),
+        let kernel = AppState {
             accounts: AccountSettings {
                 verification,
                 mail: Some(mailbox.clone() as Arc<dyn AccountMail>),
@@ -481,6 +480,7 @@ mod tests {
             },
             ..AppState::for_test(&root)
         };
+        let state = Konae { admin_key: key.into(), ..Konae::for_test(kernel) };
         Fixture { state, mailbox, root }
     }
 
@@ -507,7 +507,7 @@ mod tests {
             // A fresh rate-limit window per call, so the sign-in limits
             // never decide a test.
             let mut state = self.state.clone();
-            state.guards = Arc::new(Guards::new(Vec::new()));
+            state.kernel.guards = Arc::new(Guards::new(Vec::new()));
             mcp::owner_signup(State(state), request).await
         }
 
