@@ -10,7 +10,7 @@ import { Recorder, callTool, cli, renderDocument, startKernel, type KernelProces
 // the document does not show exactly the commands and answers this run got.
 // KONAE_WALKTHROUGH_WRITE=1 rewrites the document's recorded blocks.
 // KONAE_WALKTHROUGH_PORT sets the first of three ports: Kernel A, Kernel B
-// and the Development Kernel.
+// and the kernel binary that dev runs on the folder.
 
 const repo = path.resolve(import.meta.dir, "..");
 const docPath = path.join(repo, "docs/mcp-walkthrough.md");
@@ -280,7 +280,6 @@ describe("the MCP walkthrough", () => {
         printed += new TextDecoder().decode(value);
       }
       const url = printed.match(/http:\/\/(\S+\.localhost):\d+/)!;
-      r.name(url[1].split(".")[0], "orders-<dev suffix>");
       r.add("sh", shownCommand(["dev", "--dir", app(), "--port", "8796"]));
       r.add("text", printed.trim().split("\n").filter((line) => line.includes(".localhost:")).join("\n"));
       const { response } = await http("GET", { url: `http://127.0.0.1:${ports.dev}`, port: ports.dev }, "/", { host: url[1] });
@@ -315,7 +314,7 @@ describe("the MCP walkthrough", () => {
 
     r.step("publish");
     expect((await run(["publish", "--dir", app()])).code).toBe(0);
-    const receipt = JSON.parse(await readFile(path.join(app(), ".konae/deployment.json"), "utf8"));
+    const receipt = JSON.parse(await readFile(path.join(app(), ".konae/published.json"), "utf8"));
     Object.assign(s, { deploymentId: receipt.id, hostname: receipt.hostname });
     r.name(receipt.hostname.split(".")[0], "orders-<suffix>");
     const policy = await tool("signup_policy_read", { deploymentId: s.deploymentId });
