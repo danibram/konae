@@ -50,6 +50,7 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("domain_clear", "domain_read"),
     ("path_set", "path_read"),
     ("path_clear", "path_read"),
+    ("maintenance_set", "maintenance_read"),
     ("transfer_begin", "transfer_status"),
     ("transfer_write", "transfer_status"),
     ("transfer_complete", "transfer_status"),
@@ -130,9 +131,9 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "flags": {"--manage-users": "adds manage_users", "--export-data": "adds export_data"},
             "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data.",
             "permissions": {
-                "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read",
+                "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, maintenance_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read",
                 "write": "project_create, project_sources_save, project_delete and database_execute changes",
-                "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, and initialSignupPolicy on a first release",
+                "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, maintenance_set, and initialSignupPolicy on a first release",
                 "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
                 "export_data": "project_export"
             },
@@ -177,6 +178,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "access": "A first release may add initialSignupPolicy {mode, allowlist} with mode open, invitation, closed or allowlist; the Kernel installs it before the app serves. When the owner's request leaves access open for an app with accounts, propose visibility private and mode invitation. Later changes need manage_users and signup_policy_set. Invite people with app_invitations_create only when the owner asks, because it sends email.",
             "import": "A first release may also carry initialPackage to start the Deployment with an exported app's data; the portability topic has the steps.",
             "domain": "domain_set { deploymentId, hostname } adds a custom domain next to the generated hostname and needs publish. Its first answer names a TXT record, _konae.<hostname>, and the token it must hold. Once the record is at the DNS provider and the hostname points at the installation's proxy, which terminates TLS and forwards Host unchanged, call domain_set again: the Kernel looks the record up and the alias serves. domain_read shows the state and domain_clear removes it. bun run konae -- domain runs the same steps.",
+            "maintenance": "maintenance_set { deploymentId, on } puts the app in maintenance or takes it out and needs publish. Paused, the app serves a maintenance page, refuses writes, signups and sign-ins, and holds its email, calls and schedule; owner tools that would change it are refused except maintenance_set. maintenance_read { deploymentId } answers { maintenance, since, unreadable, installation }. Move an app with no lost write by putting it in maintenance, exporting it, and importing the folder elsewhere.",
             "path": "path_set { deploymentId, enabled, name?, acceptSharedOrigin? } answers the app on <domain>/p/<id>, and on <domain>/p/<name> once it has a name. The domain is KONAE_DOMAIN. An app with accounts or a private app needs acceptSharedOrigin true, because every path and the home share one origin, and any other app on the domain can use the sessions of this app's users. The app whose enabled path holds the name konae-home also answers <domain>/ and every path there outside /p/; with none, <domain>/ answers not found. path_read returns the state and the addresses; path_clear turns the path off and removes the name. Both need publish. Read back with path_read after a change."
         }),
         "users" => json!({

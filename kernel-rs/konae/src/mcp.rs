@@ -97,6 +97,8 @@ const OPEN_TOOLS: [&str; 21] = [
     "project_export",
     "release_plan",
 ];
+/// Tools a paused app takes because they are what maintenance is for.
+const PAUSED_TOOLS: [&str; 1] = ["maintenance_set"];
 const READ_TOOLS_SUFFIX: [&str; 2] = ["_list", "_read"];
 
 /// Runs before every administrative tool.
@@ -110,6 +112,9 @@ async fn admin_guard(state: &Konae, name: &str, a: &Value) -> Result<()> {
     }
     if let Some(message) = super::recovery::hold(&state.data_root) {
         anyhow::bail!(message);
+    }
+    if PAUSED_TOOLS.contains(&name) {
+        return Ok(());
     }
     let deployment = if let Some(id) = a["deploymentId"].as_str() {
         Some(id.to_owned())
@@ -509,6 +514,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         tool("api_keys_list", "List a deployment's API keys without their secrets.", json!({"deploymentId":text}), &["deploymentId"], true),
         domain_read_tool(),
         path_read_tool(),
+        tool("maintenance_read", "Read whether a deployment is in maintenance and since when. installation names a hold of the whole installation that the app's own state cannot lift.", json!({"deploymentId":text}), &["deploymentId"], true),
     ]);
     if owner.scopes.iter().any(|s| s == "export_data") {
         tools.extend([
@@ -578,6 +584,13 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ]);
         tools.extend(domain_tools());
         tools.extend(path_tools());
+        tools.push(tool(
+            "maintenance_set",
+            "Put a deployment in maintenance (on true) or take it out (on false). In maintenance the app serves a maintenance page, refuses writes, signups and sign-ins, holds its email, calls and schedule, and refuses every administrative tool that would change it except maintenance_set. Moving an app with no lost write is maintenance, project_export, then an import on the other installation. Requires publish. Read back with maintenance_read.",
+            json!({"deploymentId":text,"on":{"type":"boolean"}}),
+            &["deploymentId", "on"],
+            false,
+        ));
     }
     if owner.session {
         tools.extend([
@@ -1348,6 +1361,15 @@ async fn admin_call(
             let mut value = sign_in_methods_value(state, &updated);
             value["previousMethods"] = json!(previous);
             Ok(value)
+        }
+        "maintenance_read" => {
+            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "read").await?;
+            Ok(super::maintenance::read(&state.data_root, &deployment.id))
+        }
+        "maintenance_set" => {
+            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "publish").await?;
+            let on = a["on"].as_bool().ok_or_else(|| anyhow::anyhow!("on must be true or false."))?;
+            super::maintenance::set(&state.data_root, &deployment.id, on)
         }
         "signup_policy_read" => {
             let id = a["deploymentId"].as_str().unwrap();

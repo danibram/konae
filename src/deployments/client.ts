@@ -237,3 +237,19 @@ export class HostedDatabaseClient implements DatabaseAdminHost {
     return platformMcp.call<T>("database_execute", { deploymentId: this.deploymentId, operation, input });
   }
 }
+
+/**
+ * Whether the app is in maintenance (kernel-rs/kernel/src/maintenance.rs).
+ * `since` is when it went in. `installation` is a hold of the whole
+ * installation, which taking the app out does not lift.
+ */
+export type MaintenanceState = { maintenance: boolean; since: number | null; unreadable: boolean; installation: string | null };
+
+export function readMaintenance(deploymentId: string) {
+  return platformMcp.call<MaintenanceState>("maintenance_read", { deploymentId });
+}
+
+/** Puts the app in maintenance or takes it out, and answers with the state the Kernel kept. */
+export function setMaintenance(deploymentId: string, on: boolean) {
+  return platformMcp.call<MaintenanceState>("maintenance_set", { deploymentId, on });
+}

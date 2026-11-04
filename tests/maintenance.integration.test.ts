@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { appFetch, buildKernel, release, startKernel, type Kernel } from "./kernel-harness";
 
-// An app in maintenance takes no writes. kernel-rs/kernel/src/maintenance.rs reads
-// apps/<id>/.konae/maintenance.json at startup; no tool writes it yet, so the
-// test writes the file while the Kernel is stopped, as an operator would.
+// An app in maintenance takes no writes. The owner puts it in and takes it out
+// with maintenance_set, and kernel-rs/kernel/src/maintenance.rs keeps the state
+// in apps/<id>/.konae/maintenance.json, so a restart keeps it.
 let root: string;
 let kernel: Kernel;
 
@@ -29,7 +29,7 @@ beforeAll(async () => {
 
 afterAll(async () => { await kernel?.stop(); if (root) await rm(root, { recursive: true, force: true }); });
 
-test("an app in maintenance serves its page, refuses writes and owner changes, and still answers reads", async () => {
+test("an owner puts an app in maintenance, where it serves its page, refuses writes and owner changes and answers reads, and takes it out", async () => {
   const id = "maintenance_app";
   await kernel.owner.call("project_create", { projectId: id, name: "Paused" });
   const { receipt } = await release(kernel.owner, payload(id), id);
@@ -40,9 +40,11 @@ test("an app in maintenance serves its page, refuses writes and owner changes, a
   });
   expect((await invoke("notes.add", { body: "before" })).status).toBe(200);
 
+  const paused = await kernel.owner.call<{ maintenance: boolean; since: number }>("maintenance_set", { deploymentId: receipt.id, on: true });
+  expect(paused.maintenance).toBe(true);
   await kernel.stop();
-  await writeFile(path.join(kernel.data, "apps", receipt.id, ".konae", "maintenance.json"), JSON.stringify({ since: Date.now() }));
   await kernel.start();
+  expect(await kernel.owner.call("maintenance_read", { deploymentId: receipt.id })).toEqual({ maintenance: true, since: paused.since, unreadable: false, installation: null });
 
   const page = await appFetch(kernel, receipt.hostname, "/", { headers: { accept: "text/html" } });
   expect(page.status).toBe(503);
@@ -58,4 +60,9 @@ test("an app in maintenance serves its page, refuses writes and owner changes, a
   expect(inspected.deployment.id).toBe(receipt.id);
   const rows = await kernel.owner.call<{ rows: { body: string }[] }>("database_execute", { deploymentId: receipt.id, operation: "browse", input: { tableName: "notes" } }).catch((error: Error) => error);
   expect(rows).not.toBeInstanceOf(Error);
+
+  // Taking the app out is the one change a paused app takes, and it writes again.
+  expect((await kernel.owner.call<{ maintenance: boolean }>("maintenance_set", { deploymentId: receipt.id, on: false })).maintenance).toBe(false);
+  expect((await invoke("notes.add", { body: "after" })).status).toBe(200);
+  expect((await appFetch(kernel, receipt.hostname, "/", { headers: { accept: "text/html" } })).status).toBe(200);
 }, 120_000);

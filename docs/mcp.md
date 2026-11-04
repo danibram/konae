@@ -1099,9 +1099,13 @@ An app in maintenance takes no writes. Its host answers a request for a page, or
 { "error": "This app is in maintenance. It accepts no writes, signups, recovery, administrative changes or email until it comes out of maintenance.", "maintenance": true }
 ```
 
-That covers actions, uploads and file reads, signup, sign-in, recovery, invitation acceptance, HTTP routes and the runtime MCP endpoint. Nothing is redirected. Owner tools that would change the app are refused with the same message: publishing, the signup policy, suspending and resuming accounts, invitations, secrets, API keys and owner SQL that writes. Tools ending in `_list` or `_read`, `project_export`, `release_plan` and `database_execute` with `inspect`, `browse` or `list-backups` keep working. The mail worker holds the app's queued email, and a held job keeps its attempt count. Calls and schedules wait.
+That covers actions, uploads and file reads, signup, sign-in, recovery, invitation acceptance, HTTP routes and the runtime MCP endpoint. Nothing is redirected. Owner tools that would change the app are refused with the same message: publishing, the signup policy, suspending and resuming accounts, invitations, secrets, API keys and owner SQL that writes. Tools ending in `_list` or `_read`, `project_export`, `release_plan` and `database_execute` with `inspect`, `browse` or `list-backups` keep working, and so does `maintenance_set`, which takes the app out. The mail worker holds the app's queued email, and a held job keeps its attempt count. Calls and schedules wait.
 
-The state is the file `apps/<id>/.konae/maintenance.json`. A restart keeps it, a scheduled copy carries it, and a restore of that copy stays in maintenance. A file that cannot be parsed keeps the app in maintenance with a message that names it. No tool sets it yet; [ADR-0027](./adr/0027-an-app-is-one-folder-that-the-kernel-serves-with-or-without-konae.md) gives the owner a button for it.
+`maintenance_set { deploymentId, on }` puts the app in maintenance or takes it out, and needs `publish`. `maintenance_read { deploymentId }` answers `{ maintenance, since, unreadable, installation }`: `since` is when the app went in, and `installation` is the message of a hold on the whole installation after a restore, which taking the app out does not lift. In the editor, the maintenance section of App settings has the same switch.
+
+The state is the file `apps/<id>/.konae/maintenance.json`. A restart keeps it, a scheduled copy carries it, and a restore of that copy stays in maintenance. A file that cannot be parsed keeps the app in maintenance with a message that names it, and `maintenance_set` with `on: false` removes it.
+
+Moving an app with no lost write is three steps: put it in maintenance, export it, and import the folder on the other installation.
 
 ### Restore and the revocation record
 

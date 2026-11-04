@@ -75,6 +75,47 @@ fn marker(data_root: &Path, id: &str) -> Option<Arc<Marker>> {
     loaded
 }
 
+/// Whether the app is in maintenance, since when, and why the Kernel holds
+/// it, as an owner or an operator reads it. `installation` names a hold that
+/// the app's own state cannot lift: a restore that was not reconciled.
+pub fn read(data_root: &Path, id: &str) -> Value {
+    let own = marker(data_root, id);
+    json!({
+        "maintenance": own.is_some() || super::recovery::hold(data_root).is_some(),
+        "since": own.as_ref().filter(|marker| !marker.unreadable).map(|marker| marker.since),
+        "unreadable": own.as_ref().is_some_and(|marker| marker.unreadable),
+        "installation": super::recovery::hold(data_root),
+    })
+}
+
+/// Puts the app `id` in maintenance or takes it out, and answers as `read`
+/// does. Putting a paused app in again keeps the time it started. Taking it
+/// out removes the state even when it cannot be read, since whoever runs the
+/// app has decided. A hold of the whole installation stays.
+pub fn set(data_root: &Path, id: &str, on: bool) -> Result<Value> {
+    anyhow::ensure!(valid_id(id), "Invalid app ID.");
+    let path = marker_path(data_root, id);
+    let mut markers = MARKERS.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    markers.remove(&path);
+    if on {
+        let since = match std::fs::read(&path).ok().and_then(|bytes| serde_json::from_slice::<Marker>(&bytes).ok()) {
+            Some(marker) => marker.since,
+            None => now_ms(),
+        };
+        std::fs::create_dir_all(path.parent().context("The maintenance state has no folder.")?)?;
+        let temp = path.with_extension(format!("tmp-{}", Uuid::new_v4().simple()));
+        std::fs::write(&temp, serde_json::to_vec(&Marker { since, unreadable: false })?)?;
+        std::fs::rename(&temp, &path)?;
+    } else {
+        match std::fs::remove_file(&path) {
+            Err(error_value) if error_value.kind() != std::io::ErrorKind::NotFound => return Err(error_value.into()),
+            _ => {}
+        }
+    }
+    drop(markers);
+    Ok(read(data_root, id))
+}
+
 /// Puts a Deployment in maintenance or takes it out, for tests of the modules
 /// the pause reaches.
 #[cfg(any(test, feature = "testing"))]
@@ -190,6 +231,27 @@ mod tests {
         pause_for_test(&root, "app-1", false);
         assert!(pause(&root, "app-1").is_none());
         assert!(marker(&root, "../escape").is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_owner_puts_an_app_in_and_takes_it_out() {
+        let root = scratch();
+        let on = set(&root, "app-1", true).unwrap();
+        assert_eq!(on["maintenance"], true);
+        let since = on["since"].as_u64().unwrap();
+        assert_eq!(pause(&root, "app-1").as_deref(), Some(MESSAGE));
+        assert_eq!(set(&root, "app-1", true).unwrap()["since"], since, "a second pause keeps its start");
+        assert_eq!(read(&root, "app-2")["maintenance"], false);
+        let off = set(&root, "app-1", false).unwrap();
+        assert_eq!((off["maintenance"].clone(), off["since"].clone()), (json!(false), Value::Null));
+        assert!(pause(&root, "app-1").is_none());
+        // An unreadable state reads as paused, and taking the app out removes it.
+        std::fs::write(marker_path(&root, "app-1"), "{not json").unwrap();
+        forget(&root);
+        assert_eq!(read(&root, "app-1")["unreadable"], true);
+        assert_eq!(set(&root, "app-1", false).unwrap()["maintenance"], false);
+        assert!(set(&root, "../escape", true).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
