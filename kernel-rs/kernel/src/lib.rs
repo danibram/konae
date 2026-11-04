@@ -47,6 +47,7 @@ pub mod limits;
 pub mod mail;
 pub mod maintenance;
 pub mod notify;
+pub mod operator;
 pub mod package;
 pub mod path;
 pub mod path_name;
