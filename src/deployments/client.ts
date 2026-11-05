@@ -96,6 +96,11 @@ export function resumeAppUser(deploymentId: string, userId: string) {
   return platformMcp.call<{ userId: string; email: string; state: AppUserState }>("app_user_resume", { deploymentId, userId });
 }
 
+/** A one-time link that signs a browser in to the app as this account. It works once, for two minutes. */
+export function enterAsAppUser(deploymentId: string, userId: string) {
+  return platformMcp.call<{ userId: string; email: string; url: string; expiresAt: number }>("app_user_enter", { deploymentId, userId });
+}
+
 export type InvitationStatus = "pending" | "expired" | "needs-resend" | "already-member" | "accepted" | "revoked";
 /** Whether the mail transport took the message. The Kernel keeps no per-invitation provider state. */
 export type InvitationDelivery = "queued" | "failed" | "not-sent";

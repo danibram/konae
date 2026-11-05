@@ -33,6 +33,7 @@ pub mod auth;
 pub mod calls;
 pub mod copies;
 pub mod domain;
+pub mod enter;
 pub mod file_store;
 pub mod files;
 pub mod google;
@@ -601,6 +602,7 @@ pub fn stack(state: AppState, extra: Router<AppState>) -> tower::util::BoxCloneS
         .merge(accounts::routes())
         .merge(http::routes())
         .merge(invitations::routes())
+        .merge(enter::routes())
         .merge(mail::routes())
         .route("/_konae/{*path}", axum::routing::any(|| async { error(StatusCode::GONE, "Use authenticated MCP for platform operations.") }))
         .route("/{*path}", get(http::get_route).post(http::post_route))
@@ -1104,18 +1106,26 @@ pub async fn invoke_action(
         run_action(db_path, action, params).await
     };
     let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
+    // Usage and Signals do not count what someone who entered as this account does.
+    let counted = !enter::entered(actor.as_ref());
     match result {
         Ok(ran) => match guard::outcome(&name, action, &ran.answer) {
             guard::Outcome::Refused(message) => {
-                usage::execution(&state.data_root, &deployment.id, &name, "runtime", "refused");
-                usage::count(&state.data_root, &deployment.id, usage::Operation::Refused(name.clone()));
+                if counted {
+                    usage::execution(&state.data_root, &deployment.id, &name, "runtime", "refused");
+                    usage::count(&state.data_root, &deployment.id, usage::Operation::Refused(name.clone()));
+                }
                 error(StatusCode::FORBIDDEN, &message)
             }
             changed => {
-                usage::execution(&state.data_root, &deployment.id, &name, "runtime", "ok");
-                usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
+                if counted {
+                    usage::execution(&state.data_root, &deployment.id, &name, "runtime", "ok");
+                    usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
+                }
                 if matches!(changed, guard::Outcome::Changed) {
-                    usage::signal(&state.data_root, &deployment.id, &name, action, &input, actor_id);
+                    if counted {
+                        usage::signal(&state.data_root, &deployment.id, &name, action, &input, actor_id);
+                    }
                     let caller = notify::Caller { account: actor_id, actor_id };
                     notify::record(&state, &deployment, &name, action, &input, caller, ran.changed(now_ms())).await;
                 }
@@ -1123,7 +1133,9 @@ pub async fn invoke_action(
             }
         },
         Err(error_value) => {
-            usage::execution(&state.data_root, &deployment.id, &name, "runtime", "failed");
+            if counted {
+                usage::execution(&state.data_root, &deployment.id, &name, "runtime", "failed");
+            }
             error(StatusCode::BAD_REQUEST, &error_value.to_string())
         },
     }
@@ -1826,6 +1838,9 @@ pub fn count_page_view(state: &AppState, deployment: &Deployment, headers: &Head
         return;
     }
     if header("sec-purpose").contains("prefetch") || header("purpose").contains("prefetch") {
+        return;
+    }
+    if headers.contains_key(header::COOKIE) && enter::entered_request(state, deployment, headers) {
         return;
     }
     usage::count(&state.data_root, &deployment.id, usage::Operation::PageView(file.to_owned()));

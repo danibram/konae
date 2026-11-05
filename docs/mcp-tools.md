@@ -38,7 +38,7 @@ The catalog of tools depends on the credential. A call to a tool the credential 
 | `read` | `projects_list`, `project_inspect`, `signup_policy_read`, `sign_in_methods_read`, `domain_read`, `path_read`, `maintenance_read`, `secrets_list`, `api_keys_list`, `usage_read`, `signals_read`, `calls_read`, `notices_read` |
 | `write` | `project_create`, `project_sources_save`, `project_delete` and `database_execute` changes |
 | `publish` | `release_plan`, `release_apply`, `secret_set`, `secret_delete`, `api_keys_create`, `api_keys_revoke`, `domain_set`, `domain_clear`, `path_set`, `path_clear`, `maintenance_set`, and `initialSignupPolicy` on a first release |
-| `manage_users` | `signup_policy_set`, `sign_in_methods_set`, `app_users_list`, `app_user_suspend`, `app_user_resume` and the `app_invitations` tools |
+| `manage_users` | `signup_policy_set`, `sign_in_methods_set`, `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter` from the owner's browser session, and the `app_invitations` tools |
 | `export_data` | `project_export` |
 
 A delegated token cannot create tokens or add permissions to itself. Run `login` again with the flag.
@@ -61,7 +61,7 @@ A delegated token cannot create tokens or add permissions to itself. Run `login`
 | Maintenance | `maintenance_read`, `maintenance_set` |
 | Usage and Signals | `usage_read`, `signals_read`, `usage_summary`, `usage_overview` |
 | Calls and notices | `calls_read`, `notices_read` |
-| App users and invitations | `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_invitations_create`, `app_invitations_list`, `app_invitation_resend`, `app_invitation_revoke` |
+| App users and invitations | `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter`, `app_invitations_create`, `app_invitations_list`, `app_invitation_resend`, `app_invitation_revoke` |
 | Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
 | Credentials, owner session only | `tokens_list`, `token_create`, `token_revoke` |
 | App runtime, with an app session | `auth_session`, `auth_logout`, `actions_invoke`, `files_list`, `files_upload`, `files_read`, `files_update`, `files_delete` |
@@ -94,6 +94,7 @@ Every tool that writes has a tool that observes its effect through the same door
 | `app_invitation_revoke` | `app_invitations_list` |
 | `app_user_suspend` | `app_users_list` |
 | `app_user_resume` | `app_users_list` |
+| `app_user_enter` | `auth_session` |
 | `domain_set` | `domain_read` |
 | `domain_clear` | `domain_read` |
 | `path_set` | `path_read` |

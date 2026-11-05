@@ -46,6 +46,7 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("app_invitation_revoke", "app_invitations_list"),
     ("app_user_suspend", "app_users_list"),
     ("app_user_resume", "app_users_list"),
+    ("app_user_enter", "auth_session"),
     ("domain_set", "domain_read"),
     ("domain_clear", "domain_read"),
     ("path_set", "path_read"),
@@ -134,7 +135,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, maintenance_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read",
                 "write": "project_create, project_sources_save, project_delete and database_execute changes",
                 "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, maintenance_set, and initialSignupPolicy on a first release",
-                "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
+                "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
                 "export_data": "project_export"
             },
             "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds."
@@ -192,6 +193,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "app_invitations_list shows each invitation's status; app_invitation_resend sends a new link and app_invitation_revoke ends one."
             ],
             "accounts": "app_users_list, app_user_suspend and app_user_resume. Suspension ends sessions and keeps the account's rows.",
+            "enter": "app_user_enter { deploymentId, userId } answers a link on the app's own address that works once, for two minutes, and signs the browser that opens it in as that active account. It needs manage_users and the owner's own browser session, so an agent cannot call it; the editor's Users view has the button. The audit log records who entered as whom, and Usage and Signals do not count what that session does.",
             "roles": "An app account has no role the Kernel keeps. An app that needs an administrator keeps roles in its own table, such as profiles(user_id, role), checks them in SQL with the actor binding { source: actor, field: id }, and the owner names the first one with database_execute sql. auth_session answers role member for every signed-in account and anonymous for a visitor."
         }),
         "portability" => json!({

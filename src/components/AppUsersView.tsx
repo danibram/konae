@@ -2,7 +2,7 @@ import { MailWarning, RefreshCw, Send, TriangleAlert, Users } from "lucide-react
 import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import {
   createAppInvitations, listAppInvitations, listAppUsers, readMailStatus, readSignInMethods, readSignupPolicy, resendAppInvitation, resumeAppUser,
-  revokeAppInvitation, saveSignInMethods, saveSignupPolicy, setGoogleClientPart, signupModes, suspendAppUser, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+  revokeAppInvitation, enterAsAppUser, saveSignInMethods, saveSignupPolicy, setGoogleClientPart, signupModes, suspendAppUser, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
   type AppInvitation, type AppUser, type AppUserState, type InvitationResult, type MailStatus, type SignInMethods, type SignupMode, type SignupPolicy,
 } from "../deployments/client";
 import type { DeploymentVisibility } from "../deployments/manifest";
@@ -492,6 +492,20 @@ function AccountList({ deploymentId, changed, onSignedOut }: { deploymentId: str
     }
   };
 
+  // The tab opens before the call, so the browser treats it as the click's own window.
+  const enter = async (user: AppUser) => {
+    const tab = window.open("", "_blank");
+    try {
+      const { url } = await enterAsAppUser(deploymentId, user.userId);
+      if (tab) tab.location.href = url;
+      else window.location.assign(url);
+    } catch (cause) {
+      tab?.close();
+      if (signedOut(cause)) onSignedOut();
+      setError(message(cause));
+    }
+  };
+
   return (
     <Card className="access-card" role="group" aria-label="App accounts">
       <header className="access-card-head">
@@ -500,7 +514,7 @@ function AccountList({ deploymentId, changed, onSignedOut }: { deploymentId: str
           {stateFilters.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </Select>
       </header>
-      <p className="access-note">People who use this app. An app account cannot open this editor. The ID under each email is what an action binds as actor.id, and what an app's own roles table stores.</p>
+      <p className="access-note">People who use this app. An app account cannot open this editor. The ID under each email is what an action binds as actor.id, and what an app's own roles table stores. Open as signs you in to the app as that person in a new tab; your audit log records it, and Usage and Signals do not count it.</p>
       {error && <div className="access-error" role="alert">{error}</div>}
       {!rows || accountsPending ? <LoadingBlock label="Loading app accounts" rows={4} /> : rows.length === 0 ? (
         <p className="access-note">{filter ? `No ${userStateView[filter].label.toLowerCase()} app accounts.` : "No app accounts yet. People appear here once they sign up or you invite them."}</p>
@@ -515,6 +529,7 @@ function AccountList({ deploymentId, changed, onSignedOut }: { deploymentId: str
                   <td><Badge tone={userStateView[user.state].tone} title={userStateView[user.state].sentence}>{userStateView[user.state].label}</Badge>{user.state !== "pending" && !user.verified && <small> Email not verified</small>}</td>
                   <td><small>{formatDate(user.createdAt)}</small></td>
                   <td className="access-row-actions">
+                    {user.state === "active" && <Button size="sm" variant="ghost" aria-label={`Open the app as ${user.email}`} onClick={() => void enter(user)}>Open as</Button>}
                     {user.state === "suspended"
                       ? <Button size="sm" aria-label={`Resume ${user.email}`} onClick={() => void resume(user)}>Resume</Button>
                       : <Button size="sm" variant="ghost" aria-label={`Suspend ${user.email}`} onClick={() => confirm.ask({

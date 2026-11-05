@@ -158,7 +158,7 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
     "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data.",
     "permissions": {
       "export_data": "project_export",
-      "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume and the app_invitations tools",
+      "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
       "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, maintenance_set, and initialSignupPolicy on a first release",
       "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, maintenance_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read",
       "write": "project_create, project_sources_save, project_delete and database_execute changes"
@@ -1270,7 +1270,7 @@ Exporting needs `export_data`, which OAuth does not grant:
         "chunkBytes": 65536,
         "expiresAt": <time ms>,
         "sha256": "<sha256>",
-        "size": 110592,
+        "size": 118784,
         "transferId": "<identity download>"
       },
       "usage": {
@@ -1299,7 +1299,7 @@ Exporting needs `export_data`, which OAuth does not grant:
         {
           "name": "identity",
           "sha256": "<sha256>",
-          "size": 110592
+          "size": 118784
         },
         {
           "name": "files",
@@ -1358,7 +1358,7 @@ Exporting needs `export_data`, which OAuth does not grant:
     "nextOffset": 65536,
     "offset": 0,
     "sha256": "<sha256>",
-    "size": 110592
+    "size": 118784
   }
 }
 ```

@@ -46,7 +46,7 @@ const SPACE_MARGIN: u64 = 64 * MIB;
 /// Rows that let someone in without a password. They never leave the origin
 /// and an import deletes any it finds. API keys travel instead, revoked at
 /// import, so the destination lists them (`http::revoke_imported_keys`).
-const ACCESS_TABLES: [&str; 2] = ["app_sessions", "account_challenges"];
+const ACCESS_TABLES: [&str; 3] = ["app_sessions", "account_challenges", "entry_links"];
 const EXCLUDED: [&str; 5] = [
     "app sessions",
     "verification, recovery and invitation links",

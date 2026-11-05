@@ -132,6 +132,9 @@ pub struct AuthService {
 pub struct AuthUser {
     pub user_id: String,
     pub name: String,
+    /// Who entered the app as this account through a one-time link
+    /// (`enter.rs`). None when the person signed in themselves.
+    pub entered_by: Option<String>,
 }
 
 impl Serialize for AuthUser {
@@ -275,9 +278,16 @@ impl AuthService {
              CREATE TABLE IF NOT EXISTS app_sessions (
                token_hash TEXT PRIMARY KEY,
                user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
-               expires_at INTEGER NOT NULL
+               expires_at INTEGER NOT NULL,
+               entered_by TEXT
              );
-             CREATE INDEX IF NOT EXISTS app_sessions_expiry ON app_sessions(expires_at);",
+             CREATE INDEX IF NOT EXISTS app_sessions_expiry ON app_sessions(expires_at);
+             CREATE TABLE IF NOT EXISTS entry_links (
+               token_hash TEXT PRIMARY KEY,
+               user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+               entered_by TEXT NOT NULL,
+               expires_at INTEGER NOT NULL
+             );",
             )
             .map_err(AuthError::Storage)?;
         migrate(&mut connection, apply_mode.then_some(verification))?;
@@ -320,6 +330,7 @@ impl AuthService {
         let user = AuthUser {
             user_id: Uuid::new_v4().to_string(),
             name: account.email.clone(),
+            entered_by: None,
         };
         let mut connection = self.connection()?;
         let transaction = connection.transaction().map_err(AuthError::Storage)?;
@@ -358,6 +369,7 @@ impl AuthService {
             user: AuthUser {
                 user_id,
                 name: email,
+                entered_by: None,
             },
             password_hash,
         }))
@@ -397,7 +409,7 @@ impl AuthService {
         let connection = self.connection()?;
         let record = connection
             .query_row(
-                "SELECT u.id, u.email, s.expires_at
+                "SELECT u.id, u.email, s.expires_at, s.entered_by
              FROM app_sessions s JOIN app_users u ON u.id = s.user_id
              WHERE s.token_hash = ?1 AND u.state = 'active'",
                 [&token_hash],
@@ -406,12 +418,13 @@ impl AuthService {
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, i64>(2)?,
+                        row.get::<_, Option<String>>(3)?,
                     ))
                 },
             )
             .optional()
             .map_err(AuthError::Storage)?;
-        let Some((user_id, email, expires_at)) = record else {
+        let Some((user_id, email, expires_at, entered_by)) = record else {
             return Ok(None);
         };
         if expires_at <= now_seconds() {
@@ -426,6 +439,7 @@ impl AuthService {
         Ok(Some(AuthUser {
             user_id,
             name: email,
+            entered_by,
         }))
     }
 
@@ -661,6 +675,7 @@ impl AuthService {
             AuthUser {
                 user_id,
                 name: email,
+                entered_by: None,
             },
         )?;
         transaction.commit().map_err(AuthError::Storage)?;
@@ -814,7 +829,7 @@ impl AuthService {
                 transaction
                     .execute("DELETE FROM app_sessions WHERE user_id = ?1", [&user_id])
                     .map_err(AuthError::Storage)?;
-                let session = issue_session(&transaction, AuthUser { user_id, name: invited })?;
+                let session = issue_session(&transaction, AuthUser { user_id, name: invited, entered_by: None })?;
                 IdentitySignIn { session, outcome: IdentityOutcome::Created }
             }
             IdentityIntent::SignIn => {
@@ -853,7 +868,7 @@ impl AuthService {
                                 .execute("DELETE FROM account_challenges WHERE user_id = ?1 AND consumed_at IS NULL", [&user_id])
                                 .map_err(AuthError::Storage)?;
                         }
-                        let session = issue_session(&transaction, AuthUser { user_id, name: account_email })?;
+                        let session = issue_session(&transaction, AuthUser { user_id, name: account_email, entered_by: None })?;
                         IdentitySignIn { session, outcome: IdentityOutcome::SignedIn }
                     }
                     None => {
@@ -868,7 +883,7 @@ impl AuthService {
                                 params![user_id, email, unusable_password_hash()?, now],
                             )
                             .map_err(AuthError::Storage)?;
-                        let session = issue_session(&transaction, AuthUser { user_id, name: email.clone() })?;
+                        let session = issue_session(&transaction, AuthUser { user_id, name: email.clone(), entered_by: None })?;
                         IdentitySignIn { session, outcome: IdentityOutcome::Created }
                     }
                 }
@@ -1076,8 +1091,8 @@ fn issue_session(connection: &Connection, user: AuthUser) -> Result<AuthSession,
     let expires_at = now + SESSION_TTL_SECONDS;
     connection
         .execute(
-            "INSERT INTO app_sessions (token_hash, user_id, expires_at) VALUES (?1, ?2, ?3)",
-            params![hash_token(&token), user.user_id, expires_at],
+            "INSERT INTO app_sessions (token_hash, user_id, expires_at, entered_by) VALUES (?1, ?2, ?3, ?4)",
+            params![hash_token(&token), user.user_id, expires_at, user.entered_by],
         )
         .map_err(AuthError::Storage)?;
     // Sign-ins are rate limited but succeed every time with the right
@@ -1500,7 +1515,7 @@ mod tests {
         assert_eq!(state_of(&app, "new@example.test").1, "pending");
         // No password was stored at signup, so none signs in.
         assert!(matches!(sign_in(&auth, "new@example.test", PASSWORD), Err(AuthError::InvalidCredentials)));
-        let user = AuthUser { user_id: state_of(&app, "new@example.test").0, name: "new@example.test".into() };
+        let user = AuthUser { user_id: state_of(&app, "new@example.test").0, name: "new@example.test".into(), entered_by: None };
         assert!(matches!(auth.start_session(user), Err(AuthError::AccountPending)));
         let session = auth
             .complete_challenge(Purpose::Verification, &challenge.token, password(PASSWORD), |_| true)
@@ -1808,7 +1823,8 @@ mod tests {
                password_hash TEXT NOT NULL,
                created_at INTEGER NOT NULL);
              CREATE TABLE app_sessions (token_hash TEXT PRIMARY KEY,
-               user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL);",
+               user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL,
+               entered_by TEXT);",
         ).unwrap();
         connection.execute(
             "INSERT INTO app_users (id, email, password_hash, created_at) VALUES ('legacy-id', 'legacy@example.test', ?1, 1)",

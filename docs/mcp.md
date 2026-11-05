@@ -72,7 +72,7 @@ If MCP is published on an origin other than the hosting origin, set `KONAE_MCP_O
 | Usage and Signals | `usage_read`, `signals_read`, `usage_summary`, `usage_overview` |
 | Calls between apps | `calls_read` |
 | Email notices | `notices_read` |
-| App users and invitations | `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_invitations_create`, `app_invitations_list`, `app_invitation_resend`, `app_invitation_revoke` |
+| App users and invitations | `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter`, `app_invitations_create`, `app_invitations_list`, `app_invitation_resend`, `app_invitation_revoke` |
 | Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
 | Credentials from the owner session | `tokens_list`, `token_create`, `token_revoke` |
 | App runtime | `auth_session`, `auth_logout`, `actions_invoke`, `files_list`, `files_upload`, `files_read`, `files_update`, `files_delete` and transfers |
@@ -134,6 +134,7 @@ All of these tools take a `deploymentId`, check `manage_users` and the token's p
 | --- | --- | --- |
 | `app_users_list` | `limit` (1 to 100, default 50), `cursor`, `state` | `{ users: [{ userId, email, state, verified, verifiedAt, createdAt }], nextCursor }`, ordered by email. |
 | `app_user_suspend`, `app_user_resume` | `userId` | `{ userId, email, state }`. Suspension ends sessions and open links and keeps ID, password and rows. Resume returns `active` if the account ever verified, otherwise `pending`. |
+| `app_user_enter` | `userId` | `{ userId, email, url, expiresAt }`. `url` is `/_konae/enter#entry=<token>` on the app's host and signs in the browser that opens it as that active account, once, within two minutes. Needs the owner's own browser session. The audit row's detail names the account, and Usage and Signals do not count the session. |
 | `app_invitations_create` | `emails` (1 to 50), `idempotencyKey` (8 to 128 characters) | `{ policy, results: [...] }` with one result per distinct address: `invited` with `invitationId`, `expiresAt`, `acceptable` and `delivery`; `already-invited` with the pending `invitationId`; `already-member`; `suspended`; or `invalid-email`. |
 | `app_invitations_list` | `limit`, `cursor` | `{ invitations: [{ invitationId, email, status, invitedBy, createdAt, expiresAt, acceptedAt, revokedAt, delivery, sends }], nextCursor }`, newest first. |
 | `app_invitation_resend` | `invitationId`, `idempotencyKey` | A new seven-day link for a pending invitation; the earlier link stops working. Refused for an accepted or revoked invitation, an active account or a suspended one. |

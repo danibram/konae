@@ -79,6 +79,10 @@ An invitation never changes an active account's password or resumes a suspended 
 
 An account is pending until it proves control of its email, active, or suspended. Only an active account gets a session. `app_user_suspend` ends sessions and keeps the account's ID and rows. `app_user_resume` returns it to `active` if it ever verified, otherwise `pending`. `app_users_list` shows each account's state and role.
 
+## Entering as a user
+
+An owner can see the app as one of its people. Open as, beside an active account in the editor's Users view, calls `app_user_enter` and opens a link on the app's own address that works once, for two minutes, and signs that tab in as the account. The owner's audit log records who entered as whom. The session is marked, so Usage and Signals do not count what it does as that person, but its writes are real rows of that account. Only the owner's own browser session can ask for a link; an agent's credential cannot. Outside Konae the same function is a command of the Kernel on the machine.
+
 ## Credentials for agents
 
 An Agent Credential grants no Runtime Actor identity. Its permissions are `read`, `write`, `publish`, `manage_users` and `export_data`. Only `manage_users` lists, suspends and invites app accounts or changes a Signup Policy. See [MCP tools and guide topics](./mcp-tools.md).

@@ -663,6 +663,13 @@ pub async fn validate_release(state: &AppState, input: &DeployInput) -> Result<s
 }
 
 
+/// Whether Usage counts this request: not when its session came through an
+/// entry link (`enter.rs`).
+async fn counted(state: &AppState, app: &str, headers: &HeaderMap) -> bool {
+    let deployment = state.deployments.read().await.values().find(|d| d.id == app).cloned();
+    !deployment.is_some_and(|deployment| super::enter::entered_request(state, &deployment, headers))
+}
+
 pub async fn runtime_call(
     state: &AppState,
     headers: &HeaderMap,
@@ -675,7 +682,9 @@ pub async fn runtime_call(
         "auth_session" => {
             let result = response_value(session(State(state.clone()), headers.clone()).await).await;
             if let (Ok(_), Some(id)) = (&result, app) {
-                super::usage::count(&state.data_root, id, super::usage::Operation::Session);
+                if counted(state, id, headers).await {
+                    super::usage::count(&state.data_root, id, super::usage::Operation::Session);
+                }
             }
             result
         }
@@ -715,7 +724,9 @@ pub async fn runtime_call(
             anyhow::ensure!(response.status().is_success(), "File not found.");
             let result = download_body(state, principal, response.into_body()).await;
             if let (Ok(_), Some(id)) = (&result, app) {
-                super::usage::count(&state.data_root, id, super::usage::Operation::FileRead);
+                if counted(state, id, headers).await {
+                    super::usage::count(&state.data_root, id, super::usage::Operation::FileRead);
+                }
             }
             result
         }
@@ -752,7 +763,9 @@ pub async fn runtime_call(
             result.as_object_mut().unwrap().remove("url");
             super::transfers::store(state)?.execute("INSERT INTO file_receipts(transfer_id,principal,request_hash,body) VALUES(?1,?2,?3,?4)",params![id,principal,request_hash,result.to_string()])?;
             if let Some(deployment) = app {
-                super::usage::count(&state.data_root, deployment, super::usage::Operation::Upload);
+                if counted(state, deployment, headers).await {
+                    super::usage::count(&state.data_root, deployment, super::usage::Operation::Upload);
+                }
             }
             // Failed uploads and receipt replays leave no row.
             let result = Ok(result);

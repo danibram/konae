@@ -1140,21 +1140,29 @@ async fn run_verified(
     let result = run_action(db_path, action, params).await;
     // A notice below writes mail.sqlite; the app's other calls need not wait for it.
     drop(_guard);
+    // Usage and Signals do not count what someone who entered as an account does.
+    let counted = !matches!(&caller, Caller::Person(user) if user.entered_by.is_some());
     match result {
         Ok(ran) => {
             let changed = match super::guard::outcome(name, action, &ran.answer) {
                 super::guard::Outcome::Refused(message) => {
-                    super::usage::execution(&state.data_root, &deployment.id, name, "route", "refused");
-                    super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Refused(name.to_owned()));
+                    if counted {
+                        super::usage::execution(&state.data_root, &deployment.id, name, "route", "refused");
+                        super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Refused(name.to_owned()));
+                    }
                     return refusal(StatusCode::FORBIDDEN, &message);
                 }
                 outcome => matches!(outcome, super::guard::Outcome::Changed),
             };
-            super::usage::execution(&state.data_root, &deployment.id, name, "route", "ok");
-            // A route counts under its method and path, not again as an action.
-            super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Route(http.method.clone(), http.path.clone()));
+            if counted {
+                super::usage::execution(&state.data_root, &deployment.id, name, "route", "ok");
+                // A route counts under its method and path, not again as an action.
+                super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Route(http.method.clone(), http.path.clone()));
+            }
             if changed {
-                super::usage::signal(&state.data_root, &deployment.id, name, action, &input, caller.actor_id());
+                if counted {
+                    super::usage::signal(&state.data_root, &deployment.id, name, action, &input, caller.actor_id());
+                }
                 let account = match &caller {
                     Caller::Person(user) => Some(user.user_id.as_str()),
                     Caller::Key(_) | Caller::Visitor => None,
@@ -1167,7 +1175,9 @@ async fn run_verified(
             response
         }
         Err(error_value) => {
-            super::usage::execution(&state.data_root, &deployment.id, name, "route", "failed");
+            if counted {
+                super::usage::execution(&state.data_root, &deployment.id, name, "route", "failed");
+            }
             refusal(StatusCode::BAD_REQUEST, &error_value.to_string())
         },
     }
@@ -1189,6 +1199,7 @@ async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>
         Ok(caller) => caller,
         Err(response) => return response,
     };
+    let counted = !matches!(&caller, Caller::Person(user) if user.entered_by.is_some());
     let mut response = match caller {
         Caller::Key(key) => read_file_as_key(&state, &deployment, &key, &id, &headers).await,
         Caller::Person(_) => serve_file(State(state.clone()), AxumPath(id), headers).await,
@@ -1201,7 +1212,7 @@ async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>
             serve_file(State(state.clone()), AxumPath(id), visitor).await
         }
     };
-    if response.status().is_success() {
+    if response.status().is_success() && counted {
         super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::FileRead);
     }
     // Only the app's own pages may embed the file; programs are unaffected.

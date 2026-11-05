@@ -560,6 +560,15 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             false,
         ));
         tools.extend(invitations_tools());
+        if owner.session {
+            tools.push(tool(
+                "app_user_enter",
+                "Enter a deployment as one of its active app accounts. Returns a link on the app's own address that works once, for two minutes, and signs the browser that opens it in as that account. The owner's audit log records who entered as whom, and Usage and Signals do not count what that session does. Needs manage_users and the owner's own browser session; a delegated token cannot call it.",
+                json!({"deploymentId":text,"userId":text}),
+                &["deploymentId", "userId"],
+                false,
+            ));
+        }
     }
     if owner.scopes.iter().any(|s| s == "publish") {
         tools.extend([
@@ -952,6 +961,14 @@ fn audit(
                 .map(|id| format!("deployment {id}"));
             (project, deployment)
         }
+        // Who entered as whom: the principal is the actor, the detail names the account.
+        "app_user_enter" => (
+            arguments["deploymentId"].as_str().map(str::to_owned),
+            Some(match result {
+                Ok(entered) => format!("as {} ({})", entered["email"].as_str().unwrap_or_default(), entered["userId"].as_str().unwrap_or_default()),
+                Err(_) => format!("as {} (refused)", arguments["userId"].as_str().unwrap_or_default()),
+            }),
+        ),
         "package_download" => (
             arguments["deploymentId"].as_str().map(str::to_owned),
             arguments["component"].as_str().map(str::to_owned),
@@ -1518,6 +1535,11 @@ async fn admin_call(
             )?;
             tx.commit()?;
             Ok(receipt)
+        }
+        "app_user_enter" => {
+            anyhow::ensure!(owner.session, "app_user_enter signs a browser in to the app, so it takes the owner's own browser session. A delegated token cannot call it.");
+            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "manage_users").await?;
+            super::enter::issue(state, &deployment, a["userId"].as_str().unwrap_or_default(), principal).await
         }
         name if name.starts_with("app_") => {
             // Every app user and invitation tool needs manage_users and the project grant.
