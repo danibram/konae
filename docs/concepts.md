@@ -30,8 +30,6 @@ Product terms are capitalized. Declaration keys stay lowercase: guard, notice, s
 
 **Agent Credential.** A Project Owner's revocable delegation that lets an external agent perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity.
 
-**Development Kernel.** The local development authority that reproduces the Kernel interfaces without granting an application access to production resources. `konae dev` runs one.
-
 ## As the app grows
 
 **Guard.** A mutation's declared refusal, `"guard": "<message>"`. The Kernel answers it instead of `{ changes: 0 }` when the statement changes no row because the app's own rule in its `WHERE` said no.

@@ -50,7 +50,7 @@ A notice is recorded only when the statement changed a row. A guard's refusal, a
 
 - Call the mutation, then read the notice's state with `notices_read` and the Deployment's `deploymentId`. It lists the app's notice jobs, newest first, 50 at a time.
 - `mail_status` counts notice jobs per state under `queue.notices`.
-- On `konae dev`, the email lands in `<folder>/.konae/dev-data/mailbox.jsonl` and goes to no provider. `konae events` lists it with its recipient, subject and text, and `dev` serves the same list as a page on the next port.
+- On `konae dev`, the email lands in `<folder>/.konae/kernel/mailbox.jsonl` and goes to no provider. `konae events` lists it with its recipient, subject and text, and `dev` serves the same list as a page on the next port.
 - After a release, the read-back for `release_apply` is `project_inspect`. Delivered means a mail server took the message, not that a person read it.
 
 The editor preview sends no notice email and has no Usage store. Try `notify` on `konae dev` or on a Deployment.

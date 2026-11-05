@@ -14,13 +14,13 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
     bun run konae -- init --dir /tmp/my-app --name 'My app'
     ```
 
-2. Run it locally. `dev` starts a Development Kernel with its own identities, data and files under `.konae/dev-data`, and republishes each time you save a file. It publishes locally as Open so test accounts can sign up, and it never proxies production. The default port is 8796.
+2. Run it locally. `dev` builds `dist/` and runs the `kernel` binary on the folder, with the folder's `data/`, and starts it again each time you save a file in `app/`. It never proxies production. The default port is 8796.
 
     ```sh
     bun run konae -- dev --dir /tmp/my-app
     ```
 
-3. Edit the Capsule files in `app/`. Open the URL `dev` prints and reload after each change. Email, notices included, goes to `.konae/dev-data/mailbox.jsonl`.
+3. Edit the Capsule files in `app/`. Open the URL `dev` prints and reload after each change. Email, notices included, goes to `.konae/kernel/mailbox.jsonl`.
 4. Optional. Write the Action Contract and, against a test Deployment, check every action's answers.
 
     ```sh

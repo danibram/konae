@@ -271,7 +271,7 @@ export const sdkContract = {
         {
           file: "actions.json",
           key: "schedule",
-          summary: "\"schedule\": { \"every\": \"15m\" } or { \"every\": \"6h\" } or { \"daily\": \"02:00\" } on a mutation that takes no input. The Kernel's own timer runs it once in each period, or once a day at that UTC time, with no caller: an actor binding is null, kernel.now is the time of the run, and literals bind as written. Use it for work that must happen when nobody asks, such as releasing a hold that lapsed or closing a day. A run that changes no row had nothing to do, so the guard does not apply; a run that changed a row records the action's Signal with actor null. A changed run also processes notify through the notice queue. Use to owner, or to { column } to reach the accounts the changed rows name; to actor records no-account because the timer has no caller. A run queues one notice per recipient, and {changes} lists the rows it changed, so a digest can say what is due. The owner reads each run, with its outcome and changes, under scheduled with usage_read. Only the timer runs it: a call through miniapp.actions.call or actions_invoke is refused with \"Action <name> runs only on its schedule.\", unless the action also declares an http route, which answers as its callers say. The Validation Gate and the Kernel refuse the same declarations with the same messages. The editor preview runs no schedule; a Development Kernel and a Deployment do.",
+          summary: "\"schedule\": { \"every\": \"15m\" } or { \"every\": \"6h\" } or { \"daily\": \"02:00\" } on a mutation that takes no input. The Kernel's own timer runs it once in each period, or once a day at that UTC time, with no caller: an actor binding is null, kernel.now is the time of the run, and literals bind as written. Use it for work that must happen when nobody asks, such as releasing a hold that lapsed or closing a day. A run that changes no row had nothing to do, so the guard does not apply; a run that changed a row records the action's Signal with actor null. A changed run also processes notify through the notice queue. Use to owner, or to { column } to reach the accounts the changed rows name; to actor records no-account because the timer has no caller. A run queues one notice per recipient, and {changes} lists the rows it changed, so a digest can say what is due. The owner reads each run, with its outcome and changes, under scheduled with usage_read. Only the timer runs it: a call through miniapp.actions.call or actions_invoke is refused with \"Action <name> runs only on its schedule.\", unless the action also declares an http route, which answers as its callers say. The Validation Gate and the Kernel refuse the same declarations with the same messages. The editor preview runs no schedule; konae dev and a Deployment do.",
           errors: [
             { message: "Action <name> is a query, so it cannot declare a schedule. Declare it on a mutation.", when: "the action is a query", source: "kernel" },
             { message: "Action <name> is a signal action, so it cannot declare a schedule. Declare it on a mutation.", when: "the action is a signal action", source: "kernel" },
@@ -345,7 +345,7 @@ export const sdkContract = {
             { code: "await miniapp.actions.call(\"tasks.create\", { title });", comment: "{ changes, lastInsertId }" },
             { code: "await miniapp.actions.call(\"lesson.finish\", { lesson });", comment: "a signal action: { recorded: true }" },
           ],
-          preview: "Ignores the Deployment's visibility and rate limits, and keeps its database in the browser with a 10 MiB cap. A signal action returns { recorded: true } and records nothing; Signals exist only on a Deployment or a Development Kernel. A call action returns { callId, queued: true } and sends nothing; only a Kernel sends calls.",
+          preview: "Ignores the Deployment's visibility and rate limits, and keeps its database in the browser with a 10 MiB cap. A signal action returns { recorded: true } and records nothing; Signals exist only on a Deployment or on konae dev. A call action returns { callId, queued: true } and sends nothing; only a Kernel sends calls.",
         },
       ],
     },
@@ -541,7 +541,7 @@ export const sdkContract = {
         "Each attempt of a signed call signs again with a new nonce, so a retry is never refused as a replay.",
         "A paused app sends no call and runs no then mutation until its pause ends.",
         "Usage counts each queued call under call, by action. The then mutation counts as an action, or under refused when its guard refuses, and records its Signal with actor null.",
-        "The editor preview answers { callId, queued: true } and sends nothing. Run calls on a Development Kernel with konae dev, or on a Deployment.",
+        "The editor preview answers { callId, queued: true } and sends nothing. Run calls on konae dev, or on a Deployment.",
       ],
     },
     {
@@ -620,7 +620,7 @@ export const sdkContract = {
         "fields maps an input key to a JSON path into the POST body, such as { \"id\": \"$.data.object.id\" }. Each input fields does not name is read from the body's key of that name, and every other key of the body is left out, so a provider's payload needs no adapter. A path that is missing leaves its input out: a required one is refused as missing, a nullable one binds NULL.",
         "The owner sets the secret with the secret_set admin tool before publishing. It never appears in actions.json, the Build Artifact or an export.",
         "GET /_konae/files/<id>, the path miniapp.files.url returns under the page's base path, answers a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it. A visitor without a session on a private app gets 401 authentication-required before any file is looked up; every other caller who may not read the file gets 404 File not found, the same as for a missing or deleted one.",
-        "The editor preview serves no routes. Run them on a Development Kernel with konae dev, or on a Deployment.",
+        "The editor preview serves no routes. Run them on konae dev, or on a Deployment.",
       ],
     },
   ],

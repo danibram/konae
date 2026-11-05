@@ -63,7 +63,7 @@ bun run konae -- init --dir /tmp/my-app --name "My app"
 bun run konae -- dev --dir /tmp/my-app
 ```
 
-`dev` runs the app on a local Development Kernel with its own accounts and data. To publish, `login` saves a credential and the installation's address in the folder, and the first `publish` registers the project there. `init` writes the app folder: `konae.json`, the sources in `app/`, `AGENTS.md`, `action-contract.md` and a `package.json` whose `npm run build` writes `dist/`:
+`dev` runs the app on this machine with the `kernel` binary, on the folder's own `data/`. To publish, `login` saves a credential and the installation's address in the folder, and the first `publish` registers the project there. `init` writes the app folder: `konae.json`, the sources in `app/`, `AGENTS.md`, `action-contract.md` and a `package.json` whose `npm run build` writes `dist/`:
 
 ```sh
 KONAE_EMAIL=you@example.com KONAE_PASSWORD=... bun run konae -- login --dir /tmp/my-app --url http://localhost:4173 --export-data
