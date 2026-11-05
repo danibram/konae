@@ -95,6 +95,10 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
         "invite" => {
             let emails = words.rest();
             ensure!(!emails.is_empty(), "Name at least one email to invite.");
+            // A serving Kernel checks its sender at startup; this process checks it before it queues.
+            if let Some(queue) = state.accounts.queue.as_ref() {
+                queue.run_preflight().await;
+            }
             let arguments = json!({"emails": emails, "idempotencyKey": Uuid::new_v4().to_string()});
             invitations::run(state, &deployment, &operator(state, id), "app_invitations_create", &arguments).await
         }
