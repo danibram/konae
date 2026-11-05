@@ -45,9 +45,51 @@ my-app/
 3. Or, in the editor, choose Export. A published app downloads as a tar of the folder with its data; an app not published yet downloads its sources and build. When `app/actions.json` differs from the actions the published app runs, the editor says that `app/` is ahead of `dist/` and `data/`.
 4. Or over MCP, call `project_export` with the `deploymentId`. It returns `folder`, a download of `konae.json`, `app/` and `dist/`, and a manifest with one download per part of `data/`: `database`, `identity`, `files` and, when the app recorded any, `usage`. `sourcesAhead` is true when `app/actions.json` differs from the actions the release runs. Read each download with `transfer_read` and its `transferId` and `offset` until `nextOffset` equals `size`. Check its SHA-256, then call `transfer_cancel`.
 
-## Run it on your own machine
+## Run it without Konae
 
-`compose.yaml` names the Kernel image, which is not published yet, and no command loads an exported `data/` into a Kernel yet. Until both come, `bun run konae -- dev --dir /tmp/my-app-export` from a Konae checkout runs the folder's sources on a local Kernel with data of its own, and the import below moves the data between installations from `project_export`'s downloads.
+The `kernel` binary serves an exported folder as it is, with its `data/`. At startup it checks the folder as Konae checks a release, writes its own record into the folder's `.konae/`, and prints the app's address. People sign in with the passwords they have.
+
+1. Build the image from a Konae checkout, and push it to a registry the server can pull from.
+
+    ```sh
+    docker build -f Dockerfile.kernel -t registry.example.com/konae-kernel:0.1.0 .
+    ```
+
+2. In the exported folder, copy `.env.example` to `.env`. Set `KONAE_KERNEL_IMAGE` to that image, `KONAE_ADMIN_KEY` to a long random value, and a mail transport if the app sends invitations or password resets.
+3. Start it, and read the address it prints.
+
+    ```sh
+    docker compose up -d
+    docker compose logs kernel
+    ```
+
+    With the example settings the app answers at `http://<slug>.localhost:8787`.
+
+The Kernel runs as the person who owns the folder, so the files it writes into it stay theirs. Without Docker, `bun run konae -- dev --dir /tmp/my-app-export` from a Konae checkout runs the same binary on the folder.
+
+The Kernel refuses a folder whose routes sign with a secret it does not hold, because secrets never travel. Set each one, then restart:
+
+```sh
+printf '%s' "$SECRET" | docker compose exec -T kernel kernel secret set orders_hook
+docker compose restart kernel
+```
+
+### Manage the app from the machine
+
+Outside Konae, the `kernel` binary's commands do what Konae's editor does for app users, keys and secrets. Each one calls the function the editor's tool calls, refuses with the same words, and prints the answer as JSON. They work while the Kernel serves, and the Kernel reads the Signup Policy from `konae.json` again when a command changes it.
+
+```sh
+docker compose exec kernel kernel users
+docker compose exec kernel kernel invite ana@example.com
+docker compose exec kernel kernel suspend <user id>
+docker compose exec kernel kernel resume <user id>
+docker compose exec kernel kernel signup-policy invitation
+docker compose exec kernel kernel api-key create billing --action orders.create
+docker compose exec kernel kernel api-key revoke <key id>
+docker compose exec kernel kernel sql "SELECT count(*) FROM orders LIMIT 1"
+```
+
+The exported `AGENTS.md` lists every command with its options. An export carries each API key revoked, so issue new ones with `kernel api-key create`.
 
 ## Serve the app on its own domain
 
@@ -64,7 +106,7 @@ An export carries the custom hostname without its verification token, so the des
 3. Upload the release JSON built from `app/` and `dist/`, with `initialPackage` holding the `manifest` and a `components` map of part name to `transferId`. Then call `release_plan` and `release_apply`. An import installs only into a project that has no Deployment yet. The same data imported again returns the first import.
 4. Issue new API keys. `api_keys_list` shows each key revoked at import.
 
-`konae pull` and `konae dev --reset` are the same export and import for a laptop. `pull` exports the published app's data into `.konae/pull`, and `dev --reset` imports it into the local Kernel.
+`konae pull` and `konae dev --reset` are the same export and import for a laptop. `pull` exports the published app's data into `.konae/pull`, and `dev --reset` puts it in the folder's `data/`.
 
 ## Check it worked
 

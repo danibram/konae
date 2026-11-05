@@ -95,20 +95,25 @@ node_modules/
 `;
 
 const envExample = `# The Kernel's settings for compose.yaml. Copy to .env, which stays on this machine.
+# The image to run. Set it to where you published the image Dockerfile.kernel builds.
+KONAE_KERNEL_IMAGE=
 KONAE_PORT=8787
 KONAE_PUBLIC_ORIGIN=http://localhost:8787
 KONAE_HOST_SUFFIX=localhost
-# A long random key for the Kernel's own commands, such as: openssl rand -hex 32
+# A long random key that seals the links in queued account email, such as: openssl rand -hex 32
 KONAE_ADMIN_KEY=
+# How account email leaves: resend, smtp or development, which writes it to mailbox.jsonl in the Kernel's volume.
+# Without a transport, invitations and password resets are refused.
+KONAE_MAIL_TRANSPORT=
 `;
 
 function composeFile(settings: AppSettings) {
-  return `# Runs the Konae Kernel on this folder, which it keeps under apps/<id> of
-# its data directory. The image konae/kernel is not published yet; until it
-# is, serve the folder with \`konae dev\` from a Konae checkout. AGENTS.md says how.
+  return `# Runs the Kernel on this folder. The Kernel opens it as apps/${settings.id}
+# of its data directory, checks it as a release, and serves it. Set
+# KONAE_KERNEL_IMAGE in .env to the image Dockerfile.kernel builds.
 services:
   kernel:
-    image: konae/kernel:${settings.kernel}
+    image: \${KONAE_KERNEL_IMAGE:?Set KONAE_KERNEL_IMAGE in .env to the Kernel image.}
     env_file: .env
     environment:
       KONAE_BIND: "0.0.0.0"
@@ -158,10 +163,26 @@ This folder is one Konae app. A Konae Kernel serves the pages in \`dist/\` and r
 ## Run it
 
 1. \`npm install\`, then \`npm run build\` to write \`dist/\`.
-2. From a Konae checkout: \`bun run konae -- dev --dir <this folder>\`. It serves the app on this machine with local data of its own, not \`data/\`, and republishes when a file in \`app/\` changes.
-3. To publish on a Konae installation: \`bun run konae -- login --dir <this folder> --url <installation>\`, then \`bun run konae -- publish --dir <this folder>\`.
-${secrets.length ? `\nThe app's routes and calls sign with ${secrets.length === 1 ? "the secret" : "the secrets"} ${secrets.join(", ")}. A secret never travels with the folder, so set each on the installation that serves the app with \`secret_set\`. \`konae dev\` sets a local value itself.\n` : ""}
-\`compose.yaml\` names the Kernel image, which is not published yet. No command loads \`data/\` into a Kernel yet.
+2. On this machine, from a Konae checkout: \`bun run konae -- dev --dir <this folder>\`. It serves the app with \`data/\` and starts again when a file in \`app/\` changes.
+3. On a server: copy \`.env.example\` to \`.env\`, fill it in, and run \`docker compose up -d\`. The Kernel prints the app's address, \`http://${settings.slug || "app"}.localhost:8787\` with the example settings.
+4. To publish on a Konae installation: \`bun run konae -- login --dir <this folder> --url <installation>\`, then \`bun run konae -- publish --dir <this folder>\`.
+
+At startup the Kernel checks the folder as Konae checks a release. It refuses a folder whose \`dist/\` breaks the publishing rules, whose actions break a rule above, or whose \`schema.sql\` drops or retypes a column, and says which. To apply a change that loses data, start it once with the \`KONAE_CONFIRM_SCHEMA\` value it names.
+${secrets.length ? `\nThe app's routes and calls sign with ${secrets.length === 1 ? "the secret" : "the secrets"} ${secrets.join(", ")}. A secret never travels with the folder, so set each where the app runs: \`kernel secret set <name>\` below, or \`secret_set\` on Konae. The Kernel does not serve the app until each is set.\n` : ""}
+## Commands
+
+Outside Konae, the Kernel's commands manage the app. Each refuses with the same words as the tool in Konae's editor, and prints the answer as JSON. Under Compose, run each as \`docker compose exec kernel kernel <command>\`; they work while the Kernel serves.
+
+- \`kernel users [--state pending|active|suspended]\`: the app accounts, with their IDs.
+- \`kernel invite <email>...\`: email each person an invitation. It needs a mail transport.
+- \`kernel suspend <user id>\`, \`kernel resume <user id>\`: end an account's sessions and keep it out, or let it back in.
+- \`kernel signup-policy open|invitation|closed|allowlist [<email or @domain>...]\`: who may create an account.
+- \`kernel api-key create <name> --action <name>... [--files public|private]...\`, \`kernel api-key list\`, \`kernel api-key revoke <key id>\`: keys for the app's HTTP routes and files. The key appears once.
+- \`kernel secret set <name> [--use route|call|google]\`, with the value on standard input, and \`kernel secret list\`.
+- \`kernel sql "<statement>"\`: run SQL on \`data/database.sqlite\`.
+- \`kernel events --from <YYYY-MM-DD> --to <YYYY-MM-DD>\`: notices, calls, scheduled runs, routes and Signals.
+
+Add \`--app ${settings.id}\` when the Kernel serves more than one app.
 `;
 }
 
