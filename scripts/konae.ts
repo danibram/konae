@@ -854,7 +854,13 @@ async function main() {
       catch { console.warn(`Port ${eventsPort} is taken, so the events page is off. Choose another with --events-port, or run events.`); }
       if (feed) await writeFile(devSession, JSON.stringify({ events: feed.url }), { mode: 0o600 });
       const policy = settings.signupPolicy.mode;
-      if (policy !== "open") console.log(`The Signup Policy is ${policy}. To create a test account, invite it: ${kernel.binary} invite <email> --app ${settings.id}, with KONAE_DATA_DIR=${kernel.data}. The invitation lands in ${path.join(kernel.data, "mailbox.jsonl")}.`);
+      if (policy !== "open") {
+        // The Kernel's own settings, so a command run by hand seals and addresses its links as the Kernel does.
+        const envFile = path.join(root, ".konae/kernel.env");
+        await writeFile(envFile, Object.entries(kernel.env).filter(([name]) => name.startsWith("KONAE_")).map(([name, value]) => `${name}=${value}\n`).join(""), { mode: 0o600 });
+        console.log(`The Signup Policy is ${policy}. To create a test account, invite it, and open the link that lands in ${path.join(kernel.data, "mailbox.jsonl")}:`);
+        console.log(`  env $(cat ${envFile}) ${kernel.binary} invite <email> --app ${settings.id}`);
+      }
       console.log(feed
         ? `Email, calls, scheduled runs and Signals of this app: ${feed.url} in a browser, or bun run konae -- events --dir ${root} --json`
         : `See the email, calls, scheduled runs and Signals of this app with: bun run konae -- events --dir ${root} --follow`);
