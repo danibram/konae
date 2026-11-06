@@ -97,8 +97,9 @@ const OPEN_TOOLS: [&str; 21] = [
     "project_export",
     "release_plan",
 ];
-/// Tools a paused app takes because they are what maintenance is for.
-const PAUSED_TOOLS: [&str; 1] = ["maintenance_set"];
+/// Tools a paused app takes because they are what maintenance is for:
+/// taking it out, and replacing what it holds.
+const PAUSED_TOOLS: [&str; 2] = ["maintenance_set", "project_import"];
 const READ_TOOLS_SUFFIX: [&str; 2] = ["_list", "_read"];
 
 /// Runs before every administrative tool.
@@ -594,8 +595,15 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         tools.extend(domain_tools());
         tools.extend(path_tools());
         tools.push(tool(
+            "project_import",
+            "Replace an existing deployment's sources, data or both with those of an exported app folder. It backs up what it replaces first; database_execute list-backups shows the backup and restore-backup brings it back. Rows are never merged. replace sources or both takes transferId, an upload of the release JSON of the publishing topic built from the folder's app/ and dist/. replace data or both takes package { manifest, components: { <name>: <transferId> } }, uploaded as the portability topic says. The app keeps its Signup Policy, sign-in methods, address, secrets, sessions and API keys. When the schema change loses data, the answer is { imported: false, schema } and nothing changed; call again with schema.confirmation as confirmSchema after the owner agrees. Works in maintenance. Requires publish. Read back with project_inspect and database_execute list-backups.",
+            json!({"deploymentId":text,"replace":{"type":"string","enum":["sources","data","both"]},"transferId":text,"package":{"type":"object"},"confirmSchema":{"type":"string","minLength":64,"maxLength":64}}),
+            &["deploymentId", "replace"],
+            false,
+        ));
+        tools.push(tool(
             "maintenance_set",
-            "Put a deployment in maintenance (on true) or take it out (on false). In maintenance the app serves a maintenance page, refuses writes, signups and sign-ins, holds its email, calls and schedule, and refuses every administrative tool that would change it except maintenance_set. Moving an app with no lost write is maintenance, project_export, then an import on the other installation. Requires publish. Read back with maintenance_read.",
+            "Put a deployment in maintenance (on true) or take it out (on false). In maintenance the app serves a maintenance page, refuses writes, signups and sign-ins, holds its email, calls and schedule, and refuses every administrative tool that would change it except maintenance_set and project_import. Moving an app with no lost write is maintenance, project_export, then an import on the other installation. Requires publish. Read back with maintenance_read.",
             json!({"deploymentId":text,"on":{"type":"boolean"}}),
             &["deploymentId", "on"],
             false,
@@ -967,6 +975,14 @@ fn audit(
             Some(match result {
                 Ok(entered) => format!("as {} ({})", entered["email"].as_str().unwrap_or_default(), entered["userId"].as_str().unwrap_or_default()),
                 Err(_) => format!("as {} (refused)", arguments["userId"].as_str().unwrap_or_default()),
+            }),
+        ),
+        "project_import" => (
+            arguments["deploymentId"].as_str().map(str::to_owned),
+            Some(match result {
+                Ok(done) if done["imported"] == true => format!("{} after backup {}", done["replace"].as_str().unwrap_or_default(), done["backup"]["id"].as_str().unwrap_or_default()),
+                Ok(_) => format!("{} waits for a schema confirmation", arguments["replace"].as_str().unwrap_or_default()),
+                Err(_) => format!("{} refused", arguments["replace"].as_str().unwrap_or_default()),
             }),
         ),
         "package_download" => (
@@ -1433,15 +1449,21 @@ async fn admin_call(
             } else {
                 "write"
             };
-            owned_deployment(state, owner, id, scope).await?;
+            let deployment = owned_deployment(state, owner, id, scope).await?;
             let mut input = a.get("input").cloned().unwrap_or(json!({}));
             anyhow::ensure!(input.is_object(), "Input must be an object.");
             input["operation"] = json!(op);
-            response_value(
+            let answer = response_value(
                 admin_database(state, id, input.to_string().as_bytes())
                 .await,
             )
-            .await
+            .await?;
+            // A restore of a backup taken before an import may bring back the saved
+            // sources, so the editor's next save must read them first.
+            if op == "restore-backup" && answer["holds"].as_array().is_some_and(|holds| holds.iter().any(|part| part == "sources")) {
+                store(state)?.execute("UPDATE projects SET sources=sources+1 WHERE id=?1", [&deployment.project_id])?;
+            }
+            Ok(answer)
         }
         "project_export" => {
             let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "export_data").await?;
@@ -1481,7 +1503,7 @@ async fn admin_call(
                 }
                 super::package::verify(state, principal, &input.project.id, package).await?;
             }
-            let schema = validate_release(state, &input).await?;
+            let schema = validate_release(state, &input, None).await?;
             let id = Uuid::new_v4().to_string();
             let expires = now_ms() + 900_000;
             store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires) VALUES(?1,?2,?3,?4,?5,?6)",params![id,owner.id,input.project.id,revision,a["transferId"].as_str().unwrap(),expires])?;
@@ -1536,6 +1558,7 @@ async fn admin_call(
             tx.commit()?;
             Ok(receipt)
         }
+        "project_import" => project_import(state, owner, principal, &a).await,
         "app_user_enter" => {
             anyhow::ensure!(owner.session, "app_user_enter signs a browser in to the app, so it takes the owner's own browser session. A delegated token cannot call it.");
             let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "manage_users").await?;
@@ -1558,6 +1581,97 @@ async fn admin_call(
         }
         _ => anyhow::bail!("Unknown tool."),
     }
+}
+
+const IMPORT_REPLACE: &str = "replace must be sources, data or both.";
+
+/// `project_import`: replaces an existing app's sources, data or both with
+/// those of an exported folder, after a backup of what it replaces
+/// (`import.rs`). The sources arrive as a release payload in `transferId`,
+/// the data as `package { manifest, components }`. When the schema change
+/// loses data and `confirmSchema` does not match its plan, it answers the
+/// plan with `imported: false` and changes nothing.
+async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value) -> Result<Value> {
+    use super::import::{Outcome, Target};
+    let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "publish").await?;
+    let replace = a["replace"].as_str().unwrap_or_default();
+    let (data, sources) = match replace {
+        "sources" => (false, true),
+        "data" => (true, false),
+        "both" => (true, true),
+        _ => anyhow::bail!(IMPORT_REPLACE),
+    };
+    anyhow::ensure!(data == a.get("package").is_some(), "Pass package exactly when replace is data or both.");
+    anyhow::ensure!(sources == a.get("transferId").is_some(), "Pass transferId exactly when replace is sources or both.");
+    let package: Option<super::package::InitialPackage> = a.get("package").map(|value| serde_json::from_value(value.clone())).transpose()?;
+    let confirmation = a["confirmSchema"].as_str();
+    let project = deployment.project_id.clone();
+    let _guard = database_lock(state, &format!("project:{project}")).await;
+    let (mut metadata, revision) = owned_project(state, owner, &project, "publish")?;
+    if let Some(package) = &package {
+        super::package::verify(state, principal, &project, package).await?;
+    }
+    let release = match a["transferId"].as_str() {
+        Some(transfer_id) => {
+            let upload = transfer(state, principal, &json!({"transferId": transfer_id}))?;
+            anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload" && upload["projectId"] == project.as_str(), "Completed upload for this project required.");
+            let bytes = tokio::fs::read(transfer_path(state, transfer_id)?).await?;
+            anyhow::ensure!(bytes.len() <= 26_000_000, "Deployment payload exceeds 26 MB.");
+            let payload: Value = serde_json::from_slice(&bytes)?;
+            let input: DeployInput = serde_json::from_value(payload.clone())?;
+            anyhow::ensure!(input.project.id == project, "The release belongs to another project.");
+            anyhow::ensure!(
+                input.initial_package.is_none() && input.initial_signup_policy.is_none() && input.initial_sign_in_methods.is_none(),
+                "An import into an existing app keeps its Signup Policy and sign-in methods, and takes its data as package."
+            );
+            let against = match &package {
+                Some(package) => super::package::component_paths(state, &project, package)?.into_iter().find(|(name, _)| name == "database").map(|(_, path)| path),
+                None => None,
+            };
+            let change = validate_release(state, &input, against.as_deref()).await?;
+            if change.confirmation().is_some_and(|expected| confirmation != Some(expected.as_str())) {
+                return Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()}));
+            }
+            Some((payload, input, change))
+        }
+        None => None,
+    };
+    let (backup, change) = match &package {
+        Some(package) => {
+            let target = match &release {
+                Some((_, input, _)) => Target::release(input)?,
+                None => Target::live(state, &deployment)?,
+            };
+            match super::import::import_data(state, &deployment, package, &target, confirmation, sources).await? {
+                Outcome::NeedsConfirmation(change) => return Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()})),
+                Outcome::Imported { backup, change } => (backup, change),
+            }
+        }
+        None => (super::import::backup_sources(state, &deployment).await?, release.as_ref().map(|(_, _, change)| change.clone()).unwrap_or_default()),
+    };
+    let mut answer = json!({"imported": true, "replace": replace, "backup": backup, "schema": change.to_json()});
+    if let Some((mut payload, input, _)) = release {
+        payload["contactEmail"] = owner_email(state, &owner.id).map_or(Value::Null, Value::String);
+        payload["schemaConfirmation"] = confirmation.map_or(Value::Null, |value| Value::String(value.to_owned()));
+        for key in ["name", "slug", "manifest"] {
+            if let Some(value) = payload["project"].get(key) {
+                metadata[key] = value.clone();
+            }
+        }
+        let receipt = response_value(deploy(state, payload.to_string().as_bytes()).await).await?;
+        // The editor opens the imported sources, not the ones it saved before.
+        let saved = json!({
+            "id": project, "name": input.project.name, "slug": input.project.slug, "files": input.project.files,
+            "directories": [], "manifest": input.project.manifest, "updatedAt": now_ms(),
+        });
+        super::sources::write(&state.data_root, &project, &saved).await?;
+        store(state)?.execute(
+            "UPDATE projects SET revision=revision+1, sources=sources+1, body=?3 WHERE id=?1 AND revision=?2",
+            params![project, revision, metadata.to_string()],
+        )?;
+        answer["deployment"] = receipt;
+    }
+    Ok(answer)
 }
 
 /// The email of the owner account that invites, for the message. Owners

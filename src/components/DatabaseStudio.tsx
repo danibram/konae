@@ -491,6 +491,8 @@ function BackupsView({ host, tables, onExport, onRestored }: {
     try {
       await host.restoreDatabaseBackup(restoreId);
       setRestoreId("");
+      // A restore writes a backup of what it replaced, so the list grows.
+      await loadBackups();
       onRestored();
       setMessage("Backup restored");
     } catch (cause) {
@@ -520,9 +522,9 @@ function BackupsView({ host, tables, onExport, onRestored }: {
           <ul className="backup-list" aria-label="Database backups">
             {backups.map((backup) => (
               <li key={backup.id}>
-                <div><strong>{backup.label}</strong><small>{new Date(backup.createdAt).toLocaleString()} · {formatBytes(backup.sizeBytes)}</small></div>
+                <div><strong>{backup.label}</strong><small>{new Date(backup.createdAt).toLocaleString()} · {formatBytes(backup.sizeBytes)}{backup.holds?.length ? ` · ${backupHolds(backup.holds)}` : ""}</small></div>
                 {restoreId === backup.id ? (
-                  <div className="backup-confirm"><span>Replace the current database?</span><button onClick={() => void restoreBackup()} disabled={busy}>Confirm restore</button><button onClick={() => setRestoreId("")} disabled={busy}>Cancel</button></div>
+                  <div className="backup-confirm"><span>{backup.holds?.length ? `Replace the app's ${backupHolds(backup.holds)}?` : "Replace the current database?"}</span><button onClick={() => void restoreBackup()} disabled={busy}>Confirm restore</button><button onClick={() => setRestoreId("")} disabled={busy}>Cancel</button></div>
                 ) : <button onClick={() => setRestoreId(backup.id)} disabled={busy}>Restore</button>}
               </li>
             ))}
@@ -531,6 +533,12 @@ function BackupsView({ host, tables, onExport, onRestored }: {
       ) : <div className="future-backups"><History size={20} /><div><strong>Managed restore is not available for this target yet</strong><p>Download a consistent SQLite snapshot before changing the deployed database.</p></div></div>}
     </div>
   );
+}
+
+/** What a backup taken before an import brings back, in words. */
+function backupHolds(holds: string[]) {
+  const data = holds.includes("data"), sources = holds.includes("sources");
+  return data && sources ? "data and saved sources" : data ? "data, accounts and files" : "saved sources";
 }
 
 function columnLabel(name: string): string {

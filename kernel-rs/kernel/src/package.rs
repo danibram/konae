@@ -13,7 +13,8 @@
 //! `initialPackage`. `release_plan` verifies the manifest, the checksums, the
 //! references between files and accounts and the free space before any
 //! Deployment exists; `release_apply` copies the components into the new
-//! app's `data/`. Only a project without a Deployment accepts a package.
+//! app's `data/`. Only a project without a Deployment accepts a package
+//! this way; `import.rs` replaces the data of an app that already runs.
 //!
 //! Every step reads and writes components in 64 KiB blocks or lets SQLite
 //! page through them, so no component sits in memory on the Kernel.
@@ -188,7 +189,7 @@ pub fn ensure_upload_space(state: &AppState, size: u64) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn free_bytes(path: &Path) -> Result<u64> {
+pub fn free_bytes(path: &Path) -> Result<u64> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
     // SAFETY: statvfs writes into the zeroed struct and reads a NUL-terminated path.
@@ -200,7 +201,7 @@ fn free_bytes(path: &Path) -> Result<u64> {
 }
 
 #[cfg(not(unix))]
-fn free_bytes(_path: &Path) -> Result<u64> {
+pub fn free_bytes(_path: &Path) -> Result<u64> {
     Ok(u64::MAX)
 }
 
@@ -329,7 +330,7 @@ pub async fn export(
     Ok(json!({"manifest": manifest, "downloads": downloads, "folder": folder, "sourcesAhead": sources_ahead}))
 }
 
-fn folder_size(folder: &Path) -> Result<u64> {
+pub fn folder_size(folder: &Path) -> Result<u64> {
     let mut total = 0;
     for name in ["database.sqlite", "identity.sqlite", usage::USAGE_DATABASE] {
         total += std::fs::metadata(folder.join(name)).map(|m| m.len()).unwrap_or(0);
@@ -345,22 +346,8 @@ fn folder_size(folder: &Path) -> Result<u64> {
 /// Writes the components into `scratch` and returns each with its size and
 /// SHA-256. `usage` is left out when the Deployment has no Usage store yet.
 fn capture(folder: &Path, scratch: &Path, blobs: &file_store::BlockingFiles) -> Result<Vec<(String, PathBuf, u64, String)>> {
-    // Usage queued before the export is written first, so the package holds it.
-    usage::flush();
-    std::fs::create_dir_all(scratch)?;
-    let database = scratch.join("database.sqlite");
-    copies::vacuum_into(&folder.join("database.sqlite"), &database).context("database")?;
-    let identity = scratch.join("identity.sqlite");
-    copies::vacuum_into(&folder.join("identity.sqlite"), &identity).context("accounts")?;
-    revoke_access(&identity)?;
-    let files = scratch.join("files.tar");
-    write_files_tar(&folder.join("files"), &files, blobs).context("files")?;
-    let mut components = vec![("database", database), ("identity", identity), ("files", files)];
-    if folder.join(usage::USAGE_DATABASE).is_file() {
-        let usage = scratch.join(usage::USAGE_DATABASE);
-        copies::vacuum_into(&folder.join(usage::USAGE_DATABASE), &usage).context("usage")?;
-        components.push(("usage", usage));
-    }
+    let components = snapshot(folder, scratch, blobs)?;
+    revoke_access(&components[1].1)?;
     components
         .into_iter()
         .map(|(name, path)| {
@@ -368,6 +355,30 @@ fn capture(folder: &Path, scratch: &Path, blobs: &file_store::BlockingFiles) -> 
             Ok((name.to_owned(), path, size, sha256))
         })
         .collect()
+}
+
+/// Writes a consistent copy of the app's `data/` folder into `target`:
+/// `database.sqlite`, `identity.sqlite`, `files.tar` and, when the app has
+/// one, `usage.sqlite`. The caller holds the data and identity locks. An
+/// export then revokes the copy's access (`capture`); an import's backup
+/// keeps it as it is (`import.rs`).
+pub fn snapshot(folder: &Path, target: &Path, blobs: &file_store::BlockingFiles) -> Result<Vec<(&'static str, PathBuf)>> {
+    // Usage queued before the copy is written first, so the copy holds it.
+    usage::flush();
+    std::fs::create_dir_all(target)?;
+    let database = target.join("database.sqlite");
+    copies::vacuum_into(&folder.join("database.sqlite"), &database).context("database")?;
+    let identity = target.join("identity.sqlite");
+    copies::vacuum_into(&folder.join("identity.sqlite"), &identity).context("accounts")?;
+    let files = target.join("files.tar");
+    write_files_tar(&folder.join("files"), &files, blobs).context("files")?;
+    let mut components = vec![("database", database), ("identity", identity), ("files", files)];
+    if folder.join(usage::USAGE_DATABASE).is_file() {
+        let usage = target.join(usage::USAGE_DATABASE);
+        copies::vacuum_into(&folder.join(usage::USAGE_DATABASE), &usage).context("usage")?;
+        components.push(("usage", usage));
+    }
+    Ok(components)
 }
 
 /// Deletes sessions, open email links and invitation tokens from an identity file and marks
@@ -614,6 +625,13 @@ fn unpack_files(
     Ok(seen)
 }
 
+/// Unpacks a files component into `directory`, which receives `index.json`,
+/// and the store `blobs`, which receives each file. `accounts` is the
+/// identity file whose accounts the files may name as owners.
+pub fn unpack_into(archive: &Path, accounts: &Connection, directory: &Path, blobs: &file_store::BlockingFiles, limits: &file_store::FileLimits) -> Result<usize> {
+    unpack_files(archive, Some(accounts), Some((directory, blobs)), limits)
+}
+
 fn skip(input: &mut impl Read, bytes: u64) -> Result<()> {
     let skipped = std::io::copy(&mut input.take(bytes), &mut std::io::sink())?;
     ensure!(skipped == bytes, "The files component ends early.");
@@ -656,6 +674,12 @@ fn component_uploads(state: &AppState, principal: Option<&str>, project_id: &str
         uploads.push((content.clone(), transfer_path(state, id)?));
     }
     Ok(uploads)
+}
+
+/// The file of each component the package names, checked against the
+/// manifest and the project. The caller has checked who uploaded them.
+pub fn component_paths(state: &AppState, project_id: &str, package: &InitialPackage) -> Result<Vec<(String, PathBuf)>> {
+    Ok(component_uploads(state, None, project_id, package)?.into_iter().map(|(content, path)| (content.name, path)).collect())
 }
 
 /// Runs at `release_plan`, before any Deployment exists: the manifest, each

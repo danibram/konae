@@ -584,7 +584,10 @@ pub fn tool_error(error: &anyhow::Error) -> Value {
 
 /// Checks a release as the deploy would take it, and answers the schema
 /// change it makes, derived on a copy of the live database.
-pub async fn validate_release(state: &AppState, input: &DeployInput) -> Result<super::schema_change::Change> {
+/// Checks a release and answers the schema change it makes. `against` is a
+/// database an import puts in place first; without it the change is planned
+/// against the live database, or a package's or an empty one for a first release.
+pub async fn validate_release(state: &AppState, input: &DeployInput, against: Option<&Path>) -> Result<super::schema_change::Change> {
     anyhow::ensure!(
         input.artifact.version == 1
             && input.artifact.entrypoint == "index.html"
@@ -638,7 +641,9 @@ pub async fn validate_release(state: &AppState, input: &DeployInput) -> Result<s
         .data_root
         .join(format!("validate-{}.sqlite", Uuid::new_v4()));
     let result = (|| -> Result<super::schema_change::Change> {
-        if let Some(ref deployment) = existing {
+        if let Some(database) = against {
+            std::fs::copy(database, &temp)?;
+        } else if let Some(ref deployment) = existing {
             let connection = Connection::open(database_path(state, &deployment.id))?;
             connection.execute("VACUUM INTO ?1", [temp.to_string_lossy().as_ref()])?;
         } else if let Some(package) = input.initial_package.as_ref() {

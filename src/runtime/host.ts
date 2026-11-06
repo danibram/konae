@@ -58,6 +58,8 @@ export type DatabaseBackup = {
   label: string;
   createdAt: number;
   sizeBytes: number;
+  /** What a published app's backup before an import holds besides its database: "data", "sources" or both. */
+  holds?: string[];
 };
 
 export type RuntimeSession = {

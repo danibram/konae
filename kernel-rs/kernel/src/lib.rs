@@ -39,6 +39,7 @@ pub mod files;
 pub mod google;
 pub mod guard;
 pub mod hosts;
+pub mod import;
 pub mod installation;
 pub mod http;
 pub mod invitations;
@@ -424,6 +425,18 @@ pub struct DatabaseBackup {
     pub created_at: u64,
     pub size_bytes: u64,
     pub key: String,
+    /// What a backup before an import holds: `data` (the database,
+    /// accounts, files and Usage in the folder `key`) and `sources` (the
+    /// saved sources). Empty for a Data panel backup of the database alone.
+    #[serde(default)]
+    pub holds: Vec<String>,
+}
+
+impl DatabaseBackup {
+    /// The backup as `list-backups` lists it.
+    pub fn view(&self) -> Value {
+        json!({"id": self.id, "label": self.label, "createdAt": self.created_at, "sizeBytes": self.size_bytes, "holds": self.holds})
+    }
 }
 
 #[derive(Deserialize)]
@@ -677,7 +690,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
             );
         }
     };
-    if let Err(error_value) = runtime::validate_release(&state, &input).await {
+    if let Err(error_value) = runtime::validate_release(&state, &input, None).await {
         return error(StatusCode::BAD_REQUEST, &error_value.to_string());
     }
     if input.artifact.version != 1
@@ -2455,7 +2468,7 @@ pub async fn list_backups(state: &AppState, id: &str) -> Result<Vec<Value>> {
             continue;
         }
         let backup: DatabaseBackup = serde_json::from_slice(&tokio::fs::read(entry.path()).await?)?;
-        backups.push(json!({"id":backup.id,"label":backup.label,"createdAt":backup.created_at,"sizeBytes":backup.size_bytes}));
+        backups.push(backup.view());
     }
     backups.sort_by(|a, b| b["createdAt"].as_u64().cmp(&a["createdAt"].as_u64()));
     Ok(backups)
@@ -2476,15 +2489,14 @@ pub async fn create_backup(state: &AppState, id: &str, label: &str) -> Result<Va
         created_at: now_ms(),
         size_bytes: size,
         key: format!("{backup_id}.sqlite"),
+        holds: Vec::new(),
     };
     tokio::fs::write(
         dir.join(format!("{backup_id}.json")),
         serde_json::to_vec(&backup)?,
     )
     .await?;
-    Ok(
-        json!({"id":backup.id,"label":backup.label,"createdAt":backup.created_at,"sizeBytes":backup.size_bytes}),
-    )
+    Ok(backup.view())
 }
 
 pub async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Result<Value> {
@@ -2492,7 +2504,11 @@ pub async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Resu
         anyhow::bail!("Invalid backup ID.");
     }
     // The metadata file proves the backup exists before anything changes.
-    let _: DatabaseBackup = serde_json::from_slice(&tokio::fs::read(backup_dir(state, id).join(format!("{backup_id}.json"))).await?)?;
+    let record: DatabaseBackup = serde_json::from_slice(&tokio::fs::read(backup_dir(state, id).join(format!("{backup_id}.json"))).await?)?;
+    if !record.holds.is_empty() {
+        let deployment = state.deployments.read().await.values().find(|d| d.id == id).cloned().context("Deployment not found.")?;
+        return import::restore_held(state, &deployment, &record).await;
+    }
     let backup_path = backup_dir(state, id).join(format!("{backup_id}.sqlite"));
     let bytes = tokio::fs::read(&backup_path).await?;
     create_backup(state, id, "Before restore").await?;

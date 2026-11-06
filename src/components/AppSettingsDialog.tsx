@@ -4,6 +4,7 @@ import { clearDomain, domainTrafficTarget, readDomain, setDomain, type DomainVie
 import { isSharedOriginRefusal, pathAddressLabel, pathNeedsDomain, readPath, setPath, type PathChange, type PathView } from "../deployments/paths";
 import { checkHostname } from "../lib/domain-name";
 import { checkPathName } from "../lib/path-name";
+import { AppImport } from "./AppImport";
 import { AppMaintenance } from "./AppMaintenance";
 import { isSignedOutError } from "./owner-session";
 import { Badge, Button, Dialog, Field, Input, LoadingBlock, Switch } from "./ui";
@@ -11,6 +12,8 @@ import "./app-settings.css";
 
 type Props = {
   projectName: string;
+  /** The app an import replaces, and the visibility its imported sources keep. */
+  importTarget?: { project: { id: string; name: string; slug: string }; visibility: "public" | "private"; onImported: () => void };
   deploymentId?: string;
   onClose: () => void;
   onDeploy: () => void;
@@ -18,7 +21,7 @@ type Props = {
   signInHref: string;
 };
 
-export function AppSettingsDialog({ projectName, deploymentId, onClose, onDeploy, onSignedOut, signInHref }: Props) {
+export function AppSettingsDialog({ projectName, importTarget, deploymentId, onClose, onDeploy, onSignedOut, signInHref }: Props) {
   const [view, setView] = useState<DomainView | null>(null);
   const [hostname, setHostname] = useState("");
   const [loading, setLoading] = useState(Boolean(deploymentId));
@@ -163,6 +166,7 @@ export function AppSettingsDialog({ projectName, deploymentId, onClose, onDeploy
         </>}
         <PathAddress key={deploymentId} deploymentId={deploymentId} signInHref={signInHref} onSignedOut={onSignedOut} />
         <AppMaintenance key={`maintenance-${deploymentId}`} deploymentId={deploymentId} onSignedOut={onSignedOut} />
+        {importTarget && <AppImport deploymentId={deploymentId} {...importTarget} onSignedOut={onSignedOut} />}
       </>}
     </div>
   </Dialog>;

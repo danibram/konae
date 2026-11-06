@@ -57,6 +57,7 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("transfer_complete", "transfer_status"),
     ("transfer_cancel", "transfer_status"),
     ("project_export", "transfer_read"),
+    ("project_import", "project_inspect"),
     ("token_create", "tokens_list"),
     ("token_revoke", "tokens_list"),
     ("auth_logout", "auth_session"),
@@ -134,7 +135,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "permissions": {
                 "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, maintenance_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read",
                 "write": "project_create, project_sources_save, project_delete and database_execute changes",
-                "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, maintenance_set, and initialSignupPolicy on a first release",
+                "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, maintenance_set, project_import, and initialSignupPolicy on a first release",
                 "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
                 "export_data": "project_export"
             },
@@ -177,9 +178,9 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "cli": "bun run konae -- publish --dir <folder> runs these steps with the credential from login and sends signupPolicy from konae.json as initialSignupPolicy on the first release.",
             "concurrency": "An obsolete plan is rejected. Repeating an applied plan returns the same receipt.",
             "access": "A first release may add initialSignupPolicy {mode, allowlist} with mode open, invitation, closed or allowlist; the Kernel installs it before the app serves. When the owner's request leaves access open for an app with accounts, propose visibility private and mode invitation. Later changes need manage_users and signup_policy_set. Invite people with app_invitations_create only when the owner asks, because it sends email.",
-            "import": "A first release may also carry initialPackage to start the Deployment with an exported app's data; the portability topic has the steps.",
+            "import": "A first release may also carry initialPackage to start the Deployment with an exported app's data. project_import replaces an existing app's sources, data or both; the portability topic has the steps.",
             "domain": "domain_set { deploymentId, hostname } adds a custom domain next to the generated hostname and needs publish. Its first answer names a TXT record, _konae.<hostname>, and the token it must hold. Once the record is at the DNS provider and the hostname points at the installation's proxy, which terminates TLS and forwards Host unchanged, call domain_set again: the Kernel looks the record up and the alias serves. domain_read shows the state and domain_clear removes it. bun run konae -- domain runs the same steps.",
-            "maintenance": "maintenance_set { deploymentId, on } puts the app in maintenance or takes it out and needs publish. Paused, the app serves a maintenance page, refuses writes, signups and sign-ins, and holds its email, calls and schedule; owner tools that would change it are refused except maintenance_set. maintenance_read { deploymentId } answers { maintenance, since, unreadable, installation }. Move an app with no lost write by putting it in maintenance, exporting it, and importing the folder elsewhere.",
+            "maintenance": "maintenance_set { deploymentId, on } puts the app in maintenance or takes it out and needs publish. Paused, the app serves a maintenance page, refuses writes, signups and sign-ins, and holds its email, calls and schedule; owner tools that would change it are refused except maintenance_set and project_import. maintenance_read { deploymentId } answers { maintenance, since, unreadable, installation }. Move an app with no lost write by putting it in maintenance, exporting it, and importing the folder elsewhere.",
             "path": "path_set { deploymentId, enabled, name?, acceptSharedOrigin? } answers the app on <domain>/p/<id>, and on <domain>/p/<name> once it has a name. The domain is KONAE_DOMAIN. An app with accounts or a private app needs acceptSharedOrigin true, because every path and the home share one origin, and any other app on the domain can use the sessions of this app's users. The app whose enabled path holds the name konae-home also answers <domain>/ and every path there outside /p/; with none, <domain>/ answers not found. path_read returns the state and the addresses; path_clear turns the path off and removes the name. Both need publish. Read back with path_read after a change."
         }),
         "users" => json!({
@@ -207,6 +208,14 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "For each part of the data the manifest lists, transfer_begin { size, sha256, projectId, component } with its name, transfer_write each block and transfer_complete.",
                 "Build the folder, upload the release JSON of the publishing topic with initialPackage { manifest, components: { <name>: <transferId> } }, then release_plan and release_apply.",
                 "Sessions, email links and live API keys stay behind: people sign in with their passwords, and api_keys_list shows each key revoked at import so the owner issues new ones."
+            ],
+            "importExisting": [
+                "project_import { deploymentId, replace, transferId?, package?, confirmSchema? } replaces an existing app with an exported folder and needs publish. replace is sources (publish the folder's app/ and dist/), data (the database, accounts, files and Usage) or both. It never merges rows.",
+                "For sources, upload the release JSON of the publishing topic built from the folder and pass its transferId. For data, upload each component as a new app's import does and pass package { manifest, components }. The manifest lists each component's size and SHA-256.",
+                "It writes a backup of what it replaces first. database_execute list-backups lists it with holds data and or sources, and restore-backup brings it back after backing up the current state again.",
+                "The app keeps its Signup Policy, sign-in methods, addresses, secrets, and the sessions and API keys it has now, for every account the new data holds.",
+                "When the schema change loses data the answer is { imported: false, schema } and nothing changed. Show the owner each loss and call again with schema.confirmation as confirmSchema.",
+                "It works while the app is in maintenance, so a move with no lost write is maintenance_set on, project_export, project_import on the destination, maintenance_set off."
             ],
         }),
         "refusals" => refusals(),

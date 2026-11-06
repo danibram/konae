@@ -27,3 +27,8 @@
   .app-settings-body .ui-button { min-height: 44px; white-space: normal; }
   .app-settings-dialog .ui-dialog-close { width: 44px; min-height: 44px; top: 8px; right: 8px; }
 }
+.import-file { display: grid; gap: 6px; font-weight: 650; }
+.import-file input { font: inherit; font-weight: 400; min-width: 0; }
+.import-choices { display: grid; gap: 10px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.import-choices legend { font-weight: 650; margin-bottom: 6px; }
+.import-choices small { display: block; color: var(--ds-muted); }

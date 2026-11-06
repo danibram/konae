@@ -449,7 +449,7 @@ fn keys_table(db: &Connection) -> rusqlite::Result<()> {
 }
 
 /// Accounts files written before keys carried a reason lack the column.
-fn add_revoked_reason(db: &Connection) -> rusqlite::Result<()> {
+pub fn add_revoked_reason(db: &Connection) -> rusqlite::Result<()> {
     let present: bool = db.query_row(
         "SELECT EXISTS(SELECT 1 FROM pragma_table_info('api_keys') WHERE name='revoked_reason')",
         [],

@@ -62,6 +62,7 @@ If MCP is published on an origin other than the hosting origin, set `KONAE_MCP_O
 | Projects | `project_create`, `project_sources_read`, `project_sources_save`, `project_delete` |
 | Owner data | `database_execute`, `storage_test` |
 | App export, with `export_data` | `project_export` |
+| Import into an existing app, with `publish` | `project_import` |
 | Publishing | `release_plan`, `release_apply` |
 | Signup policy | `signup_policy_read`, `signup_policy_set` |
 | Sign-in methods | `sign_in_methods_read`; `sign_in_methods_set` with `manage_users` |
@@ -69,6 +70,7 @@ If MCP is published on an origin other than the hosting origin, set `KONAE_MCP_O
 | API keys | `api_keys_list`, `api_keys_create`, `api_keys_revoke` |
 | Custom domain | `domain_read`; `domain_set`, `domain_clear` with `publish` |
 | Path address | `path_read`; `path_set`, `path_clear` with `publish` |
+| Maintenance | `maintenance_read`; `maintenance_set` with `publish` |
 | Usage and Signals | `usage_read`, `signals_read`, `usage_summary`, `usage_overview` |
 | Calls between apps | `calls_read` |
 | Email notices | `notices_read` |
@@ -1074,7 +1076,7 @@ To import on another Kernel, first create the project there with `project_create
 - the volume has room for the components, a schema check copy of the database and 64 MiB to spare;
 - the release's `schema.sql` and actions run against the imported database.
 
-`release_apply` copies each component into the new app folder's `data/`, checking its SHA-256 as it copies, deletes sessions and email links again, marks any live API key revoked at import, and unpacks the files. The uploads stay intact until you cancel them, so a failed apply can be retried with a new plan. Repeating an applied plan returns its receipt and creates nothing. A `release_plan` that names a package this project already imported returns `{ planId, applied: true, packageId, receipt }` with the first plan, so `release_apply` with that plan returns the first receipt. A project that already has a Deployment refuses any other `initialPackage`. The signup policy comes from the manifest unless the payload sets `initialSignupPolicy`.
+`release_apply` copies each component into the new app folder's `data/`, checking its SHA-256 as it copies, deletes sessions and email links again, marks any live API key revoked at import, and unpacks the files. The uploads stay intact until you cancel them, so a failed apply can be retried with a new plan. Repeating an applied plan returns its receipt and creates nothing. A `release_plan` that names a package this project already imported returns `{ planId, applied: true, packageId, receipt }` with the first plan, so `release_apply` with that plan returns the first receipt. A project that already has a Deployment refuses any other `initialPackage`; `project_import` replaces what it holds instead. The signup policy comes from the manifest unless the payload sets `initialSignupPolicy`.
 
 | Refusal | Message |
 | --- | --- |
@@ -1089,6 +1091,16 @@ To import on another Kernel, first create the project there with `project_create
 | Not enough disk at `transfer_begin` for a component, at `project_export` or at `release_plan` | `Not enough free space on the Kernel volume to import this app: 340 MiB needed, 120 MiB free.` |
 
 The release payload is the one `release_plan` always takes, `project`, `visibility` and the `artifact` built from `app/` into `dist/`, plus `initialPackage`. No CLI command imports a package into a Kernel you already run; [the walkthrough](mcp-walkthrough.md#14-import-on-a-second-kernel) shows the tool calls.
+
+### Import into an existing app
+
+`project_import { deploymentId, replace, transferId?, package?, confirmSchema? }` replaces an app that is already published with an exported folder, and needs `publish`. `replace` is `sources`, `data` or `both`:
+
+- `sources` takes `transferId`, an upload of the release payload built from the folder's `app/` and `dist/`. It publishes them and makes them the saved sources the editor opens.
+- `data` takes `package { manifest, components }`, uploaded as for a new app. It replaces the database, the accounts, the files and Usage, and the database takes the schema the live one has now.
+- `both` takes both, and the database takes the release's schema before it serves.
+
+It never merges rows. Before it changes anything it writes a backup of what it replaces. `database_execute` with `list-backups` lists it as `Before import`, with `holds` naming `data`, `sources` or both, and `restore-backup` brings it back, after it backs up the current state again. The app keeps its Signup Policy, sign-in methods, addresses and secrets. Sessions and API keys survive, as after a restore: people the new data still holds stay signed in, and the app's keys keep working. A schema change that loses data answers `{ imported: false, replace, schema }` and changes nothing; call again with `schema.confirmation` as `confirmSchema` once the owner agrees. Otherwise the answer is `{ imported: true, replace, backup, schema }`, with `deployment` when the sources changed. `project_import` works while the app is in maintenance. In the editor, App settings has an Import section that reads the `.tar` Export downloads and asks which part to replace.
 
 The CLI's `export --dir <folder> --out <empty folder> --with-data` writes the same app folder on disk, with the data in `data/`. `src/lib/portable-package.ts` checks the manifest on the client with the same limits as `kernel-rs/kernel/src/package.rs`.
 
