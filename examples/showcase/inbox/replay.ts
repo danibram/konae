@@ -14,7 +14,7 @@ import path from "node:path";
 import initSqlJs from "sql.js";
 import { McpClient, McpError } from "../../../src/mcp/client";
 import { signRoute } from "../../../src/lib/route-signature";
-import { buildLocal } from "../../../scripts/konae";
+import { appDir, buildLocal } from "../../../scripts/konae";
 import { createCapsuleValidator } from "../../../src/agent/gate";
 import { starterProject } from "../../../src/lib/starter";
 import type { CapsuleFiles } from "../../../src/agent/contracts";
@@ -103,7 +103,7 @@ try {
 
   // --------------------------------------------------------------- Publish
   const root = path.join(scratch, "inbox");
-  await cp(source, root, { recursive: true, filter: (from) => !from.endsWith("replay.ts") && !from.endsWith("README.md") });
+  await cp(source, appDir(root), { recursive: true, filter: (from) => !from.endsWith("replay.ts") && !from.endsWith("README.md") });
   const project = { id: "showcase_inbox", name: "Inbox", slug: "inbox", manifest: { version: 1, visibility: "private" } };
   await owner.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
 
@@ -279,9 +279,9 @@ try {
   const variant = async (id: string, slug: string, feedHttp: Record<string, unknown>, secrets: Record<string, string>) => {
     const variantRoot = path.join(scratch, slug);
     await cp(root, variantRoot, { recursive: true });
-    const variantActions = JSON.parse(await readFile(path.join(variantRoot, "actions.json"), "utf8"));
+    const variantActions = JSON.parse(await readFile(path.join(appDir(variantRoot), "actions.json"), "utf8"));
     variantActions.actions["events.feed"].http = feedHttp;
-    await writeFile(path.join(variantRoot, "actions.json"), JSON.stringify(variantActions, null, 2));
+    await writeFile(path.join(appDir(variantRoot), "actions.json"), JSON.stringify(variantActions, null, 2));
     const variantProject = { id, name: slug, slug, manifest: { version: 1, visibility: "private" } };
     await owner.call("project_create", { projectId: id, name: slug, slug, manifest: variantProject.manifest });
     for (const [name, value] of Object.entries(secrets)) await owner.call("secret_set", { projectId: id, name, value });

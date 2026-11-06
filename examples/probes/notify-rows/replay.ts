@@ -1,26 +1,31 @@
 // Probe: a scheduled notice that reaches the people its rows name (ADR-0021),
-// run on `konae dev`, the Development Kernel a person uses on their own
-// machine. Ana and Ben accept invitations, which proves their addresses. Ana
-// assigns chores to herself, to Ben, to an email address and to an ID that is
-// no account. The hourly chores.remind runs every 2 seconds here
-// (KONAE_SCHEDULE_MIN_SECONDS), and the development mailbox shows one
-// notice to Ana and one to Ben, each listing only their own chores.
+// run on `konae dev`, the Kernel a person runs on an app folder on their own
+// machine. Ana and Ben accept invitations the `kernel` binary's invite command
+// sends, which proves their addresses.
+// Ana assigns chores to herself, to Ben, to an email address and to an ID that
+// is no account. The hourly chores.remind runs every 2 seconds here
+// (KONAE_SCHEDULE_MIN_SECONDS), and the development mailbox shows one notice
+// to Ana and one to Ben, each listing only their own chores.
 //
 //   KONAE_PROBE_PORT=20010 bun run examples/probes/notify-rows/replay.ts [--keep <folder>]
 //
+// dev serves its events page on the next port, so that one must be free too.
+// KONAE_KERNEL_BIN names a built `kernel` binary, which dev then runs instead of compiling one.
 // --keep copies the mailbox file to <folder>/mailbox.jsonl as evidence.
 import assert from "node:assert/strict";
-import { copyFile, cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient } from "../../../src/mcp/client";
+import { appDir, localKernel } from "../../../scripts/konae";
+import { KERNEL_VERSION, type AppSettings } from "../../../src/lib/app-folder";
 
 const repo = path.resolve(import.meta.dir, "../../..");
 const port = Number(process.env.KONAE_PROBE_PORT ?? 20010);
 const url = `http://127.0.0.1:${port}`;
 const keep = process.argv.includes("--keep") ? process.argv[process.argv.indexOf("--keep") + 1] : undefined;
 const scratch = await mkdtemp(path.join(tmpdir(), "konae-notify-rows-"));
-const mailboxFile = path.join(scratch, ".konae/dev-data/mailbox.jsonl");
+const mailboxFile = path.join(scratch, ".konae/kernel/mailbox.jsonl");
 type Mail = { purpose: string; to: string; subject?: string; text?: string; link?: string; action?: string };
 const mailbox = async (): Promise<Mail[]> => (await readFile(mailboxFile, "utf8").catch(() => ""))
   .trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -36,14 +41,22 @@ let dev: ReturnType<typeof Bun.spawn> | undefined;
 try {
   try { await fetch(`${url}/_konae/health`); throw Error(`Something already answers on port ${port}. Set KONAE_PROBE_PORT.`); }
   catch (error) { if (error instanceof Error && error.message.startsWith("Something")) throw error; }
-  for (const file of ["index.html", "schema.sql", "actions.json"]) await cp(path.join(import.meta.dir, file), path.join(scratch, file));
-  await writeFile(path.join(scratch, "konae.json"), JSON.stringify({ url, project: {
-    id: "probe_notify_rows", name: "Chores", slug: "chores", manifest: { version: 1, visibility: "private" },
-  } }));
+  await mkdir(appDir(scratch), { recursive: true });
+  for (const file of ["index.html", "schema.sql", "actions.json"]) await cp(path.join(import.meta.dir, file), path.join(appDir(scratch), file));
+  // The app starts Invitation only, as konae init writes it.
+  const settings: AppSettings = {
+    id: "probe_notify_rows", name: "Chores", slug: "chores", visibility: "private",
+    signupPolicy: { mode: "invitation", allowlist: [] }, signInMethods: ["password"], kernel: KERNEL_VERSION, manifest: { version: 1 },
+  };
+  await writeFile(path.join(scratch, "konae.json"), `${JSON.stringify(settings, null, 2)}\n`);
 
+  const kernelBin = process.env.KONAE_KERNEL_BIN;
   dev = Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), "dev", "--dir", scratch, "--port", String(port)], {
     cwd: repo, stdout: "pipe", stderr: "inherit",
-    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_SCHEDULE_MIN_SECONDS: "2" },
+    env: {
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))),
+      KONAE_SCHEDULE_MIN_SECONDS: "2", ...(kernelBin ? { KONAE_KERNEL_BIN: kernelBin } : {}),
+    },
   });
   const output = dev.stdout.getReader();
   let printed = "";
@@ -54,20 +67,9 @@ try {
     return printed.match(/^(http:\/\/\S+)$/m)?.[1];
   }, 300);
   const host = new URL(appUrl).host;
-
-  // The owner of the Development Kernel signs in with the folder's dev secret.
-  const secret = await readFile(path.join(scratch, ".konae/dev-secret"), "utf8");
-  const signedIn = await fetch(`${url}/_konae/owner/login`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "local-owner@konae.test", password: secret }),
-  });
-  assert.equal(signedIn.status, 200, await signedIn.clone().text());
-  const ownerCookie = signedIn.headers.get("set-cookie")!.split(";")[0];
-  const owner = new McpClient(`${url}/mcp`, { fetch: (input, init) => {
-    const headers = new Headers(init?.headers); headers.set("cookie", ownerCookie);
-    return fetch(input, { ...init, headers });
-  } });
-  const inspected = await owner.call<{ deployment: { id: string } }>("project_inspect", { projectId: "probe_notify_rows" });
-  const deploymentId = inspected.deployment.id;
+  // The same binary and environment dev runs, for the operator commands.
+  const kernel = await localKernel(scratch, settings, { port: String(port), build: false });
+  const operator = async <T>(args: string[]) => JSON.parse(await kernel.run(args)) as T;
 
   let address = 0;
   const appFetch = (cookie?: string): typeof fetch => (input, init) => {
@@ -77,8 +79,9 @@ try {
     if (cookie) headers.set("cookie", cookie);
     return fetch(input, { ...init, headers });
   };
+  // Ana and Ben accept invitations the operator sends, which proves their addresses.
   const member = async (email: string) => {
-    const invited = await owner.call<{ results: { status: string }[] }>("app_invitations_create", { deploymentId, emails: [email], idempotencyKey: `invite-${email}` });
+    const invited = await operator<{ results: { status: string }[] }>(["invite", email]);
     assert.equal(invited.results[0].status, "invited");
     const invitation = await waitFor(`invitation for ${email}`, async () => (await mailbox()).find((mail) => mail.purpose === "invitation" && mail.to === email));
     const accepted = await appFetch()(`${url}/_konae/auth/accept`, {
@@ -118,14 +121,19 @@ try {
   assert(notices.every((mail) => mail.action === "chores.remind"));
 
   const today = new Date().toISOString().slice(0, 10);
-  const usage = await owner.call<{ totals: { kind: string; name: string; count: number }[] }>("usage_read", { deploymentId, from: today, to: today });
-  const lines = Object.fromEntries(usage.totals.filter((row) => row.kind === "notify").map((row) => [row.name, row.count]));
+  // The running Kernel writes usage in the background, so the read waits for both notice lines.
+  type Events = { summary: { usage: { totals: { kind: string; name: string; count: number }[] } } };
+  const lines = await waitFor("notice usage", async () => {
+    const events = await operator<Events>(["events", "--from", today, "--to", today]);
+    const found = Object.fromEntries(events.summary.usage.totals.filter((row) => row.kind === "notify").map((row) => [row.name, row.count]));
+    return Object.keys(found).length >= 2 ? found : undefined;
+  });
   assert.deepEqual(lines, { "chores.remind: queued": 2, "chores.remind: not-a-verified-account": 2 });
   const mine = await ana.app.call<{ title: string; reminded_at: number | null }[]>("actions_invoke", { name: "chores.mine", input: {} });
   assert.deepEqual(mine.map((chore) => [chore.title, chore.reminded_at !== null]), [["Water the plants", true], ["Paint the fence", false]]);
 
   if (keep) await copyFile(mailboxFile, path.join(keep, "mailbox.jsonl"));
-  console.log(`PASS A scheduled notice reaches the members its rows name. On konae dev, chores.remind ran with nobody calling and wrote two notices to ${mailboxFile}: "${to("ana@chores.test").subject}" to ana@chores.test and "${to("ben@chores.test").subject}" to ben@chores.test, each listing only that member's chores. The chores assigned to cy@chores.test and to an ID that is no account sent nothing, and usage_read says ${JSON.stringify(lines)}.`);
+  console.log(`PASS A scheduled notice reaches the members its rows name. On konae dev, chores.remind ran with nobody calling and wrote two notices to ${mailboxFile}: "${to("ana@chores.test").subject}" to ana@chores.test and "${to("ben@chores.test").subject}" to ben@chores.test, each listing only that member's chores. The chores assigned to cy@chores.test and to an ID that is no account sent nothing, and kernel events says ${JSON.stringify(lines)}.`);
 } catch (error) {
   console.error(error);
   process.exitCode = 1;

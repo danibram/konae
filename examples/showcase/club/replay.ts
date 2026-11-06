@@ -9,7 +9,7 @@ import path from "node:path";
 import { deflateSync } from "node:zlib";
 import { chromium } from "playwright";
 import { McpClient, type Transfer } from "../../../src/mcp/client";
-import { buildLocal, publishLocal } from "../../../scripts/konae";
+import { appDir, buildLocal, publishLocal } from "../../../scripts/konae";
 
 const repo = path.resolve(import.meta.dir, "../../..");
 const scratch = await mkdtemp(path.join(tmpdir(), "konae-showcase-club-"));
@@ -160,11 +160,10 @@ try {
 
   // Publish with the CLI's own publish path and a delegated token, as a creator would.
   const root = path.join(scratch, "club");
-  await cp(import.meta.dir, root, { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
+  await cp(import.meta.dir, appDir(root), { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
   const project = { id: "showcase_club", name: "Club", slug: "club", manifest: { version: 1, visibility: "private" } };
   // konae.json names the first release's signup policy; publish sends it as initialSignupPolicy.
   const cliProject = { ...project, manifest: { ...project.manifest, signupPolicy: { mode: "invitation" } } };
-  await writeFile(path.join(root, "konae.json"), JSON.stringify({ url: origin.url, project: cliProject }, null, 2));
   const publishToken = await origin.owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 600 });
   const receiptA = await publishLocal(root, { url: origin.url, project: cliProject }, publishToken.token) as Receipt;
   const A = app(origin, receiptA);

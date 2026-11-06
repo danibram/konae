@@ -12,7 +12,7 @@ import initSqlJs from "sql.js";
 import { chromium } from "playwright";
 import { McpClient } from "../../../src/mcp/client";
 import { signRoute } from "../../../src/lib/route-signature";
-import { buildLocal, publishLocal } from "../../../scripts/konae";
+import { appDir, buildLocal, publishLocal } from "../../../scripts/konae";
 import { kernelTarget } from "../../../scripts/conform";
 import { createCapsuleValidator } from "../../../src/agent/gate";
 import { generateActionContract } from "../../../src/lib/action-contract";
@@ -462,15 +462,16 @@ try {
   await rm(scratch, { recursive: true, force: true });
 }
 
+/** An app folder in the scratch folder whose app/ holds a copy of this example's sources. */
 async function copyOf(name: string) {
   const root = path.join(scratch, name);
-  await cp(source, root, { recursive: true, filter: (file) => !/(replay\.ts|README\.md|\.konae)$/.test(file) });
+  await cp(source, appDir(root), { recursive: true, filter: (file) => !/(replay\.ts|README\.md|\.konae)$/.test(file) });
   return root;
 }
 
 async function publish(projectId: string, slug: string, files: Record<string, string>, initialSignupPolicy?: { mode: string; allowlist: string[] }) {
   const root = await copyOf(`publish-${projectId}-${crypto.randomUUID()}`);
-  for (const [name, text] of Object.entries(files)) await Bun.write(path.join(root, name), text);
+  for (const [name, text] of Object.entries(files)) await Bun.write(path.join(appDir(root), name), text);
   const compiled = await buildLocal(root);
   const project = { id: projectId, name: projectId, slug, manifest: { version: 1, visibility: "public" }, files: compiled.files };
   const owner = new McpClient(`${url}/mcp`, { fetch: ownerFetch });

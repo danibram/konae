@@ -1,5 +1,5 @@
 // The harness every probe shares. It compiles the Kernel offline, or takes the
-// binary KONAE_KERNEL_BIN names, starts it on
+// konae binary KONAE_BIN names, starts it on
 // KONAE_PROBE_PORT with a random setup key, the development mailbox and a
 // data directory under the system temp folder, signs up the owner, and removes
 // the Kernel and its data when the probe ends, whether it passed or not.
@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import initSqlJs from "sql.js";
 import { McpClient } from "../../src/mcp/client";
-import { buildLocal } from "../../scripts/konae";
+import { appDir, buildLocal } from "../../scripts/konae";
 import { createCapsuleValidator } from "../../src/agent/gate";
 
 const repo = path.resolve(import.meta.dir, "../..");
@@ -60,9 +60,9 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
   try {
     try { await fetch(`${url}/_konae/health`); throw Error(`Something already answers on port ${port}. Set KONAE_PROBE_PORT.`); }
     catch (error) { if (error instanceof Error && error.message.startsWith("Something")) throw error; }
-    // KONAE_KERNEL_BIN runs a Kernel binary already built from these sources instead of compiling one.
-    const binary = process.env.KONAE_KERNEL_BIN ?? path.join(repo, "kernel-rs/target/debug/konae");
-    if (!process.env.KONAE_KERNEL_BIN) {
+    // KONAE_BIN runs a konae binary already built from these sources instead of compiling one.
+    const binary = process.env.KONAE_BIN ?? path.join(repo, "kernel-rs/target/debug/konae");
+    if (!process.env.KONAE_BIN) {
       const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
       assert.equal(await build.exited, 0, "The Kernel must compile.");
     }
@@ -98,13 +98,15 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
       return fetch(input, { ...init, headers });
     } });
 
+    // The probe's sources go into app/ of a scratch app folder, the layout buildLocal reads.
     const capsule = async (dir: string, files: Record<string, string> = {}) => {
       const copy = await mkdtemp(path.join(scratch, "capsule-"));
-      await cp(dir, copy, { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
-      for (const [file, text] of Object.entries(files)) await writeFile(path.join(copy, file), text);
+      const app = appDir(copy);
+      await cp(dir, app, { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
+      for (const [file, text] of Object.entries(files)) await writeFile(path.join(app, file), text);
       const { artifact } = await buildLocal(copy);
       const sources: Record<string, string> = {};
-      for (const file of ["index.html", "schema.sql", "actions.json"]) sources[file] = await readFile(path.join(copy, file), "utf8");
+      for (const file of ["index.html", "schema.sql", "actions.json"]) sources[file] = await readFile(path.join(app, file), "utf8");
       return { artifact, sources };
     };
     const created = new Set<string>();

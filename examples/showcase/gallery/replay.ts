@@ -16,7 +16,7 @@ import path from "node:path";
 import { deflateSync } from "node:zlib";
 import { chromium } from "playwright";
 import { McpClient } from "../../../src/mcp/client";
-import { buildLocal } from "../../../scripts/konae";
+import { appDir, buildLocal } from "../../../scripts/konae";
 import { kernelTarget } from "../../../scripts/conform";
 import { generateActionContract } from "../../../src/lib/action-contract";
 import { formatConformanceReport, runConformance } from "../../../src/lib/action-conformance";
@@ -128,7 +128,7 @@ try {
 
   // konae build publishes every page at the Capsule root with the files they load.
   const cliCopy = path.join(scratch, "cli-build");
-  await cp(here, cliCopy, { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
+  await cp(here, appDir(cliCopy), { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
   const { artifact } = await buildLocal(cliCopy);
   assert.deepEqual(Object.keys(artifact.files).sort(), ["404.html", "about.html", "app.js", "index.html", "runtime.js", "styles.css"]);
   assert(!("schema.sql" in artifact.files) && !("actions.json" in artifact.files));
@@ -136,7 +136,7 @@ try {
   // A page that names a file the Capsule does not hold stops the build with the path.
   const brokenCopy = path.join(scratch, "cli-broken");
   await cp(cliCopy, brokenCopy, { recursive: true });
-  await writeFile(path.join(brokenCopy, "about.html"), (await readFile(path.join(brokenCopy, "about.html"), "utf8")).replace("</main>", '<img src="/portrait.jpg" alt=""></main>'));
+  await writeFile(path.join(appDir(brokenCopy), "about.html"), (await readFile(path.join(appDir(brokenCopy), "about.html"), "utf8")).replace("</main>", '<img src="/portrait.jpg" alt=""></main>'));
   const brokenBuild = await errorText(buildLocal(brokenCopy));
   assert.equal(brokenBuild, "about.html references /portrait.jpg, but the Capsule holds no portrait.jpg.");
   refused("`konae build` with about.html naming a missing /portrait.jpg", brokenBuild);
