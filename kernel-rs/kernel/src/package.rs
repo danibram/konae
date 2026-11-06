@@ -371,7 +371,7 @@ pub fn snapshot(folder: &Path, target: &Path, blobs: &file_store::BlockingFiles)
     let identity = target.join("identity.sqlite");
     copies::vacuum_into(&folder.join("identity.sqlite"), &identity).context("accounts")?;
     let files = target.join("files.tar");
-    write_files_tar(&folder.join("files"), &files, blobs).context("files")?;
+    write_files_tar(&folder.join("files"), &files, |id| blobs.open(id)).context("files")?;
     let mut components = vec![("database", database), ("identity", identity), ("files", files)];
     if folder.join(usage::USAGE_DATABASE).is_file() {
         let usage = target.join(usage::USAGE_DATABASE);
@@ -408,7 +408,9 @@ pub fn revoke_access(path: &Path) -> Result<usize> {
 // The files component: a ustar archive of `index.json` followed by one
 // `<id>.blob` per indexed file, in index order.
 
-fn write_files_tar(directory: &Path, target: &Path, blobs: &file_store::BlockingFiles) -> Result<()> {
+/// Writes the files component from the index in `directory` and the bytes
+/// `open` reads for each file it lists.
+fn write_files_tar<R: Read>(directory: &Path, target: &Path, open: impl Fn(&str) -> Result<Option<(u64, R)>>) -> Result<()> {
     let index: Vec<Value> = match std::fs::read(directory.join("index.json")) {
         Ok(bytes) => serde_json::from_slice(&bytes)?,
         Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => Vec::new(),
@@ -422,7 +424,7 @@ fn write_files_tar(directory: &Path, target: &Path, blobs: &file_store::Blocking
     for file in &index {
         let id = file["id"].as_str().filter(|id| valid_file_id(id)).context("A stored file has an invalid id.")?;
         let name = format!("{id}.blob");
-        let (size, mut blob) = blobs.open(id)?.with_context(|| format!("Stored file {id} has no data."))?;
+        let (size, mut blob) = open(id)?.with_context(|| format!("Stored file {id} has no data."))?;
         output.write_all(&tar_header(&name, size))?;
         let copied = std::io::copy(&mut blob, &mut output)?;
         ensure!(copied == size, "Stored file {id} changed during the capture.");
@@ -431,6 +433,19 @@ fn write_files_tar(directory: &Path, target: &Path, blobs: &file_store::Blocking
     output.write_all(&[0; 1024])?;
     output.into_inner().map_err(|error_value| error_value.into_error())?.sync_all()?;
     Ok(())
+}
+
+/// Writes the files component of an app folder's `data/files/`, where each
+/// file's bytes sit beside the index as `<id>.blob`.
+pub fn folder_files_tar(directory: &Path, target: &Path) -> Result<()> {
+    write_files_tar(directory, target, |id| {
+        let path = directory.join(format!("{id}.blob"));
+        match std::fs::File::open(&path) {
+            Ok(file) => Ok(Some((file.metadata()?.len(), file))),
+            Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error_value) => Err(error_value.into()),
+        }
+    })
 }
 
 /// Writes the part of the app folder that is not data: `konae.json`,
@@ -693,7 +708,6 @@ pub async fn verify(state: &AppState, principal: &str, project_id: &str, package
     ensure_space(free_bytes(&state.data_root)?, total + database + SPACE_MARGIN, "import this app")?;
     let file_limits = state.files.limits;
     tokio::task::spawn_blocking(move || {
-        let path = |name: &str| uploads.iter().find(|(c, _)| c.name == name).map(|(_, p)| p.clone());
         for (content, path) in &uploads {
             let (size, sha256) = copies::checksum_file(path)?;
             ensure!(
@@ -702,36 +716,45 @@ pub async fn verify(state: &AppState, principal: &str, project_id: &str, package
                 content.name
             );
         }
-        let database = path("database").context("The package has no database.")?;
-        integrity(&database, "database")?;
-        let stored = Connection::open_with_flags(&database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .and_then(|db| super::sql_rules::stored_trigger_or_view(&db))?;
-        if let Some(refusal) = stored {
-            anyhow::bail!(refusal);
-        }
-        let accounts = match path("identity") {
-            Some(identity) => {
-                integrity(&identity, "accounts")?;
-                let db = Connection::open_with_flags(&identity, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-                let has_users: bool = db.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_users')",
-                    [],
-                    |r| r.get(0),
-                )?;
-                ensure!(has_users, "The accounts component has no app_users table.");
-                Some(db)
-            }
-            None => None,
-        };
-        if let Some(files) = path("files") {
-            unpack_files(&files, accounts.as_ref(), None, &file_limits)?;
-        }
-        if let Some(usage) = path("usage") {
-            integrity(&usage, "usage")?;
-        }
-        Ok(())
+        let components = uploads.into_iter().map(|(content, path)| (content.name, path)).collect::<Vec<_>>();
+        check_components(&components, &file_limits)
     })
     .await?
+}
+
+/// The checks every component gets before an import puts it in place:
+/// SQLite integrity, no stored trigger or view, an accounts file with its
+/// users, and files that fit the limits and belong to accounts it holds.
+pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_store::FileLimits) -> Result<()> {
+    let path = |name: &str| components.iter().find(|(component, _)| component == name).map(|(_, p)| p.clone());
+    let database = path("database").context("The package has no database.")?;
+    integrity(&database, "database")?;
+    let stored = Connection::open_with_flags(&database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .and_then(|db| super::sql_rules::stored_trigger_or_view(&db))?;
+    if let Some(refusal) = stored {
+        anyhow::bail!(refusal);
+    }
+    let accounts = match path("identity") {
+        Some(identity) => {
+            integrity(&identity, "accounts")?;
+            let db = Connection::open_with_flags(&identity, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            let has_users: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_users')",
+                [],
+                |r| r.get(0),
+            )?;
+            ensure!(has_users, "The accounts component has no app_users table.");
+            Some(db)
+        }
+        None => None,
+    };
+    if let Some(files) = path("files") {
+        unpack_files(&files, accounts.as_ref(), None, file_limits)?;
+    }
+    if let Some(usage) = path("usage") {
+        integrity(&usage, "usage")?;
+    }
+    Ok(())
 }
 
 fn integrity(path: &Path, label: &str) -> Result<()> {
@@ -954,7 +977,7 @@ mod tests {
         let (from, to) = (file_store::BlockingFiles::new(source.clone(), &deployment), file_store::BlockingFiles::new(target.clone(), &arrival));
         let (archive_path, index_path, target_path) = (archive.clone(), index_dir.clone(), target_dir.clone());
         tokio::task::spawn_blocking(move || {
-            write_files_tar(&index_path, &archive_path, &from).unwrap();
+            write_files_tar(&index_path, &archive_path, |id| from.open(id)).unwrap();
             let accounts = Connection::open_in_memory().unwrap();
             accounts.execute_batch("CREATE TABLE app_users(id TEXT PRIMARY KEY); INSERT INTO app_users VALUES('u1');").unwrap();
             assert_eq!(unpack_files(&archive_path, Some(&accounts), Some((&target_path, &to)), &Default::default()).unwrap(), 2);
@@ -1003,7 +1026,7 @@ mod tests {
         let root_path = root.clone();
         tokio::task::spawn_blocking(move || {
             let root = root_path;
-            write_files_tar(&source, &archive, &blobs).unwrap();
+            write_files_tar(&source, &archive, |id| blobs.open(id)).unwrap();
             let strangers = Connection::open_in_memory().unwrap();
             strangers.execute_batch("CREATE TABLE app_users(id TEXT PRIMARY KEY);").unwrap();
             assert!(unpack_files(&archive, Some(&strangers), None, &Default::default()).unwrap_err().to_string().contains("does not contain"));

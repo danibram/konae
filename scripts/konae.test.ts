@@ -298,40 +298,14 @@ describe("konae CLI", () => {
     expect(JSON.parse(await readFile(path.join(directory, "konae.json"), "utf8"))).toEqual(settings);
   });
 
-  test("a pulled copy goes with a first release as its package, and never with a later one", async () => {
-    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
-    const bytes = new TextEncoder().encode("database bytes");
-    const sha256 = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
-    const manifest = { format: "konae-package", version: 1, packageId: "pkg_1", createdAt: 1, deploymentId: "dep_origin", projectId: "app_test", visibility: "public", publishedRevision: 1, contents: [{ name: "database", size: bytes.length, sha256 }], excluded: [] };
-    await mkdir(path.join(directory, ".konae/pull"), { recursive: true });
-    await writeFile(path.join(directory, ".konae/pull/database.sqlite"), bytes);
-    const pulled = { manifest, from: "http://origin.test", at: 1 } as Parameters<typeof publishLocal>[4];
-    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: { visibility: "private" } } };
-
-    const first = await publishLocal(directory, config, "token", () => {}, pulled);
-    expect(first.first).toBe(true);
-    expect(calls.find((call) => call.name === "transfer_begin")!.arguments).toMatchObject({ component: "database", size: bytes.length, sha256, projectId: "app_test" });
-    const payload = JSON.parse(uploaded.slice(bytes.length));
-    expect(payload.initialPackage).toEqual({ manifest, components: { database: "transfer_1" } });
-    // The copy says who may open the app it was taken from.
-    expect(payload.visibility).toBe("public");
-
-    calls.length = 0; uploaded = "";
-    answers.project_inspect = { deployment: { id: "dep_1" } };
-    const later = await publishLocal(directory, config, "token", () => {}, pulled);
-    expect(later.first).toBe(false);
-    expect(calls.filter((call) => call.name === "transfer_begin")).toHaveLength(1);
-    expect(JSON.parse(uploaded).initialPackage).toBeUndefined();
-  });
-
-  test("sql and events reach the Development Kernel unless --prod, and say so when none runs", async () => {
+  test("sql and events read the local app through the kernel binary unless --prod, and say so when there is none", async () => {
     await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_test", name: "Test", slug: "test", visibility: "private", signupPolicy: { mode: "invitation" }, signInMethods: ["password"], kernel: "0.1.0", manifest: {} }));
     for (const command of [["sql", "SELECT 1"], ["events"]]) {
-      const run = cli(command[0], "--dir", directory, ...command.slice(1));
+      const run = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "konae.ts"), command[0], "--dir", directory, ...command.slice(1)], {
+        env: { ...process.env, KONAE_MCP_TOKEN: "token", KONAE_KERNEL_BIN: path.join(directory, "no-kernel") }, stdout: "pipe", stderr: "pipe",
+      });
       expect(await run.exited).toBe(1);
-      const refusal = await new Response(run.stderr).text();
-      expect(refusal).toContain("No Development Kernel is running for this folder.");
-      expect(refusal).toContain("add --prod");
+      expect(await new Response(run.stderr).text()).toContain(`No kernel binary at ${path.join(directory, "no-kernel")}`);
     }
     expect(calls).toEqual([]);
     // --prod is the only way to the published database.

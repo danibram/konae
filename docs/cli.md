@@ -1,6 +1,6 @@
 # CLI
 
-The `konae` command makes an app in a folder, runs it on a Development Kernel, publishes it, and moves it. Run it from the repository root with Bun.
+The `konae` command makes an app in a folder, runs it on this machine, publishes it, and moves it. Run it from the repository root with Bun.
 
 ```sh
 bun run konae -- <command> [options]
@@ -41,7 +41,7 @@ Writes an app folder into an empty folder, without a credential or a Kernel: `ko
 bun run konae -- dev --dir ./my-app [--port 8796] [--events-port 8797] [--reset] [--confirm-schema <confirmation>]
 ```
 
-Compiles and starts the Rust Kernel with data under `.konae/dev-data`, with its own identities and no link to production. It publishes the build there, sets the signup policy to Open so test accounts can sign up, and rebuilds when the sources change. Its email, notices included, goes to `.konae/dev-data/mailbox.jsonl`. When the command exits, the Kernel stops and the data stays in the folder. `--reset` deletes that data first. A Development Kernel with no data imports the data `pull` exported, when there is some, and the Kernel brings its tables to what `app/schema.sql` states. A change that loses data asks first, as `publish` does. On every start and change it writes `actions.d.ts` beside `konae.json`, which types `miniapp.actions.call`.
+Builds `dist/`, compiles the `kernel` binary, and runs it on the folder. The Kernel reads `konae.json`, `app/`, `dist/` and `data/` where they are, with no owner and no link to production. It checks the folder as a release and brings `data/database.sqlite` to what `app/schema.sql` states. A change that loses data is refused with the plan's confirmation; run `dev` again with `--confirm-schema` and that confirmation to apply it. When a file in `app/` changes, `dev` builds again and restarts the Kernel. The app keeps the Signup Policy in `konae.json`; to create a test account on an app that is not Open, invite it with the `kernel` binary's `invite` command, which `dev` prints. Its email, notices and invitations included, goes to `.konae/kernel/mailbox.jsonl`. `--reset` imports the data `pull` exported with the `kernel` binary's `import` command, which backs up `data/` into `.konae/backups` first, or empties `data/` when there is none. On every start and change it writes `actions.d.ts` beside `konae.json`, which types `miniapp.actions.call`.
 
 ## pull
 
@@ -49,7 +49,7 @@ Compiles and starts the Rust Kernel with data under `.konae/dev-data`, with its 
 bun run konae -- pull --dir ./my-app [--url <Kernel URL>]
 ```
 
-Exports the published app's data, its database, accounts, files and Usage, into `.konae/pull`. Needs a credential from `login --export-data`. `dev --reset` imports it into the local app. Nothing travels back to the published app.
+Exports the published app's data, its database, accounts, files and Usage, into `.konae/pull/data`, laid out as an export lays out `data/`. Needs a credential from `login --export-data`. `dev --reset` imports it. Nothing travels back to the published app.
 
 ## sql
 
@@ -57,7 +57,7 @@ Exports the published app's data, its database, accounts, files and Usage, into 
 bun run konae -- sql --dir ./my-app [--prod] [--url <Kernel URL>] ("<statement>" | --file <file.sql>)
 ```
 
-Runs SQL on the app's database through `database_execute`, on the Development Kernel that `dev` is running for the folder. That is where to look at the exported data's rows after a schema change. Only `--prod` reaches the published Deployment.
+Runs SQL on `data/database.sqlite` with the `kernel` binary's `sql` command, the function `database_execute` calls on Konae. That is where to look at the exported data's rows after a schema change. Only `--prod` reaches the published Deployment, through `database_execute`.
 
 ## events
 
@@ -65,7 +65,7 @@ Runs SQL on the app's database through `database_execute`, on the Development Ke
 bun run konae -- events --dir ./my-app [--follow] [--json] [--days 7] [--prod]
 ```
 
-Lists what the app did besides answer its page: email, calls to other services, scheduled runs, routes and Signals, oldest first. On the Development Kernel an email shows its recipient and text, because nothing is sent. `--json` prints one object per line, `--follow` keeps printing, and only `--prod` reads the published Deployment. While `dev` runs, the same list is a page on the port after the app's.
+Lists what the app did besides answer its page: email, calls to other services, scheduled runs, routes and Signals, oldest first. Locally an email shows its recipient and text, because nothing is sent. `--json` prints one object per line, `--follow` keeps printing, and only `--prod` reads the published Deployment. While `dev` runs, the same list is a page on the port after the app's.
 
 ## build
 

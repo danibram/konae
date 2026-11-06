@@ -28,7 +28,13 @@ The S3 buckets must already exist. The same S3 settings work with RustFS, MinIO,
 
 ### Two binaries
 
-`kernel-rs` builds two binaries. `konae` is the installation: the Kernel with owner accounts, the owner's MCP, OAuth and the project list. The image, `bun run kernel` and `bun run dev:local` run it, and every command on this page is a `konae` command. `kernel` is the Kernel alone: it serves the app folders under `apps/` of its data directory, answers `restore`, `reconcile`, `files-migrate` and `files-reconcile`, and reads no owner, credential or project list.
+`kernel-rs` builds two binaries. `konae` is the installation: the Kernel with owner accounts, the owner's MCP, OAuth and the project list. `Dockerfile.konae`, `bun run kernel` and `bun run dev:local` run it, and every command on this page is a `konae` command. `kernel` is the Kernel alone: it serves the app folders under `apps/` of its data directory, answers `restore`, `reconcile`, `files-migrate` and `files-reconcile`, and reads no owner, credential or project list.
+
+At startup `kernel` opens each folder under `apps/` as a release. It runs the checks a publish runs on `konae.json`, `app/` and `dist/`, brings `data/database.sqlite` to `app/schema.sql`, writes its record in the folder's `.konae/`, and prints `Serving <name> at <url>`. A folder that fails a check is not served, and the Kernel prints why and serves the others. A schema change that loses data needs `KONAE_CONFIRM_SCHEMA` set to the confirmation it prints. A folder without a record answers at `<slug>.<KONAE_HOST_SUFFIX>`, or at a random address when another app holds that one. While it serves, `kernel` reads an app's `konae.json` again when it changes.
+
+`kernel` also answers the commands an app needs without Konae: `users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events` and `import`. Each calls the function Konae's owner tool calls and prints its answer as JSON. They run beside a serving Kernel, except `import`, which replaces the app's data with the `data/` of an exported folder after a backup and runs while no Kernel serves the app. `kernel help` lists them with their options, and so does an exported folder's `AGENTS.md`.
+
+`Dockerfile.kernel` builds an image that holds only `kernel`, and an exported folder's `compose.yaml` runs it on the folder, named by `KONAE_KERNEL_IMAGE` in the folder's `.env`. The image runs the Kernel and each command as the owner of the app folder it finds under `/kernel/apps`, so the files it writes there stay that person's. Konae publishes no image; build it with `docker build -f Dockerfile.kernel -t <registry>/<name>:<version> .` and push it where the server can pull it.
 
 ## Before a Kernel is reachable
 
@@ -115,7 +121,7 @@ The editor, the `konae` CLI and the test configurations read these:
 | `KONAE_EDITOR_PORT` | `dev:local` | `4173` | Port of the Vite editor. |
 | `KONAE_KERNEL_URL` | `dev:local`, `vite.config.ts` | `http://127.0.0.1:<kernel port>` under `dev:local`, `http://127.0.0.1:8787` for plain `bun run dev` | Kernel the editor proxies `/mcp`, `/_konae`, `/oauth` and `/.well-known` to. |
 | `KONAE_MCP_TOKEN` | `konae` CLI | unset | Bearer token for `init`, `publish`, `domain` and `export --with-data`. When unset, the CLI reads `.konae/credentials.json`. |
-| `KONAE_KERNEL_BIN` | `konae dev` | unset | A Kernel binary built from this checkout. `dev` starts it instead of compiling one with `cargo`. |
+| `KONAE_KERNEL_BIN` | `konae dev`, `sql`, `events` | unset | A `kernel` binary built from this checkout. `dev` starts it instead of compiling one with `cargo`. |
 | `KONAE_URL` | `konae login`, `konae init`, `konae domain` | `http://localhost:4173`; unset for `init` | Konae installation to talk to. `--url` overrides it. `init` writes it into `konae.json` only when it is set. |
 | `KONAE_EMAIL`, `KONAE_PASSWORD` | `konae login` | unset | Owner credentials exchanged for a 24-hour MCP token. |
 | `KONAE_SETUP_KEY` | `konae login` | unset | Installation setup key, needed only to create an installation's first owner. |
@@ -123,8 +129,9 @@ The editor, the `konae` CLI and the test configurations read these:
 | `KONAE_EDITOR_URL` | `playwright.local.config.ts` | `http://127.0.0.1:4176` | Editor the local end-to-end suite opens. When set outside CI, the suite reuses a server that is already running. |
 | `KONAE_TEST_KERNEL_PORT` | `playwright.local.config.ts` | `8794` | Kernel port for the local end-to-end suite. |
 | `KONAE_PORT` | an exported app folder's `compose.yaml` | `8787` | Port the folder's Kernel publishes, read from its `.env`. |
+| `KONAE_KERNEL_IMAGE` | an exported app folder's `compose.yaml` | unset | The image `Dockerfile.kernel` builds, as published to a registry. Compose refuses to start without it. |
 
-`konae dev` ignores every `KONAE_` and `VITE_` variable from your shell. It starts its own Kernel on `127.0.0.1` with a generated setup key and data under `.konae/dev-data`, and opens signup on the local Deployment so you can create test accounts. It sets a local value for each signing secret `actions.json` names and prints it, and it serves a page of the email, calls, scheduled runs and Signals the app produced on the port after the app's, on this machine only.
+`konae dev` ignores every `KONAE_` and `VITE_` variable from your shell. It runs the `kernel` binary on `127.0.0.1` with a generated key, a data directory at `.konae/kernel`, and the folder's own `data/`. It sets a local value for each signing secret `actions.json` names and prints it, and it serves a page of the email, calls, scheduled runs and Signals the app produced on the port after the app's, on this machine only.
 
 ## Data directory and copies
 

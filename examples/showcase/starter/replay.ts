@@ -321,7 +321,7 @@ try {
   assert.equal(buildCode, 0, buildOut + buildErr);
   const [publishCode, publishOut, publishErr] = await cli(["publish", "--dir", cliDir]);
   assert.equal(publishCode, 0, publishOut + publishErr);
-  const receipt = JSON.parse(await readFile(path.join(cliDir, ".konae/deployment.json"), "utf8")) as Receipt;
+  const receipt = JSON.parse(await readFile(path.join(cliDir, ".konae/published.json"), "utf8")) as Receipt;
   assert.equal(publishOut.trim().split("\n").at(-1), receipt.url);
   const S = app(A, receipt);
   const policy = await A.owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receipt.id });

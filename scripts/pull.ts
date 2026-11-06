@@ -1,11 +1,14 @@
-// `konae pull` exports the published app's data into .konae/pull, and
-// `konae dev --reset` imports it into a Development Kernel that holds no data
-// yet. The data travels one way. Nothing here writes to the app it came from.
+// `konae pull` exports the published app's data into .konae/pull, an app
+// folder that holds only data/, and `konae dev --reset` imports it with the
+// kernel binary's import command. The data travels one way. Nothing here
+// writes to the app it came from.
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import type { McpClient, Transfer } from "../src/mcp/client";
-import { checkPackageManifest, packageComponentFiles, type PackageManifest } from "../src/lib/portable-package";
-import { downloadToFile, uploadFromFile } from "./package-files";
+import { checkPackageManifest, packageComponentFiles, type PackageComponentName, type PackageManifest } from "../src/lib/portable-package";
+import { dataEntries } from "../src/lib/app-folder";
+import { downloadToFile } from "./package-files";
 
 /** Where the exported data sits in the app folder. .konae is already kept out of Git. */
 export const PULL_DIRECTORY = ".konae/pull";
@@ -47,7 +50,29 @@ export async function downloadPackage(client: McpClient, deploymentId: string, d
 }
 
 /**
- * Exports the published app's data into .konae/pull. The download
+ * Exports the published app's data into the data/ of the app folder
+ * `folder`, laid out as an export lays it out. Answers the package's manifest.
+ */
+export async function downloadData(client: McpClient, deploymentId: string, folder: string) {
+  const scratch = await mkdtemp(path.join(tmpdir(), "konae-data-"));
+  try {
+    const { manifest, files } = await downloadPackage(client, deploymentId, scratch);
+    for (const { name, file } of files) {
+      for (const entry of dataEntries(name as PackageComponentName, new Uint8Array(await readFile(file)))) {
+        const target = path.resolve(folder, entry.path);
+        if (!target.startsWith(path.resolve(folder) + path.sep)) throw Error(`Invalid folder path ${entry.path}.`);
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, entry.contents);
+      }
+    }
+    return manifest;
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Exports the published app's data into .konae/pull/data. The download
  * lands in a folder beside it first, so a pull that fails keeps the data an
  * earlier pull left.
  */
@@ -57,7 +82,7 @@ export async function pullLocal(root: string, client: McpClient, from: string, p
   await mkdir(path.join(root, ".konae"), { recursive: true });
   const scratch = await mkdtemp(path.join(root, ".konae/pull-"));
   try {
-    const { manifest } = await downloadPackage(client, remote.deployment.id, scratch);
+    const manifest = await downloadData(client, remote.deployment.id, scratch);
     const pulled: Pulled = { manifest, from, at: Date.now() };
     await writeFile(path.join(scratch, RECORD), JSON.stringify(pulled, null, 2), { mode: 0o600 });
     const target = path.join(root, PULL_DIRECTORY);
@@ -77,20 +102,6 @@ export async function readPulled(root: string): Promise<Pulled | undefined> {
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
   const pulled = JSON.parse(text) as Pulled;
   return { ...pulled, manifest: checkPackageManifest(pulled.manifest) };
-}
-
-/** Uploads each component of the exported data and returns the transfer IDs a release names in `initialPackage.components`. */
-export async function uploadPulled(client: McpClient, root: string, pulled: Pulled, projectId: string) {
-  const components: Record<string, string> = {};
-  try {
-    for (const content of pulled.manifest.contents) {
-      components[content.name] = await uploadFromFile(client, path.join(root, PULL_DIRECTORY, packageComponentFiles[content.name]), content, projectId);
-    }
-    return components;
-  } catch (error) {
-    for (const id of Object.values(components)) await client.cancel(id).catch(() => {});
-    throw error;
-  }
 }
 
 /** One phrase for the exported data: where it came from, when, and each component with its size. */

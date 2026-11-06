@@ -1,32 +1,30 @@
+# The Kernel alone: the `kernel` binary, which serves the app folders under
+# /kernel/apps. An exported app folder's compose.yaml runs this image on the
+# folder. Konae's own image is Dockerfile.konae.
 FROM rust:1.91-bookworm AS build
 
 WORKDIR /src
 COPY kernel-rs/Cargo.toml kernel-rs/Cargo.lock ./
 COPY kernel-rs/kernel/Cargo.toml kernel/Cargo.toml
 COPY kernel-rs/konae/Cargo.toml konae/Cargo.toml
-# Builds the dependencies once, on empty crates, so a source change rebuilds only Konae and the Kernel.
+# Builds the dependencies once, on empty crates, so a source change rebuilds only the Kernel.
+# The workspace names konae too, so it gets an empty crate and is never built.
 RUN mkdir kernel/src konae/src \
   && printf '' > kernel/src/lib.rs && printf 'fn main() {}\n' > kernel/src/main.rs && printf 'fn main() {}\n' > konae/src/main.rs \
-  && cargo build --release --locked --bin konae && rm -rf kernel/src konae/src
+  && cargo build --release --locked -p kernel --bin kernel && rm -rf kernel/src
 COPY kernel-rs/kernel/src ./kernel/src
-COPY kernel-rs/konae/src ./konae/src
-RUN touch kernel/src/lib.rs kernel/src/main.rs konae/src/main.rs && cargo build --release --locked --bin konae
+RUN touch kernel/src/lib.rs kernel/src/main.rs && cargo build --release --locked -p kernel --bin kernel
 
 FROM debian:bookworm-slim
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
   && rm -rf /var/lib/apt/lists/* \
-  && groupadd --system --gid 10001 konae \
-  && useradd --system --uid 10001 --gid konae --home-dir /data --no-create-home --shell /usr/sbin/nologin konae \
-  && mkdir -p /data \
-  && chown konae:konae /data \
-  && chmod 0700 /data
-COPY --from=build /src/target/release/konae /usr/local/bin/konae
-COPY ops/kernel-entrypoint.sh /usr/local/bin/konae-entrypoint
-RUN chmod 755 /usr/local/bin/konae-entrypoint
-# The Kernel binds all interfaces here, so it refuses the local development
-# key unless the compose file opts in.
-ENV KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/data
+  && mkdir -p /kernel/apps /usr/local/lib/konae
+COPY --from=build /src/target/release/kernel /usr/local/lib/konae/kernel
+COPY ops/kernel-entrypoint.sh /usr/local/bin/kernel
+RUN chmod 755 /usr/local/bin/kernel
+ENV KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/kernel KONAE_KERNEL_PORT=8787
 EXPOSE 8787
-ENTRYPOINT ["/usr/local/bin/konae-entrypoint"]
+HEALTHCHECK --interval=10s --timeout=2s --start-period=5s CMD curl -fs http://127.0.0.1:8787/_konae/health || exit 1
+ENTRYPOINT ["/usr/local/bin/kernel"]

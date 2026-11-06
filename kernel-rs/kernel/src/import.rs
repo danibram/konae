@@ -56,6 +56,16 @@ impl Target {
         })
     }
 
+    /// The `schema.sql` and `actions.json` in the app's `app/`, which the
+    /// Kernel opens at its next start.
+    pub fn sources(state: &AppState, id: &str) -> Result<Self> {
+        let sources = layout::sources(&state.data_root, id);
+        Ok(Self {
+            sql: std::fs::read_to_string(sources.join("schema.sql")).unwrap_or_default(),
+            program: serde_json::from_str(&std::fs::read_to_string(sources.join("actions.json")).context("app/actions.json is missing.")?)?,
+        })
+    }
+
     /// The tables and indexes the live database has now, and the actions the app runs.
     pub fn live(state: &AppState, deployment: &Deployment) -> Result<Self> {
         Ok(Self {
@@ -158,6 +168,51 @@ pub async fn import_data(
         files: find("files"),
         usage: find("usage"),
     };
+    import_incoming(state, deployment, incoming, target, confirmation, sources).await
+}
+
+/// Imports the `data/` of the app folder `folder`, an export, into an
+/// existing app, as `import_data` imports a package. The sources stay; the
+/// database takes the schema of `target`. It checks each file as
+/// `package::verify` checks an upload, and the caller holds the project lock.
+pub async fn import_folder(state: &AppState, deployment: &Deployment, folder: &Path, target: &Target, confirmation: Option<&str>) -> Result<Outcome> {
+    let data = folder.join("data");
+    let database = data.join("database.sqlite");
+    ensure!(database.is_file(), "{} holds no database.sqlite to import.", data.display());
+    let stage = state.data_root.join("transfers").join(format!(".import-folder-{}", Uuid::new_v4()));
+    tokio::fs::create_dir_all(&stage).await?;
+    let result = async {
+        let present = |name: &str| Some(data.join(name)).filter(|path| path.is_file());
+        let files = if data.join("files").is_dir() {
+            let archive = stage.join("files.tar");
+            package::folder_files_tar(&data.join("files"), &archive)?;
+            Some(archive)
+        } else {
+            None
+        };
+        let incoming = Incoming { database, identity: present("identity.sqlite"), files, usage: present(usage::USAGE_DATABASE) };
+        package::ensure_space(package::free_bytes(&state.data_root)?, incoming.size() * 2 + SPACE_MARGIN, "import this folder")?;
+        let components = [("database", Some(&incoming.database)), ("identity", incoming.identity.as_ref()), ("files", incoming.files.as_ref()), ("usage", incoming.usage.as_ref())]
+            .into_iter()
+            .filter_map(|(name, path)| path.map(|path| (name.to_owned(), path.clone())))
+            .collect::<Vec<_>>();
+        let limits = state.files.limits;
+        tokio::task::spawn_blocking(move || package::check_components(&components, &limits)).await??;
+        import_incoming(state, deployment, incoming, target, confirmation, false).await
+    }
+    .await;
+    let _ = tokio::fs::remove_dir_all(&stage).await;
+    result
+}
+
+async fn import_incoming(
+    state: &AppState,
+    deployment: &Deployment,
+    incoming: Incoming,
+    target: &Target,
+    confirmation: Option<&str>,
+    sources: bool,
+) -> Result<Outcome> {
     let change = plan(state, &incoming.database, target)?;
     if change.confirmation().is_some_and(|expected| confirmation != Some(expected.as_str())) {
         return Ok(Outcome::NeedsConfirmation(change));

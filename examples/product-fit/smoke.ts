@@ -5,7 +5,7 @@ import path from "node:path";
 import { chromium } from "playwright";
 import { McpClient } from "../../src/mcp/client";
 import { signRoute } from "../../src/lib/route-signature";
-import { buildLocal, publishLocal } from "../../scripts/konae";
+import { appDir, buildLocal, publishLocal } from "../../scripts/konae";
 import { kernelTarget } from "../../scripts/conform";
 import { generateActionContract } from "../../src/lib/action-contract";
 import { formatConformanceReport, runConformance } from "../../src/lib/action-conformance";
@@ -64,7 +64,7 @@ try {
   const receipts: Record<string, { id: string; hostname: string; url: string }> = {};
   for (const name of ["launch", "journal", "board", "portfolio", "poll", "feed", "docs", "probe"]) {
     const root = path.join(scratch, name);
-    await cp(path.join(import.meta.dir, name), root, { recursive: true });
+    await cp(path.join(import.meta.dir, name), appDir(root), { recursive: true });
     const project = { id: `product_fit_${name}`, name, slug: name, manifest: { version: 1, visibility: name === "board" ? "private" : "public" } };
     await owner.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
     if (name === "feed") await owner.call("secret_set", { projectId: project.id, name: "pings_webhook", value: pingsSecret });
@@ -304,19 +304,20 @@ try {
   check("Static docs", `konae build publishes the pages, pages/guide/ at /guide/ and public/; search works. Missing route status ${missing.status}; /guide/install serves the install page; sitemap type=${sitemap.headers.get("content-type")}.`);
 
   const retryRoot = path.join(scratch, "retry");
-  await cp(path.join(import.meta.dir, "launch"), retryRoot, { recursive: true });
-  const originalSchema = await readFile(path.join(retryRoot, "schema.sql"), "utf8");
-  await writeFile(path.join(retryRoot, "schema.sql"), "CREATE VIEW unsupported AS SELECT 1;");
+  const retryApp = appDir(retryRoot);
+  await cp(path.join(import.meta.dir, "launch"), retryApp, { recursive: true });
+  const originalSchema = await readFile(path.join(retryApp, "schema.sql"), "utf8");
+  await writeFile(path.join(retryApp, "schema.sql"), "CREATE VIEW unsupported AS SELECT 1;");
   const retryConfig = { url, project: { id: "product_fit_retry", name: "Retry", slug: "retry", manifest: { version: 1, visibility: "public" } } };
   const token = await owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 60 });
   for (let i = 0; i < 9; i++) await assert.rejects(publishLocal(retryRoot, retryConfig, token.token), /schema/i);
-  await writeFile(path.join(retryRoot, "schema.sql"), originalSchema);
-  const originalActions = await readFile(path.join(retryRoot, "actions.json"), "utf8");
+  await writeFile(path.join(retryApp, "schema.sql"), originalSchema);
+  const originalActions = await readFile(path.join(retryApp, "actions.json"), "utf8");
   const returningActions = JSON.parse(originalActions);
   returningActions.actions["waitlist.join"].statement += " RETURNING id";
-  await writeFile(path.join(retryRoot, "actions.json"), JSON.stringify(returningActions));
+  await writeFile(path.join(retryApp, "actions.json"), JSON.stringify(returningActions));
   await assert.rejects(publishLocal(retryRoot, retryConfig, token.token), /cannot use RETURNING/);
-  await writeFile(path.join(retryRoot, "actions.json"), originalActions);
+  await writeFile(path.join(retryApp, "actions.json"), originalActions);
   assert((await publishLocal(retryRoot, retryConfig, token.token)).url.startsWith("http://retry-"));
   check("Failed publish recovery", "Nine failed release plans free their transfers, and the repaired project publishes with the same credential.");
 
@@ -372,7 +373,7 @@ try {
   }
   // The CLI, from a contract file on disk, with no proxy header and no session.
   const contractDir = path.join(scratch, "contract-launch");
-  await cp(path.join(import.meta.dir, "launch"), contractDir, { recursive: true });
+  await cp(path.join(import.meta.dir, "launch"), appDir(contractDir), { recursive: true });
   const cli = (args: string[]) => Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
   const written = cli(["contract", "--dir", contractDir]);
   assert.equal(await written.exited, 0, await new Response(written.stderr).text());

@@ -5,7 +5,7 @@
 //   bun run examples/probes/replay-all.ts
 //   KONAE_PROBE_BASE_PORT=23000 bun run examples/probes/replay-all.ts
 //
-// KONAE_KERNEL_BIN runs an already built Kernel instead of compiling one.
+// KONAE_BIN runs an already built konae binary instead of compiling one.
 import { readdirSync } from "node:fs";
 import path from "node:path";
 

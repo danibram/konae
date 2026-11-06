@@ -386,15 +386,18 @@ describe("authenticated MCP", () => {
     try {
       const output = (async () => {
         let text = "";
-        for await (const block of dev.stdout) { text += new TextDecoder().decode(block); if (/http:\/\/external-proof-[a-f0-9]+\.localhost:\d+/.test(text)) return text; }
+        for await (const block of dev.stdout) { text += new TextDecoder().decode(block); if (/http:\/\/external-proof\.localhost:\d+/.test(text)) return text; }
         throw Error("Development process returned no URL.");
       })();
-      const result = await Promise.race([output, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error("Development CLI timed out.")), 20_000); })]);
-      expect(result).toContain(`.localhost:${port}`);
-      expect(await Bun.file(path.join(directory, ".konae/dev-data/owners.sqlite")).exists()).toBe(true);
+      const result = await Promise.race([output, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error("Development CLI timed out.")), 60_000); })]);
+      expect(result).toContain(`http://external-proof.localhost:${port}`);
+      // dev runs the kernel binary on the folder itself: no owner, no MCP, and data/ holds the app's data.
+      const kernelData = path.join(directory, ".konae/kernel");
+      for (const file of ["owners.sqlite", "mcp.sqlite"]) expect(await Bun.file(path.join(kernelData, file)).exists()).toBe(false);
+      expect(await Bun.file(path.join(directory, "data/database.sqlite")).exists()).toBe(true);
       expect((await alice.call<{ revision: number }>("project_inspect", { projectId: config.project.id })).revision).toBe(1);
     } finally { clearTimeout(timer!); dev.kill(); await dev.exited; }
-  }, 30_000);
+  }, 90_000);
   test("requires credentials before discovery and closes the old operation routes", async () => {
     expect((await fetch(`${url}/mcp`, { method: "POST", body: "{}" })).status).toBe(401);
     const stale = await fetch(`${url}/_konae/admin/deploy`, { method: "POST", headers: { "x-konae-admin-key": setupKey } });

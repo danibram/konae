@@ -1,18 +1,19 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient } from "../src/mcp/client";
-import { INIT_TEMPLATES, configOf, initLocal, publishLocal, setDevSecrets } from "../scripts/konae";
+import { INIT_TEMPLATES, buildLocal, configOf, initLocal, localKernel, publishLocal, readSettings, resetData, setDevSecrets } from "../scripts/konae";
 import { pullLocal, readPulled } from "../scripts/pull";
 
-// init, publish, pull and the first release of a Development Kernel, on two
-// real Kernels: `origin` stands for the installation an app is published to
-// and `local` for the one `konae dev` starts.
+// init, publish, pull and dev --reset: `origin` is a Konae installation an
+// app is published to, and each folder runs locally on the kernel binary, as
+// `konae dev` runs it, with the data pull exported in data/.
 type Kernel = { url: string; process: ReturnType<typeof Bun.spawn>; owner: McpClient; token: string };
 let root: string;
 let origin: Kernel;
-let local: Kernel;
+let localPort: number;
+let served: ReturnType<typeof Bun.spawn> | undefined;
 const password = "pull-integration-password";
 let nextClient = 0;
 const freshClient = () => { nextClient++; return `198.19.${Math.floor(nextClient / 250)}.${nextClient % 250 + 1}`; };
@@ -46,13 +47,41 @@ beforeAll(async () => {
   root = await mkdtemp(path.join(tmpdir(), "konae-pull-"));
   const port = Number(process.env.KONAE_PULL_TEST_PORT) || 19900 + Math.floor(Math.random() * 80);
   origin = await start("origin", port);
-  local = await start("local", port + 1);
+  localPort = port + 1;
 }, 300_000);
 
 afterAll(async () => {
-  for (const kernel of [origin, local]) { kernel?.process.kill(); if (kernel) await kernel.process.exited; }
+  origin?.process.kill(); if (origin) await origin.process.exited;
+  await stopLocal();
   if (root) await rm(root, { recursive: true, force: true });
 });
+
+async function stopLocal() {
+  if (served && served.exitCode === null) { served.kill(); await served.exited; }
+  served = undefined;
+}
+
+/** Builds the folder and serves it on the kernel binary, as dev does. Answers the local Kernel and the app's address. */
+async function serveLocally(folder: string) {
+  await stopLocal();
+  const kernel = await localKernel(folder, await readSettings(folder), { port: String(localPort), build: false });
+  await buildLocal(folder);
+  const set = await setDevSecrets(folder, kernel);
+  served = Bun.spawn([kernel.binary], { env: { ...kernel.env, KONAE_TRUSTED_PROXIES: "127.0.0.1" }, stdout: "pipe", stderr: "inherit" });
+  let output = "";
+  for await (const block of served.stdout as ReadableStream<Uint8Array>) { output += new TextDecoder().decode(block); if (output.includes("listening on")) break; }
+  const url = /Serving .+ at (\S+)/.exec(output)?.[1];
+  if (!url) throw Error(`The kernel binary did not serve ${folder}:\n${output}`);
+  return { url, set, kernel, local: { url: `http://127.0.0.1:${localPort}` } as Kernel };
+}
+
+/** Builds the folder and imports the pulled data with the kernel binary's import, as dev --reset does. */
+async function importPulled(folder: string, pulled: Awaited<ReturnType<typeof pullLocal>>) {
+  await stopLocal();
+  const kernel = await localKernel(folder, await readSettings(folder), { port: String(localPort), build: false });
+  await buildLocal(folder);
+  await resetData(folder, kernel, pulled);
+}
 
 /** The app's runtime endpoint for one signed-in account, which `route` creates or signs in. */
 async function member(kernel: Kernel, hostname: string, route: "signup" | "login") {
@@ -69,17 +98,14 @@ const hostOf = (receipt: { url: string }) => new URL(receipt.url).hostname;
 
 describe("every template init offers", () => {
   for (const template of INIT_TEMPLATES) {
-    test(`${template} publishes on a Kernel with no data and serves its page`, async () => {
+    test(`${template} runs on the kernel binary with no data and serves its page`, async () => {
       const folder = path.join(root, `template-${template}`);
-      const config = configOf(await initLocal(folder, { name: `Template ${template}`, template }));
-      const admin = new McpClient(`${local.url}/mcp`, { token: local.token });
-      const { signupPolicy: _, ...manifest } = config.project.manifest;
-      const set = await setDevSecrets(folder, admin, { ...config.project, manifest });
+      await initLocal(folder, { name: `Template ${template}`, template });
+      const { url, set, kernel, local } = await serveLocally(folder);
       // Only the webhook receiver signs, and a second run finds its secret held.
       expect(set).toHaveLength(template === "webhook" ? 1 : 0);
-      expect(await setDevSecrets(folder, admin, { ...config.project, manifest })).toEqual([]);
-      const receipt = await publishLocal(folder, { ...config, url: local.url }, local.token, () => {});
-      const page = await fetch(`${local.url}/`, { headers: { host: hostOf(receipt), "x-forwarded-for": freshClient() }, redirect: "manual" });
+      expect(await setDevSecrets(folder, kernel)).toEqual([]);
+      const page = await fetch(`${local.url}/`, { headers: { host: hostOf({ url }), "x-forwarded-for": freshClient() }, redirect: "manual" });
       // A public app answers with its page and a private one with the Kernel's sign-in page.
       expect(page.status).toBe(200);
     }, 60_000);
@@ -105,11 +131,11 @@ describe("a project starts the same through MCP and through init", () => {
   }, 60_000);
 });
 
-describe("init, publish, pull, dev", () => {
+describe("init, publish, pull, dev --reset", () => {
   let app: string;
   let config: Awaited<ReturnType<typeof initLocal>>;
 
-  test("a project init wrote without a Kernel publishes, and its rows and accounts arrive on a Kernel with no data", async () => {
+  test("a project init wrote without a Kernel publishes, and its rows and accounts arrive in data/", async () => {
     app = path.join(root, "app");
     config = configOf(await initLocal(app, { name: "Pulled notes" }));
     expect(config.url).toBeUndefined();
@@ -124,16 +150,23 @@ describe("init, publish, pull, dev", () => {
     expect(pulled.manifest.contents.map((content) => content.name)).toEqual(expect.arrayContaining(["database", "identity"]));
     expect(await readPulled(app)).toEqual(pulled);
 
-    const first = await publishLocal(app, { ...config, url: local.url }, local.token, () => {}, pulled);
-    expect(first.first).toBe(true);
+    await importPulled(app, pulled);
+    const first = await serveLocally(app);
     // The account signs in with the password it had on the origin and reads its own row.
-    const there = await member(local, hostOf(first), "login");
+    const there = await member(first.local, hostOf(first), "login");
     expect(await there.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Written on the origin" }]);
+    await there.call("actions_invoke", { name: "notes.create", input: { title: "Written locally" } });
 
-    // A later release of the same project carries no package, and the row stays.
-    const again = await publishLocal(app, { ...config, url: local.url }, local.token, () => {}, pulled);
-    expect(again.first).toBe(false);
-    expect(await there.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Written on the origin" }]);
+    // A later start without --reset keeps data/ as it is.
+    const again = await serveLocally(app);
+    const back = await member(again.local, hostOf(again), "login");
+    expect(await back.call("actions_invoke", { name: "notes.list" })).toHaveLength(2);
+    // A second reset imports the pulled data again, after a backup of what data/ held, and the local session survives it.
+    await importPulled(app, pulled);
+    const backups = (await readdir(path.join(app, ".konae/backups"))).filter((name) => name.endsWith(".json"));
+    expect(backups).toHaveLength(2);
+    await serveLocally(app);
+    expect(await back.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Written on the origin" }]);
     // The origin is untouched by any of it.
     expect(await ana.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Written on the origin" }]);
   }, 120_000);
@@ -147,7 +180,7 @@ describe("init, publish, pull, dev", () => {
     expect((await readPulled(app))?.manifest.projectId).toBe(config.project.id);
   }, 60_000);
 
-  test("a folder whose schema.sql is ahead of the exported data publishes on it, and the Kernel adds the column with every row kept", async () => {
+  test("a folder whose schema.sql is ahead of the exported data runs on it, and the Kernel adds the column with every row kept", async () => {
     const next = path.join(root, "next");
     const born = configOf(await initLocal(next, { name: "Next version" }));
     const published = await publishLocal(next, { ...born, url: origin.url }, origin.token);
@@ -162,11 +195,9 @@ describe("init, publish, pull, dev", () => {
     expect(schema).toMatch(/created_at[^,\n]*\n\s*\);/);
     await writeFile(path.join(next, "app", "schema.sql"), schema.replace(/(created_at[^,\n]*)\n(\s*\);)/, "$1,\n  pinned INTEGER NOT NULL DEFAULT 0\n$2"));
 
-    const released = await publishLocal(next, { ...born, url: local.url }, local.token, () => {}, pulled);
-    expect(JSON.parse(await readFile(path.join(next, ".konae/release-plan.json"), "utf8")).schema).toMatchObject({
-      losses: [], confirmation: null, statements: [expect.stringContaining("ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")],
-    });
-    const there = await member(local, hostOf(released), "login");
+    await importPulled(next, pulled);
+    const released = await serveLocally(next);
+    const there = await member(released.local, hostOf(released), "login");
     expect(await there.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Before the column", pinned: 0 }]);
   }, 120_000);
 });

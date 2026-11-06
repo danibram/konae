@@ -1,8 +1,8 @@
 # Walkthrough: from a credential to an import over MCP
 
-This page takes one app through every operation an external agent performs on Konae: get an Agent Credential, create a project, run it on a Development Kernel, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, publish it with a signup policy, invite a member, check it against its Action Contract, read its Usage and Signals, export it and import it on a second Kernel.
+This page takes one app through every operation an external agent performs on Konae: get an Agent Credential, create a project, run it on this machine, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, publish it with a signup policy, invite a member, check it against its Action Contract, read its Usage and Signals, export it and import it on a second Kernel.
 
-Every command and every answer below was recorded from real Kernels by `tests/mcp-walkthrough.integration.test.ts`, which fails when this page differs from what the Kernel answers. Values that change on every run appear as placeholders in angle brackets, such as `<project id>`. Kernel A answers on `http://localhost:4173`, Kernel B on `http://localhost:4174`, and the Development Kernel on `http://localhost:8796`. An app's host is `<slug>-<suffix>.localhost` on its Kernel's port.
+Every command and every answer below was recorded from real Kernels by `tests/mcp-walkthrough.integration.test.ts`, which fails when this page differs from what the Kernel answers. Values that change on every run appear as placeholders in angle brackets, such as `<project id>`. Kernel A answers on `http://localhost:4173`, Kernel B on `http://localhost:4174`, and `dev` on `http://localhost:8796`. An app's host is `<slug>-<suffix>.localhost` on its Kernel's port.
 
 A tool call is shown as the `params` of a JSON-RPC `tools/call` request to `<Kernel URL>/mcp` with `Authorization: Bearer <token>`, followed by its answer. The answer is the tool's `structuredContent` as `{ "result": ... }`, a tool error as `{ "refused": "<text>" }`, or a JSON-RPC error as `{ "error": "<message>" }`. Some long answers show only the fields the step needs. [Develop with authenticated MCP](mcp.md) explains every tool, and [the miniapp SDK](sdk.md) every call an app makes.
 
@@ -336,9 +336,9 @@ styles.css
 ```
 <!-- /walkthrough:init -->
 
-## 5. Run it on a Development Kernel
+## 5. Run it on this machine
 
-`dev` starts a Kernel with its own data in `.konae/dev-data`, publishes the folder there as Open so test accounts can sign up, prints the app's URL and republishes when a file changes. Stop it with Ctrl-C.
+`dev` builds `dist/` and runs the `kernel` binary on the folder, with the folder's `data/`. It prints the app's URL and starts the Kernel again when a file in `app/` changes. Stop it with Ctrl-C.
 
 <!-- walkthrough:dev -->
 ```sh
@@ -346,11 +346,11 @@ bun run konae -- dev --dir /tmp/orders --port 8796
 ```
 
 ```text
-http://orders-<dev suffix>.localhost:8796
+http://orders.localhost:8796
 ```
 
 ```sh
-curl -i 'http://orders-<dev suffix>.localhost:8796/'
+curl -i 'http://orders.localhost:8796/'
 ```
 
 ```text

@@ -36,6 +36,7 @@ pub mod domain;
 pub mod enter;
 pub mod file_store;
 pub mod files;
+pub mod folder;
 pub mod google;
 pub mod guard;
 pub mod hosts;
@@ -48,6 +49,7 @@ pub mod limits;
 pub mod mail;
 pub mod maintenance;
 pub mod notify;
+pub mod operator;
 pub mod package;
 pub mod path;
 pub mod path_name;
@@ -541,16 +543,40 @@ pub async fn start(
     own_origins: Vec<String>,
     audit: Option<runtime::AuditSink>,
 ) -> Result<Running> {
+    tokio::fs::create_dir_all(crate::layout::apps(&startup.data_root)).await?;
+    let lock = file_store::hold_kernel_lock(&startup.data_root)?;
+    let schedule_clock = schedule::Clock::from_env(&startup.bind)?;
+    let (state, copy_config) = state_from_env(startup, installation, mail_key, own_origins, audit).await?;
+    path::load(&state);
+    if let Some(config) = copy_config {
+        copies::spawn_schedule(state.clone(), config);
+    }
+    schedule::spawn(state.clone(), schedule_clock);
+    if let Some(queue) = state.accounts.queue.clone() {
+        mail::spawn_worker(queue);
+    }
+    calls::spawn_worker(state.clone());
+    Ok(Running { state, _lock: lock })
+}
+
+/// The state a Kernel serves with, read from the environment, without its
+/// workers. An operator command works on the same state beside a running
+/// Kernel. Also answers the copy settings the workers need.
+pub async fn state_from_env(
+    startup: &Startup,
+    installation: installation::Installation,
+    mail_key: &str,
+    own_origins: Vec<String>,
+    audit: Option<runtime::AuditSink>,
+) -> Result<(AppState, Option<copies::CopyConfig>)> {
     let data_root = startup.data_root.clone();
     let public_origin = startup.hosts.public_origin.clone();
     tokio::fs::create_dir_all(crate::layout::apps(&data_root)).await?;
-    let lock = file_store::hold_kernel_lock(&data_root)?;
     let account_settings = accounts::AccountSettings::from_env(&data_root, mail_key, &public_origin, &installation)?;
     let s3 = s3_client_from_env().await;
     let artifact_bucket = env("KONAE_ARTIFACT_BUCKET", "konae-apps");
     let data_bucket = env("KONAE_DATA_BUCKET", "konae-data");
     let copy_config = copies::CopyConfig::from_env(&data_root, s3.is_some())?;
-    let schedule_clock = schedule::Clock::from_env(&startup.bind)?;
     let deployments = load_deployments(&data_root, &public_origin).await?;
     let files = file_store::Files::from_env(&data_root).await?;
     let state = AppState {
@@ -573,16 +599,7 @@ pub async fn start(
         audit,
         installation: Arc::new(installation),
     };
-    path::load(&state);
-    if let Some(config) = copy_config {
-        copies::spawn_schedule(state.clone(), config);
-    }
-    schedule::spawn(state.clone(), schedule_clock);
-    if let Some(queue) = state.accounts.queue.clone() {
-        mail::spawn_worker(queue);
-    }
-    calls::spawn_worker(state.clone());
-    Ok(Running { state, _lock: lock })
+    Ok((state, copy_config))
 }
 
 /// Binds the port and serves the Kernel, with `extra` beside its routes.

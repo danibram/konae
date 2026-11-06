@@ -35,7 +35,7 @@ A schedule fits work such as releasing a hold that lapsed or closing a day. The 
     }
     ```
 
-5. Optional. To watch a run without waiting, start the Development Kernel with `KONAE_SCHEDULE_MIN_SECONDS` set. Every schedule then runs once every that many seconds. The Kernel takes it only on a loopback address.
+5. Optional. To watch a run without waiting, start `konae dev` with `KONAE_SCHEDULE_MIN_SECONDS` set. Every schedule then runs once every that many seconds. The Kernel takes it only on a loopback address.
 
     ```sh
     KONAE_SCHEDULE_MIN_SECONDS=10 bun run konae -- dev --dir /tmp/my-app

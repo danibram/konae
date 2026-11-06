@@ -1,6 +1,6 @@
 // `konae events`: what an app did besides answer its page. Email, calls
 // to other services, scheduled runs, routes and Signals, newest last, from
-// the Development Kernel `dev` is running or, with --prod, from the published
+// the local app, through the kernel binary's commands, or, with --prod, from the published
 // Deployment. The entries are the editor's What happened list
 // (src/lib/what-happened.ts), so a refusal reads the same in both places.
 import { readFile } from "node:fs/promises";
@@ -8,7 +8,7 @@ import type { McpClient } from "../src/mcp/client";
 import { usageRange, type UsageSummary } from "../src/lib/usage";
 import { whatHappened, type Call, type Notice, type Signal } from "../src/lib/what-happened";
 
-/** One line of the feed. `mail` exists only on a Development Kernel, whose mailbox is a file that names the recipient and holds the text. */
+/** One line of the feed. `mail` exists only for the local app, whose mailbox is a file that names the recipient and holds the text. */
 export type AppEvent = {
   id: string;
   at: number;
@@ -56,7 +56,7 @@ export async function kernelEvents(client: Pick<McpClient, "call">, deploymentId
     client.call<{ notices: Notice[] }>("notices_read", { deploymentId }),
     client.call<{ signals: Signal[] }>("signals_read", { deploymentId }),
   ]);
-  // On a Development Kernel a delivered notice is a line of the mailbox, which names its recipient and text, so it is listed once, as mail.
+  // Locally a delivered notice is a line of the mailbox, which names its recipient and text, so it is listed once, as mail.
   const listed = mailboxShowsDelivered ? notices.notices.filter((notice) => notice.state !== "delivered") : notices.notices;
   return whatHappened({ summary, calls: calls.calls, notices: listed, signals: signals.signals }).map((entry) => ({
     id: entry.id, at: entry.at, kind: entry.kind, title: entry.title, detail: entry.detail, outcome: entry.outcome.words,
@@ -114,7 +114,7 @@ export const EVENTS_PAGE = `<!doctype html>
 </style>
 <main>
   <h1>What this app did</h1>
-  <p class="lede">Email, calls to other services, scheduled runs, routes and Signals of the app on this Development Kernel, newest first. Email is written to a file here and never sent.</p>
+  <p class="lede">Email, calls to other services, scheduled runs, routes and Signals of the app on this machine, newest first. Email is written to a file here and never sent.</p>
   <div class="filters" id="filters" role="group" aria-label="Show"></div>
   <p class="error" id="error" role="alert" hidden></p>
   <ol id="list" aria-live="polite"></ol>
@@ -152,7 +152,7 @@ export const EVENTS_PAGE = `<!doctype html>
     const error = document.getElementById("error");
     try {
       const response = await fetch("events.json");
-      if (!response.ok) throw Error((await response.json()).error || "The Development Kernel did not answer.");
+      if (!response.ok) throw Error((await response.json()).error || "The local Kernel did not answer.");
       events = (await response.json()).reverse(); error.hidden = true; draw();
     } catch (problem) { error.textContent = "Could not read the events: " + problem.message; error.hidden = false; }
   }

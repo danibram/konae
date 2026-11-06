@@ -12,7 +12,8 @@ import path from "node:path";
 import initSqlJs from "sql.js";
 import { chromium } from "playwright";
 import { McpClient } from "../../../src/mcp/client";
-import { buildLocal } from "../../../scripts/konae";
+import { appDir, buildLocal } from "../../../scripts/konae";
+import { KERNEL_VERSION, type AppSettings } from "../../../src/lib/app-folder";
 import { createCapsuleValidator } from "../../../src/agent/gate";
 
 const repo = path.resolve(import.meta.dir, "../../..");
@@ -114,7 +115,7 @@ function withHeaders(endpoint: string, headers: Record<string, string>) {
 }
 
 async function readSources(root: string) {
-  return Object.fromEntries(await Promise.all(appFiles.map(async (name) => [name, await readFile(path.join(root, name), "utf8")] as const)));
+  return Object.fromEntries(await Promise.all(appFiles.map(async (name) => [name, await readFile(path.join(appDir(root), name), "utf8")] as const)));
 }
 
 const utcDay = (offset = 0) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
@@ -122,9 +123,10 @@ const utcDay = (offset = 0) => new Date(Date.now() + offset * 86_400_000).toISOS
 try {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
   assert.equal(await build.exited, 0, "The Kernel must compile.");
-  const appRoot = path.join(scratch, "app");
-  await mkdir(appRoot);
-  for (const name of appFiles) await cp(path.join(import.meta.dir, name), path.join(appRoot, name));
+  // An app folder whose app/ holds this example's sources.
+  const appRoot = path.join(scratch, "habits");
+  await mkdir(appDir(appRoot), { recursive: true });
+  for (const name of appFiles) await cp(path.join(import.meta.dir, name), path.join(appDir(appRoot), name));
   const sources = await readSources(appRoot);
 
   // ---------------------------------------------------------------- the Gate
@@ -424,8 +426,8 @@ try {
   assert.equal(conformVerify.status, 200);
   const conformToken = cookieOf(conformVerify)!.split("=").slice(1).join("=");
   const contractDir = path.join(scratch, "contract");
-  await mkdir(contractDir);
-  for (const name of appFiles) await cp(path.join(appRoot, name), path.join(contractDir, name));
+  await mkdir(appDir(contractDir), { recursive: true });
+  for (const name of appFiles) await cp(path.join(appDir(appRoot), name), path.join(appDir(contractDir), name));
   const cli = (args: string[], env: Record<string, string> = {}) => {
     const child = Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), ...args], {
       cwd: repo, stdout: "pipe", stderr: "pipe",
@@ -455,13 +457,18 @@ try {
   // The same project, published with the CLI from a folder that holds its files.
   const publisher = await owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], projectIds: [projectId], ttlSeconds: 3600 });
   const folder = path.join(scratch, "folder");
-  await mkdir(folder);
-  for (const name of appFiles) await writeFile(path.join(folder, name), sources[name]);
-  await writeFile(path.join(folder, "konae.json"), JSON.stringify({ url, project: { id: projectId, name: "Habits", slug: "habits", manifest } }, null, 2));
-  const indexHtml = await readFile(path.join(folder, "index.html"), "utf8");
+  await mkdir(appDir(folder), { recursive: true });
+  for (const name of appFiles) await writeFile(path.join(appDir(folder), name), sources[name]);
+  const { visibility: _, ...folderManifest } = manifest;
+  const settings: AppSettings = {
+    id: projectId, name: "Habits", slug: "habits", visibility: "public", signupPolicy: { mode: "open", allowlist: [] },
+    signInMethods: ["password"], kernel: KERNEL_VERSION, manifest: folderManifest,
+  };
+  await writeFile(path.join(folder, "konae.json"), JSON.stringify(settings, null, 2));
+  const indexHtml = await readFile(path.join(appDir(folder), "index.html"), "utf8");
   assert(indexHtml.includes("Build 1"));
-  await writeFile(path.join(folder, "index.html"), indexHtml.replace("Build 1", "Build 2, published from a folder"));
-  const [publishCode, publishOut, publishErr] = await cli(["publish", "--dir", folder], { KONAE_MCP_TOKEN: publisher.token });
+  await writeFile(path.join(appDir(folder), "index.html"), indexHtml.replace("Build 1", "Build 2, published from a folder"));
+  const [publishCode, publishOut, publishErr] = await cli(["publish", "--dir", folder, "--url", url], { KONAE_MCP_TOKEN: publisher.token });
   assert.equal(publishCode, 0, publishOut + publishErr);
   assert.equal(publishOut.trim(), receipt.url);
   const shell = await (await fetch(url, { headers: { host } })).text();

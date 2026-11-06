@@ -42,7 +42,7 @@ bun run konae -- init --dir ./my-app --name 'My app'
 bun run konae -- dev --dir ./my-app
 ```
 
-`login` saves a 24-hour token with `read`, `write` and `publish` in `./my-app/.konae/credentials.json`. `init` writes the app folder: `konae.json`, the template in `app/`, `AGENTS.md`, `action-contract.md` and a `package.json` whose `npm run build` writes `dist/`. The first publish registers the project. `dev` runs the app on a local Development Kernel and republishes when the files change. To publish to the Kernel the credential names, run `bun run konae -- publish --dir ./my-app`. The [CLI reference](./cli.md) lists the other variables and flags.
+`login` saves a 24-hour token with `read`, `write` and `publish` in `./my-app/.konae/credentials.json`. `init` writes the app folder: `konae.json`, the template in `app/`, `AGENTS.md`, `action-contract.md` and a `package.json` whose `npm run build` writes `dist/`. The first publish registers the project. `dev` runs the app on this machine with the `kernel` binary and starts it again when the files change. To publish to the Kernel the credential names, run `bun run konae -- publish --dir ./my-app`. The [CLI reference](./cli.md) lists the other variables and flags.
 
 ### 4. Prove it
 
