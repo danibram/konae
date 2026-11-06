@@ -1,9 +1,9 @@
 //! The commands an operator runs on an app that a Kernel serves without
 //! Konae (ADR-0027, decision 3). Each one calls the function Konae's owner
 //! tool calls, so it refuses with the same words, and prints the same answer
-//! as JSON. They work on the app's files beside a running Kernel: the app
-//! accounts, keys and secrets are SQLite files the Kernel reads on every
-//! request, and the Kernel follows `konae.json` for the Signup Policy.
+//! as JSON. They work on the app's files beside a running Kernel, which
+//! reads the app accounts, keys and secrets from SQLite on every request and
+//! follows `konae.json` for the Signup Policy.
 
 use std::io::Read;
 
