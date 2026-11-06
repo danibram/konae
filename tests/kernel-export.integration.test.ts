@@ -118,6 +118,26 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   const user = users.users.find((entry) => entry.email === "ana@carried.test")!;
   expect(user.state).toBe("active");
 
+  // An invitation from the machine leaves through the running Kernel's mail worker.
+  const invited = await command("invite", "bea@carried.test");
+  expect(invited.error).toBe("");
+  expect(JSON.parse(invited.output)).toMatchObject({ results: [{ email: "bea@carried.test", status: "invited", delivery: "queued" }] });
+  let mailed = false;
+  for (let attempt = 0; attempt < 50 && !mailed; attempt++) {
+    mailed = (await readFile(path.join(data, "mailbox.jsonl"), "utf8").catch(() => "")).includes("bea@carried.test");
+    if (!mailed) await Bun.sleep(200);
+  }
+  expect(mailed).toBe(true);
+
+  // An API key appears once, is listed without its secret, and stays listed revoked.
+  const created = JSON.parse((await command("api-key", "create", "reader", "--files", "public")).output) as { keyId: string; key: string };
+  expect(created.key.length).toBeGreaterThan(20);
+  const keys = () => command("api-key", "list").then((listed) => JSON.parse(listed.output) as { keys: { keyId: string; revokedAt: number | null }[] });
+  expect((await keys()).keys).toEqual([expect.objectContaining({ keyId: created.keyId, revokedAt: null })]);
+  expect(JSON.parse((await command("api-key", "revoke", created.keyId)).output)).toEqual({ keyId: created.keyId, revoked: true });
+  expect((await keys()).keys[0].revokedAt).toBeGreaterThan(0);
+  expect((await command("api-key", "create", "nothing")).error).toContain("Name at least one action or file visibility for the key.");
+
   // A suspension from the machine ends the session the running Kernel holds.
   const suspended = await command("suspend", user.userId);
   expect(suspended.error).toBe("");
