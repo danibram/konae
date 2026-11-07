@@ -21,7 +21,10 @@ const setupKeyB = "walkthrough-second-installation-key";
 const password = "walkthrough-agent-password";
 const memberPassword = "walkthrough-member-password";
 const secret = "walkthrough-orders-secret-0123";
-const today = new Date().toISOString().slice(0, 10);
+// Usage counts by UTC day. A run that crosses 00:00 UTC asks from the day it
+// started to the day it reads, and the document shows both as <today>.
+const utcDay = () => new Date().toISOString().slice(0, 10);
+const today = utcDay();
 
 const APP_FILES: Record<string, string> = {
   "index.html": `<main>
@@ -414,7 +417,9 @@ describe("the MCP walkthrough", () => {
 
   test("12. Usage and Signals", async () => {
     r.step("usage");
-    await tool("usage_read", { deploymentId: s.deploymentId, from: today, to: today }, { pick: (value) => ({ from: value.from, to: value.to, totals: value.totals }) });
+    const readDay = utcDay();
+    r.name(readDay, "<today>");
+    await tool("usage_read", { deploymentId: s.deploymentId, from: today, to: readDay }, { pick: (value) => ({ from: value.from, to: value.to, totals: value.totals }) });
     r.step("signals");
     const signals = await tool("signals_read", { deploymentId: s.deploymentId });
     // conform sends one generated order; name it so the document is the same on every run.
