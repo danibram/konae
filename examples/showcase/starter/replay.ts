@@ -11,14 +11,14 @@
 //   KONAE_SHOWCASE_SCREENSHOTS=/tmp/shots   adds light and dark screenshots
 //   KONAE_SHOWCASE_BROWSER=0                skips Chrome
 import assert from "node:assert/strict";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
 import initSqlJs from "sql.js";
 import { chromium } from "playwright";
 import { McpClient, type Transfer } from "../../../src/mcp/client";
-import { buildLocal } from "../../../scripts/konae";
+import { appDir, buildLocal } from "../../../scripts/konae";
 import { createCapsuleValidator } from "../../../src/agent/gate";
 import { signRoute } from "../../../src/lib/route-signature";
 
@@ -192,11 +192,11 @@ async function publishInbox(kernel: Kernel): Promise<Receipt> {
   await kernel.owner.call("secret_set", { projectId, name: "github_webhook", value: `gh_starter_${crypto.randomUUID().replaceAll("-", "")}` });
   await kernel.owner.call("secret_set", { projectId, name: "payments_webhook", value: `whsec_starter_${crypto.randomUUID().replaceAll("-", "")}` });
   const dir = path.join(scratch, "inbox");
-  await mkdir(dir);
-  for (const name of ["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]) await cp(path.join(import.meta.dir, "../inbox", name), path.join(dir, name));
+  await mkdir(appDir(dir), { recursive: true });
+  for (const name of ["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]) await cp(path.join(import.meta.dir, "../inbox", name), path.join(appDir(dir), name));
   const { artifact } = await buildLocal(dir);
   const files: Record<string, string> = {};
-  for (const name of ["index.html", "schema.sql", "actions.json"]) files[name] = await readFile(path.join(dir, name), "utf8");
+  for (const name of ["index.html", "schema.sql", "actions.json"]) files[name] = await readFile(path.join(appDir(dir), name), "utf8");
   const upload = await kernel.owner.upload(json({ project: { id: projectId, name: "Inbox", slug: "inbox", manifest, files }, visibility: "private", artifact, initialSignupPolicy: { mode: "closed", allowlist: [] } }), projectId);
   try {
     const plan = await kernel.owner.call<{ planId: string }>("release_plan", { transferId: upload.transferId });
@@ -295,18 +295,20 @@ try {
   const ownerEnv = { KONAE_EMAIL: ownerEmail, KONAE_PASSWORD: passwords.owner };
   const [loginCode, loginOut, loginErr] = await cli(["login", "--dir", cliDir, "--url", A.url], ownerEnv);
   assert.equal(loginCode, 0, loginOut + loginErr);
-  const [initCode, initOut, initErr] = await cli(["init", "--dir", cliDir, "--name", "Starter", "--url", A.url]);
+  const [initCode, initOut, initErr] = await cli(["init", "--dir", cliDir, "--name", "Starter"]);
   assert.equal(initCode, 0, initOut + initErr);
   const config = JSON.parse(await readFile(path.join(cliDir, "konae.json"), "utf8"));
-  const initPolicy = config.project.manifest.signupPolicy.mode;
-  const initVisibility = config.project.manifest.visibility;
-  // Replace the template with the Capsule and ask for a public app with open signup.
-  for (const name of await readdir(cliDir)) if (!name.startsWith(".") && name !== "konae.json") await rm(path.join(cliDir, name), { recursive: true });
-  for (const name of capsuleFiles) await cp(path.join(import.meta.dir, name), path.join(cliDir, name));
-  await writeFile(path.join(cliDir, "actions.json"), sources["actions.json"]);
-  config.project.manifest = { ...config.project.manifest, visibility: "public", signupPolicy: { mode: "open" } };
+  const initPolicy = config.signupPolicy.mode;
+  const initVisibility = config.visibility;
+  // Replace the template in app/ with the Capsule and ask for a public app with open signup.
+  await rm(appDir(cliDir), { recursive: true });
+  await mkdir(appDir(cliDir));
+  for (const name of capsuleFiles) await cp(path.join(import.meta.dir, name), path.join(appDir(cliDir), name));
+  await writeFile(path.join(appDir(cliDir), "actions.json"), sources["actions.json"]);
+  config.visibility = "public";
+  config.signupPolicy = { mode: "open", allowlist: [] };
   await writeFile(path.join(cliDir, "konae.json"), JSON.stringify(config, null, 2));
-  const projectId: string = config.project.id;
+  const projectId: string = config.id;
   const [unsetCode, , unsetErr] = await cli(["publish", "--dir", cliDir]);
   assert.notEqual(unsetCode, 0);
   const unsetSecret = "Action status.report signs with the secret status_webhook, which is not set for this project. Set it with secret_set before publishing.";
@@ -347,8 +349,8 @@ try {
   await A.owner.call("secret_set", { projectId: editorId, name: "status_webhook", value: editorSecret });
   await A.owner.call("secret_set", { projectId: editorId, name: "inbox_events", value: inboxSecret, use: "call" });
   const editorRoot = path.join(scratch, "editor");
-  await mkdir(editorRoot);
-  for (const name of capsuleFiles) await writeFile(path.join(editorRoot, name), sources[name]);
+  await mkdir(appDir(editorRoot), { recursive: true });
+  for (const name of capsuleFiles) await writeFile(path.join(appDir(editorRoot), name), sources[name]);
   const { artifact: editorArtifact } = await buildLocal(editorRoot);
   const releaseUpload = await A.owner.upload(json({ project: editorSource, visibility: "public", artifact: editorArtifact, initialSignupPolicy: { mode: "open", allowlist: [] } }), editorId);
   const editorPlan = await A.owner.call<{ planId: string }>("release_plan", { transferId: releaseUpload.transferId });
@@ -694,8 +696,8 @@ try {
 
   // --------------------------------------------- Action Contract and conform
   const contractDir = path.join(scratch, "contract");
-  await mkdir(contractDir);
-  for (const name of capsuleFiles) await writeFile(path.join(contractDir, name), sources[name]);
+  await mkdir(appDir(contractDir), { recursive: true });
+  for (const name of capsuleFiles) await writeFile(path.join(appDir(contractDir), name), sources[name]);
   const [contractCode, contractOut, contractErr] = await cli(["contract", "--dir", contractDir]);
   assert.equal(contractCode, 0, contractOut + contractErr);
   assert.equal(contractErr.trim(), "", "contract warns about nothing");
@@ -743,8 +745,8 @@ try {
   assert.equal(exported.manifest.visibility, "public");
   const componentBytes: Record<string, Uint8Array> = {};
   for (const content of exported.manifest.contents) componentBytes[content.name] = await A.owner.download(exported.downloads[content.name]);
-  const project = config.project;
-  const { signupPolicy: _policy, ...projectManifest } = project.manifest;
+  const projectManifest = { ...config.manifest, version: 1, visibility: config.visibility };
+  const project = { id: config.id, name: config.name, slug: config.slug };
   await B.owner.call("project_create", { projectId, name: project.name, slug: project.slug, manifest: projectManifest });
   // Secrets never travel. The sender keeps its one secret, so the destination's owner sets the same value.
   await B.owner.call("secret_set", { projectId, name: "status_webhook", value: webhookSecret });

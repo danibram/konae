@@ -77,7 +77,8 @@ await probe("shop", 23020, async (kit) => {
   });
   assert.equal(checkout.queued, true);
   const mine = async () => clients[0].call<any[]>("actions_invoke", { name: "orders.mine", input: {} });
-  const withSession = await until(mine, (rows) => rows.some((row) => row.id === first && row.session_id != null), "the checkout session");
+  const withSession = await until(mine, (rows) => rows.some((row) => row.id === first && row.session_id != null), "the checkout session")
+    .catch(async (error) => { throw Error(`${error.message} The outbox holds ${JSON.stringify(await owner.call("calls_read", { deploymentId: app.deploymentId }))}`); });
   const sessionId = withSession.find((row) => row.id === first).session_id;
   assert.equal(typeof sessionId, "number");
   const outbox = await owner.call<{ calls: { action: string; state: string; status: number | null; then: { state: string } | null }[] }>("calls_read", { deploymentId: app.deploymentId });
