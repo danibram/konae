@@ -71,6 +71,7 @@ If MCP is published on an origin other than the hosting origin, set `KONAE_MCP_O
 | Custom domain | `domain_read`; `domain_set`, `domain_clear` with `publish` |
 | Path address | `path_read`; `path_set`, `path_clear` with `publish` |
 | Maintenance | `maintenance_read`; `maintenance_set` with `publish` |
+| Contact email | `contact_email_read`; `contact_email_set` with `publish` |
 | Usage and Signals | `usage_read`, `signals_read`, `usage_summary`, `usage_overview` |
 | Calls between apps | `calls_read` |
 | Email notices | `notices_read` |
@@ -837,7 +838,7 @@ The notice is recorded only when the statement changed a row, after the answer i
 | Reason | What happened |
 | --- | --- |
 | `no-transport` | The installation has no mail transport. Nothing is stored |
-| `owner-has-no-email` | `to` is `owner` and the owner signs in through Clerk, so the Kernel has no address |
+| `owner-has-no-email` | `to` is `owner` and the app has no contact email; see [Contact email](#contact-email) |
 | `no-account` | `to` is `actor` and the caller is a visitor, a signed request or an API key |
 | `unverified-email` | `to` is `actor` and the account has not answered a link, or is not active |
 | `not-a-verified-account` | `to` names a column and a row's value is not the ID of an active account of this Deployment that answered a link |
@@ -1103,6 +1104,12 @@ The release payload is the one `release_plan` always takes, `project`, `visibili
 It never merges rows. Before it changes anything it writes a backup of what it replaces. `database_execute` with `list-backups` lists it as `Before import`, with `holds` naming `data`, `sources` or both, and `restore-backup` brings it back, after it backs up the current state again. The app keeps its Signup Policy, sign-in methods, addresses and secrets. Sessions and API keys survive, as after a restore: people the new data still holds stay signed in, and the app's keys keep working. A schema change that loses data answers `{ imported: false, replace, schema }` and changes nothing; call again with `schema.confirmation` as `confirmSchema` once the owner agrees. Otherwise the answer is `{ imported: true, replace, backup, schema }`, with `deployment` when the sources changed. `project_import` works while the app is in maintenance. In the editor, App settings has an Import section that reads the `.tar` Export downloads and asks which part to replace.
 
 The CLI's `export --dir <folder> --out <empty folder> --with-data` writes the same app folder on disk, with the data in `data/`. `src/lib/portable-package.ts` checks the manifest on the client with the same limits as `kernel-rs/kernel/src/package.rs`.
+
+## Contact email
+
+`"notify": { "to": "owner" }` sends to the app's contact email, which `konae.json` keeps, so an export carries it and the `kernel` binary sends there too. A first publish fills it with the owner's email when Konae knows it. An owner who signs in through Clerk has no email in Konae, so their app has none until they set one. Later publishes keep the address the app has.
+
+`contact_email_set { deploymentId, email }` sets it, or clears it with `email: null`, and needs `publish`. `contact_email_read { deploymentId }` answers `{ deploymentId, contactEmail, ownerNotices }`, where `ownerNotices` names the actions that send to the owner. With `contactEmail` null and `ownerNotices` listed, those notices are not sent, and Usage counts each under `notify` as `owner-has-no-email`. In the editor, App settings has the same field, and the publish dialog says when an app sends owner notices and has no contact email.
 
 ## Maintenance
 

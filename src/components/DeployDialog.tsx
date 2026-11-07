@@ -9,7 +9,8 @@ import {
 } from "lucide-react";
 import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { listSecrets, readSignupPolicy, type DeploymentReceipt, type SignupMode } from "../deployments/client";
+import { listSecrets, readContactEmail, readSignupPolicy, type ContactEmailState, type DeploymentReceipt, type SignupMode } from "../deployments/client";
+import { missingContactSentence } from "./AppContactEmail";
 import { readDomain } from "../deployments/domains";
 import type { DeploymentVisibility } from "../deployments/manifest";
 import { actionSentence, deployReadiness, ownerFixes, type ReleaseFacts } from "./action-readiness";
@@ -260,6 +261,13 @@ function actionTitle(name: string): string {
 function PublishedState({ deployment, onClose, onOpenUsers, onOpenAppSettings }: { deployment: DeploymentReceipt; onClose: () => void; onOpenUsers?: () => void; onOpenAppSettings?: () => void }) {
   const isPrivate = deployment.manifest.visibility === "private";
   const policy = usePublishedPolicy(deployment.id);
+  const [contact, setContact] = useState<ContactEmailState | null>(null);
+  useEffect(() => {
+    let current = true;
+    readContactEmail(deployment.id).then((value) => { if (current) setContact(value); }, () => {});
+    return () => { current = false; };
+  }, [deployment.id]);
+  const missingContact = missingContactSentence(contact);
   const urlRef = useRef<HTMLAnchorElement>(null);
   // The Deploy button that had focus is gone now; the new address takes it.
   useEffect(() => { urlRef.current?.focus(); }, []);
@@ -274,6 +282,7 @@ function PublishedState({ deployment, onClose, onOpenUsers, onOpenAppSettings }:
     </div>
     {deployment.accessCode && <div className="published-access-code"><small>PRIVATE ACCESS CODE</small><code>{deployment.accessCode}</code><p>Keep it private. Anyone with this code can open this deployment.</p></div>}
     <p className="deploy-note">Accounts, rows and rules are published with this app. Export takes them to another machine.</p>
+    {missingContact && <p className="deploy-contact-missing" role="status">{missingContact}{onOpenAppSettings && <> <button type="button" className="deploy-auth-link" onClick={onOpenAppSettings}>Set a contact email in App settings</button></>}</p>}
     {policy.status === "ready" && policy.mode === "invitation" && onOpenUsers && <Button className="published-invite" onClick={onOpenUsers}>Invite people</Button>}
     {onOpenAppSettings && <Button onClick={onOpenAppSettings}>Connect a custom domain</Button>}
     <Button variant="primary" className="published-done" onClick={onClose}>Back to workshop</Button>

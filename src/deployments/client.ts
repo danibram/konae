@@ -258,3 +258,19 @@ export function readMaintenance(deploymentId: string) {
 export function setMaintenance(deploymentId: string, on: boolean) {
   return platformMcp.call<MaintenanceState>("maintenance_set", { deploymentId, on });
 }
+
+/**
+ * Where `"notify": { "to": "owner" }` sends (kernel-rs/kernel/src/notify.rs).
+ * `ownerNotices` names the actions that send there; with no contact email
+ * those notices are not sent.
+ */
+export type ContactEmailState = { deploymentId: string; contactEmail: string | null; ownerNotices: string[] };
+
+export function readContactEmail(deploymentId: string) {
+  return platformMcp.call<ContactEmailState>("contact_email_read", { deploymentId });
+}
+
+/** Sets the app's contact email in konae.json, or clears it with null, and answers with what the Kernel kept. */
+export function setContactEmail(deploymentId: string, email: string | null) {
+  return platformMcp.call<ContactEmailState>("contact_email_set", { deploymentId, email });
+}

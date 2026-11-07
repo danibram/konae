@@ -2,8 +2,9 @@
 //! changes a row (ADR-0016).
 //!
 //! `"notify": { "to": "owner" | "actor", "subject", "body" }` sends to the
-//! Deployment's contact email, which a publish from Konae fills with the
-//! owner's email, or to the calling account's verified email,
+//! app's contact email in `konae.json`, which the owner sets in App settings
+//! and a first publish from Konae fills with the owner's email when Konae
+//! knows it, or to the calling account's verified email,
 //! never to an address from the input, so an app cannot relay mail. The
 //! subject and body are templates whose only placeholders are
 //! `{input.<key>}`, for one of the action's input bindings, and `{actor.id}`.
@@ -22,6 +23,42 @@ use serde_json::{Map, Value};
 use super::mail::{self, Notice, NoticeOutcome};
 use super::refusal::{refuse, Refusal};
 use super::{ActionDefinition, AppState, Deployment};
+
+pub const CONTACT_EMAIL_INVALID: &str = "The contact email is not a valid email address.";
+
+/// The actions of `actions` (an `actions.json`) whose notice goes to the
+/// owner, by name.
+pub fn owner_notices(actions: &str) -> Vec<String> {
+    let program: Value = serde_json::from_str(actions).unwrap_or(Value::Null);
+    let mut names: Vec<String> = program["actions"]
+        .as_object()
+        .map(|actions| actions.iter().filter(|(_, action)| action["notify"]["to"] == "owner").map(|(name, _)| name.clone()).collect())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// Where the app's owner notices go, and which actions send them, as
+/// `contact_email_read` answers.
+pub fn contact_view(deployment: &Deployment) -> Value {
+    serde_json::json!({
+        "deploymentId": deployment.id,
+        "contactEmail": deployment.contact_email,
+        "ownerNotices": owner_notices(&deployment.actions),
+    })
+}
+
+/// Sets the app's contact email in `konae.json`, or clears it with `None`,
+/// and answers as `contact_view`. The caller holds the project lock.
+pub async fn set_contact_email(state: &AppState, deployment: &Deployment, email: Option<&str>) -> anyhow::Result<Value> {
+    let email = email
+        .map(|email| super::auth::normalize_email(email).map_err(|_| anyhow::anyhow!(CONTACT_EMAIL_INVALID)))
+        .transpose()?;
+    let updated = Deployment { contact_email: email, ..deployment.clone() };
+    super::persist_deployment(state, &updated).await?;
+    state.deployments.write().await.insert(updated.hostname.clone(), updated.clone());
+    Ok(contact_view(&updated))
+}
 
 pub const MAX_SUBJECT_CHARS: usize = 120;
 pub const MAX_BODY_CHARS: usize = 2000;

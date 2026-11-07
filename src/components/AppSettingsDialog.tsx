@@ -4,6 +4,7 @@ import { clearDomain, domainTrafficTarget, readDomain, setDomain, type DomainVie
 import { isSharedOriginRefusal, pathAddressLabel, pathNeedsDomain, readPath, setPath, type PathChange, type PathView } from "../deployments/paths";
 import { checkHostname } from "../lib/domain-name";
 import { checkPathName } from "../lib/path-name";
+import { AppContactEmail } from "./AppContactEmail";
 import { AppImport } from "./AppImport";
 import { AppMaintenance } from "./AppMaintenance";
 import { isSignedOutError } from "./owner-session";
@@ -165,6 +166,7 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
           </section>
         </>}
         <PathAddress key={deploymentId} deploymentId={deploymentId} signInHref={signInHref} onSignedOut={onSignedOut} />
+        <AppContactEmail key={`contact-${deploymentId}`} deploymentId={deploymentId} onSignedOut={onSignedOut} />
         <AppMaintenance key={`maintenance-${deploymentId}`} deploymentId={deploymentId} onSignedOut={onSignedOut} />
         {importTarget && <AppImport deploymentId={deploymentId} {...importTarget} onSignedOut={onSignedOut} />}
       </>}

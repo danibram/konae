@@ -516,6 +516,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         domain_read_tool(),
         path_read_tool(),
         tool("maintenance_read", "Read whether a deployment is in maintenance and since when. installation names a hold of the whole installation that the app's own state cannot lift.", json!({"deploymentId":text}), &["deploymentId"], true),
+        tool("contact_email_read", "Read the app's contact email, where \"notify\": { \"to\": \"owner\" } sends, and ownerNotices, the actions that send there. A contact email of null with ownerNotices listed means those notices are not sent.", json!({"deploymentId":text}), &["deploymentId"], true),
     ]);
     if owner.scopes.iter().any(|s| s == "export_data") {
         tools.extend([
@@ -599,6 +600,13 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             "Replace an existing deployment's sources, data or both with those of an exported app folder. It backs up what it replaces first; database_execute list-backups shows the backup and restore-backup brings it back. Rows are never merged. replace sources or both takes transferId, an upload of the release JSON of the publishing topic built from the folder's app/ and dist/. replace data or both takes package { manifest, components: { <name>: <transferId> } }, uploaded as the portability topic says. The app keeps its Signup Policy, sign-in methods, address, secrets, sessions and API keys. When the schema change loses data, the answer is { imported: false, schema } and nothing changed; call again with schema.confirmation as confirmSchema after the owner agrees. Works in maintenance. Requires publish. Read back with project_inspect and database_execute list-backups.",
             json!({"deploymentId":text,"replace":{"type":"string","enum":["sources","data","both"]},"transferId":text,"package":{"type":"object"},"confirmSchema":{"type":"string","minLength":64,"maxLength":64}}),
             &["deploymentId", "replace"],
+            false,
+        ));
+        tools.push(tool(
+            "contact_email_set",
+            "Set the app's contact email in konae.json, where \"notify\": { \"to\": \"owner\" } sends, or clear it with email null. A first publish fills it with the owner's email when Konae knows it; an owner who signs in through Clerk sets it here. Later publishes keep it. Requires publish. Read back with contact_email_read.",
+            json!({"deploymentId":text,"email":{"type":["string","null"],"maxLength":254}}),
+            &["deploymentId", "email"],
             false,
         ));
         tools.push(tool(
@@ -1399,6 +1407,18 @@ async fn admin_call(
             let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "read").await?;
             Ok(super::maintenance::read(&state.data_root, &deployment.id))
         }
+        "contact_email_read" => {
+            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "read").await?;
+            Ok(super::notify::contact_view(&deployment))
+        }
+        "contact_email_set" => {
+            let id = a["deploymentId"].as_str().unwrap_or_default();
+            let deployment = owned_deployment(state, owner, id, "publish").await?;
+            // Releases hold the same lock, so a publish cannot put back the email it read before.
+            let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
+            let current = owned_deployment(state, owner, id, "publish").await?;
+            super::notify::set_contact_email(state, &current, a["email"].as_str()).await
+        }
         "maintenance_set" => {
             let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "publish").await?;
             let on = a["on"].as_bool().ok_or_else(|| anyhow::anyhow!("on must be true or false."))?;
@@ -1533,9 +1553,9 @@ async fn admin_call(
             transfer(state, principal, &json!({"transferId":row.2}))?;
             let bytes = tokio::fs::read(transfer_path(state, &row.2)?).await?;
             let mut payload: Value = serde_json::from_slice(&bytes)?;
-            // The owner's email is where notify to the owner sends. It comes
-            // from Konae's owner record, never from the payload.
-            payload["contactEmail"] = owner_email(state, &owner.id).map_or(Value::Null, Value::String);
+            // Where notify to the owner sends: the contact email the app has,
+            // else the owner's email from Konae's record, never the payload's.
+            payload["contactEmail"] = contact_email(state, owner, &row.0).await;
             // A schema change that loses data applies only with the
             // confirmation release_plan gave for it.
             payload["schemaConfirmation"] = a.get("confirmSchema").cloned().unwrap_or(Value::Null);
@@ -1651,7 +1671,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
     };
     let mut answer = json!({"imported": true, "replace": replace, "backup": backup, "schema": change.to_json()});
     if let Some((mut payload, input, _)) = release {
-        payload["contactEmail"] = owner_email(state, &owner.id).map_or(Value::Null, Value::String);
+        payload["contactEmail"] = contact_email(state, owner, &project).await;
         payload["schemaConfirmation"] = confirmation.map_or(Value::Null, |value| Value::String(value.to_owned()));
         for key in ["name", "slug", "manifest"] {
             if let Some(value) = payload["project"].get(key) {
@@ -1682,6 +1702,13 @@ pub(super) fn inviter_email(state: &Konae, owner_id: &str) -> Option<String> {
     let db = Connection::open_with_flags(state.data_root.join("owners.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     db.busy_timeout(std::time::Duration::from_secs(5)).ok()?;
     db.query_row("SELECT email FROM app_users WHERE id = ?1", [owner_id], |row| row.get(0)).optional().ok().flatten()
+}
+
+/// The contact email a release of `project` carries: the one the published
+/// app has, which the owner may have set in App settings, else the owner's.
+async fn contact_email(state: &Konae, owner: &Owner, project: &str) -> Value {
+    let kept = find_project_deployment(&*state.deployments.read().await, project).and_then(|deployment| deployment.contact_email);
+    kept.or_else(|| owner_email(state, &owner.id)).map_or(Value::Null, Value::String)
 }
 
 /// The email of the owner's active account, when Konae keeps one. An owner
