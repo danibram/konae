@@ -267,13 +267,24 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [explorerOpen, setExplorerOpen] = useState(false);
   const [compact, setCompact] = useState(() => window.matchMedia("(max-width: 900px)").matches);
   const [compactPanel, setCompactPanel] = useState<PanelId>("preview");
+  // A window that crosses the breakpoint, such as a rotated tablet, keeps the section it showed.
+  const shownPanel = useRef({ compactPanel, focused: layout.focused });
+  shownPanel.current = { compactPanel, focused: layout.focused };
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 900px)");
     const follow = () => {
       const next = media.matches;
       setCompact(next);
-      if (next) setCompactPanel("preview");
+      if (next) {
+        setCompactPanel(shownPanel.current.focused ?? "preview");
+        return;
+      }
+      setLayout((current) => {
+        const shown = openPanel(current, shownPanel.current.compactPanel);
+        saveLayout(shown);
+        return shown;
+      });
     };
     media.addEventListener("change", follow);
     return () => media.removeEventListener("change", follow);
