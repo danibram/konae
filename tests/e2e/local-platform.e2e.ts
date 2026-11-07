@@ -466,7 +466,7 @@ test("a person who writes code adds a page, a public file and a signed route, an
   await expect(page.getByText('Marks a row done. Anyone can run it. When no row changes it refuses with "That task is gone.".')).toBeVisible();
   await waitForKernelSave(page);
 
-  // The deploy dialog reads the release plan first: it names the unset secret and keeps Deploy off.
+  // The deploy dialog reads the release plan first, so it names the unset secret and keeps Deploy off.
   await page.getByRole("button", { name: "Deploy", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Deploy application" });
   await expect(dialog).toContainText("Action orders.receive signs with the secret orders_webhook, which is not set for this project.");

@@ -171,7 +171,7 @@ At startup the Kernel checks the folder as Konae checks a release. It refuses a 
 ${secrets.length ? `\nThe app's routes and calls sign with ${secrets.length === 1 ? "the secret" : "the secrets"} ${secrets.join(", ")}. A secret never travels with the folder, so set each where the app runs: \`kernel secret set <name>\` below, or \`secret_set\` on Konae. The Kernel does not serve the app until each is set.\n` : ""}
 ## Commands
 
-Outside Konae, the Kernel's commands manage the app. Each refuses with the same words as the tool in Konae's editor, and prints the answer as JSON. Under Compose, run each as \`docker compose exec kernel kernel <command>\`; they work while the Kernel serves.
+Outside Konae, the Kernel's commands manage the app. Each refuses with the same words as the tool in Konae's editor, and prints the answer as JSON. Under Compose, run each as \`docker compose exec kernel kernel <command>\`. All but \`import\` work while the Kernel serves.
 
 - \`kernel users [--state pending|active|suspended]\`: the app accounts, with their IDs.
 - \`kernel invite <email>...\`: email each person an invitation. It needs a mail transport.
@@ -183,7 +183,7 @@ Outside Konae, the Kernel's commands manage the app. Each refuses with the same 
 - \`kernel events --from <YYYY-MM-DD> --to <YYYY-MM-DD>\`: notices, calls, scheduled runs, routes and Signals.
 - \`kernel maintenance on|off\`: pause the app, so it takes no writes, signups or sign-ins and holds its email, calls and schedule, or let it run again.
 - \`kernel enter <email>\`: a one-time link, good for 2 minutes, that signs a browser in as that account. Usage and Signals do not count what the session does.
-- \`kernel import <folder> [--confirm-schema <confirmation>]\`: replace the app's data with the \`data/\` of an exported folder, after a backup in \`.konae/backups\`. Sessions and API keys stay as they are. Stop the Kernel first.
+- \`kernel import <folder> [--confirm-schema <confirmation>]\`: replace the app's data with the \`data/\` of an exported folder, after a backup in \`.konae/backups\`. Sessions and API keys stay as they are. It needs the Kernel stopped, so under Compose run \`docker compose stop kernel\`, then \`docker compose run --rm kernel kernel import <folder inside the volume>\`, then \`docker compose start kernel\`.
 
 Add \`--app ${settings.id}\` when the Kernel serves more than one app.
 `;

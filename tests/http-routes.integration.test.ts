@@ -209,8 +209,8 @@ describe("HTTP routes", () => {
     expect(await refusedWith({})).toEqual({ status: 401, body: { error: "invalid-signature" } });
     expect(await refusedWith({ "x-signature": await signed(body) }, JSON.stringify({ id: "A-1", total: 99 }))).toEqual({ status: 401, body: { error: "invalid-signature" } });
     // A stale t has its own answer, whatever the secret, so a sender with a skewed clock can tell.
-    // The Kernel reads its clock after this test does, so t sits a minute past the 300 s window:
-    // t = now + 301 is 300 s ahead once the request crosses a second, and the Kernel accepts that.
+    // The Kernel reads its clock after this test does. A t of now + 301 is 300 s ahead once the
+    // request crosses a second, and the Kernel accepts that, so t sits a minute past the window.
     const outside = 300 + 60;
     expect(await refusedWith({ "x-signature": await signed(body, Math.floor(Date.now() / 1000) - outside) })).toEqual({ status: 401, body: { error: "stale-timestamp" } });
     expect(await refusedWith({ "x-signature": await signed(body, Math.floor(Date.now() / 1000) + outside, "another-secret-0123456789") })).toEqual({ status: 401, body: { error: "stale-timestamp" } });

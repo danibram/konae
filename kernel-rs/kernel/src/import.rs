@@ -408,8 +408,8 @@ fn carry_access(incoming: &Path, live: &Path) -> Result<()> {
         return Ok(());
     }
     connection.execute("ATTACH DATABASE ?1 AS live", [live.to_string_lossy().as_ref()])?;
-    // The schema goes in as the pragma's argument: a `main.` prefix on the
-    // function would still read the attached database's table.
+    // The schema goes in as the pragma's argument, because a `main.` prefix
+    // on the function still reads the attached database's table.
     let columns = |schema: &str, table: &str| -> Result<Vec<String>> {
         let mut statement = connection.prepare("SELECT name FROM pragma_table_info(?1, ?2)")?;
         let names = statement.query_map([table, schema], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;

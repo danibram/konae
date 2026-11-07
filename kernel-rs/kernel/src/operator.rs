@@ -48,11 +48,14 @@ pub const MAIL_KEY_FILE: &str = "mail-key";
 /// readable by its owner alone. The Kernel and its commands read the same file.
 pub fn mail_key(data_root: &std::path::Path) -> Result<String> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     let path = data_root.join(MAIL_KEY_FILE);
     std::fs::create_dir_all(data_root)?;
     let key = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-    match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path) {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    match options.open(&path) {
         Ok(mut file) => {
             file.write_all(key.as_bytes())?;
             file.sync_all()?;
@@ -184,7 +187,7 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
     }
 }
 
-/// `signup_policy_set` as Konae's tool runs it: the entries stay when none are given.
+/// `signup_policy_set` as Konae's tool runs it. The entries stay when none are given.
 async fn signup_policy(state: &AppState, deployment: Deployment, words: &mut Arguments) -> Result<Value> {
     let mode: SignupMode = serde_json::from_value(json!(words.required("open, invitation, closed or allowlist")?))
         .map_err(|_| anyhow!("The Signup Policy is open, invitation, closed or allowlist."))?;
@@ -196,7 +199,7 @@ async fn signup_policy(state: &AppState, deployment: Deployment, words: &mut Arg
 /// database takes the schema of the app's own `app/`, which the Kernel
 /// opens at its next start. A folder the Kernel has not served yet opens
 /// first, so its record exists to import into. Run it while no Kernel
-/// serves the app: the import holds its locks in this process only.
+/// serves the app, because the import holds its locks in this process only.
 async fn import(state: &AppState, id: &str, words: &mut Arguments) -> Result<Value> {
     use crate::import::{import_folder, Outcome, Target};
     let confirmation = words.option("confirm-schema")?;
@@ -312,6 +315,7 @@ impl Arguments {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn the_first_start_writes_a_private_mail_key_and_later_ones_read_it() {
         use std::os::unix::fs::PermissionsExt;
