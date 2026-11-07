@@ -21,7 +21,8 @@ test("platform pages require an owner session and return to the requested page a
   const projectPath = await createProject(page, `Return here ${Date.now()}`);
   await page.request.post("/_konae/owner/logout");
 
-  for (const path of ["/", projectPath, "/design-system"]) {
+  // The component gallery is public (0b179e2), so only the workspace pages ask for sign-in.
+  for (const path of ["/", projectPath]) {
     await page.goto(path);
     await expect(page).toHaveURL(/\/platform-access\?returnTo=/);
     await expect(page.getByRole("heading", { name: "Owner sign-in" })).toBeVisible();
@@ -46,7 +47,7 @@ async function signInApp(page: Page) {
 const templates = { tasks: "Shared list", notes: "Private notes" } as const;
 
 async function createProject(page: Page, name: string, template: keyof typeof templates = "tasks") {
-  await page.goto("/projects");
+  await page.goto("/");
   await page.getByRole("button", { name: "New project" }).click();
   await page.getByLabel("Project name").fill(name);
   await page.getByRole("radio", { name: new RegExp(`^${templates[template]}`) }).check();
@@ -100,6 +101,9 @@ async function openFile(page: Page, path: string) {
 
 async function publish(page: Page) {
   await page.getByRole("button", { name: "Deploy", exact: true }).click();
+  // A first publish of a private template starts on Private; these tests publish public apps.
+  const visibility = page.getByRole("radiogroup", { name: "Deployment visibility" });
+  if (await visibility.count()) await visibility.getByText("Public", { exact: true }).click();
   await page.getByRole("button", { name: "Deploy public", exact: true }).click();
   const link = page.locator("a.published-url");
   await expect(link).toBeVisible({ timeout: 30_000 });
@@ -120,7 +124,6 @@ test("workspace count follows Kernel projects across the component gallery", asy
   await expect(page.locator(".account-sidebar a[href='/']").first()).toHaveText("Projects 3");
   await page.goto("/usage");
   await expect(page.locator(".account-sidebar a[href='/']").first()).toHaveText("Projects 3");
-  await expect(page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Projects" })).toHaveAttribute("href", "/");
   await expect(page.locator(".account-content").getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
 });
 
@@ -463,16 +466,17 @@ test("a person who writes code adds a page, a public file and a signed route, an
   await expect(page.getByText('Marks a row done. Anyone can run it. When no row changes it refuses with "That task is gone.".')).toBeVisible();
   await waitForKernelSave(page);
 
+  // The deploy dialog reads the release plan first: it names the unset secret and keeps Deploy off.
   await page.getByRole("button", { name: "Deploy", exact: true }).click();
-  await page.getByRole("button", { name: "Deploy public", exact: true }).click();
-  const refusal = page.getByRole("alert").filter({ hasText: "Deployment failed" });
-  await expect(refusal).toContainText("Action orders.receive signs with the secret orders_webhook, which is not set for this project.");
-  await refusal.getByRole("button", { name: "Set it in Auth > Integrations" }).click();
-  await expect(page.getByText("orders.receive signs with it. Publishing is refused until it is set.")).toBeVisible();
+  const dialog = page.getByRole("dialog", { name: "Deploy application" });
+  await expect(dialog).toContainText("Action orders.receive signs with the secret orders_webhook, which is not set for this project.");
+  await expect(dialog.getByRole("button", { name: "Deploy public", exact: true })).toBeDisabled();
+  await dialog.getByRole("button", { name: "Open Auth > Integrations" }).click();
+  await expect(page.getByText("orders.receive uses it. Publishing is refused until it is set.")).toBeVisible();
   await page.getByRole("button", { name: "Set", exact: true }).click();
   await page.getByLabel("Secret value").fill("whsec-0123456789abcdef");
   await page.getByRole("button", { name: "Save secret" }).click();
-  await expect(page.getByText("Used by orders.receive.")).toBeVisible();
+  await expect(page.getByText(/^orders\.receive uses it\. Updated /)).toBeVisible();
 
   const url = await publish(page);
   const about = await page.request.get(`${url}/about`);

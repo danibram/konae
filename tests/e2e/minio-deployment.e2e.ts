@@ -11,7 +11,7 @@ test("builds a multi-file app in the browser, deploys it to MinIO, and persists 
   expect(storage.ok()).toBe(true);
   expect((await storage.json()).result.structuredContent.result).toMatchObject({ ok: true, adapter: "s3-compatible", bucket: "konae-apps" });
 
-  await page.goto("/projects");
+  await page.goto("/");
 
   await page.getByRole("button", { name: "New project" }).click();
   await page.getByLabel("Project name").fill("MinIO tasks");
