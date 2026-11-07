@@ -486,5 +486,28 @@
    }
   },
   "error": null
+ },
+ {
+  "case": "a table made AS a query",
+  "schema": "CREATE TABLE x AS SELECT 1;",
+  "error": "schema.sql may only create tables and indexes, but it contains CREATE TABLE ... AS.",
+  "code": "schema.statement-refused"
+ },
+ {
+  "case": "a CHECK that loads an extension",
+  "schema": "CREATE TABLE t (a TEXT CHECK (load_extension('x') IS NULL));",
+  "error": "schema.sql may only create tables and indexes, but it contains load_extension().",
+  "code": "schema.statement-refused"
+ },
+ {
+  "case": "an index in the temp schema",
+  "schema": "CREATE TABLE t (a TEXT); CREATE INDEX temp.t_a ON t(a);",
+  "error": "schema.sql may only create tables and indexes, but it contains CREATE INDEX temp.*.",
+  "code": "schema.statement-refused"
+ },
+ {
+  "case": "a generated column, whose AS sits inside the column list",
+  "schema": "CREATE TABLE IF NOT EXISTS t (a INTEGER, b INTEGER GENERATED ALWAYS AS (a * 2));",
+  "error": null
  }
 ]

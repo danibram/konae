@@ -617,15 +617,13 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     // The limit counts the bytes the Kernel stores, after base64 is decoded.
     let total: usize = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?.values().map(Vec::len).sum();
     anyhow::ensure!(total <= 16 * 1024 * 1024, "Artifact exceeds 16 MiB.");
-    let program: ActionProgram = serde_json::from_str(
+    let program = super::action_shape::read(
         input
             .project
             .files
             .get("actions.json")
             .ok_or_else(|| anyhow::anyhow!("actions.json is required."))?,
     )?;
-    anyhow::ensure!(program.version == 1, "Unsupported action version.");
-    super::action_shape::check_program(&program)?;
     super::calls::check_release(&super::domain::Rules::of(state), &super::http::secrets_store(&state.data_root, &input.project.id)?, &program)?;
     let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
     let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);

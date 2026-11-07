@@ -69,12 +69,18 @@ fn returns_rows(tokens: &[SqlTok]) -> bool {
 }
 
 /// The statements of `schema.sql` the Kernel will not apply, named as the
-/// Gate names them: `CREATE TRIGGER`, `CREATE VIEW`, or the first word of a
-/// statement that is not a CREATE. Forms that pass this reading but not the
-/// schema authorizer, such as a TEMP schema or a refused function, keep the
-/// authorizer's answer.
+/// Gate names them: a CREATE of something other than a table or an index, a
+/// TEMP table or index, `CREATE TABLE ... AS`, the first word of a statement
+/// that is not a CREATE, and each refused function it calls. The schema
+/// authorizer refuses the same forms; this reading names them first, so both
+/// doors answer with one code and sentence.
 pub fn refused_schema_statements(schema: &str) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
+    let mut add = |refused: String| {
+        if !found.contains(&refused) {
+            found.push(refused);
+        }
+    };
     for statement in statements(schema) {
         let words: Vec<String> = statement
             .iter()
@@ -83,22 +89,67 @@ pub fn refused_schema_statements(schema: &str) -> Vec<String> {
             .collect();
         let refused = match words.first().map(String::as_str) {
             None => Some("a statement that is not CREATE TABLE or CREATE INDEX".to_owned()),
-            Some("CREATE") => {
-                let object = if words.get(1).map(String::as_str) == Some("UNIQUE") { words.get(2) } else { words.get(1) };
-                match object.map(String::as_str) {
-                    Some("TABLE" | "INDEX") => None,
-                    _ => Some(format!("CREATE {}", words.get(1).map(String::as_str).unwrap_or("")).trim().to_owned()),
-                }
-            }
+            Some("CREATE") => refused_create(&statement, &words),
             Some(word) => Some(word.to_owned()),
         };
         if let Some(refused) = refused {
-            if !found.contains(&refused) {
-                found.push(refused);
-            }
+            add(refused);
+        }
+        for name in refused_functions(&statement) {
+            add(format!("{name}()"));
         }
     }
     found
+}
+
+/// The refused functions a statement calls, from `DENIED_FUNCTIONS`, which
+/// the authorizer refuses too and `refusedFunctionNames` in
+/// src/agent/gate.ts repeats. A quoted name still calls the function.
+fn refused_functions(tokens: &[SqlTok]) -> Vec<String> {
+    tokens
+        .windows(2)
+        .filter(|pair| matches!(pair[0].kind, SqlTokKind::Word | SqlTokKind::Ident) && pair[1].is_symbol("("))
+        .map(|pair| pair[0].text.to_ascii_lowercase())
+        .filter(|name| super::denied_function(name))
+        .collect()
+}
+
+/// The CREATE forms the Kernel will not apply, as `refusedCreate` in
+/// src/agent/gate.ts reads them: a trigger, a view or anything but a table
+/// or an index; a table or an index in the temp schema; and a table made AS
+/// a query, which copies rows in.
+fn refused_create(tokens: &[SqlTok], words: &[String]) -> Option<String> {
+    let object = if words.get(1).map(String::as_str) == Some("UNIQUE") { words.get(2) } else { words.get(1) };
+    let object = match object.map(String::as_str) {
+        Some(object @ ("TABLE" | "INDEX")) => object,
+        _ => return Some(format!("CREATE {}", words.get(1).map(String::as_str).unwrap_or("")).trim().to_owned()),
+    };
+    let start = tokens.iter().position(|token| token.is_word(object))?;
+    let mut index = start + 1;
+    if tokens.get(index).is_some_and(|token| token.is_word("IF")) {
+        index += 3;
+    }
+    let name = |token: Option<&SqlTok>| token.filter(|token| matches!(token.kind, SqlTokKind::Word | SqlTokKind::Ident)).map(|token| token.text.clone());
+    if tokens.get(index + 1).is_some_and(|token| token.is_symbol(".")) {
+        if let Some(schema) = name(tokens.get(index)).filter(|schema| ["temp", "temporary"].contains(&schema.to_ascii_lowercase().as_str())) {
+            return Some(format!("CREATE {object} {schema}.*"));
+        }
+    }
+    if object == "INDEX" {
+        return None;
+    }
+    // The column list opens with the first top-level "(". An AS before it is
+    // a CREATE TABLE ... AS query; GENERATED ALWAYS AS sits inside the list.
+    let outer = tokens[start].depth;
+    for token in tokens.iter().skip(index).filter(|token| token.depth == outer) {
+        if token.is_symbol("(") {
+            return None;
+        }
+        if token.is_word("AS") {
+            return Some("CREATE TABLE ... AS".to_owned());
+        }
+    }
+    None
 }
 
 /// The refusal for a schema with statements the Kernel will not apply.

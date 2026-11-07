@@ -490,11 +490,24 @@ pub struct ActionBinding {
     pub key: Option<String>,
     #[serde(rename = "type")]
     pub value_type: Option<String>,
+    #[serde(default, deserialize_with = "whole_number")]
     pub max_length: Option<usize>,
     #[serde(default)]
     pub nullable: bool,
     pub field: Option<String>,
     pub value: Option<Value>,
+}
+
+/// A whole number, also when written as `100.0`, which is the integer 100 to
+/// the editor's JSON reader.
+fn whole_number<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Option<usize>, D::Error> {
+    Option::<f64>::deserialize(deserializer)?
+        .map(|number| {
+            (number.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(&number))
+                .then_some(number as usize)
+                .ok_or_else(|| serde::de::Error::custom("expected a whole number"))
+        })
+        .transpose()
 }
 
 /// Runs the operator commands both binaries answer: `restore`, the file
@@ -726,21 +739,13 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
         Some(value) => value.clone(),
         None => return error(StatusCode::BAD_REQUEST, "actions.json is required."),
     };
-    let program: ActionProgram = match serde_json::from_str(&actions) {
-        Ok(value) => value,
-        Err(error_value) => {
-            return error(
-                StatusCode::BAD_REQUEST,
-                &format!("Invalid actions.json: {error_value}"),
-            );
-        }
+    let program = match action_shape::read(&actions) {
+        Ok(program) => program,
+        Err(error_value) => match refusal::of(&error_value) {
+            Some(refused) => return refusal_error(refused),
+            None => return error(StatusCode::BAD_REQUEST, &error_value.to_string()),
+        },
     };
-    if program.version != 1 {
-        return error(StatusCode::BAD_REQUEST, "Unsupported actions.json version.");
-    }
-    if let Err(refused) = action_shape::check_program(&program) {
-        return refusal_error(&refused);
-    }
     if !runtime::valid_app_id(&input.project.id) {
         return error(StatusCode::BAD_REQUEST, "Invalid project ID.");
     }
@@ -3971,11 +3976,11 @@ pub mod tests {
                 "CREATE TABLE IF NOT EXISTS evil_{function} (id INTEGER PRIMARY KEY, path TEXT CHECK ({function}(path) IS NULL));"
             );
             let error = apply_schema(&path, &schema, &actions).unwrap_err().to_string();
-            assert!(error.contains("schema may only"), "{function}: {error}");
+            assert_eq!(error, format!("schema.sql may only create tables and indexes, but it contains {function}()."), "{function}");
         }
         let evil = format!("{schema} CREATE INDEX IF NOT EXISTS evil_index ON items(load_extension(name));");
         let error = apply_schema(&path, &evil, &actions).unwrap_err().to_string();
-        assert!(error.contains("not authorized"), "{error}");
+        assert_eq!(error, "schema.sql may only create tables and indexes, but it contains load_extension().");
         let _ = std::fs::remove_dir_all(root);
     }
 

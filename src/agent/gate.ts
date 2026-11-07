@@ -212,7 +212,7 @@ function refusedStatements(schema: string): string[] {
  * read and write files on the host. sql.js does not ship most of them, so the
  * gate has to name them rather than wait for the statement to fail.
  */
-const refusedFunctionNames = new Set(["load_extension", "readfile", "writefile", "fts3_tokenizer"]);
+const refusedFunctionNames = new Set(["load_extension", "readfile", "writefile", "edit", "fts3_tokenizer"]);
 
 /** The refused functions `tokens` call. A quoted name still calls the function. */
 function refusedFunctions(tokens: SqlToken[]): string[] {

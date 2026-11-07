@@ -184,7 +184,7 @@ function parseAction(name: string, value: unknown): ServerActionDefinition {
 
 function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   if (name.length > MAX_ACTION_NAME || !ACTION_NAME.test(name)) throw refusal("action.name-invalid", `Invalid server action name: ${name}`);
-  if (!value || typeof value !== "object") throw new Error(`Invalid server action: ${name}`);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw refusal("action.invalid", `Invalid server action: ${name}`);
   const candidate = value as Record<string, unknown>;
   if (candidate.access === "granted") {
     // Reserved for per-grant access; the Kernel refuses to deploy it until grants exist.
@@ -194,9 +194,9 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   if (!access) throw refusal("action.access-invalid", `Action ${name} has an invalid access. Use "anonymous" or "authenticated".`);
   const kind = candidate.kind === "query" || candidate.kind === "mutation" || candidate.kind === "signal" || candidate.kind === "call" ? candidate.kind : null;
   if (!kind) throw refusal("action.kind-invalid", `Action ${name} has an invalid kind. Use "query", "mutation", "signal" or "call".`);
-  if (!Array.isArray(candidate.bindings)) throw new Error(`Action ${name} requires a bindings array.`);
+  if (!Array.isArray(candidate.bindings)) throw refusal("action.bindings-missing", `Action ${name} requires a bindings array.`);
   const bindings = candidate.bindings.map((binding, index) => parseBinding(name, index, binding));
-  if (kind !== "signal" && kind !== "call" && typeof candidate.statement !== "string") throw new Error(`Invalid server action: ${name}`);
+  if (kind !== "signal" && kind !== "call" && typeof candidate.statement !== "string") throw refusal("action.invalid", `Invalid server action: ${name}`);
   const statementBytes = typeof candidate.statement === "string" ? new TextEncoder().encode(candidate.statement).length : 0;
   if (statementBytes > MAX_STATEMENT_BYTES || bindings.length > MAX_BINDINGS) throw refusal("action.limits-exceeded", `Action ${name} exceeds statement or binding limits.`);
   // A call runs no SQL; the Kernel's worker sends it (kernel-rs/kernel/src/calls.rs).
@@ -495,7 +495,7 @@ function assertDistinctRoutes(actions: Record<string, ServerActionDefinition>) {
 }
 
 function parseBinding(actionName: string, index: number, value: unknown): ActionBinding {
-  if (!value || typeof value !== "object") throw refusal("action.binding-invalid", `Invalid binding ${index} in ${actionName}.`);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw refusal("action.binding-invalid", `Invalid binding ${index} in ${actionName}.`);
   const binding = value as Record<string, unknown>;
   if (binding.nullable !== undefined && typeof binding.nullable !== "boolean" || binding.nullable === true && binding.source !== "input") {
     throw refusal("action.binding-nullable-invalid", `Action ${actionName} has an invalid nullable input binding.`);
@@ -503,8 +503,8 @@ function parseBinding(actionName: string, index: number, value: unknown): Action
   if (binding.source === "input" && typeof binding.key === "string") {
     const nullable = typeof binding.nullable === "boolean" ? binding.nullable : undefined;
     if (binding.type === "string") {
-      const maxLength = binding.maxLength === undefined ? 10_000 : Number(binding.maxLength);
-      if (!Number.isInteger(maxLength) || maxLength < 1 || maxLength > 100_000) throw refusal("action.max-length-invalid", `Invalid maxLength in ${actionName}.`);
+      const maxLength = binding.maxLength === undefined ? 10_000 : binding.maxLength;
+      if (typeof maxLength !== "number" || !Number.isInteger(maxLength) || maxLength < 1 || maxLength > 100_000) throw refusal("action.max-length-invalid", `Invalid maxLength in ${actionName}.`);
       return { source: "input", key: binding.key, type: "string", maxLength, ...(nullable === undefined ? {} : { nullable }) };
     }
     if (binding.type === "number" || binding.type === "boolean") return { source: "input", key: binding.key, type: binding.type, ...(nullable === undefined ? {} : { nullable }) };

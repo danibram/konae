@@ -2261,5 +2261,175 @@
   },
   "error": "Action page.view is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route.",
   "code": "signal.route"
+ },
+ {
+  "case": "an action without bindings",
+  "actions": {
+   "a.b": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT 1 FROM t LIMIT 1"
+   }
+  },
+  "error": "Action a.b requires a bindings array.",
+  "code": "action.bindings-missing"
+ },
+ {
+  "case": "a query whose statement is not a string",
+  "actions": {
+   "a.b": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": 5,
+    "bindings": []
+   }
+  },
+  "error": "Invalid server action: a.b",
+  "code": "action.invalid"
+ },
+ {
+  "case": "an action that is not an object",
+  "actions": {
+   "a.b": []
+  },
+  "error": "Invalid server action: a.b",
+  "code": "action.invalid"
+ },
+ {
+  "case": "a maxLength that is not a whole number",
+  "actions": {
+   "a.b": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT 1 FROM t LIMIT 1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "q",
+      "type": "string",
+      "maxLength": 1.5
+     }
+    ]
+   }
+  },
+  "error": "Invalid maxLength in a.b.",
+  "code": "action.max-length-invalid"
+ },
+ {
+  "case": "a maxLength written as a string",
+  "actions": {
+   "a.b": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT 1 FROM t LIMIT 1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "q",
+      "type": "string",
+      "maxLength": "5"
+     }
+    ]
+   }
+  },
+  "error": "Invalid maxLength in a.b.",
+  "code": "action.max-length-invalid"
+ },
+ {
+  "case": "a maxLength written as 100.0, which is the integer 100",
+  "actions": {
+   "a.b": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT id FROM notes WHERE body = ?1 LIMIT 1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "q",
+      "type": "string",
+      "maxLength": 100.0
+     }
+    ]
+   }
+  },
+  "error": null
+ },
+ {
+  "case": "nullable written as a string",
+  "actions": {
+   "a.b": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT 1 FROM t LIMIT 1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "q",
+      "type": "string",
+      "nullable": "yes"
+     }
+    ]
+   }
+  },
+  "error": "Action a.b has an invalid nullable input binding.",
+  "code": "action.binding-nullable-invalid"
+ },
+ {
+  "case": "an input binding whose key is not a string",
+  "actions": {
+   "a.b": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT 1 FROM t LIMIT 1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": 5,
+      "type": "string"
+     }
+    ]
+   }
+  },
+  "error": "Invalid binding 0 in a.b.",
+  "code": "action.binding-invalid"
+ },
+ {
+  "case": "access written as a number",
+  "actions": {
+   "a.b": {
+    "kind": "query",
+    "access": 1,
+    "statement": "SELECT 1 FROM t LIMIT 1",
+    "bindings": []
+   }
+  },
+  "error": "Action a.b has an invalid access. Use \"anonymous\" or \"authenticated\".",
+  "code": "action.access-invalid"
+ },
+ {
+  "case": "a wrong type in a later action leaves the earlier action's refusal first",
+  "actions": {
+   "a.a": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT 1 FROM t",
+    "bindings": []
+   },
+   "a.b": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT 1 FROM t LIMIT 1",
+    "bindings": [
+     {
+      "source": "input",
+      "key": "q",
+      "type": "string",
+      "nullable": "yes"
+     }
+    ]
+   }
+  },
+  "error": "Action a.a reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+  "code": "query.limit-missing"
  }
 ]

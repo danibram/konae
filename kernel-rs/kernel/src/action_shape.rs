@@ -7,6 +7,8 @@
 //! suites run. Actions are checked in sorted name order, so with two bad
 //! actions both doors name the same one.
 
+use serde_json::Value;
+
 use super::refusal::{refuse, Refusal};
 use super::{ActionDefinition, ActionProgram};
 
@@ -15,6 +17,102 @@ const MAX_NAME_CHARS: usize = 100;
 const MAX_STATEMENT_BYTES: usize = 20_000;
 const MAX_BINDINGS: usize = 100;
 const MAX_STRING_LENGTH: usize = 100_000;
+
+/// Reads `actions.json` and checks it, as `parseServerActionSource` does. A
+/// field of the wrong type, such as `"nullable": "yes"`, is refused with the
+/// Gate's code before the Kernel's types read the file, and an action earlier
+/// in name order that breaks a rule is named first, as the Gate names it. A
+/// file that is not JSON, or not version 1, is refused without a code on
+/// both doors.
+pub fn read(source: &str) -> anyhow::Result<ActionProgram> {
+    let value: Value = serde_json::from_str(source).map_err(|error_value| anyhow::anyhow!("Invalid actions.json: {error_value}"))?;
+    if value["version"] == 1 {
+        if let Some(actions) = value["actions"].as_object().filter(|actions| actions.len() <= MAX_ACTIONS) {
+            let mut names = actions.keys().collect::<Vec<_>>();
+            names.sort();
+            for (at, name) in names.iter().enumerate() {
+                if let Err(refused) = check_types(name, &actions[*name]) {
+                    for earlier in &names[..at] {
+                        let action: ActionDefinition = serde_json::from_value(actions[*earlier].clone())?;
+                        super::validate_action(earlier, &action)?;
+                    }
+                    return Err(refused.into());
+                }
+            }
+        }
+    }
+    let program: ActionProgram = serde_json::from_value(value).map_err(|error_value| anyhow::anyhow!("Invalid actions.json: {error_value}"))?;
+    anyhow::ensure!(program.version == 1, "Unsupported actions.json version.");
+    check_program(&program)?;
+    Ok(program)
+}
+
+/// The checks `parseActionBody` and `parseBinding` in src/kernel/actions.ts
+/// make before an action's SQL, on the JSON as written, so a value of the
+/// wrong type gets the rule's code instead of a parse error.
+fn check_types(name: &str, action: &Value) -> Result<(), Refusal> {
+    if !valid_name(name) {
+        return Err(refuse("action.name-invalid", format!("Invalid server action name: {name}")));
+    }
+    let Some(action) = action.as_object() else {
+        return Err(refuse("action.invalid", format!("Invalid server action: {name}")));
+    };
+    let text = |key: &str| action.get(key).and_then(Value::as_str);
+    if text("access") == Some("granted") {
+        return Err(refuse(
+            "action.access-unsupported",
+            format!(r#"Action {name} uses "access": "granted", which the Kernel does not support yet. Use "anonymous" or "authenticated"."#),
+        ));
+    }
+    if !matches!(text("access"), Some("anonymous" | "authenticated")) {
+        return Err(refuse("action.access-invalid", format!(r#"Action {name} has an invalid access. Use "anonymous" or "authenticated"."#)));
+    }
+    let kind = text("kind").unwrap_or_default();
+    if !matches!(kind, "query" | "mutation" | "signal" | "call") {
+        return Err(refuse("action.kind-invalid", format!(r#"Action {name} has an invalid kind. Use "query", "mutation", "signal" or "call"."#)));
+    }
+    let Some(bindings) = action.get("bindings").and_then(Value::as_array) else {
+        return Err(refuse("action.bindings-missing", format!("Action {name} requires a bindings array.")));
+    };
+    for (index, binding) in bindings.iter().enumerate() {
+        check_binding_types(name, index, binding)?;
+    }
+    if matches!(kind, "query" | "mutation") && !action.get("statement").is_some_and(Value::is_string) {
+        return Err(refuse("action.invalid", format!("Invalid server action: {name}")));
+    }
+    Ok(())
+}
+
+fn check_binding_types(name: &str, index: usize, binding: &Value) -> Result<(), Refusal> {
+    let invalid = || refuse("action.binding-invalid", format!("Invalid binding {index} in {name}."));
+    let binding = binding.as_object().ok_or_else(invalid)?;
+    let text = |key: &str| binding.get(key).and_then(Value::as_str);
+    let nullable = binding.get("nullable");
+    if nullable.is_some_and(|value| !value.is_boolean()) || (nullable == Some(&Value::Bool(true)) && text("source") != Some("input")) {
+        return Err(refuse("action.binding-nullable-invalid", format!("Action {name} has an invalid nullable input binding.")));
+    }
+    let valid = match text("source") {
+        Some("input") if text("key").is_some() => match text("type") {
+            Some("string") => {
+                let length = binding.get("maxLength");
+                // 100.0 is the integer 100 to the editor's JSON reader, so it is here too.
+                let whole = |length: &Value| length.as_f64().is_some_and(|length| length.fract() == 0.0 && (1.0..=MAX_STRING_LENGTH as f64).contains(&length));
+                if length.is_some_and(|length| !whole(length)) {
+                    return Err(refuse("action.max-length-invalid", format!("Invalid maxLength in {name}.")));
+                }
+                true
+            }
+            Some("number" | "boolean") => true,
+            _ => false,
+        },
+        Some("actor") => text("field") == Some("id"),
+        Some("kernel") => text("field") == Some("now"),
+        // An absent value and null both bind NULL.
+        Some("literal") => binding.get("value").is_none_or(|value| value.is_null() || value.is_string() || value.is_number()),
+        _ => false,
+    };
+    if valid { Ok(()) } else { Err(invalid()) }
+}
 
 /// Checks the program: its size, then each action in sorted name order, then
 /// that no two actions bind one route.
@@ -139,9 +237,11 @@ mod tests {
         let cases: Vec<Value> = serde_json::from_str(include_str!("action-cases.json")).unwrap();
         assert!(cases.len() >= 25);
         for case in cases {
-            let program: super::ActionProgram =
-                serde_json::from_value(serde_json::json!({"version": 1, "actions": case["actions"]})).unwrap();
-            crate::refusal::assert_case(&case, super::check_program(&program));
+            let source = serde_json::json!({"version": 1, "actions": case["actions"]}).to_string();
+            let outcome = super::read(&source).map(|_| ()).map_err(|error_value| {
+                crate::refusal::of(&error_value).cloned().unwrap_or_else(|| panic!("{}: {error_value} has no code", case["case"]))
+            });
+            crate::refusal::assert_case(&case, outcome);
         }
     }
 }
