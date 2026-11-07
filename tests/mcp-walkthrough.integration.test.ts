@@ -336,8 +336,13 @@ describe("the MCP walkthrough", () => {
     r.name((invited.result as any).results[0].invitationId, "<invitation id>");
 
     r.step("accept");
-    const mail = (await readFile(path.join(a.data, "mailbox.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-    const message = mail.findLast((entry: any) => entry.to === "member@walkthrough.test");
+    // The mail worker appends the invitation after the tool answers, so wait for its whole line.
+    let message: any;
+    for (let attempt = 0; attempt < 50 && !message; attempt++) {
+      const lines = (await readFile(path.join(a.data, "mailbox.jsonl"), "utf8").catch(() => "")).split("\n");
+      message = lines.flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } }).findLast((entry: any) => entry.to === "member@walkthrough.test");
+      if (!message) await Bun.sleep(100);
+    }
     const token = new URL(message.link).hash.replace("#invitation=", "");
     r.name(token, "<invitation token>");
     r.name(a.data, "/tmp/kernel-a");
