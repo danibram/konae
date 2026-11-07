@@ -38,10 +38,33 @@ pub fn usage() -> &'static str {
   kernel import <folder> [--confirm-schema <confirmation>]   replaces the app's data with the data/ of an exported folder, after a backup"
 }
 
-/// The key that seals queued links when `KONAE_MAIL_SECRET` is unset. The
-/// Kernel and its commands read the same one.
-pub fn mail_key() -> String {
-    std::env::var("KONAE_ADMIN_KEY").ok().filter(|key| !key.is_empty()).unwrap_or_else(|| crate::DEFAULT_ADMIN_KEY.into())
+/// The file in the data directory that holds the key the Kernel alone seals
+/// queued links with.
+pub const MAIL_KEY_FILE: &str = "mail-key";
+
+/// The key that seals queued links when `KONAE_MAIL_SECRET` is unset. A
+/// Kernel without Konae has no setup key, and the development default is
+/// public, so the first start writes a random key into the data directory,
+/// readable by its owner alone. The Kernel and its commands read the same file.
+pub fn mail_key(data_root: &std::path::Path) -> Result<String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = data_root.join(MAIL_KEY_FILE);
+    std::fs::create_dir_all(data_root)?;
+    let key = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path) {
+        Ok(mut file) => {
+            file.write_all(key.as_bytes())?;
+            file.sync_all()?;
+            Ok(key)
+        }
+        Err(error_value) if error_value.kind() == std::io::ErrorKind::AlreadyExists => {
+            let kept = std::fs::read_to_string(&path).with_context(|| format!("{} cannot be read", path.display()))?;
+            ensure!(kept.len() >= 32, "{} holds no key. Remove it, and the next start writes a new one; queued links sealed with the old key stop working.", path.display());
+            Ok(kept)
+        }
+        Err(error_value) => Err(anyhow::Error::from(error_value).context(format!("Could not write {}", path.display()))),
+    }
 }
 
 /// Runs the command the process was started with, and answers false when
@@ -57,7 +80,8 @@ pub async fn command(installation: &Installation) -> Result<bool> {
     };
     let mut words = Arguments::new(&args[1..]);
     let app = words.option("app")?;
-    let state = crate::state_from_env(&Startup::from_env()?, installation.clone(), &mail_key(), Vec::new(), None).await?.0;
+    let startup = Startup::from_env()?;
+    let state = crate::state_from_env(&startup, installation.clone(), &mail_key(&startup.data_root)?, Vec::new(), None).await?.0;
     let id = app_id(&state, app).await?;
     let answer = run(&state, &id, name, &mut words).await?;
     println!("{}", serde_json::to_string_pretty(&answer)?);
@@ -299,5 +323,24 @@ impl Arguments {
 
     fn rest(&mut self) -> Vec<String> {
         std::mem::take(&mut self.words)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_start_writes_a_private_mail_key_and_later_ones_read_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("konae-mail-key-{}", Uuid::new_v4()));
+        let key = mail_key(&root).unwrap();
+        assert!(key.len() >= 32 && key != crate::DEFAULT_ADMIN_KEY);
+        let mode = std::fs::metadata(root.join(MAIL_KEY_FILE)).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(mail_key(&root).unwrap(), key);
+        std::fs::write(root.join(MAIL_KEY_FILE), "short").unwrap();
+        assert!(mail_key(&root).unwrap_err().to_string().contains("holds no key"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

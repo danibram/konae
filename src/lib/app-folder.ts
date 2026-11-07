@@ -100,8 +100,8 @@ KONAE_KERNEL_IMAGE=
 KONAE_PORT=8787
 KONAE_PUBLIC_ORIGIN=http://localhost:8787
 KONAE_HOST_SUFFIX=localhost
-# A long random key that seals the links in queued account email, such as: openssl rand -hex 32
-KONAE_ADMIN_KEY=
+# The Kernel seals the links in queued account email with a key it writes to mail-key in its volume
+# on the first start. Set KONAE_MAIL_SECRET, at least 32 characters, to use your own instead.
 # How account email leaves: resend, smtp or development, which writes it to mailbox.jsonl in the Kernel's volume.
 # Without a transport, invitations and password resets are refused.
 KONAE_MAIL_TRANSPORT=

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { dataEntries, generatedFiles, type AppSettings, type FolderEntry } from "../src/lib/app-folder";
@@ -88,7 +88,6 @@ test("an app exported with its data runs on the kernel binary, and an operator c
     ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))) as Record<string, string>,
     KONAE_DATA_DIR: data, KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_PUBLIC_ORIGIN: url,
     KONAE_HOST_SUFFIX: "localhost", KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
-    KONAE_ADMIN_KEY: "kernel-export-operator-key",
   };
   alone = Bun.spawn([kernelBinary], { env, stdout: "pipe", stderr: "inherit" });
   const served = (async () => {
@@ -98,6 +97,8 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   })();
   const startup = await Promise.race([served, Bun.sleep(30_000).then(() => { throw Error("The kernel binary did not start."); })]);
   expect(startup).toContain(`Serving Carried at http://carried.localhost:${port}`);
+  // With no KONAE_MAIL_SECRET, the Kernel seals queued links with a key it wrote for itself, readable by its owner alone.
+  expect((await stat(path.join(data, "mail-key"))).mode & 0o777).toBe(0o600);
   const hostname = "carried.localhost";
   const app = { url, data } as Kernel;
 

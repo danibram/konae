@@ -55,7 +55,7 @@ The `kernel` binary serves an exported folder as it is, with its `data/`. At sta
     docker build -f Dockerfile.kernel -t registry.example.com/konae-kernel:0.1.0 .
     ```
 
-2. In the exported folder, copy `.env.example` to `.env`. Set `KONAE_KERNEL_IMAGE` to that image, `KONAE_ADMIN_KEY` to a long random value, and a mail transport if the app sends invitations or password resets.
+2. In the exported folder, copy `.env.example` to `.env`. Set `KONAE_KERNEL_IMAGE` to that image, and a mail transport if the app sends invitations or password resets. The Kernel seals queued email links with a key it writes to `mail-key` in its volume on the first start.
 3. Start it, and read the address it prints.
 
     ```sh

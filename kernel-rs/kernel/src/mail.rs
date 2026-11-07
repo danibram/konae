@@ -117,8 +117,9 @@ impl Limits {
 }
 
 /// The key that seals links at rest. `KONAE_MAIL_SECRET` when set;
-/// otherwise derived from `KONAE_ADMIN_KEY`, which every installation
-/// reachable from another machine already keeps secret. The development
+/// otherwise the key the binary passes: Konae's `KONAE_ADMIN_KEY`, which
+/// every installation reachable from another machine already keeps secret,
+/// or the `kernel` binary's own `mail-key` (`operator::mail_key`). The development
 /// default key is public, so it seals nothing for a real provider; the
 /// development mailbox writes its links in clear anyway and may use it.
 fn mail_secret(key: &str, development: bool) -> Result<String> {

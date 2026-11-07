@@ -534,13 +534,10 @@ export async function localKernel(root: string, settings: AppSettings, options: 
   await mkdir(path.dirname(link), { recursive: true });
   if (await readlink(link).catch(() => undefined) === undefined) await symlink(root, link, "dir");
   await ignoreInGit(root, [".konae/"]);
-  const keyFile = path.join(root, ".konae/kernel-key");
-  let key: string;
-  try { key = await readFile(keyFile, "utf8"); } catch { key = crypto.randomUUID() + crypto.randomUUID(); await writeFile(keyFile, key, { mode: 0o600 }); }
   const port = options.port ?? "8796";
   const env: Record<string, string | undefined> = {
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("KONAE_") && !name.startsWith("VITE_"))),
-    KONAE_BIND: "127.0.0.1", KONAE_DATA_DIR: data, KONAE_ADMIN_KEY: key, KONAE_KERNEL_PORT: port,
+    KONAE_BIND: "127.0.0.1", KONAE_DATA_DIR: data, KONAE_KERNEL_PORT: port,
     KONAE_PUBLIC_ORIGIN: `http://localhost:${port}`, KONAE_HOST_SUFFIX: "localhost",
     // Account links and notices land in a file on this machine, never a provider.
     KONAE_MAIL_TRANSPORT: "development",
