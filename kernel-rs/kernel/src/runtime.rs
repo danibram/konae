@@ -8,7 +8,10 @@ use super::transfers::{CHUNK, MAX_TRANSFER, download_body, transfer, transfer_ca
 use rusqlite::params;
 
 pub const VERSION: &str = "2025-11-25";
-pub const INSTRUCTIONS: &str = "Use project-scoped credentials. Source and builds stay on your computer. Call platform_describe, then platform_guide topics rules and pieces before building. After every write, use the read-back that rules names.";
+/// What `initialize` tells a client of an app's runtime endpoint. The tools
+/// are the app's, never an owner's: Konae's owner MCP answers on `/mcp` of
+/// the installation with its own instructions.
+pub const INSTRUCTIONS: &str = "This is one app's runtime endpoint. It acts as the visitor or the app account whose session the request carries. actions_invoke runs the app's Server Actions by name; tools/list names the actions and file tools this session may call. auth_session says who is signed in.";
 
 /// Records an app user's file upload or delete: the principal, the tool,
 /// the Deployment and whether it worked. Whoever starts the Kernel decides
@@ -833,3 +836,20 @@ pub fn origin(state: &AppState, headers: &HeaderMap) -> String {
     format!("{scheme}://{host}")
 }
 
+
+#[cfg(test)]
+mod tests {
+    /// Every tool the instructions name is one the runtime endpoint serves.
+    #[test]
+    fn the_instructions_name_only_runtime_tools() {
+        let served: Vec<String> = super::runtime_tools().iter().filter_map(|tool| tool["name"].as_str().map(str::to_owned)).collect();
+        let named: Vec<&str> = super::INSTRUCTIONS
+            .split(|c: char| !(c.is_ascii_lowercase() || c == '_'))
+            .filter(|word| word.contains('_'))
+            .collect();
+        assert!(!named.is_empty());
+        for word in named {
+            assert!(served.iter().any(|name| name == word), "{word} is not a runtime tool");
+        }
+    }
+}

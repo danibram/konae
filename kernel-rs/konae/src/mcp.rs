@@ -97,6 +97,8 @@ const OPEN_TOOLS: [&str; 21] = [
     "project_export",
     "release_plan",
 ];
+/// What `initialize` tells an owner's agent on `/mcp`.
+const OWNER_INSTRUCTIONS: &str = "Use project-scoped credentials. Source and builds stay on your computer. Call platform_describe, then platform_guide topics rules and pieces before building. After every write, use the read-back that rules names.";
 /// Tools a paused app takes because they are what maintenance is for:
 /// taking it out, and replacing what it holds.
 const PAUSED_TOOLS: [&str; 2] = ["maintenance_set", "project_import"];
@@ -845,7 +847,7 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
     }
     let result = match method {
         "initialize" => Ok(
-            json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"konae","version":"0.1.0"},"instructions":INSTRUCTIONS}),
+            json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"konae","version":"0.1.0"},"instructions":OWNER_INSTRUCTIONS}),
         ),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools":tools})),
