@@ -855,12 +855,34 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
     if let Err(error_value) = tokio::fs::create_dir_all(&data).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
-    let _database_guard = database_lock(&state, &id).await;
+    // One release of an app at a time, so the cleanup of one never removes
+    // the files another is still staging.
+    let _release_guard = named_lock(&state, &format!("publish:{id}"), true).await;
+    // Every step that can fail runs before the app changes. Readers keep the
+    // previous files until the record names this release and dist/ switches.
+    if let Err(error_value) = stage_local_artifact(&state, &id, &artifact_version, &artifact_files)
+        .await
+        .and_then(|()| release_step(&id, "stage_local_artifact"))
+    {
+        remove_artifact_version(&state, &id, &artifact_version).await;
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
+    }
+    if let Err(error_value) = upload_artifact(&state, &id, &artifact_version, artifact_files)
+        .await
+        .and_then(|()| release_step(&id, "upload_artifact"))
+    {
+        remove_artifact_version(&state, &id, &artifact_version).await;
+        return error(
+            StatusCode::BAD_GATEWAY,
+            &format!("Artifact upload failed: {error_value}"),
+        );
+    }
     let mut notices = Vec::new();
     if let Some(package) = input.initial_package.as_ref() {
         if let Err(error_value) = package::install(&state, package, &id)
             .await
         {
+            remove_artifact_version(&state, &id, &artifact_version).await;
             let _ = tokio::fs::remove_dir_all(&data).await;
             file_store::forget_deployment(state.files.store.as_ref(), &id).await;
             return error(StatusCode::BAD_REQUEST, &format!("Package import failed: {error_value:#}"));
@@ -869,6 +891,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
         match path::arrive(&state, &deployment, package.manifest.path.as_ref()).await {
             Ok(lines) => notices = lines,
             Err(error_value) => {
+                remove_artifact_version(&state, &id, &artifact_version).await;
                 let _ = tokio::fs::remove_dir_all(&data).await;
                 return error(StatusCode::BAD_REQUEST, &format!("Package import failed: {error_value:#}"));
             }
@@ -883,58 +906,89 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
         .unwrap_or_default();
     if !db_path.exists() {
         if let Err(error_value) = initialize_database(&db_path) {
+            remove_artifact_version(&state, &id, &artifact_version).await;
             return error(
                 StatusCode::BAD_REQUEST,
                 &format!("Database initialization failed: {error_value}"),
             );
         }
     }
-    let mode = schema_change::Mode::Apply(input.schema_confirmation.as_deref());
-    if let Err(error_value) = schema_change::apply(&db_path, &schema, &program, mode) {
-        return match refusal::of(&error_value) {
-            Some(refused) => refusal_error(refused),
-            None => error(StatusCode::BAD_REQUEST, &format!("Schema update failed: {error_value}")),
-        };
-    }
     let identity_path = layout::identity(&state.data_root, &id);
-    if !identity_path.exists() {
-        if let Err(error_value) = open_auth(&state, &deployment) {
-            return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
-        }
-    }
-    // New files go into a staging folder beside dist/. Readers keep the
-    // previous files until the record names this release and dist/ switches.
-    if let Err(error_value) =
-        stage_local_artifact(&state, &id, &artifact_version, &artifact_files).await
-    {
+    let identity = if identity_path.exists() {
+        Ok(())
+    } else {
+        open_auth(&state, &deployment).map(drop).map_err(|error_value| anyhow::anyhow!(error_value.to_string()))
+    };
+    if let Err(error_value) = identity.and_then(|()| release_step(&id, "open_auth")) {
         remove_artifact_version(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
-    if let Err(error_value) =
-        upload_artifact(&state, &id, &artifact_version, artifact_files).await
-    {
+    // From here until the new release serves, no Server Action runs on this
+    // Database, so none writes a row the copy below would miss.
+    let database_guard = database_lock(&state, &id).await;
+    let staged_database = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}.sqlite"));
+    let staged = stage_database(&db_path, &staged_database, &schema, &program, input.schema_confirmation.as_deref())
+        .and_then(|change| release_step(&id, "schema_change").map(|()| change));
+    let change = match staged {
+        Ok(change) => change,
+        Err(error_value) => {
+            remove_database_files(&staged_database);
+            remove_artifact_version(&state, &id, &artifact_version).await;
+            return match refusal::of(&error_value) {
+                Some(refused) => refusal_error(refused),
+                None => error(StatusCode::BAD_REQUEST, &format!("Schema update failed: {error_value}")),
+            };
+        }
+    };
+    // The database, the record, dist/ and the Deployment in memory change
+    // together. A step that fails puts back the ones before it.
+    let recorded = Recorded::read(&state.data_root, &id).await;
+    let replaced = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}-replaced.sqlite"));
+    let swapped = if change.statements.is_empty() {
+        remove_database_files(&staged_database);
+        false
+    } else if let Err(error_value) = swap_database(&db_path, &staged_database, &replaced) {
+        remove_database_files(&staged_database);
         remove_artifact_version(&state, &id, &artifact_version).await;
-        return error(
-            StatusCode::BAD_GATEWAY,
-            &format!("Artifact upload failed: {error_value}"),
-        );
-    }
-    if let Err(error_value) = persist_deployment(&state, &deployment).await {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The changed database could not take the place of the live one: {error_value}"));
+    } else {
+        true
+    };
+    let undo_database = || {
+        if swapped {
+            if let Err(error_value) = restore_database(&db_path, &replaced) {
+                eprintln!("Could not put back the database of {id} after a failed release: {error_value}");
+            }
+        }
+    };
+    if let Err(error_value) = persist_deployment(&state, &deployment)
+        .await
+        .and_then(|()| release_step(&id, "persist_deployment"))
+    {
+        recorded.put_back().await;
+        undo_database();
         remove_artifact_version(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
     if let Err(error_value) = switch_dist(&state, &id, &artifact_version).await {
+        recorded.put_back().await;
+        undo_database();
+        remove_artifact_version(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The new files could not take the place of dist/: {error_value}"));
-    }
-    // An app the editor never saved keeps the release's sources in app/, so its folder is whole.
-    if let Err(error_value) = sources::write_release(&state.data_root, &id, &input.project.files).await {
-        eprintln!("Could not write the sources of release {artifact_version} to app/: {error_value:#}");
     }
     state
         .deployments
         .write()
         .await
         .insert(hostname, deployment.clone());
+    drop(database_guard);
+    if swapped {
+        remove_database_files(&replaced);
+    }
+    // An app the editor never saved keeps the release's sources in app/, so its folder is whole.
+    if let Err(error_value) = sources::write_release(&state.data_root, &id, &input.project.files).await {
+        eprintln!("Could not write the sources of release {artifact_version} to app/: {error_value:#}");
+    }
     http::routes_published(&deployment);
     remove_stale_artifacts(&state, &id, &artifact_version).await;
     let mut result = match serde_json::to_value(&deployment) {
@@ -999,14 +1053,128 @@ pub fn staged_dist(state: &AppState, id: &str, version: &str) -> PathBuf {
 }
 
 /// Moves the staged files into `dist/` and the previous ones aside, for
-/// `remove_stale_artifacts` to delete.
+/// `remove_stale_artifacts` to delete. When the second move fails, the
+/// previous files go back to `dist/`.
 pub async fn switch_dist(state: &AppState, id: &str, version: &str) -> std::io::Result<()> {
     let dist = layout::dist(&state.data_root, id);
-    if tokio::fs::try_exists(&dist).await? {
-        let retired = layout::private(&state.data_root, id).join(format!("dist-retired-{}", Uuid::new_v4().simple()));
+    let retired = layout::private(&state.data_root, id).join(format!("dist-retired-{}", Uuid::new_v4().simple()));
+    let had_dist = tokio::fs::try_exists(&dist).await?;
+    if had_dist {
         tokio::fs::rename(&dist, &retired).await?;
     }
-    tokio::fs::rename(staged_dist(state, id, version), &dist).await
+    let moved = match release_step(id, "switch_dist") {
+        Ok(()) => tokio::fs::rename(staged_dist(state, id, version), &dist).await,
+        Err(error_value) => Err(std::io::Error::other(error_value.to_string())),
+    };
+    if moved.is_err() && had_dist {
+        if let Err(error_value) = tokio::fs::rename(&retired, &dist).await {
+            eprintln!("Could not put back dist/ of {id}: {error_value}");
+        }
+    }
+    moved
+}
+
+/// Copies the live database with `VACUUM INTO` and applies `schema` to the
+/// copy, so a change that fails, or a release that fails after it, leaves the
+/// live database as it was. The caller holds the database lock alone.
+fn stage_database(live: &Path, staged: &Path, schema: &str, program: &ActionProgram, confirmation: Option<&str>) -> Result<schema_change::Change> {
+    remove_database_files(staged);
+    Connection::open(live)?.execute("VACUUM INTO ?1", [staged.to_string_lossy().as_ref()])?;
+    let change = schema_change::apply(staged, schema, program, schema_change::Mode::Apply(confirmation))?;
+    // The copy leaves in rollback mode. Closing this connection checkpoints
+    // and removes its WAL, so only the file moves into place.
+    Connection::open(staged)?.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
+    Ok(change)
+}
+
+fn database_sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+fn remove_database_files(path: &Path) {
+    for file in [path.to_path_buf(), database_sidecar(path, "-wal"), database_sidecar(path, "-shm")] {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
+/// Moves the live database and its WAL files to `replaced` and the staged
+/// copy into its place. A move that fails puts back what moved before it.
+fn swap_database(live: &Path, staged: &Path, replaced: &Path) -> std::io::Result<()> {
+    std::fs::rename(live, replaced)?;
+    for suffix in ["-wal", "-shm"] {
+        let from = database_sidecar(live, suffix);
+        if from.exists() {
+            if let Err(error_value) = std::fs::rename(&from, database_sidecar(replaced, suffix)) {
+                let _ = restore_database(live, replaced);
+                return Err(error_value);
+            }
+        }
+    }
+    if let Err(error_value) = std::fs::rename(staged, live) {
+        let _ = restore_database(live, replaced);
+        return Err(error_value);
+    }
+    Ok(())
+}
+
+/// Puts the database `swap_database` moved to `replaced` back in place.
+fn restore_database(live: &Path, replaced: &Path) -> std::io::Result<()> {
+    for suffix in ["-wal", "-shm"] {
+        let from = database_sidecar(replaced, suffix);
+        if from.exists() {
+            std::fs::rename(&from, database_sidecar(live, suffix))?;
+        } else {
+            let _ = std::fs::remove_file(database_sidecar(live, suffix));
+        }
+    }
+    std::fs::rename(replaced, live)
+}
+
+/// `konae.json` and the record as they were before a release, to put back
+/// when the release fails after writing them.
+struct Recorded(Vec<(PathBuf, Option<Vec<u8>>)>);
+
+impl Recorded {
+    async fn read(root: &Path, id: &str) -> Self {
+        let mut files = Vec::new();
+        for path in [layout::settings(root, id), layout::record(root, id)] {
+            let bytes = tokio::fs::read(&path).await.ok();
+            files.push((path, bytes));
+        }
+        Self(files)
+    }
+
+    async fn put_back(&self) {
+        for (path, bytes) in &self.0 {
+            let restored = match bytes {
+                Some(bytes) => write_atomic(path, bytes).await,
+                None => tokio::fs::remove_file(path).await,
+            };
+            if let Err(error_value) = restored {
+                eprintln!("Could not put back {} after a failed release: {error_value}", path.display());
+            }
+        }
+    }
+}
+
+/// The release steps a test makes fail, by app.
+#[cfg(test)]
+static FAILING_RELEASE_STEPS: std::sync::Mutex<Vec<(String, &'static str)>> = std::sync::Mutex::new(Vec::new());
+
+/// Fails a release at `step` when a test asked for it.
+#[cfg(test)]
+fn release_step(id: &str, step: &'static str) -> Result<()> {
+    if FAILING_RELEASE_STEPS.lock().unwrap().iter().any(|(app, failing)| app == id && *failing == step) {
+        anyhow::bail!("The test failed this release at {step}.");
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn release_step(_id: &str, _step: &'static str) -> Result<()> {
+    Ok(())
 }
 
 /// Best-effort removal of a release that never went live.
@@ -4581,6 +4749,81 @@ pub mod tests {
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .filter(|name| name.starts_with("dist-"))
             .collect()
+    }
+
+    /// A release body for `id` with these tables and actions and one page.
+    fn release_body(id: &str, schema: &str, actions: Value, page: &str, confirmation: Option<String>) -> Value {
+        json!({
+            "project": {
+                "id": id, "name": "Steps", "slug": "steps", "manifest": {},
+                "files": {"actions.json": json!({"version": 1, "actions": actions}).to_string(), "schema.sql": schema}
+            },
+            "visibility": "public",
+            "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": page}},
+            "schemaConfirmation": confirmation
+        })
+    }
+
+    #[tokio::test]
+    async fn a_release_that_fails_at_any_step_leaves_the_old_actions_on_the_old_rows() {
+        let list = |table: &str, column: &str| json!({"kind": "query", "access": "anonymous", "statement": format!("SELECT {column} FROM {table} ORDER BY id LIMIT 50"), "bindings": []});
+        let both = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);\nCREATE TABLE IF NOT EXISTS tags(id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n";
+        let notes_only = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);\n";
+        for step in ["stage_local_artifact", "upload_artifact", "open_auth", "schema_change", "persist_deployment", "switch_dist"] {
+            let root = std::env::temp_dir().join(format!("konae-release-step-{}", Uuid::new_v4()));
+            tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+            let state = test_state(&root);
+            let id = format!("app_{step}");
+            let first = release_body(&id, both, json!({"notes.list": list("notes", "body"), "tags.list": list("tags", "name")}), "<p>one</p>", None);
+            let response = deploy(&state, first.to_string().as_bytes()).await;
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
+            assert_eq!(status, StatusCode::OK, "{step}: {}", String::from_utf8_lossy(&bytes));
+            Connection::open(database_path(&state, &id)).unwrap()
+                .execute_batch("INSERT INTO notes(body) VALUES ('kept note'); INSERT INTO tags(name) VALUES ('old tag');").unwrap();
+            let live = state.deployments.read().await.values().next().cloned().unwrap();
+
+            // The next release drops tags, confirmed as release_plan would confirm it.
+            let mut second = release_body(&id, notes_only, json!({"notes.list": list("notes", "body")}), "<p>two</p>", None);
+            let input: DeployInput = serde_json::from_value(second.clone()).unwrap();
+            let confirmation = runtime::validate_release(&state, &input, None).await.unwrap().confirmation();
+            assert!(confirmation.is_some(), "dropping tags loses a row");
+            second["schemaConfirmation"] = json!(confirmation);
+            FAILING_RELEASE_STEPS.lock().unwrap().push((id.clone(), step));
+            assert_ne!(deploy(&state, second.to_string().as_bytes()).await.status(), StatusCode::OK, "{step}");
+            FAILING_RELEASE_STEPS.lock().unwrap().retain(|(app, _)| app != &id);
+
+            let call = |name: &'static str| {
+                let state = state.clone();
+                let mut headers = HeaderMap::new();
+                headers.insert(header::HOST, live.hostname.parse().unwrap());
+                async move {
+                    let response = invoke_action(State(state), AxumPath(name.into()), headers, Json(json!({}))).await;
+                    let status = response.status();
+                    (status, String::from_utf8(axum::body::to_bytes(response.into_body(), 100_000).await.unwrap().to_vec()).unwrap())
+                }
+            };
+            let (status, body) = call("tags.list").await;
+            assert_eq!(status, StatusCode::OK, "{step}: {body}");
+            assert!(body.contains("old tag"), "{step}: {body}");
+            assert!(call("notes.list").await.1.contains("kept note"), "{step}");
+            let serving = state.deployments.read().await.values().next().cloned().unwrap();
+            assert_eq!(serving.artifact_version, live.artifact_version, "{step}");
+            let record: Value = serde_json::from_slice(&std::fs::read(crate::layout::record(&root, &id)).unwrap()).unwrap();
+            assert_eq!(record["artifactVersion"], json!(live.artifact_version), "{step}: the record names the release memory serves");
+            assert_eq!(read_artifact(&state, &serving, "index.html").await.unwrap(), b"<p>one</p>", "{step}");
+            assert!(staged_or_retired(&root, &id).is_empty(), "{step}: no staged files stay");
+            let leftovers: Vec<_> = std::fs::read_dir(crate::layout::private(&root, &id)).unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .filter(|name| name.starts_with("release-")).collect();
+            assert!(leftovers.is_empty(), "{step}: {leftovers:?}");
+
+            // The same release goes through once nothing fails.
+            assert_eq!(deploy(&state, second.to_string().as_bytes()).await.status(), StatusCode::OK, "{step}");
+            assert_eq!(call("tags.list").await.0, StatusCode::NOT_FOUND, "{step}");
+            assert!(call("notes.list").await.1.contains("kept note"), "{step}");
+            let _ = tokio::fs::remove_dir_all(root).await;
+        }
     }
 
     #[tokio::test]
