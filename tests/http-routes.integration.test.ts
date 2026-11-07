@@ -209,8 +209,11 @@ describe("HTTP routes", () => {
     expect(await refusedWith({})).toEqual({ status: 401, body: { error: "invalid-signature" } });
     expect(await refusedWith({ "x-signature": await signed(body) }, JSON.stringify({ id: "A-1", total: 99 }))).toEqual({ status: 401, body: { error: "invalid-signature" } });
     // A stale t has its own answer, whatever the secret, so a sender with a skewed clock can tell.
-    expect(await refusedWith({ "x-signature": await signed(body, Math.floor(Date.now() / 1000) - 301) })).toEqual({ status: 401, body: { error: "stale-timestamp" } });
-    expect(await refusedWith({ "x-signature": await signed(body, Math.floor(Date.now() / 1000) + 301, "another-secret-0123456789") })).toEqual({ status: 401, body: { error: "stale-timestamp" } });
+    // The Kernel reads its clock after this test does, so t sits a minute past the 300 s window:
+    // t = now + 301 is 300 s ahead once the request crosses a second, and the Kernel accepts that.
+    const outside = 300 + 60;
+    expect(await refusedWith({ "x-signature": await signed(body, Math.floor(Date.now() / 1000) - outside) })).toEqual({ status: 401, body: { error: "stale-timestamp" } });
+    expect(await refusedWith({ "x-signature": await signed(body, Math.floor(Date.now() / 1000) + outside, "another-secret-0123456789") })).toEqual({ status: 401, body: { error: "stale-timestamp" } });
     expect(await refusedWith({ "x-signature": await signed(body, undefined, "another-secret-0123456789") })).toEqual({ status: 401, body: { error: "invalid-signature" } });
     const elsewhere = await signRoute(secret, { method: "POST", path: "/hooks/void", body });
     expect(await refusedWith({ "x-signature": elsewhere })).toEqual({ status: 401, body: { error: "invalid-signature" } });
