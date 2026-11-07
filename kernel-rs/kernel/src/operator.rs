@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use crate::installation::Installation;
 use crate::{
-    admin_database, find_project_deployment, http, invitations, layout, persist_deployment, runtime, AppState, Deployment,
-    Settings, SignupMode, SignupPolicy, Startup,
+    admin_database, find_project_deployment, http, invitations, layout, runtime, AppState, Deployment,
+    Settings, SignupMode, Startup,
 };
 
 const COMMANDS: &[&str] = &["users", "invite", "suspend", "resume", "signup-policy", "api-key", "secret", "sql", "events", "import", "maintenance", "enter"];
@@ -184,30 +184,12 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
     }
 }
 
-/// `signup_policy_set` as Konae's tool runs it: the entries stay when none
-/// are given, and the change lands in `konae.json`, which the running
-/// Kernel follows.
+/// `signup_policy_set` as Konae's tool runs it: the entries stay when none are given.
 async fn signup_policy(state: &AppState, deployment: Deployment, words: &mut Arguments) -> Result<Value> {
     let mode: SignupMode = serde_json::from_value(json!(words.required("open, invitation, closed or allowlist")?))
         .map_err(|_| anyhow!("The Signup Policy is open, invitation, closed or allowlist."))?;
     let given = words.rest();
-    let entries = if given.is_empty() { deployment.signup_policy.allowlist.clone() } else { given };
-    let policy = SignupPolicy::from_input(mode, &entries).map_err(anyhow::Error::msg)?;
-    let _guard = crate::database_lock(state, &format!("project:{}", deployment.project_id)).await;
-    let mut updated = Settings::read(&state.data_root, &deployment.id)?.deployment(
-        crate::Installed {
-            hostname: deployment.hostname.clone(),
-            created_at: deployment.created_at,
-            actions: deployment.actions.clone(),
-            artifact_version: deployment.artifact_version.clone(),
-        },
-        &state.public_origin,
-    );
-    let previous = updated.signup_policy.mode;
-    updated.signup_policy = policy;
-    persist_deployment(state, &updated).await?;
-    let visibility = if crate::is_private(&updated) { "private" } else { "public" };
-    Ok(json!({"deploymentId": updated.id, "visibility": visibility, "mode": updated.signup_policy.mode, "allowlist": updated.signup_policy.allowlist, "previousMode": previous}))
+    crate::set_signup_policy(state, &deployment.id, mode, (!given.is_empty()).then_some(given)).await
 }
 
 /// `project_import` with `replace: data`, from a folder on the machine. The

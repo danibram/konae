@@ -1430,29 +1430,10 @@ async fn admin_call(
             Ok(signup_policy_value(&deployment))
         }
         "signup_policy_set" => {
-            let id = a["deploymentId"].as_str().unwrap();
-            let deployment = owned_deployment(state, owner, id, "manage_users").await?;
+            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "manage_users").await?;
             let mode: SignupMode = serde_json::from_value(a["mode"].clone())?;
-            let entries: Vec<String> = match a.get("allowlist") {
-                Some(list) => serde_json::from_value(list.clone())?,
-                None => deployment.signup_policy.allowlist.clone(),
-            };
-            let policy = SignupPolicy::from_input(mode, &entries).map_err(anyhow::Error::msg)?;
-            // Releases hold the same lock, so a publish cannot overwrite this change
-            // with the policy it read before.
-            let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
-            let mut updated = owned_deployment(state, owner, id, "manage_users").await?;
-            let previous = updated.signup_policy.mode;
-            updated.signup_policy = policy;
-            persist_deployment(state, &updated).await?;
-            state
-                .deployments
-                .write()
-                .await
-                .insert(updated.hostname.clone(), updated.clone());
-            let mut value = signup_policy_value(&updated);
-            value["previousMode"] = json!(previous);
-            Ok(value)
+            let entries: Option<Vec<String>> = a.get("allowlist").map(|list| serde_json::from_value(list.clone())).transpose()?;
+            set_signup_policy(state, &deployment.id, mode, entries).await
         }
         "storage_test" => {
             owner.require("read", None)?;
@@ -1758,10 +1739,6 @@ fn sign_in_methods_value(state: &Konae, deployment: &Deployment) -> Value {
 }
 
 const GOOGLE_CLIENT_MISSING: &str = "This app asks for Google sign-in, but its Google client ID and client secret are not set on this installation, so its sign-in page offers only email and password. Set both, and add this app's redirect URIs to the Google client. Until then, people who signed in with Google sign in with a password, or set one with Forgot your password.";
-
-fn signup_policy_value(deployment: &Deployment) -> Value {
-    json!({"deploymentId":deployment.id,"visibility":if is_private(deployment) { "private" } else { "public" },"mode":deployment.signup_policy.mode,"allowlist":deployment.signup_policy.allowlist})
-}
 
 /// The Capsule a project is born as: one of the templates in
 /// project-templates.json, which `bun run templates:render` writes from the

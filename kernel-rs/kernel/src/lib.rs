@@ -3216,6 +3216,36 @@ pub async fn deployment_by_id(state: &AppState, id: &str) -> Option<Deployment> 
 
 /// Fails closed: a Deployment is public only when its manifest says "public",
 /// so a record with no visibility or an unknown one needs a login.
+/// The Signup Policy as `signup_policy_read` answers it.
+pub fn signup_policy_value(deployment: &Deployment) -> Value {
+    json!({"deploymentId":deployment.id,"visibility":if is_private(deployment) { "private" } else { "public" },"mode":deployment.signup_policy.mode,"allowlist":deployment.signup_policy.allowlist})
+}
+
+/// Sets who may create an account in the app `id`, as Konae's
+/// `signup_policy_set` and the `kernel` binary's `signup-policy` both do.
+/// The entries stay as they are when `entries` is `None`. The change lands
+/// in `konae.json`, which a running `kernel` binary follows, and the answer
+/// is `signup_policy_value` with `previousMode`.
+pub async fn set_signup_policy(state: &AppState, id: &str, mode: SignupMode, entries: Option<Vec<String>>) -> Result<Value> {
+    let served = |deployments: &HashMap<String, Deployment>| {
+        find_project_deployment(deployments, id).ok_or_else(|| anyhow::anyhow!("The app {id} is not published."))
+    };
+    let current = served(&*state.deployments.read().await)?;
+    let entries = entries.unwrap_or_else(|| current.signup_policy.allowlist.clone());
+    let policy = SignupPolicy::from_input(mode, &entries).map_err(anyhow::Error::msg)?;
+    // Releases hold the same lock, so a publish cannot overwrite this change
+    // with the policy it read before.
+    let _guard = database_lock(state, &format!("project:{}", current.project_id)).await;
+    let mut updated = served(&*state.deployments.read().await)?;
+    let previous = updated.signup_policy.mode;
+    updated.signup_policy = policy;
+    persist_deployment(state, &updated).await?;
+    state.deployments.write().await.insert(updated.hostname.clone(), updated.clone());
+    let mut value = signup_policy_value(&updated);
+    value["previousMode"] = json!(previous);
+    Ok(value)
+}
+
 pub fn is_private(deployment: &Deployment) -> bool {
     deployment
         .manifest
