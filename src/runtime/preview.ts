@@ -29,9 +29,10 @@ export const runtimeClient = String.raw`
     if (event.source !== parent || !event.ports[0]) return;
     const message = event.data;
     if (!message || message.channel !== 'konae-runtime' || message.type !== 'connect') return;
-    // Last connect wins: the host may hand over a fresh port after a reload or a
-    // missed handshake, and refusing it would strand the app on a dead one.
-    if (runtimePort) runtimePort.close();
+    // Last connect wins for new requests: the host may hand over a fresh port
+    // after a reload or a missed handshake, and refusing it would strand the
+    // app on a dead one. The previous port stays open, so a request already
+    // sent on it still gets its answer.
     runtimePort = event.ports[0];
     capability = message.capability;
     runtimePort.onmessage = ({ data: response }) => {

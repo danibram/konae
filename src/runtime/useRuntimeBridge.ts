@@ -32,28 +32,34 @@ export function useRuntimeBridge(
 
   useEffect(() => {
     if (!iframe) return;
-    let activePort: MessagePort | null = null;
+    // `hello` and `load` both connect the same document, and the app may send
+    // a request on one port just before the next arrives. Each port stays open
+    // until the document changes, so that request still gets its answer.
+    let ports: MessagePort[] = [];
+    let portsDocument: string | null = null;
     const documentStarted = previewDocumentTracker(hostRef.current);
 
     const connect = () => {
-      activePort?.close();
       const channel = new MessageChannel();
       const capability = crypto.randomUUID();
       const host = hostRef.current;
-      // `hello` and `load` both connect the same document. Only a new document
-      // (a changed srcdoc, or a new iframe, which runs this effect again)
-      // makes the previous failures history.
+      // Only a new document (a changed srcdoc, or a new iframe, which runs this
+      // effect again) makes the previous failures and ports history.
       documentStarted(iframe.srcdoc);
-      activePort = channel.port1;
-
-      const port = activePort;
-      activePort.onmessage = async (event: MessageEvent<PreviewMcpRequest>) => {
+      if (portsDocument !== iframe.srcdoc) {
+        for (const old of ports) old.close();
+        ports = [];
+        portsDocument = iframe.srcdoc;
+      }
+      const port = channel.port1;
+      ports.push(port);
+      port.onmessage = async (event: MessageEvent<PreviewMcpRequest>) => {
         const request = event.data;
         if (!request || request.jsonrpc !== "2.0" || typeof request.method !== "string") return;
         const response = await handlePreviewMcp(host, request, capability);
         if (response) port.postMessage(response);
       };
-      activePort.start();
+      port.start();
       iframe.contentWindow?.postMessage(
         { channel: "konae-runtime", type: "connect", capability },
         "*",
@@ -82,7 +88,7 @@ export function useRuntimeBridge(
     return () => {
       window.removeEventListener("message", greeting);
       iframe.removeEventListener("load", connect);
-      activePort?.close();
+      for (const port of ports) port.close();
     };
   }, [appId, iframe]);
 

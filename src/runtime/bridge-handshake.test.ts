@@ -37,7 +37,14 @@ describe("runtime handshake", () => {
   test("the app greets its host and accepts a replacement port", () => {
     expect(source).toContain("type: 'hello'");
     // Refusing a second port would strand the app on a closed one.
-    expect(source).toContain("if (runtimePort) runtimePort.close();");
     expect(source).not.toContain("|| runtimePort ||");
+  });
+
+  test("a replaced port stays open, so a request sent on it still gets its answer", () => {
+    // The first notes.list after a reload went out on the port that hello or
+    // load replaced a moment later, and both sides closed it unanswered.
+    expect(source).not.toContain("runtimePort.close()");
+    expect(bridge).not.toContain("activePort?.close()");
+    expect(bridge).toContain("if (portsDocument !== iframe.srcdoc)");
   });
 });
