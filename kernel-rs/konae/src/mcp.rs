@@ -606,7 +606,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ));
         tools.push(tool(
             "contact_email_set",
-            "Set the app's contact email in konae.json, where \"notify\": { \"to\": \"owner\" } sends, or clear it with email null. A first publish fills it with the owner's email when Konae knows it; an owner who signs in through Clerk sets it here. Later publishes keep it. Requires publish. Read back with contact_email_read.",
+            "Set the app's contact email in konae.json, where \"notify\": { \"to\": \"owner\" } sends, or clear it with email null. A publish of an app with none fills it with the owner's email when Konae knows it; an owner who signs in through Clerk sets it here. Later publishes keep it, unless the folder's konae.json names contactEmail, which konae publish sends. Requires publish. Read back with contact_email_read.",
             json!({"deploymentId":text,"email":{"type":["string","null"],"maxLength":254}}),
             &["deploymentId", "email"],
             false,
@@ -1536,9 +1536,8 @@ async fn admin_call(
             transfer(state, principal, &json!({"transferId":row.2}))?;
             let bytes = tokio::fs::read(transfer_path(state, &row.2)?).await?;
             let mut payload: Value = serde_json::from_slice(&bytes)?;
-            // Where notify to the owner sends: the contact email the app has,
-            // else the owner's email from Konae's record, never the payload's.
-            payload["contactEmail"] = contact_email(state, owner, &row.0).await;
+            // Notify to the owner sends to konae.json's address, else the app's, else the owner's.
+            payload["contactEmail"] = contact_email(state, owner, &row.0, &payload).await?;
             // A schema change that loses data applies only with the
             // confirmation release_plan gave for it.
             payload["schemaConfirmation"] = a.get("confirmSchema").cloned().unwrap_or(Value::Null);
@@ -1654,7 +1653,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
     };
     let mut answer = json!({"imported": true, "replace": replace, "backup": backup, "schema": change.to_json()});
     if let Some((mut payload, input, _)) = release {
-        payload["contactEmail"] = contact_email(state, owner, &project).await;
+        payload["contactEmail"] = contact_email(state, owner, &project, &payload).await?;
         payload["schemaConfirmation"] = confirmation.map_or(Value::Null, |value| Value::String(value.to_owned()));
         for key in ["name", "slug", "manifest"] {
             if let Some(value) = payload["project"].get(key) {
@@ -1687,11 +1686,16 @@ pub(super) fn inviter_email(state: &Konae, owner_id: &str) -> Option<String> {
     db.query_row("SELECT email FROM app_users WHERE id = ?1", [owner_id], |row| row.get(0)).optional().ok().flatten()
 }
 
-/// The contact email a release of `project` carries: the one the published
-/// app has, which the owner may have set in App settings, else the owner's.
-async fn contact_email(state: &Konae, owner: &Owner, project: &str) -> Value {
+/// The contact email a release of `project` carries: the one the payload
+/// names from its folder's konae.json, else the one the published app has,
+/// which the owner may have set in App settings, else the owner's.
+async fn contact_email(state: &Konae, owner: &Owner, project: &str, payload: &Value) -> Result<Value> {
+    if let Some(given) = payload["contactEmail"].as_str() {
+        let email = super::auth::normalize_email(given).map_err(|_| anyhow::anyhow!(super::notify::CONTACT_EMAIL_INVALID))?;
+        return Ok(Value::String(email));
+    }
     let kept = find_project_deployment(&*state.deployments.read().await, project).and_then(|deployment| deployment.contact_email);
-    kept.or_else(|| owner_email(state, &owner.id)).map_or(Value::Null, Value::String)
+    Ok(kept.or_else(|| owner_email(state, &owner.id)).map_or(Value::Null, Value::String))
 }
 
 /// The email of the owner's active account, when Konae keeps one. An owner

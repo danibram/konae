@@ -29,7 +29,8 @@ import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
 /** `url` is absent in a project that `init` wrote without one, until a publish names the installation. */
-type Config = { url?: string; project: Project };
+/** What a publish sends. `contactEmail` is where notices to the owner go, from konae.json. */
+type Config = { url?: string; project: Project; contactEmail?: string };
 type SignupMode = "open" | "invitation" | "closed" | "allowlist";
 export type SignupPolicy = { mode: SignupMode; allowlist: string[] };
 
@@ -261,6 +262,7 @@ export async function readSettings(root: string): Promise<AppSettings> {
 export function configOf(settings: AppSettings, url?: string): Config {
   return {
     ...(url ? { url } : {}),
+    ...(settings.contactEmail ? { contactEmail: settings.contactEmail } : {}),
     project: { id: settings.id, name: settings.name, slug: settings.slug, manifest: { ...settings.manifest, visibility: settings.visibility, signupPolicy: settings.signupPolicy } },
   };
 }
@@ -322,6 +324,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
   const payload = {
     project: { ...project, files }, visibility: manifest.visibility ?? "private", artifact,
     ...(first && wanted ? { initialSignupPolicy: wanted } : {}),
+    ...(config.contactEmail ? { contactEmail: config.contactEmail } : {}),
   };
   let receipt: { id: string; url: string };
   let transfer: Transfer | undefined;

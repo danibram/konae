@@ -1107,7 +1107,7 @@ The CLI's `export --dir <folder> --out <empty folder> --with-data` writes the sa
 
 ## Contact email
 
-`"notify": { "to": "owner" }` sends to the app's contact email, which `konae.json` keeps, so an export carries it and the `kernel` binary sends there too. A first publish fills it with the owner's email when Konae knows it. An owner who signs in through Clerk has no email in Konae, so their app has none until they set one. Later publishes keep the address the app has.
+`"notify": { "to": "owner" }` sends to the app's contact email, which `konae.json` keeps, so an export carries it and the `kernel` binary sends there too. A publish of an app that has none fills it with the owner's email when Konae knows it. An owner who signs in through Clerk has no email in Konae, so their app has none until they set one. Later publishes keep the address the app has, unless the folder they publish from names one as `contactEmail` in `konae.json`; `konae publish` sends that one.
 
 `contact_email_set { deploymentId, email }` sets it, or clears it with `email: null`, and needs `publish`. `contact_email_read { deploymentId }` answers `{ deploymentId, contactEmail, ownerNotices }`, where `ownerNotices` names the actions that send to the owner. With `contactEmail` null and `ownerNotices` listed, those notices are not sent, and Usage counts each under `notify` as `owner-has-no-email`. In the editor, App settings has the same field, and the publish dialog says when an app sends owner notices and has no contact email.
 

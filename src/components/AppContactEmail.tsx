@@ -77,7 +77,7 @@ export function AppContactEmail({ deploymentId, onSignedOut }: { deploymentId: s
         : state.contactEmail && <div className="domain-status"><Badge tone="success">Set</Badge></div>}
       <p>{missing ?? "Where the app sends a notice to its owner. It is kept in konae.json, so an export carries it."}</p>
       <form onSubmit={submit} className="domain-form">
-        <Field label="Email" help="Publishing keeps this address. Without one, Konae uses your owner email when it knows it.">
+        <Field label="Email" help="Publishing keeps this address, unless the folder you publish from names another in konae.json. Without one, Konae uses your owner email when it knows it.">
           <Input type="email" value={email} onChange={(event) => { setEmail(event.target.value); setNotice(""); setError(""); }} autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="email" placeholder="owner@example.org" disabled={busy} />
         </Field>
         <Button type="submit" variant="primary" loading={busy} disabled={!email.trim() || email.trim() === state.contactEmail}>{state.contactEmail ? "Change email" : "Save email"}</Button>
