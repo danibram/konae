@@ -162,4 +162,36 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   }
   expect(refused).toBe(403);
   expect((await command("sql", "SELECT body FROM notes ORDER BY id LIMIT 5")).output).toContain("written alone");
+
+  // An entry link from the machine signs a browser in as Ana, and the link works once.
+  const link = JSON.parse((await command("enter", "Ana@Carried.test")).output) as { userId: string; url: string };
+  expect(link.userId).toBe(user.userId);
+  expect(link.url).toStartWith(`http://${hostname}:${port}/_konae/enter#entry=`);
+  const token = new URL(link.url).hash.replace("#entry=", "");
+  const enter = () => appFetch(app, hostname, "/_konae/enter", { method: "POST", body: JSON.stringify({ token }), headers: { origin: `http://${hostname}` } });
+  const entered = await enter();
+  expect(entered.status).toBe(200);
+  expect((await enter()).status).toBe(410);
+  const asAna = runtime(app, hostname, entered.headers.get("set-cookie")!.split(";")[0]);
+  expect(await asAna.call("actions_invoke", { name: "notes.mine", input: {} })).toHaveLength(2);
+  expect((await command("enter", "nobody@carried.test")).error).toContain("This app has no account with the email nobody@carried.test.");
+
+  // Maintenance from the machine pauses the running app at once, and off lets it answer again.
+  expect(JSON.parse((await command("maintenance", "on")).output)).toMatchObject({ maintenance: true });
+  expect((await appFetch(app, hostname, "/")).status).toBe(503);
+  await expect(asAna.call("actions_invoke", { name: "notes.mine", input: {} })).rejects.toThrow("maintenance");
+  expect(JSON.parse((await command("maintenance", "off")).output)).toMatchObject({ maintenance: false });
+  expect((await appFetch(app, hostname, "/")).status).toBe(200);
+
+  // An import from the machine puts the exported data back, after a backup, with the Kernel stopped.
+  alone.kill(); await alone.exited;
+  const incoming = path.join(root, "incoming");
+  for (const entry of entries.filter((entry) => entry.path.startsWith("data/"))) {
+    await mkdir(path.dirname(path.join(incoming, entry.path)), { recursive: true });
+    await writeFile(path.join(incoming, entry.path), entry.contents);
+  }
+  const imported = await command("import", incoming);
+  expect(imported.error).toBe("");
+  expect(JSON.parse(imported.output)).toMatchObject({ imported: true, replace: "data", backup: { holds: ["data"] } });
+  expect(JSON.parse((await command("sql", "SELECT body FROM notes ORDER BY id LIMIT 5")).output)).toMatchObject({ rows: [{ body: "written on Konae" }] });
 }, 120_000);

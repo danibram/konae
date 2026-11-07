@@ -408,9 +408,11 @@ fn carry_access(incoming: &Path, live: &Path) -> Result<()> {
         return Ok(());
     }
     connection.execute("ATTACH DATABASE ?1 AS live", [live.to_string_lossy().as_ref()])?;
+    // The schema goes in as the pragma's argument: a `main.` prefix on the
+    // function would still read the attached database's table.
     let columns = |schema: &str, table: &str| -> Result<Vec<String>> {
-        let mut statement = connection.prepare(&format!("SELECT name FROM {schema}.pragma_table_info(?1)"))?;
-        let names = statement.query_map([table], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut statement = connection.prepare("SELECT name FROM pragma_table_info(?1, ?2)")?;
+        let names = statement.query_map([table, schema], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(names)
     };
     connection.execute(
@@ -508,6 +510,22 @@ mod tests {
         assert!(after.authenticate(Some(&bo.token)).unwrap().is_none(), "Bo is not in the new data");
         let revoked: Option<i64> = after.read(|db| db.query_row("SELECT revoked_at FROM api_keys WHERE id='k1'", [], |row| row.get(0)).map_err(AuthError::Storage)).unwrap();
         assert_eq!(revoked, None, "the live key keeps working");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_incoming_identity_without_keys_takes_the_live_ones() {
+        let root = std::env::temp_dir().join(format!("konae-import-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        AuthService::open(root.join("live.sqlite")).unwrap();
+        Connection::open(root.join("live.sqlite")).unwrap()
+            .execute_batch("CREATE TABLE api_keys(id TEXT PRIMARY KEY, name TEXT, revoked_at INTEGER); INSERT INTO api_keys VALUES('k1','live key',NULL);")
+            .unwrap();
+        let incoming_path = root.join("incoming.sqlite");
+        AuthService::open(&incoming_path).unwrap();
+        carry_access(&incoming_path, &root.join("live.sqlite")).unwrap();
+        let name: String = Connection::open(&incoming_path).unwrap().query_row("SELECT name FROM api_keys WHERE id='k1'", [], |row| row.get(0)).unwrap();
+        assert_eq!(name, "live key");
         let _ = std::fs::remove_dir_all(root);
     }
 }

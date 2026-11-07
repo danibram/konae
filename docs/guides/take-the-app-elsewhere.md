@@ -87,6 +87,8 @@ docker compose exec kernel kernel signup-policy invitation
 docker compose exec kernel kernel api-key create billing --action orders.create
 docker compose exec kernel kernel api-key revoke <key id>
 docker compose exec kernel kernel sql "SELECT count(*) FROM orders LIMIT 1"
+docker compose exec kernel kernel maintenance on
+docker compose exec kernel kernel enter ana@example.com
 ```
 
 The exported `AGENTS.md` lists every command with its options. An export carries each API key revoked, so issue new ones with `kernel api-key create`.

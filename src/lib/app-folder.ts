@@ -181,6 +181,8 @@ Outside Konae, the Kernel's commands manage the app. Each refuses with the same 
 - \`kernel secret set <name> [--use route|call|google]\`, with the value on standard input, and \`kernel secret list\`.
 - \`kernel sql "<statement>"\`: run SQL on \`data/database.sqlite\`.
 - \`kernel events --from <YYYY-MM-DD> --to <YYYY-MM-DD>\`: notices, calls, scheduled runs, routes and Signals.
+- \`kernel maintenance on|off\`: pause the app, so it takes no writes, signups or sign-ins and holds its email, calls and schedule, or let it run again.
+- \`kernel enter <email>\`: a one-time link, good for 2 minutes, that signs a browser in as that account. Usage and Signals do not count what the session does.
 - \`kernel import <folder> [--confirm-schema <confirmation>]\`: replace the app's data with the \`data/\` of an exported folder, after a backup in \`.konae/backups\`. Sessions and API keys stay as they are. Stop the Kernel first.
 
 Add \`--app ${settings.id}\` when the Kernel serves more than one app.

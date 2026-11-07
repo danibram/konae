@@ -535,7 +535,6 @@ mod tests {
         assert_eq!(signals["signals"][0]["properties"], json!({"actor": null}));
         let failed = &usage["scheduled"].as_array().unwrap().iter().find(|run| run["outcome"] == "failed").unwrap()["error"];
         assert!(failed.as_str().unwrap().contains("no such table: holds"), "{failed}");
-        crate::maintenance::forget(&rig.root);
     }
 
     #[tokio::test]

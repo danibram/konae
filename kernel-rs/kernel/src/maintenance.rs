@@ -1,9 +1,10 @@
 //! The maintenance state of one Deployment, and the guards that keep a paused
 //! app from taking writes. ADR-0014 introduced it and ADR-0027 keeps it.
 //!
-//! The state lives in `deployments/<id>/maintenance.json`, inside the
-//! Deployment's folder, so a restart, a scheduled copy and a restore all keep
-//! it. While it pauses an app:
+//! The state lives in `.konae/maintenance.json`, inside the app's folder, so
+//! a restart, a scheduled copy and a restore all keep it. The Kernel reads
+//! the file on every check, so the `maintenance` command run beside a
+//! serving Kernel takes effect at once. While it pauses an app:
 //!
 //! - the app host serves a maintenance page for the published shell and
 //!   refuses every other request with one message;
@@ -13,8 +14,6 @@
 //!
 //! An installation that a restore could not reconcile is paused the same way
 //! for every app (`recovery::hold`).
-
-use std::sync::{LazyLock, RwLock as SyncRwLock};
 
 use axum::{http::Method, middleware::Next};
 
@@ -45,10 +44,6 @@ impl Marker {
     }
 }
 
-/// Markers by file path. Only this process writes them while it runs, and a
-/// restore runs before it starts, so the cache stays true.
-static MARKERS: LazyLock<SyncRwLock<HashMap<PathBuf, Option<Arc<Marker>>>>> = LazyLock::new(Default::default);
-
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && !id.contains(['/', '\\', '.'])
 }
@@ -57,22 +52,16 @@ fn marker_path(data_root: &Path, id: &str) -> PathBuf {
     crate::layout::private(data_root, id).join(MARKER_FILE)
 }
 
-fn marker(data_root: &Path, id: &str) -> Option<Arc<Marker>> {
+fn marker(data_root: &Path, id: &str) -> Option<Marker> {
     if !valid_id(id) {
         return None;
     }
-    let path = marker_path(data_root, id);
-    if let Some(found) = MARKERS.read().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&path) {
-        return found.clone();
-    }
-    let unreadable = || Arc::new(Marker { unreadable: true, ..Marker::default() });
-    let loaded = match std::fs::read(&path) {
-        Ok(bytes) => Some(serde_json::from_slice::<Marker>(&bytes).map(Arc::new).unwrap_or_else(|_| unreadable())),
+    let unreadable = || Marker { unreadable: true, ..Marker::default() };
+    match std::fs::read(marker_path(data_root, id)) {
+        Ok(bytes) => Some(serde_json::from_slice::<Marker>(&bytes).unwrap_or_else(|_| unreadable())),
         Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => Some(unreadable()),
-    };
-    MARKERS.write().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(path, loaded.clone());
-    loaded
+    }
 }
 
 /// Whether the app is in maintenance, since when, and why the Kernel holds
@@ -95,8 +84,6 @@ pub fn read(data_root: &Path, id: &str) -> Value {
 pub fn set(data_root: &Path, id: &str, on: bool) -> Result<Value> {
     anyhow::ensure!(valid_id(id), "Invalid app ID.");
     let path = marker_path(data_root, id);
-    let mut markers = MARKERS.write().unwrap_or_else(|poisoned| poisoned.into_inner());
-    markers.remove(&path);
     if on {
         let since = match std::fs::read(&path).ok().and_then(|bytes| serde_json::from_slice::<Marker>(&bytes).ok()) {
             Some(marker) => marker.since,
@@ -112,7 +99,6 @@ pub fn set(data_root: &Path, id: &str, on: bool) -> Result<Value> {
             _ => {}
         }
     }
-    drop(markers);
     Ok(read(data_root, id))
 }
 
@@ -127,13 +113,6 @@ pub fn pause_for_test(data_root: &Path, id: &str, paused: bool) {
     } else {
         let _ = std::fs::remove_file(&path);
     }
-    MARKERS.write().unwrap().remove(&path);
-}
-
-/// Forgets cached markers under `data_root`, for tests that edit files.
-#[cfg(any(test, feature = "testing"))]
-pub fn forget(data_root: &Path) {
-    MARKERS.write().unwrap().retain(|path, _| !path.starts_with(data_root));
 }
 
 /// Why a Deployment is paused: its own maintenance state, or the
@@ -223,10 +202,8 @@ mod tests {
         let root = scratch();
         assert!(pause(&root, "app-1").is_none());
         pause_for_test(&root, "app-1", true);
-        forget(&root);
         assert_eq!(pause(&root, "app-1").as_deref(), Some(MESSAGE));
         std::fs::write(marker_path(&root, "app-1"), "{not json").unwrap();
-        forget(&root);
         assert_eq!(pause(&root, "app-1").as_deref(), Some(UNREADABLE));
         pause_for_test(&root, "app-1", false);
         assert!(pause(&root, "app-1").is_none());
@@ -248,7 +225,6 @@ mod tests {
         assert!(pause(&root, "app-1").is_none());
         // An unreadable state reads as paused, and taking the app out removes it.
         std::fs::write(marker_path(&root, "app-1"), "{not json").unwrap();
-        forget(&root);
         assert_eq!(read(&root, "app-1")["unreadable"], true);
         assert_eq!(set(&root, "app-1", false).unwrap()["maintenance"], false);
         assert!(set(&root, "../escape", true).is_err());

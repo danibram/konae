@@ -17,7 +17,7 @@ use crate::{
     Settings, SignupMode, SignupPolicy, Startup,
 };
 
-const COMMANDS: &[&str] = &["users", "invite", "suspend", "resume", "signup-policy", "api-key", "secret", "sql", "events", "import"];
+const COMMANDS: &[&str] = &["users", "invite", "suspend", "resume", "signup-policy", "api-key", "secret", "sql", "events", "import", "maintenance", "enter"];
 
 pub fn usage() -> &'static str {
     "Commands on an app this Kernel serves. Add --app <id> when the data directory holds more than one app.
@@ -33,6 +33,8 @@ pub fn usage() -> &'static str {
   kernel secret set <name> [--use route|call|google]   reads the value from standard input
   kernel sql <statement>
   kernel events --from <YYYY-MM-DD> --to <YYYY-MM-DD>
+  kernel maintenance on|off
+  kernel enter <email>   prints a one-time link that signs this browser in as the account, for 2 minutes
   kernel import <folder> [--confirm-schema <confirmation>]   replaces the app's data with the data/ of an exported folder, after a backup"
 }
 
@@ -112,6 +114,19 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
             invitations::run(state, &deployment, &operator(state, id), tool, &json!({"userId": user})).await
         }
         "signup-policy" => signup_policy(state, deployment, words).await,
+        "maintenance" => {
+            let on = match words.required("on or off")?.as_str() {
+                "on" => true,
+                "off" => false,
+                _ => bail!("Say maintenance on or maintenance off."),
+            };
+            crate::maintenance::set(&state.data_root, id, on)
+        }
+        "enter" => {
+            let email = words.required("the account's email")?;
+            let user = account_with_email(state, id, &email)?;
+            crate::enter::issue(state, &deployment, &user, "operator").await
+        }
         "api-key" => {
             let (tool, arguments) = match words.next().as_deref() {
                 Some("list") => ("api_keys_list", json!({})),
@@ -195,6 +210,18 @@ async fn import(state: &AppState, id: &str, words: &mut Arguments) -> Result<Val
         }
         Outcome::Imported { backup, change } => Ok(json!({"imported": true, "replace": "data", "backup": backup, "schema": change.to_json()})),
     }
+}
+
+/// The ID of the app account with `email`, as `kernel users` lists it.
+fn account_with_email(state: &AppState, id: &str, email: &str) -> Result<String> {
+    let path = layout::data(&state.data_root, id).join("identity.sqlite");
+    let db = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("{} cannot be read.", path.display()))?;
+    use rusqlite::OptionalExtension;
+    let normalized = crate::auth::normalize_email(email).map_err(|error_value| anyhow!(error_value.to_string()))?;
+    db.query_row("SELECT id FROM app_users WHERE email = ?1", [normalized], |row| row.get(0))
+        .optional()?
+        .ok_or_else(|| anyhow!("This app has no account with the email {}.", email.trim()))
 }
 
 /// Who sends an invitation from the machine: the app's contact email.

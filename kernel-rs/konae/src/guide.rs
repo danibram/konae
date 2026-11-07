@@ -205,7 +205,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             ],
             "withoutKonae": [
                 "The kernel binary serves an exported folder with its data/: the folder's compose.yaml runs the image Dockerfile.kernel builds, named by KONAE_KERNEL_IMAGE in .env. At startup it checks the folder as a release and prints the app's address.",
-                "There the kernel binary's commands do what the owner tools do, with the same refusals: users, invite, suspend, resume, signup-policy, api-key, secret, sql, events and import. The folder's AGENTS.md lists them; under Compose run docker compose exec kernel kernel <command>."
+                "There the kernel binary's commands do what the owner tools do, with the same refusals: users, invite, suspend, resume, signup-policy, api-key, secret, sql, events, maintenance, enter and import. The folder's AGENTS.md lists them; under Compose run docker compose exec kernel kernel <command>."
             ],
             "import": [
                 "On the destination Kernel, project_create with the same projectId, and secret_set for every secret the app's routes sign with, and, when the app offers Google sign-in, google_client_id and google_client_secret with use google. Register the destination's redirect URIs, which sign_in_methods_read lists, in that Google client.",
