@@ -2,8 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
-// CONTEXT.md says how each term introduced in November 2026 is written in a
-// sentence. This test holds the docs, the editor's words and the Kernel's
+// CONTEXT.md lists the terms written in lowercase in a sentence. This test holds the docs, the editor's words and the Kernel's
 // messages to that list, so a term keeps one spelling wherever a person reads it.
 
 const root = path.resolve(import.meta.dir, "../..");
@@ -88,12 +87,15 @@ describe("the words of CONTEXT.md", () => {
     expect(terms.filter((term) => !headings.has(term.toLowerCase()))).toEqual([]);
   });
 
-  test("the terms introduced with the HTTP module, copies, maintenance, accounts and mail each have one entry", () => {
+  test("each term of the product has exactly one entry", () => {
     const introduced = [
+      "Konae", "Kernel", "Owner", "App User", "App Folder", "Schema Change", "actions.d.ts", "Contact Email",
+      "Entering as a User", "Import", "Kernel Commands",
       "API Key", "Signing Secret", "Guard", "Callers", "Export", "Copy", "Maintenance", "Revocation Record",
       "Invitation", "Invitation Code", "Email Job", "Sender Preflight", "Action Contract", "SDK Module", "Usage", "Signal",
     ];
     const entries = [...context.matchAll(/^\*\*([^*]+)\*\*:$/gm)].map((match) => match[1]);
+    expect(new Set(entries).size).toBe(entries.length);
     for (const term of introduced) expect(entries.filter((entry) => entry === term)).toEqual([term]);
   });
 

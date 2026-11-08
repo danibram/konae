@@ -1,225 +1,267 @@
 # Konae
 
-Konae is the guardrail that lets a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged. The code, who may open a Deployment, and who may read a row stay separate. The Validation Gate and the Kernel refuse the same Capsule, so a check that passes in the editor still passes on the machine the app leaves on.
+Konae is the guardrail that lets a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged. The Validation Gate and the Kernel refuse the same Capsule with the same words, so a check that passes in the editor still passes on the machine the app leaves on.
 
 ## Language
 
-The terms come in two halves. Read "Words an app author uses" to make an app, edit its files or take it elsewhere; its first part names the words met before an app runs. Read "Words for running an installation" only to operate the Kernel, its accounts, its mail and its copies.
+Read "Words an app author uses" to make an app, edit its files or take it elsewhere. Read "Words for running an installation" only to operate a Kernel or a Konae installation. Each entry gives the meaning now and the words to avoid; the decision records in `docs/adr/` hold the rules.
 
-Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, the terms the code introduced in November 2026 are written in lowercase, because that is how the editor and the Kernel already say them: API key, signing secret, guard, callers, app folder, copy, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, path address, notice, schedule, signature scheme, call action, outbox, SDK module, sign-in methods, Google client and file store. Usage, Signal and Action Contract keep their capitals, as the older terms do.
+Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, these terms are written in lowercase, because that is how the editor and the Kernel say them: API key, signing secret, guard, callers, app folder, copy, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, path address, notice, schedule, signature scheme, call action, outbox, SDK module, sign-in methods, Google client, file store, app user, contact email and schema change. Usage, Signal and Action Contract keep their capitals.
 
 ## Words an app author uses
 
-### Before the app runs
+### The two halves of the product
+
+**Konae**:
+The platform: the editor, the build agent, owner accounts, the owner's MCP on `/mcp` and the project list. It is the `konae` binary in `kernel-rs/konae`, which links the Kernel, and the `konae` CLI in `scripts/konae.ts`. An app is made and managed there (ADR-0001).
+_Avoid_: the Kernel (when the owner's side is meant), the builder
+
+**Kernel**:
+The server that runs apps: Server Actions, app accounts, files, schedules, notices, routes, calls and Usage. It is a library and the `kernel` binary in `kernel-rs/kernel`, which serves a directory of app folders with no Konae around it. Konae contains one, and `konae dev` runs the binary on one folder. It never opens an owner's records (ADR-0001).
+_Avoid_: Konae Kernel, development Kernel, runtime server
+
+**Owner**:
+A person with a Konae account who makes and manages apps, in the editor or through the owner's MCP. Owners exist only in Konae, and an app folder carries none, so an export leaves its owner behind (ADR-0001). The account proves its email before it holds a session (ADR-0003).
+_Avoid_: Project Owner, admin, creator (the `creator-*` commands keep it in their names)
+
+**App User**:
+A person with an account in one app. The Kernel keeps the account and its sessions in the app's `data/identity.sqlite`. The Kernel keeps no role for it; an app that needs an administrator keeps roles in its own table and checks them in SQL against the actor binding (ADR-0001).
+_Avoid_: member (that is a role an app may keep), runtime user, owner
+
+**Runtime Actor**:
+Whoever calls a Deployment at runtime: a visitor without a session, an app user, or a program holding an API key. An `actor` binding of `id` yields the app user's ID or the key's ID, and null for a visitor or a schedule's run.
+_Avoid_: owner, editor user
+
+### The app and its files
 
 **Project**:
-The source lineage, schema, capability configuration and deployment history owned by a workspace member. Its sources open in the editor, and the CLI publishes them from a folder.
-_Avoid_: App when referring specifically to editable source
+An app as Konae's project list knows it: its ID, its name, the owner who holds it and the sources the editor saves. Its ID names its app folder and its Deployment.
+_Avoid_: workspace, repo, app (when the editable source is meant)
+
+**App Folder**:
+Everything an app is, in one layout that is the same on a laptop, inside the Kernel and in an export: `konae.json`, `app/`, `dist/`, `data/`, `actions.d.ts`, `action-contract.md`, `AGENTS.md`, `compose.yaml` and `.env.example`. `konae init` writes it, `konae dev` serves it, an export hands it over, and the Kernel keeps each app in one under `apps/<id>/`. Inside the Kernel it also holds `.konae/`, what the installation knows about the app, which never leaves. `kernel-rs/kernel/src/layout.rs` names every path (ADR-0001).
+_Avoid_: kit, package, workspace, repo
 
 **Capsule**:
-The editable source of a Project taken as one unit. It is a nested source tree with an entrypoint, `app.js` or `src/main.ts`, from which relative imports are bundled, plus optional `index.html` and `styles.css`, the schema in `schema.sql`, the only model of the database, which the Validation Gate and the Kernel check and run, and the Server Action declarations in `actions.json`. Its pages are every `.html` at the root and under `pages/`, and files under `public/` are published as they are. It is the shape the editor and the agent read and write; what a Deployment serves is the Build Artifact built from it.
+The app's editable sources, `app/` of the app folder: its pages, styles and scripts, `schema.sql`, `actions.json` and an optional `package.json`. The editor and the build agent read and write it; a Deployment serves the Build Artifact built from it.
 _Avoid_: bundle, repo, the project files
 
 **Server Action**:
-A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. It runs one SQL statement. A query starts with `SELECT`, a mutation with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, and a `WITH` clause sits inside the statement, never in front of it. The Validation Gate and the Kernel refuse a statement that breaks a rule, and an action whose name, access, kind or bindings they do not take, with the same words, and a project declares at most 100 actions. A call action runs no SQL; the Kernel sends its request. An action declared `anonymous` may also declare an HTTP route, one method and path on its Deployment host, that runs it for the callers the route takes, of a signed request, an API key and a signed-in user; an `authenticated` action may not. An action whose route does not answer anyone answers only there, never through `miniapp.actions.call`.
-_Avoid_: Raw SQL endpoint
+A named operation in `actions.json` and the only way a page reaches the database. The Kernel authorizes the Runtime Actor from the action's access and bindings, then runs its one SQL statement, records its Signal, or queues its call. Its kinds are `query`, `mutation`, `signal` and `call` (ADR-0002, ADR-0004).
+_Avoid_: raw SQL endpoint, database API
 
 **Validation Gate**:
-The check that every agent-proposed change must pass before it is applied to a Project. The schema must be valid and every Server Action that runs SQL must prepare against it. The Kernel derives the change to a published database from `schema.sql` and asks the owner before one that loses data. Applying is versioned and reversible. The Gate and the Kernel must refuse the same Capsule with the same words; that shared refusal is what lets the app leave with its rules unchanged.
+The editor's check of `schema.sql` and `actions.json`, in `src/agent/gate.ts`, that a change must pass before Apply. It and the Kernel refuse with the same code and sentence, which is what lets an app leave with its rules (ADR-0004).
 _Avoid_: linter, preview
 
+**Refusal**:
+What either door answers when the app's files break a rule: `{ code, message, hint }`, where `hint.fix` says whether the Capsule, the owner or the operator clears it. `kernel-rs/kernel/src/refusal-codes.json` holds every code (ADR-0004).
+_Avoid_: validation error, lint warning
+
+**Schema Change**:
+The change the Kernel derives from `schema.sql` to a live database, at publish, at import and when the `kernel` binary starts an app folder. A new table, column or index applies. A dropped table, a dropped column or a retyped column loses data and applies only with its confirmation, the digest of the plan's statements that `release_plan` returns. An owner passes it as `confirmSchema`, `--confirm-schema` or `KONAE_CONFIRM_SCHEMA`, and it fits only the plan it came from. A rename reads as a drop and an add (ADR-0005).
+_Avoid_: migration, schema diff
+
+**actions.d.ts**:
+The types of `miniapp.actions.call` by action name, input and returned columns, generated from the Action Contract into the app folder by `konae contract`, `konae dev` and an export. It is never edited (ADR-0005).
+_Avoid_: SDK types, API client
+
 **Build Artifact**:
-The validated, immutable static output of a Project revision that a Deployment serves. It contains no source authority, runtime database access or administrative capability. Under the Kernel's Content Security Policy its own inline scripts and same-origin files load, and inline event handler attributes and other origins do not. Every builder makes it by one rule set: each page with the SDK, the files the pages load and `public/`, with binary files as base64 named in `encodings`, and a build that names a file the Capsule does not hold is refused. Its routing mode is `pages` by default, where a path it does not hold answers 404 with its `404.html`, or `spa`, where such a path serves `index.html`. The Validation Gate does not judge an artifact; the builders refuse a bad reference, and the builders and the Kernel refuse a routing mode other than these two with the same words.
-_Avoid_: Project source, build cache
+The static files in `dist/` with a manifest of their paths, hashes, types, `encodings` and `routing`. Any builder may write it; the Kernel checks it and serves it under its Content Security Policy. `src/lib/static-artifact.js` decides which files of the Capsule it holds (ADR-0006).
+_Avoid_: project source, build cache
+
+**Declared Dependencies**:
+The npm packages a Capsule imports by name, listed with exact versions under `dependencies` in its `package.json`. The editor's build reads them from esm.sh and `konae build` from `node_modules`; the published app loads nothing from another origin (ADR-0006).
+_Avoid_: library allowlist, vendored copy
+
+### The published app
 
 **Deployment**:
-The published, addressable instance of a Project with its own hostname, an optional custom domain, visibility, signup policy and database. It shares the Project's ID, and everything it is lives in the app folder `apps/<id>/` on the Kernel volume: `konae.json`, the saved sources in `app/`, the Build Artifact in `dist/`, the databases, file index and secrets in `data/`, and the installation's record, address markers and backups in `.konae/`. The bytes of its files live in the installation's file store, which is that folder unless the operator points the Kernel at an S3 bucket; the index in the folder decides which files exist and who may read them, and a package carries the bytes either way (ADR-0009). Republishing replaces its Build Artifact and keeps its hostname and data; immutable release history does not exist yet.
-_Avoid_: Project, preview
+The published app on one installation: its generated hostname, optional custom domain and path address, visibility, Signup Policy and database. It shares its Project's ID and lives in that app folder. A publish replaces its Build Artifact and keeps its hostname and data, all or nothing (ADR-0005).
+_Avoid_: project, preview
 
 **Public Deployment**:
-A Deployment whose application shell may be opened without signing in. A signed-out visitor may call Server Actions declared `anonymous`, and may list and read files marked public. Uploads, and changing a file's visibility or deleting it, require a Runtime Actor session and only the uploader may do the last two; private files need a session or an API key that names them. Public visibility of the Deployment grants no database access and no access to private files. A Deployment is public only when it says so; a Project is born private unless its template is made for visitors without an app account.
-_Avoid_: Public database
+A Deployment whose `konae.json` says `"public"`. A visitor without a session may open its shell, call actions declared `anonymous` and read files uploaded as public. Visibility grants no access to private rows or files (ADR-0002).
+_Avoid_: public database
 
 **Private Deployment**:
-A Deployment whose application shell and runtime require a signed-in Runtime Actor before anything loads or runs. An HTTP route of an action declared `anonymous` answers to its callers. A signed route takes its signature or an API key, and an unsigned one takes an API key or a session unless it declares other `callers`. Its Signup Policy decides who may create that account. A Deployment that names no visibility, or one the Kernel does not know, is private.
-_Avoid_: Password-protected app
-
-**Project Owner**:
-An authenticated workspace member allowed to edit a Project and administer its data, schema, files, Usage and deployments.
-_Avoid_: Runtime user, app user
-
-**Runtime Actor**:
-Whoever calls a Deployment at runtime, of three kinds: an anonymous visitor, a signed-in app user, or a service holding an API key. Its permissions are evaluated by server-side actions and never imply Project ownership. An `actor` binding of the `id` yields the app user's ID or the key's ID, and nothing for a visitor or for a schedule's run.
-_Avoid_: Owner, editor user
+A Deployment with any other visibility, or none. Its shell, assets and runtime endpoint need an app session; an HTTP route still answers the callers it declares (ADR-0002). A new app is private unless its template is made for visitors.
+_Avoid_: password-protected app
 
 **Signup Policy**:
-The per-Deployment rule for who may create a Runtime Actor account: Open (anyone), Invitation only (only through an invitation), Closed (nobody signs up, and an invitation the owner sends can still be accepted) or Allowlist (exact emails or `@domain` entries, kept as an advanced option). Public Deployments start Open and Private Deployments start Closed; a first release may name another. The Project Owner chooses it in the publish dialog on a first release and changes it later in the editor's Auth > Users view or with `signup_policy_set`, which needs `manage_users`, and a republish never changes it except to close an Open app made private. The Kernel checks it again when an account verifies and when an invitation is accepted. A project published with the CLI names its first release's policy in `konae.json` as `project.manifest.signupPolicy`, and `konae publish` sends it only then.
-_Avoid_: Invite list, access grant
+The rule for who may create an app account: Open, Allowlist, Invitation only or Closed. A public app starts Open and a private one Closed. The owner chooses it on the first release and changes it with `signup_policy_set`, which needs `manage_users` (ADR-0002, ADR-0003).
+_Avoid_: invite list, access grant
 
 **Sign-in Methods**:
-The per-Deployment list of ways an app account signs in: `password` always, and `google` when the Project Owner turns on Continue with Google in Auth > Users or with `sign_in_methods_set`. Google needs the app's own Google client, which the owner sets as two signing secrets with `"use": "google"`; until both are set it cannot be turned on, and an imported Deployment that asks for Google keeps the setting and offers only the password. A Google sign-in reaches the account that holds the same verified email, and only for an address Google manages (Gmail, or a Workspace domain the token names). The Signup Policy decides whether a new account may exist. An export carries the list and the accounts, never the client.
-_Avoid_: Social login, SSO
+The ways an app account signs in: `password` always, and `google` once the owner sets the app's Google client and turns it on with `sign_in_methods_set`. `konae.json` carries the list; the client stays behind (ADR-0003).
+_Avoid_: social login, SSO
 
 **Google Client**:
-An app's own Google OAuth client, which its Project Owner makes in their own Google Cloud console and sets as the two signing secrets `google_client_id` and `google_client_secret` with `"use": "google"`. The owner registers one redirect URI per address the app answers on: its generated host, a verified custom domain, and its path address by id. The values never leave the Kernel and never travel in an export (ADR-0003).
-_Avoid_: OAuth app, installation Google client (there is none)
+An app's own Google OAuth client, which its owner makes in their own Google Cloud console and sets as the signing secrets `google_client_id` and `google_client_secret` with `"use": "google"`. The installation has none, and an export never carries it (ADR-0003).
+_Avoid_: OAuth app, installation Google client
 
 **Agent Credential**:
-A Project Owner's revocable delegation that permits an external agent to perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity. Its permissions are `read`, `write`, `publish`, `manage_users` and `export_data`. Only `manage_users` lists, suspends and invites app accounts or changes a Signup Policy, and only `export_data` downloads accounts and data. An OAuth client may hold the first four. A call it may not make is refused with the permission it needs.
-_Avoid_: Runtime session, setup key
-
-**App Folder**:
-Everything an app is, in one layout that is the same on a laptop, inside Konae and in an export: `konae.json` (name, visibility, Signup Policy, sign-in methods, contact email and Kernel version), `app/` (the Capsule), `dist/` (the Build Artifact), `data/` (database, accounts, Usage and uploaded files), and beside them `AGENTS.md`, `action-contract.md`, `compose.yaml`, `.env.example` and a `package.json` whose `npm run build` writes `dist/`. `konae init` writes it, `konae build` and `npm run build` fill `dist/`, and the Kernel keeps one per app. Secrets and the installation's `.konae/` never leave the machine that holds them (ADR-0001).
-_Avoid_: kit, workspace, repo
+An owner's delegated token for an agent: an expiry, a set of projects and the permissions `read`, `write`, `publish`, `manage_users` and `export_data`. OAuth offers the first four. A tool the credential lacks answers with the permission it needs (ADR-0002).
+_Avoid_: runtime session, setup key
 
 ### As the app grows
 
 **Guard**:
-A mutation's declared refusal, `"guard": "<message>"`, which the Kernel answers instead of `{ changes: 0 }` when the statement changes no row because the app's own rule in its `WHERE` said no. It is a tool error on the runtime endpoint and 403 on a route, counts under Usage's `refused` and records no Signal.
+A mutation's `"guard": "<message>"`, which the Kernel answers as a refusal when the statement changes no row (ADR-0010).
 _Avoid_: check constraint, validation error
 
 **Notice**:
-The email a mutation declares with `"notify": { "to", "subject", "body" }`, queued as an email job when its statement changes a row. It goes to the Project Owner or to the calling account's verified email, never to an address from the input, and its templates take only `{input.<key>}` and `{actor.id}`. The mutation's answer never depends on it; Usage counts each one under `notify` with the outcome.
+The email a mutation declares with `"notify"`, queued when its statement changes a row. It goes to the app's contact email, to the calling account, or to the accounts a changed row names in a column, and never to an address from the input (ADR-0012).
 _Avoid_: notification, alert, webhook
 
+**Contact Email**:
+The address in `konae.json` where notices to `"owner"` go. The owner sets it in App settings or with `contact_email_set`; a first publish from Konae fills it with the owner's email (ADR-0012).
+_Avoid_: owner email, admin address
+
 **Schedule**:
-A mutation's declaration that the Kernel's own timer runs it, `"schedule": { "every": "15m" }` for a period from 5 minutes to 24 hours or `{ "daily": "02:00" }` at a UTC time, for work that must happen when nobody asks, such as releasing a hold that lapsed. The mutation takes no input, and a run has no caller, so an `actor` binding is null and the guard does not apply. Only the timer runs it, unless it also declares an `http` route. It runs once a period under the Deployment's data lock with the 2-second statement budget, never while the app is in maintenance, and Usage records each run under `scheduled` with its outcome and changes. The period it last ran for is kept with Usage, so a restart, a copy or a migration does not run it twice, and publishing does not run it. A changed run processes its notice, once per run, through the existing mail queue. It can notify the owner; a notice to actor records no-account because the timer has no caller. Nothing is pushed to a page: a `subscribe` key is refused, and the page polls a query.
+A mutation's `"schedule"`, `{ "every": "15m" }` or `{ "daily": "02:00" }` in UTC, that only the Kernel's timer runs. The mutation takes no input, and a page polls a query to see what it did (ADR-0011).
 _Avoid_: cron, job, worker, background task
 
 **Signal**:
-A named occurrence the Capsule declares on a Server Action, with properties taken from that action's input bindings and, as `actor`, the caller's ID. The Kernel records it when the action succeeds, and for a mutation only when it changed a row, next to Usage and distinct from application rows. An action of kind `signal` records one and runs no SQL. The app calls it with `miniapp.actions.call`; only the Project Owner reads Signals.
+A named occurrence a Server Action declares, with properties from its input bindings or `actor`, recorded next to Usage when the action succeeds. Only the owner reads Signals (ADR-0010).
 _Avoid_: event, track, custom metric
 
 **Usage**:
-The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations: sessions opened, browser page views by the HTML file served, actions by name, HTTP routes by method and path, uploads, file reads, signups and logins, and the runs of each schedule under `scheduled` with their outcome and changes. Operation totals exclude refused calls except a guard's refusal. Execution outcomes separately distinguish correct calls, app-rule refusals and execution failures, while platform authentication refusals and invalid inputs remain excluded. Usage belongs to the Deployment, distinct from application rows, and only the Project Owner reads it. The account overview includes only projects that owner may read.
+The Kernel's daily totals for one Deployment: sessions, page views, actions, routes, uploads, file reads, signups, logins, refusals, notices, calls and scheduled runs. It lives in `data/usage.sqlite`, and only the owner reads it (ADR-0010).
 _Avoid_: analytics, telemetry, audit, metric
 
 **Invitation**:
-The Project Owner's offer of an account on one Deployment to one email, sent as a seven-day Challenge. Accepting sets the password and activates the account in the transaction that rechecks the Signup Policy and the account's state. It never changes an active account's password or resumes a suspended one. An export and a restore keep the invitation as history without its link, and the owner resends it.
-_Avoid_: invite code (that names creator admission), allowlist entry
+The owner's offer of an account in one app to one email, sent as a seven-day challenge. Open, Invitation only and Closed accept it; an Allowlist still has to list the address (ADR-0003).
+_Avoid_: invite code (that admits an owner), allowlist entry
+
+**Entering as a User**:
+An owner signing a browser into the app as one of its active accounts, through a link that works once for two minutes. `app_user_enter` needs the owner's browser session, and Konae's audit log records it; the `kernel` binary's `enter` writes it to the Kernel's log. Usage and Signals do not count that session as the user (ADR-0001).
+_Avoid_: impersonation, owner role
 
 **Callers**:
-The kinds of caller an HTTP route takes, any of `"signature"` (a service that signs the request with the signing secret), `"key"` (an API key that names the action) and `"session"` (a signed-in app user), declared as `"callers"` on the route. Without the list a signed route takes a signature or a key, an unsigned route on a Private Deployment takes a key or a session, and an unsigned route on a Public Deployment answers anyone. An action whose route does not answer anyone answers only on that route. The Validation Gate and the Kernel parse the list from one case file.
+The kinds of caller an HTTP route takes, `"signature"`, `"key"` and `"session"`, resolved before any SQL runs (ADR-0013).
 _Avoid_: principals, auth mode, access level (that is `anonymous` or `authenticated` on the action)
 
 **Signature Scheme**:
-How a route's signature is computed and where it travels, declared as `"scheme"` on the signature: `konae`, the default, or a provider's own, `hmac-body` (an HMAC of the body, as GitHub and Shopify send), `timestamped` (an HMAC of `<t>.<body>` with a window, as Stripe sends) or `svix` (three `svix-*` headers, as Resend sends). A provider's route may add `"fields"`, a JSON path into the body for each input, and then leaves out body keys no input names, so a provider's payload reaches the action with no adapter. Each scheme accepts a delivery once. The Validation Gate and the Kernel parse both from one case file.
+How a route's signature is computed and where it travels: `konae` by default, or a provider's `hmac-body`, `timestamped` or `svix` (ADR-0013).
 _Avoid_: webhook format, provider adapter
 
 **Signing Secret**:
-A value the Project Owner sets for a Project through the Admin Interface and an HTTP route names in its signature. It lives in the app's `data/secrets.sqlite` and a copy carries it; an export never does, and one owner's two apps never hold the same route secret. One set with `"use": "call"` instead signs, or holds the API key for, the Project's call actions, and may repeat another project's route secret. The two set with `"use": "google"`, `google_client_id` and `google_client_secret`, hold the app's own Google client for its sign-in methods; no route or call reads them. In Konae's own signature scheme a sender proves a request with an HMAC under it of a timestamp, a nonce, the method, the path, the canonical query string and the body; in a provider's scheme, with the HMAC that provider computes. It never appears in `actions.json`, a Build Artifact or an export.
+A value the owner sets with `secret_set` or `kernel secret set`, with one use: `route` verifies a route, `call` signs an outgoing call, `google` holds the Google client. It lives in the app's `data/secrets.sqlite`, is never returned, and never travels in `actions.json`, a Build Artifact or an export (ADR-0013).
 _Avoid_: webhook token, API key
 
 **API Key**:
-A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It names the Server Actions it may call over their HTTP routes and the file visibilities it may read, and on a public Deployment it also reads public files as a visitor does. It is sent as `Authorization: Bearer`. The runtime endpoint refuses it. The Kernel stores its hash only. An export carries its name, scope and hash, and the import marks it revoked at import, so the destination's owner sees which programs to issue new keys for; a restore of a copy keeps it valid.
-_Avoid_: token (an Agent Credential), service account
+A token the owner issues for one Deployment so a program can call its routes and read its files as a Runtime Actor. The Kernel keeps only its hash. An export carries it revoked at import (ADR-0013).
+_Avoid_: token (that is an Agent Credential), service account
 
 **Call Action**:
-A Server Action of `"kind": "call"` that declares one HTTP request to another app or an outside service: a method, a URL, a body built from its inputs, an optional `auth` that signs with a signing secret or sends the API key a secret holds, and an optional `then` mutation. Invoking it queues the call and answers `{ callId, queued: true }`; the Kernel sends it from its own process, never from the browser, retries it, and runs the `then` mutation with the answer. A URL is https, or http to an app of this installation, never a private address, the editor or the Kernel's own paths. A call to an app of this installation runs through that app's route code with the same callers check.
+A Server Action of `"kind": "call"` that declares one HTTP request, which the Kernel queues, sends from its own process and answers with its `then` mutation (ADR-0013).
 _Avoid_: webhook out, fetch action, integration
 
 **Outbox**:
-The calls a Deployment's call actions queued, kept in `calls.sqlite` with their attempts, status, error kind and what the `then` mutation did, which the Project Owner reads with `calls_read`. Pending calls stay on the installation; they do not travel in a package.
-_Avoid_: call log, queue (the mail queue holds account email)
+The calls a Deployment queued, in the installation's `calls.sqlite`, which the owner reads with `calls_read`. An export does not carry it.
+_Avoid_: call log, queue (the mail queue holds email)
 
 **SDK Module**:
-A namespace on `window.miniapp`, such as `auth`, `actions` or `files`, with a contract: its calls, their arguments, what they return, the messages they refuse with and the limits that apply. The SDK contract in `src/sdk/contract.ts` is the one description; the build agent's prompt, the `sdk` topic of `platform_guide` and `docs/sdk.md` are rendered from it. A module adds a door to an existing primitive and never a new one.
+A namespace on `window.miniapp`, such as `auth`, `actions` or `files`, described once in `src/sdk/contract.ts`, from which the build agent's prompt, `platform_guide` topic `sdk` and `docs/sdk.md` are rendered.
 _Avoid_: plugin, library, extension
 
 **Action Contract**:
-The generated description of a Capsule's Server Actions, `action-contract.json` with its JSON Schema and a Markdown rendering: for each action its inputs with types, nullability and limits, the columns a query returns or the `{ changes, lastInsertId }` a mutation returns, the Signal it records, who may call it on the runtime endpoint and on its HTTP route, the errors the Kernel answers with and the limits that apply. It is written from `actions.json` and `schema.sql`, never edited, and travels in the export. The conformance runner (`konae conform`) calls every action against a backend and checks the answers against it, which is how a second backend would show it serves the same app.
+The generated description of a Capsule's Server Actions, `action-contract.json` and `action-contract.md`: inputs, returned columns, Signals, callers, errors and limits. `konae conform` checks a backend against it (ADR-0004).
 _Avoid_: API spec, OpenAPI document, schema dump
 
 **Custom Domain**:
-A hostname its owner controls on which one Deployment answers next to its generated hostname, which keeps answering. The owner sets it with `domain_set`, which needs `publish`, and proves control with a TXT record `_konae.<hostname>` holding a token the Kernel issued; the Kernel looks the record up itself and the alias serves only once it holds the token. One name serves one Deployment. On it the app has its own origin: its own cookies, the same policy, routes, file path and maintenance page. The operator's proxy terminates TLS and forwards `Host` unchanged. An export carries the name without the token, and the destination issues its own.
-_Avoid_: vanity URL, CNAME (that is one way to point the name), domain mapping
+A hostname the owner proves with a TXT record `_konae.<hostname>` and on which one Deployment answers as its own origin, next to its generated hostname (ADR-0014).
+_Avoid_: vanity URL, CNAME, domain mapping
 
 **Path Address**:
-A path on the installation's domain on which one Deployment answers: `<domain>/p/<id>`, and `<domain>/p/<name>` once the owner names it. The owner turns it on with `path_set`, which needs `publish`. The app whose path holds the name `konae-home` is the home and also answers `<domain>/`. Every path and the home share the origin `<domain>`, so an app with accounts or a private app needs the owner's `acceptSharedOrigin` before its path turns on. It needs `KONAE_DOMAIN`. An export carries the name and the path's state, never the id.
+`<domain>/p/<id>`, and `<domain>/p/<name>` once named, on which one Deployment answers on the origin it shares with every other path address. An app with accounts, or a private app, needs the owner to accept that sharing first (ADR-0014).
 _Avoid_: short link, vanity path, app URL
 
 **File Store**:
-Where the installation keeps the bytes of app files: each app folder's `data/files/`, or an S3-compatible bucket the operator names with `KONAE_FILES_S3_*`. The file index in the app folder decides which files exist either way, and `files-migrate` moves the bytes between the two while no Kernel runs (ADR-0009).
+Where an installation keeps the bytes of uploaded files: each app folder's `data/files/`, or an S3 bucket. The index in the app folder decides which files exist and who may read them (ADR-0009).
 _Avoid_: bucket (one kind of store), storage
 
+### Taking the app elsewhere
+
 **Export**:
-The app folder handed over: `konae.json`, `app/` and `dist/` in one download, and the data as one download per part of `data/`, its database, its accounts without sessions or email links, its API keys revoked at import, its files, and its Usage and Signals when it has any, captured under the Deployment's locks. A versioned manifest lists each part of the data with its size and SHA-256 and names the published revision. Each part travels as its own transfer, so no step holds a whole part in memory. An import verifies every part and installs the data only into a project that has no Deployment yet; the same data imported again returns the first import. `project_export`, `konae export`, `konae pull` and the editor's Export are the one export, and exporting needs the `export_data` permission. It carries nothing of Konae: no owner, credential, project record or secret.
-_Avoid_: package, kit, dump, full backup
+The app folder handed over: `konae.json`, `app/` and `dist/` in one download, and each part of `data/` (database, accounts, files, Usage) as its own download with a manifest of sizes and SHA-256. It carries no owner, credential, secret, session or `.konae/`, and its API keys arrive revoked. `project_export`, `konae export`, `konae pull` and the editor's Export are the one export, and each needs `export_data`. Tool arguments call the manifest and its downloads a package (ADR-0008).
+_Avoid_: kit, dump, full backup
+
+**Import**:
+An export taken in. Into a new app the data travels with the first release as `initialPackage`; into an existing app `project_import` or `kernel import` replaces the sources, the data or both after a backup, and never merges rows. `konae dev --reset` imports what `konae pull` exported (ADR-0008).
+_Avoid_: migration, sync, restore (that installs a copy)
 
 **Maintenance**:
-The state of a Deployment that takes no writes. Its host shows a maintenance page and refuses actions, uploads, signups, sign-ins, recovery, invitations and HTTP routes, the owner cannot change it, its email waits, and its calls and schedules wait. The state lives in the app folder, `.konae/maintenance.json`, so a restart, a copy or a restore keeps it. A restore that cannot read the revocation record keeps it for the whole installation in `recovery-hold.json` until `konae reconcile` runs.
-_Avoid_: downtime, read-only mode (reads stop too)
-
-**Declared Dependencies**:
-The npm packages a Capsule imports by name, listed with exact versions under `dependencies` in its `package.json`. The editor's build fetches each one from esm.sh at that version and links it into the app's bundle; `konae build` and an exported app folder's `npm run build` read the same list from `node_modules` after `npm install`. Either way the published app holds the package's code and loads nothing from another origin. A version range is refused, so every build reads the same code.
-_Avoid_: library allowlist, vendored copy
+The state of a Deployment that takes no writes: its host shows a maintenance page, owner tools that would change it are refused except `maintenance_set` and `project_import`, and its email, calls and schedule wait. It lives in `.konae/maintenance.json`. An owner moves an app with no lost write by maintenance, export and import (ADR-0008).
+_Avoid_: downtime, read-only mode (reads stop too), migration
 
 ## Words for running an installation
 
-**Konae Kernel**:
-The provider-independent authority that resolves Deployments, authenticates actors, owns sessions, grants, Usage and Signals, applies visibility, and authorizes capabilities.
-_Avoid_: Cloudflare auth, provider gateway
+**Installation**:
+One running Kernel, with or without Konae, and its data directory: `apps/`, the mail queue, the outbox and, under Konae, the owner and MCP stores.
+_Avoid_: instance, cluster
 
-**Runtime Interface**:
-The Kernel interface used by a Deployment to open sessions and invoke its declared Server Actions.
-_Avoid_: Database API
+**Operator**:
+The person who runs an installation: its settings, its copies, its file store and, under Konae, who may become an owner.
+_Avoid_: owner, admin
 
-**Admin Interface**:
-The Kernel interface used by a Project Owner for editing, schema changes, SQL Studio, backups, export and Usage.
-_Avoid_: Runtime Interface
+**Kernel Commands**:
+What the `kernel` binary does on the machine instead of serving. On one app: `users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter` and `import`, each calling the function the owner tool calls, with the same refusals (`kernel-rs/kernel/src/operator.rs`). On the installation: `restore`, `reconcile`, `files-migrate` and `files-reconcile`. The `konae` binary runs all of these and adds `creator-code-create`, `creator-code-list`, `creator-code-revoke`, `creator-account-suspend` and `creator-account-resume`.
+_Avoid_: admin page, CLI (that is `konae`)
 
-**Agent Workspace**:
-The disposable copy of a Project's source that the agent reads and edits during a conversation. Changes in it are proposals; they reach the Project only through the Validation Gate.
-_Avoid_: Project, filesystem
+**Runtime Endpoint**:
+`/_konae/mcp` on an app's own origin, which the SDK calls with the app's session. No runtime credential authorizes an owner tool (ADR-0002).
+_Avoid_: Runtime Interface, database API
 
-**Account**:
-The authenticated identity and personal profile used to enter Konae and participate in Workspaces. An Account does not directly own runtime data or imply access to every Project.
-_Avoid_: Runtime Actor, Project Owner
+**Owner's MCP**:
+Konae's MCP on `/mcp`, which the editor, the build agent and an outside agent all use with an owner's credential (ADR-0002).
+_Avoid_: Admin Interface, admin API
 
-**Account State**:
-Whether an Account or a Runtime Actor's account may hold a session: pending until it proves control of its email, active, or suspended by the operator or the Project Owner. Only an active account gets a session, and suspension keeps the account's ID and rows.
-_Avoid_: enabled, verified flag
+**Scratch Copy**:
+The copy of a Capsule the build agent edits in the browser. Its changes reach the Project only through the Validation Gate and the owner's Apply (ADR-0007).
+_Avoid_: Agent Workspace, sandbox
 
-**Workspace**:
-A collection of Projects that an Account can browse and administer through membership. A personal Workspace may have one member; the term still preserves the future boundary for teams.
-_Avoid_: Deployment list, app runtime
-
-**Workspace Home**:
-The owner-facing index of Projects and their latest Deployments, used to enter an editor or open a published app.
-_Avoid_: App store, runtime dashboard
+**Project List**:
+The editor's home at `/`, listing the projects the signed-in owner holds. Projects live on the installation, not in the browser.
+_Avoid_: Workspace Home, dashboard, app store
 
 **Installation Home**:
-The app whose path address holds the name `konae-home`. It answers the installation's bare domain. It is not the Workspace Home, which lists an owner's Projects.
-_Avoid_: Landing page, Workspace Home
+The app whose path address holds the name `konae-home`. It answers the installation's bare domain (ADR-0014).
+_Avoid_: landing page, project list
 
-**Setup Key**:
-The installation secret in `KONAE_ADMIN_KEY` that creates the first creator Account while the installation has no account and no invitation code was ever issued. It never authenticates an MCP tool and never enters the editor bundle. The Kernel refuses to start on a reachable address while it is still the development default.
-_Avoid_: installation key, admin password, Agent Credential
-
-**Invitation Code**:
-A single-use, expiring code the operator issues on the server with the Kernel executable, which admits one creator Account. The Kernel stores its hash and the creator it produced. It is not a Challenge, because nobody receives it by email and it proves no address, so the account it creates still verifies its email. The setup key creates only the first creator; once any code exists it creates none.
-_Avoid_: invite link, setup key, app invitation (the Deployment's own invitation is a Challenge)
+**Account State**:
+Whether an owner or app account may hold a session: pending until it proves its email, active, or suspended. Only an active account gets one, and suspension keeps the account's rows (ADR-0003).
+_Avoid_: enabled, verified flag
 
 **Challenge**:
-A single-use, expiring proof sent by email, with one purpose (verification, invitation or recovery) and one scope (the creator scope or one Deployment). The Kernel stores only its hash; answering it sets the account's password.
+A single-use, expiring proof sent by email, with one purpose (verification, invitation or recovery) and one scope (owners, or one app). The Kernel keeps only its hash (ADR-0003).
 _Avoid_: magic link, reset token
 
 **Verification Mode**:
-The installation's choice between local, where signup creates an active unverified account for development, and required, where every new account starts pending and accounts that never verified return to pending. In required mode a sign-in that fails in the browser that asked for a link says to open the link first; the hint follows that browser's signup request, never the account's state.
+`KONAE_ACCOUNT_VERIFICATION`: `local`, where signup creates an active unverified account for development, or `required`, where every account proves its email first (ADR-0003).
 _Avoid_: email confirmation setting
 
+**Setup Key**:
+`KONAE_ADMIN_KEY`, which creates Konae's first owner while no owner and no invitation code exists. It never authenticates an MCP tool, and Konae refuses to start on a reachable address while it is the development default (ADR-0003).
+_Avoid_: installation key, admin password, Agent Credential
+
+**Invitation Code**:
+A single-use, expiring code the operator issues with `konae creator-code-create`, which admits one owner. The account it creates still proves its email (ADR-0003).
+_Avoid_: invite link, setup key, invitation (that is an app's)
+
 **Email Job**:
-One email in the installation's queue: its purpose, recipient, scope, idempotency key and state, pending, accepted by the provider, delivered to the recipient's server or failed. An account email commits with its Challenge and is sent only while that Challenge is open; a notice has no Challenge and fails when it has not left within a day. Delivered says a mail server took it, not that a person read it.
+One email in the installation's queue, `mail.sqlite`: purpose, recipient, scope and state (pending, accepted, delivered or failed). An export does not carry it (ADR-0012).
 _Avoid_: notification, message log
 
 **Sender Preflight**:
-The Kernel's check that its mail transport may send as the configured sender, such as a domain verified in Resend. While it refuses, nothing is sent: account email is not queued, and a notice is recorded as a failed email job the owner can read.
+The Kernel's check that its mail transport may send as the configured sender. While it refuses, account email is not queued and a notice fails (ADR-0012).
 _Avoid_: email health
 
 **Copy**:
-A consistent snapshot of every app folder, secrets included, with the owner, MCP and mail stores, sent off the Kernel volume to a second disk or an S3 prefix on a schedule. With a copy secret, the files sent to S3 are encrypted. Each copy target also keeps the revocation record. Restore installs one copy into an empty data directory, signs everyone out, ends every open Challenge and applies the revocation record, or holds the installation in maintenance when it cannot read it. A copy moves an installation; an export moves one app.
-_Avoid_: backup (a Data panel snapshot of one app database), replica, mirror
+A snapshot of every app folder and installation store, sent on a schedule to a directory or an S3 prefix. `restore` installs one into an empty data directory. A copy moves an installation; an export moves one app (ADR-0008).
+_Avoid_: backup (one app's snapshot before an import or on request), replica, mirror
 
 **Revocation Record**:
-The suspensions of accounts and revocations of API keys, each written to every copy target as it happens. A restore applies it so a copy taken earlier cannot bring back what was revoked since; it never lifts a suspension.
-_Avoid_: audit log (that stays on the volume)
+Every suspension of an account and revocation of an API key, written to each copy target before the tool answers, so a restore cannot bring back what was revoked since (ADR-0008).
+_Avoid_: audit log

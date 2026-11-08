@@ -7,11 +7,11 @@
 //! that comparison touch the live file:
 //!
 //! - A new table, a new column and a new index apply.
-//! - A table whose definition changed is rebuilt the way the SQLite page on
-//!   ALTER TABLE says (section "Making Other Kinds Of Table Schema Changes"):
-//!   foreign keys off, then in one transaction create the new table under
-//!   another name, copy the rows, drop the old table, rename the new one,
-//!   recreate the indexes and check the foreign keys.
+//! - A table whose definition changed is rebuilt by the steps of
+//!   https://sqlite.org/lang_altertable.html#otheralter. Foreign keys go
+//!   off, then one transaction creates the new table under another name,
+//!   copies the rows, drops the old table, renames the new one, recreates
+//!   the indexes and checks the foreign keys.
 //! - A dropped table, a dropped column and a column whose type changed lose
 //!   something, so the change applies only with the confirmation that the
 //!   plan of those same statements carries.
