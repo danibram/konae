@@ -6,7 +6,7 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.clear());
 });
 
-test("builds a multi-file app in the browser, deploys it to MinIO, and persists its data", async ({ page }) => {
+test("builds a multi-file app in the browser, deploys it to MinIO, and persists its data", async ({ page, baseURL }) => {
   const storage = await page.request.post("/mcp", { data: { jsonrpc: "2.0", id: "storage", method: "tools/call", params: { name: "storage_test", arguments: {} } } });
   expect(storage.ok()).toBe(true);
   expect((await storage.json()).result.structuredContent.result).toMatchObject({ ok: true, adapter: "s3-compatible", bucket: "konae-apps" });
@@ -34,7 +34,7 @@ test("builds a multi-file app in the browser, deploys it to MinIO, and persists 
   await page.getByRole("button", { name: "Create" }).click();
   // The new file opens in the editor and the File list stays beside it.
   await expect(explorer).toBeVisible();
-  await page.getByLabel("src/features/empty-label.js code editor").fill("export const emptyLabel = 'No tasks stored in MinIO yet.';\n");
+  await page.getByLabel("src/features/empty-label.js code editor").fill("export const emptyLabel = 'Nothing here yet. Anyone with this link sees the same list.';\n");
 
   await page.getByLabel("Open file").selectOption("app.js");
   const appEditor = page.getByLabel("app.js code editor");
@@ -49,18 +49,18 @@ test("builds a multi-file app in the browser, deploys it to MinIO, and persists 
   // Run shows the rebuilt preview without a trip to the Preview section.
   await page.getByRole("button", { name: "Run", exact: true }).click();
   const preview = page.frameLocator('iframe[title="Mini-app preview"]');
-  await expect(preview.getByText("No tasks stored in MinIO yet.")).toBeVisible();
+  await expect(preview.getByText("Nothing here yet. Anyone with this link sees the same list.")).toBeVisible();
 
   await page.getByRole("button", { name: "Deploy", exact: true }).click();
   await page.getByRole("button", { name: "Deploy public" }).click();
   const publishedUrl = page.locator("a.published-url");
   await expect(publishedUrl).toBeVisible({ timeout: 30_000 });
   const deploymentUrl = await publishedUrl.getAttribute("href");
-  expect(deploymentUrl).toMatch(/^http:\/\/minio-tasks-[a-f0-9]{6}\.localhost:8080$/);
+  expect(deploymentUrl).toMatch(new RegExp(`^http://minio-tasks-[a-f0-9]{6}\\.localhost:${new URL(baseURL!).port}$`));
 
   // The tasks starter declares anonymous actions, so a public app works without signing in.
   await page.goto(deploymentUrl!);
-  await expect(page.getByText("No tasks stored in MinIO yet.")).toBeVisible();
+  await expect(page.getByText("Nothing here yet. Anyone with this link sees the same list.")).toBeVisible();
   await page.getByPlaceholder(/Add one small thing/).fill("Ship the S3 build");
   await page.getByRole("button", { name: "Add task" }).click();
   await expect(page.getByText("Ship the S3 build")).toBeVisible();

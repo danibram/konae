@@ -8,7 +8,8 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 10_000 },
   use: {
-    baseURL: "http://app.localhost:8080",
+    // KONAE_E2E_GATEWAY_URL points the suite at a stack whose gateway publishes another port.
+    baseURL: process.env.KONAE_E2E_GATEWAY_URL ?? "http://app.localhost:8080",
     channel: "chrome",
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
