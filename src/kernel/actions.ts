@@ -29,7 +29,7 @@ export type HttpBinding = {
    * unsigned route on a public Deployment anyone. See `routeCallers`.
    */
   callers?: RouteCaller[];
-  /** Input keys and the JSON path each reads from a POST body; other body keys are left out (ADR-0018). */
+  /** Input keys and the JSON path each reads from a POST body; other body keys are left out (ADR-0013). */
   fields?: Record<string, string>;
 };
 
@@ -38,8 +38,8 @@ const ROUTE_CALLERS: readonly RouteCaller[] = ["signature", "key", "session"];
 /**
  * The callers a route accepts on a Deployment of the given visibility, or
  * null when it answers anyone. An action whose route does not answer anyone
- * answers only there, never through actions_invoke (ADR-0011, update of
- * 2026-11-06). kernel-rs/kernel/src/http.rs `route_callers` is the same rule.
+ * answers only there, never through actions_invoke (ADR-0013).
+ * kernel-rs/kernel/src/http.rs `route_callers` is the same rule.
  */
 export function routeCallers(http: HttpBinding, visibility: "public" | "private"): RouteCaller[] | null {
   if (http.callers) return http.callers;
@@ -49,18 +49,18 @@ export function routeCallers(http: HttpBinding, visibility: "public" | "private"
 
 /**
  * A Signal the action records when it succeeds. Its properties name input
- * bindings. See docs/adr/0010-kernel-owns-usage-and-signals.md.
+ * bindings. See docs/adr/0010-the-kernel-keeps-usage-and-signals.md.
  */
 export type SignalDeclaration = { name: string; properties: string[] };
 
 /**
  * The email a mutation queues when its statement changes a row. It goes to
  * the Project Owner or to the calling account, never to an address from the
- * input. See docs/adr/0016-a-mutation-may-notify-the-owner-or-the-actor.md.
+ * input. See docs/adr/0012-email-leaves-through-one-queue-to-addresses-the-app-has-proved.md.
  */
 export type NotifyDeclaration = {
   to: "owner" | "actor" | { column: string };
-  /** Columns of the changed rows that {changes} lists (ADR-0021). */
+  /** Columns of the changed rows that {changes} lists (ADR-0012). */
   changes?: string[];
   subject: string;
   body: string;

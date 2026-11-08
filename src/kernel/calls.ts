@@ -1,4 +1,4 @@
-// Calls between apps, docs/adr/0019-an-app-calls-another-from-the-kernel.md.
+// Calls between apps, docs/adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md.
 //
 // The same checks, in the same order and with the same messages, as
 // kernel-rs/kernel/src/calls.rs `declaration`, `check_program` and `check_connects`.

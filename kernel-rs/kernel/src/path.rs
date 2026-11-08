@@ -1,5 +1,5 @@
 //! A path address: an app answers on `<domain>/p/<id>`, and on
-//! `<domain>/p/<name>` when it is named (docs/adr/0024-an-installation-names-its-hosts-from-one-domain-and-an-app-may-answer-on-a-path.md).
+//! `<domain>/p/<name>` when it is named (docs/adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md).
 //!
 //! The owner turns the path on with `path_set`. The state lives in
 //! `deployments/<id>/path.json`, next to `domain.json`. The Kernel keeps the

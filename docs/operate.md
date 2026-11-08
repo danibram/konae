@@ -90,13 +90,13 @@ The Kernel reads these at startup. Defaults are the values in `kernel-rs/kernel/
 | `KONAE_FILES_S3_PATH_STYLE` | `1` | `1` addresses the bucket as `<endpoint>/<bucket>`, `0` as `<bucket>.<endpoint host>`. |
 | `KONAE_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses whose `X-Forwarded-For` header the Kernel trusts for rate limiting. CIDR ranges are rejected. |
 | `KONAE_DATA_DIR` | `/data` (`data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory: one app folder per project under `apps/<id>/`, plus `owners.sqlite`, `mcp.sqlite`, `mail.sqlite`, `calls.sqlite` and `transfers.sqlite`. |
-| `KONAE_DOMAIN` | unset | Derives the installation's hosts from one domain (ADR-0024). The public and MCP origin become `<scheme>://app.<domain>` and the app suffix becomes `<domain>`. Each of `KONAE_PUBLIC_ORIGIN`, `KONAE_MCP_ORIGIN` and `KONAE_HOST_SUFFIX` still wins when it is set. The Kernel refuses to start when `KONAE_PUBLIC_ORIGIN` or `KONAE_MCP_ORIGIN` has the bare domain as its host, because the home and path addresses answer there. The local stack sets `localhost` with port `8080`. |
+| `KONAE_DOMAIN` | unset | Derives the installation's hosts from one domain (ADR-0014). The public and MCP origin become `<scheme>://app.<domain>` and the app suffix becomes `<domain>`. Each of `KONAE_PUBLIC_ORIGIN`, `KONAE_MCP_ORIGIN` and `KONAE_HOST_SUFFIX` still wins when it is set. The Kernel refuses to start when `KONAE_PUBLIC_ORIGIN` or `KONAE_MCP_ORIGIN` has the bare domain as its host, because the home and path addresses answer there. The local stack sets `localhost` with port `8080`. |
 | `KONAE_SCHEME` | `http` for `localhost`, `https` otherwise | Scheme of the derived origins, `http` or `https`. Read only with `KONAE_DOMAIN`. Any other value stops the Kernel. |
 | `KONAE_PUBLIC_PORT` | unset | Port appended to the derived origins, such as `8080`. Read only with `KONAE_DOMAIN`. A value that is not a port number stops the Kernel. |
 | `KONAE_PUBLIC_ORIGIN` | `http://localhost:8080` (`http://localhost:<kernel port>` under `dev:local`), or `<scheme>://app.<domain>` with `KONAE_DOMAIN` | Origin used to build app URLs. Its scheme and port are copied onto each app hostname, and an `https://` origin makes OAuth metadata use HTTPS. |
 | `KONAE_HOST_SUFFIX` | `localhost`, or `<domain>` with `KONAE_DOMAIN` | Domain appended to new app hostnames, as in `<slug>-<id>.localhost`. |
 | `KONAE_MCP_ORIGIN` | unset, or the public origin with `KONAE_DOMAIN` | Public origin of the MCP endpoint, without a path, when it differs from the hosting origin. OAuth discovery advertises it. |
-| `KONAE_DNS_RESOLVER` | the first `nameserver` in `/etc/resolv.conf` | The resolver, as an IP address with an optional port, that the Kernel asks for a custom domain's TXT record `_konae.<hostname>` when `domain_set` runs (ADR-0015). |
+| `KONAE_DNS_RESOLVER` | the first `nameserver` in `/etc/resolv.conf` | The resolver, as an IP address with an optional port, that the Kernel asks for a custom domain's TXT record `_konae.<hostname>` when `domain_set` runs (ADR-0014). |
 | `KONAE_S3_ENDPOINT` | unset | S3 endpoint URL. The Kernel always serves artifacts from its data directory; when this is set it also uploads each artifact to `KONAE_ARTIFACT_BUCKET` and can send copies to `KONAE_DATA_BUCKET`. When unset, the Kernel ignores the other S3 variables. |
 | `KONAE_S3_REGION` | `us-east-1` | S3 region. |
 | `KONAE_S3_ACCESS_KEY` | `konae` | S3 access key. |
@@ -145,7 +145,7 @@ data/
 ├── calls.sqlite            # the call actions' queue and outbox
 ├── transfers.sqlite        # unfinished MCP transfers and the receipts of file uploads
 ├── transfers/              # the bytes of unfinished MCP uploads and downloads
-└── apps/<id>/              # one app folder (ADR-0027)
+└── apps/<id>/              # one app folder (ADR-0001)
     ├── konae.json          # name, visibility, Signup Policy, sign-in methods, contact email
     ├── app/                # the saved sources
     ├── dist/               # the static files the Deployment serves
@@ -161,7 +161,7 @@ A failed copy never stops the Kernel from serving. It is logged, and `/_konae/he
 
 ### File bytes in a bucket
 
-With `KONAE_FILES_S3_BUCKET` set, the bytes of app files live in that bucket and each Deployment's `files/index.json` stays in its folder, which still decides which files exist and who may read them ([ADR-0025](./adr/0025-a-deployments-file-bytes-may-live-outside-its-folder.md)). The Kernel sends only `PutObject`, `GetObject` with a range, `DeleteObject` and `ListObjectsV2`, and every byte still passes through it; the browser never gets a bucket URL. It has been tested against SeaweedFS, not yet against R2, Scaleway or Hetzner.
+With `KONAE_FILES_S3_BUCKET` set, the bytes of app files live in that bucket and each Deployment's `files/index.json` stays in its folder, which still decides which files exist and who may read them ([ADR-0009](./adr/0009-file-bytes-go-through-one-store-and-the-index-stays-with-the-app.md)). The Kernel sends only `PutObject`, `GetObject` with a range, `DeleteObject` and `ListObjectsV2`, and every byte still passes through it; the browser never gets a bucket URL. It has been tested against SeaweedFS, not yet against R2, Scaleway or Hetzner.
 
 `files-store.json` in the data directory records which store holds the bytes, and a Kernel whose settings name another store refuses to start. To move the bytes, stop the Kernel and run, with the `KONAE_FILES_S3_` settings set in both directions:
 

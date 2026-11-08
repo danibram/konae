@@ -276,7 +276,7 @@ export function formatValidation(validation: ValidationResult): string {
   return `Validation failed with ${validation.errors.length} problem${validation.errors.length === 1 ? "" : "s"}:\n${lines.join("\n")}${warnings}`;
 }
 
-/** The Kernel's code for a refused Capsule and its remedy (ADR-0020), so the agent can name the rule. */
+/** The Kernel's code for a refused Capsule and its remedy (ADR-0004), so the agent can name the rule. */
 function refusalLine(finding: { code?: string; hint?: { remedy: string } }): string {
   return finding.code ? `\n  Code ${finding.code}: ${finding.hint?.remedy ?? ""}`.trimEnd() : "";
 }

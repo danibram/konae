@@ -1,4 +1,4 @@
-// Probe: one app calls another (ADR-0019). The tasks app escalates a task to
+// Probe: one app calls another (ADR-0013). The tasks app escalates a task to
 // the desk app's signed route with a call action; the Kernel sends it from its
 // own process, through the desk's route code, and the tasks app's then
 // mutation stores what the desk answered, including the desk's guard refusal.

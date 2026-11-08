@@ -72,7 +72,7 @@ services:
       KONAE_DATA_DIR: /data
       KONAE_KERNEL_PORT: "8787"
       # Derives http://app.localhost:8080 as the public and MCP origin, and
-      # localhost as the app suffix (ADR-0024). The gateway publishes port 8080.
+      # localhost as the app suffix (ADR-0014). The gateway publishes port 8080.
       KONAE_DOMAIN: localhost
       KONAE_PUBLIC_PORT: "8080"
       KONAE_S3_ENDPOINT: http://minio:9000

@@ -1,5 +1,5 @@
 //! The commands an operator runs on an app that a Kernel serves without
-//! Konae (ADR-0027, decision 3). Each one calls the function Konae's owner
+//! Konae (ADR-0001). Each one calls the function Konae's owner
 //! tool calls, so it refuses with the same words, and prints the same answer
 //! as JSON. They work on the app's files beside a running Kernel, which
 //! reads the app accounts, keys and secrets from SQLite on every request and

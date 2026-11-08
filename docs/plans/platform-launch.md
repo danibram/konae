@@ -247,7 +247,7 @@ These must not appear as active controls or beta promises. First-version support
 - [Self-use and SDK modules plan](self-use-and-sdk-modules.md), the installation this plan opens.
 - [Signup and invitations plan](signup-and-app-invitations.md), access detail, subordinate to this document.
 - [Hosted creator access](../clerk-creator-access.md), the optional identity adapter.
-- [ADR on Eject and sources](../adr/0005-build-artifacts-separate-managed-and-external-projects.md).
+- [ADR on Eject and sources](../adr/0001-an-app-is-one-folder-that-the-kernel-serves-with-or-without-konae.md).
 - [Architecture](../architecture.md), Kernel storage and the absence of state replication.
 - [MCP](../mcp.md), implemented catalogue and limits.
 - `src/lib/managed-sources.ts`, server-side Managed sources.
@@ -259,7 +259,7 @@ As each delivery lands, the affected ADRs, MCP contracts and documentation are u
 
 ### Delivery A, November 6, 2026
 
-Merged from branch `deliv/A-verified-accounts`. `kernel-rs/src/auth.rs` holds the account core of both scopes and `kernel-rs/src/accounts.rs` the routes and pages a challenge link opens. [ADR-0011](../adr/0011-one-verified-account-core-for-creators-and-app-users.md) records the decision, and the README's verified accounts section and [the MCP guide](../mcp.md#verified-accounts) the behaviour. No evidence was written here when it landed; these are the tests that prove its refusals, all run by `cargo test --manifest-path kernel-rs/Cargo.toml`.
+Merged from branch `deliv/A-verified-accounts`. `kernel-rs/src/auth.rs` holds the account core of both scopes and `kernel-rs/src/accounts.rs` the routes and pages a challenge link opens. [ADR-0003](../adr/0003-an-account-proves-its-email-before-it-holds-a-session.md) records the decision, and the README's verified accounts section and [the MCP guide](../mcp.md#verified-accounts) the behaviour. No evidence was written here when it landed; these are the tests that prove its refusals, all run by `cargo test --manifest-path kernel-rs/Cargo.toml`.
 
 | Refusal or result | Test |
 | --- | --- |
@@ -274,7 +274,7 @@ Merged from branch `deliv/A-verified-accounts`. `kernel-rs/src/auth.rs` holds th
 
 ### Delivery C, November 6, 2026
 
-`kernel-rs/src/admission.rs` issues, lists and revokes invitation codes from the Kernel executable and consumes a code in the transaction that creates the creator. The installation key creates only the first owner; [ADR-0011](../adr/0011-one-verified-account-core-for-creators-and-app-users.md) records the rule and why it is stricter than this plan's. The README's creator admission section is the operator guide, and [the MCP guide](../mcp.md#creator-admission) lists the routes and refusals.
+`kernel-rs/src/admission.rs` issues, lists and revokes invitation codes from the Kernel executable and consumes a code in the transaction that creates the creator. The installation key creates only the first owner; [ADR-0003](../adr/0003-an-account-proves-its-email-before-it-holds-a-session.md) records the rule and why it is stricter than this plan's. The README's creator admission section is the operator guide, and [the MCP guide](../mcp.md#creator-admission) lists the routes and refusals.
 
 | Refusal or result | Where | Run against |
 | --- | --- | --- |
@@ -289,7 +289,7 @@ A headless Chrome session against a Kernel from this branch showed the owner pag
 The plan did not account for three things. "Once a code system is active" left signup open to a leaked key on an installation that never issued a code, so the key also stops after the first creator. The browser tests create an owner per run with the default development key, so that key keeps working until the first code is issued. "Codes" in the suspension row reads here as the creator's open account links and OAuth authorization codes, because operator-issued invitation codes are never held by a creator.
 ### Delivery B, November 6, 2026
 
-The queue, the worker, the transports, provider events, the preflight and the limits are in `kernel-rs/src/mail.rs`; [ADR-0012](../adr/0012-account-email-goes-through-a-persistent-queue.md) records the decisions and [the README](../operate.md#account-email) the configuration.
+The queue, the worker, the transports, provider events, the preflight and the limits are in `kernel-rs/src/mail.rs`; [ADR-0012](../adr/0012-email-leaves-through-one-queue-to-addresses-the-app-has-proved.md) records the decisions and [the README](../operate.md#account-email) the configuration.
 
 | Refusal or guarantee | Test in `kernel-rs/src/mail.rs` unless named |
 | --- | --- |
@@ -349,7 +349,7 @@ The integration test runs the done-when criterion against a local Kernel with th
 This delivery leaves four things undone. The invitation email names neither the app nor the inviter, because `AccountMessage` carries only a link and delivery B owns the message templates and the queue; `delivery` reports only whether the transport took the message. Invitations and their mail are not stored in one transaction, because the seam has no queue to write into; the rows commit first and a failed hand-off shows `failed`. The editor has no Users view yet (delivery G), so a person who does not write code can choose Invitation only but cannot invite anyone without an agent. There is no runtime MCP tool to accept an invitation; the HTTP route is the contract.
 ### Delivery I, November 6, 2026
 
-`kernel-rs/src/eject.rs` adds `eject_plan` and `eject_apply` behind the `manage_lifecycle` permission. The plan checks the expected saved-sources revision before any transfer exists and returns the code package; apply flips the project to External under the project lock and records who and when. The CLI's `eject` command and the editor's Eject dialog both check the package before they apply. An ejected project opens read-only in the editor, and its card says External. [ADR-0005](../adr/0005-build-artifacts-separate-managed-and-external-projects.md) has the dated note and [the MCP guide](../mcp.md#eject) the tools and refusals.
+`kernel-rs/src/eject.rs` adds `eject_plan` and `eject_apply` behind the `manage_lifecycle` permission. The plan checks the expected saved-sources revision before any transfer exists and returns the code package; apply flips the project to External under the project lock and records who and when. The CLI's `eject` command and the editor's Eject dialog both check the package before they apply. An ejected project opens read-only in the editor, and its card says External. [ADR-0001](../adr/0001-an-app-is-one-folder-that-the-kernel-serves-with-or-without-konae.md) records why Eject was later removed, and [the MCP guide](../mcp.md#eject) the tools and refusals.
 
 | Refusal or proof | Where | Run against |
 | --- | --- | --- |
@@ -369,7 +369,7 @@ The plan said the client fetches and checks the code package before the project 
 
 ### Delivery H, November 6, 2026
 
-`package_export` in `kernel-rs/src/package.rs` captures one Deployment under its locks and offers its database, accounts and files as three download transfers with a versioned manifest. A release imports them as `initialPackage` into a project with no Deployment. [ADR-0013](../adr/0013-an-app-leaves-as-a-chunked-package.md) records the decision and [the MCP guide](../mcp.md#export-and-import-an-app) the format. The CLI's `export --with-data` and the kit's `deploy.mjs` use it.
+`package_export` in `kernel-rs/src/package.rs` captures one Deployment under its locks and offers its database, accounts and files as three download transfers with a versioned manifest. A release imports them as `initialPackage` into a project with no Deployment. [ADR-0008](../adr/0008-an-app-leaves-by-export-and-returns-by-import.md) records the decision and [the MCP guide](../mcp.md#export-and-import-an-app) the format. The CLI's `export --with-data` and the kit's `deploy.mjs` use it.
 
 | Refusal or proof | Where | Run against |
 | --- | --- | --- |
@@ -409,7 +409,7 @@ The plan asks the Users view to show each invitation as pending, accepted by the
 
 ### Delivery J, November 6, 2026
 
-`kernel-rs/src/migration.rs` adds the maintenance state and the five migration tools; `kernel-rs/src/recovery.rs` adds the revocation record and its reconciliation; `kernel-rs/src/copies.rs` seals S3 copies with `KONAE_COPY_SECRET` and applies the record on restore. [ADR-0014](../adr/0014-an-app-migrates-with-one-writer-at-a-time.md) records the decisions, [the MCP guide](../mcp.md#migrate-an-app) the tools and refusals, and [the README](../guides/take-the-app-elsewhere.md) the procedure and the restore commands.
+`kernel-rs/src/migration.rs` adds the maintenance state and the five migration tools; `kernel-rs/src/recovery.rs` adds the revocation record and its reconciliation; `kernel-rs/src/copies.rs` seals S3 copies with `KONAE_COPY_SECRET` and applies the record on restore. [ADR-0008](../adr/0008-an-app-leaves-by-export-and-returns-by-import.md) records the decisions, [the MCP guide](../mcp.md#migrate-an-app) the tools and refusals, and [the README](../guides/take-the-app-elsewhere.md) the procedure and the restore commands.
 
 | Refusal or proof | Where | Run against |
 | --- | --- | --- |

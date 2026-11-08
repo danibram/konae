@@ -76,7 +76,7 @@ export type ValidationError = {
   stage: ValidationStage;
   message: string;
   detail?: string;
-  /** The Kernel's code for a refused Capsule, and who fixes it (ADR-0020). */
+  /** The Kernel's code for a refused Capsule, and who fixes it (ADR-0004). */
   code?: RefusalCode;
   hint?: RefusalHint;
 };

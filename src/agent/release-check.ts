@@ -1,6 +1,6 @@
 // release_plan's sentences from names alone, for the Validation Gate and the
 // Deploy dialog. Kept apart from gate.ts so the editor shell can import it
-// without the Gate's sql.js path (ADR-0003, lever 7).
+// without the Gate's sql.js path (ADR-0007, lever 7).
 import type { ServerActionProgram } from "../kernel/actions";
 import type { DomainRules } from "../lib/domain-name";
 import { hintOf, type Refusal, type RefusalCode } from "../kernel/refusal";

@@ -191,7 +191,7 @@ try {
   refused("A visitor signs up while signup is Closed (POST /_konae/auth/signup)", strangerBody.error, 403);
 
   // The owner invites the curator. Closed refuses self-signup, not the
-  // owner's invitation (ADR-0011, note of 2026-11-06 on Closed).
+  // owner's invitation (ADR-0003).
   const invited = await owner.call<{ policy: string; results: any[] }>("app_invitations_create", {
     deploymentId: receipt.id, emails: [curatorEmail], idempotencyKey: crypto.randomUUID(),
   });
@@ -320,7 +320,7 @@ try {
   assert.equal(feed.status, 200);
   assert.equal(feed.headers.get("content-type"), "application/json");
   assert.equal(feed.headers.get("cache-control"), "no-store");
-  // An open GET route allows every origin since ADR-0019.
+  // An open GET route allows every origin since ADR-0013.
   assert.equal(feed.headers.get("access-control-allow-origin"), "*");
   const feedBody = await feed.json();
   assert.deepEqual(Object.keys(feedBody), ["result"]);

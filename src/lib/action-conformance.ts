@@ -172,13 +172,13 @@ export async function runConformance(contract: ActionContract, target: Conforman
   for (const action of contract.actions) {
     const name = action.name;
     const valid = minimal(action);
-    // A call's then mutation runs only after its call ends; the runtime endpoint refuses it (ADR-0019).
+    // A call's then mutation runs only after its call ends; the runtime endpoint refuses it (ADR-0013).
     if (action.thenOf) {
       await expectRefusal(action, "runs only after its call", [`Action ${name} runs only after the call ${action.thenOf} answers.`, "Sign in to use Konae MCP."],
         () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
       continue;
     }
-    // A scheduled mutation with no route runs only on the Kernel's timer (ADR-0017, update of 2026-11-08).
+    // A scheduled mutation with no route runs only on the Kernel's timer (ADR-0011).
     if (action.schedule && !action.http) {
       await expectRefusal(action, "runs only on its schedule", [`Action ${name} runs only on its schedule.`, "Sign in to use Konae MCP."],
         () => invoke(name, valid, target.hasSession ? "session" : "visitor"));

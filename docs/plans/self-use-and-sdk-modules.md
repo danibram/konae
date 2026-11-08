@@ -112,7 +112,7 @@ Product-fit already names it. A Server Action may declare an HTTP binding.
 
 The Kernel routes the path to that action on the Deployment's hostname and nothing else. The action keeps its access level, bindings, query bound, rate limit and Usage. A signed binding verifies the request body against a secret the owner sets through the Admin Interface; the secret never enters `actions.json` or the artifact. A `query` action with `"method": "GET"` returns its rows as JSON. Unknown POST paths keep returning 405; GET routing stays as it is today.
 
-Visibility does not decide whether an HTTP binding answers; the action's access level does. A private Deployment still runs nothing in the browser without an app session, but an action declared `anonymous` with an `http` binding answers on that path whatever the Deployment's visibility, and its signature, when declared, is the check. An `authenticated` action keeps requiring an app session, so in this delivery it may not carry an `http` binding; the Gate and the Kernel refuse that combination. Delivery 7 recorded this rule as a dated update on ADR-0011, which holds both amendments to ADR-0002, before any code.
+Visibility does not decide whether an HTTP binding answers; the action's access level does. A private Deployment still runs nothing in the browser without an app session, but an action declared `anonymous` with an `http` binding answers on that path whatever the Deployment's visibility, and its signature, when declared, is the check. An `authenticated` action keeps requiring an app session, so in this delivery it may not carry an `http` binding; the Gate and the Kernel refuse that combination. Delivery 7 recorded this rule before any code. ADR-0013 holds it now.
 
 The Validation Gate parses the `http` key the same way the Kernel does, as it does for `signal` under ADR-0010. A path collision, a `GET` on a mutation or an `http` binding on an `authenticated` action is refused in the editor and by the Kernel with the same message.
 
@@ -180,7 +180,7 @@ The contract records these differences between the editor preview and the Kernel
 
 Recorded on 2026-11-06 on branch `deliv/7-http-module`.
 
-The decision is a dated update on ADR-0011, not a note on ADR-0002. The launch plan asks for one ADR that records both amendments to ADR-0002, and ADR-0011 already records the first. The Kernel side is `kernel-rs/src/http.rs`; `main.rs` and `mcp.rs` gained about 50 lines between them. [The MCP guide](../mcp.md#http-routes) states the signature scheme a sender computes.
+ADR-0013 records the decision, and ADR-0003 records the account core it builds on. The Kernel side is `kernel-rs/src/http.rs`; `main.rs` and `mcp.rs` gained about 50 lines between them. [The MCP guide](../mcp.md#http-routes) states the signature scheme a sender computes.
 
 | Check | Command | Result |
 | --- | --- | --- |
@@ -206,7 +206,7 @@ Where this differs from the text above:
 
 #### Hardening, recorded 2026-11-06 on branch `deliv/http-hardening`
 
-Four open items of this delivery and one from the invitations delivery, closed. The decision is a dated note on [ADR-0011](../adr/0011-one-verified-account-core-for-creators-and-app-users.md) under the HTTP update, and the inviter is a dated note on [ADR-0012](../adr/0012-account-email-goes-through-a-persistent-queue.md). The bullet above about the in-process replay memory no longer holds.
+Four open items of this delivery and one from the invitations delivery, closed. [ADR-0013](../adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md) records the decision, and [ADR-0012](../adr/0012-email-leaves-through-one-queue-to-addresses-the-app-has-proved.md) records the inviter line. The bullet above about the in-process replay memory no longer holds.
 
 | Check | Command | Result |
 | --- | --- | --- |
@@ -232,7 +232,7 @@ Where this differs from the request:
 
 Recorded on 2026-11-06 on branch `deliv/8-action-contract`.
 
-The Action Contract is `action-contract.json`, checked by `src/lib/action-contract.schema.json`, with `action-contract.md` beside it. `src/lib/action-contract.ts` writes all three from `actions.json` and `schema.sql`; `bun run konae -- contract --dir <dir>` writes them beside `konae.json`, the export kit carries them under `konae/`, and the editor lists `action-contract.md` in Files as generated and read-only. `bun run konae -- conform --url <app URL> --contract <file>` is the conformance runner, `src/lib/action-conformance.ts`. [The MCP guide](../mcp.md#action-contract) describes both, CONTEXT.md defines the term and ADR-0009 has a dated note. The Kernel is unchanged: it needed no new read tool.
+The Action Contract is `action-contract.json`, checked by `src/lib/action-contract.schema.json`, with `action-contract.md` beside it. `src/lib/action-contract.ts` writes all three from `actions.json` and `schema.sql`; `bun run konae -- contract --dir <dir>` writes them beside `konae.json`, the export kit carries them under `konae/`, and the editor lists `action-contract.md` in Files as generated and read-only. `bun run konae -- conform --url <app URL> --contract <file>` is the conformance runner, `src/lib/action-conformance.ts`. [The MCP guide](../mcp.md#action-contract) describes both, CONTEXT.md defines the term and ADR-0004 records the bound. The Kernel is unchanged: it needed no new read tool.
 
 | Check | Command | Result |
 | --- | --- | --- |
@@ -251,7 +251,7 @@ Decisions the plan left open:
 
 - The contract carries each action's statement and binding order. The plan asked for inputs and output shapes. Without the SQL a second backend could not run the action, and with it the contract converts back to the same `actions.json` program, which is the round-trip the tests check.
 - Error messages are not written in the generator. It picks them from the SDK contract, which now records the HTTP status of each route refusal, so `src/sdk/contract.test.ts` keeps them true to the Kernel source.
-- An unnamed column is a Gate warning, not a refusal, and the Kernel does not check it. The ADR-0009 note says why and what a refusal would cost.
+- An unnamed column is a Gate warning, not a refusal, and the Kernel does not check it. ADR-0004 records the rule.
 - `--token` is an app session token, the value of the app session cookie, because the runtime endpoint accepts it as `Authorization: Bearer` and only a Runtime Actor can invoke actions. An owner credential cannot. `KONAE_APP_EMAIL` and `KONAE_APP_PASSWORD` sign in for one.
 - `conform` writes rows: each mutation runs once with real input. Generated strings carry a per-run suffix so a UNIQUE column does not refuse a second run.
 - The SQL tokenizer now records each token's offsets, so the contract quotes an unnamed expression as written.

@@ -4,7 +4,7 @@ The page an installation answers on its bare domain. It says what Konae does, sh
 
 ## How the Kernel finds it
 
-The Deployment whose path address holds the name `konae-home` answers `<domain>/` and every other path on `<domain>` outside `/p/` ([ADR-0024](../../docs/adr/0024-an-installation-names-its-hosts-from-one-domain-and-an-app-may-answer-on-a-path.md)). With no app on that name, `<domain>/` answers not found. There is no variable to set and nothing to restart.
+The Deployment whose path address holds the name `konae-home` answers `<domain>/` and every other path on `<domain>` outside `/p/` ([ADR-0014](../../docs/adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md)). With no app on that name, `<domain>/` answers not found. There is no variable to set and nothing to restart.
 
 ## Files
 

@@ -1,6 +1,6 @@
 /**
  * A route's signature scheme and its `fields` map, as the Validation Gate
- * reads them (ADR-0018). The same checks, in the same order and with the same
+ * reads them (ADR-0013). The same checks, in the same order and with the same
  * messages, as kernel-rs/kernel/src/provider.rs `signature` and `fields`;
  * kernel-rs/kernel/src/http-binding-cases.json and signature-preset-cases.json hold
  * the cases both test suites run.

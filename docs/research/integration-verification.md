@@ -12,7 +12,7 @@ The schedule probe failed before the fix with zero notices instead of two. It no
 
 The capability matrix had marked outbound retries impossible even though the call worker already retries after 30 seconds, 1, 2 and 4 minutes, up to five attempts. Its integration-hub F18 cell now records that fixed calendar as a compromise. Counts recomputed from the cells are 146 works, 94 compromises and 10 impossible. None of the 88 required cells is impossible. All ten impossible cells are third-party login.
 
-The findings report contained a second copy of the whole report and stale conclusions about schedules, roles and parser parity. It now has one copy and the current matrix results. References left at ADR-0015 by independently developed branches now name their accepted ADRs. The SDK contract, generated agent prompt, Kernel guide and SDK documentation describe the notice behavior.
+The findings report contained a second copy of the whole report and stale conclusions about schedules, roles and parser parity. It now has one copy and the current matrix results. References left at ADR-0014 by independently developed branches now name their accepted ADRs. The SDK contract, generated agent prompt, Kernel guide and SDK documentation describe the notice behavior.
 
 ## Checks
 

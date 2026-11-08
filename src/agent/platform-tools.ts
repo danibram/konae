@@ -22,7 +22,7 @@ export type PublishOutcome =
   | { status: "failed"; error: string };
 
 /**
- * The editor's side of ADR-0022: the owner's MCP session, which deployment the
+ * The editor's side of ADR-0007: the owner's MCP session, which deployment the
  * open project has, a confirmation dialog and the Deploy dialog.
  */
 export type AgentPlatformBinding = {

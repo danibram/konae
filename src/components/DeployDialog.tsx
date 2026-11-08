@@ -26,7 +26,7 @@ type Props = {
   deployment: DeploymentReceipt | null;
   publishing: boolean;
   error: string;
-  /** The Kernel's refusal code for `error`, when it refused the Capsule (ADR-0020). */
+  /** The Kernel's refusal code for `error`, when it refused the Capsule (ADR-0004). */
   errorCode?: string;
   /** Signed out means deploying cannot work, so the dialog offers sign-in instead. */
   session: OwnerSession;

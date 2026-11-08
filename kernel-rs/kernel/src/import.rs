@@ -1,5 +1,5 @@
 //! Import into an existing app, and the backup that comes before it
-//! (ADR-0027, decision 2).
+//! (ADR-0008).
 //!
 //! An import replaces the app's sources, its data or both, as whoever
 //! manages it chooses. It never merges rows. First it writes a backup of

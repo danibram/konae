@@ -1,4 +1,4 @@
-//! Scheduled work, ADR-0017.
+//! Scheduled work, ADR-0011.
 //!
 //! A mutation may declare `"schedule": { "every": "15m" }` or
 //! `"schedule": { "daily": "02:00" }` (UTC). The Kernel runs it from one timer

@@ -12,7 +12,7 @@
 //! response never waits on this store. When the queue is full the message is
 //! dropped and counted in `dropped`, rather than slowing the app down.
 //!
-//! The one other writer is the timer in `schedule.rs` (ADR-0017). It records
+//! The one other writer is the timer in `schedule.rs` (ADR-0011). It records
 //! each scheduled run, its `scheduled` count and the slot it ran for with
 //! `record_run`, directly and in one transaction, because a run the store lost
 //! would run again after a restart. SQLite's WAL and busy timeout let the two

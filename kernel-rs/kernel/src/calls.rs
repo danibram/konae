@@ -1,4 +1,4 @@
-//! Calls between apps, ADR-0019.
+//! Calls between apps, ADR-0013.
 //!
 //! An action of `"kind": "call"` names a URL, a method, a body built from its
 //! inputs, an optional `auth` and an optional `then` mutation. `actions_invoke`

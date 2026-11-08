@@ -1,6 +1,6 @@
 /**
  * Signs a POST body the way an outside service does for a route that declares
- * its scheme, as kernel-rs/kernel/src/provider.rs checks it (ADR-0018). The
+ * its scheme, as kernel-rs/kernel/src/provider.rs checks it (ADR-0013). The
  * conformance runner, the hub probe and the inbox replay sign with it.
  * kernel-rs/kernel/src/provider-signature-cases.json holds vectors both sides check,
  * among them GitHub's and Svix's published examples.

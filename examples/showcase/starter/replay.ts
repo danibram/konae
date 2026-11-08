@@ -188,7 +188,7 @@ async function publishInbox(kernel: Kernel): Promise<Receipt> {
   const manifest = { version: 1, visibility: "private" };
   await kernel.owner.call("project_create", { projectId, name: "Inbox", slug: "inbox", manifest });
   await kernel.owner.call("secret_set", { projectId, name: "events_webhook", value: inboxSecret });
-  // The inbox also takes a code host's and a payment provider's webhooks (ADR-0018); each route needs its own secret before it publishes.
+  // The inbox also takes a code host's and a payment provider's webhooks (ADR-0013); each route needs its own secret before it publishes.
   await kernel.owner.call("secret_set", { projectId, name: "github_webhook", value: `gh_starter_${crypto.randomUUID().replaceAll("-", "")}` });
   await kernel.owner.call("secret_set", { projectId, name: "payments_webhook", value: `whsec_starter_${crypto.randomUUID().replaceAll("-", "")}` });
   const dir = path.join(scratch, "inbox");

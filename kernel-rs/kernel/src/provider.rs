@@ -1,6 +1,6 @@
 //! Webhooks from outside services: the signature schemes a route may declare
 //! besides Konae's own, and the `fields` map that reads a provider's
-//! nested payload into the action's inputs (ADR-0018).
+//! nested payload into the action's inputs (ADR-0013).
 //!
 //! A route's `signature` names a `scheme`:
 //!

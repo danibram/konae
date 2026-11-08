@@ -62,7 +62,7 @@ pub struct Limits {
     pub app_per_day: u32,
     pub installation_per_day: u32,
     pub client_per_hour: u32,
-    /// Notices (`notify`, ADR-0016) count apart from account email, so a
+    /// Notices (`notify`, ADR-0012) count apart from account email, so a
     /// busy app never uses up the allowance that signup and recovery need.
     pub notify_app_per_day: u32,
     pub notify_creator_per_day: u32,
@@ -740,7 +740,7 @@ struct SealedNotice {
     html: String,
 }
 
-/// The purpose of a notice job (`notify` on a mutation, ADR-0016).
+/// The purpose of a notice job (`notify` on a mutation, ADR-0012).
 pub const NOTIFY: &str = "notify";
 
 fn now() -> i64 {
@@ -1238,7 +1238,7 @@ impl MailQueue {
         Ok(json!({
             "depth": counts["pending"],
             "jobs": counts,
-            // The jobs above that are notices (`notify`, ADR-0016).
+            // The jobs above that are notices (`notify`, ADR-0012).
             "notices": notices,
             "lastFailure": last.map(|(kind, at, purpose)| json!({"kind": kind, "at": at, "purpose": purpose})),
         }))
@@ -1429,7 +1429,7 @@ fn advance(connection: &Connection, provider_id: &str, event: &str) -> rusqlite:
     )
 }
 
-/// The jobs table. `notify` joined the purposes with ADR-0016, and `action`
+/// The jobs table. `notify` joined the purposes with ADR-0012, and `action`
 /// names the action that queued a notice.
 fn jobs_table(name: &str) -> String {
     format!(
@@ -2569,7 +2569,7 @@ mod tests {
         assert_eq!((job.1.as_str(), job.4.as_deref(), job.5), ("failed", Some("restored"), false));
     }
 
-    // -- Notices (ADR-0016) ----------------------------------------------------
+    // -- Notices (ADR-0012) ----------------------------------------------------
 
     /// Two app accounts, one that answered a link and one that did not. The
     /// owner's address is the Deployment's contact email, which `deployment` sets.
@@ -2656,7 +2656,7 @@ mod tests {
         super::super::notify::record(&fixture.state, &fixture.app, "tasks.remind", &program.actions["tasks.remind"], &json!({}), caller, changed).await;
     }
 
-    /// ADR-0021: a column of account IDs reaches each verified account of
+    /// ADR-0012: a column of account IDs reaches each verified account of
     /// this Deployment with its own rows, and never an address a row holds.
     #[tokio::test]
     async fn a_column_notice_reaches_each_verified_account_with_only_its_rows() {

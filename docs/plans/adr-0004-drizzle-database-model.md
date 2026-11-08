@@ -1,4 +1,4 @@
-# ADR-0004 implementation plan: managed Drizzle model
+# ADR-0005 implementation plan: managed Drizzle model
 
 ## Intended outcome
 
@@ -22,7 +22,7 @@ Before enabling migrations on hosted data, a separate ADR must decide who owns t
 - The recommended option is that a Project Environment owns the database and file storage. Immutable Deployments reference that Environment and an expected schema revision.
 - In the current model, each Deployment owns its own SQLite and blobs. In this model, publishing creates another database, so there is no clear continuity to migrate from.
 
-ADR-0004 can progress through generation, preview, Development Kernel and project conversion without this decision. Hosted application must stay disabled until it is settled.
+ADR-0005 can progress through generation, preview, Development Kernel and project conversion without this decision. Hosted application must stay disabled until it is settled.
 
 ## Main seam
 

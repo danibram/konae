@@ -1,4 +1,4 @@
-// The app folder of ADR-0027: what `konae init` writes, what `konae export`
+// The app folder of ADR-0001: what `konae init` writes, what `konae export`
 // and the editor's Export hand over, and what the Kernel keeps for each app.
 //
 //   konae.json      name, visibility, Signup Policy, sign-in methods, contact email, Kernel version

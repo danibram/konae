@@ -73,33 +73,33 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 ├── owners.sqlite           # creator accounts, sessions, challenges and invitation codes
 ├── mcp.sqlite              # projects and their save counts, agent credentials, OAuth, audit
 ├── mail.sqlite             # the account email queue, ADR-0012
-├── calls.sqlite            # the call actions' queue and outbox, ADR-0019
+├── calls.sqlite            # the call actions' queue and outbox, ADR-0013
 ├── mailbox.jsonl           # the development mailbox, only with KONAE_MAIL_TRANSPORT=development
 ├── transfers.sqlite        # unfinished MCP transfers and the receipts of file uploads
 ├── transfers/              # the bytes of unfinished MCP uploads and downloads
 ├── recovery-hold.json      # only after a restore that could not read the revocation record
-└── apps/<id>/              # one app folder, the project's ID, ADR-0027
+└── apps/<id>/              # one app folder, the project's ID, ADR-0001
     ├── konae.json          # name, visibility, Signup Policy, sign-in methods, contact email, Kernel version
     ├── app/                # the sources the editor saved
     ├── dist/               # the Build Artifact it serves
     ├── data/
-    │   ├── database.sqlite # the app's rows, in WAL mode (ADR-0023)
+    │   ├── database.sqlite # the app's rows, in WAL mode (ADR-0005)
     │   ├── identity.sqlite # app accounts, sessions, challenges, invitations, API keys, accepted route signatures
     │   ├── usage.sqlite    # Usage and Signals, ADR-0010
-    │   ├── files/          # index.json, and the uploads unless a bucket holds them (ADR-0025)
+    │   ├── files/          # index.json, and the uploads unless a bucket holds them (ADR-0009)
     │   └── secrets.sqlite  # signing secrets and the Google client; a copy carries it, an export never does
     └── .konae/             # this installation's part, never exported
         ├── deployment.json # hostname, release and published actions.json
         ├── sources.json    # the editor's name, manifest and folders of app/
         ├── backups/        # Data panel snapshots
-        ├── domain.json     # the custom domain and its proof, ADR-0015
+        ├── domain.json     # the custom domain and its proof, ADR-0014
         ├── path.json       # the path address
         └── maintenance.json # only while the app is in maintenance
 ```
 
 ### The Kernel and Konae
 
-`kernel-rs` is a Cargo workspace of two crates ([ADR-0027](./adr/0027-an-app-is-one-folder-that-the-kernel-serves-with-or-without-konae.md), decision 4).
+`kernel-rs` is a Cargo workspace of two crates ([ADR-0001](./adr/0001-an-app-is-one-folder-that-the-kernel-serves-with-or-without-konae.md)).
 
 - `kernel` is a library and the `kernel` binary. The binary serves every app folder under `apps/` with all its primitives and answers `restore`, `reconcile`, `files-migrate` and `files-reconcile`. It keeps the runtime endpoint `/_konae/mcp` that the browser SDK calls, and never opens `owners.sqlite` or `mcp.sqlite`.
 - `konae` is the `konae` binary. It links the library and adds the owner's MCP on `/mcp`, OAuth, Clerk, owner accounts and admission, the guide, and the project list in `mcp.sqlite`. It starts the Kernel with an `Installation` that adds `owners.sqlite` and `mcp.sqlite` to the stores a copy carries, and holds the setup key, the MCP origin and the owner verification mode in its own state.
@@ -116,7 +116,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 | `invitations.rs` | App invitations and the user tools, run on a Deployment the caller authorized |
 | `mail.rs` | The email queue, its worker, the Resend, SMTP and development transports, the sender preflight and the limits |
 | `http.rs` | HTTP routes, their callers and signatures, signing secrets, API keys and `GET /_konae/files/<id>` |
-| `provider.rs` | A provider's signature schemes, a route's `fields` and the memory of accepted deliveries ([ADR-0018](./adr/0018-a-route-verifies-a-providers-own-signature.md)) |
+| `provider.rs` | A provider's signature schemes, a route's `fields` and the memory of accepted deliveries ([ADR-0013](./adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md)) |
 | `calls.rs` | Call actions, their queue and worker in `calls.sqlite`, the address rules, `then` mutations, the outbox read and the manifest's `connects` |
 | `guard.rs` | A mutation's guard |
 | `sql_rules.rs` | The statement rules both doors share |
@@ -127,7 +127,7 @@ The Kernel's data directory is the authority. A copy of a Deployment's folder, w
 | `security.rs` | The response headers of every host |
 | `limits.rs` | Per-client limits on unauthenticated requests |
 | `copies.rs` | Scheduled copies and `restore` |
-| `schedule.rs` | A mutation's schedule, the timer that runs it and the record of each run ([ADR-0017](./adr/0017-the-kernel-runs-a-declared-schedule.md)) |
+| `schedule.rs` | A mutation's schedule, the timer that runs it and the record of each run ([ADR-0011](./adr/0011-the-kernel-runs-a-declared-schedule.md)) |
 | `recovery.rs` | The revocation record and `reconcile` |
 | `layout.rs` | Where each part of an app folder lives |
 | `sources.rs` | The editor's saved sources as the files of `app/` |
@@ -149,11 +149,11 @@ The modules of `konae`:
 
 ### Two doors, one set of refusals
 
-A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before anything is applied. The Kernel parses the same `actions.json` and `schema.sql` again at `release_plan`, on every installation, including one unpacked from an export. Where both refuse a declaration they use the same words, and each rule has one case file that both test suites run: `sql-rule-cases.json` for statements, `http-binding-cases.json` for routes and their callers, `signal-cases.json` for Signals, `guard-cases.json` for guards, `signature-cases.json` for route signatures, `schedule-cases.json` for schedules and `call-cases.json` for call actions and `connects`, all in `kernel-rs/kernel/src`. The query bound is `src/lib/query-bound.ts` on one side and its port in `lib.rs` on the other ([ADR-0009](./adr/0009-the-gate-and-the-kernel-share-one-query-bound.md)). The Action Contract written from a Capsule lists the refusals a third backend would have to give.
+A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before anything is applied. The Kernel parses the same `actions.json` and `schema.sql` again at `release_plan`, on every installation, including one unpacked from an export. Where both refuse a declaration they use the same words, and each rule has one case file that both test suites run: `sql-rule-cases.json` for statements, `http-binding-cases.json` for routes and their callers, `signal-cases.json` for Signals, `guard-cases.json` for guards, `signature-cases.json` for route signatures, `schedule-cases.json` for schedules and `call-cases.json` for call actions and `connects`, all in `kernel-rs/kernel/src`. The query bound is `src/lib/query-bound.ts` on one side and its port in `lib.rs` on the other ([ADR-0004](./adr/0004-the-gate-and-the-kernel-refuse-with-the-same-code-and-words.md)). The Action Contract written from a Capsule lists the refusals a third backend would have to give.
 
 An artifact holds pages and the files they load. `kernel-rs/kernel/src/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page; under `spa` it serves `index.html`. The rules for which Capsule files become the artifact live in one file, `src/lib/static-artifact.js`, which the CLI, the editor and an exported app folder's `npm run build` all run. The [MCP guide](./mcp.md#what-the-build-publishes) lists both.
 
-A scheduled copy takes each Deployment's data and identity locks, snapshots its SQLite files with `VACUUM INTO`, copies the rest of its folder and writes a manifest of SHA-256 checksums last. It sends the result to a directory on another disk, an S3 prefix in the data bucket, or both, and keeps 24 recent and 30 daily copies. Copy failures are logged and reported under `copies` in `/_konae/health`; they never block serving. `restore` is the only way back: it installs one copy into an empty data directory, verifies every checksum, signs out every session and agent credential and ends every open email link. App API keys stay valid, because a restore brings back the same installation for the same owner; an import into another installation revokes them. Suspensions and key revocations made after the copy are written to each copy target as they happen, and restore applies them, or starts the installation in maintenance when it cannot read them ([ADR-0014](./adr/0014-an-app-migrates-with-one-writer-at-a-time.md)). With `KONAE_COPY_SECRET` the files sent to S3 are encrypted.
+A scheduled copy takes each Deployment's data and identity locks, snapshots its SQLite files with `VACUUM INTO`, copies the rest of its folder and writes a manifest of SHA-256 checksums last. It sends the result to a directory on another disk, an S3 prefix in the data bucket, or both, and keeps 24 recent and 30 daily copies. Copy failures are logged and reported under `copies` in `/_konae/health`; they never block serving. `restore` is the only way back: it installs one copy into an empty data directory, verifies every checksum, signs out every session and agent credential and ends every open email link. App API keys stay valid, because a restore brings back the same installation for the same owner; an import into another installation revokes them. Suspensions and key revocations made after the copy are written to each copy target as they happen, and restore applies them, or starts the installation in maintenance when it cannot read them ([ADR-0008](./adr/0008-an-app-leaves-by-export-and-returns-by-import.md)). With `KONAE_COPY_SECRET` the files sent to S3 are encrypted.
 
 A Deployment in maintenance, by its own state or after an unreconciled restore, keeps that state in `apps/<id>/.konae/maintenance.json` or the data directory's `recovery-hold.json`. One middleware answers its host with a maintenance page or a 503, the administrative tools that would change it refuse, and the mail worker holds its email. The Kernel reads nothing from the data bucket at startup.
 
@@ -161,9 +161,9 @@ A copy moves a whole installation for the same owner; an export moves one app, p
 
 ### Account email
 
-Every verification, recovery and invitation link leaves through the queue in `mail.sqlite` ([ADR-0012](./adr/0012-account-email-goes-through-a-persistent-queue.md)). The transaction that issues a challenge writes its email job too, and a worker inside the Kernel sends due jobs through Resend, SMTP or the development mailbox, retrying a provider outage for about two hours. The sender preflight checks that the transport may send as the configured sender, and while it refuses, signup and recovery answer 503 and nothing is queued. Limits per recipient, client address, creator, app and installation refuse a request before anything is stored. Fixed templates hold the text; only the app name, the inviter's account email and the link vary.
+Every verification, recovery and invitation link leaves through the queue in `mail.sqlite` ([ADR-0012](./adr/0012-email-leaves-through-one-queue-to-addresses-the-app-has-proved.md)). The transaction that issues a challenge writes its email job too, and a worker inside the Kernel sends due jobs through Resend, SMTP or the development mailbox, retrying a provider outage for about two hours. The sender preflight checks that the transport may send as the configured sender, and while it refuses, signup and recovery answer 503 and nothing is queued. Limits per recipient, client address, creator, app and installation refuse a request before anything is stored. Fixed templates hold the text; only the app name, the inviter's account email and the link vary.
 
-The Docker development stack uses Nginx only for hostname routing. `app.localhost` (`KONAE_DOMAIN=localhost` derives it, ADR-0024) reaches Vite and the Kernel Admin Interface, and every other hostname, a custom domain included, reaches the Rust Kernel Runtime Interface with `Host` unchanged. MinIO provides the same S3 operations used with hosted providers. Nginx and MinIO do not make authorization decisions.
+The Docker development stack uses Nginx only for hostname routing. `app.localhost` (`KONAE_DOMAIN=localhost` derives it, ADR-0014) reaches Vite and the Kernel Admin Interface, and every other hostname, a custom domain included, reaches the Rust Kernel Runtime Interface with `Host` unchanged. MinIO provides the same S3 operations used with hosted providers. Nginx and MinIO do not make authorization decisions.
 
 ### Two independent policy axes
 
@@ -174,7 +174,7 @@ Deployment visibility and data authorization are deliberately independent:
 | Public | Anyone | Only actors allowed by each server action |
 | Private | Signed-in app accounts, created under the Deployment's signup policy | Only actors allowed by each server action |
 
-On a public Deployment a signed-out visitor may call the actions declared `anonymous`, and may list and read files marked public. Uploads, private files, and authenticated actions require an app session. On a private Deployment nothing loads or runs without a login, except the HTTP routes of actions declared `anonymous`: a route answers the callers it takes, a signed route its signature or an API key and an unsigned route an API key or a session, and an action whose route does not answer anyone answers only there ([ADR-0011](./adr/0011-one-verified-account-core-for-creators-and-app-users.md), updates of 2026-11-06). Each Deployment's signup policy (Open, Invitation only, Closed or Allowlist) decides who can create an app account; public Deployments start Open and private ones start Closed. Under Invitation only an account comes only from an emailed invitation, which `kernel-rs/kernel/src/invitations.rs` issues and accepts.
+On a public Deployment a signed-out visitor may call the actions declared `anonymous`, and may list and read files marked public. Uploads, private files, and authenticated actions require an app session. On a private Deployment nothing loads or runs without a login, except the HTTP routes of actions declared `anonymous`: a route answers the callers it takes, a signed route its signature or an API key and an unsigned route an API key or a session, and an action whose route does not answer anyone answers only there ([ADR-0013](./adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md)). Each Deployment's signup policy (Open, Invitation only, Closed or Allowlist) decides who can create an app account; public Deployments start Open and private ones start Closed. Under Invitation only an account comes only from an emailed invitation, which `kernel-rs/kernel/src/invitations.rs` issues and accepts.
 
 A public deployment may contain private user records. Public means its HTML, CSS and JavaScript are public; it never means the database is public. A private deployment also protects the application shell, but still requires per-action authorization because authenticated users need not share the same data.
 
@@ -190,11 +190,11 @@ The hosted browser runtime must never receive:
 - owner/admin capabilities embedded in JavaScript;
 - private fields that the current action does not explicitly return.
 
-The browser calls named server actions. An action declared `anonymous` may also bind an HTTP route, and a route has three kinds of caller ([ADR-0011](./adr/0011-one-verified-account-core-for-creators-and-app-users.md)):
+The browser calls named server actions. An action declared `anonymous` may also bind an HTTP route, and a route has three kinds of caller ([ADR-0013](./adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md)):
 
 | Caller | Proof | Acts as |
 | --- | --- | --- |
-| A third-party service | The route's signature, an HMAC under the project's signing secret over the time, a nonce, the method, the path, the canonical query string and the body, or over what the provider's own scheme signs ([ADR-0018](./adr/0018-a-route-verifies-a-providers-own-signature.md)) | A visitor, with no actor ID |
+| A third-party service | The route's signature, an HMAC under the project's signing secret over the time, a nonce, the method, the path, the canonical query string and the body, or over what the provider's own scheme signs ([ADR-0013](./adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md)) | A visitor, with no actor ID |
 | A program the owner wrote | An API key that names the action, sent as `Authorization: Bearer` | A Runtime Actor of kind service, with the key's ID |
 | A signed-in person | The app session cookie | The app user |
 
@@ -240,9 +240,9 @@ All adapters implement the same Kernel seams. Provider identity products may opt
 
 ## Isolation of hosted code
 
-Every app runs on its own host, `<slug>-<id>.<KONAE_HOST_SUFFIX>`, and the editor runs on a host no app shares (`app.<domain>` when `KONAE_DOMAIN` is set, ADR-0024). An app may also answer on one custom domain its owner proved with a TXT record ([ADR-0015](./adr/0015-a-deployment-answers-on-one-custom-domain.md)); the Kernel resolves it to the same Deployment, so it is that app's origin too, and no other app or the editor can take it. One layer in `kernel-rs/kernel/src/security.rs` adds the headers below to every Kernel response, so an exported Kernel sends them too.
+Every app runs on its own host, `<slug>-<id>.<KONAE_HOST_SUFFIX>`, and the editor runs on a host no app shares (`app.<domain>` when `KONAE_DOMAIN` is set, ADR-0014). An app may also answer on one custom domain its owner proved with a TXT record ([ADR-0014](./adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md)); the Kernel resolves it to the same Deployment, so it is that app's origin too, and no other app or the editor can take it. One layer in `kernel-rs/kernel/src/security.rs` adds the headers below to every Kernel response, so an exported Kernel sends them too.
 
-`<domain>` is one origin that the home and every path address share ([ADR-0024](./adr/0024-an-installation-names-its-hosts-from-one-domain-and-an-app-may-answer-on-a-path.md)). An app on a path address answers its pages, routes and runtime under `<domain>/p/<id>` or `<domain>/p/<name>`, and every such app shares that origin with the others and with the home. A script of one app can therefore open another app's page in the same origin, read its DOM through `window.open`, and send another app's session cookie with a request to its runtime. The Kernel refuses a runtime call whose Referer names another app's path, but only when the browser sends a Referer, so that check is not a boundary. The owner accepts this when turning a path on for an app with accounts or a private app. The isolation this section describes holds for generated hostnames and aliases only.
+`<domain>` is one origin that the home and every path address share ([ADR-0014](./adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md)). An app on a path address answers its pages, routes and runtime under `<domain>/p/<id>` or `<domain>/p/<name>`, and every such app shares that origin with the others and with the home. A script of one app can therefore open another app's page in the same origin, read its DOM through `window.open`, and send another app's session cookie with a request to its runtime. The Kernel refuses a runtime call whose Referer names another app's path, but only when the browser sends a Referer, so that check is not a boundary. The owner accepts this when turning a path on for an app with accounts or a private app. The isolation this section describes holds for generated hostnames and aliases only.
 
 App hosts get this Content Security Policy:
 
@@ -259,7 +259,7 @@ A fragment page in a Build Artifact inlines the runtime and the compiled module;
 
 - Styles allow `'unsafe-inline'` because apps write `style="..."` attributes through `innerHTML`, as the `poll` example does, and the artifact inlines `styles.css`. A hash cannot cover a generated attribute. Google Fonts is the only foreign origin because the starter templates import it and the agent is told to keep the fonts it finds. Neither font host can read app data.
 - Images and media accept `blob:` and `data:` because `miniapp.files.read` hands a file to the app as a Blob URL and apps keep small inline copies of images, as the `portfolio` example does. `miniapp.files.url` returns `/_konae/files/<id>`, which `connect-src 'self'` allows a page to fetch again.
-- `connect-src 'self'` limits `fetch` to the app's origin, where the runtime reaches `/_konae/mcp`, plus the origins the manifest's `connects` lists, at most 10 ([ADR-0019](./adr/0019-an-app-calls-another-from-the-kernel.md)). A request that needs a secret or a key is a call action, which the Kernel sends.
+- `connect-src 'self'` limits `fetch` to the app's origin, where the runtime reaches `/_konae/mcp`, plus the origins the manifest's `connects` lists, at most 10 ([ADR-0013](./adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md)). A request that needs a secret or a key is a call action, which the Kernel sends.
 
 Every host, apps included, sends `frame-ancestors 'none'` and `X-Frame-Options: DENY`. The Kernel's pages on the editor host, such as owner sign-in, get `default-src 'self'` with their script hashes; its JSON and errors get `default-src 'none'`. When `KONAE_PUBLIC_ORIGIN` or `KONAE_MCP_ORIGIN` is HTTPS, every response carries `Strict-Transport-Security: max-age=31536000; includeSubDomains`. `includeSubDomains` makes a browser that has visited the installation's host use HTTPS for app hosts beneath it before their first visit. A custom domain gets `max-age=31536000` alone, because the names under the owner's domain are not the installation's. There is no `preload`; the operator decides that.
 
@@ -292,4 +292,4 @@ The editor authenticates MCP administration with an HttpOnly owner session. Exte
 
 The setup key creates the first owner and remains outside the editor bundle; every later creator needs an invitation code. The first owner claims legacy Deployments. Each later owner starts with a separate project registry. Native development binds to localhost; the Docker gateway preserves Host and routes MCP, authorization and login to the Kernel.
 
-MCP is the operation protocol under [ADR-0008](./adr/0008-authenticated-mcp-is-the-platform-operation-protocol.md). The old operation routes return HTTP 410, except `GET /_konae/files/<id>`, which serves a file to its allowed callers and answers 404 or 405 otherwise. File and artifact transfers use authenticated tools with bounded chunks and checksums. Login, OAuth discovery and static documents retain their HTTP routes. [The MCP guide](./mcp.md) describes the implemented tools and limits, and [the decision records](./adr/README.md) say which ADR decides what.
+MCP is the operation protocol under [ADR-0002](./adr/0002-browsers-reach-data-through-named-server-actions-and-owners-through-konae.md). The old operation routes return HTTP 410, except `GET /_konae/files/<id>`, which serves a file to its allowed callers and answers 404 or 405 otherwise. File and artifact transfers use authenticated tools with bounded chunks and checksums. Login, OAuth discovery and static documents retain their HTTP routes. [The MCP guide](./mcp.md) describes the implemented tools and limits, and [the decision records](./adr/README.md) say which ADR decides what.

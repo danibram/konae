@@ -16,7 +16,7 @@ function refusalCases(): { file: string; case: string; code?: string }[] {
   return found;
 }
 
-describe("refusal codes (ADR-0020)", () => {
+describe("refusal codes (ADR-0004)", () => {
   test("every refusal case names a code from the table", () => {
     const cases = refusalCases();
     expect(cases.length).toBeGreaterThan(300);

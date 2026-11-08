@@ -47,7 +47,7 @@ export type KonaeAgentHandle = KonaeAgent & {
 };
 
 export type KonaeAgentOptions = {
-  /** The owner's MCP session (ADR-0022). Without it the agent edits files and nothing else. */
+  /** The owner's MCP session (ADR-0007). Without it the agent edits files and nothing else. */
   platform?: AgentPlatformBinding;
   /** Injected sql.js loader for the Validation Gate; defaults to the browser one. */
   loadSql?: SqlJsLoader;

@@ -1,4 +1,4 @@
-// The hostname rules for a custom domain (ADR-0015). The Kernel's
+// The hostname rules for a custom domain (ADR-0014). The Kernel's
 // kernel-rs/kernel/src/domain.rs applies the same rules with the same words, and both
 // test suites run kernel-rs/kernel/src/domain-cases.json.
 

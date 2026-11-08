@@ -38,7 +38,7 @@ pub fn routes() -> Router<AppState> {
 /// the policy. Open, Invitation only and Closed admit it: Closed stops people
 /// from signing themselves up, and the owner chose the invited person. An
 /// Allowlist still has to list the email, because the list is the owner's
-/// own rule about addresses. ADR-0011, note of 2026-11-06 on Closed.
+/// own rule about addresses. ADR-0003.
 pub fn admits_invitation(policy: &SignupPolicy, email: &str) -> bool {
     match policy.mode {
         SignupMode::Open | SignupMode::Invitation | SignupMode::Closed => true,
@@ -1002,8 +1002,8 @@ mod tests {
         assert_eq!(fixture.answer(APP_HOST, &token, PASSWORD).await.status(), StatusCode::OK, "the refused link still works");
     }
 
-    /// ADR-0011, note of 2026-11-06 on Closed: the owner chose the invited
-    /// person, so an invitation is acceptable under Closed, from the answer
+    /// The owner chose the invited person, so an invitation is acceptable
+    /// under Closed (ADR-0003), from the answer
     /// to `app_invitations_create` to the acceptance. A signup and a
     /// verification stay refused.
     #[tokio::test]

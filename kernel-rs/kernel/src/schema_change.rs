@@ -1,5 +1,5 @@
 //! The change from an app's live database to the one its `schema.sql`
-//! states (ADR-0027, decision 5).
+//! states (ADR-0005).
 //!
 //! The Kernel runs `schema.sql` only in a scratch database in memory, then
 //! compares that database's tables, columns and indexes with the live one,

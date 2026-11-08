@@ -1,4 +1,4 @@
-//! A custom domain: one hostname alias per Deployment (ADR-0015).
+//! A custom domain: one hostname alias per Deployment (ADR-0014).
 //!
 //! The owner names a hostname with `domain_set`. The Kernel checks the name
 //! by the rules in `domain-cases.json`, which the CLI runs too, records the

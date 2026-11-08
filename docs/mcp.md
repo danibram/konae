@@ -329,7 +329,7 @@ An action runs one SQL statement. A query starts with `SELECT` and a mutation wi
 | Any other first word | `Action <name> is a query, so it must start with SELECT.` or `Action <name> is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE.` |
 | Anything after the first `;` but comments and whitespace, where a character at or above U+0080, such as a no-break space, counts as text as SQLite reads it | `Action <name> must contain one statement.` |
 | `RETURNING` on a mutation | `Action <name> cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.` |
-| A query that reads rows with no top-level `LIMIT`; `:limit`, `@limit` and `$limit` are named parameters, not the clause | `Action <name> reads rows and has no LIMIT. Add a LIMIT. ...`, with the reason the [query bound](./adr/0009-the-gate-and-the-kernel-share-one-query-bound.md) gives, such as `uses OVER, which keeps one result row per stored row` |
+| A query that reads rows with no top-level `LIMIT`; `:limit`, `@limit` and `$limit` are named parameters, not the clause | `Action <name> reads rows and has no LIMIT. Add a LIMIT. ...`, with the reason the [query bound](./adr/0004-the-gate-and-the-kernel-refuse-with-the-same-code-and-words.md) gives, such as `uses OVER, which keeps one result row per stored row` |
 | A trigger, a view or a row in `schema.sql` | `schema.sql may only create tables and indexes, but it contains CREATE TRIGGER.`, naming each refused statement as `CREATE VIEW`, `INSERT` and so on |
 
 A `WITH` clause is allowed inside the statement: `INSERT INTO bookings (room_id, slot) WITH span(slot) AS (...) SELECT ...` and `SELECT ... FROM (WITH ... SELECT ...) LIMIT 50` both pass. A keyword or a `;` inside a string, a quoted name or a comment does not count.
@@ -366,7 +366,7 @@ A field of the wrong JSON type, such as `"bindings": {}` or a missing `kind`, is
 
 ## HTTP routes
 
-An action declared `anonymous` may answer one method and path on its Deployment's host. This is how a project receives a webhook or serves a JSON endpoint without a server of its own. `kernel-rs/kernel/src/http.rs` implements it; the [ADR-0011 updates of 2026-11-06](./adr/0011-one-verified-account-core-for-creators-and-app-users.md) record the decisions.
+An action declared `anonymous` may answer one method and path on its Deployment's host. This is how a project receives a webhook or serves a JSON endpoint without a server of its own. `kernel-rs/kernel/src/http.rs` implements it; [ADR-0013](./adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md) records the decision.
 
 ```json
 "orders.receive": {
@@ -478,7 +478,7 @@ A service with its own fixed signing scheme declares it instead, as described ne
 
 ### Webhooks from outside services
 
-A service the owner does not control, such as a code host, a shop or a payment provider, signs its webhook its own way and posts its own nested JSON. A route takes it as it arrives when its signature names the provider's `"scheme"` and its `"fields"` say where each input sits in the body. `kernel-rs/kernel/src/provider.rs` implements it and [ADR-0018](./adr/0018-a-route-verifies-a-providers-own-signature.md) records the decision.
+A service the owner does not control, such as a code host, a shop or a payment provider, signs its webhook its own way and posts its own nested JSON. A route takes it as it arrives when its signature names the provider's `"scheme"` and its `"fields"` say where each input sits in the body. `kernel-rs/kernel/src/provider.rs` implements it and [ADR-0013](./adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md) records the decision.
 
 ```json
 "issues.receive": {
@@ -551,7 +551,7 @@ The editor preview serves no routes. Try them on `konae dev` or on a Deployment.
 
 ## Calls between apps
 
-An action of `"kind": "call"` sends one HTTP request to another app or an outside service. The Kernel sends it from its own process, never from the browser, so a signing secret or an API key the request needs stays in the Kernel. [ADR-0019](./adr/0019-an-app-calls-another-from-the-kernel.md) records the decision; `kernel-rs/kernel/src/calls.rs` implements it.
+An action of `"kind": "call"` sends one HTTP request to another app or an outside service. The Kernel sends it from its own process, never from the browser, so a signing secret or an API key the request needs stays in the Kernel. [ADR-0013](./adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md) records the decision; `kernel-rs/kernel/src/calls.rs` implements it.
 
 ```json
 "tasks.escalate": {
@@ -670,7 +670,7 @@ Both tools accept inclusive UTC dates and the same 400-day range limit as `usage
 
 Coverage includes `queueFlushed` to say whether earlier queued records finished writing before the read. A false value means recent activity may be missing. Coverage also names when new aggregates began, the earliest retained metric day, and the last day affected by pruning as `prunedThrough`. A null capture start means the old store has not received a new write. Earlier operation counters may exist. Dropped-entry and write-error counts cover the installation since restart. Retained call and mail states describe jobs created in the requested period; records already removed cannot contribute. These tools return neither Signal properties nor request bodies.
 
-Each Deployment keeps Usage and Signals in its own `usage.sqlite`, next to its database and accounts. [ADR-0010](./adr/0010-kernel-owns-usage-and-signals.md) records the decision; `kernel-rs/kernel/src/usage.rs` implements it. Only the owner reads them, through two tools that need `read` and the project grant. The runtime endpoint does not list them, so an app cannot read its own Usage.
+Each Deployment keeps Usage and Signals in its own `usage.sqlite`, next to its database and accounts. [ADR-0010](./adr/0010-the-kernel-keeps-usage-and-signals.md) records the decision; `kernel-rs/kernel/src/usage.rs` implements it. Only the owner reads them, through two tools that need `read` and the project grant. The runtime endpoint does not list them, so an app cannot read its own Usage.
 
 ```text
 usage_read   { "deploymentId", "from": "2026-11-01", "to": "2026-11-06" }
@@ -763,7 +763,7 @@ The store keeps 400 days and at most 100,000 rows of totals, the newest 50,000 S
 
 ### Scheduled work
 
-Some work has to happen when nobody asks: a hold that lapsed is released so the hour shows free, a day is closed so tomorrow's page starts from a total. A mutation that takes no input may declare when the Kernel's own timer runs it ([ADR-0017](./adr/0017-the-kernel-runs-a-declared-schedule.md)):
+Some work has to happen when nobody asks: a hold that lapsed is released so the hour shows free, a day is closed so tomorrow's page starts from a total. A mutation that takes no input may declare when the Kernel's own timer runs it ([ADR-0011](./adr/0011-the-kernel-runs-a-declared-schedule.md)):
 
 ```json
 "holds.release": {
@@ -807,7 +807,7 @@ The Validation Gate and the Kernel parse the same cases from `kernel-rs/kernel/s
 
 ### Notices
 
-A mutation may send one email when its statement changes a row. [ADR-0016](./adr/0016-a-mutation-may-notify-the-owner-or-the-actor.md) records the decision; `kernel-rs/kernel/src/notify.rs` implements it.
+A mutation may send one email when its statement changes a row. [ADR-0012](./adr/0012-email-leaves-through-one-queue-to-addresses-the-app-has-proved.md) records the decision; `kernel-rs/kernel/src/notify.rs` implements it.
 
 ```json
 "bookings.create": {
@@ -821,7 +821,7 @@ A mutation may send one email when its statement changes a row. [ADR-0016](./adr
 
 `to` is `owner`, the email of the Project Owner's active account, or `actor`, the email of the calling app account, only when that account proved it by answering a verification, invitation or recovery link. The Kernel never sends to an address from the input, so an app cannot relay mail to whoever a visitor names. The subject and body are templates. Their placeholders are `{input.<key>}`, for one of the action's input bindings, `{actor.id}`, the caller's ID, `{kernel.now}`, the time of the call or scheduled run as `2026-11-08 07:00 UTC`, `{changes.count}`, the rows the statement changed, and, in the body only, `{changes}`. A value loses its line breaks and keeps 200 characters; a missing or null value fills nothing.
 
-`{changes}` lists the changed rows, one line each, with the columns named in `"changes"` joined by ` · `: at most 50 lines, then `- and <n> more`. `"to": { "column": "assignee_id" }` sends one notice to each account whose ID a changed row holds in that column, listing only that account's rows. The Kernel reads the rows back by appending its own `RETURNING` to the statement, so the columns belong to the table the statement changes, and the answer stays `{ changes, lastInsertId }`. A column value is an account ID, never an address: the Kernel looks it up among this Deployment's active accounts that answered a link, and a value that is not one sends nothing and counts as `not-a-verified-account`. One run reads at most 1,000 rows and writes to at most 50 accounts, in account ID order; each account past the 50th counts as `recipient-cap`. See [ADR-0021](./adr/0021-a-notice-lists-its-rows-and-reaches-the-accounts-they-name.md).
+`{changes}` lists the changed rows, one line each, with the columns named in `"changes"` joined by ` · `: at most 50 lines, then `- and <n> more`. `"to": { "column": "assignee_id" }` sends one notice to each account whose ID a changed row holds in that column, listing only that account's rows. The Kernel reads the rows back by appending its own `RETURNING` to the statement, so the columns belong to the table the statement changes, and the answer stays `{ changes, lastInsertId }`. A column value is an account ID, never an address: the Kernel looks it up among this Deployment's active accounts that answered a link, and a value that is not one sends nothing and counts as `not-a-verified-account`. One run reads at most 1,000 rows and writes to at most 50 accounts, in account ID order; each account past the 50th counts as `recipient-cap`. See [ADR-0012](./adr/0012-email-leaves-through-one-queue-to-addresses-the-app-has-proved.md).
 
 ```json
 "tasks.remind": {
@@ -949,7 +949,7 @@ There is also `bun run konae -- login --dir /tmp/my-app --url http://localhost:4
 
 ## Custom domain
 
-A Deployment can answer on one hostname its owner controls, such as `notes.example.org`, next to its generated `<slug>-<id>.<suffix>`, which keeps answering. [ADR-0015](./adr/0015-a-deployment-answers-on-one-custom-domain.md) records the decisions.
+A Deployment can answer on one hostname its owner controls, such as `notes.example.org`, next to its generated `<slug>-<id>.<suffix>`, which keeps answering. [ADR-0014](./adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md) records the decisions.
 
 1. Point the hostname at the installation's proxy, with a CNAME to the installation's host or an A record. The proxy terminates TLS for it and forwards `Host` unchanged. Konae issues no certificate.
 2. Call `domain_set { deploymentId, hostname }`. It checks the name and answers with the record to add:
@@ -984,7 +984,7 @@ Two Deployments may both wait on a name; the first whose token appears in the re
 
 ## Path address
 
-A Deployment can answer on the installation's domain at `<domain>/p/<id>`, and at `<domain>/p/<name>` once it has a name, with no DNS of its own. `KONAE_DOMAIN` names the domain, and the addresses carry it. [ADR-0024](./adr/0024-an-installation-names-its-hosts-from-one-domain-and-an-app-may-answer-on-a-path.md) records the decisions.
+A Deployment can answer on the installation's domain at `<domain>/p/<id>`, and at `<domain>/p/<name>` once it has a name, with no DNS of its own. `KONAE_DOMAIN` names the domain, and the addresses carry it. [ADR-0014](./adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md) records the decisions.
 
 1. `path_set { deploymentId, enabled: true, name? }` turns the path on. A name is 3 to 40 letters, digits and hyphens, does not start or end with a hyphen, is not a word Konae uses such as `app` or `mcp`, and does not have the shape of an id. No other Deployment may hold it while its path is on.
 2. An app with accounts needs `acceptSharedOrigin: true` before its path turns on. An app has accounts when it is private, when its signup is not Closed, or when one of its actions has access other than `anonymous`. Without the acceptance the call refuses with `path.shared-origin`. Every path and the home share the origin `<domain>`, so any other app there, including other owners' apps, can use the sessions of this app's users. The app's own hostname keeps its sessions on its own origin.
@@ -1153,7 +1153,7 @@ The official SDK checks connection, listing and MCP calls, as well as the OAuth 
 
 An export captures `visibility` and the Signup Policy under the project lock, so an importer uses the export's values even if an earlier project inspection or editor copy differs. A release imports that policy only on its first Deployment, and the Kernel installs it before serving, so a public app exported with Closed signup never opens registration during import.
 
-Calls between apps (ADR-0019) change three answers a client may have recorded: `secret_set` and each entry of `secrets_list` carry `"use": "route"` or `"call"`; a `GET` route that answers anyone carries `Access-Control-Allow-Origin: *`; and an action of an unknown kind is refused with `Use "query", "mutation", "signal" or "call".` instead of the list without `call`. `docs/mcp-walkthrough.md` records the first.
+Calls between apps (ADR-0013) change three answers a client may have recorded: `secret_set` and each entry of `secrets_list` carry `"use": "route"` or `"call"`; a `GET` route that answers anyone carries `Access-Control-Allow-Origin: *`; and an action of an unknown kind is refused with `Use "query", "mutation", "signal" or "call".` instead of the list without `call`. `docs/mcp-walkthrough.md` records the first.
 
 Each entry of `secrets_list` also carries `svixKey`, true when the value decodes as a svix `whsec_` key. The value itself is never returned.
 

@@ -1271,7 +1271,7 @@ pub async fn invoke_action(
         return error(StatusCode::FORBIDDEN, &format!("Action {name} runs only after the call {call} answers."));
     }
     // A scheduled mutation with no route belongs to the Kernel's timer
-    // (ADR-0017, update of 2026-11-08).
+    // (ADR-0011).
     if action.schedule.is_some() && action.http.is_none() {
         return error(StatusCode::FORBIDDEN, &format!("Action {name} runs only on its schedule."));
     }
@@ -2722,7 +2722,7 @@ pub async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Resu
 /// Deployment, never the async workers every other app shares.
 /// What a statement did. `answer` is what the caller reads. `rows` are the
 /// changed rows a mutation's notice reads back through the Kernel's own
-/// RETURNING clause (ADR-0021); they never reach the answer.
+/// RETURNING clause (ADR-0012); they never reach the answer.
 pub struct Ran {
     pub answer: Value,
     pub rows: Vec<serde_json::Map<String, Value>>,
@@ -3452,7 +3452,7 @@ pub fn authenticate_deployment(
 /// addresses, `/p/<id>` and `/p/<name>`, and a `Path=/p/<segment>/` cookie set
 /// on one would not reach the other. A `__Host-` name also needs `Path=/`. The
 /// per-app name keeps two apps' sessions from overwriting each other; it does
-/// not keep a hostile app out, since every path shares one origin (ADR-0024).
+/// not keep a hostile app out, since every path shares one origin (ADR-0014).
 pub fn app_cookie_name(state: &AppState, deployment_id: &str, headers: &HeaderMap) -> String {
     let https = state.public_origin.starts_with("https://");
     if path::on_path_host(state, headers) {
@@ -3745,7 +3745,7 @@ pub fn error(status: StatusCode, message: &str) -> Response {
 }
 
 /// A refused Capsule: `error` stays the sentence clients read, and `code` and
-/// `hint` sit beside it (ADR-0020).
+/// `hint` sit beside it (ADR-0004).
 pub fn refusal_error(refused: &refusal::Refusal) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({"error": refused.message, "code": refused.code, "hint": refused.hint()}))).into_response()
 }
@@ -4442,7 +4442,7 @@ pub mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// ADR-0021: a notice that lists or addresses rows reads them back
+    /// ADR-0012: a notice that lists or addresses rows reads them back
     /// through the Kernel's RETURNING clause; the answer stays changes and
     /// lastInsertId.
     #[test]

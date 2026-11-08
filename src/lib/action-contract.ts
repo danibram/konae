@@ -50,10 +50,10 @@ export type ContractOutput =
   | { kind: "changes"; fields: ["changes", "lastInsertId"] }
   /** Reserved for actions that record a Signal (ADR-0010). The generator does not write it yet. */
   | { kind: "signal"; signal: string }
-  /** A call action: the Kernel queued the request (ADR-0019). */
+  /** A call action: the Kernel queued the request (ADR-0013). */
   | { kind: "queued"; fields: ["callId", "queued"] };
 
-/** What a call action sends and what its then mutation reads (ADR-0019). */
+/** What a call action sends and what its then mutation reads (ADR-0013). */
 export type ContractCall = {
   method: "GET" | "POST";
   url: string;
@@ -90,7 +90,7 @@ export type ContractCaller = {
 /**
  * How a sender signs the route: the scheme actions.json declares, its
  * settings, the headers it sets, what the MAC covers and how a replay is
- * refused (ADR-0018).
+ * refused (ADR-0013).
  */
 export type ContractSignature = {
   scheme: SignatureScheme;
@@ -125,7 +125,7 @@ export type ContractHttp = {
   /**
    * When the route is the action's only door, so the runtime endpoint refuses
    * the action: always for a signed route or one with declared callers, and on
-   * a private Deployment for an unsigned one (ADR-0011, update of 2026-11-06).
+   * a private Deployment for an unsigned one (ADR-0013).
    */
   onlyDoor: "always" | "on a private Deployment";
 };
@@ -167,14 +167,14 @@ export type ContractAction = {
   /** A mutation's refusal when its statement changes no row; it is listed among the errors too. */
   guard?: string;
   /**
-   * The email a mutation queues when it changes a row (ADR-0016). It does not
+   * The email a mutation queues when it changes a row (ADR-0012). It does not
    * change the answer: the call succeeds whether or not the email can be sent.
    */
   notify?: { to: "owner" | "actor" | { column: string }; changes?: string[]; subject: string; body: string };
   /**
    * When the Kernel's timer runs the mutation, with no caller: `actor` binds
    * null, the guard does not apply, and Usage counts the run under `scheduled`
-   * (ADR-0017). Without an http route only the timer runs it.
+   * (ADR-0011). Without an http route only the timer runs it.
    */
   schedule?: ScheduleDeclaration;
   /** A call action's request and its then mutation. */
@@ -356,7 +356,7 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables, ca
         ? { kind: "queued", fields: ["callId", "queued"] }
         : { kind: "changes", fields: ["changes", "lastInsertId"] };
   const http = action.http ? contractHttp(action.http, action.kind) : undefined;
-  // A scheduled mutation with no route belongs to the Kernel's timer (ADR-0017, update of 2026-11-08).
+  // A scheduled mutation with no route belongs to the Kernel's timer (ADR-0011).
   const timerOnly = Boolean(action.schedule && !action.http);
   return {
     name: action.name,
@@ -509,7 +509,7 @@ function actionErrors(action: ServerActionDefinition, inputs: ContractInput[], a
 
 function actionLimits(action: ServerActionDefinition): ContractLimits {
   // The parser has already refused a query that reads rows without a top-level
-  // LIMIT, so a query without one returns a single row (ADR-0009).
+  // LIMIT, so a query without one returns a single row (ADR-0004).
   const query = action.kind === "query";
   const bound: ContractLimits["bound"] = !query ? "none" : hasTopLevelLimit(action.statement) ? "limit" : "single-row";
   return {

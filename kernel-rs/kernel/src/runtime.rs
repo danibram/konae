@@ -575,7 +575,7 @@ pub async fn response_value(response: Response) -> Result<Value> {
 
 
 /// A tool's failed result. The text stays the sentence clients read today; a
-/// refused Capsule also answers `{ error: { code, message, hint } }` (ADR-0020).
+/// refused Capsule also answers `{ error: { code, message, hint } }` (ADR-0004).
 pub fn tool_error(error: &anyhow::Error) -> Value {
     let text = json!([{"type": "text", "text": error.to_string()}]);
     match super::refusal::of(error) {

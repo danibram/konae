@@ -1,4 +1,4 @@
-// Probe: scheduled work (ADR-0017). Decides the matrix cell for work that has
+// Probe: scheduled work (ADR-0011). Decides the matrix cell for work that has
 // to happen when nobody asks. A reminder app surfaces due notes from a
 // "schedule" on a mutation; the Kernel's timer runs it with no caller.
 //
@@ -70,7 +70,7 @@ await probe("schedule", 23060, async (kit) => {
   const ran = first.scheduled.find((run) => run.changes === 1)!;
   kit.pass("A run with nobody asking", `With nobody calling, notes.surface ran at ${new Date(ran.at).toISOString()} and surfaced "Water the plants"; "Renew the passport", due in an hour, stays put.`);
 
-  // Only the timer: a scheduled mutation with no route refuses every caller (ADR-0017, update of 2026-11-08).
+  // Only the timer: a scheduled mutation with no route refuses every caller (ADR-0011).
   await person.call("actions_invoke", { name: "notes.add", input: { body: "Call the plumber", remind_at: Date.now() - 1000 } });
   const byPerson = await kit.errorText(person.call("actions_invoke", { name: "notes.surface", input: {} }));
   assert.equal(byPerson, "Action notes.surface runs only on its schedule.");

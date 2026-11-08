@@ -46,7 +46,7 @@ The yardstick: a person who does not write code, and a person who does, make the
 | `konae build` drops `about.html` without a word; a two-page app cannot be published from the CLI. Fixed 2026-11-06: every page at the root and under `pages/` publishes, and a missing reference stops the build | gallery | artifact holds `index.html` only |
 | Every unknown GET path serves the home page with 200; extensionless paths do not resolve; `404.html` is never read. Fixed 2026-11-06: 404 with `404.html`, `/about` serves `about.html`, `"routing": "spa"` keeps the old fallback | gallery | 200, home page |
 | `konae publish` sends no `initialSignupPolicy`: a public app starts Open, a private one Closed, and Invitation only needs a second credential with `manage_users`. Fixed: `konae.json` names `project.manifest.signupPolicy`, publish sends it on a first release and warns on a later one that differs | inbox, club, gallery, booking | `Unknown tool or insufficient permission.` |
-| An app Closed from its first release can admit no one, not even by invitation; the invitation is sent anyway with `acceptable: false`. Fixed: an owner's invitation is acceptable under Closed and a signup stays refused (ADR-0011, note on Closed) | gallery | 403, now 200 |
+| An app Closed from its first release can admit no one, not even by invitation; the invitation is sent anyway with `acceptable: false`. Fixed: an owner's invitation is acceptable under Closed and a signup stays refused (ADR-0003) | gallery | 403, now 200 |
 | Fixed 2026-11-06. A file cannot be made public later or deleted; a draft is re-uploaded and the private copy keeps counting against the quota | gallery | Now `files_update` and `files_delete`, uploader only; a deleted file frees its quota and reads as `File not found.` |
 | Fixed 2026-11-06. The SDK's Blob URL cannot be re-read with `fetch` under `connect-src 'self'` | gallery | `violates ... "connect-src 'self'"`. Now `miniapp.files.url(fileId)` returns `/_konae/files/<id>`, which `fetch` reads under the same policy |
 | A route always answers `{ "result": [rows] }`; no feed shape, no absolute URLs (the statement cannot read the origin), no CORS, `no-store` on everything | gallery | |
@@ -60,7 +60,7 @@ The yardstick: a person who does not write code, and a person who does, make the
 
 | Finding | Apps | Exact answer |
 | --- | --- | --- |
-| The package drops API keys, against what CONTEXT.md and docs/mcp.md say; the destination cannot see which programs had access. Fixed: keys travel revoked at import and `api_keys_list` names them (ADR-0013, note on keys) | club | `{ keys: [] }`, now one key with `revokedReason: "import"` |
+| The package drops API keys, against what CONTEXT.md and docs/mcp.md say; the destination cannot see which programs had access. Fixed: keys travel revoked at import and `api_keys_list` names them (ADR-0008) | club | `{ keys: [] }`, now one key with `revokedReason: "import"` |
 | `McpClient.upload` has no `component` argument; the replay calls `transfer_begin` itself. Fixed: `upload(bytes, projectId, component)` | club | |
 | The development mailbox writes no subject or body, so the inviter's name cannot be checked without a transport | inbox | |
 
@@ -72,13 +72,13 @@ A suspended member's session answers as signed out and only the login route says
 
 ## What to do first
 
-1. Done on 2026-11-06, see the ADR-0011 update "a route binds its action". Bind a signed route to its action: an action with a signature or a key requirement is not callable through `actions_invoke`, and a route on a private app without a signature requires a key or a session. Include method, path and query in the MAC and add a nonce. This is the only finding that opens data the app meant to close.
-2. Done on 2026-11-06, see the ADR-0010 update. Make a refused mutation visible: a declared `refuse` clause, or a convention that `changes: 0` with a declared guard answers `forbidden`, so the page, Usage, the Signal and the contract all see a refusal. Record Signals only when `changes > 0`, and let a Signal name the actor.
-3. Done on 2026-11-06, see the ADR-0009 note. One refusal text per rule at both doors, with a test that walks every shared case through the Gate and the Kernel and compares the words, as `http-binding-cases.json` and `signal-cases.json` already do for two groups.
-4. Done on 2026-11-06, see the ADR-0005 note on the static publishing contract. The static publishing contract from product-fit: multi-page artifacts in the CLI, 404, extensionless paths, `404.html`.
-5. Done on 2026-11-06, see the ADR-0011 note on Closed and `project.manifest.signupPolicy` in docs/mcp.md. Initial signup policy in `konae publish` and `konae.json`; invitations allowed under Closed when the owner sends them.
+1. Done on 2026-11-06, see ADR-0013. Bind a signed route to its action: an action with a signature or a key requirement is not callable through `actions_invoke`, and a route on a private app without a signature requires a key or a session. Include method, path and query in the MAC and add a nonce. This is the only finding that opens data the app meant to close.
+2. Done on 2026-11-06, see ADR-0010. Make a refused mutation visible: a declared `refuse` clause, or a convention that `changes: 0` with a declared guard answers `forbidden`, so the page, Usage, the Signal and the contract all see a refusal. Record Signals only when `changes > 0`, and let a Signal name the actor.
+3. Done on 2026-11-06, see ADR-0004. One refusal text per rule at both doors, with a test that walks every shared case through the Gate and the Kernel and compares the words, as `http-binding-cases.json` and `signal-cases.json` already do for two groups.
+4. Done on 2026-11-06, see ADR-0006. The static publishing contract from product-fit: multi-page artifacts in the CLI, 404, extensionless paths, `404.html`.
+5. Done on 2026-11-06, see ADR-0003 and `project.manifest.signupPolicy` in docs/mcp.md. Initial signup policy in `konae publish` and `konae.json`; invitations allowed under Closed when the owner sends them.
 6. File lifecycle: publish and delete. Done 2026-11-06: `files_update`, `files_delete` and `miniapp.files.url`.
-7. Done on 2026-11-06, see the ADR-0013 note on keys. Keys in the package, and the docs made true either way.
+7. Done on 2026-11-06, see ADR-0008. Keys in the package, and the docs made true either way.
 
 Items 1 to 3 touch `http.rs`, `usage.rs`, `actions.ts` and the Gate together and go as one delivery. Items 4 to 7 are disjoint and can run in parallel.
 
@@ -88,11 +88,11 @@ The [capability matrix](./capability-matrix.md) compares ten app shapes with 25 
 
 | Addition | What it closes | Evidence |
 | --- | --- | --- |
-| Custom domain, ADR-0015 | A Deployment answers on a hostname whose TXT record proves control | Domain probe and gallery replay |
-| Notices, ADR-0016 | A changed mutation emails the owner or the verified caller | Notify probe, booking and inbox replays |
-| Scheduled mutations, ADR-0017 | The Kernel changes due rows without a person calling | Schedule probe, booking and habits replays |
-| Provider signatures, ADR-0018 | Routes verify provider signatures and read nested JSON fields | Hub probe and inbox replay |
-| Outbound calls, ADR-0019 | The Kernel sends signed or keyed requests and retries failures with bounded backoff | Calls probe, starter replay and `cargo test calls::tests` |
+| Custom domain, ADR-0014 | A Deployment answers on a hostname whose TXT record proves control | Domain probe and gallery replay |
+| Notices, ADR-0012 | A changed mutation emails the owner or the verified caller | Notify probe, booking and inbox replays |
+| Scheduled mutations, ADR-0011 | The Kernel changes due rows without a person calling | Schedule probe, booking and habits replays |
+| Provider signatures, ADR-0013 | Routes verify provider signatures and read nested JSON fields | Hub probe and inbox replay |
+| Outbound calls, ADR-0013 | The Kernel sends signed or keyed requests and retries failures with bounded backoff | Calls probe, starter replay and `cargo test calls::tests` |
 
 The integration hub's retries use the call worker's fixed calendar, with at most five attempts after waits of 30 seconds, 1, 2 and 4 minutes. An app cannot declare its own retry calendar. Changed scheduled mutations and call answers now queue their declared notices. A schedule can send the owner a generic reminder, but cannot fill a digest from changed rows or address those rows' account IDs. Notices reach the owner or the verified caller, rather than an assignee or followers.
 

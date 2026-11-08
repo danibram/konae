@@ -33,7 +33,7 @@ The validated, immutable static output of a Project revision that a Deployment s
 _Avoid_: Project source, build cache
 
 **Deployment**:
-The published, addressable instance of a Project with its own hostname, an optional custom domain, visibility, signup policy and database. It shares the Project's ID, and everything it is lives in the app folder `apps/<id>/` on the Kernel volume: `konae.json`, the saved sources in `app/`, the Build Artifact in `dist/`, the databases, file index and secrets in `data/`, and the installation's record, address markers and backups in `.konae/`. The bytes of its files live in the installation's file store, which is that folder unless the operator points the Kernel at an S3 bucket; the index in the folder decides which files exist and who may read them, and a package carries the bytes either way (ADR-0025). Republishing replaces its Build Artifact and keeps its hostname and data; immutable release history does not exist yet.
+The published, addressable instance of a Project with its own hostname, an optional custom domain, visibility, signup policy and database. It shares the Project's ID, and everything it is lives in the app folder `apps/<id>/` on the Kernel volume: `konae.json`, the saved sources in `app/`, the Build Artifact in `dist/`, the databases, file index and secrets in `data/`, and the installation's record, address markers and backups in `.konae/`. The bytes of its files live in the installation's file store, which is that folder unless the operator points the Kernel at an S3 bucket; the index in the folder decides which files exist and who may read them, and a package carries the bytes either way (ADR-0009). Republishing replaces its Build Artifact and keeps its hostname and data; immutable release history does not exist yet.
 _Avoid_: Project, preview
 
 **Public Deployment**:
@@ -61,7 +61,7 @@ The per-Deployment list of ways an app account signs in: `password` always, and 
 _Avoid_: Social login, SSO
 
 **Google Client**:
-An app's own Google OAuth client, which its Project Owner makes in their own Google Cloud console and sets as the two signing secrets `google_client_id` and `google_client_secret` with `"use": "google"`. The owner registers one redirect URI per address the app answers on: its generated host, a verified custom domain, and its path address by id. The values never leave the Kernel and never travel in an export (ADR-0026).
+An app's own Google OAuth client, which its Project Owner makes in their own Google Cloud console and sets as the two signing secrets `google_client_id` and `google_client_secret` with `"use": "google"`. The owner registers one redirect URI per address the app answers on: its generated host, a verified custom domain, and its path address by id. The values never leave the Kernel and never travel in an export (ADR-0003).
 _Avoid_: OAuth app, installation Google client (there is none)
 
 **Agent Credential**:
@@ -69,7 +69,7 @@ A Project Owner's revocable delegation that permits an external agent to perform
 _Avoid_: Runtime session, setup key
 
 **App Folder**:
-Everything an app is, in one layout that is the same on a laptop, inside Konae and in an export: `konae.json` (name, visibility, Signup Policy, sign-in methods, contact email and Kernel version), `app/` (the Capsule), `dist/` (the Build Artifact), `data/` (database, accounts, Usage and uploaded files), and beside them `AGENTS.md`, `action-contract.md`, `compose.yaml`, `.env.example` and a `package.json` whose `npm run build` writes `dist/`. `konae init` writes it, `konae build` and `npm run build` fill `dist/`, and the Kernel keeps one per app. Secrets and the installation's `.konae/` never leave the machine that holds them (ADR-0027).
+Everything an app is, in one layout that is the same on a laptop, inside Konae and in an export: `konae.json` (name, visibility, Signup Policy, sign-in methods, contact email and Kernel version), `app/` (the Capsule), `dist/` (the Build Artifact), `data/` (database, accounts, Usage and uploaded files), and beside them `AGENTS.md`, `action-contract.md`, `compose.yaml`, `.env.example` and a `package.json` whose `npm run build` writes `dist/`. `konae init` writes it, `konae build` and `npm run build` fill `dist/`, and the Kernel keeps one per app. Secrets and the installation's `.konae/` never leave the machine that holds them (ADR-0001).
 _Avoid_: kit, workspace, repo
 
 ### As the app grows
@@ -139,7 +139,7 @@ A path on the installation's domain on which one Deployment answers: `<domain>/p
 _Avoid_: short link, vanity path, app URL
 
 **File Store**:
-Where the installation keeps the bytes of app files: each app folder's `data/files/`, or an S3-compatible bucket the operator names with `KONAE_FILES_S3_*`. The file index in the app folder decides which files exist either way, and `files-migrate` moves the bytes between the two while no Kernel runs (ADR-0025).
+Where the installation keeps the bytes of app files: each app folder's `data/files/`, or an S3-compatible bucket the operator names with `KONAE_FILES_S3_*`. The file index in the app folder decides which files exist either way, and `files-migrate` moves the bytes between the two while no Kernel runs (ADR-0009).
 _Avoid_: bucket (one kind of store), storage
 
 **Export**:

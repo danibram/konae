@@ -1,5 +1,5 @@
 // A refusal of a Capsule carries a stable code beside its sentence
-// (docs/adr/0020-a-refusal-carries-a-stable-code.md). The site that refuses
+// (docs/adr/0004-the-gate-and-the-kernel-refuse-with-the-same-code-and-words.md). The site that refuses
 // names the code, so a reworded sentence keeps its code and the editor
 // branches on the code, never on the text. kernel-rs/kernel/src/refusal.rs is the
 // Kernel's twin and reads the same table.

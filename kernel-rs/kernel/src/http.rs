@@ -4,9 +4,8 @@
 //!
 //! An `http` key in `actions.json` binds one action to one method and path.
 //! The action keeps its access level, bindings, query bound and rate limit.
-//! Only `anonymous` actions may bind a route (ADR-0011, updates of
-//! 2026-11-06). A route has three kinds of caller, resolved before any SQL
-//! runs:
+//! Only `anonymous` actions may bind a route (ADR-0013). A route has three
+//! kinds of caller, resolved before any SQL runs:
 //!
 //! | Caller            | Proof                                  | Actor ID       |
 //! | ----------------- | -------------------------------------- | -------------- |
@@ -21,7 +20,7 @@
 //! answers only there: `actions_invoke` refuses it (`route_only`).
 //! docs/mcp.md, "HTTP routes", states the signature scheme a sender computes.
 //! A route may instead declare a provider's own scheme and a `fields` map
-//! that reads a nested payload; provider.rs holds both (ADR-0018).
+//! that reads a nested payload; provider.rs holds both (ADR-0013).
 
 use super::refusal::{refuse, Refusal};
 use super::*;
@@ -163,8 +162,8 @@ pub fn route_callers(http: &HttpBinding, private: bool) -> Option<Vec<String>> {
 }
 
 /// The route an action answers on when that is its only door: its route does
-/// not answer anyone, so `actions_invoke` refuses it (ADR-0011, update of
-/// 2026-11-06). `None` when the action has no route or its route is open.
+/// not answer anyone, so `actions_invoke` refuses it (ADR-0013).
+/// `None` when the action has no route or its route is open.
 pub fn route_only(name: &str, action: &ActionDefinition, private: bool) -> Option<String> {
     let http = binding(name, action).ok().flatten()?;
     route_callers(&http, private).map(|_| format!("{} {}", http.method, http.path))
@@ -217,7 +216,7 @@ pub fn secrets_store(root: &Path, project: &str) -> Result<Connection> {
     }
     let db = Connection::open(path)?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
-    // `use` is "route", "call" (ADR-0019) or "google".
+    // `use` is "route", "call" (ADR-0013) or "google".
     db.execute_batch("CREATE TABLE IF NOT EXISTS secrets(name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL, use TEXT NOT NULL)")?;
     Ok(db)
 }
@@ -905,7 +904,7 @@ pub async fn get_route(State(state): State<AppState>, AxumPath(relative): AxumPa
             let mut response = run_route(&state, &deployment, &table, name, http, request.headers(), client, input, raw_query, b"").await;
             // A GET route that answers anyone hands every caller the same rows,
             // with no cookie or key counted from another origin, so a page on
-            // another origin may read it (ADR-0019, "connects").
+            // another origin may read it (ADR-0013, "connects").
             if route_callers(http, is_private(&deployment)).is_none() {
                 response.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
             }

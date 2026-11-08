@@ -122,7 +122,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       try {
         program = parseServerActionSource(files["actions.json"]);
       } catch (error) {
-        // A refusal of the Capsule keeps the Kernel's code beside its sentence (ADR-0020).
+        // A refusal of the Capsule keeps the Kernel's code beside its sentence (ADR-0004).
         const refused = refusalOf(error);
         errors.push({ stage: "actions", message: "actions.json is not a valid server action program.", detail: describe(error), ...(refused ? { code: refused.code, hint: refused.hint } : {}) });
       }
@@ -319,7 +319,7 @@ function checkActions(db: Database, program: ServerActionProgram, stage: "action
 /**
  * A notify column the statement cannot return, checked by preparing the
  * statement with the Kernel's own RETURNING clause, as kernel-rs/kernel/src/notify.rs
- * `check_columns` does at publish (ADR-0021).
+ * `check_columns` does at publish (ADR-0012).
  */
 export function notifyColumnsRefusal(db: Database, action: ServerActionDefinition) {
   const columns = action.kind === "mutation" ? notifyReturning(action.notify) : [];

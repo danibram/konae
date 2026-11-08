@@ -1,5 +1,5 @@
 //! The name an app may answer on under `<domain>/p/<name>`
-//! (docs/adr/0024-an-installation-names-its-hosts-from-one-domain-and-an-app-may-answer-on-a-path.md).
+//! (docs/adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md).
 //!
 //! The owner names the path with `path_set`. The Kernel checks the name here,
 //! and the editor checks it in `src/lib/path-name.ts`. Both run the rules in

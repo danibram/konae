@@ -1,6 +1,6 @@
 export type Transfer = { transferId: string; size: number; sha256: string; chunkBytes: number };
 
-/** A Capsule refusal a tool answers beside its text (ADR-0020). */
+/** A Capsule refusal a tool answers beside its text (ADR-0004). */
 export type McpRefusal = { code: string; message: string; hint?: { fix: string; remedy: string; tool?: string } };
 
 export class McpError extends Error {

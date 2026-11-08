@@ -215,7 +215,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [domainVersion, setDomainVersion] = useState(0);
-  // A platform tool the agent wants to run that waits for the owner (ADR-0022).
+  // A platform tool the agent wants to run that waits for the owner (ADR-0007).
   const [platformConfirmation, setPlatformConfirmation] = useState<PlatformConfirmation | null>(null);
   const resolvePlatformConfirmation = useRef<((approved: boolean) => void) | null>(null);
   // The agent's publish tool waits on the Deploy dialog the owner drives.
@@ -576,7 +576,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   projectRef.current = project;
 
   /**
-   * ADR-0003 lever 7: pi-agent-core, the provider catalogs and sql.js are imported
+   * ADR-0007 lever 7: pi-agent-core, the provider catalogs and sql.js are imported
    * on the first prompt, never at editor start.
    */
   const ensureAgent = () => {
@@ -591,7 +591,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             previewErrors: () => hostRef.current.previewErrors(),
             // What release_plan reads, as the Deploy dialog reads it: secret names and the installation's hosts.
             releaseFacts: () => readReleaseFacts(projectRef.current.id, deploymentsRef.current[projectRef.current.id]?.id),
-            // ADR-0022: the owner's own MCP session, pinned to the open project.
+            // ADR-0007: the owner's own MCP session, pinned to the open project.
             platform: {
               listTools: (signal) => platformMcp.listTools(signal),
               call: (name, args, signal) => platformMcp.call(name, args, signal),

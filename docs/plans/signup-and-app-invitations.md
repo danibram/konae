@@ -188,4 +188,4 @@ Actualizar `docs/mcp.md`, arquitectura y la decisión de identidad para document
 - [Verificación de tokens de sesión de Clerk](https://clerk.com/docs/guides/sessions/manual-jwt-verification). La integración debe validar la prueba en el servidor y restringir los orígenes autorizados.
 - [Claves de idempotencia de Resend](https://resend.com/changelog/idempotency-keys). Complementan la deduplicación persistente que mantiene Konae.
 - [Estado actual del MCP](../mcp.md).
-- [Decisión actual sobre identidad](../adr/0002-kernel-owns-identity-and-visibility.md).
+- [Decisión actual sobre identidad](../adr/0002-browsers-reach-data-through-named-server-actions-and-owners-through-konae.md).

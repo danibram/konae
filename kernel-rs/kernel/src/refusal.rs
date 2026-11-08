@@ -1,5 +1,5 @@
 //! A refusal of a Capsule carries a stable code beside its sentence
-//! (docs/adr/0020-a-refusal-carries-a-stable-code.md).
+//! (docs/adr/0004-the-gate-and-the-kernel-refuse-with-the-same-code-and-words.md).
 //!
 //! The site that refuses names the code, so a reworded sentence keeps its
 //! code and a client branches on the code, never on the text. The codes live

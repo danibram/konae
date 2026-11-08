@@ -26,7 +26,7 @@ These files live in `kernel-rs/kernel/src`, and both sides parse the same cases.
 - `schedule-cases.json`, for schedules
 - `call-cases.json`, for call actions and `connects`
 
-The query bound is `src/lib/query-bound.ts` on one side and its port in `kernel-rs/kernel/src/lib.rs` on the other (ADR-0009).
+The query bound is `src/lib/query-bound.ts` on one side and its port in `kernel-rs/kernel/src/lib.rs` on the other (ADR-0004).
 
 ## The LIMIT rule
 

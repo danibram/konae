@@ -44,7 +44,7 @@ export type PackageManifest = {
   sourcesRevision?: number | null;
   contents: PackageContent[];
   excluded: string[];
-  /** The custom domain's hostname, without its token; the destination issues a new one (ADR-0015). */
+  /** The custom domain's hostname, without its token; the destination issues a new one (ADR-0014). */
   domain?: string;
 };
 

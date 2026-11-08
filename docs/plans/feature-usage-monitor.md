@@ -19,7 +19,7 @@ Las funciones propias de una app, como reservar una cita o completar una tarea, 
 - Los paquetes con estado incluyen `usage.sqlite`. El export de código por sí solo no contiene ese historial.
 - La cola de Usage puede perder entradas cuando se llena o falla la escritura. Las cifras actuales son métricas operativas aproximadas, no registros de facturación.
 
-La propuesta amplía [ADR-0010](../adr/0010-kernel-owns-usage-and-signals.md).
+La propuesta amplía [ADR-0010](../adr/0010-the-kernel-keeps-usage-and-signals.md).
 
 ## Qué verá el propietario
 

@@ -183,7 +183,7 @@ impl FileStore for LocalFolder {
 /// An S3-compatible bucket. Each file is the object
 /// `<prefix><deployment id>/<file id>`. It sends only `PutObject`,
 /// `GetObject` with a `Range`, `DeleteObject` and `ListObjectsV2`, the
-/// operations R2, Scaleway and Hetzner all document (ADR-0025).
+/// operations R2, Scaleway and Hetzner all document (ADR-0009).
 pub struct S3Store {
     client: S3Client,
     pub settings: S3Settings,

@@ -1,4 +1,4 @@
-// Probe: a scheduled notice that reaches the people its rows name (ADR-0021),
+// Probe: a scheduled notice that reaches the people its rows name (ADR-0012),
 // run on `konae dev`, the Kernel a person runs on an app folder on their own
 // machine. Ana and Ben accept invitations the `kernel` binary's invite command
 // sends, which proves their addresses.

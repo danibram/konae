@@ -52,7 +52,7 @@ describe("signup policy copy", () => {
       expect(sentence.slice(0, -1)).not.toContain(". ");
     }
     expect(signupModeCopy.invitation.label).toBe("Invitation only");
-    // ADR-0011, note of 2026-11-06 on Closed: the owner's invitation still works.
+    // ADR-0003: the owner's invitation still works.
     expect(signupModeCopy.closed.sentence).toContain("people you invite can still accept");
     expect(signupModes.filter((mode) => signupModeCopy[mode].advanced)).toEqual(["allowlist"]);
   });

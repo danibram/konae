@@ -1,5 +1,4 @@
-//! Entering an app as one of its users, through a one-time link (ADR-0027,
-//! decision 3).
+//! Entering an app as one of its users, through a one-time link (ADR-0001).
 //!
 //! Whoever manages the app, an owner in Konae or an operator on the machine,
 //! calls `issue` with the account and a label that says who enters. The link

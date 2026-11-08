@@ -1,5 +1,5 @@
 //! The maintenance state of one Deployment, and the guards that keep a paused
-//! app from taking writes. ADR-0014 introduced it and ADR-0027 keeps it.
+//! app from taking writes. ADR-0008 records it.
 //!
 //! The state lives in `.konae/maintenance.json`, inside the app's folder, so
 //! a restart, a scheduled copy and a restore all keep it. The Kernel reads

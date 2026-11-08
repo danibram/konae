@@ -13,7 +13,7 @@
 //!   an app cannot frame the editor, another app or itself in another origin.
 //! - Every host gets HSTS when the installation is served over HTTPS, and a
 //!   custom domain gets it without `includeSubDomains`.
-//! - A path address on `<domain>` (ADR-0024) is an app host for these headers.
+//! - A path address on `<domain>` (ADR-0014) is an app host for these headers.
 //!   The layer runs outside the router, so the home page and the redirects of
 //!   the path router get the same headers as an app response.
 
@@ -34,7 +34,7 @@ const MAX_HASHED_HTML: usize = 32 * 1024 * 1024;
 /// Fonts, so those two hosts are the only foreign origins. Images and media
 /// accept `blob:` and `data:` because the SDK hands files to the app as Blob
 /// URLs and apps keep small inline copies of images. `connects` are the
-/// origins the manifest's `connects` adds to connect-src (ADR-0019).
+/// origins the manifest's `connects` adds to connect-src (ADR-0013).
 pub fn app_policy(script_hashes: &[String], connects: &[String]) -> String {
     let mut script = String::from("'self'");
     for hash in script_hashes {

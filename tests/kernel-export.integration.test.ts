@@ -9,7 +9,7 @@ import { readTar } from "../src/lib/tar";
 import type { Transfer } from "../src/mcp/client";
 import { account, appFetch, buildKernel, freshClient, password, release, runtime, startKernel, type Kernel } from "./kernel-harness";
 
-// ADR-0027, step 7: an app exported from Konae with its data runs on the
+// An app exported from Konae with its data (ADR-0008) runs on the
 // kernel binary alone. The Kernel opens the exported folder, which carries
 // no record of the installation, an existing app user signs in with the
 // password they set on Konae, and an operator command run beside the Kernel

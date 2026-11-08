@@ -1,6 +1,6 @@
 import { McpError, platformMcp } from "../mcp/client";
 
-// The path address of a Deployment (ADR-0024). The Kernel's kernel-rs/kernel/src/path.rs
+// The path address of a Deployment (ADR-0014). The Kernel's kernel-rs/kernel/src/path.rs
 // answers these tools; the words below mirror its refusals and its `next` text.
 
 export type PathView = {

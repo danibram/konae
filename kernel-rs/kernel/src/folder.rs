@@ -1,4 +1,4 @@
-//! The Kernel alone serves each app folder as it finds it (ADR-0027). At
+//! The Kernel alone serves each app folder as it finds it (ADR-0001). At
 //! startup it reads `konae.json`, `app/` and `dist/` of every folder under
 //! `apps/`, runs on them the checks a release gets, applies the schema
 //! change `app/schema.sql` asks of `data/database.sqlite`, and writes the

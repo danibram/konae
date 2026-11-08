@@ -417,7 +417,7 @@ async fn stage_copy(state: &AppState, staging: &Path, id: &str, created_at: u64)
 }
 
 /// Reads every file the copied index names from the installation's store into
-/// the copy, as `<id>.blob`, so a copy restores without the store (ADR-0025).
+/// the copy, as `<id>.blob`, so a copy restores without the store (ADR-0009).
 /// The bytes under a file ID never change, so reading them after the locks is
 /// safe; a file deleted since the index was taken is left out of the copy.
 async fn copy_file_bytes(state: &AppState, deployment: &str, files: &Path) -> Result<()> {
@@ -1431,8 +1431,8 @@ mod tests {
         }
     }
 
-    /// ADR-0011, note of 2026-11-06: a restore brings back the same
-    /// installation for the same owner, so API keys stay valid; an import
+    /// A restore brings back the same installation for the same owner, so
+    /// API keys stay valid (ADR-0008); an import
     /// into another installation revokes them. The Usage store travels.
     #[tokio::test]
     async fn a_restore_keeps_api_keys_live_and_an_import_revokes_them() {

@@ -1,4 +1,4 @@
-//! The hosts an installation answers on (ADR-0024).
+//! The hosts an installation answers on (ADR-0014).
 //!
 //! `KONAE_DOMAIN` derives the public origin and the app suffix. Each older
 //! variable still wins when it is set. Without the domain the defaults are
@@ -59,7 +59,7 @@ pub fn resolve(get: impl Fn(&str) -> Option<String>) -> Result<Hosts> {
     let derived = format!("{scheme}://app.{domain}{port}");
     let public_origin = non_empty(&get, "KONAE_PUBLIC_ORIGIN").unwrap_or(derived);
     // The home and every path address share <domain>. The editor on that host would let an
-    // app's script reach the owner's session, so the Kernel refuses to start that way (ADR-0024).
+    // app's script reach the owner's session, so the Kernel refuses to start that way (ADR-0014).
     refuse_on_domain("KONAE_PUBLIC_ORIGIN", &public_origin, &domain)?;
     Ok(Hosts {
         host_suffix: non_empty(&get, "KONAE_HOST_SUFFIX").unwrap_or_else(|| domain.clone()),

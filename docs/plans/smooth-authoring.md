@@ -14,7 +14,7 @@ Findings this plan acts on, with evidence:
 4. A GitHub or Stripe webhook needs six signature keys copied from prose, and the Gate refuses them one at a time.
 5. Five declarations are refused only at publish (unset secret, malformed `svix` secret, http URL off the installation, editor host, call secret on a route), so "Validated" in the editor does not mean "publishable".
 6. A new project starts from Tiny Tasks (`src/lib/starter.ts`), an anonymous shared list. Every app with members, roles, a public form, a webhook or a digest starts by rewriting it. The starter showcase repeats one role predicate in 5 statements.
-7. Refusals are sentences, so tools match text (ADR-0020).
+7. Refusals are sentences, so tools match text (ADR-0004).
 
 ## Work packages
 
@@ -54,9 +54,9 @@ Owns `src/agent/gate.ts`, `src/components/action-readiness.ts`, `src/components/
 - The Gate takes the project's secret names (never values, from `secrets_list`) and the installation's host facts the editor already knows, and refuses the five publish-only declarations with the sentence `release_plan` uses. The footer shows it before Deploy, with a link to Integrations when the owner must act.
 - Without secret names (offline, preview) the Gate says nothing about secrets, as now.
 
-### E. Refusal codes (ADR-0020)
+### E. Refusal codes (ADR-0004)
 
-Starts after A, B and D land, because it touches every refusal they add. Not dispatched in the first wave. Built in the third wave, 2026-11-08: see the update at the end of ADR-0020.
+Starts after A, B and D land, because it touches every refusal they add. Not dispatched in the first wave. Built in the third wave, 2026-11-08: see ADR-0004.
 
 ## Not in this wave
 
@@ -75,21 +75,21 @@ Closed in the second wave:
 - The habits and starter replays, and the members, digest, gallery and webhook templates, were refused at publish with "The accepted database model does not match the deployed schema. Apply its migration before publishing." The check compared CHECK clauses, which a Database Model cannot declare, and the schema.sql files wrote unique columns and foreign keys in a form the model does not derive. The Kernel now leaves CHECK groups out of the comparison, the schema.sql files write the model's form, and `tests/template-release.integration.test.ts` plans a release for every template and both showcases. All six showcase replays pass; habits covers `days.close` end to end, and `notes.surface` lives in the schedule probe, which passes.
 - `tests/security-review-accounts.integration.test.ts` failed 7 of 11 when run alone because two tests take about 6 seconds and bun's default timeout is 5. A timed-out test made bun kill the Kernel. The lab helper sets the 30 seconds `bun run test` uses.
 
-Open: a migration that recreates a table builds it from the model, so it drops CHECK constraints schema.sql added. Before the second wave such an app could not publish; now it can, so this needs a refusal or a model that can state a CHECK. Closed in the third wave: a migration carries the live table's CHECKs into the rebuilt table, and refuses one that would remove a column another CHECK names (ADR-0004, note of 2026-11-08).
+Open: a migration that recreates a table builds it from the model, so it drops CHECK constraints schema.sql added. Before the second wave such an app could not publish; now it can, so this needs a refusal or a model that can state a CHECK. Closed in the third wave: a migration carries the live table's CHECKs into the rebuilt table, and refuses one that would remove a column another CHECK names (ADR-0005).
 
 Also closed in the second wave: the Kernel runs `release-cases.json` (27 cases, `Rules` injected); `secrets_list` answers `svixKey`, so the editor gives all five publish-time refusals before Deploy; the build agent's Gate gets the release facts, and a refusal the owner must fix is a warning in the agent panel and the workshop footer and stays an error at Deploy (owner decision, 2026-11-08); the agent reads the templates under `/templates`; the new-project dialog shows seven cards and scrolls. After the merge: Kernel 267 passed, `bun test src scripts` 754 passed, all six showcase replays pass.
 
-Closed in the third wave: a migration that rebuilds a table carries the CHECKs schema.sql added, and a change that removes a column a CHECK names is refused at both doors (`schema.check-names-removed-column`); rebuilds now run on a deployment. Package E landed: 113 codes in `kernel-rs/src/refusal-codes.json`, every refusal case carries one, both runners check code and sentence, MCP answers `structuredContent.error`, and `platform_guide` has a `refusals` topic. ADR-0020 is accepted. After the merge: Kernel 275 passed, `bun test src scripts` 764 passed, all six showcase replays pass.
+Closed in the third wave: a migration that rebuilds a table carries the CHECKs schema.sql added, and a change that removes a column a CHECK names is refused at both doors (`schema.check-names-removed-column`); rebuilds now run on a deployment. Package E landed: 113 codes in `kernel-rs/src/refusal-codes.json`, every refusal case carries one, both runners check code and sentence, MCP answers `structuredContent.error`, and `platform_guide` has a `refusals` topic. ADR-0004 is accepted. After the merge: Kernel 275 passed, `bun test src scripts` 764 passed, all six showcase replays pass.
 
 Next wave:
 
 - The migration refusal carries its code through `schema_apply` and the Database Studio, as Capsule refusals do; today only the case file names it.
 - The items under "Not in this wave": `{changes}` and `{kernel.now}` placeholders and `to` naming a column of account IDs for notices; a "What happened" owner view over notices, calls and scheduled runs; splitting CONTEXT.md and the agent prompt into author and maintainer parts.
 
-Fourth wave, notices: `{changes}`, `{kernel.now}` and `to: { column }` landed with ADR-0021; the nightly digest mails each member their own entries, and `examples/probes/notify-rows` proves a scheduled notice to two members on `konae dev`.
+Fourth wave, notices: `{changes}`, `{kernel.now}` and `to: { column }` landed with ADR-0012; the nightly digest mails each member their own entries, and `examples/probes/notify-rows` proves a scheduled notice to two members on `konae dev`.
 
 ## Status after the fourth wave, 2026-11-08
 
-All four landed on `main`: notices with `{changes}`, `{kernel.now}` and `to: { column }` (ADR-0021); a What happened panel over notices (`notices_read`, new), calls, scheduled runs, routes and signals; migration and model refusals that carry their code through `database_execute`, `release_apply` and the Database Studio; CONTEXT.md ordered as author words then installation words, and the build agent's prompt cut from 66k to 49k characters. After the merge: Kernel 288 passed, `bun test src scripts` 786 passed, all six showcase replays and all 11 probe replays pass, and the template-release, check-carry and MCP walkthrough suites pass (29).
+All four landed on `main`: notices with `{changes}`, `{kernel.now}` and `to: { column }` (ADR-0012); a What happened panel over notices (`notices_read`, new), calls, scheduled runs, routes and signals; migration and model refusals that carry their code through `database_execute`, `release_apply` and the Database Studio; CONTEXT.md ordered as author words then installation words, and the build agent's prompt cut from 66k to 49k characters. After the merge: Kernel 288 passed, `bun test src scripts` 786 passed, all six showcase replays and all 11 probe replays pass, and the template-release, check-carry and MCP walkthrough suites pass (29).
 
 Every item this plan opened is closed. A next plan should start from a fresh review of the running editor against AGENTS.md, as the first one did.

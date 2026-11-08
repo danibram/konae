@@ -229,7 +229,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
 }
 
 /// Every code a refused Capsule answers, rendered from refusal-codes.json
-/// (ADR-0020), grouped by the part of the Capsule it names.
+/// (ADR-0004), grouped by the part of the Capsule it names.
 fn refusals() -> Value {
     let mut groups = serde_json::Map::new();
     for (code, row) in super::refusal::table() {

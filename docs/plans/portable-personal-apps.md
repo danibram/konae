@@ -79,7 +79,7 @@ konae.manifest.json
 migrations/                # reviewable lifecycle output
 ```
 
-The proposal keeps Drizzle as the model, per ADR-0004. Going back to schema.sql as a second authority now would change another decision without solving the persistence problem. The generated SQL stays available for inspection and export. The first templates and agent tools should cover a small subset of the model.
+The proposal keeps Drizzle as the model, per ADR-0005. Going back to schema.sql as a second authority now would change another decision without solving the persistence problem. The generated SQL stays available for inspection and export. The first templates and agent tools should cover a small subset of the model.
 
 The agent has a small SDK. These methods are the proposed contract; today some capabilities still differ between the preview and the kernels.
 

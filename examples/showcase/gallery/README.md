@@ -27,7 +27,7 @@ This is a product probe. The app uses Konae's primitives as a creator would, and
 - `feed.items`, an anonymous query bound to `GET /feed.json` with no signature.
 - A multi-page Build Artifact from `konae build`: `index.html`, `about.html`, `404.html`, the `styles.css` and `app.js` they load, and the SDK as `runtime.js`.
 - `signals_read`, `usage_read`, `konae contract` and `konae conform`.
-- A custom domain, `gallery.studio.example`, set with `domain_set` and proved with a TXT record that a fake resolver on a local UDP port answers ([ADR-0015](../../../docs/adr/0015-a-deployment-answers-on-one-custom-domain.md)). The replay reaches the alias with a `Host` header, as a proxy that forwards `Host` unchanged would.
+- A custom domain, `gallery.studio.example`, set with `domain_set` and proved with a TXT record that a fake resolver on a local UDP port answers ([ADR-0014](../../../docs/adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md)). The replay reaches the alias with a `Host` header, as a proxy that forwards `Host` unchanged would.
 
 ## Run the replay
 
@@ -100,7 +100,7 @@ Rows with a status or a quoted message are answers the replay received. Rows tha
 | `konae publish` with a first signup policy | | Fixed on 2026-11-06: `konae.json` names `project.manifest.signupPolicy` and `konae publish` sends it on the first release (the club and booking replays use it). This replay publishes the artifact `konae build` writes, over MCP with `initialSignupPolicy`, so it can also plan a broken release first. |
 | Publish `contact.send` with `... RETURNING id` | | `Action contact.send cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.` |
 | A visitor signs up while signup is Closed | 403 | `This app is not accepting new accounts for this email address.` The same text for everyone under Closed, though it reads as if the address were the problem. |
-| The invited curator accepts while signup is Closed | 200 | Fixed on 2026-11-06 (ADR-0011, note on Closed). The replay first recorded 403 `This app is not accepting new accounts for this email address.` with `acceptable: false`. An owner's invitation is now acceptable under Closed, and the replay asserts `acceptable: true` and the 200. |
+| The invited curator accepts while signup is Closed | 200 | Fixed on 2026-11-06 (ADR-0003). The replay first recorded 403 `This app is not accepting new accounts for this email address.` with `acceptable: false`. An owner's invitation is now acceptable under Closed, and the replay asserts `acceptable: true` and the 200. |
 | Create the curator's account on an app that is Closed from its first release | | Fixed on 2026-11-06. The owner invites the curator and the policy stays Closed; the curator's own signup still answers 403. |
 | Mark the curator as the studio owner | | No primitive. `auth_session` answers `role: "member"` for the only account; the app cannot tell the curator from any other account, so the owner inserts the curator's user ID into `studio` with `database_execute`. Until then `photos.add` is refused with its guard, `Only the studio's curator can add photographs.` (before 2026-11-07, `{ changes: 0 }`). |
 | A visitor reads a draft over MCP (`files_read`) | | `File not found.` |
@@ -115,7 +115,7 @@ Rows with a status or a quoted message are answers the replay received. Rows tha
 | `GET /feed.json?page=2` | 400 | `{"error":"Unexpected action input: page"}` |
 | Shape `/feed.json` as a JSON Feed document (`version`, `title`, `items`) | | No primitive. A route always answers `{ "result": [rows] }`. |
 | Absolute image URLs in `/feed.json` | | No primitive. The only kernel binding is `now`; the statement cannot read the Deployment's origin, so the feed carries `/_konae/files/<id>` paths. |
-| Let a browser cache `/feed.json` | | No primitive. `Cache-Control: no-store` on every answer. Since ADR-0019 (2026-11-07) a feed reader in another origin's browser reads it, because an open GET route answers `Access-Control-Allow-Origin: *`; the replay asserted the missing header before. |
+| Let a browser cache `/feed.json` | | No primitive. `Cache-Control: no-store` on every answer. Since ADR-0013 (2026-11-07) a feed reader in another origin's browser reads it, because an open GET route answers `Access-Control-Allow-Origin: *`; the replay asserted the missing header before. |
 | Message 31 from one address within 10 seconds (`contact.send` over MCP) | 200 | `rate-limited`, as a JSON-RPC result with `isError: true` and `Retry-After: 1`. A route answers 429; the runtime endpoint answers 200. |
 | A tighter limit for `contact.send` alone, such as 3 an hour | | No primitive. `actions.json` declares no rate limit; every anonymous action shares 30 calls per 10 seconds per address, which lets one address send about 260,000 messages a day. |
 | `contact.send` with topic `spam` | | `CHECK constraint failed: topic IN ('commission', 'print', 'other')`. Inputs have type and length but no allowed values, so the CHECK in `schema.sql` is the only guard and its SQLite text reaches the visitor. |

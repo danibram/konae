@@ -1,5 +1,5 @@
 //! A mutation's notice: an email the Kernel queues when the statement
-//! changes a row (ADR-0016).
+//! changes a row (ADR-0012).
 //!
 //! `"notify": { "to": "owner" | "actor", "subject", "body" }` sends to the
 //! app's contact email in `konae.json`, which the owner sets in App settings
@@ -75,7 +75,7 @@ const MAX_CHANGES_COLUMNS: usize = 8;
 pub const MAX_RETURNED_ROWS: usize = 1000;
 /// Rows `{changes}` lists in one notice before "and N more".
 const MAX_LISTED_ROWS: usize = 50;
-/// Distinct accounts one run notifies through a column (ADR-0021).
+/// Distinct accounts one run notifies through a column (ADR-0012).
 pub const MAX_RECIPIENTS_PER_RUN: usize = 50;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
