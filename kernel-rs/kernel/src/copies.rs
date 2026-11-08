@@ -111,7 +111,7 @@ impl CopyConfig {
             ensure!(s3_configured, "KONAE_COPY_S3_PREFIX needs KONAE_S3_ENDPOINT.");
             let prefix = normalize_prefix(prefix);
             ensure!(!prefix.is_empty(), "KONAE_COPY_S3_PREFIX must name a prefix, such as copies/.");
-            // Publishing deletes stale artifact keys under deployments/<id>/.
+            // Publishing deletes stale artifact keys under the bucket's deployments/<id>/.
             ensure!(
                 !prefix.starts_with("deployments/"),
                 "KONAE_COPY_S3_PREFIX must not start with deployments/, where artifacts live."

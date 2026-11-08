@@ -775,7 +775,7 @@ pub fn copy_database(state: &AppState, package: &InitialPackage, target: &Path) 
     Ok(())
 }
 
-/// Runs inside the release, after the Deployment's folder exists and before
+/// Runs inside the release, after the app folder exists and before
 /// its record does. Copies each component in, checking its SHA-256 as it
 /// goes, revokes sessions, links and keys, and unpacks the files. The
 /// uploads stay intact, so a failed release can be retried.

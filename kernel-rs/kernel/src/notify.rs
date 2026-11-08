@@ -80,7 +80,7 @@ pub const MAX_RECIPIENTS_PER_RUN: usize = 50;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Recipient {
-    /// The Project Owner's account email.
+    /// The app's contact email in `konae.json`.
     Owner,
     /// The calling account's verified email.
     Actor,

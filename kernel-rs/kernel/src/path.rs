@@ -2,13 +2,13 @@
 //! `<domain>/p/<name>` when it is named (docs/adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md).
 //!
 //! The owner turns the path on with `path_set`. The state lives in
-//! `deployments/<id>/path.json`, next to `domain.json`. The Kernel keeps the
+//! `apps/<id>/.konae/path.json`, next to `domain.json`. The Kernel keeps the
 //! enabled ids and names in memory, so `deployment_for_segment` answers the
 //! router without a file read. Every path and the home share the origin
 //! `<domain>`, so an app with accounts, or a private app, needs the owner's
 //! `acceptSharedOrigin` before its path turns on. `has_accounts` decides that.
 //!
-//! A package carries the path's state and the name, never the id. The
+//! An export carries the path's state and the name, never the id. The
 //! destination keeps the name when it is free there.
 
 use super::path_name::check_name;
@@ -424,12 +424,12 @@ pub async fn arrive(state: &AppState, deployment: &Deployment, carried: Option<&
             Ok(checked) => match ensure_free(state, &deployment.id, &checked).await {
                 Ok(()) => Some(checked),
                 Err(_) => {
-                    notices.push(format!("The package's path name {checked} is taken on this installation, so the import dropped it. Set another with path_set."));
+                    notices.push(format!("The export's path name {checked} is taken on this installation, so the import dropped it. Set another with path_set."));
                     None
                 }
             },
             Err(refusal) => {
-                notices.push(format!("The package's path name {raw} is not valid here, so the import dropped it. {refusal}"));
+                notices.push(format!("The export's path name {raw} is not valid here, so the import dropped it. {refusal}"));
                 None
             }
         },
@@ -437,7 +437,7 @@ pub async fn arrive(state: &AppState, deployment: &Deployment, carried: Option<&
     let mut enabled = carried.enabled;
     if enabled && has_accounts(deployment) && !carried.accept_shared_origin {
         enabled = false;
-        notices.push("The path stays off: the app has accounts or is private, and the package does not accept the shared origin. Call path_set with acceptSharedOrigin true to turn it on.".to_owned());
+        notices.push("The path stays off: the app has accounts or is private, and the export does not accept the shared origin. Call path_set with acceptSharedOrigin true to turn it on.".to_owned());
     }
     if enabled && state.path_origin.is_none() {
         notices.push("This installation has no KONAE_DOMAIN, so the path address does not answer until it is set.".to_owned());
@@ -667,7 +667,7 @@ mod tests {
         folder(&state, "arriving").await;
         let notices = arrive(&state, &arriving, Some(&carried)).await.unwrap();
         assert_eq!(notices.len(), 1);
-        assert!(notices[0].starts_with("The package's path name spring-menu is taken on this installation"), "{notices:?}");
+        assert!(notices[0].starts_with("The export's path name spring-menu is taken on this installation"), "{notices:?}");
         assert!(!notices[0].contains(&notes.id), "the notice does not name the holder");
         assert_eq!(read_record(&state, "arriving"), Some(Record { enabled: true, name: None, accept_shared_origin: true }));
         assert_eq!(deployment_for_segment(&state, "arriving").as_deref(), Some("arriving"));

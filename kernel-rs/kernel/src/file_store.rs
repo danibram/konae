@@ -1,10 +1,9 @@
 //! Where the Kernel keeps the bytes of app files, and how many it accepts.
 //!
-//! A Deployment's file index, `deployments/<id>/files/index.json`, always
-//! stays in the Deployment's folder, so listing, visibility and the quota never
-//! ask the store. Only the bytes go through [`FileStore`]. [`LocalFolder`]
-//! keeps them next to the index as `<file id>.blob`, which is what every
-//! Kernel did before stores existed.
+//! A Deployment's file index, `apps/<id>/data/files/index.json`, always
+//! stays in the app folder, so listing, visibility and the quota never ask
+//! the store. Only the bytes go through [`FileStore`]. [`LocalFolder`] keeps
+//! them next to the index as `<file id>.blob`.
 //!
 //! The operator sets the limits with `KONAE_FILES_QUOTA_BYTES` (all files
 //! of one Deployment together, 20 MiB by default) and `KONAE_FILE_MAX_BYTES`
@@ -551,7 +550,7 @@ async fn write_marker(data_root: &Path, value: &serde_json::Value) -> Result<()>
     Ok(())
 }
 
-/// Whether any Deployment folder still holds a `.blob`.
+/// Whether any app folder still holds a `.blob`.
 async fn local_bytes_remain(data_root: &Path) -> Result<bool> {
     let local = LocalFolder::new(data_root);
     for deployment in local.deployments().await? {

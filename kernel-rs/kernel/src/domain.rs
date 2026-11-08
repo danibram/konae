@@ -2,7 +2,7 @@
 //!
 //! The owner names a hostname with `domain_set`. The Kernel checks the name
 //! by the rules in `domain-cases.json`, which the CLI runs too, records the
-//! claim in `deployments/<id>/domain.json` with a token, and answers with the
+//! claim in `apps/<id>/.konae/domain.json` with a token, and answers with the
 //! TXT record `_konae.<hostname>` that must hold the token. Each later
 //! `domain_set` looks the record up through the Kernel's own DNS query; when
 //! it holds the token, the alias serves. From then on a request whose `Host`
@@ -451,7 +451,7 @@ pub fn for_package(state: &AppState, id: &str) -> Option<String> {
 /// token in DNS.
 pub async fn arrive(state: &AppState, id: &str, hostname: Option<&str>) -> Result<()> {
     let Some(raw) = hostname else { return Ok(()) };
-    let hostname = check_hostname(raw, &Rules::of(state)).map_err(|message| anyhow::anyhow!("The package's custom domain: {message}"))?;
+    let hostname = check_hostname(raw, &Rules::of(state)).map_err(|message| anyhow::anyhow!("The export's custom domain: {message}"))?;
     let _domains = database_lock(state, "domains").await;
     ensure_free(state, &id, &hostname).await?;
     let record = Record { hostname, token: new_token(), verified: false, verified_at: None, created_at: now_ms() };

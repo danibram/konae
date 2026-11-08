@@ -23,5 +23,5 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     kernel::folder::follow_settings(running.state.clone());
-    kernel::listen(&startup, running.state.clone(), axum::Router::new(), "Konae Kernel").await
+    kernel::listen(&startup, running.state.clone(), axum::Router::new(), "Kernel").await
 }

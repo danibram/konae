@@ -1,8 +1,8 @@
 //! Usage and Signals, ADR-0010.
 //!
-//! Each Deployment keeps `usage.sqlite` in its folder, next to `database.sqlite`
-//! and `identity.sqlite`. It holds daily totals of the Runtime Interface
-//! operations the Kernel authorized and the Signals that Server Actions
+//! Each Deployment keeps `usage.sqlite` in its app folder's `data/`, next to
+//! `database.sqlite` and `identity.sqlite`. It holds daily totals of the
+//! runtime endpoint's operations the Kernel authorized and the Signals that Server Actions
 //! declared. Nothing else writes it and a Runtime Actor never reads it; the
 //! owner reads it with `usage_read` and `signals_read`.
 //!
@@ -57,7 +57,7 @@ const SIGNALS_PAGE: i64 = 100;
 const QUEUE: usize = 16_384;
 const BATCH: usize = 1_024;
 
-/// An authorized Runtime Interface operation.
+/// An operation of the runtime endpoint that the Kernel authorized.
 pub enum Operation {
     /// `auth_session`, which the SDK calls when an app opens.
     Session,
@@ -835,7 +835,7 @@ mod tests {
         count(&root, id, Operation::Login);
         let long = "é".repeat(100);
         signal(&root, id, "orders.place", action, &json!({"id": long}), None);
-        // A Deployment folder that is gone gets no new file.
+        // An app folder that is gone gets no new file.
         count(&root, "deployment-gone", Operation::Session);
         flush();
         let path = crate::layout::usage(&root, &id);
