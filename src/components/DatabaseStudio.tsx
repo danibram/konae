@@ -112,7 +112,7 @@ export function DatabaseStudio({ host, onEditSchema, onExportDatabase, target = 
       )}
       {tab === "sql" && <SqlConsole host={host} tables={tables} onMutated={mutated} />}
       {tab === "schema" && <SchemaView tables={tables} onEdit={onEditSchema} />}
-      {tab === "backups" && <BackupsView host={host} tables={tables} onExport={onExportDatabase} onRestored={mutated} />}
+      {tab === "backups" && <BackupsView host={host} tables={tables} deployed={target === "deployed"} onExport={onExportDatabase} onRestored={mutated} />}
 
       <footer className="database-statusbar">
         <span><i /> {target === "deployed" ? "Deployed database" : "Local database"}</span>
@@ -446,9 +446,10 @@ function SchemaView({ tables, onEdit }: { tables: DatabaseTable[]; onEdit: () =>
   );
 }
 
-function BackupsView({ host, tables, onExport, onRestored }: {
+function BackupsView({ host, tables, deployed, onExport, onRestored }: {
   host: DatabaseAdminHost;
   tables: DatabaseTable[];
+  deployed: boolean;
   onExport: () => void;
   onRestored: () => void;
 }) {
@@ -505,7 +506,7 @@ function BackupsView({ host, tables, onExport, onRestored }: {
   return (
     <div className="studio-document-view backups-view">
       <header>
-        <div><h3>Rows on this browser</h3><span>Export, beside Deploy, takes the accounts, the rows and the rules.</span></div>
+        <div><h3>{deployed ? "Rows of the published app" : "Rows on this browser"}</h3><span>Export, beside Deploy, takes the accounts, the rows and the rules.</span></div>
         {supportsRestore
           ? <button onClick={() => void createBackup()} disabled={busy}><History size={12} /> Create backup</button>
           : <button onClick={onExport}><Download size={12} /> Download rows</button>}
@@ -529,7 +530,7 @@ function BackupsView({ host, tables, onExport, onRestored }: {
               </li>
             ))}
           </ul>
-        ) : <div className="future-backups"><History size={20} /><div><strong>No restore points yet</strong><p>Create a backup before changing the tables. This preview keeps five. A published copy keeps its backups on the machine that hosts it.</p></div></div>
+        ) : <div className="future-backups"><History size={20} /><div><strong>No restore points yet</strong><p>{deployed ? "Create a backup before changing the tables. The Kernel keeps each one in the app's folder on the machine that serves it." : "Create a backup before changing the tables. This preview keeps five. A published copy keeps its backups on the machine that hosts it."}</p></div></div>
       ) : <div className="future-backups"><History size={20} /><div><strong>Managed restore is not available for this target yet</strong><p>Download a consistent SQLite snapshot before changing the deployed database.</p></div></div>}
     </div>
   );
