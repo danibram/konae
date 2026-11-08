@@ -727,6 +727,7 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .publish-actions > .publish-refusal { flex-wrap: wrap; gap: var(--ds-space-2); padding: var(--ds-space-2) var(--ds-space-3); border: 1px solid var(--ds-danger); background: var(--ds-danger-soft); color: var(--ds-danger); font: 600 12px/1.45 var(--ds-font); }
 .publish-refusal span { flex: 1 1 24ch; min-width: 0; }
 .publish-refusal .deploy-auth-link { margin: 0; height: 32px; }
+.deploy-contact-missing .deploy-auth-link { margin: 8px 0 0; height: 32px; }
 .confirm-publish, .published-done { display: flex; align-items: center; justify-content: center; gap: 7px; background: var(--acid); box-shadow: 3px 3px 0 var(--ink); }
 .confirm-publish.ui-button-secondary,
 .publish-dialog.is-refused-leave .confirm-publish {
