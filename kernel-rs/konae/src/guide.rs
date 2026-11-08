@@ -80,17 +80,18 @@ pub(super) fn topic(name: &str) -> Result<Value> {
     Ok(match name {
         "rules" => json!({
             "yardstick": "Konae lets a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.",
-            "decide": "A new capability belongs in the product only when the Validation Gate and the Kernel refuse it with the same words, and an export of the app folder can carry the app's accounts, data and rules. Anything else is operator work, not an App feature.",
+            "decide": "A new capability belongs in the product only when the Validation Gate and the Kernel refuse it with the same words, and an export of the app folder can carry the app's accounts, data and rules. Anything else is operator work on the installation, not an app feature.",
+            "words": "An owner has a Konae account and manages apps through this MCP or the editor. An app user has an account in one app, kept by the Kernel. The app folder is the app: konae.json, app/, dist/ and data/, the same on a laptop, on this installation and in an export.",
             "sameChecks": "A query that reads rows names a LIMIT in the editor and on the Kernel that leaves with the app. Who may open the app, and who may read a row, stay decisions of the app.",
             "firstRun": {
                 "cli": [
+                    "bun run konae -- init --dir <folder> --name '<name>' && bun run konae -- dev --dir <folder>, which need no credential",
                     "bun run konae -- login --dir <folder> --url <Kernel URL>",
-                    "bun run konae -- init --dir <folder> --name '<name>' && bun run konae -- dev --dir <folder>",
                     "bun run konae -- publish --dir <folder>, then open the Deployment URL and call one Server Action"
                 ],
                 "mcp": [
-                    "A credential: bun run konae -- login, then platform_guide topics rules, pieces and credentials",
-                    "An app that runs: bun run konae -- init, then dev or publish; the publishing topic has the same steps as MCP calls",
+                    "An app that runs: bun run konae -- init, then dev, with no credential; the publishing topic has the same steps as MCP calls",
+                    "A credential, to publish or to operate: bun run konae -- login, then platform_guide topics rules, pieces and credentials",
                     "Proof: project_inspect for the Deployment URL, open it, call one Server Action with actions_invoke, and conform against action-contract.json when checking a contract"
                 ],
                 "after": "If the first run grows past these steps, the product got harder. Prefer fixing the path over adding a guide page."
@@ -105,32 +106,37 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "divergences": [
                 {"where": "editor preview vs published Deployment", "fact": "The preview applies no Content Security Policy. Inline event handlers and other-origin fetches can still run there; a published app refuses them. Attach listeners in JavaScript and keep scripts and fetches on the app's own origin."},
                 {"where": "editor preview vs Deployment", "fact": "The preview has no HTTP routes, no schedule timer, no notice email, no Usage store and no call outbox. Try those on bun run konae -- dev or on a published Deployment."},
+                {"where": "editor preview vs Kernel", "fact": "The editor preview refuses a file over 2 MiB. A Kernel refuses at its own KONAE_FILE_MAX_BYTES, 2 MiB unless the operator raised it, and names the number."},
                 {"where": "editor preview vs Deployment", "fact": "The editor preview has no Google sign-in. miniapp.auth.signInWithGoogle() refuses there; try it on a published Deployment once the owner has set the app's Google client and turned Google on."},
-                {"where": "Validation Gate vs publish builders", "fact": "The Gate checks schema and actions.json. A page that names a missing file fails at build or release, not at validate_capsule. Check every path you write."}
+                {"where": "editor build vs konae build", "fact": "The editor's build reads npm packages from esm.sh; konae build and an app folder's npm run build read them from node_modules. Both use the exact versions in package.json, but the bundles are not byte-identical."},
+                {"where": "Validation Gate vs publish builders", "fact": "The Gate checks schema and actions.json. A page that names a missing file fails at build or release, not at validate_capsule. Check every path you write."},
+                {"where": "editor preview vs Kernel", "fact": "The editor preview re-runs schema.sql on its own test rows and never changes a table it already has. A Kernel derives the schema change at publish. When the preview lacks a table or column schema.sql declares, the Gate warns and passes. Try such a change on bun run konae -- dev or a published Deployment."},
+                {"where": "konae dev vs Deployment", "fact": "konae dev sends no email. Account email and notices land in .konae/kernel/mailbox.jsonl, and bun run konae -- events lists them."}
             ]
         }),
         "pieces" => json!({
-            "rule": "Pick the smallest piece that does the job. Do not invent a second process, a second database door or a host rule the Capsule can already declare.",
+            "rule": "Pick the smallest piece that does the job. Prefer a declaration inside the Capsule over a new platform resource, a second process or a second database door.",
             "choose": [
-                {"need": "Show a page and keep rows the app owns", "use": "Capsule files plus Server Actions in actions.json (query or mutation)", "not": "Raw SQL from the browser, or a Database API outside Server Actions"},
-                {"need": "Let a visitor or member change or read a row", "use": "A named Server Action with access and actor bindings", "not": "Owner SQL from database_execute in the app UI"},
-                {"need": "Refuse a mutation that matched no row", "use": "guard on that mutation", "not": "A second check statement or a platform error invent"},
-                {"need": "Email the owner, the caller or the people a changed row names", "use": "notify on that mutation", "not": "A Call Action to a mail API from the browser"},
-                {"need": "Work that must run when nobody is looking", "use": "schedule on a mutation with no input", "not": "An external cron hitting a public route unless a human asked for that door"},
-                {"need": "Record that something happened for the owner", "use": "signal on a mutation, or kind signal", "not": "miniapp.track or a side table only the agent reads"},
-                {"need": "Another service calls this app", "use": "http on an anonymous action with callers, signature and/or API key", "not": "A Call Action (that is outbound)"},
-                {"need": "This app calls another app or https service", "use": "kind call with url, body, optional auth and then", "not": "fetch of a secret from the browser"},
-                {"need": "Files a person uploads", "use": "miniapp.files", "not": "Base64 in a SQLite column for large bytes"},
+                {"need": "Page and rows the app owns", "use": "Capsule + Server Actions", "not": "Raw SQL from the browser"},
+                {"need": "Visitor or app user reads or writes a row", "use": "Named Server Action with access and actor bindings", "not": "Owner database_execute in the app UI"},
+                {"need": "Mutation matched no row", "use": "guard on that mutation", "not": "A second check statement"},
+                {"need": "Email when a row changes", "use": "notify on that mutation", "not": "Browser mail or a call action for mail"},
+                {"need": "Work when nobody is looking", "use": "schedule on a no-input mutation", "not": "External cron unless asked"},
+                {"need": "Owner-facing occurrence", "use": "signal on a mutation, or kind: signal", "not": "A side table only the agent reads"},
+                {"need": "Another service calls this app", "use": "http on an anonymous action with callers / signature / key", "not": "A call action (that is outbound)"},
+                {"need": "This app calls another host", "use": "kind: call", "not": "fetch of a secret from the browser"},
+                {"need": "Uploaded files", "use": "miniapp.files", "not": "Large bytes in a SQLite column"},
                 {"need": "Who may create an app account", "use": "Signup Policy and invitations", "not": "A homemade users table that bypasses Runtime Actor"},
+                {"need": "An administrator inside the app", "use": "A role column in the app's own table, checked in SQL", "not": "An owner account inside the app"},
                 {"need": "A short link on the installation's domain", "use": "path address (path_set)", "not": "A custom domain when DNS is not yours"},
-                {"need": "Take the app to another machine", "use": "export and import of the app folder", "not": "Copy (that moves the whole installation)"},
-                {"need": "Debug, or try the next version, on what the published app holds", "use": "konae pull (an export of the data), then dev --reset (its import)", "not": "Publishing to find out"},
-                {"need": "See the email, calls, scheduled runs and Signals of a local run", "use": "konae events (--json for an agent), or the page dev serves", "not": "Reading the Kernel's files by hand"}
+                {"need": "Take the app elsewhere", "use": "export and import of the app folder", "not": "Copy (moves the installation)"},
+                {"need": "Debug, or try the next version, on what the published app holds", "use": "konae pull (an export of the data) + dev --reset (its import)", "not": "Publishing to find out"},
+                {"need": "See the email, calls, scheduled runs and Signals of a local run", "use": "konae events", "not": "Reading the Kernel's files by hand"}
             ],
-            "unit": "A Deployment folder on the Kernel is the app: artifact, database, identity, files and Usage. Prefer adding a declaration inside the Capsule over adding a new platform resource."
+            "unit": "The app folder is the app: konae.json, app/, dist/ and data/ with its database, accounts, files and Usage. The Kernel keeps it under apps/<id>/, and an export hands the same folder over."
         }),
         "credentials" => json!({
-            "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a development Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
+            "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
             "flags": {"--manage-users": "adds manage_users", "--export-data": "adds export_data"},
             "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data.",
             "permissions": {
@@ -187,7 +193,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
         "users" => json!({
             "permission": "manage_users, which login adds with --manage-users. signup_policy_read and sign_in_methods_read need only read.",
             "policy": "signup_policy_set { deploymentId, mode } with open, invitation, closed or allowlist and allowlist entries. A publish never changes it after the first release.",
-            "google": "Each app has its own Google OAuth client, which the owner makes in their own Google console. sign_in_methods_read { deploymentId } returns redirectUris, the callbacks to register in that client: the app's own host, a verified custom domain, and <domain>/p/<id> while the path address is on (the name address uses the id's callback; the home address offers no Google), and googleClient { clientIdSet, clientSecretSet }. secret_set { projectId, name: \"google_client_id\" or \"google_client_secret\", value, use: \"google\" } sets each half; the value is never returned and no route or call reads it. Then sign_in_methods_set { deploymentId, methods: [\"password\", \"google\"] } adds Continue with Google to the sign-in page; [\"password\"] removes it. Password cannot be turned off. While either half is unset it refuses with \"Set this app's Google client ID and client secret before turning Google on.\", and while Google is on secret_delete refuses either half. A Google sign-in reaches the app account that holds the same email, made with a password or with Google, and Signup Policy decides whether an email without an account gets one. Google proves only an address it manages: a gmail.com address, or one whose Workspace domain the token names in hd; any other address is refused and signs in with email and password. An active account whose email nobody proved is taken back for the person Google vouches for: its password and sessions stop working. A package carries signInMethods and the accounts, never the client: on another installation the owner sets the two secrets and registers that host's redirect URI, and until then the sign-in page offers only email and password and sign_in_methods_read returns a notice.",
+            "google": "Each app has its own Google OAuth client, which the owner makes in their own Google console. sign_in_methods_read { deploymentId } returns redirectUris, the callbacks to register in that client: the app's own host, a verified custom domain, and <domain>/p/<id> while the path address is on (the name address uses the id's callback; the home address offers no Google), and googleClient { clientIdSet, clientSecretSet }. secret_set { projectId, name: \"google_client_id\" or \"google_client_secret\", value, use: \"google\" } sets each half; the value is never returned and no route or call reads it. Then sign_in_methods_set { deploymentId, methods: [\"password\", \"google\"] } adds Continue with Google to the sign-in page; [\"password\"] removes it. Password cannot be turned off. While either half is unset it refuses with \"Set this app's Google client ID and client secret before turning Google on.\", and while Google is on secret_delete refuses either half. A Google sign-in reaches the app account that holds the same email, made with a password or with Google, and Signup Policy decides whether an email without an account gets one. Google proves only an address it manages: a gmail.com address, or one whose Workspace domain the token names in hd; any other address is refused and signs in with email and password. An active account whose email nobody proved is taken back for the person Google vouches for: its password and sessions stop working. An export carries signInMethods and the accounts, never the client: on another installation the owner sets the two secrets and registers that host's redirect URI, and until then the sign-in page offers only email and password and sign_in_methods_read returns a notice.",
             "invite": [
                 "Call mail_status: inviting needs sending true.",
                 "app_invitations_create { deploymentId, emails, idempotencyKey } emails each address a seven-day link to /_konae/invitation#invitation=<token> on the app's host. Call it only when the owner asked for those invitations.",
@@ -408,7 +414,7 @@ mod tests {
         let rules = topic("rules").unwrap();
         assert!(rules["yardstick"].as_str().unwrap().contains("take it to another machine"));
         assert_eq!(rules["firstRun"]["mcp"].as_array().unwrap().len(), 3);
-        // The first run is the three steps of AGENTS.md: a credential, an app that runs, a proof.
+        // The first run is the three steps of AGENTS.md: an app that runs, a credential, a proof.
         // Uploading by transfer belongs to the publishing topic, after the agent has an app.
         for step in rules["firstRun"]["mcp"].as_array().unwrap() {
             assert!(!step.as_str().unwrap().contains("transfer_"), "{step}");
@@ -421,7 +427,29 @@ mod tests {
         assert!(rules["divergences"].as_array().unwrap().len() >= 3);
         let pieces = topic("pieces").unwrap();
         assert!(pieces["choose"].as_array().unwrap().len() >= 8);
-        assert!(pieces["unit"].as_str().unwrap().contains("Deployment folder"));
+        assert!(pieces["unit"].as_str().unwrap().contains("app folder"));
+    }
+
+    /// A coding agent reads AGENTS.md and an MCP agent reads these topics,
+    /// so both get the same table of pieces and the same divergences.
+    #[test]
+    fn pieces_and_divergences_are_the_ones_agents_md_names() {
+        let agents = include_str!("../../../AGENTS.md");
+        let section = |heading: &str| agents.split(heading).nth(1).unwrap().split("\n## ").next().unwrap().to_owned();
+        let rows: Vec<Vec<String>> = section("## Pick the smallest piece")
+            .lines()
+            .filter(|line| line.starts_with("| ") && !line.starts_with("| Need") && !line.starts_with("| ---"))
+            .map(|line| line.trim_matches('|').split(" | ").map(|cell| cell.trim().replace('`', "")).collect())
+            .collect();
+        let choose: Vec<Vec<String>> = topic("pieces").unwrap()["choose"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| ["need", "use", "not"].iter().map(|key| row[*key].as_str().unwrap().to_owned()).collect())
+            .collect();
+        assert_eq!(choose, rows);
+        let divergences = section("## Named divergences").lines().filter(|line| line.starts_with("- ")).count();
+        assert_eq!(topic("rules").unwrap()["divergences"].as_array().unwrap().len(), divergences);
     }
 
     #[test]

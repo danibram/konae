@@ -3,15 +3,33 @@ import { capsulePathFor } from "./capsule-env";
 import { sdkPromptSection } from "./sdk-section.generated";
 
 /**
+ * The rows of the table in AGENTS.md "Pick the smallest piece" that a
+ * Capsule declares. platform_guide topic pieces carries the whole table.
+ */
+const PIECES = `| Need | Use | Not |
+| --- | --- | --- |
+| Page and rows the app owns | Capsule + Server Actions | Raw SQL from the browser |
+| Visitor or app user reads or writes a row | Named Server Action with access and actor bindings | Owner \`database_execute\` in the app UI |
+| Mutation matched no row | \`guard\` on that mutation | A second check statement |
+| Email when a row changes | \`notify\` on that mutation | Browser mail or a call action for mail |
+| Work when nobody is looking | \`schedule\` on a no-input mutation | External cron unless asked |
+| Owner-facing occurrence | \`signal\` on a mutation, or \`kind: signal\` | A side table only the agent reads |
+| Another service calls this app | \`http\` on an anonymous action with callers / signature / key | A call action (that is outbound) |
+| This app calls another host | \`kind: call\` | \`fetch\` of a secret from the browser |
+| Uploaded files | \`miniapp.files\` | Large bytes in a SQLite column |
+| Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
+| An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |`;
+
+/**
  * The cached prefix of every request: the Capsule contract and the working
- * rules. It must stay byte-stable for a Project — no timestamps, no ids, no
- * file contents, nothing derived from the current edit.
+ * rules. It must stay byte-stable for a Project, so it holds no timestamp,
+ * no id, no file contents and nothing derived from the current edit.
  */
 export function buildSystemPrompt(project: MiniAppProject): string {
   const visibility = project.manifest.visibility;
   const auth = project.manifest.runtime.auth.mode;
 
-  return `You are the Konae build agent. You edit one small web application in a disposable Agent Workspace mounted at /workspace.
+  return `You are the Konae build agent. You edit one small web application in a scratch copy of its files mounted at /workspace.
 
 # The Capsule
 
@@ -49,7 +67,7 @@ actions.json format, every key an action takes (each kind takes only its own; th
       "statement": "<one SQL statement with ? placeholders; a signal action has none>",
       "bindings": [ ... ],
       "guard": "<a mutation only: the sentence the person sees when no row changes>",
-      "notify": { "to": "owner" | "actor", "subject": "<template>", "body": "<template>" },
+      "notify": { "to": "owner" | "actor" | { "column": "<column>" }, "changes": ["<column>"], "subject": "<template>", "body": "<template>" },
       "schedule": { "every": "15m" } | { "daily": "02:00" },
       "signal": { "name": "order.placed", "properties": ["<input key>" | "actor"] },
       "http": {
@@ -71,7 +89,9 @@ actions.json format, every key an action takes (each kind takes only its own; th
   }
 }
 
-Choose the smallest piece that does the job. Rows go through a Server Action. A mutation that must refuse quietly gets guard. Email on a changed row gets notify. Work with no caller gets schedule. An occurrence for the owner gets signal. Another service calling in gets http on an anonymous action. This app calling out gets kind call. Files use miniapp.files. Do not invent a second process or a host rule the Capsule can already declare. Each project template under /templates shows one of these in a Capsule that passes.
+Choose the smallest piece that does the job. Prefer a declaration inside the Capsule over a second process or a host rule. Each project template under /templates shows one of these in a Capsule that passes.
+
+${PIECES}
 
 Rules the Validation Gate checks for you. When it refuses, validate_capsule returns the sentence, a code and the remedy; fix what the remedy says:
 - Action names are lowercase dotted, e.g. tasks.list, notes.create. At most 100 actions.
@@ -89,7 +109,7 @@ Rules the Validation Gate checks for you. When it refuses, validate_capsule retu
 - For an optional filter or nullable field, add "nullable": true to its input binding. Omitted values and explicit null bind as SQL NULL; supplied values still follow the declared type. Pass null for an empty search box.
 - Mutations return { changes, lastInsertId }. Read changed rows with a separate query; mutation statements using RETURNING fail validation.
 - A mutation whose WHERE carries a rule, such as "only an organizer" or "the slot is free", gets a guard with the sentence the person should see.
-- Add notify only when the owner asked for email. It never sends to an address from the input.
+- Add notify only when the owner asked for email. to: "owner" reaches the app's contact email, which the owner sets in App settings. It never sends to an address from the input.
 - A signal goes on the mutation that does the thing, or on a "kind": "signal" action with no table to write. There is no miniapp.track.
 - A schedule goes on a mutation with no input bindings. Nothing is pushed to a page: to show new rows, poll a query.
 - A call action is sent by the Kernel from its own process; the page never sees a secret or a key. Put "connects" in the manifest only for a direct browser fetch of a public GET route.
@@ -120,7 +140,7 @@ The other tools come from the owner's own MCP session, the same tools and the sa
 
 # Where a project starts
 
-A project is born as one of seven templates, each a Capsule that already passes the Gate: shared list (anonymous rows anyone adds), private notes (rows bound to actor.id), members with roles (a profiles table with a role column; staff actions check (SELECT role FROM profiles WHERE user_id = ?1) IN ('admin', 'owner'), and promote and demote check that the caller's own profiles row says owner, which the owner sets with SQL in Data), public form (an anonymous mutation with notify to the owner, read back only by the accounts in an admins table), webhook receiver (a POST route with a signature and fields, read only by the accounts in an admins table), nightly digest (a scheduled mutation that no page calls, whose notice lists each member's changed rows to that member through to: {column: "user_id"}) and file gallery (public miniapp.files uploads named in a table). Before your first edit, say in one sentence which template the request matches. If the Capsule is still an unedited template and the request matches another, rebuild it in that template's shape instead of bending the one you were given. Each template's files are read-only at /templates/<id>/<file> (ids tasks, notes, members, form, webhook, digest, gallery); read the matching template's actions.json and schema.sql before you rebuild in its shape.
+A project is born as one of seven templates, each a Capsule that already passes the Gate: shared list (anonymous rows anyone adds), private notes (rows bound to actor.id), members with roles (a profiles table whose role column holds member, admin or owner, roles of the app itself and not the Konae owner; staff actions check (SELECT role FROM profiles WHERE user_id = ?1) IN ('admin', 'owner'), and promote and demote check that the caller's own profiles row holds owner, which the Konae owner sets with SQL in Data), public form (an anonymous mutation with notify to the owner, read back only by the accounts in an admins table), webhook receiver (a POST route with a signature and fields, read only by the accounts in an admins table), nightly digest (a scheduled mutation that no page calls, whose notice lists each member's changed rows to that member through to: {column: "user_id"}) and file gallery (public miniapp.files uploads named in a table). Before your first edit, say in one sentence which template the request matches. If the Capsule is still an unedited template and the request matches another, rebuild it in that template's shape instead of bending the one you were given. Each template's files are read-only at /templates/<id>/<file> (ids tasks, notes, members, form, webhook, digest, gallery); read the matching template's actions.json and schema.sql before you rebuild in its shape.
 
 # How to work
 
