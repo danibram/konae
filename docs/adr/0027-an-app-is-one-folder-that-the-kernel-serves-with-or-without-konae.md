@@ -74,7 +74,7 @@ A publish stages and uploads first. It then copies the database, applies the sch
 
 ### 8. One implementation of the checks, in part
 
-The Gate is TypeScript and the Kernel is Rust, held together by shared case files. A spike compiled the Kernel's checks of `actions.json` to WebAssembly: they are pure, weigh 178 KB gzipped, and give the Gate's code and sentence on every shared case. The checks that compare actions with the schema need SQLite, and the editor's SQLite has no authorizer, so those stay two implementations joined by case files. The spike is on its own branch and is not merged. Adopting the pure half is later work.
+The Gate is TypeScript and the Kernel is Rust, held together by shared case files. A spike compiled the Kernel's checks of `actions.json` to WebAssembly: they are pure, weigh 178 KB gzipped, and give the Gate's code and sentence on every shared case. The checks that compare actions with the schema need SQLite, and the editor's SQLite has no authorizer, so those stay two implementations joined by case files. The spike is kept at the tag `spike/checks-wasm` and is not merged. Adopting the pure half is later work.
 
 ## What was built
 
