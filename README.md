@@ -135,3 +135,7 @@ Konae runs as a self-hosted installation and has no tagged release yet. These ar
 - Quotas shown to creators, alerts and account closing.
 
 The Kernel rejects `granted` actions until it supports explicit deployment grants. File bytes in a bucket are tested against SeaweedFS only. [docs/plans](./docs/plans) and [docs/research](./docs/research) hold the working notes behind these.
+
+## License
+
+Konae is released under the MIT License. See [LICENSE](./LICENSE).
