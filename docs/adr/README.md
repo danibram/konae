@@ -30,7 +30,7 @@ Each record states its status and which earlier record it amends on its first li
 | [0024](0024-an-installation-names-its-hosts-from-one-domain-and-an-app-may-answer-on-a-path.md) | Accepted. `KONAE_DOMAIN` derives `app.<domain>` and the app hosts, and the app whose path is named `konae-home` is the home; an owner may put an app on `/p/<id>` or `/p/<name>`, sharing one origin | | |
 | [0025](0025-a-deployments-file-bytes-may-live-outside-its-folder.md) | File quotas are installation settings; a Deployment's file bytes may live in an S3 bucket while its index stays in its folder; a copy carries the bytes | 0013 | |
 | [0026](0026-an-app-account-may-sign-in-with-the-apps-own-google-client.md) | An app account may sign in with the app's own Google client, on the app's host, matched by an email Google manages; the owner's unproven account is not taken back | 0011 | |
-| [0027](0027-an-app-is-one-folder-that-the-kernel-serves-with-or-without-konae.md) | Proposed. One app folder everywhere; export and import only; owners live in Konae and users in the app; the Kernel is a library Konae is built on; `schema.sql` is the only model; `dist/` is the publishing contract | 0001, 0004, 0005, 0006, 0008, 0011, 0012, 0013, 0014, 0015, 0016, 0019, 0026 | |
+| [0027](0027-an-app-is-one-folder-that-the-kernel-serves-with-or-without-konae.md) | One app folder everywhere; export and import only; owners live in Konae and users in the app; the Kernel is a library Konae is built on; `schema.sql` is the only model; `dist/` is the publishing contract | 0001, 0004, 0005, 0006, 0008, 0011, 0012, 0013, 0014, 0015, 0016, 0019, 0026 | |
 
 ## Which record answers a question
 
