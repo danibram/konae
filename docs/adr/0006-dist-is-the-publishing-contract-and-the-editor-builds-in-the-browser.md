@@ -8,14 +8,7 @@ An app may be built in the editor's tab, by `konae build` on a laptop, or by any
 
 ### Any builder may write `dist/`, and the Kernel checks it
 
-The publishing contract is the static files in `dist/` with a manifest of their paths, hashes, sizes, content types, `encodings` and `routing`. It is not a compiler or a project layout. The Kernel does not build. It treats what it receives as untrusted input:
-
-- it checks every declared hash against the bytes, enforces size and file-count limits and admits an allowlist of content types;
-- it refuses a path that escapes the artifact root or collides with what the Kernel serves itself, such as `/_konae/*` and `/runtime.js`;
-- it refuses a `routing` other than `"pages"` or `"spa"` with the builders' words;
-- it serves the result under the Content Security Policy of ADR-0002.
-
-Owner authentication says who may publish. It never says the bytes are well formed.
+The publishing contract is the static files in `dist/` with a manifest of their paths, hashes, sizes, content types, `encodings` and `routing`. It is not a compiler or a project layout. The Kernel does not build. It treats what it receives as untrusted input. It decodes the files `encodings` names, refuses a `routing` other than `"pages"` or `"spa"` with the builders' words, and serves the result under the Content Security Policy of ADR-0002. `/_konae/*` and `/runtime.js` belong to the Kernel on every app. Owner authentication says who may publish. It never says the bytes are well formed.
 
 ### The static publishing rules
 
@@ -29,7 +22,7 @@ Owner authentication says who may publish. It never says the bytes are well form
 
 ### The editor builds in the browser
 
-The editor bundles `app/` with `esbuild-wasm` in its own worker (`src/runtime/browser-build.ts`). Bundling parses and links source without running it, so a dependency cannot act during a build, and the worker is apart from the editor's context, which holds the model provider's keys. A change that does not build cannot be applied or published.
+The editor bundles `app/` with `esbuild-wasm` in its own worker (`src/runtime/browser-build.ts`). Bundling parses and links source without running it, so a dependency cannot act during a build, and the worker is apart from the editor's context, which holds the model provider's keys. The Validation Gate checks the schema and `actions.json`, not the build, so a page that names a missing file fails at build or publish, not at `validate_capsule`.
 
 ### An app may import npm packages
 

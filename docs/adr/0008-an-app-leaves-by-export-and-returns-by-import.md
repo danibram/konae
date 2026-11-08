@@ -14,6 +14,7 @@ Job 4 asks that either person can take the app to another machine with its accou
 - The identity component leaves without sessions, email links or entry links. Each API key travels with its name, actions, file visibilities and hash, marked revoked with the reason `import`, so the export opens nothing even on a Kernel that would not revoke it. The editor lists such keys under "Revoked at import" with what each could call.
 - Downloading accounts and data needs `export_data`. OAuth does not offer it (ADR-0002).
 - `konae pull` is an export of the published app's data, and `konae dev --reset` imports it into the local folder. The data is what the installation held at the time of the pull.
+- Local work never reaches the published app on its own. `konae dev` serves the folder's own `data/` on the `kernel` binary, `pull` runs only when asked, and `konae sql` and `konae events` read the published app only with `--prod`.
 
 ### Import takes a folder
 
@@ -38,6 +39,7 @@ Moving an app with no lost write is maintenance on the origin, export, import on
 - **Several export formats.** A small JSON export, a database download, a self-host kit, an Eject package and a chunked package each left out something the others carried. One folder carries one set of things.
 - **A live migration that kept one writer through a confirmation handed between installations.** It cost five tools and a second manifest version to prevent something the owner who moves the app can prevent by pausing it.
 - **Refuse any push of local data to a published app.** It left the person who rehearses a change locally with no way to put the result back except retyping it. An import replaces data only after a backup and never merges rows.
+- **Let `dev` pull on its own when a credential is present.** Every run of the local loop would read production, and every developer would need the permission to download accounts.
 - **Delete API keys from an export.** The destination's owner could then not tell which programs had access at the origin.
 - **Revoke API keys on a restore.** A restore brings back the same app for the same owner, and its keys sit in programs the owner may not control.
 - **Apply resumptions from the revocation record.** An entry that failed to reach a target would leave an account suspended or active depending on which entry got through. A suspension that stays errs on the safe side.

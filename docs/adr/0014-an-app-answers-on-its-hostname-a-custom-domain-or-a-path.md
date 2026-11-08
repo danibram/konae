@@ -19,7 +19,7 @@ A shop needs its own domain. A person who shares a page wants `konae.es/p/<name>
 | `<slug>-<id>.<domain>` | An app on its generated hostname |
 | A proved custom domain | An app on its alias |
 
-The Kernel derives `KONAE_PUBLIC_ORIGIN` and `KONAE_MCP_ORIGIN` as `https://app.<domain>` and `KONAE_HOST_SUFFIX` as `<domain>`. The scheme is `http` for `localhost` and `https` otherwise, and `KONAE_SCHEME` overrides it. Each variable still wins when it is set. The Kernel refuses to start when the editor or MCP origin is the bare domain, because the home and path addresses answer there.
+The Kernel derives `KONAE_PUBLIC_ORIGIN` as `https://app.<domain>` and `KONAE_HOST_SUFFIX` as `<domain>`, and Konae takes the same origin for `KONAE_MCP_ORIGIN`. The scheme is `http` for `localhost` and `https` otherwise, and `KONAE_SCHEME` overrides it. Each variable still wins when it is set. The Kernel refuses to start when the editor or MCP origin is the bare domain, because the home and path addresses answer there.
 
 The home is a public app. The Deployment whose path address holds the name `konae-home` answers `<domain>/` and every path on `<domain>` outside `/p/`. The operator claims that name with `path_set` like any other, so no setting and no restart choose the home.
 

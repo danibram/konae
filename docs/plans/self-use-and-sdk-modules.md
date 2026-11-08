@@ -265,7 +265,7 @@ Delivery 5 before 7, so the HTTP module is the first one born from the contract.
 
 ### Evidence for Usage and Signals, ADR-0010
 
-Landed on 2026-11-06 on branch `deliv/usage-signals`. `kernel-rs/src/usage.rs` keeps `deployments/<id>/usage.sqlite` with daily totals of session, action, route, upload, file_read, signup and login, and the Signals that actions declare. A queue and one writer thread keep it off the request path. `usage_read` and `signals_read` give it to the owner behind `read`. The scheduled copy and `package_export` carry it. The ADR-0010 note of 2026-11-06 records the bounds and the rules.
+Landed on 2026-11-06 on branch `deliv/usage-signals`. `kernel-rs/src/usage.rs` keeps `deployments/<id>/usage.sqlite` with daily totals of session, action, route, upload, file_read, signup and login, and the Signals that actions declare. A queue and one writer thread keep it off the request path. `usage_read` and `signals_read` give it to the owner behind `read`. The scheduled copy and `package_export` carry it. ADR-0010 records the rules.
 
 | Check | Command | Result |
 | --- | --- | --- |
@@ -284,7 +284,7 @@ Where this differs from the brief:
 - A route call counts under `route` with its method and path and not again under `action`, so the two kinds add up to the calls made.
 - `session` counts `auth_session`, which the SDK calls when an app opens. `signup` counts an account that becomes active, so a signup in required mode counts when its link is answered, and an accepted invitation counts too. `login` counts password sign-ins and answered recovery links.
 - A signal action may not declare `http`. Both parsers already refuse it with the method message, because a signal action is neither a query nor a mutation.
-- Property values are the inputs the action ran with. Actor, kernel and literal bindings have no key, so a Signal could not carry who caused it. ADR-0010's update of the same day lets a Signal list `actor`.
+- Property values are the inputs the action ran with. Actor, kernel and literal bindings have no key, so a Signal could not carry who caused it. ADR-0010 now lets a Signal list `actor`.
 - A package lists `usage` only when the store exists, and a Kernel from before this delivery refuses a package that lists it. The exported kit carries the new Kernel, so a kit is unaffected.
 - The action cap was 50 in the Gate and 100 in the Kernel before this delivery. A signal action counts toward each; the two numbers still differ.
 

@@ -1,6 +1,6 @@
 //! A mutation's guard: the refusal it answers with when its statement
-//! changes no row, instead of `{ changes: 0 }` (ADR-0010, update of
-//! 2026-11-06).
+//! changes no row, instead of `{ changes: 0 }`
+//! (ADR-0010).
 //!
 //! An app writes its rules into the statement's `WHERE`: the caller is an
 //! organizer, the slot is free, the event exists. When the rule says no, the

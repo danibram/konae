@@ -31,7 +31,7 @@ An API key is a Runtime Actor of one Deployment. The owner issues it with `api_k
 
 ### Signatures
 
-- Konae's own scheme signs `t`, a nonce, the method, the path, the sorted query string and the raw body with HMAC-SHA256, in `X-Konae-Signature: t=<unix seconds>,n=<nonce>,v1=<hex>`. A `t` more than 300 seconds off answers `stale-timestamp` before the MAC is checked. A header carries at most two `v1=` values, one per secret during a rotation. `src/lib/route-signature.ts` and the Kernel sign the same vectors.
+- Konae's own scheme signs `t`, a nonce, the method, the path, the sorted query string and the raw body with HMAC-SHA256, as `t=<unix seconds>,n=<nonce>,v1=<hex>` in the header the route declares. A `t` more than 300 seconds off answers `stale-timestamp` before the MAC is checked. A header carries at most two `v1=` values, one per secret during a rotation. `src/lib/route-signature.ts` and the Kernel sign the same vectors.
 - A route may name a provider's own scheme: `hmac-body` (GitHub, Shopify), `timestamped` (Stripe) or `svix` (Svix, Resend). A preset, `{ "provider": "stripe", "secret": "<name>" }`, stands for that provider's long form, from `kernel-rs/kernel/src/signature-presets.json`.
 - `"fields"` maps each input to a JSON path into the body, so a provider's nested payload reaches the action and other keys are left out. Without it, a body key the action does not declare is refused.
 - The Kernel records each accepted signature in the app's identity file before the action runs and forgets it when the action fails, so a provider's retry of a failed delivery runs and a replay does not. A body-only MAC and a Svix id are remembered for 72 hours, a timestamped one until its `t` leaves the window.
@@ -44,7 +44,7 @@ The owner sets a secret with `secret_set`, or the `kernel` binary's `secret`, an
 
 - An action of `"kind": "call"` declares one request: `"method"` `GET` or `POST`, `"url"`, `"body"` as a map from body keys to its inputs, an optional `"auth"` and an optional `"then"`. Its bindings may only be inputs, so the Kernel adds no identity or clock to a request that leaves the app.
 - The runtime endpoint checks the caller and the inputs, queues the call in `calls.sqlite` and answers `{ callId, queued: true }`. One worker sends it, so a slow host never holds a request and a call survives a restart.
-- `"auth": { "secret": "<name>" }` signs with Konae's scheme. `"auth": { "key": "<name>" }` sends the secret's value as a bearer token.
+- `"auth": { "secret": "<name>" }` signs with Konae's scheme, in `X-Konae-Signature` or the header the call names. `"auth": { "key": "<name>" }` sends the secret's value as a bearer token.
 - A URL is https, or http only to an app of the same installation. Both doors refuse credentials, fragments, IP addresses, `localhost`, `metadata`, `instance-data` and `.internal` names. Before each attempt to an outside host the Kernel resolves the name, refuses the call when any address is not public, and connects to the address it checked. It follows no redirect and uses no proxy from the environment.
 - A call to an app of the same installation goes through the same route code an outside request meets, with its callers, signature, replay memory, guard and Usage.
 - An attempt has 10 seconds and reads at most 64 KiB. A network failure, a timeout, 408, 425, 429 or a 5xx is retried after 30 seconds, then 1, 2 and 4 minutes, up to 5 attempts. An app queues at most 20 calls a minute unless the operator sets `KONAE_CALLS_PER_MINUTE`. A paused app sends nothing.
