@@ -272,10 +272,10 @@ describe("formatValidation", () => {
   });
 
   test("a pass says which stages did not run, so the model cannot assume them", () => {
-    expect(formatValidation({ ok: true, errors: [], checked: ["schema", "actions", "migration"] }))
+    expect(formatValidation({ ok: true, errors: [], checked: ["schema", "actions", "preview-rows"] }))
       .not.toContain("did not run");
     expect(formatValidation({ ok: true, errors: [], checked: ["schema", "actions"] }))
-      .toContain("The migration stage did not run");
+      .toContain("The preview-rows stage did not run");
   });
 });
 
@@ -304,7 +304,7 @@ describe("release facts", () => {
 describe("readLiveDatabase", () => {
   /**
    * The bug this pins: a database that could not be read was reported as no
-   * database at all, so the migration stage was silently skipped and the same
+   * database at all, so the preview-rows stage was silently skipped and the same
    * capsule flipped from blocked to validated.
    */
   test("tells a missing database apart from an unreadable one", async () => {

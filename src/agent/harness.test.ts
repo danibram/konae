@@ -136,7 +136,7 @@ function agentFor(turns: Turn[], options: Partial<KonaeAgentOptions> = {}) {
   return { agent, events, harness };
 }
 
-const passing: ValidationResult = { ok: true, errors: [], checked: ["schema", "actions", "migration"] };
+const passing: ValidationResult = { ok: true, errors: [], checked: ["schema", "actions", "preview-rows"] };
 
 function stubValidator(result: ValidationResult) {
   const seen: CapsuleFiles[] = [];

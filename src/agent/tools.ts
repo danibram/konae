@@ -225,7 +225,7 @@ function validateTool(
 
 /**
  * What the gate gets to know about the live database. A read that fails is
- * reported as such rather than as "there is none": the migration stage is
+ * reported as such rather than as "there is none": the preview-rows stage is
  * skipped either way, but only one of the two is a stage nobody could check.
  */
 export async function readLiveDatabase(hooks: CapsuleToolHooks): Promise<LiveDatabase> {
@@ -264,9 +264,9 @@ export function formatValidation(validation: ValidationResult): string {
     return `\n- [${warning.stage}] Warning: ${warning.message}${detail}${owner}`;
   }).join("");
   if (validation.ok) {
-    const skipped = validation.checked.includes("migration")
+    const skipped = validation.checked.includes("preview-rows")
       ? ""
-      : " The migration stage did not run, so nothing was checked against the live database.";
+      : " The preview-rows stage did not run, so nothing was checked against the live database.";
     return `Validation passed: schema, server actions and bindings are consistent.${skipped}${warnings}`;
   }
   const lines = validation.errors.map((error) => {

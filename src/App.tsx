@@ -585,7 +585,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       agentLoad.current = import("./agent/harness")
         .then(({ createKonaeAgent }) => {
           const handle = createKonaeAgent(projectRef.current, agentSession, keyStore, {
-            // The Validation Gate's migration stage needs the live database, not just a fresh one.
+            // The Validation Gate's preview-rows stage needs the live database, not just a fresh one.
             liveDatabase: () => hostRef.current.exportDatabase(),
             // The other half of the gate: what the running preview actually threw.
             previewErrors: () => hostRef.current.previewErrors(),

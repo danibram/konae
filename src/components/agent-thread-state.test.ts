@@ -207,9 +207,9 @@ describe("agent thread apply gate", () => {
   const failing: ValidationResult = {
     ok: false,
     checked: ["schema", "actions"],
-    errors: [{ stage: "migration", message: "table task is missing column due_at", detail: "after migration" }],
+    errors: [{ stage: "preview-rows", message: "table task is missing column due_at", detail: "on the preview rows" }],
   };
-  const passing: ValidationResult = { ok: true, errors: [], checked: ["schema", "actions", "migration"] };
+  const passing: ValidationResult = { ok: true, errors: [], checked: ["schema", "actions", "preview-rows"] };
 
   test("no proposal means an empty footer", () => {
     expect(proposalFooter(initialAgentThreadState)).toEqual({ kind: "empty", canApply: false });
@@ -233,9 +233,9 @@ describe("agent thread apply gate", () => {
       kind: "blocked",
       changedFiles: ["schema.sql"],
       canApply: false,
-      stage: "migration",
+      stage: "preview-rows",
       message: "table task is missing column due_at",
-      detail: "after migration",
+      detail: "on the preview rows",
     });
   });
 
@@ -302,19 +302,19 @@ describe("agent thread apply gate", () => {
       kind: "validated",
       changedFiles: ["styles.css"],
       canApply: true,
-      checked: ["schema", "actions", "migration"],
+      checked: ["schema", "actions", "preview-rows"],
     });
     expect(state.proposal?.changedFiles).toEqual(["styles.css"]);
   });
 
   /**
-   * The bug this pins: the footer said "schema, migration and actions hold" for
+   * The bug this pins: the footer said "schema, preview rows and actions hold" for
    * any pass, including one where the live database could not be read and the
-   * migration stage never ran.
+   * preview-rows stage never ran.
    */
   test("a pass only claims the stages that ran", () => {
-    expect(validationSummary(["schema", "actions", "migration"])).toBe("Validated — schema, migration and actions hold.");
-    expect(validationSummary(["schema", "actions"])).toBe("Validated — schema and actions hold — migration not checked.");
+    expect(validationSummary(["schema", "actions", "preview-rows"])).toBe("Validated. Schema, preview rows and actions hold.");
+    expect(validationSummary(["schema", "actions"])).toBe("Validated. Schema and actions hold. The preview rows were not checked.");
     expect(validationSummary([])).toBe("Validated.");
   });
 

@@ -189,19 +189,19 @@ export type ProposalFooter =
 /** The Kernel's sentence for a refusal the owner clears in Auth > Integrations, and who acts. */
 export type OwnerRefusal = { message: string; detail?: string };
 
-const stageOrder: ValidationStage[] = ["schema", "migration", "actions"];
+const stageOrder: ValidationStage[] = ["schema", "preview-rows", "actions"];
 
 /**
  * What a passing gate is entitled to say. Naming the stages that ran is the
- * difference between "migration holds" and "nobody looked": the migration stage
+ * difference between "preview rows hold" and "nobody looked": the preview-rows stage
  * is skipped whenever the live database could not be read.
  */
 export function validationSummary(checked: ValidationStage[]): string {
-  const ran = stageOrder.filter((stage) => checked.includes(stage));
+  const ran = stageOrder.filter((stage) => checked.includes(stage)).map((stage) => stage.replace("-", " "));
   if (ran.length === 0) return "Validated.";
   const held = ran.length === 1 ? ran[0] : `${ran.slice(0, -1).join(", ")} and ${ran[ran.length - 1]}`;
-  const skipped = checked.includes("migration") ? "" : " — migration not checked";
-  return `Validated — ${held} hold${skipped}.`;
+  const skipped = checked.includes("preview-rows") ? "" : " The preview rows were not checked.";
+  return `Validated. ${held[0].toUpperCase()}${held.slice(1)} hold.${skipped}`;
 }
 
 /**

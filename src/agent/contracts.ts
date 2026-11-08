@@ -39,7 +39,7 @@ export interface AgentKeyStore {
   clearKey(provider: ProviderId): void;
 }
 
-// --- Agent Workspace ----------------------------------------------------------
+// --- Scratch copy -------------------------------------------------------------
 
 export type CapsuleMutation = {
   file: ProjectFile;
@@ -54,8 +54,8 @@ export type CapsuleSnapshot = {
 };
 
 /**
- * The Agent Workspace: a disposable copy of a Project's five files exposed to
- * the agent as an `ExecutionEnv`. `Shell.exec` is not implemented.
+ * The scratch copy of a Capsule's files, exposed to the agent as an
+ * `ExecutionEnv`. `Shell.exec` is not implemented.
  */
 export interface CapsuleWorkspace {
   /** Immutable snapshot; the reference changes on every mutation. */
@@ -70,7 +70,7 @@ export interface CapsuleWorkspace {
 
 // --- Validation Gate ----------------------------------------------------------
 
-export type ValidationStage = "schema" | "migration" | "actions";
+export type ValidationStage = "schema" | "preview-rows" | "actions";
 
 export type ValidationError = {
   stage: ValidationStage;
@@ -125,7 +125,7 @@ export type LiveDatabase =
   | { state: "unreadable"; reason: string };
 
 /**
- * Reads the live local database so the gate can run its `migration` stage. It
+ * Reads the live local database so the gate can run its `preview-rows` stage. It
  * resolves to undefined when there is no database yet.
  */
 export type LiveDatabaseExport = () => Promise<Uint8Array | undefined>;

@@ -13,7 +13,7 @@ import type {
   Result,
 } from "./contracts";
 
-/** The Agent Workspace is mounted here; a Capsule has no other directory. */
+/** The scratch copy is mounted here; a Capsule has no other directory. */
 export const capsuleRoot = "/workspace";
 
 export const capsuleFileNames: readonly ProjectFile[] = [
@@ -154,7 +154,7 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
     const invalid = <T>(path: string) =>
       err<T, FileError>(new FileError("invalid", "A path is required.", path));
     const missing = <T>(path: string) =>
-      err<T, FileError>(new FileError("not_found", `No such file in the Agent Workspace: ${path}`, path));
+      err<T, FileError>(new FileError("not_found", `No such file in the scratch copy: ${path}`, path));
     const stopped = <T>(signal?: AbortSignal) =>
       signal?.aborted ? err<T, FileError>(new FileError("aborted", "The workspace operation was aborted.")) : null;
     const unsupported = <T>(message: string, path?: string) =>
@@ -368,13 +368,13 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
       async createTempDir(_prefix, abortSignal) {
         const stop = stopped<string>(abortSignal);
         if (stop) return stop;
-        return unsupported<string>("The Agent Workspace has no temporary storage.");
+        return unsupported<string>("The scratch copy has no temporary storage.");
       },
 
       async createTempFile(options) {
         const stop = stopped<string>(options?.abortSignal);
         if (stop) return stop;
-        return unsupported<string>("The Agent Workspace has no temporary storage.");
+        return unsupported<string>("The scratch copy has no temporary storage.");
       },
 
       async exec(_command: string, options?: ShellExecOptions) {

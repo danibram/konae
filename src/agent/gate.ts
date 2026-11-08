@@ -50,19 +50,18 @@ export function createCapsuleValidator(loadSql: SqlJsLoader = loadBrowserSqlJs):
 /**
  * The Validation Gate. Three stages, all in-process on sql.js:
  *
- * 1. `schema`   — schema.sql must execute on a fresh database, twice, because
- *                 the preview re-runs it on every open and the Kernel runs it
- *                 twice in its scratch database too. It may only hold CREATE
- *                 TABLE and CREATE [UNIQUE] INDEX, the same allowlist the
- *                 Kernel's scratch database enforces.
- * 2. `actions`  — actions.json must parse, every binding must resolve, and every
- *                 statement must prepare against the schema it declares.
- * 3. `migration`— only when the preview's database could be read: schema.sql
- *                 runs on a clone of it. When the clone then carries every table
- *                 and column the fresh schema declares, every action must
- *                 prepare against it. When it does not, the preview is behind:
- *                 the Gate warns and passes, because the Kernel derives the
- *                 change at publish (kernel-rs/kernel/src/schema_change.rs).
+ * 1. `schema`. schema.sql must execute on a fresh database, twice, because
+ *    the preview re-runs it on every open and the Kernel runs it twice in its
+ *    scratch database too. It may only hold CREATE TABLE and CREATE [UNIQUE]
+ *    INDEX, the same allowlist the Kernel's scratch database enforces.
+ * 2. `actions`. actions.json must parse, every binding must resolve, and
+ *    every statement must prepare against the schema it declares.
+ * 3. `preview-rows`, only when the preview's database could be read.
+ *    schema.sql runs on a clone of it. When the clone then carries every
+ *    table and column the fresh schema declares, every action must prepare
+ *    against it. When it does not, the preview is behind, and the Gate warns
+ *    and passes, because the Kernel derives the schema change at publish
+ *    (kernel-rs/kernel/src/schema_change.rs).
  *
  * The result names the stages that actually ran, because a stage that was
  * skipped must never be reported as one that held.
@@ -142,8 +141,8 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
         // Not the same as having no database: there is one, and the gate cannot
         // see it. Passing here would promise a convergence nobody checked.
         errors.push({
-          stage: "migration",
-          message: "The current database could not be read, so the migration stage could not run.",
+          stage: "preview-rows",
+          message: "The current database could not be read, so the preview-rows stage could not run.",
           detail: live.reason,
         });
       }
@@ -152,7 +151,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
         try {
           clone = new SQL.Database(live.bytes);
         } catch (error) {
-          errors.push({ stage: "migration", message: "The current database export could not be opened.", detail: describe(error) });
+          errors.push({ stage: "preview-rows", message: "The current database export could not be opened.", detail: describe(error) });
         }
         if (clone) {
           // The preview re-runs schema.sql on its own test rows and changes no
@@ -165,9 +164,9 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
           } catch (error) {
             behind = [`schema.sql does not run on it: ${describe(error)}.`];
           }
-          if (behind.length > 0) warnings.push({ stage: "migration", message: PREVIEW_BEHIND, detail: behind.join(" ") });
-          else if (program) errors.push(...checkActions(clone, program, "migration"));
-          checked.push("migration");
+          if (behind.length > 0) warnings.push({ stage: "preview-rows", message: PREVIEW_BEHIND, detail: behind.join(" ") });
+          else if (program) errors.push(...checkActions(clone, program, "preview-rows"));
+          checked.push("preview-rows");
         }
       }
     } finally {
@@ -266,7 +265,7 @@ function nameOf(token: SqlToken | undefined): string | null {
   return token && (token.kind === "word" || token.kind === "identifier") ? token.text : null;
 }
 
-function checkActions(db: Database, program: ServerActionProgram, stage: "actions" | "migration"): ValidationError[] {
+function checkActions(db: Database, program: ServerActionProgram, stage: "actions" | "preview-rows"): ValidationError[] {
   const target = stage === "actions" ? "the schema in schema.sql" : "the current database";
   const errors: ValidationError[] = [];
 

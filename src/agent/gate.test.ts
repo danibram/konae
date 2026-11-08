@@ -229,14 +229,14 @@ describe("validation gate", () => {
     expect(result.ok).toBe(true);
   });
 
-  test("stage migration accepts a live database that already matches the schema", async () => {
+  test("stage preview-rows accepts a live database that already matches the schema", async () => {
     const live = await exportDatabase(starterProject.files["schema.sql"]);
     const result = await validator.validate(capsule(), loaded(live));
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
   });
 
-  test("stage migration warns that the preview is behind a column the Kernel adds at publish, and passes", async () => {
+  test("stage preview-rows warns that the preview is behind a column the Kernel adds at publish, and passes", async () => {
     const live = await exportDatabase("CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL);");
     const result = await validator.validate(capsule({
       "schema.sql": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, due_at INTEGER);",
@@ -255,8 +255,8 @@ describe("validation gate", () => {
 
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
-    expect(result.checked).toContain("migration");
-    expect(result.warnings).toEqual([expect.objectContaining({ stage: "migration", message: expect.stringContaining("Publishing applies it"), detail: "Its table tasks has no due_at." })]);
+    expect(result.checked).toContain("preview-rows");
+    expect(result.warnings).toEqual([expect.objectContaining({ stage: "preview-rows", message: expect.stringContaining("Publishing applies it"), detail: "Its table tasks has no due_at." })]);
   });
 
   test("stage schema rejects a schema that cannot be re-run, with or without a live database", async () => {
@@ -278,7 +278,7 @@ describe("validation gate", () => {
 
   /**
    * The bug this pins: `DROP TABLE IF EXISTS tasks;` above the new CREATE passed
-   * the gate. The migration stage runs on a copy, so the destruction is invisible
+   * the gate. The preview-rows stage runs on a copy, so the destruction is invisible
    * there, and Apply then runs the same script against the owner's real database.
    */
   test("stage schema refuses a schema.sql that destroys what is already there", async () => {
@@ -407,7 +407,7 @@ END;`,
   /**
    * The bug this pins: an unreadable live database was swallowed into "there is
    * none", so the same capsule flipped from blocked to a full pass and the panel
-   * still claimed the migration stage held.
+   * still claimed the preview-rows stage held.
    */
   test("a verdict names the stages that actually ran", async () => {
     const withoutDatabase = await validator.validate(capsule());
@@ -416,24 +416,24 @@ END;`,
 
     const withDatabase = await validator.validate(capsule(), loaded(await exportDatabase(starterProject.files["schema.sql"])));
     expect(withDatabase.ok).toBe(true);
-    expect(withDatabase.checked).toEqual(["schema", "actions", "migration"]);
+    expect(withDatabase.checked).toEqual(["schema", "actions", "preview-rows"]);
 
     const unreadable = await validator.validate(capsule(), { state: "unreadable", reason: "the wasm heap is gone" });
     expect(unreadable.ok).toBe(false);
-    expect(unreadable.checked).not.toContain("migration");
-    expect(unreadable.errors[0].stage).toBe("migration");
+    expect(unreadable.checked).not.toContain("preview-rows");
+    expect(unreadable.errors[0].stage).toBe("preview-rows");
     expect(unreadable.errors[0].detail).toContain("wasm heap");
   });
 
-  test("stage migration warns when schema.sql does not run on the preview's older table", async () => {
+  test("stage preview-rows warns when schema.sql does not run on the preview's older table", async () => {
     // Runs twice on an empty database, but the preview's tasks table predates the index's column.
     const live = await exportDatabase("CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL);");
     const result = await validator.validate(capsule({
       "schema.sql": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, due_at INTEGER);\nCREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks (due_at);",
     }), loaded(live));
 
-    expect(result.errors.map((error) => error.stage)).not.toContain("migration");
-    expect(result.warnings?.find((warning) => warning.stage === "migration")?.detail).toContain("schema.sql does not run on it");
+    expect(result.errors.map((error) => error.stage)).not.toContain("preview-rows");
+    expect(result.warnings?.find((warning) => warning.stage === "preview-rows")?.detail).toContain("schema.sql does not run on it");
   });
 });
 

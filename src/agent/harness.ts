@@ -33,7 +33,7 @@ import { createCapsuleTools, readLiveDatabase, readReleaseFacts, type PreviewFai
  */
 export type KonaeAgentHandle = KonaeAgent & {
   configure(config: AgentSessionConfig): void;
-  /** Throw away the Agent Workspace edits and the transcript. */
+  /** Throw away the scratch copy's edits and the transcript. */
   discard(): void;
   /** Re-seed the workspace from the Project after a proposal was applied. */
   reseed(files: CapsuleFiles): void;
@@ -57,7 +57,7 @@ export type KonaeAgentOptions = {
   thinkingLevel?: ThinkingLevel;
   /** Used from the turn after a change touches schema.sql or actions.json. */
   riskyThinkingLevel?: ThinkingLevel;
-  /** The live local database, so the gate can run its migration stage. */
+  /** The live local database, so the gate can run its preview-rows stage. */
   liveDatabase?: LiveDatabaseExport;
   /** Runtime failures from the live preview, exposed to the model as `preview_errors`. */
   previewErrors?: () => PreviewFailureReport[];
