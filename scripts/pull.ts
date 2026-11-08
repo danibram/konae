@@ -108,5 +108,5 @@ export async function readPulled(root: string): Promise<Pulled | undefined> {
 export function describePulled(pulled: Pulled) {
   const size = (bytes: number) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
   const parts = pulled.manifest.contents.map((content) => `${content.name} ${size(content.size)}`).join(", ");
-  return `${new URL(pulled.from).host} exported ${new Date(pulled.at).toISOString().replace(/\.\d+Z$/, "Z")} (${parts})`;
+  return `that ${new URL(pulled.from).host} held at ${new Date(pulled.at).toISOString().replace(/\.\d+Z$/, "Z")} (${parts})`;
 }
