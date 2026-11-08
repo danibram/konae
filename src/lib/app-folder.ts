@@ -182,7 +182,7 @@ Outside Konae, the Kernel's commands manage the app. Each refuses with the same 
 - \`kernel sql "<statement>"\`: run SQL on \`data/database.sqlite\`.
 - \`kernel events --from <YYYY-MM-DD> --to <YYYY-MM-DD>\`: notices, calls, scheduled runs, routes and Signals.
 - \`kernel maintenance on|off\`: pause the app, so it takes no writes, signups or sign-ins and holds its email, calls and schedule, or let it run again.
-- \`kernel enter <email>\`: a one-time link, good for 2 minutes, that signs a browser in as that account. Usage and Signals do not count what the session does.
+- \`kernel enter <email>\`: a one-time link, good for 2 minutes, that signs a browser in as that account. Usage and Signals do not count what the session does. With no audit log outside Konae, the Kernel's log records who entered as whom, as \`operator:<login name> entered app <id> as <email>.\`
 - \`kernel import <folder> [--confirm-schema <confirmation>]\`: replace the app's data with the \`data/\` of an exported folder, after a backup in \`.konae/backups\`. Sessions and API keys stay as they are. It needs the Kernel stopped, so under Compose run \`docker compose stop kernel\`, then \`docker compose run --rm kernel kernel import <folder inside the volume>\`, then \`docker compose start kernel\`.
 
 Add \`--app ${settings.id}\` when the Kernel serves more than one app.

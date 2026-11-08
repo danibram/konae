@@ -91,7 +91,7 @@ docker compose exec kernel kernel maintenance on
 docker compose exec kernel kernel enter ana@example.com
 ```
 
-The exported `AGENTS.md` lists every command with its options. An export carries each API key revoked, so issue new ones with `kernel api-key create`.
+`enter` labels the entry with the login name of whoever ran it when the shell sets `USER`, and `operator` otherwise. Inside a container that is usually `operator`, so note who ran it. The Kernel's log, `docker compose logs kernel`, records the entry when the link is used, since a Kernel without Konae keeps no audit log. The exported `AGENTS.md` lists every command with its options. An export carries each API key revoked, so issue new ones with `kernel api-key create`.
 
 ## Serve the app on its own domain
 

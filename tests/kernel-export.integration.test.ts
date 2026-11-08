@@ -90,10 +90,16 @@ test("an app exported with its data runs on the kernel binary, and an operator c
     KONAE_HOST_SUFFIX: "localhost", KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
   };
   alone = Bun.spawn([kernelBinary], { env, stdout: "pipe", stderr: "inherit" });
+  // The Kernel's log, read for as long as it runs.
+  let log = "";
   const served = (async () => {
-    let text = "";
-    for await (const block of alone!.stdout as ReadableStream<Uint8Array>) { text += new TextDecoder().decode(block); if (text.includes("listening")) return text; }
-    throw Error(`The kernel binary stopped during startup:\n${text}`);
+    let listening: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { listening = resolve; });
+    void (async () => {
+      for await (const block of alone!.stdout as ReadableStream<Uint8Array>) { log += new TextDecoder().decode(block); if (log.includes("listening")) listening!(); }
+    })();
+    await Promise.race([started, alone!.exited.then(() => { throw Error(`The kernel binary stopped during startup:\n${log}`); })]);
+    return log;
   })();
   const startup = await Promise.race([served, Bun.sleep(30_000).then(() => { throw Error("The kernel binary did not start."); })]);
   expect(startup).toContain(`Serving Carried at http://carried.localhost:${port}`);
@@ -165,13 +171,18 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   expect((await command("sql", "SELECT body FROM notes ORDER BY id LIMIT 5")).output).toContain("written alone");
 
   // An entry link from the machine signs a browser in as Ana, and the link works once.
-  const link = JSON.parse((await command("enter", "Ana@Carried.test")).output) as { userId: string; url: string };
+  const issued = await command("enter", "Ana@Carried.test");
+  const link = JSON.parse(issued.output) as { userId: string; url: string };
+  // Without Konae there is no audit log, so the command and the Kernel's log say who entered as whom.
+  const operator = process.env.USER ? `operator:${process.env.USER}` : "operator";
+  expect(issued.error).toContain(`${operator} may enter app ${id} as ana@carried.test`);
   expect(link.userId).toBe(user.userId);
   expect(link.url).toStartWith(`http://${hostname}:${port}/_konae/enter#entry=`);
   const token = new URL(link.url).hash.replace("#entry=", "");
   const enter = () => appFetch(app, hostname, "/_konae/enter", { method: "POST", body: JSON.stringify({ token }), headers: { origin: `http://${hostname}` } });
   const entered = await enter();
   expect(entered.status).toBe(200);
+  expect(log).toContain(`${operator} entered app ${id} as ana@carried.test.`);
   expect((await enter()).status).toBe(410);
   const asAna = runtime(app, hostname, entered.headers.get("set-cookie")!.split(";")[0]);
   expect(await asAna.call("actions_invoke", { name: "notes.mine", input: {} })).toHaveLength(2);

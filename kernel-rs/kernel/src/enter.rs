@@ -130,15 +130,21 @@ async fn enter(State(state): State<AppState>, headers: HeaderMap, request: Reque
         Err(error_value) => return auth_error(error_value),
     };
     let session = tokio::task::spawn_blocking(move || {
-        let user = auth.transaction(|tx| take(tx, &answer.token))?;
+        let user = auth.transaction(|tx| take(tx, &answer.token))?.ok_or(AuthError::InvalidChallenge)?;
+        let entry = (user.entered_by.clone().unwrap_or_default(), user.name.clone());
         // start_session refuses an account that is no longer active.
-        auth.start_session(user.ok_or(AuthError::InvalidChallenge)?)
+        auth.start_session(user).map(|session| (session, entry))
     })
     .await
     .unwrap_or(Err(AuthError::PasswordHash));
     match session {
-        // An entry is no sign-in of the account, so Usage counts nothing.
-        Ok(session) => accounts::app_session_response(&cookie_name, session),
+        // An entry is no sign-in of the account, so Usage counts nothing. The
+        // Kernel's log keeps who entered as whom, the one record of it on a
+        // Kernel without Konae.
+        Ok((session, (entered_by, email))) => {
+            println!("{entered_by} entered app {} as {email}.", deployment.id);
+            accounts::app_session_response(&cookie_name, session)
+        }
         Err(error_value) => auth_error(error_value),
     }
 }

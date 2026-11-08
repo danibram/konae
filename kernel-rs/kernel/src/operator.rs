@@ -152,7 +152,14 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
         "enter" => {
             let email = words.required("the account's email")?;
             let user = account_with_email(state, id, &email)?;
-            crate::enter::issue(state, &deployment, &user, "operator").await
+            // The person at the machine is the operator; their login name, when
+            // the shell has one, says which one.
+            let who = std::env::var("USER").ok().filter(|name| !name.trim().is_empty())
+                .map_or_else(|| "operator".to_owned(), |name| format!("operator:{name}"));
+            let link = crate::enter::issue(state, &deployment, &user, &who).await?;
+            let account = link["email"].as_str().unwrap_or(&email);
+            eprintln!("{who} may enter app {id} as {account} with this link, once, within 2 minutes. The serving Kernel logs the entry.");
+            Ok(link)
         }
         "api-key" => {
             let (tool, arguments) = match words.next().as_deref() {
