@@ -1,6 +1,6 @@
 // The static publishing contract: which Capsule files become a Build Artifact
 // and at which path each one is served. The CLI (`konae build`), the
-// editor's browser build and the exported kit's scripts/build.mjs all run this
+// editor's browser build and an app folder's scripts/build.mjs all run this
 // file, so it is plain JavaScript with no imports. Each door supplies how to
 // read a file and how to bundle a module; the rules below are the same for all.
 //

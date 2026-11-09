@@ -390,7 +390,7 @@ try {
     ben: await ben.call<{ userId: string; role: string }>("auth_session"),
     olga: await olga.call<{ userId: string; name: string; role: string }>("auth_session"),
   };
-  // The Project Owner's own email signs up as an ordinary app account.
+  // The Konae owner's own email signs up as an ordinary app account.
   assert.equal(sessions.olga.name, ownerEmail);
   assert.equal(sessions.olga.role, "member");
   check("Verified open signup", `Signup answers 202 with no session cookie, only the signup hint; the pending account's sign-in from Ana's browser answers ${pendingLogin.status} with the hint to open the link first, and from another browser the plain 401; and the emailed link sets the password and opens a session. Ana, Ben and the owner's app account are active, all three members.`);
@@ -402,7 +402,7 @@ try {
   }
 
   // ------------------------------------------------- a team admin, promoted by the owner
-  // Everyone joins as member. The Project Owner names Olga the app's owner with owner SQL,
+  // Everyone joins as member. The Konae owner names Olga the app's owner with owner SQL,
   // as the Data panel does; the Kernel keeps no role.
   assert.equal((await action(olga, "me.get"))[0].role, "member");
   const ownerNamed = await A.owner.call<{ changes: number }>("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: `UPDATE profiles SET role = 'owner' WHERE user_id = '${sessions.olga.userId}'` } });
@@ -432,7 +432,7 @@ try {
   refused("Guard", "Ben (member) posts in the team area", benPosts);
   const [stats] = await action(olga, "admin.stats");
   assert.equal(stats.admins, 1);
-  check("Owner and team admin", `Everyone joins as member and auth_session says member for every account. The Project Owner names Olga the app's owner with database_execute sql on the profiles table, and the owner-only actions check that row against actor.id. Ben's members.promote is refused with "${benPromotes}"; Ana sees an empty roster and is refused a team post until the owner promotes her with members.promote, a guarded mutation. Then team.roster lists ana (admin) and olga (owner), her post lands, and her own members.promote, members.list and admin.stats get the guard or no rows. Ben still reads no team row.`);
+  check("Owner and team admin", `Everyone joins as member and auth_session says member for every account. The Konae owner names Olga the app's owner with database_execute sql on the profiles table, and the owner-only actions check that row against actor.id. Ben's members.promote is refused with "${benPromotes}"; Ana sees an empty roster and is refused a team post until the owner promotes her with members.promote, a guarded mutation. Then team.roster lists ana (admin) and olga (owner), her post lands, and her own members.promote, members.list and admin.stats get the guard or no rows. Ben still reads no team row.`);
 
   // ------------------------------------------------------- the visitor's view
   const visitor = S.runtime();

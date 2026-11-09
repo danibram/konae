@@ -97,7 +97,7 @@ Since 2026-11-07 a booking emails its own booker (see [What worked](#what-worked
 
 - `connect-src 'self'` stops the page from calling another origin.
 - An action runs one SQL statement or records a Signal. There is no outbound HTTP and no queue.
-- Besides account mail, the Kernel sends only a mutation's `notify`, and only to the Project Owner or to the person who called the action. It cannot reach the staff member who held a room someone cancelled, or everyone who works in the office.
+- Besides account mail, the Kernel sends only a mutation's `notify`, and only to the Konae owner or to the person who called the action. It cannot reach the staff member who held a room someone cancelled, or everyone who works in the office.
 - Signals are readable only by the owner through `signals_read`; the runtime endpoint does not list them.
 
 What the app does instead:

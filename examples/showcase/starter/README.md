@@ -1,6 +1,6 @@
 # Starter
 
-Starter is the typical small app in one Capsule, and the example to copy first. A visitor reads a public landing: service status, updates and downloads, also served as a JSON API. Anyone can create an account, and it opens only after they answer the emailed link. A member keeps private notes and files, sets a public avatar and publishes a file as a download. Team admins see a team area, post to the team and publish updates. The owner's account inside the app opens an admin area that promotes members. A program posts updates with an API key, and a monitoring service reports status through a signed webhook. A team admin tells the team's inbox app about a status change with a call the Kernel sends. The Project Owner reads the Signals and the calls.
+Starter is the typical small app in one Capsule, and the example to copy first. A visitor reads a public landing: service status, updates and downloads, also served as a JSON API. Anyone can create an account, and it opens only after they answer the emailed link. A member keeps private notes and files, sets a public avatar and publishes a file as a download. Team admins see a team area, post to the team and publish updates. The owner's account inside the app opens an admin area that promotes members. A program posts updates with an API key, and a monitoring service reports status through a signed webhook. A team admin tells the team's inbox app about a status change with a call the Kernel sends. The Konae owner reads the Signals and the calls.
 
 Every rule lives in `actions.json`. The Kernel binds the caller's ID and the SQL decides who may read or change each row; `app.js` only hides what a role cannot use.
 
@@ -27,7 +27,7 @@ Every rule lives in `actions.json`. The Kernel binds the caller's ID and the SQL
 | Member area | `actor` bindings on `authenticated` actions | `me.*`, `notes.*`, `attachments.*` |
 | Team area with roles | A role column and guarded mutations whose `WHERE` checks the caller's role | `team.*`, `updates.publish` |
 | Admin area for the owner | Guards that find the caller's `profiles` row with role `'owner'` through `{ "source": "actor", "field": "id" }` | `members.list`, `members.promote`, `members.demote`, `updates.remove`, `admin.stats` |
-| The in-app owner | The Project Owner sets one `profiles` row to `owner` with SQL in the editor's Data panel; the Kernel keeps no role | `me.join` adds everyone as member |
+| The in-app owner | The Konae owner sets one `profiles` row to `owner` with SQL in the editor's Data panel; the Kernel keeps no role | `me.join` adds everyone as member |
 | Private write API | A key-only route on a public app; the key's ID is the actor | `updates.post` at `POST /api/updates` |
 | Signed webhook | A route with a signature and a signing secret set with `secret_set` | `status.report` at `POST /hooks/status`, header `X-Starter-Signature` |
 | Call to the team inbox | A call action the Kernel signs and sends to the [inbox](../inbox/README.md) showcase's webhook, with a `then` mutation that keeps the answer (ADR-0013) | `status.escalate`, `status.escalated`, `status.escalations`; the secret `inbox_events` set with `"use": "call"` |
@@ -64,7 +64,7 @@ cp examples/showcase/starter/{index.html,styles.css,app.js,favicon.svg,schema.sq
 bun run konae -- publish --dir /tmp/starter
 ```
 
-Then, as the Project Owner, join the app with your own account, copy its ID from the project's Auth > Users view, and run `UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>'` in Data > SQL on the published database. The app's admin area is where you then make members team admins.
+Then, as the Konae owner, join the app with your own account, copy its ID from the project's Auth > Users view, and run `UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>'` in Data > SQL on the published database. The app's admin area is where you then make members team admins.
 
 ## What the replay proves
 
@@ -95,7 +95,7 @@ Each row is a limit the app met, with the exact answer. None was worked around.
 
 | Primitive | Request | Answer | What it costs the app |
 | --- | --- | --- | --- |
-| Owner inside the app | `auth_session` for the app account the Project Owner opened with the owner's own email | Was `role "member"`, with no binding that told the app this account was its owner, so Starter appointed one through a key-only route called with curl. Fixed on 2026-11-07 with an owner role the Kernel gave the owner's account; replaced on 2026-11-10, when ADR-0001 removed that role, by a `profiles` row the owner sets with SQL. |
+| Owner inside the app | `auth_session` for the app account the Konae owner opened with the owner's own email | Was `role "member"`, with no binding that told the app this account was its owner, so Starter appointed one through a key-only route called with curl. Fixed on 2026-11-07 with an owner role the Kernel gave the owner's account; replaced on 2026-11-10, when ADR-0001 removed that role, by a `profiles` row the owner sets with SQL. |
 | Actor binding | An action that wants the caller's email | No binding gives it: only `actor.id`, `kernel.now` and literals exist | Display names are typed by the member, and the owner matches emails to IDs with `app_users_list` |
 | Required verification | Ana signs in before opening her verification link | Was `401 {"error":"Email or password is incorrect."}`. Fixed on 2026-11-07: from her browser, `401 {"error":"Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first."}`; from another browser, the plain answer | None now. The hint depends on a cookie the signup request set, never on the account, so it tells nobody whether an address has an account |
 | conform | `conform --token` as a member, on `updates.publish`, a guarded mutation with a nullable `body` | Fixed on 2026-11-07: `PASS updates.publish: answers without the nullable body. Refused with its guard, "Only team admins can publish an update.": the bindings accepted the call without body.` Before, the same probe failed with `Refused with "Only team admins can publish an update." where the contract makes body optional.` | None now. conform passes a guard refusal on the probe that omits a nullable input, as it does on the valid call |
@@ -106,7 +106,7 @@ Each row is a limit the app met, with the exact answer. None was worked around.
 | API key files | The Release bot key, which names no file visibility, reads Ana's public avatar | Was `404 {"error":"File not found."}`. Fixed on 2026-11-07: 200 with the image, as for a visitor; the private draft still answers 404 | None now. A key reads a public file of a public Deployment as a visitor does, plus the visibilities it names |
 | Files and rows | Publishing or deleting an attachment | Two calls: `files_update` or `files_delete`, then the row's action | No transaction joins them. If the second call fails, a public file is not listed, or a row names a deleted file. An action cannot see the Kernel's file records, so a row's `file_id` is whatever the page sent |
 | Signals | The in-app owner's session calls `signals_read` | `Unknown tool or insufficient permission.` | The admin area cannot show Signals or Usage; the owner reads them outside the app |
-| Visitor | `app_users_list` on the runtime endpoint, as anyone in the app | `Unknown tool or insufficient permission.` | The in-app owner cannot invite, suspend or list accounts; those stay with the Project Owner's tools |
+| Visitor | `app_users_list` on the runtime endpoint, as anyone in the app | `Unknown tool or insufficient permission.` | The in-app owner cannot invite, suspend or list accounts; those stay with the Konae owner's tools |
 | Call action | Ben, a member with no team role, invokes `status.escalate` with a title of his own | `{ callId, queued: true }`; the inbox files "Ben says api is down" under source `starter` | A call runs no SQL, so no `WHERE` can check the caller's role, and it cannot read the app's rows, so the page supplies the title and the event ID. Only the action's access gates it. The page shows the button to team admins only, which is a courtesy; the inbox's one event per source and ID is the only other check |
 | Call action | Ana writes `status.escalated` herself | `Action status.escalated runs only after the call status.escalate answers.` | None. Only the Kernel records what the inbox answered |
 | Signing secret | `secret_set` of the inbox's `events_webhook` value as the starter's `inbox_events` | `Another of your projects already uses this secret value. ...` without `"use": "call"`; accepted with it | One owner's two apps need the call-only use to share a value |

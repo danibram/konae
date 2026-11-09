@@ -137,9 +137,9 @@ export function DesignSystem({ ownerSession }: { ownerSession: OwnerSession }) {
                 <div><h3 className="ds-sub">Switch</h3><div className="ds-stack"><SwitchDemo /></div></div>
                 <div><h3 className="ds-sub">Segmented</h3><SegmentedDemo /></div>
               </div></Sample>
-            <Sample id="navigation" title="Navigation" note="The workspace sidebar, in the states it takes. The frame is a demo, so its links stay on this page.">
+            <Sample id="navigation" title="Navigation" note="The project list sidebar, in the states it takes. The frame is a demo, so its links stay on this page.">
               <div className="ds-nav-frames" onClickCapture={(event) => { if ((event.target as HTMLElement).closest("a")) event.preventDefault(); }}>
-                <div className="ds-frame ds-frame-wide"><span>Workspace shell, signed in</span><div className="account-home ds-frame-home"><WorkspaceNav active="usage" projectCount={7} ownerSession={{ state: "signed-in", ownerId: "demo", email: "ada@example.com" }} />
+                <div className="ds-frame ds-frame-wide"><span>Project list, signed in</span><div className="account-home ds-frame-home"><WorkspaceNav active="usage" projectCount={7} ownerSession={{ state: "signed-in", ownerId: "demo", email: "ada@example.com" }} />
                   <div className="ds-frame-page"><Breadcrumb items={[{ label: "Usage", href: "/usage" }, { label: "Tiny Tasks" }]} /><h3>Tiny Tasks</h3><StatStrip items={[{ label: "Page views", value: "12,480", delta: "+12%", trend: "up" }, { label: "Executions", value: "4,999", delta: "+4%", trend: "up" }, { label: "Refused", value: "407", delta: "+18%", trend: "up", upIsGood: false }]} /></div></div></div>
                 <div className="ds-frame ds-frame-narrow"><span>Signed out</span><div className="account-home ds-frame-home"><WorkspaceNav active="projects" ownerSession={{ state: "signed-out" }} /></div></div>
                 <div className="ds-frame ds-frame-narrow"><span>Checking the session</span><div className="account-home ds-frame-home"><WorkspaceNav active="design-system" ownerSession={{ state: "checking" }} /></div></div>

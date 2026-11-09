@@ -14,7 +14,7 @@ import { downloadToFile } from "./package-files";
 export const PULL_DIRECTORY = ".konae/pull";
 const RECORD = "pull.json";
 
-/** What pull.json holds: the package's manifest, the installation it came from and when. */
+/** What pull.json holds: the export's manifest, the installation it came from and when. */
 export type Pulled = { manifest: PackageManifest; from: string; at: number };
 
 export const NEEDS_EXPORT_DATA = "Downloading live data needs a credential with the export_data permission. Run login with --export-data, or create a token with export_data for this project.";
@@ -38,7 +38,7 @@ export async function downloadPackage(client: McpClient, deploymentId: string, d
     const files: { name: string; file: string; size: number }[] = [];
     for (const content of manifest.contents) {
       const transfer = exported.downloads[content.name];
-      if (!transfer || transfer.size !== content.size || transfer.sha256 !== content.sha256) throw Error(`The ${content.name} download does not match the package manifest.`);
+      if (!transfer || transfer.size !== content.size || transfer.sha256 !== content.sha256) throw Error(`The ${content.name} download does not match the export's manifest.`);
       const file = path.join(directory, packageComponentFiles[content.name]);
       await downloadToFile(client, transfer, file);
       files.push({ name: content.name, file, size: content.size });
@@ -51,7 +51,7 @@ export async function downloadPackage(client: McpClient, deploymentId: string, d
 
 /**
  * Exports the published app's data into the data/ of the app folder
- * `folder`, laid out as an export lays it out. Answers the package's manifest.
+ * `folder`, laid out as an export lays it out. Answers the export's manifest.
  */
 export async function downloadData(client: McpClient, deploymentId: string, folder: string) {
   const scratch = await mkdtemp(path.join(tmpdir(), "konae-data-"));

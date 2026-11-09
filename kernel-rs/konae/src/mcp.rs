@@ -27,7 +27,7 @@ pub fn routes() -> Router<Konae> {
         .route("/_konae/owner/clerk", post(owner_clerk))
 }
 
-/// Remembers which package each project imported, so a retried import
+/// Remembers which export each project imported, so a retried import
 /// returns its first receipt.
 fn install_imports(db: &Connection) -> Result<()> {
     db.execute_batch(
@@ -37,7 +37,7 @@ fn install_imports(db: &Connection) -> Result<()> {
 }
 
 
-/// A second `release_plan` with a package this project already imported
+/// A second `release_plan` with an export this project already imported
 /// gets the first plan and its receipt instead of a refusal.
 fn replay_import(state: &Konae, owner: &Owner, project: &str, package_id: &str) -> Result<Option<Value>> {
     let db = store(state)?;
@@ -876,7 +876,7 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
             } else {
                 None
             };
-            // A package export's downloads hold accounts and data. Every
+            // An export's downloads hold accounts and data. Every
             // credential of one owner shares the transfer principal, so reading
             // them needs export_data, not the read scope that finds them.
             let package_transfer = (name.starts_with("transfer_") && name != "transfer_begin")
@@ -940,7 +940,7 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                     audit(&state, &principal, "package_download", &target, None, &result);
                 }
                 Some(_) => {}
-                // A package component upload is audited at its first block.
+                // An upload of a part of an export is audited at its first block.
                 None if component_upload && arguments["offset"] != 0 && result.is_ok() => {}
                 None => audit(&state, &principal, name, &arguments, previous_mode, &result),
             }
@@ -1500,7 +1500,7 @@ async fn admin_call(
                 "Artifact belongs to another project."
             );
             if let Some(package) = input.initial_package.as_ref() {
-                // The same package again answers with the first import.
+                // The same export again answers with the first import.
                 if let Some(replay) = replay_import(state, owner, &input.project.id, &package.manifest.package_id)? {
                     return Ok(replay);
                 }

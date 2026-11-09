@@ -3,8 +3,8 @@ import type { TemplateSource } from "./types";
 
 /**
  * Every staff action checks the caller's role with this one predicate. The
- * app's owner is a profiles row the Project Owner marks with SQL in Data;
- * admin comes from that owner's promote. The Kernel accepts it as written,
+ * app's own owner role is a profiles row the Konae owner marks with SQL in
+ * Data; admin comes from that role's promote. The Kernel accepts it as written,
  * with ?1 bound to actor.id.
  */
 export const adminCheck = "(SELECT role FROM profiles WHERE user_id = ?1) IN ('admin', 'owner')";

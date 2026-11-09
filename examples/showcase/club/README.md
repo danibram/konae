@@ -1,6 +1,6 @@
 # Club
 
-Club is a members-only book club. The Project Owner invites people by email. Members propose books with a cover image that every member sees, and keep private notes that only they can open. An organizer, whom the Project Owner promotes, schedules the next meeting, marks a book finished and removes books. The app runs as a private Deployment with the Invitation only Signup Policy, and it moves to a second Kernel as a Package with its accounts, rows, files and rules.
+Club is a members-only book club. The Konae owner invites people by email. Members propose books with a cover image that every member sees, and keep private notes that only they can open. An organizer, whom the Konae owner promotes, schedules the next meeting, marks a book finished and removes books. The app runs as a private Deployment with the Invitation only Signup Policy, and it moves to a second Kernel as a Package with its accounts, rows, files and rules.
 
 ## Files
 
@@ -17,9 +17,9 @@ Club is a members-only book club. The Project Owner invites people by email. Mem
 - `app_invitations_create`, the development mailbox and `POST /_konae/auth/accept`.
 - `miniapp.files.upload` with and without `visibility: "public"`, and `GET /_konae/files/<id>` with the app session cookie, as an `<img>` source for covers and a `fetch` for notes, under the app's Content Security Policy.
 - `api_keys_create` with `files: ["public"]`, used with `Authorization: Bearer`.
-- Roles in SQL. The Project Owner promotes an organizer with `database_execute` after finding her user ID with `app_users_list`.
+- Roles in SQL. The Konae owner promotes an organizer with `database_execute` after finding her user ID with `app_users_list`.
 - `POST /_konae/auth/recover` and `POST /_konae/auth/reset`.
-- `project_export`, then `McpClient.upload` with `component`, and a first release with `initialPackage` on a second Kernel under a second Project Owner.
+- `project_export`, then `McpClient.upload` with `component`, and a first release with `initialPackage` on a second Kernel under a second Konae owner.
 - `konae contract` and `konae conform`.
 
 ## Run the replay
@@ -77,8 +77,8 @@ The predicate still holds on both Kernels. Nobody without the role changed a row
 | API key | The same key on `/_konae/mcp` | Fixed on 2026-11-06: 403 `{"error":"An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session."}`. Before, 401 `{"error":"Sign in to use Konae MCP."}` |
 | API key | `api_keys_create` naming `books.list` | `Action books.list has no HTTP route, so a key cannot call it.` A program can read covers but cannot list which books they belong to without an anonymous route, and on a private app an anonymous route is open to anyone who knows the path. |
 | Roles in SQL | Ben (member) calls `books.schedule`, `books.remove`, `books.finish` | Fixed on 2026-11-06: each guard, such as `Only an organizer can remove a book.` `books.schedule` on a book that does not exist gets the same schedule guard. Before, `{ changes: 0, lastInsertId: 0 }` |
-| Roles in SQL | Ana (organizer) calls `app_invitations_create` on the runtime endpoint | `Unknown tool or insufficient permission.` The organizer is a row in the app's database. Only the Project Owner holds `manage_users`, so the club's organizer cannot invite a new member. |
-| Roles in SQL | Promoting an organizer | An `actor` binding yields only the user ID, so the app's database never sees an email. The Project Owner reads `app_users_list`, copies the user ID and pastes it into a `database_execute` SQL string. That operation takes no bound parameters. |
+| Roles in SQL | Ana (organizer) calls `app_invitations_create` on the runtime endpoint | `Unknown tool or insufficient permission.` The organizer is a row in the app's database. Only the Konae owner holds `manage_users`, so the club's organizer cannot invite a new member. |
+| Roles in SQL | Promoting an organizer | An `actor` binding yields only the user ID, so the app's database never sees an email. The Konae owner reads `app_users_list`, copies the user ID and pastes it into a `database_execute` SQL string. That operation takes no bound parameters. |
 | Usage | `usage_read` after two refused schedules and one real one | Fixed on 2026-11-06 with the guard: `books.schedule` counts 1 under `action` and 2 under `refused`. Before, 3 calls with nothing separating the two that changed nothing. |
 | Recovery | Cy's session from before the reset | `Sign in to use Konae MCP.` |
 | Recovery | Cy signs in with the old password | 401 `{"error":"Email or password is incorrect."}` |

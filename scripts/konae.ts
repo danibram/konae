@@ -156,7 +156,7 @@ function endpoint(url: string) { return new URL("/mcp", url).href; }
 async function json<T>(filename: string): Promise<T> { return JSON.parse(await readFile(filename, "utf8")); }
 
 /** What login says when the account it created waits for its emailed link. */
-export const VERIFY_BY_LINK = "This installation verifies email, so the account waits for the link sent to your address. Open it, choose KONAE_PASSWORD as the password, then run login again with the same KONAE_EMAIL and KONAE_PASSWORD and without the code or key, which are used now. On a development Kernel on this machine, run login with --verify-from <its data folder>/mailbox.jsonl to do both in one step.";
+export const VERIFY_BY_LINK = "This installation verifies email, so the account waits for the link sent to your address. Open it, choose KONAE_PASSWORD as the password, then run login again with the same KONAE_EMAIL and KONAE_PASSWORD and without the code or key, which are used now. On a Kernel on this machine, run login with --verify-from <its data folder>/mailbox.jsonl to do both in one step.";
 
 /** Whether a Kernel URL names this machine, the only place a development mailbox can be read. */
 export function isLoopbackUrl(url: string) {
@@ -165,7 +165,7 @@ export function isLoopbackUrl(url: string) {
 }
 
 /**
- * The newest creator verification token for `email` among the development
+ * The newest owner verification token for `email` among the development
  * mailbox's lines past the first `seen`. Lines for app accounts, other
  * addresses and other purposes are skipped.
  */

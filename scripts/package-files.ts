@@ -1,5 +1,5 @@
-// Streams package components between MCP transfers, files and the kit
-// archive in fixed blocks, so a 256 MiB database never sits in memory.
+// Streams the parts of an export between MCP transfers and files in fixed
+// blocks, so a 256 MiB database never sits in memory.
 import { createHash } from "node:crypto";
 import { open, rm } from "node:fs/promises";
 import { decodeBase64, McpError, type McpClient, type Transfer } from "../src/mcp/client";

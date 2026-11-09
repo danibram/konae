@@ -114,7 +114,7 @@ export function AgentSettingsModal({
 
           <div className={`agent-settings-key ${key}`}>
             <KeyRound size={13} />
-            {key === "not-needed" && <span>The Konae Kernel holds the key.</span>}
+            {key === "not-needed" && <span>Konae holds the key.</span>}
             {key === "stored" && !editingKey && (
               <>
                 <span><Check size={12} /> Key stored for {provider.label}</span>

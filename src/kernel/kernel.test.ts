@@ -3,7 +3,7 @@ import { createDefaultManifest } from "../deployments/manifest";
 import { KernelIdentity, MemoryKernelIdentityStore } from "./auth";
 import { KonaeKernel } from "./kernel";
 
-describe("Konae Kernel", () => {
+describe("Kernel", () => {
   test("authenticates and applies deployment visibility through one interface", async () => {
     const store = new MemoryKernelIdentityStore();
     store.setGrants("user_1", [{ type: "deployment", deploymentId: "deploy_1" }]);

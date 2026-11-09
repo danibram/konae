@@ -55,8 +55,8 @@ export type SignalDeclaration = { name: string; properties: string[] };
 
 /**
  * The email a mutation queues when its statement changes a row. It goes to
- * the Project Owner or to the calling account, never to an address from the
- * input. See docs/adr/0012-email-leaves-through-one-queue-to-addresses-the-app-has-proved.md.
+ * the app's contact email, the calling account or the accounts a changed row
+ * names, never to an address from the input. See docs/adr/0012-email-leaves-through-one-queue-to-addresses-the-app-has-proved.md.
  */
 export type NotifyDeclaration = {
   to: "owner" | "actor" | { column: string };

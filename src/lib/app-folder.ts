@@ -142,7 +142,7 @@ function packageManifest(settings: AppSettings) {
 function agentsGuide(settings: AppSettings, secrets: string[]) {
   return `# ${settings.name}
 
-This folder is one Konae app. A Konae Kernel serves the pages in \`dist/\` and runs the Server Actions in \`app/actions.json\` on the database in \`data/\`.
+This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs the Server Actions in \`app/actions.json\` on the database in \`data/\`.
 
 ## Layout
 
@@ -157,7 +157,7 @@ This folder is one Konae app. A Konae Kernel serves the pages in \`dist/\` and r
 
 - The page talks to the database only through the named Server Actions in \`app/actions.json\`. \`action-contract.md\` lists them.
 - A query that reads rows names a LIMIT.
-- \`schema.sql\` is the model. Add tables and columns there; the Kernel applies an added table or column on the next publish and refuses a change that drops or retypes one.
+- \`schema.sql\` is the model. Add tables and columns there; the Kernel applies an added table, column or index on the next publish or start, and a change that drops or retypes one only with the confirmation it names.
 - A page loads no script from another origin and uses no inline event handler.
 
 ## Run it

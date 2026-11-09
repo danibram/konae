@@ -6,7 +6,8 @@
  * conformance runner in src/lib/action-conformance.ts.
  *
  * The generator reads SQL with the tokenizer the Validation Gate uses. It does
- * not run SQLite, so it works in the editor, in the CLI and in the export kit.
+ * not run SQLite, so it works in the editor, in the CLI and in an exported app
+ * folder.
  * Output column names follow SQLite's rule for a result column: the alias when
  * there is one, otherwise the column's own name. An expression with no alias
  * gets the text SQLite happens to print for it, which another backend would
@@ -878,7 +879,7 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
       if (action.guard) lines.push(`When the statement changes no row the call is refused with \`${action.guard}\` instead.`, "");
       if (action.notify) {
         const recipient = action.notify.to;
-        const to = recipient === "owner" ? "the Project Owner"
+        const to = recipient === "owner" ? "the app's contact email"
           : recipient === "actor" ? "the caller's verified email"
           : `each verified account of this app whose ID a changed row holds in \`${recipient.column}\`, with only its own rows`;
         lines.push(`When the statement changes a row the Kernel queues an email to ${to} with the subject \`${action.notify.subject}\`. The answer does not wait for it or depend on it; Usage counts it under \`notify\`.`, "");

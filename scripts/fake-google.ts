@@ -1,6 +1,6 @@
 /**
  * A local stand-in for Google's OAuth endpoints, for trying "Continue with
- * Google" on a development Kernel without a real Google client.
+ * Google" on a local Kernel without a real Google client.
  *
  *   bun run scripts/fake-google.ts            # listens on 127.0.0.1:8799
  *   KONAE_GOOGLE_TEST_ISSUER=http://127.0.0.1:8799 bun run dev:local
@@ -44,7 +44,7 @@ function idToken(grant: Grant) {
 function authorizePage(params: URLSearchParams) {
   const hidden = [...params].map(([name, value]) => `<input type="hidden" name="${escape(name)}" value="${escape(value)}">`).join("");
   return `<!doctype html><meta charset="utf-8"><title>Fake Google</title><style>body{font:16px system-ui;max-width:420px;margin:48px auto}label{display:grid;gap:4px;margin:12px 0}input{font:inherit;padding:8px}button{font:inherit;padding:10px 14px}</style>
-<h1>Fake Google</h1><p>Choose who signs in. This page stands in for Google on a development Kernel.</p>
+<h1>Fake Google</h1><p>Choose who signs in. This page stands in for Google on a local Kernel.</p>
 <form method="post" action="/authorize">${hidden}
 <label>Email <input name="email" type="email" required value="ana@gmail.com"></label>
 <label>Workspace domain (hd), empty for Gmail <input name="hd" value=""></label>

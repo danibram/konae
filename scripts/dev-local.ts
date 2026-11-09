@@ -69,7 +69,7 @@ const editorEnv = {
   };
 
 console.log(`Konae editor: http://localhost:${editorPort}`);
-console.log(`Konae Kernel: ${kernelUrl}`);
+console.log(`Konae and its Kernel: ${kernelUrl}`);
 console.log(`Local app data: ${dataRoot}`);
 
 start("cargo", ["run", "--manifest-path", path.join(root, "kernel-rs", "Cargo.toml"), "--bin", "konae"], kernelEnv);

@@ -20,7 +20,7 @@ function deployment(visibility: "public" | "private"): KernelDeployment {
   return { id: "deploy_1", projectId: "project_1", manifest };
 }
 
-describe("Konae Kernel access", () => {
+describe("Kernel access", () => {
   test("serves public shells without exposing undeclared actions", () => {
     const publicDeployment = deployment("public");
     expect(authorizeKernelIntent(anonymousActor, { type: "open-deployment", deployment: publicDeployment }).allowed).toBe(true);
