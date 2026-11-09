@@ -8,9 +8,9 @@ import { readTar } from "../src/lib/tar";
 import { downloadToFile } from "../scripts/package-files";
 import type { PackageManifest } from "../src/lib/portable-package";
 
-// Delivery H: the chunked package and every refusal its row in
-// docs/plans/platform-launch.md lists. The 256 MiB run is
-// tests/smoke/package-quota.ts.
+// The chunked package of ADR-0008 and every refusal its import checks.
+// tests/smoke/package-quota.ts exports a 256 MiB app with its data and runs
+// it on the kernel binary.
 let root: string;
 let kernel: ReturnType<typeof Bun.spawn>;
 let url: string;
