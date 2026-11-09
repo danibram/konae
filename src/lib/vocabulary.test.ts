@@ -47,9 +47,6 @@ const prose = [
   "docs/divergences.md",
   "docs/examples.md",
   ...files("docs/guides", (file) => file.endsWith(".md")),
-  "docs/research/showcase-findings.md",
-  "docs/plans/platform-launch.md",
-  "docs/plans/self-use-and-sdk-modules.md",
   ...files("docs/adr", (file) => file.endsWith(".md")),
 ];
 

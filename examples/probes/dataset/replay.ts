@@ -1,5 +1,5 @@
 // Probe: a public dataset with a JSON read API and a private write API.
-// Decides the matrix cells for search, pagination and sorting, counters and
+// Proves search, pagination and sorting, counters and
 // aggregates, the public read API from another origin, and the keyed write API.
 //
 //   KONAE_PROBE_PORT=23000 bun run examples/probes/dataset/replay.ts

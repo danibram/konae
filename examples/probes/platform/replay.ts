@@ -1,9 +1,7 @@
-// Probe: what the platform has no primitive for. Decides the matrix cells for
-// email on an event, realtime push and third-party login, by reading what the
-// runtime door offers and how the two doors answer a declaration for each.
-// Scheduled work and the custom domain have primitives since 2026-11-07; the
-// schedule and domain probes prove them, and this one checks that both doors
-// refuse the forms they do not take and what an unclaimed hostname answers.
+// Probe: what the platform has no primitive for, such as realtime push. It
+// reads what the runtime door offers and how the two doors answer each
+// declaration, checks that both doors refuse the schedule and domain forms
+// they do not take, and checks what an unclaimed hostname answers.
 //
 //   KONAE_PROBE_PORT=23050 bun run examples/probes/platform/replay.ts
 import assert from "node:assert/strict";
@@ -31,7 +29,7 @@ await probe("platform", 23050, async (kit) => {
   const absent = /mail|schedule|cron|subscribe|stream|watch|pay|charge|oauth|provider|domain/;
   for (const name of [...member, ...visitor]) assert(!absent.test(name), `${name} looks like a primitive this probe says is missing.`);
   assert(member.includes("actions_invoke") && member.includes("files_upload") && visitor.includes("auth_signup"));
-  kit.pass("Runtime tools", `A signed-in app user gets ${member.join(", ")}. A visitor gets ${visitor.join(", ")}. Accounts are email and password only.`);
+  kit.pass("Runtime tools", `A signed-in app user gets ${member.join(", ")}. A visitor gets ${visitor.join(", ")}. Accounts sign in with a password, or with Google once the owner turns it on.`);
 
   // A declaration for each missing primitive, at both doors.
   const schema = await readFile(path.join(here, "schema.sql"), "utf8");

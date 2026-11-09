@@ -1,5 +1,4 @@
-// Probe: email on an event. Decides the matrix cells for a notice to the
-// owner when a visitor joins a waitlist, a confirmation to the person who
+// Probe: email on an event. Proves a notice to the owner when a visitor joins a waitlist, a confirmation to the person who
 // ordered once their account proved its email, what is not sent (a retry that
 // stored nothing, a guard's refusal, an unproven address, an address typed
 // into the input), what the owner reads, and what both doors refuse.

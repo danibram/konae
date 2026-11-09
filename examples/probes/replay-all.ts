@@ -1,6 +1,6 @@
 // Runs every probe replay in turn, each on its own port, and exits non-zero if
-// any fails. Each probe starts and removes its own Kernel. The probes back the
-// cells of docs/research/capability-matrix.md that no showcase replay proves.
+// any fails. Each probe starts and removes its own Kernel. examples/probes/README.md
+// says what each one proves that no showcase replay does.
 //
 //   bun run examples/probes/replay-all.ts
 //   KONAE_PROBE_BASE_PORT=23000 bun run examples/probes/replay-all.ts

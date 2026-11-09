@@ -1,5 +1,5 @@
-// Probe: a small shop with stock that holds expire from. Decides the matrix
-// cells for inventory rules under concurrency, delayed work (a hold that
+// Probe: a small shop with stock that holds expire from. Proves inventory
+// rules under concurrency, delayed work (a hold that
 // lapses), payments (Checkout Session via a call, then a Stripe-shaped
 // webhook), and what the page may load from a payment provider.
 //

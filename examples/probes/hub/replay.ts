@@ -1,6 +1,6 @@
 // Probe: an integration hub that receives webhooks from services the owner
-// does not control and exposes an API for a program. Decides the matrix cells
-// for signed webhooks in, payments (a payment provider's webhook is one of
+// does not control and exposes an API for a program. Proves signed
+// webhooks in, payments (a payment provider's webhook is one of
 // these senders) and the hub's program API.
 //
 // Each sender signs here with node:crypto, the way its own documentation

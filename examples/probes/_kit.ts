@@ -4,8 +4,8 @@
 // data directory under the system temp folder, signs up the owner, and removes
 // the Kernel and its data when the probe ends, whether it passed or not.
 //
-// A probe is small: it publishes one Capsule from its own folder and asserts
-// the answers that decide one or more cells of docs/research/capability-matrix.md.
+// A probe is small. It publishes one Capsule from its own folder and asserts
+// the answers that prove one kind of app works, or the refusal both doors give.
 import assert from "node:assert/strict";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

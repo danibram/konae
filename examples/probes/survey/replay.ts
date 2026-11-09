@@ -1,5 +1,4 @@
-// Probe: a form and survey collector. Decides the matrix cells for a
-// multi-answer form in one atomic write, tallies, one vote per person, and
+// Probe: a form and survey collector. Proves a multi-answer form in one atomic write, tallies, one vote per person, and
 // what a duplicate or an invalid answer gets back.
 //
 //   KONAE_PROBE_PORT=23040 bun run examples/probes/survey/replay.ts

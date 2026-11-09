@@ -4,10 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient } from "../src/mcp/client";
 
-// Delivery C of docs/plans/platform-launch.md: creator admission with
-// invitation codes, against a Kernel that requires verification and writes
-// its mail to a development mailbox. The operator commands run as the real
-// executable against the live data directory.
+// Owner admission with invitation codes, against a Kernel that requires
+// verification and writes its mail to a development mailbox. The operator
+// commands run as the real executable against the live data directory.
 
 const binary = "kernel-rs/target/debug/konae";
 const setupKey = "admission-integration-setup-secret";

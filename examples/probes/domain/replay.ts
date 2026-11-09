@@ -1,5 +1,4 @@
-// Probe: a custom domain (ADR-0014). Decides matrix cell F22 by serving a
-// public guestbook from guestbook.example.org next to its generated hostname.
+// Probe: a custom domain (ADR-0014). It serves a public guestbook from guestbook.example.org next to its generated hostname.
 // A fake resolver on a local UDP port answers the Kernel's own TXT lookup;
 // requests reach the alias with a Host header, as a proxy that forwards Host
 // unchanged sends them.

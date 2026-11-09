@@ -1,5 +1,5 @@
-// Probe: scheduled work (ADR-0011). Decides the matrix cell for work that has
-// to happen when nobody asks. A reminder app surfaces due notes from a
+// Probe: scheduled work (ADR-0011), for work that has to happen when nobody
+// asks. A reminder app surfaces due notes from a
 // "schedule" on a mutation; the Kernel's timer runs it with no caller.
 //
 // The probe starts its Kernel with KONAE_SCHEDULE_MIN_SECONDS=2, so a

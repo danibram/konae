@@ -1,5 +1,5 @@
 // Probe: a two-sided app where publishers post and readers follow them.
-// Decides the matrix cells for roles managed inside the app, public and
+// Proves roles managed inside the app, public and
 // private rows in one table, realtime by polling, the audit of who did what,
 // and files shared with a role.
 //
