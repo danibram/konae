@@ -2284,7 +2284,7 @@ pub fn database_path(state: &AppState, id: &str) -> PathBuf {
 
 /// Named locks on one database or transfer. Each is a read-write lock: a
 /// Server Action shares its Database's lock, and work that reads or replaces
-/// the whole file (a copy, a restore, a migration, the owner's console) holds
+/// the whole file (a copy, a restore, an import, the owner's console) holds
 /// it alone. An entry lives only while someone holds or waits for it, so
 /// callers that pass many distinct names cannot grow the map.
 pub type LockMap = Arc<std::sync::Mutex<HashMap<String, Arc<RwLock<()>>>>>;
@@ -3545,8 +3545,8 @@ pub fn restrict_database(db: &Connection) -> Result<()> {
     arm_deadline(db);
     db.authorizer(Some(|context: AuthContext<'_>| match context.action {
         AuthAction::Attach { .. } | AuthAction::Detach { .. } => Authorization::Deny,
-        // Konae runs no triggers or views, and Studio and migrations use
-        // this connection too, so neither can add one the Gate never saw.
+        // Konae runs no triggers or views, and Studio and the schema change
+        // use this connection too, so neither can add one the Gate never saw.
         AuthAction::CreateTrigger { .. } | AuthAction::CreateTempTrigger { .. } => Authorization::Deny,
         AuthAction::CreateView { .. } | AuthAction::CreateTempView { .. } => Authorization::Deny,
         AuthAction::Pragma { pragma_name, .. } if !["table_info", "table_xinfo", "index_list", "index_info", "foreign_key_list", "foreign_key_check", "integrity_check", "quick_check"].contains(&pragma_name.to_ascii_lowercase().as_str()) => Authorization::Deny,
@@ -4205,7 +4205,7 @@ pub mod tests {
         db.query_row(&pattern(MAX_LIKE_PATTERN_BYTES as usize), [], |row| row.get::<_, bool>(0)).unwrap();
         let long = db.query_row(&pattern(MAX_LIKE_PATTERN_BYTES as usize + 1), [], |row| row.get::<_, bool>(0)).unwrap_err().to_string();
         assert!(long.contains("pattern too complex"), "{long}");
-        // Studio and migrations open this connection too.
+        // Studio and the schema change open this connection too.
         for statement in ["CREATE TRIGGER t AFTER INSERT ON items BEGIN DELETE FROM items; END", "CREATE VIEW v AS SELECT 1",
             "CREATE TEMP TRIGGER t AFTER INSERT ON items BEGIN SELECT 1; END", "CREATE TEMP VIEW v AS SELECT 1"] {
             assert!(db.execute_batch(statement).unwrap_err().to_string().contains("not authorized"), "{statement}");

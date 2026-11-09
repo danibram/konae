@@ -44,8 +44,8 @@ export class McpClient {
   }
 
   /**
-   * Uploads bytes as one owner transfer. `component` names a Package
-   * component (`database`, `identity`, `files` or `usage`), which lets the
+   * Uploads bytes as one owner transfer. `component` names a part of an
+   * export (`database`, `identity`, `files` or `usage`), which lets the
    * upload reach that component's limit instead of 32 MiB; a release then
    * names the transfer in `initialPackage.components`.
    */

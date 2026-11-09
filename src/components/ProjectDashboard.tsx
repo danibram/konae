@@ -201,7 +201,7 @@ function DeleteProjectDialog({ project, published, onClose, onDelete }: {
     open
     title={`Delete ${project.name}`}
     description={published
-      ? "This app is published. Deleting it stops its address, and deletes its database, app accounts, uploaded files and backups on this Kernel. This cannot be undone. Export a package first if you want to keep the data."
+      ? "This app is published. Deleting it stops its address, and deletes its database, app accounts, uploaded files and backups on this Kernel. This cannot be undone. Export the app first to keep its data."
       : "This removes the app from your account. This cannot be undone."}
     onClose={close}
     footer={<>

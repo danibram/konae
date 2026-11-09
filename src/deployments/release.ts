@@ -10,7 +10,7 @@ export type SchemaLoss = { table: string; column: string | null; sentence: strin
  */
 export type SchemaChange = { statements: string[]; losses: SchemaLoss[]; confirmation: string | null };
 
-/** `schema` is absent when release_plan replays a package import it already applied. */
+/** `schema` is absent when release_plan replays an import it already applied. */
 export type ReleasePlan = { planId: string; projectId: string; expectedRevision: number; schema?: SchemaChange };
 
 /** Asks the owner about a schema change that loses data. False stops the release. */

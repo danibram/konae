@@ -63,7 +63,7 @@ The change the Kernel derives from `schema.sql` to a live database, at publish, 
 _Avoid_: migration, schema diff
 
 **actions.d.ts**:
-The types of `miniapp.actions.call` by action name, input and returned columns, generated from the Action Contract into the app folder by `konae contract`, `konae dev` and an export. It is never edited (ADR-0005).
+The types of `miniapp.actions.call` by action name, input and returned columns, generated from the Action Contract into the app folder by `konae init`, `konae contract`, `konae dev` and an export. It is never edited (ADR-0005).
 _Avoid_: SDK types, API client
 
 **Build Artifact**:
@@ -185,11 +185,11 @@ _Avoid_: bucket (one kind of store), storage
 ### Taking the app elsewhere
 
 **Export**:
-The app folder handed over: `konae.json`, `app/` and `dist/` in one download, and each part of `data/` (database, accounts, files, Usage) as its own download with a manifest of sizes and SHA-256. It carries no owner, credential, secret, session or `.konae/`, and its API keys arrive revoked. `project_export`, `konae export`, `konae pull` and the editor's Export are the one export, and each needs `export_data`. Tool arguments call the manifest and its downloads a package (ADR-0008).
+The app folder handed over: `konae.json`, `app/` and `dist/` in one download, and each part of `data/` (database, accounts, files, Usage) as its own download with a manifest of sizes and SHA-256. It carries no owner, credential, secret, session or `.konae/`, and its API keys arrive revoked. `project_export`, `konae export`, `konae pull` and the editor's Export are the one export, and downloading accounts and data needs `export_data`. Tool arguments call the manifest and its downloads a package (ADR-0008).
 _Avoid_: kit, dump, full backup
 
 **Import**:
-An export taken in. Into a new app the data travels with the first release as `initialPackage`; into an existing app `project_import` or `kernel import` replaces the sources, the data or both after a backup, and never merges rows. `konae dev --reset` imports what `konae pull` exported (ADR-0008).
+An export taken in. Into a new app the data travels with the first release as `initialPackage`; into an existing app `project_import` replaces the sources, the data or both, and `kernel import` the data, after a backup and never merging rows. `konae dev --reset` imports what `konae pull` exported (ADR-0008).
 _Avoid_: migration, sync, restore (that installs a copy)
 
 **Maintenance**:
@@ -207,7 +207,7 @@ The person who runs an installation: its settings, its copies, its file store an
 _Avoid_: owner, admin
 
 **Kernel Commands**:
-What the `kernel` binary does on the machine instead of serving. On one app: `users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter` and `import`, each calling the function the owner tool calls, with the same refusals (`kernel-rs/kernel/src/operator.rs`). On the installation: `restore`, `reconcile`, `files-migrate` and `files-reconcile`. The `konae` binary runs all of these and adds `creator-code-create`, `creator-code-list`, `creator-code-revoke`, `creator-account-suspend` and `creator-account-resume`.
+What the `kernel` binary does on the machine instead of serving. On one app: `users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter` and `import`, each calling the function the owner tool calls, with the same refusals (`kernel-rs/kernel/src/operator.rs`). On the installation: `restore`, `reconcile`, `files-migrate` and `files-reconcile`. The `konae` binary runs the installation commands and adds `creator-code-create`, `creator-code-list`, `creator-code-revoke`, `creator-account-suspend`, `creator-account-resume` and, with Clerk, `creator-suspend`. Under Konae the owner tools do what the commands on one app do.
 _Avoid_: admin page, CLI (that is `konae`)
 
 **Runtime Endpoint**:

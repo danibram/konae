@@ -1,6 +1,6 @@
 // Reads an app folder, as the editor's Export writes it in a tar, back into
-// what `project_import` takes: a release payload for the sources and a
-// package for the data. It is the inverse of export-project.ts and
+// what `project_import` takes: a release payload for the sources and the
+// export's manifest and parts for the data. It is the inverse of export-project.ts and
 // `dataEntries` in app-folder.ts.
 import { checksum, encodeBase64 } from "../mcp/client";
 import { DATA_FOLDER, DIST_FOLDER, SETTINGS_FILE, SOURCES_FOLDER, dataPaths, type AppSettings } from "./app-folder";

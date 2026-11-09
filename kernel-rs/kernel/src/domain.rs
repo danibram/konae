@@ -194,7 +194,7 @@ pub fn is_alias_request(state: &AppState, headers: &HeaderMap) -> bool {
     request_host(headers).is_some_and(|host| serving(state, &host).is_some())
 }
 
-/// The address the app's email links and its migration notice use: the
+/// The address the app's email links use: the
 /// verified alias when there is one, the generated URL otherwise.
 pub fn app_url(state: &AppState, deployment: &Deployment) -> String {
     match read_record(state, &deployment.id).filter(|record| record.verified) {

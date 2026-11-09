@@ -271,7 +271,7 @@ pub async fn export(
         Ok(value) => value,
         Err(error_value) => {
             let _ = tokio::fs::remove_dir_all(&scratch).await;
-            return Err(error_value.context("The package capture failed"));
+            return Err(error_value.context("The export capture failed"));
         }
     };
     let manifest = Manifest {
@@ -596,7 +596,7 @@ fn unpack_files(
                 Some(db) => db.query_row("SELECT 1 FROM app_users WHERE id=?1", [owner], |_| Ok(())).optional()?.is_some(),
                 None => false,
             };
-            ensure!(known, "File {id} belongs to an account the package does not contain.");
+            ensure!(known, "File {id} belongs to an account the export does not contain.");
             restored["ownerId"] = json!(owner);
         }
         normalized.push(restored);

@@ -8,7 +8,7 @@
 //! A kept connection reads the file it opened, even after another file is
 //! renamed over its path. So a connection is lent only while its path still
 //! names the file it opened, and `database_lock` (which a restore, a copy or
-//! a migration holds) drops every kept connection of that Database.
+//! an import holds) drops every kept connection of that Database.
 
 use rusqlite::Connection;
 use std::collections::{HashMap, VecDeque};

@@ -1,7 +1,7 @@
 //! The Kernel's half of the static publishing contract: how a Build Artifact
 //! carries binary files, and which artifact file answers a path.
 //!
-//! The builders (`konae build`, the editor and the exported kit) share
+//! The builders (`konae build`, the editor and an app folder's build) share
 //! `src/lib/static-artifact.js`. They decide which Capsule files ship. The
 //! Kernel accepts an artifact from any builder, so it checks the encodings and
 //! the routing mode itself and refuses the same routing values with the same

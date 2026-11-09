@@ -32,7 +32,7 @@ beforeAll(async () => {
 
 afterAll(async () => { await kernel?.stop(); if (root) await rm(root, { recursive: true, force: true }); });
 
-/** Exports the app's data and uploads it again as a package for the same project. */
+/** Exports the app's data and uploads it again for an import into the same project. */
 async function exportedPackage(deploymentId: string, projectId: string) {
   const exported = await kernel.owner.call<{ manifest: PackageManifest; downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { deploymentId });
   const components: Record<string, string> = {};
@@ -93,7 +93,7 @@ test("an import replaces data, sources or both after a backup, keeps sessions, a
   const saved = JSON.parse(new TextDecoder().decode(await kernel.owner.download(read.transfer))) as { files: Record<string, string> };
   expect(saved.files["schema.sql"]).toBe(slimmer);
 
-  // Both: the release's schema applies to the package's data before it serves.
+  // Both: the release's schema applies to the exported data before it serves.
   const again = await exportedPackage(deploymentId, id);
   const both = payload(id, schema, "v3");
   const bothUpload = await kernel.owner.upload(new TextEncoder().encode(JSON.stringify(both)), id);

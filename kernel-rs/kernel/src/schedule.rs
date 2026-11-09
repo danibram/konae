@@ -10,7 +10,7 @@
 //! 1970-01-01 00:00 UTC, and `daily` into days that start at its time. An
 //! action runs once in a slot, at the first tick after the slot opens. The
 //! slot it last ran for is kept in the Deployment's `usage.sqlite`, so a
-//! restart, a copy, a package or a migration resumes from it and a daily job
+//! restart, a copy, or an export and its import resumes from it and a daily job
 //! does not run twice. A Kernel that was down for many slots runs the action
 //! once, not once per missed slot. The first slot an action is seen in counts
 //! as done, so publishing never runs it.

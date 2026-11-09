@@ -17,7 +17,7 @@ export type ImportResult =
 
 /**
  * Imports a folder into the published app: its sources as a release, its
- * data as a package, or both. The Kernel backs up what it replaces first.
+ * data from its export, or both. The Kernel backs up what it replaces first.
  * Call again with the plan's confirmation when the first answer asks for one.
  */
 export async function importFolder(input: {

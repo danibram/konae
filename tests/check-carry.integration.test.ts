@@ -7,7 +7,7 @@ import type { PackageManifest } from "../src/lib/portable-package";
 import { downloadToFile } from "../scripts/package-files";
 import { buildKernel, importPackage, release, startKernel, type Kernel } from "./kernel-harness";
 
-// The CHECK constraints schema.sql declares travel in a package to another app.
+// The CHECK constraints schema.sql declares travel in an export to another app.
 let root: string;
 let kernel: Kernel;
 
@@ -43,7 +43,7 @@ beforeAll(async () => {
 afterAll(async () => { await kernel?.stop(); if (root) await rm(root, { recursive: true, force: true }); });
 
 describe("CHECK constraints from schema.sql", () => {
-  test("travel in a package to another app", async () => {
+  test("travel in an export to another app", async () => {
     const app = await publish("checks_package");
     await sql(app.id, "INSERT INTO habits(name) VALUES('read')");
     const exported = await kernel.owner.call<{ manifest: PackageManifest; downloads: Record<string, Transfer> }>("project_export", { deploymentId: app.id });

@@ -441,7 +441,7 @@ pub fn transfer_tools(runtime: bool) -> Vec<Value> {
             if runtime {
                 "Start a size-bounded upload with an expected SHA-256 checksum. A file is at most the installation's per-file limit, which a refusal names."
             } else {
-                "Start a size-bounded upload with an expected SHA-256 checksum. An upload is at most 32 MiB unless it names a package component, which may be as large as that component's quota."
+                "Start a size-bounded upload with an expected SHA-256 checksum. An upload is at most 32 MiB unless it names a component of an export, which may be as large as that component's quota."
             },
             // The bound depends on the installation's file limits, so the
             // handler checks it and names the number.
