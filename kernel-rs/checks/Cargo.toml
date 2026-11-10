@@ -1,0 +1,25 @@
+# The Kernel's checks of an action program and a schema, with no I/O, built
+# for wasm32-unknown-unknown so the editor can call them (ADR-0027, decision 7).
+# This crate is a spike, and the Kernel does not depend on it yet.
+[package]
+name = "konae-checks"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Its own workspace, so building it never touches the Kernel's.
+[workspace]

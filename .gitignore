@@ -5,6 +5,7 @@ dist/
 .env*
 data/
 kernel-rs/target/
+kernel-rs/checks/target/
 test-results/
 playwright-report/
 *.tsbuildinfo
