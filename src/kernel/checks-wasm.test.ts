@@ -88,6 +88,34 @@ describe.skipIf(unavailable !== null)(`the Kernel's checks as WebAssembly${unava
     });
   }
 
+  // Where the two doors differ today. The Kernel reads actions.json into
+  // typed fields first, so a value of the wrong type stops at that reading
+  // without a code. Its schema check reads tokens only, and the authorizer
+  // refuses the rest once SQLite applies the schema.
+  test("differ from the Gate on a field of the wrong type and on what only the authorizer refuses", async () => {
+    const { checks } = load();
+    const query = { kind: "query", access: "anonymous", statement: "SELECT 1 FROM t LIMIT 1", bindings: [] as unknown[] };
+    const typed: [Record<string, unknown>, Outcome][] = [
+      [{ kind: "query", access: "anonymous", statement: "SELECT 1 FROM t LIMIT 1" }, { code: "(not a refusal)", message: "Action a.b requires a bindings array." }],
+      [{ ...query, statement: 5 }, { code: "(not a refusal)", message: "Invalid server action: a.b" }],
+      [{ ...query, bindings: [{ source: "input", key: "q", type: "string", maxLength: 1.5 }] }, { code: "action.max-length-invalid", message: "Invalid maxLength in a.b." }],
+      [{ ...query, bindings: [{ source: "input", key: "q", type: "string", nullable: "yes" }] }, { code: "action.binding-nullable-invalid", message: "Action a.b has an invalid nullable input binding." }],
+    ];
+    for (const [action, editor] of typed) {
+      const source = JSON.stringify({ version: 1, actions: { "a.b": action } });
+      const kernel = call(checks, "check_actions", source);
+      expect(kernel?.code).toBeNull();
+      expect(kernel?.message).toStartWith("Invalid actions.json: ");
+      expect(outcomeOf(() => parseServerActionSource(source))).toEqual(editor);
+    }
+    const gate = createCapsuleValidator(() => initSqlJs());
+    for (const [schema, refused] of [["CREATE TABLE x AS SELECT 1;", "CREATE TABLE ... AS"], ["CREATE TABLE t (a TEXT CHECK (load_extension('x') IS NULL));", "load_extension()"]]) {
+      expect(call(checks, "check_schema", schema)).toBeNull();
+      const result = await gate.validate({ ...starterProject.files, "schema.sql": schema, "actions.json": JSON.stringify({ version: 1, actions: {} }) });
+      expect(result.errors[0]?.message).toBe(`schema.sql may only create tables and indexes, but it contains ${refused}.`);
+    }
+  });
+
   test("answer a file that does not parse without a code, as the Kernel's publish does", () => {
     const { checks } = load();
     expect(call(checks, "check_actions", JSON.stringify({ version: 2, actions: {} }))).toEqual({ code: null, message: "Unsupported actions.json version." });

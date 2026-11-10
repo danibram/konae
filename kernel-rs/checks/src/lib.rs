@@ -11,7 +11,7 @@
 //!
 //! | Kernel source | Copied here | Stays in the Kernel, and what it needs |
 //! | --- | --- | --- |
-//! | src/main.rs:360-414, 2808-3032 | action types, `validate_action`, the LIMIT rule, the SQL tokenizer | `apply_additive_schema` (3066), SQLite: the authorizer, two applies, `prepare` of every statement, `column_count` |
+//! | src/main.rs:360-414, 2808-3032 | action types, `validate_action`, the LIMIT rule, the SQL tokenizer | `apply_additive_schema` (3067), SQLite: the authorizer, two applies, `prepare` of every statement, `column_count` |
 //! | src/sql_rules.rs:9-149 | statement and `schema.sql` rules | `stored_trigger_or_view` (154), SQLite on a database file |
 //! | src/calls.rs:34-36, 59-61, 64-485, 511-543 | call declarations, `then`, `connects` | `check_release` (579), mcp.sqlite and the installation's hosts; the outbox and DNS (668 on) |
 //! | src/http.rs:53-148, 173-182, 190-205 | `http` binding, duplicate routes | secrets, API keys and request signatures (207 on) |
@@ -26,9 +26,17 @@
 //! against it, a mutation returns no column and a notify column exists. The
 //! editor runs these on sql.js, which has no authorizer hook, so
 //! `refusedStatements` in src/agent/gate.ts restates by hand what the
-//! Kernel's authorizer refuses: TEMP objects, CREATE TABLE ... AS and four
-//! functions. Those rules exist in TypeScript and in the authorizer, and not
-//! in any pure Rust check here.
+//! Kernel's authorizer refuses. CREATE TABLE ... AS and the four refused
+//! functions exist in TypeScript and in the authorizer, and in no pure Rust
+//! check here. rusqlite 0.41 builds for wasm32-unknown-unknown through
+//! sqlite-wasm-rs when cc finds LLVM's llvm-ar, and its authorizer runs
+//! there. Such a module imports five host functions: sleep, random, time,
+//! entropy and localtime. rusqlite 0.37, which the Kernel pins, does not build
+//! for this target.
+//!
+//! An actions.json that serde cannot read into the Kernel's types, such as
+//! a binding with `"nullable": "yes"`, is refused here without a code, where
+//! the Gate names the rule. src/kernel/checks-wasm.test.ts lists those cases.
 //!
 //! The WebAssembly boundary is four exports and no imports: `alloc`,
 //! `dealloc`, `check_actions` and `check_schema`. Each check takes UTF-8
