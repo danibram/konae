@@ -2,7 +2,7 @@
 
 A public photo portfolio for one photographer, Lena Varga (a made-up name). Visitors see the published photographs, open an about page with a contact form, and any program can read the newest work at `/feed.json`. Only one app account exists, the curator's. It uploads photographs, keeps drafts private, publishes them and reads the messages. Nobody else can create an account.
 
-This is a product probe. The app uses Konae's primitives as a creator would, and this file records what they allowed and what they refused, with the exact messages the replay saw.
+`replay.ts` publishes it the way an owner would, and this file records what the Kernel allowed and what it refused, with the exact messages the replay sees.
 
 ## Files
 
@@ -17,10 +17,10 @@ This is a product probe. The app uses Konae's primitives as a creator would, and
 | `actions.json` | Seven Server Actions, one HTTP route and one Signal |
 | `replay.ts` | Starts its own Kernel, publishes, runs every flow below and asserts the answers |
 
-## Primitives used
+## Platform parts it uses
 
 - A Public Deployment whose first release sets `initialSignupPolicy` to Closed.
-- An Invitation, read from the development mailbox, to admit the curator's single account.
+- An invitation, read from the development mailbox, to admit the curator's single account.
 - `files_upload` with `visibility: "public"` for published photographs and `"private"` for drafts. Publishing a draft makes its own file public with `files_update` (`miniapp.files.update` in the page), and a stray upload goes with `files_delete`. Visitors read public files through `GET /_konae/files/<id>`, the path `miniapp.files.url` returns, which the grid embeds as `<img>` under `img-src 'self'`.
 - Anonymous queries (`photos.published`), authenticated queries and mutations gated by a `studio` row the owner seeds with `database_execute`. `photos.add` and `photos.publish` declare a guard, so an account outside the studio is refused with the app's sentence.
 - `contact.send`, an anonymous mutation with the Signal `contact.received` carrying only the `topic`.
@@ -39,7 +39,22 @@ KONAE_SHOWCASE_PORT=19620 bun run examples/showcase/gallery/replay.ts
 
 The default port is 19620. The replay builds the Kernel offline, starts it on that port with a random setup key, `KONAE_MAIL_TRANSPORT=development` and its data in a temporary directory, and removes both when it exits, whether it passed or not. `KONAE_SHOWCASE_BROWSER=0` skips Chrome. `KONAE_SHOWCASE_SCREENSHOTS=<dir>` saves the home page in light and dark, the about page and the studio. `KONAE_SHOWCASE_CONTRACT_OUT=<file>` keeps a copy of the generated `action-contract.md`.
 
-It runs these flows and exits 0 when all of them pass:
+To publish it yourself on an installation where you have an owner account, such as the one `bun run dev:local` starts:
+
+```sh
+KONAE_EMAIL=you@example.com KONAE_PASSWORD=... bun run konae -- login --dir /tmp/gallery --url http://localhost:4173 --manage-users
+bun run konae -- init --dir /tmp/gallery --name Gallery
+rm -rf /tmp/gallery/app && mkdir /tmp/gallery/app
+cp examples/showcase/gallery/{index.html,about.html,404.html,app.js,styles.css,schema.sql,actions.json} /tmp/gallery/app/
+```
+
+Set `"visibility": "public"` and `"signupPolicy": { "mode": "closed" }` in `/tmp/gallery/konae.json`, then run `bun run konae -- publish --dir /tmp/gallery`. Invite the curator over MCP with `app_invitations_create`, and once they accept, add their account ID, which `app_users_list` shows, to the studio:
+
+```sh
+bun run konae -- sql --dir /tmp/gallery --prod "INSERT INTO studio (user_id) VALUES ('<account id>')"
+```
+
+The replay runs these flows and exits 0 when all of them pass:
 
 1. `konae build` on this Capsule, then on a copy whose about page names a missing image.
 2. A release whose `contact.send` ends in `RETURNING id`, which must be refused at planning.
@@ -58,10 +73,10 @@ It runs these flows and exits 0 when all of them pass:
 
 ## What worked
 
-- Closed signup from the first request. The Kernel refused every signup, the curator's own included, and the curator's account came in through the owner's Invitation with the policy still Closed (`acceptable: true`, then 200 on accept). The app has exactly one account (`app_users_list`) and the curator still signs in.
+- Closed signup from the first request. The Kernel refuses every signup, the curator's own included, and the curator's account comes in through the owner's invitation with the policy still Closed (`acceptable: true`, then 200 on accept). The app has exactly one account (`app_users_list`) and the curator still signs in.
 - Drafts stayed invisible by every door a visitor has: `photos.published` leaves them out, `files_list` lists only the public files, `files_read` answers `File not found.` and `GET /_konae/files/<id>` answers 404.
 - Public photographs load in the page from `/_konae/files/<id>` as `image/png`, `inline`, with `Cross-Origin-Resource-Policy: same-origin`. Chrome reported no policy violation on any page, light or dark.
-- Publishing a draft keeps its file. `files_update` made the draft's file public under the same ID, `photos.publish` marked the row published, and the curator held 5 files for 5 photographs. `photos.publish` takes only the photograph's ID since 2026-11-07, because the row already names its file; before, it took a `file_id` that could point the row at any file. A second publish of the same photograph is refused with `Only the studio's curator can publish, and only a photograph that is still a draft.` A stray upload deleted with `files_delete` left `files_list`, answered `File not found.` to `files_read` and 404 at the file path, and stopped counting against the 20 MiB quota.
+- Publishing a draft keeps its file. `files_update` made the draft's file public under the same ID, `photos.publish` marked the row published, and the curator held 5 files for 5 photographs. `photos.publish` takes only the photograph's ID, because the row already names its file. A second publish of the same photograph is refused with `Only the studio's curator can publish, and only a photograph that is still a draft.` A stray upload deleted with `files_delete` left `files_list`, answered `File not found.` to `files_read` and 404 at the file path, and stopped counting against the 20 MiB quota.
 - In the studio, `fetch(await miniapp.files.url(draft))` answered 200 `image/png` with the draft's bytes under `connect-src 'self'`, and the draft previews load from the same path instead of from `miniapp.files.list()`, which downloads every file.
 - `contact.send` works for a signed-out visitor, from the page and over MCP. The 31st call from one address in 10 seconds answered `rate-limited` with `Retry-After: 1`, and a second address went through at once. Each sent message recorded one `contact.received` Signal with only `{ topic }`, and the curator read every message through `studio.messages`.
 - `GET /feed.json` answers any program with no signature and no key: 200, `application/json`, the four published photographs newest first, with image paths that load. `HEAD` answers 405 with `Allow: GET`. `POST` answers 405 with `Allow: GET` and `No route accepts POST on this path.`
@@ -72,7 +87,7 @@ It runs these flows and exits 0 when all of them pass:
 - Every path the artifact does not hold answers 404 with `404.html`, never the home page. `HEAD /styles.css` answers 200 with `text/css`.
 - The studio serves from its own domain. Until the Kernel's own lookup found the token in `_konae.gallery.studio.example`, the name answered 404; a record holding another value was refused with the value it held and the token it needed. Once proved, `gallery.studio.example` answered `/`, `/about`, the 404 page, `/feed.json` with the same four items and the first photograph as `image/png`, with the same policy, and `photos.published` over the runtime with the alias as `Origin` returned the four rows. The generated hostname kept answering.
 - conform with no credential passed every check it could run.
-- The page reads every failure through one `reason(error)` helper, the same in all five showcase apps. A refusal shows its own sentence, `rate-limited` becomes "Too many requests just now. Wait a few seconds and try again.", and an unreachable Kernel becomes "The site could not reach its server. Check the connection and try again." Before 2026-11-07 the studio's upload and publish judged `{ changes: 0 }` themselves, a refused upload left its file behind, and the grid stayed on "Loading photographs…" when the first call failed.
+- The page reads every failure through one `reason(error)` helper, the same in every showcase app but starter. A refusal shows its own sentence, `rate-limited` becomes "Too many requests just now. Wait a few seconds and try again.", and an unreachable Kernel becomes "The site could not reach its server. Check the connection and try again." A refused upload deletes its file, and the grid shows the failure when the first call fails.
 
 ## Unknown paths on a multi-page site
 
@@ -88,46 +103,44 @@ It runs these flows and exits 0 when all of them pass:
 | `/styles.css` | 200 | text/css | |
 | `/feed` | 404 | text/html | Not found · Lena Varga |
 
-An exact file answers first, and a path with no extension answers with its `.html` page. Every other path answers 404 with the artifact's `404.html` (`kernel-rs/kernel/src/artifact.rs`). `/about/` asks for `about/index.html`, which the gallery does not have. Before 2026-11-06 every path the artifact did not hold served `index.html` with 200.
+An exact file answers first, and a path with no extension answers with its `.html` page. Every other path answers 404 with the artifact's `404.html` (`kernel-rs/kernel/src/artifact.rs`). `/about/` asks for `about/index.html`, which the gallery does not have.
 
-## What the primitives refused or could not do
+## What the Kernel refused or could not do
 
-Rows with a status or a quoted message are answers the replay received. Rows that start with "No primitive" or "No option" come from reading the Kernel, the CLI and the docs for a way to do it and finding none.
+Rows with a status or a quoted message are answers the replay receives. Rows that start with "No way" come from reading the Kernel, the CLI and the docs for a way to do it and finding none.
 
 | Attempt | Status | Exact answer |
 | --- | --- | --- |
 | `konae build` on a copy whose `about.html` names `/portrait.jpg`, which the Capsule does not hold | | `about.html references /portrait.jpg, but the Capsule holds no portrait.jpg.` |
-| `konae publish` with a first signup policy | | Fixed on 2026-11-06: `konae.json` names `project.manifest.signupPolicy` and `konae publish` sends it on the first release (the club and booking replays use it). This replay publishes the artifact `konae build` writes, over MCP with `initialSignupPolicy`, so it can also plan a broken release first. |
 | Publish `contact.send` with `... RETURNING id` | | `Action contact.send cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.` |
 | A visitor signs up while signup is Closed | 403 | `This app is not accepting new accounts for this email address.` The same text for everyone under Closed, though it reads as if the address were the problem. |
-| The invited curator accepts while signup is Closed | 200 | Fixed on 2026-11-06 (ADR-0003). The replay first recorded 403 `This app is not accepting new accounts for this email address.` with `acceptable: false`. An owner's invitation is now acceptable under Closed, and the replay asserts `acceptable: true` and the 200. |
-| Create the curator's account on an app that is Closed from its first release | | Fixed on 2026-11-06. The owner invites the curator and the policy stays Closed; the curator's own signup still answers 403. |
-| Mark the curator as the studio owner | | No primitive. `auth_session` answers `role: "member"` for the only account; the app cannot tell the curator from any other account, so the owner inserts the curator's user ID into `studio` with `database_execute`. Until then `photos.add` is refused with its guard, `Only the studio's curator can add photographs.` (before 2026-11-07, `{ changes: 0 }`). |
+| The invited curator accepts while signup is Closed | 200 | `acceptable: true`. An owner's invitation is acceptable under Closed (ADR-0003). |
+| Mark the curator as the studio's owner | | No way. `auth_session` answers `role: "member"` for the only account; the app cannot tell the curator from any other account, so the owner inserts the curator's user ID into `studio` with `database_execute`. Until then `photos.add` is refused with its guard, `Only the studio's curator can add photographs.` |
 | A visitor reads a draft over MCP (`files_read`) | | `File not found.` |
 | A visitor reads a draft at `GET /_konae/files/<id>` | 404 | `{"error":"File not found."}` |
 | A visitor uploads a file (`transfer_begin`) | | `authentication-required` |
 | A visitor makes a draft public (`files_update`) | | `authentication-required` |
 | `files_update` with `visibility: "friends"` | | `Value is outside the allowed choices.` |
 | Delete a file that was already deleted (`files_delete`) | | `File not found.` |
-| `miniapp.files.upload(file, { visibility: "organizers" })` in the page | | `File visibility must be private or public.` The SDK refuses before it sends anything. Before 2026-11-06 it stored a private file without a word. |
+| `miniapp.files.upload(file, { visibility: "organizers" })` in the page | | `File visibility must be private or public.` The SDK refuses before it sends anything. |
 | `HEAD /feed.json` | 405 | `Allow: GET` and an empty body. HTTP drops the body of a HEAD answer, so `A route does not answer HEAD. Send GET.` from the docs never reaches the caller. |
 | `POST /feed.json` | 405 | `{"error":"No route accepts POST on this path."}` with `Allow: GET` |
 | `GET /feed.json?page=2` | 400 | `{"error":"Unexpected action input: page"}` |
-| Shape `/feed.json` as a JSON Feed document (`version`, `title`, `items`) | | No primitive. A route always answers `{ "result": [rows] }`. |
-| Absolute image URLs in `/feed.json` | | No primitive. The only kernel binding is `now`; the statement cannot read the Deployment's origin, so the feed carries `/_konae/files/<id>` paths. |
-| Let a browser cache `/feed.json` | | No primitive. `Cache-Control: no-store` on every answer. Since ADR-0013 (2026-11-07) a feed reader in another origin's browser reads it, because an open GET route answers `Access-Control-Allow-Origin: *`; the replay asserted the missing header before. |
+| Shape `/feed.json` as a JSON Feed document (`version`, `title`, `items`) | | No way. A route always answers `{ "result": [rows] }`. |
+| Absolute image URLs in `/feed.json` | | No way. The only kernel binding is `now`; the statement cannot read the Deployment's origin, so the feed carries `/_konae/files/<id>` paths. |
+| Let a browser cache `/feed.json` | | No way. `Cache-Control: no-store` on every answer. A feed reader in another origin's browser reads it, because an open GET route answers `Access-Control-Allow-Origin: *` (ADR-0013). |
 | Message 31 from one address within 10 seconds (`contact.send` over MCP) | 200 | `rate-limited`, as a JSON-RPC result with `isError: true` and `Retry-After: 1`. A route answers 429; the runtime endpoint answers 200. |
-| A tighter limit for `contact.send` alone, such as 3 an hour | | No primitive. `actions.json` declares no rate limit; every anonymous action shares 30 calls per 10 seconds per address, which lets one address send about 260,000 messages a day. |
+| A tighter limit for `contact.send` alone, such as 3 an hour | | No way. `actions.json` declares no rate limit; every anonymous action shares 30 calls per 10 seconds per address, which lets one address send about 260,000 messages a day. |
 | `contact.send` with topic `spam` | | `CHECK constraint failed: topic IN ('commission', 'print', 'other')`. Inputs have type and length but no allowed values, so the CHECK in `schema.sql` is the only guard and its SQLite text reaches the visitor. |
-| The `contact.received` Signal in `action-contract.md` | | Fixed on 2026-11-07. The Markdown has a Signal section: `Records contact.received with topic after the statement changes a row.` Before, only `action-contract.json` named it. |
-| The HEAD answer of `/feed.json` in the Action Contract | 405 | Fixed on 2026-11-07. `feed.items` lists `A route does not answer HEAD. Send GET.` with 405 and says HTTP drops the body, and conform sends a HEAD and checks the status. Before, the contract listed no 405 and conform did not probe HEAD. |
+| The `contact.received` Signal in `action-contract.md` | | The Markdown has a Signal section that records `contact.received` with `topic` after the statement changes a row. |
+| The HEAD answer of `/feed.json` in the Action Contract | 405 | `feed.items` lists `A route does not answer HEAD. Send GET.` with 405 and says HTTP drops the body, and conform sends a HEAD and checks the status. |
 | `domain_set gallery.studio.example` while `_konae.gallery.studio.example` holds another value | | `The TXT record at _konae.gallery.studio.example holds "konae-verify-copied-from-another-app", not this Deployment's token. Set it to <token> and call domain_set again.` |
 | `domain_set gallery.localhost` | | `gallery.localhost is under this installation's app suffix localhost, where Konae names apps itself. Name a hostname outside it.` |
 | A page on the generated hostname calls the runtime on `gallery.studio.example` | 403 | `Cross-origin or unrecognized-host MCP request rejected.` |
 
 ## Conform with no credential
 
-`konae conform --url <app> --contract action-contract.json --inputs <file>` from the CLI, with no token, key or secret: **32 passed, 0 failed, 8 skipped.** The count rose from 31 on 2026-11-07, when conform began sending a HEAD to `/feed.json`. The in-process run, one client address per call, gives the same counts. `--inputs` sets `contact.send`'s `topic` to `other`, because the generated string would fail the CHECK.
+`konae conform --url <app> --contract action-contract.json --inputs <file>` from the CLI, with no token, key or secret, fails nothing and skips 8 checks. The in-process run, one client address per call, gives the same result. `--inputs` sets `contact.send`'s `topic` to `other`, because the generated string would fail the CHECK.
 
 Skipped, each with "Needs a signed-in person; pass --token.":
 
@@ -140,385 +153,10 @@ The unauthenticated refusal of those four actions (`authentication-required`) pa
 
 ## The Action Contract
 
-`bun run konae -- contract --dir examples/showcase/gallery --out <dir>` writes it; the replay keeps it out of the source folder. The full Markdown is below.
+Write it from a copy of the app folder:
 
-<details>
-<summary>action-contract.md, 7 actions</summary>
-
-### Action Contract
-
-Generated from actions.json and schema.sql. action-contract.json is the machine-readable form and action-contract.schema.json its schema. Do not edit either; change the Capsule and generate them again.
-
-7 actions. Every action runs on the runtime endpoint `/_konae/mcp` as the `actions_invoke` tool, which `miniapp.actions.call(name, input)` calls.
-
-- A query answers an array of row objects keyed by the column names listed. A mutation answers { changes, lastInsertId }.
-- Column types are SQLite affinities read from schema.sql. SQLite does not enforce them, so a value can still arrive as another JSON type when it was stored as one.
-- Nullability follows NOT NULL and INTEGER PRIMARY KEY in schema.sql. A column read through the right side of a LEFT JOIN is nullable.
-- A SQLite error, such as a UNIQUE constraint, is returned with SQLite's own text.
-- On a private Deployment every runtime call needs a session, including anonymous actions. An HTTP route answers the callers it takes: without a callers list, a signed route takes the signature or an API key, and an unsigned one anyone on a public Deployment and an API key or a session on a private one. An action whose route does not answer anyone answers only there.
-
-| Action | Kind | Access | HTTP |
-| --- | --- | --- | --- |
-| `contact.send` | mutation | anonymous |  |
-| `feed.items` | query | anonymous | `GET /feed.json` |
-| `photos.add` | mutation | authenticated |  |
-| `photos.publish` | mutation | authenticated |  |
-| `photos.published` | query | anonymous |  |
-| `studio.messages` | query | authenticated |  |
-| `studio.photos` | query | authenticated |  |
-
-#### contact.send
-
-A mutation declared anonymous.
-
-```sql
-INSERT INTO messages (name, email, topic, body, received_at) VALUES (?1, ?2, ?3, ?4, ?5)
+```sh
+bun run konae -- contract --dir /tmp/gallery --out /tmp/gallery-contract
 ```
 
-##### Input
-
-| Key | Type | Required | Limit |
-| --- | --- | --- | --- |
-| `name` | string | yes | 120 UTF-16 code units |
-| `email` | string | yes | 254 UTF-16 code units |
-| `topic` | string | yes | 20 UTF-16 code units |
-| `message` | string | yes | 4000 UTF-16 code units |
-
-##### Output
-
-`{ changes, lastInsertId }`, both integers.
-
-##### Signal
-
-Records `contact.received` with `topic` after the statement changes a row. A refused call records none.
-
-##### Callers
-
-Runtime endpoint: visitor (none; a public Deployment only; actor none); person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
-
-##### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `Missing action input: name` |  | runtime | a required input is omitted |
-| `name must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `name is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `Missing action input: email` |  | runtime | a required input is omitted |
-| `email must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `email is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `Missing action input: topic` |  | runtime | a required input is omitted |
-| `topic must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `topic is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `Missing action input: message` |  | runtime | a required input is omitted |
-| `message must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `message is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-##### Limits
-
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-#### feed.items
-
-A query declared anonymous.
-
-```sql
-SELECT id, title, caption, '/_konae/files/' || file_id AS image, published_at FROM photos WHERE status = 'published' ORDER BY published_at DESC, id DESC LIMIT 20
-```
-
-##### Input
-
-None. Send `{}`.
-
-##### Output
-
-An array of row objects.
-
-| Column | Type | Nullable | Reads |
-| --- | --- | --- | --- |
-| `id` | integer | no | photos.id |
-| `title` | text | no | photos.title |
-| `caption` | text | yes | photos.caption |
-| `image` | unknown | unknown |  |
-| `published_at` | integer | yes | photos.published_at |
-
-##### Callers
-
-Runtime endpoint: visitor (none; a public Deployment only; actor none); person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; a public Deployment only, since on a private one the action answers only on its route; actor user id).
-
-HTTP route `GET /feed.json` on the Deployment host. Input is the query string, each value typed by its input's declared type. It answers `{ "result": ... }` with the same output, or `{ "error": "<message>" }` with a status.
-
-Callers: visitor (none; a public Deployment only; actor none); service (Authorization: Bearer <API key that names this action>; actor key id); person (the app session cookie, from the app's own origin; actor user id).
-
-On a private Deployment the route takes an API key or a session and is the action's only door: the runtime endpoint refuses it there.
-
-##### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `Action feed.items answers only on its HTTP route, GET /feed.json.` |  | runtime | the Deployment is private and the route has no signature |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` | 400 | both | input has a key no input binding declares |
-| `Query result exceeds 2 MiB or 1000 rows.` | 400 | both | a query produces more than 1000 rows or more than 2 MiB of JSON |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-| `authentication-required` | 401 | http | the Deployment is private and the request carries neither an API key nor a session |
-| `invalid-api-key` | 401 | http | Authorization carries an lbk_ key that is unknown or revoked (401) |
-| `This API key may not call feed.items.` | 403 | http | the key does not name the route's action (403) |
-| `Repeated query parameter: <key>` | 400 | http | a GET names one input twice (400) |
-| `A route does not answer HEAD. Send GET.` | 405 | http | a HEAD reaches the route; it is refused before any SQL, with Allow: GET. HTTP carries no body on a HEAD answer, so the caller sees the 405 and the header, not the message |
-| `rate-limited` | 429 | http | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-##### Limits
-
-- LIMIT 20 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-#### photos.add
-
-A mutation declared authenticated. It binds the caller's ID, so a caller without one is refused.
-
-```sql
-INSERT INTO photos (file_id, title, caption, status, created_at, published_at) SELECT ?2, ?3, ?4, ?5, ?6, CASE WHEN ?5 = 'published' THEN ?6 END WHERE EXISTS (SELECT 1 FROM studio WHERE user_id = ?1)
-```
-
-##### Input
-
-| Key | Type | Required | Limit |
-| --- | --- | --- | --- |
-| `file_id` | string | yes | 80 UTF-16 code units |
-| `title` | string | yes | 120 UTF-16 code units |
-| `caption` | string or null | no | 600 UTF-16 code units |
-| `status` | string | yes | 12 UTF-16 code units |
-
-##### Output
-
-`{ changes, lastInsertId }`, both integers.
-
-When the statement changes no row the call is refused with `Only the studio's curator can add photographs.` instead.
-
-##### Callers
-
-Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
-
-##### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `Missing action input: file_id` |  | runtime | a required input is omitted |
-| `file_id must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `file_id is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `Missing action input: title` |  | runtime | a required input is omitted |
-| `title must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `title is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `caption must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `caption is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `Missing action input: status` |  | runtime | a required input is omitted |
-| `status must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `status is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `Only the studio's curator can add photographs.` |  | runtime | the statement changes no row, so the action's rule refused the call. Usage counts it under refused and no Signal is recorded |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-##### Limits
-
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-#### photos.publish
-
-A mutation declared authenticated. It binds the caller's ID, so a caller without one is refused.
-
-```sql
-UPDATE photos SET status = 'published', published_at = ?3 WHERE id = ?2 AND status = 'draft' AND EXISTS (SELECT 1 FROM studio WHERE user_id = ?1)
-```
-
-##### Input
-
-| Key | Type | Required | Limit |
-| --- | --- | --- | --- |
-| `id` | number | yes |  |
-
-##### Output
-
-`{ changes, lastInsertId }`, both integers.
-
-When the statement changes no row the call is refused with `Only the studio's curator can publish, and only a photograph that is still a draft.` instead.
-
-##### Callers
-
-Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
-
-##### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `Missing action input: id` |  | runtime | a required input is omitted |
-| `id must be a number.` |  | runtime | a number input is not a JSON number |
-| `Only the studio's curator can publish, and only a photograph that is still a draft.` |  | runtime | the statement changes no row, so the action's rule refused the call. Usage counts it under refused and no Signal is recorded |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-##### Limits
-
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-#### photos.published
-
-A query declared anonymous.
-
-```sql
-SELECT id, file_id, title, caption, published_at FROM photos WHERE status = 'published' ORDER BY published_at DESC, id DESC LIMIT 60
-```
-
-##### Input
-
-None. Send `{}`.
-
-##### Output
-
-An array of row objects.
-
-| Column | Type | Nullable | Reads |
-| --- | --- | --- | --- |
-| `id` | integer | no | photos.id |
-| `file_id` | text | no | photos.file_id |
-| `title` | text | no | photos.title |
-| `caption` | text | yes | photos.caption |
-| `published_at` | integer | yes | photos.published_at |
-
-##### Callers
-
-Runtime endpoint: visitor (none; a public Deployment only; actor none); person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
-
-##### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-##### Limits
-
-- LIMIT 60 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-#### studio.messages
-
-A query declared authenticated. It binds the caller's ID, so a caller without one is refused.
-
-```sql
-SELECT id, name, email, topic, body, received_at FROM messages WHERE EXISTS (SELECT 1 FROM studio WHERE user_id = ?1) ORDER BY received_at DESC, id DESC LIMIT 100
-```
-
-##### Input
-
-None. Send `{}`.
-
-##### Output
-
-An array of row objects.
-
-| Column | Type | Nullable | Reads |
-| --- | --- | --- | --- |
-| `id` | integer | no | messages.id |
-| `name` | text | no | messages.name |
-| `email` | text | no | messages.email |
-| `topic` | text | no | messages.topic |
-| `body` | text | no | messages.body |
-| `received_at` | integer | no | messages.received_at |
-
-##### Callers
-
-Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
-
-##### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-##### Limits
-
-- LIMIT 100 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-#### studio.photos
-
-A query declared authenticated. It binds the caller's ID, so a caller without one is refused.
-
-```sql
-SELECT id, file_id, title, caption, status, created_at, published_at FROM photos WHERE EXISTS (SELECT 1 FROM studio WHERE user_id = ?1) ORDER BY created_at DESC, id DESC LIMIT 200
-```
-
-##### Input
-
-None. Send `{}`.
-
-##### Output
-
-An array of row objects.
-
-| Column | Type | Nullable | Reads |
-| --- | --- | --- | --- |
-| `id` | integer | no | photos.id |
-| `file_id` | text | no | photos.file_id |
-| `title` | text | no | photos.title |
-| `caption` | text | yes | photos.caption |
-| `status` | text | no | photos.status |
-| `created_at` | integer | no | photos.created_at |
-| `published_at` | integer | yes | photos.published_at |
-
-##### Callers
-
-Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
-
-##### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-##### Limits
-
-- LIMIT 200 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-#### Any action
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `Server action not declared.` |  | runtime | actions.json declares no action with that name |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session, whatever the action's name |
-| `Arguments must be an object.` |  | runtime | input is not an object, e.g. null |
-| `No route accepts POST on this path.` | 405 | http | a POST reaches a path no action binds (405) |
-
-</details>
+`action-contract.md` there lists each action's input, output, Signal, callers, errors and limits. The replay writes it outside the source folder, and `KONAE_SHOWCASE_CONTRACT_OUT=<file>` keeps a copy.

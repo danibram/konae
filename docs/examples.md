@@ -1,10 +1,10 @@
 # Example apps
 
-The repository holds three sets of example apps, the docs site, the installation home and an architecture map. They are the sources the Kernel is tested against, so each one also shows a rule the Kernel enforces.
+The repository holds three sets of example apps, the docs site, the installation home and an architecture map. The Kernel is tested against them, so each one also shows a rule the Kernel enforces.
 
 ## Showcase
 
-Six apps in `examples/showcase/`. Each has a `replay.ts` that starts its own Kernel, publishes the app and runs every flow and refusal.
+Six apps in `examples/showcase/`. Each has a `replay.ts` that starts its own Kernel, publishes the app, runs every flow and refusal, and removes its data when it exits.
 
 - `examples/showcase/starter`, the typical app in one, and the one to copy first. It has a public landing and API, verified open signup, and member, team and admin areas.
 - `examples/showcase/inbox`, a private operations inbox fed by signed webhooks.
@@ -34,17 +34,17 @@ Eight apps in `examples/product-fit/`. A smoke run publishes all eight on an iso
 bun run examples/product-fit/smoke.ts
 ```
 
-To start from one of them, create a new project with `konae init`, then copy the example's sources over the template and keep the generated `konae.json`.
+To start from one of them, write an app folder with `konae init`, then put the example's sources in its `app/` in place of the template's. The generated `konae.json` stays.
 
 ```sh
 bun run konae -- init --dir /tmp/my-journal --name "My journal"
-cp -R examples/product-fit/journal/. /tmp/my-journal/
-bun run konae -- dev --dir /tmp/my-journal --port 8796
+rm -rf /tmp/my-journal/app && cp -R examples/product-fit/journal /tmp/my-journal/app
+bun run konae -- dev --dir /tmp/my-journal
 ```
 
 ## Probes
 
-Small Capsules in `examples/probes/` that decide the cells of the capability matrix no showcase replay proves. Examples are `notify` (email on an event), `schedule` (work run by the timer) and `calls` (a tasks app that escalates to a desk app). `examples/probes/` holds eleven.
+`examples/probes/` holds eleven small Capsules. Each has a replay that proves one kind of app works on the Kernel where no showcase replay does, or pins the refusal both doors give. Among them are `notify` (email when a row changes), `schedule` (work the timer runs) and `calls` (a tasks app that escalates to a desk app). [The probes README](../examples/probes/README.md) says what each one proves.
 
 ```sh
 bun run examples/probes/replay-all.ts

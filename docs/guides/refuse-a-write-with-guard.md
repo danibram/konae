@@ -10,7 +10,7 @@ A guard is 1 to 200 characters on one line. It goes on a mutation only. A query 
 
 ## Steps
 
-1. Write the rule into the statement, so the statement changes no row when the rule fails. This example changes a row only for the member who owns it, and only when the name is free.
+1. Write the rule into the statement, so the statement changes no row when the rule fails. This example from the starter app changes only the caller's own profile, and only when no one else uses the name.
 2. Add `guard` next to `kind` and `access`. The sentence is what the person sees, so write it for them.
 
     ```json
@@ -26,14 +26,14 @@ A guard is 1 to 200 characters on one line. It goes on a mutation only. A query 
     }
     ```
 
-3. For an owner-only action, keep the role in the app's own table and test it in the `WHERE` against the caller's ID. The Project Owner names the app's owner with SQL in Data.
+3. For an action only some app users may call, keep their role in the app's own table and test it in the `WHERE` against the caller's ID. The starter app keeps `member`, `admin` and `owner` in a `role` column of `profiles`, and you give yourself the first `owner` row with SQL in the editor's Data panel.
 
     ```json
     "members.promote": {
       "kind": "mutation",
       "access": "authenticated",
       "guard": "Only the app's owner can make a member a team admin.",
-      "statement": "UPDATE profiles SET role = 'admin' WHERE user_id = ?1 AND role = 'member' AND (SELECT role FROM profiles WHERE user_id = ?2) = 'owner'",
+      "statement": "UPDATE profiles SET role = 'admin' WHERE user_id = ?1 AND role = 'member' AND EXISTS (SELECT 1 FROM profiles o WHERE o.user_id = ?2 AND o.role = 'owner')",
       "bindings": [
         { "source": "input", "key": "userId", "type": "string", "maxLength": 64 },
         { "source": "actor", "field": "id" }
@@ -55,9 +55,9 @@ A guard is 1 to 200 characters on one line. It goes on a mutation only. A query 
 
 ## Check it worked
 
-- Call the action twice through the same door the page uses, once with input the rule accepts and once with input it refuses. The first answers `{ changes, lastInsertId }`. The second answers your sentence. `actions_invoke` is its own read-back.
+- Call the action twice through the door the page uses, once with input the rule accepts and once with input it refuses. The first answers `{ changes, lastInsertId }`. The second answers your sentence. `actions_invoke` is its own read-back.
 - Read Usage with `usage_read` and find the call under `refused`.
-- After a release, the read-back for `release_apply` is `project_inspect`.
+- After `release_apply`, read the Deployment back with `project_inspect`.
 
 The editor preview refuses with the guard the same way a Deployment does, so you can try it there. It has no Usage store, so read `usage_read` on `konae dev` or a Deployment.
 

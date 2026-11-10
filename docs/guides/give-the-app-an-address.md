@@ -14,14 +14,14 @@ The generated hostname keeps answering when you add either of the others.
 
 ## Add a custom domain
 
-1. Point the hostname at the installation's proxy with a CNAME or an A record. Konae issues no certificate, so the proxy terminates TLS for the name.
+1. Point the hostname at the installation's proxy with a CNAME or an A record. The Kernel issues no certificate, so the proxy terminates TLS for the name.
 2. Ask for the record that proves you control the name.
 
     ```sh
     bun run konae -- domain --dir ./my-app --deployment <id> --set notes.example.org
     ```
 
-    `--dir` is the folder whose `.konae/credentials.json` holds your login. Set `KONAE_MCP_TOKEN` to skip it. The command prints a TXT record named `_konae.notes.example.org`. Over MCP the same step is `domain_set`.
+    `--dir` is the folder whose `.konae/credentials.json` holds your login, or set `KONAE_MCP_TOKEN` instead. The Deployment's ID is the `id` in that folder's `konae.json`, and `project_inspect` shows it too. The command prints a TXT record named `_konae.notes.example.org`. Over MCP the same step is `domain_set`.
 3. Add the TXT record at your DNS provider and run the same command again. The Kernel looks the record up itself, and the answer changes from `pending` to `active`.
 
 On the custom domain the app has its own origin. A session made there stays there, and one made on the generated hostname stays on the generated hostname. Email links use the custom domain once it serves. `--clear`, or `domain_clear`, removes it.
@@ -39,7 +39,7 @@ Write the app's links and file references as relative paths, such as `about.html
 
 ## Check it worked
 
-- `domain_read` shows the custom domain's `status`, and `path_read` shows `enabled` and the `addresses`.
+- `domain_read` shows the custom domain's `status`, `pending` or `active`. `path_read` shows `enabled` and the `addresses`.
 - Open each address and call one Server Action from the page.
 
 ## Read next

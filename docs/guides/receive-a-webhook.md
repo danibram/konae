@@ -4,7 +4,7 @@ Declare an `http` route on an `anonymous` action, name who may call it, and set 
 
 ## How it works
 
-An action declared `anonymous` may declare one HTTP route, a method and a path on its Deployment host. A `GET` route binds a query and a `POST` route binds a mutation with a JSON object body. An `authenticated` action may not declare a route. This is the inbound door. To make the app call another service, see the guide on call actions.
+An action declared `anonymous` may declare one HTTP route, a method and a path on its Deployment host. A `GET` route binds a query and a `POST` route binds a mutation with a JSON object body. An `authenticated` action may not declare a route. This is the inbound door. To make the app call another service, see [Call another service](./call-another-service.md).
 
 The route's `callers` list names who may use it, any of `"signature"` (a service that signs the request), `"key"` (an API key that names the action) and `"session"` (a signed-in app user). Without the list, a signed route takes a signature or a key, an unsigned route on a Private Deployment takes a key or a session, and an unsigned route on a Public Deployment answers anyone.
 
@@ -38,7 +38,7 @@ The route's `callers` list names who may use it, any of `"signature"` (a service
     }
     ```
 
-3. Set the secret before you publish. A release that signs with an unset secret is refused and the refusal names each one. The value is 16 to 512 printable characters with no spaces. Use `secret_set` with `projectId`, `name` and `value`, or set it in the editor's Auth > Integrations view.
+3. Set the secret before you publish. A release that signs with an unset secret is refused, and the refusal names each one. The value is 16 to 512 printable characters with no spaces. Set it in the editor's Auth > Integrations view, or call `secret_set` with `projectId`, `name` and `value`. For a folder published with the CLI, the first `publish` registers the project and stops at this refusal, so call `secret_set` then and publish again.
 4. Publish, then give the sender the Deployment's URL plus the route path. The Kernel accepts each signed request once.
 5. To let a program of yours call a route without a signature, declare `callers` as `["key"]`. This is the starter app's route.
 
@@ -62,14 +62,14 @@ The route's `callers` list names who may use it, any of `"signature"` (a service
 
 ## What the Kernel answers
 
-A route answers `{ result }` with the rows or `{ changes, lastInsertId }`, and `{ error }` with a status code. A repeated signature answers 409 `replayed-signature`. A `t` more than 300 seconds from the Kernel's clock answers `stale-timestamp`. A guard's refusal answers 403. An action whose route does not answer anyone answers only on that route, never through `miniapp.actions.call`.
+A route answers `{ result }` with the rows or `{ changes, lastInsertId }`, and `{ error }` with a status code. A repeated signature answers 409 `replayed-signature`. A `t` more than 300 seconds from the Kernel's clock answers 401 `stale-timestamp`. A guard's refusal answers 403. An action whose route does not answer anyone answers only on that route, never through `miniapp.actions.call`.
 
 ## Check it worked
 
 - Send one real or test request, then read the row it wrote through a query action. `actions_invoke` is its own read-back.
-- After `secret_set`, the read-back is `secrets_list`. It shows names, uses and update times, never values.
-- After `api_keys_create` or `api_keys_revoke`, the read-back is `api_keys_list`.
-- After a release, the read-back for `release_apply` is `project_inspect`. Usage counts the route by method and path, readable with `usage_read`.
+- After `secret_set`, read the names back with `secrets_list`. It shows names, uses and update times, never values.
+- After `api_keys_create` or `api_keys_revoke`, read the keys back with `api_keys_list`.
+- After `release_apply`, read the Deployment back with `project_inspect`. Usage counts the route by method and path, and `usage_read` reads it. On `konae dev`, `bun run konae -- events --dir <folder>` lists each route call.
 
 The editor preview has no HTTP routes. Try routes on `konae dev` or on a published Deployment.
 

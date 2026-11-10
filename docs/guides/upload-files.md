@@ -4,9 +4,9 @@ Use `miniapp.files` for the bytes and a mutation for the row that remembers the 
 
 ## How it works
 
-The Kernel stores small files for one Deployment. A file is private to the person who uploaded it unless the upload asks for `"public"`. Large bytes do not belong in a SQLite column. Keep the file's ID in a row and let the Kernel keep the bytes.
+The Kernel stores small files for one Deployment, in its file store. A file is private to the person who uploaded it unless the upload asks for `"public"`. Large bytes do not belong in a SQLite column. Keep the file's ID in a row and let the Kernel keep the bytes.
 
-- 1 byte to 2 MiB per file, and 20 MiB of files per Deployment.
+- 1 byte to 2 MiB per file, and 20 MiB of files per Deployment. An operator can change both with `KONAE_FILE_MAX_BYTES` and `KONAE_FILES_QUOTA_BYTES`, and each refusal names the number in force.
 - An upload needs an app session. A signed-out visitor on a public Deployment can list and read public files only.
 - Only the uploader changes a file's visibility or deletes it. A deleted file stops counting against the quota.
 
@@ -75,21 +75,20 @@ The Kernel stores small files for one Deployment. A file is private to the perso
     }
     ```
 
-
 ## Refusals you may meet
 
 - `authentication-required` when nobody is signed in.
-- `Transfer size is outside the limit.` when the file is empty or over 2 MiB.
+- `Files must be between 1 byte and 2 MiB.` when the file is empty or too large.
 - `This deployment has reached its 20 MiB file quota.`
 - `Only the person who uploaded this file may change or delete it.`
 
 ## Check it worked
 
-- After an upload, the read-back for `files_upload` is `files_list`. After `files_update` or `files_delete`, it is `files_list` too. In the page, that is `miniapp.files.list()`.
+- After `files_upload`, `files_update` or `files_delete`, read the files back with `files_list`. In the page, that is `miniapp.files.list()`.
 - Open the `files.url` path in the app and check the file loads. A visitor without a session on a private Deployment gets 401 `authentication-required`. Anyone else who may not read the file gets 404 `File not found.`
 - Query the row from step 2 to confirm the ID was stored.
 
-The editor preview keeps files in browser storage and never reaches the 20 MiB quota. Published apps send them to the Kernel in chunked, checksummed transfers, so try a real upload on `konae dev` or a Deployment. A package carries the files when the app moves.
+The editor preview keeps files in browser storage, refuses a file over 2 MiB and never reaches the 20 MiB quota. A published app sends files to the Kernel in chunked, checksummed transfers, so try a real upload on `konae dev` or a Deployment. An export carries the files when the app moves.
 
 ## Read next
 

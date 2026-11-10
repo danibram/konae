@@ -2,11 +2,11 @@
 
 A room booking board for a small office. Anyone with the link sees which rooms are free each hour from 08:00 to 18:00. Staff sign in with an address at the office's domain, book one to four hours, cancel their own bookings and see who holds a room. A booker whose account has proved its address gets a confirmation by email. A door panel checks a booking in over a signed HTTP route.
 
-This app is a product probe. It uses Konae the way a creator would and records what the platform let it do and what it refused. It changes nothing in the Kernel, the Validation Gate, the SDK or the editor.
+`replay.ts` publishes it the way an owner would and records what the Kernel allowed and what it refused.
 
-## Primitives it uses
+## Platform parts it uses
 
-| Primitive | Where |
+| Part | Where |
 | --- | --- |
 | Public Deployment with anonymous queries | `rooms.list` and `availability.day` answer a signed-out visitor with `{ room, hour }` only, no titles and no names |
 | Authenticated mutations | `bookings.create`, `bookings.cancel` and `staff.name` bind the caller with `{ "source": "actor", "field": "id" }` |
@@ -33,22 +33,27 @@ KONAE_SHOWCASE_PORT=19473 bun run examples/showcase/booking/replay.ts
 
 The replay builds the Kernel offline, starts it on `KONAE_SHOWCASE_PORT` (default 19470) with a random setup key and a data directory under the system temp folder, and deletes both on exit. It refuses to start when something already answers on the port. `KONAE_SHOWCASE_BROWSER=0` skips Chrome. `KONAE_SHOWCASE_SCREENSHOTS=<dir>` writes `booking-visitor-light.png`, `booking-staff-light.png` and `booking-staff-dark.png` there.
 
-It prints one `PASS` line per group and a JSON report, and exits 0 when all eleven hold. The replay's Kernel uses the development mail transport, so email lands in `mailbox.jsonl` in its data directory. The last run, on 2026-11-07 after notices and scheduled work landed, printed these lines, trimmed where marked `[...]`:
+It prints one `PASS` line per group and a JSON report, and exits 0 when every group holds. The replay's Kernel uses the development mail transport, so email lands in `mailbox.jsonl` in its data directory.
 
-```text
-PASS Validation Gate and Kernel. Both pass the Capsule and both refuse a trigger that writes the booking log, a mutation that starts with WITH, two statements in one action, a view of free hours with the same sentence. [...]
-PASS Publish. Refused first with "Action panel.checkin signs with the secret panel_hook, which is not set for this project. Set it with secret_set before publishing."; published public with konae publish at [...] after secret_set, with konae.json's signupPolicy allowlist @office.example installed on the first release.
-PASS Allowlist signup. @office.example signs up. pat@elsewhere.example, sam@sub.office.example and, under Closed, cara@office.example all get 403 {"error":"This app is not accepting new accounts for this email address."}. Existing staff still sign in under Closed.
-PASS One-statement booking. A two-hour booking writes two rows in one INSERT ... WITH RECURSIVE ... SELECT. An overlap and a fractional hour, five hours, a span past 18:00, a past day, an impossible date, text that is not a date, an unknown room each are refused with the guard "Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours."; the statement still cannot say which rule failed. [...]
-PASS Public and staff views. A visitor and GET /api/availability get only { room, hour }; titles and names need a session, and authenticated actions answer authentication-required. Ben sees Ana's title, is refused with the cancel guard on her booking, and books the hours she freed. [...]
-PASS Double booking under concurrency. 20 rounds of two overlapping bookings sent together: one wins with 2 rows, the other is refused with the guard (2/0, 0/2, 0 standing for the guard). Ten requests for one hour: 0,0,1,0,0,0,0,0,0,0. Owner SQL counts 1 holder.
-PASS Signals. 62 bookings.create calls: 25 bookings made and 25 booking.created Signals, each naming the booker as actor. One booking.cancelled names the canceller. Usage counts the 37 guard refusals under refused.
-PASS Booking confirmation. bookings.create declares "notify": { "to": "actor" }. Cara accepts an invitation, which proves her address, books pine and gets "Booked: pine on [...] at 15:00" in the development mailbox; her overlapping booking is refused with the guard and sends nothing. The 25 bookings Ana and Ben made after a local signup sent nothing, and usage_read says why: {"bookings.create: queued":1,"bookings.create: unverified-email":25}. mail_status counts 1 delivered notice.
-PASS Check-in route. POST /api/checkin refuses an unsigned body (401 invalid-signature) and a stale t (401 stale-timestamp), and accepts a signature or the panel's API key. A second check-in for the same hour and one for an hour nobody booked get 403 with the guard. [...] The runtime endpoint refuses the key with 403 [...]. A visitor and a staff member calling panel.checkin through actions_invoke get "Action panel.checkin answers only on its HTTP route, POST /api/checkin.".
-PASS Release unclaimed bookings. bookings.release, declared every 15 minutes and run here every 2 seconds, released Ana's unclaimed 09:00 booking for [...] with nobody calling; GET availability for that day now holds only the checked-in {"hour":10,"room":"pine"}, and no booking from today on was touched. Ben calling bookings.release himself is refused with "Action bookings.release runs only on its schedule.". usage_read lists 3 runs, all ok, that changed 1 row between them, and one booking.released Signal records the run that did.
-PASS Action Contract. [...] conform --token --secret: "80 passed, 0 failed, 0 skipped.". conform --token --key: "79 passed, 0 failed, 0 skipped.". conform --key alone: "29 passed, 0 failed, 16 skipped, 1 rate-limit waits.".
-PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no policy violation or page error; staff book two hours from the grid, and an offline day change shows a sentence instead of an unhandled error.
+To publish it yourself on an installation where you have an owner account, such as the one `bun run dev:local` starts:
+
+```sh
+KONAE_EMAIL=you@example.com KONAE_PASSWORD=... bun run konae -- login --dir /tmp/booking --url http://localhost:4173
+bun run konae -- init --dir /tmp/booking --name "Room board"
+rm -rf /tmp/booking/app && mkdir /tmp/booking/app
+cp examples/showcase/booking/{index.html,styles.css,app.js,schema.sql,actions.json} /tmp/booking/app/
 ```
+
+1. In `/tmp/booking/konae.json` set `"visibility": "public"` and `"signupPolicy": { "mode": "allowlist", "allowlist": ["@office.example"] }`, with your office's domain.
+2. Run `bun run konae -- publish --dir /tmp/booking`. The first run registers the project and is refused, naming the unset signing secret `panel_hook`.
+3. Over MCP, set it with `secret_set`, with the `id` from `konae.json` as `projectId`, and publish again.
+4. Add the rooms:
+
+    ```sh
+    bun run konae -- sql --dir /tmp/booking --prod "INSERT INTO rooms (id, name, seats) VALUES ('oak', 'Oak', 6), ('birch', 'Birch', 4)"
+    ```
+
+5. For a door panel that calls the route with a key, issue one over MCP with `api_keys_create` and `actions: ["panel.checkin"]`.
 
 ## What worked
 
@@ -62,16 +67,16 @@ PASS Chrome. The visitor and staff pages load under "connect-src 'self'" with no
 - **A confirmation by email.** `bookings.create` declares `"notify": { "to": "actor", "subject": "Booked: {input.room} on {input.day} at {input.start}:00", ... }`. Cara, who joined by invitation, books two hours and gets one email with that subject; her overlapping attempt is refused with the guard and sends nothing. Ana and Ben signed up under the Allowlist in local mode, where nothing proves an address, so their 25 bookings succeeded and sent nothing; `usage_read` lists `bookings.create: unverified-email` 25 times beside `bookings.create: queued` once. On an installation with `KONAE_ACCOUNT_VERIFICATION=required` every booker has answered a link and gets the email.
 - **Releasing a booking nobody claimed.** A booking that nobody checked in within 15 minutes of its first hour holds the room for no one. `bookings.release` is one `UPDATE` over every hour of such a booking, and its `"schedule": { "every": "15m" }` has the Kernel run it with nobody calling. The replay's Kernel sets `KONAE_SCHEDULE_MIN_SECONDS=2`, so it runs every 2 seconds: Ana's booking for 09:00 the day before is released, the one the panel checked in at 10:00 stays, and no booking from today on is touched. A scheduled mutation with no route answers only to the timer, so Ben calling the action himself is refused with `Action bookings.release runs only on its schedule.` `usage_read` lists each run with its outcome and changes, and one `booking.released` Signal records the run that released a row.
 - **Content Security Policy.** The visitor page and the staff page load in Chrome under the Kernel's policy with no violation and no page error, and a staff member books two hours by clicking the grid.
-- **Errors on the page.** Every status line reads a failure through one `reason(error)` helper, the same in all five showcase apps. A refusal shows its own sentence, `rate-limited` becomes "Too many requests just now. Wait a few seconds and try again.", and a Kernel the browser cannot reach becomes "The board could not reach its server. Check the connection and try again." The replay takes the page offline and moves to the next day to prove the last one.
+- **Errors on the page.** Every status line reads a failure through one `reason(error)` helper, the same in every showcase app but starter. A refusal shows its own sentence, `rate-limited` becomes "Too many requests just now. Wait a few seconds and try again.", and a Kernel the browser cannot reach becomes "The board could not reach its server. Check the connection and try again." The replay takes the page offline and moves to the next day to prove the last one.
 
 ## Atomic booking and the one-statement rule
 
 The obvious model has two tables: a `slots` table that holds one row per room and hour, and a `bookings` table that records who booked what, plus a log of changes. A booking writes one `bookings` row and N `slots` rows, and a cancel deletes the slots and writes a log row. Konae runs exactly one SQL statement per action, so none of those pairs can be one action:
 
 - A second statement in the same action is refused: `Action bookings.cancel must contain one statement.`
-- A trigger that writes the second table is refused, since 2026-11-06 at both doors with `schema.sql may only create tables and indexes, but it contains CREATE TRIGGER.`
+- A trigger that writes the second table is refused at both doors with `schema.sql may only create tables and indexes, but it contains CREATE TRIGGER.`
 - A view over the bookings is refused the same way, naming `CREATE VIEW`.
-- A mutation must begin with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, so `WITH span AS (...) INSERT ...` is refused, since 2026-11-06 at both doors with `Action bookings.create is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Put the WITH clause after INSERT INTO <table> (<columns>), or inside a subquery.` The same CTE placed after `INSERT INTO bookings (...)` passes, which is the form this app uses.
+- A mutation must begin with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, so `WITH span AS (...) INSERT ...` is refused at both doors with `Action bookings.create is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Put the WITH clause after INSERT INTO <table> (<columns>), or inside a subquery.` The same CTE placed after `INSERT INTO bookings (...)` passes, which is the form this app uses.
 - Two actions called one after the other are two transactions. A failure between them leaves the first write in place, and nothing in the SDK groups them.
 
 The compromise is one `bookings` table where each row is one hour held, carrying the booking's metadata. `booking_ref` (room, day, start hour and creation time) groups the rows of one booking. Cancelling sets `cancelled_at` instead of deleting, so the cancelled rows stay as the activity log the second table would have held, and the unique index on `(room_id, day, slot)` is partial, `WHERE cancelled_at IS NULL`, so a cancelled hour can be booked again. The title and the requester are copied onto every hour of the booking. That duplication is the cost.
@@ -80,7 +85,7 @@ Which guard answers depends on who writes:
 
 | Guard | Answer | When it fires |
 | --- | --- | --- |
-| `WHERE` in `bookings.create` (room exists, valid date, not in the past, whole hours, 1 to 4 hours, ends by 18:00) | The guard, `Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours.` Before 2026-11-06, `{ changes: 0 }` | Every invalid request through the action |
+| `WHERE` in `bookings.create` (room exists, valid date, not in the past, whole hours, 1 to 4 hours, ends by 18:00) | The guard, `Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours.` | Every invalid request through the action |
 | `NOT EXISTS` over the span in the same `WHERE` | The same guard | Any overlap, including the loser of a race |
 | Partial unique index `bookings_one_holder` | `UNIQUE constraint failed: ...`, and the whole multi-row insert rolls back | Only if two statements interleave, or the owner writes SQL directly |
 | `CHECK` on `day` and `slot` | `CHECK constraint failed: ...` | Only on owner SQL; the action's `WHERE` stops bad input first |
@@ -89,657 +94,73 @@ Which guard answers depends on who writes:
 
 The replay sends conflicting `bookings.create` calls from two staff sessions with `Promise.allSettled`. Exactly one wins every time, and the loser is refused with the create guard.
 
-The guarantee comes from two places. The Kernel holds a per-Deployment database lock around every action statement, on the runtime endpoint (`kernel-rs/kernel/src/lib.rs:852`) and on HTTP routes (`kernel-rs/kernel/src/http.rs:778`), so the `NOT EXISTS` check and the insert of one request never interleave with another's. The partial unique index holds even without the lock, because SQLite checks it inside the statement. The Action Contract does not state that actions are serialized. A replacement backend that runs statements in parallel would still refuse the second holder, but the loser would see SQLite's `UNIQUE constraint failed` text instead of the guard, and `conform` would not notice the difference.
+The guarantee comes from two places. The Kernel holds a per-Deployment write lock around every mutation, on the runtime endpoint and on HTTP routes (`action_lock` in `kernel-rs/kernel/src/lib.rs`), so the `NOT EXISTS` check and the insert of one request never interleave with another's. The partial unique index holds even without the lock, because SQLite checks it inside the statement. The Action Contract does not state that actions are serialized. A replacement backend that runs statements in parallel would still refuse the second holder, but the loser would see SQLite's `UNIQUE constraint failed` text instead of the guard, and `conform` would not notice the difference.
 
 ## Notifying staff
 
-Since 2026-11-07 a booking emails its own booker (see [What worked](#what-worked)). A webhook out is still not a primitive, and nothing in an app can tell another staff member that a room was booked, freed or checked in:
+A booking emails its own booker (see [What worked](#what-worked)). Nothing else in the app tells another staff member that a room was booked, freed or checked in:
 
 - `connect-src 'self'` stops the page from calling another origin.
-- An action runs one SQL statement or records a Signal. There is no outbound HTTP and no queue.
-- Besides account mail, the Kernel sends only a mutation's `notify`, and only to the Konae owner or to the person who called the action. It cannot reach the staff member who held a room someone cancelled, or everyone who works in the office.
+- Besides account mail, the Kernel sends only a mutation's `notify`: to the app's contact email, to the caller, or to the accounts a changed row names in a column. This app declares only the notice to the caller. It could declare a notice on `bookings.cancel` to the column that holds the booker, but no notice reaches everyone who works in the office.
+- A call action can send a request to another service from the Kernel. This app declares none.
 - Signals are readable only by the owner through `signals_read`; the runtime endpoint does not list them.
 
 What the app does instead:
 
 - The staff view has a Recent activity list, the ten most recently changed bookings, cancellations included. The open board reloads it every 30 seconds while the tab is visible.
 - A lobby screen can poll `GET /api/availability`.
-- The owner can read `booking.created` and `booking.cancelled` Signals. Since 2026-11-06 they count only calls that changed a row and `booking.created` names who booked; since 2026-11-07 `booking.cancelled` names who cancelled.
+- The owner can read `booking.created` and `booking.cancelled` Signals. They count only calls that changed a row, and each names who booked or cancelled.
 
 A person who does not have the board open learns about a booking when they next open it.
 
-## What the primitives refused or could not do
+## What the Kernel refused or could not do
 
-Messages are quoted exactly as the replay received them. "Gate" is the editor's Validation Gate, run in-process by the replay on the same files the Kernel was given.
+Messages are quoted exactly as the replay receives them. The replay also runs the editor's Validation Gate in-process on the same files, and the Gate refuses each schema and action below with the same sentence, under `actions.json is not a valid server action program.` for an action.
 
 | What the app tried | Door | Exact answer | Consequence |
 | --- | --- | --- | --- |
-| A trigger on `bookings` that writes a log row | Kernel | `schema.sql may only create tables and indexes, but it contains CREATE TRIGGER.` (fixed on 2026-11-06; before, `schema may only create tables and indexes: not authorized`) | One action writes one table. See [the compromise](#atomic-booking-and-the-one-statement-rule) |
-| The same trigger | Gate | `schema.sql may only create tables and indexes, but it contains CREATE TRIGGER.`, with a detail that explains the authorizer | Fixed on 2026-11-06: the Kernel gives the same sentence |
-| A view of taken hours | Kernel | `schema.sql may only create tables and indexes, but it contains CREATE VIEW.` (fixed on 2026-11-06) | Each query repeats its own filter |
-| The same view | Gate | `schema.sql may only create tables and indexes, but it contains CREATE VIEW.` | Fixed on 2026-11-06: the same sentence at both doors |
-| A mutation that opens with `WITH span AS (...) INSERT ...` | Kernel | `Action bookings.create is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Put the WITH clause after INSERT INTO <table> (<columns>), or inside a subquery.` (fixed on 2026-11-06; before, `contains disallowed SQL.`) | Put the CTE after `INSERT INTO t (...)`, which passes |
-| The same mutation | Gate | `actions.json is not a valid server action program.` with the Kernel's sentence as its detail | Fixed on 2026-11-06: the hint points at the `INSERT`, not at schema.sql |
-| A cancel that also writes a second statement | Kernel | `Action bookings.cancel must contain one statement.` | No multi-statement transaction from the app |
-| The same action | Gate | `actions.json is not a valid server action program.` with `Action bookings.cancel must contain one statement.` as its detail | Fixed on 2026-11-06: same rule, same text |
-| Telling the requester why a booking failed | Kernel | Fixed on 2026-11-06 in part: the guard `Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours.` Before, `{ changes: 0 }` | One statement still cannot say which rule failed, so the guard names them all; overlap, past day, bad date, unknown room, too many hours and a span past 18:00 get one sentence. `RETURNING` is refused (`Action <name> cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.`) and there are no triggers to `RAISE`. Letting the unique index fail instead would show staff `UNIQUE constraint failed: bookings.room_id, bookings.day, bookings.slot` |
-| Counting bookings with a Signal on `bookings.create` | Kernel | Fixed on 2026-11-06: 61 calls, 24 bookings, 24 `booking.created` Signals naming the booker, and 37 refusals under Usage's `refused`. Before, 61 Signals | A Signal on a mutation records only when a row changed |
-| Protecting `panel.checkin` with a signature | Kernel | Fixed on 2026-11-06: `Action panel.checkin answers only on its HTTP route, POST /api/checkin.` for a visitor and for staff. Before, `{ changes: 1 }` with no signature | A signed route is its action's only door. The contract lists no runtime caller for the action |
-| A staff member checking in from the app with their session | Kernel | 401 `{"error":"invalid-signature"}` | Matches docs/mcp.md: a signed route takes the signature or a key unless its `callers` list `"session"`. Since 2026-11-06 the contract's route section lists only the callers the route takes |
-| The panel's API key on the runtime endpoint | Kernel | Fixed on 2026-11-06: 403 `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.` Before, visitor answers with no error | A misconfigured program learns where its key works |
+| A trigger on `bookings` that writes a log row | Kernel and Gate | `schema.sql may only create tables and indexes, but it contains CREATE TRIGGER.` | One action writes one table. See [the compromise](#atomic-booking-and-the-one-statement-rule) |
+| A view of taken hours | Kernel and Gate | `schema.sql may only create tables and indexes, but it contains CREATE VIEW.` | Each query repeats its own filter |
+| A mutation that opens with `WITH span AS (...) INSERT ...` | Kernel and Gate | `Action bookings.create is a mutation, so it must start with INSERT, UPDATE, DELETE or REPLACE. Put the WITH clause after INSERT INTO <table> (<columns>), or inside a subquery.` | Put the CTE after `INSERT INTO t (...)`, which passes |
+| A cancel that also writes a second statement | Kernel and Gate | `Action bookings.cancel must contain one statement.` | No multi-statement transaction from the app |
+| Telling the requester why a booking failed | Kernel | The guard `Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours.` | One statement cannot say which rule failed, so the guard names them all; overlap, past day, bad date, unknown room, too many hours and a span past 18:00 get one sentence. `RETURNING` is refused (`Action <name> cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.`) and there are no triggers to `RAISE`. Letting the unique index fail instead would show staff `UNIQUE constraint failed: bookings.room_id, bookings.day, bookings.slot` |
+| Counting bookings with a Signal on `bookings.create` | Kernel | One `booking.created` Signal per booking made, naming the booker, and the guard refusals under Usage's `refused` | A Signal on a mutation records only when a row changed |
+| Protecting `panel.checkin` with a signature | Kernel | `Action panel.checkin answers only on its HTTP route, POST /api/checkin.` for a visitor and for staff | A signed route is its action's only door. The contract lists no runtime caller for the action |
+| A staff member checking in from the app with their session | Kernel | 401 `{"error":"invalid-signature"}` | A signed route takes the signature or a key unless its `callers` list `"session"`. The contract's route section lists only the callers the route takes |
+| The panel's API key on the runtime endpoint | Kernel | 403 `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.` | A misconfigured program learns where its key works |
 | An API key booking a room | Kernel | Not possible: keys work only on HTTP routes, and `bookings.create` is `authenticated`, which cannot declare `http` | A program, such as a calendar sync, cannot book on a person's behalf |
-| A webhook out to notify staff | none | No primitive exists | See [Notifying staff](#notifying-staff) |
-| A confirmation email to the booker | Kernel | Since 2026-11-07, `"notify": { "to": "actor" }` on `bookings.create`. A booker who signed up in local mode has proved no address, so the booking succeeds and Usage counts `bookings.create: unverified-email` | Cara, invited, gets the email; Ana and Ben do not until they answer a link |
-| Seeding rooms from `schema.sql` | Kernel | `schema.sql` may only create tables and indexes (docs/mcp.md; not run by the replay) | The owner inserts rooms with `database_execute` after the first publish |
-| `bun run konae -- publish` with an Allowlist | CLI | Fixed on 2026-11-06. `publishLocal` sent no `initialSignupPolicy`, so a public app published with the CLI started Open until the owner called `signup_policy_set`, and the replay published over MCP to avoid that window | `konae.json` now names `project.manifest.signupPolicy` and the replay publishes with `publishLocal` on a token without `manage_users`; the Allowlist is in place before the first request |
+| Telling other staff about a booking | none | No notice reaches everyone in the office, and the app declares no call action | See [Notifying staff](#notifying-staff) |
+| A confirmation email to the booker | Kernel | `"notify": { "to": "actor" }` on `bookings.create`. A booker who signed up in local mode has proved no address, so the booking succeeds and Usage counts `bookings.create: unverified-email` | Cara, invited, gets the email; Ana and Ben do not until they answer a link |
+| Seeding rooms from `schema.sql` | Kernel | `schema.sql` may only create tables and indexes (not run by the replay) | The owner inserts rooms with `database_execute` after the first publish |
+| `bun run konae -- publish` with an Allowlist | CLI | No refusal. `konae.json`'s `signupPolicy` goes as `initialSignupPolicy` on the first release | The replay publishes with `publishLocal` on a token without `manage_users`, and the Allowlist is in place before the first request |
 | A whole-hour input | Kernel | No integer input type; `"type": "number"` accepts `13.5` | The statement checks `?4 = CAST(?4 AS INTEGER)`, and a CHECK on `typeof(slot)` backs it |
-| "Not in the past" in the office's time | Kernel | The `now` binding is UTC milliseconds; there is no time zone | Changed on 2026-11-07. The check compared with the UTC date, so in the evening west of UTC it refused the person's own today: at 21:00 in New York the UTC date is already tomorrow. It now accepts the UTC day before today, and the replay books it. The cost is the other side: east of UTC, just after midnight, yesterday is still accepted for a few hours. The page offers no past day and sends the browser's local date for its own lists |
+| "Not in the past" in the office's time | Kernel | The `now` binding is UTC milliseconds; there is no time zone | The check accepts the UTC day before today, so at 21:00 in New York, when the UTC date is already tomorrow, the person can still book their own today. The replay books it. The cost is the other side: east of UTC, just after midnight, yesterday is still accepted for a few hours. The page offers no past day and sends the browser's local date for its own lists |
 | The booker's name | Kernel | The `actor` binding has only `id` | The app keeps a `staff` table of display names each person sets for themselves. A name is not verified |
 | Typed columns in the Action Contract | `contract` | No warning and no `unnamed` entry, but 7 columns typed `unknown` | `bookings.day.booked_by`, `bookings.day.mine`, `bookings.mine.start`, `bookings.recent.start`, `bookings.recent.booked_by`, `bookings.recent.created_at`, `bookings.recent.cancelled_at`. Every expression column is aliased, so all are named; their types come from `coalesce`, `min`, `max` and a comparison, which the contract does not infer |
-| `conform` with an API key alone | `conform` | `29 passed, 0 failed, 16 skipped` | Authenticated actions need `--token`. With both `--token` and `--key`, the key is sent only to a signed route whose secret was not given |
+| `conform` with an API key alone | `conform` | No failure, and the checks that need a session skipped | Authenticated actions need `--token`. With both `--token` and `--key`, the key is sent only to a signed route whose secret was not given |
 
 ## Action Contract and conform
 
-`bun run konae -- contract --dir <copy of this folder>` writes the contract below. The replay runs `conform` three times against the published app with the CLI, from a contract file on disk:
+Write the contract from a copy of the app folder:
+
+```sh
+bun run konae -- contract --dir /tmp/booking --out /tmp/booking-contract
+```
+
+`action-contract.md` there lists each action's input, output, Signal, notice, callers, errors and limits. The replay runs `conform` three times against the published app with the CLI, from a contract file on disk:
 
 | Run | Result |
 | --- | --- |
-| `--token <session> --secret panel_hook=<secret>` | 78 passed, 0 failed, 0 skipped |
-| `--token <session> --key <panel key>` | 77 passed, 0 failed, 0 skipped |
-| `--key <panel key>` alone | 29 passed, 0 failed, 14 skipped |
+| `--token <session> --secret panel_hook=<secret>` | No failure and no skip |
+| `--token <session> --key <panel key>` | No failure and no skip |
+| `--key <panel key>` alone | No failure; the checks that need a session are skipped |
 
-The counts fell on 2026-11-06 because `panel.checkin` answers only on its route, so its inputs are probed there and not on the runtime endpoint. The runs with a key gained one check on 2026-11-07, when `panel.checkin` declared its guard and `conform` probed it on the route. They grew again on 2026-11-07 with `bookings.release`. On 2026-11-08 a scheduled mutation with no route began to refuse every caller, so `conform` expects `Action bookings.release runs only on its schedule.` instead of calling it, and the counts moved from 80, 79 and 29 with 16 skipped to the ones above.
+`panel.checkin` answers only on its route, so conform probes its inputs and its guard there and not on the runtime endpoint. A scheduled mutation with no route refuses every caller, so conform expects `Action bookings.release runs only on its schedule.` instead of calling it.
 
-It also runs the same contract in-process with the token and the key from fresh client addresses, with 0 failed. `conform` runs every mutation once with generated input. Here `bookings.create` gets a day that is not a date and is refused with its guard, which `conform` checks, and `panel.checkin` matches no booking, so the run leaves the board unchanged.
+The replay also runs the same contract in-process with the token and the key from fresh client addresses, with 0 failed. `conform` runs every mutation once with generated input. Here `bookings.create` gets a day that is not a date and is refused with its guard, which `conform` checks, and `panel.checkin` matches no booking, so the run leaves the board unchanged.
 
 Every expression the queries return carries an `AS` alias, so the contract names every column and lists nothing under `unnamed`. Seven of those columns have the type `unknown`, listed in the table above.
 
 ## Screenshots
 
 The replay with `KONAE_SHOWCASE_SCREENSHOTS` set writes the visitor's grid in light mode and the staff view in light and dark mode, after the staff member booked Birch from 14:00 to 16:00 from the grid.
-
-<details>
-<summary>The Markdown Action Contract</summary>
-
-## Action Contract
-
-Generated from actions.json and schema.sql. action-contract.json is the machine-readable form and action-contract.schema.json its schema. Do not edit either; change the Capsule and generate them again.
-
-11 actions. Every action runs on the runtime endpoint `/_konae/mcp` as the `actions_invoke` tool, which `miniapp.actions.call(name, input)` calls.
-
-- A query answers an array of row objects keyed by the column names listed. A mutation answers { changes, lastInsertId }.
-- Column types are SQLite affinities read from schema.sql. SQLite does not enforce them, so a value can still arrive as another JSON type when it was stored as one.
-- Nullability follows NOT NULL and INTEGER PRIMARY KEY in schema.sql. A column read through the right side of a LEFT JOIN is nullable.
-- A SQLite error, such as a UNIQUE constraint, is returned with SQLite's own text.
-- On a private Deployment every runtime call needs a session, including anonymous actions. An HTTP route answers the callers it takes: without a callers list, a signed route takes the signature or an API key, and an unsigned one anyone on a public Deployment and an API key or a session on a private one. An action whose route does not answer anyone answers only there.
-
-| Action | Kind | Access | HTTP |
-| --- | --- | --- | --- |
-| `availability.day` | query | anonymous | `GET /api/availability` |
-| `bookings.cancel` | mutation | authenticated |  |
-| `bookings.create` | mutation | authenticated |  |
-| `bookings.day` | query | authenticated |  |
-| `bookings.mine` | query | authenticated |  |
-| `bookings.recent` | query | authenticated |  |
-| `bookings.release` | mutation | authenticated |  |
-| `panel.checkin` | mutation | anonymous | `POST /api/checkin` |
-| `rooms.list` | query | anonymous |  |
-| `staff.me` | query | authenticated |  |
-| `staff.name` | mutation | authenticated |  |
-
-### availability.day
-
-A query declared anonymous.
-
-```sql
-SELECT room_id AS room, slot AS hour FROM bookings WHERE day = ?1 AND cancelled_at IS NULL ORDER BY room_id, slot LIMIT 500
-```
-
-#### Input
-
-| Key | Type | Required | Limit |
-| --- | --- | --- | --- |
-| `day` | string | yes | 10 UTF-16 code units |
-
-#### Output
-
-An array of row objects.
-
-| Column | Type | Nullable | Reads |
-| --- | --- | --- | --- |
-| `room` | text | no | bookings.room_id |
-| `hour` | integer | no | bookings.slot |
-
-#### Callers
-
-Runtime endpoint: visitor (none; a public Deployment only; actor none); person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; a public Deployment only, since on a private one the action answers only on its route; actor user id).
-
-HTTP route `GET /api/availability` on the Deployment host. Input is the query string, each value typed by its input's declared type. It answers `{ "result": ... }` with the same output, or `{ "error": "<message>" }` with a status.
-
-Callers: visitor (none; a public Deployment only; actor none); service (Authorization: Bearer <API key that names this action>; actor key id); person (the app session cookie, from the app's own origin; actor user id).
-
-On a private Deployment the route takes an API key or a session and is the action's only door: the runtime endpoint refuses it there.
-
-#### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `Action availability.day answers only on its HTTP route, GET /api/availability.` |  | runtime | the Deployment is private and the route has no signature |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` | 400 | both | input has a key no input binding declares |
-| `Missing action input: day` | 400 | both | a required input is omitted |
-| `day must be a non-empty string.` | 400 | both | a string input is not a string, or is empty or only whitespace |
-| `day is too long.` | 400 | both | a string input is longer than its maxLength in UTF-16 code units |
-| `Query result exceeds 2 MiB or 1000 rows.` | 400 | both | a query produces more than 1000 rows or more than 2 MiB of JSON |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-| `authentication-required` | 401 | http | the Deployment is private and the request carries neither an API key nor a session |
-| `invalid-api-key` | 401 | http | Authorization carries an lbk_ key that is unknown or revoked (401) |
-| `This API key may not call availability.day.` | 403 | http | the key does not name the route's action (403) |
-| `Repeated query parameter: <key>` | 400 | http | a GET names one input twice (400) |
-| `rate-limited` | 429 | http | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-#### Limits
-
-- LIMIT 500 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-### bookings.cancel
-
-A mutation declared authenticated. It binds the caller's ID, so a caller without one is refused.
-
-```sql
-UPDATE bookings SET cancelled_at = ?3 WHERE booking_ref = ?1 AND user_id = ?2 AND cancelled_at IS NULL
-```
-
-#### Input
-
-| Key | Type | Required | Limit |
-| --- | --- | --- | --- |
-| `ref` | string | yes | 120 UTF-16 code units |
-
-#### Output
-
-`{ changes, lastInsertId }`, both integers.
-
-When the statement changes no row the call is refused with `Nothing to cancel. The booking is not yours, or it is already cancelled.` instead.
-
-#### Callers
-
-Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
-
-#### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `Missing action input: ref` |  | runtime | a required input is omitted |
-| `ref must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `ref is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `Nothing to cancel. The booking is not yours, or it is already cancelled.` |  | runtime | the statement changes no row, so the action's rule refused the call. Usage counts it under refused and no Signal is recorded |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-#### Limits
-
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-### bookings.create
-
-A mutation declared authenticated. It binds the caller's ID, so a caller without one is refused.
-
-```sql
-INSERT INTO bookings (booking_ref, room_id, day, slot, user_id, title, created_at)
-WITH RECURSIVE span(slot) AS (SELECT ?4 UNION ALL SELECT slot + 1 FROM span WHERE slot + 1 < ?4 + min(?5, 4))
-SELECT printf('%s/%s/%d/%d', r.id, ?3, ?4, ?7), r.id, ?3, span.slot, ?1, ?6, ?7
-FROM rooms r, span
-WHERE r.id = ?2
-  AND date(?3) IS ?3 AND ?3 >= date(?7 / 1000, 'unixepoch', '-1 day')
-  AND ?4 = CAST(?4 AS INTEGER) AND ?5 = CAST(?5 AS INTEGER)
-  AND ?4 >= 8 AND ?5 BETWEEN 1 AND 4 AND ?4 + ?5 <= 18
-  AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.room_id = ?2 AND b.day = ?3 AND b.slot >= ?4 AND b.slot < ?4 + ?5 AND b.cancelled_at IS NULL)
-```
-
-#### Input
-
-| Key | Type | Required | Limit |
-| --- | --- | --- | --- |
-| `room` | string | yes | 40 UTF-16 code units |
-| `day` | string | yes | 10 UTF-16 code units |
-| `start` | number | yes |  |
-| `hours` | number | yes |  |
-| `title` | string | yes | 80 UTF-16 code units |
-
-#### Output
-
-`{ changes, lastInsertId }`, both integers.
-
-When the statement changes no row the call is refused with `Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours.` instead.
-
-#### Callers
-
-Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
-
-#### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `Missing action input: room` |  | runtime | a required input is omitted |
-| `room must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `room is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `Missing action input: day` |  | runtime | a required input is omitted |
-| `day must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `day is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `Missing action input: start` |  | runtime | a required input is omitted |
-| `start must be a number.` |  | runtime | a number input is not a JSON number |
-| `Missing action input: hours` |  | runtime | a required input is omitted |
-| `hours must be a number.` |  | runtime | a number input is not a JSON number |
-| `Missing action input: title` |  | runtime | a required input is omitted |
-| `title must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `title is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours.` |  | runtime | the statement changes no row, so the action's rule refused the call. Usage counts it under refused and no Signal is recorded |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-#### Limits
-
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-### bookings.day
-
-A query declared authenticated. It binds the caller's ID, so a caller without one is refused.
-
-```sql
-SELECT b.booking_ref AS ref, b.room_id AS room, b.slot AS hour, b.title AS title, coalesce(s.display, 'A colleague') AS booked_by, b.user_id = ?1 AS mine, b.checked_in_at AS checked_in_at FROM bookings b LEFT JOIN staff s ON s.user_id = b.user_id WHERE b.day = ?2 AND b.cancelled_at IS NULL ORDER BY b.room_id, b.slot LIMIT 500
-```
-
-#### Input
-
-| Key | Type | Required | Limit |
-| --- | --- | --- | --- |
-| `day` | string | yes | 10 UTF-16 code units |
-
-#### Output
-
-An array of row objects.
-
-| Column | Type | Nullable | Reads |
-| --- | --- | --- | --- |
-| `ref` | text | no | bookings.booking_ref |
-| `room` | text | no | bookings.room_id |
-| `hour` | integer | no | bookings.slot |
-| `title` | text | no | bookings.title |
-| `booked_by` | unknown | unknown |  |
-| `mine` | unknown | unknown |  |
-| `checked_in_at` | integer | yes | bookings.checked_in_at |
-
-#### Callers
-
-Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
-
-#### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `Missing action input: day` |  | runtime | a required input is omitted |
-| `day must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `day is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-#### Limits
-
-- LIMIT 500 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-### bookings.mine
-
-A query declared authenticated. It binds the caller's ID, so a caller without one is refused.
-
-```sql
-SELECT booking_ref AS ref, room_id AS room, day, min(slot) AS start, count(*) AS hours, title FROM bookings WHERE user_id = ?1 AND day >= ?2 AND cancelled_at IS NULL GROUP BY booking_ref ORDER BY day, start LIMIT 50
-```
-
-#### Input
-
-| Key | Type | Required | Limit |
-| --- | --- | --- | --- |
-| `from` | string | yes | 10 UTF-16 code units |
-
-#### Output
-
-An array of row objects.
-
-| Column | Type | Nullable | Reads |
-| --- | --- | --- | --- |
-| `ref` | text | no | bookings.booking_ref |
-| `room` | text | no | bookings.room_id |
-| `day` | text | no | bookings.day |
-| `start` | unknown | unknown |  |
-| `hours` | integer | no |  |
-| `title` | text | no | bookings.title |
-
-#### Callers
-
-Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
-
-#### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `Missing action input: from` |  | runtime | a required input is omitted |
-| `from must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `from is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-#### Limits
-
-- LIMIT 50 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-### bookings.recent
-
-A query declared authenticated.
-
-```sql
-SELECT b.booking_ref AS ref, b.room_id AS room, b.day AS day, min(b.slot) AS start, count(*) AS hours, b.title AS title, coalesce(s.display, 'A colleague') AS booked_by, max(b.created_at) AS created_at, max(b.cancelled_at) AS cancelled_at FROM bookings b LEFT JOIN staff s ON s.user_id = b.user_id GROUP BY b.booking_ref ORDER BY max(coalesce(b.cancelled_at, b.created_at)) DESC LIMIT 10
-```
-
-#### Input
-
-None. Send `{}`.
-
-#### Output
-
-An array of row objects.
-
-| Column | Type | Nullable | Reads |
-| --- | --- | --- | --- |
-| `ref` | text | no | bookings.booking_ref |
-| `room` | text | no | bookings.room_id |
-| `day` | text | no | bookings.day |
-| `start` | unknown | unknown |  |
-| `hours` | integer | no |  |
-| `title` | text | no | bookings.title |
-| `booked_by` | unknown | unknown |  |
-| `created_at` | unknown | unknown |  |
-| `cancelled_at` | unknown | unknown |  |
-
-#### Callers
-
-Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
-
-#### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-#### Limits
-
-- LIMIT 10 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-### bookings.release
-
-A mutation declared authenticated.
-
-```sql
-UPDATE bookings SET cancelled_at = ?1 WHERE cancelled_at IS NULL AND booking_ref IN (SELECT booking_ref FROM bookings WHERE cancelled_at IS NULL GROUP BY booking_ref HAVING max(checked_in_at) IS NULL AND (CAST(strftime('%s', min(day)) AS INTEGER) + min(slot) * 3600 + 900) * 1000 <= ?1)
-```
-
-#### Input
-
-None. Send `{}`.
-
-#### Output
-
-`{ changes, lastInsertId }`, both integers.
-
-The Kernel's timer runs it every 15m, with no caller: an `actor` binding is null and the guard does not apply. Only the timer runs it. The owner reads each run under `scheduled` with `usage_read`.
-
-#### Signal
-
-Records `booking.released` after the statement changes a row. A refused call records none.
-
-#### Callers
-
-Runtime endpoint: none; only the Kernel's timer runs it.
-
-#### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `Action bookings.release runs only on its schedule.` |  | runtime | the action is a mutation with a schedule and no http route, which only the Kernel's timer runs |
-
-#### Limits
-
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-### panel.checkin
-
-A mutation declared anonymous.
-
-```sql
-UPDATE bookings SET checked_in_at = ?4 WHERE room_id = ?1 AND day = ?2 AND slot = ?3 AND cancelled_at IS NULL AND checked_in_at IS NULL
-```
-
-#### Input
-
-| Key | Type | Required | Limit |
-| --- | --- | --- | --- |
-| `room` | string | yes | 40 UTF-16 code units |
-| `day` | string | yes | 10 UTF-16 code units |
-| `hour` | number | yes |  |
-
-#### Output
-
-`{ changes, lastInsertId }`, both integers.
-
-When the statement changes no row the call is refused with `No booking holds this room at this hour, or it is already checked in.` instead.
-
-#### Callers
-
-Runtime endpoint: none; the action answers only on its route.
-
-HTTP route `POST /api/checkin` on the Deployment host. Input is a JSON object body of at most 64 KiB. It answers `{ "result": ... }` with the same output, or `{ "error": "<message>" }` with a status.
-
-A signed request carries `X-Panel-Signature: t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256, keyed with the secret, of t, n, the method, the path, the canonical query string and the raw body, joined by newlines>`. The secret is named `panel_hook` and set by the owner; it is never in this file. `t` must be within 300 seconds of the server's clock, and each signature is accepted once.
-
-Callers: visitor (the X-Panel-Signature signature; actor none); service (Authorization: Bearer <API key that names this action>; it replaces the signature; actor key id).
-
-The route is the action's only door: the runtime endpoint refuses it.
-
-#### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `Action panel.checkin answers only on its HTTP route, POST /api/checkin.` |  | runtime | always: the route declares a signature or callers |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` | 400 | http | input has a key no input binding declares |
-| `Missing action input: room` | 400 | http | a required input is omitted |
-| `room must be a non-empty string.` | 400 | http | a string input is not a string, or is empty or only whitespace |
-| `room is too long.` | 400 | http | a string input is longer than its maxLength in UTF-16 code units |
-| `Missing action input: day` | 400 | http | a required input is omitted |
-| `day must be a non-empty string.` | 400 | http | a string input is not a string, or is empty or only whitespace |
-| `day is too long.` | 400 | http | a string input is longer than its maxLength in UTF-16 code units |
-| `Missing action input: hour` | 400 | http | a required input is omitted |
-| `hour must be a number.` | 400 | http | a number input is not a JSON number |
-| `No booking holds this room at this hour, or it is already checked in.` | 403 | http | the statement changes no row, so the action's rule refused the call. Usage counts it under refused and no Signal is recorded |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-| `invalid-signature` | 401 | http | a signed route gets no signature, a malformed one, or one whose MAC does not match (401) |
-| `stale-timestamp` | 401 | http | a signature's t is more than 300 seconds from the Kernel's clock; checked before the MAC, so it says nothing about the secret (401) |
-| `replayed-signature` | 409 | http | the same signature arrives a second time; a retry signs again with a new nonce (409) |
-| `invalid-api-key` | 401 | http | Authorization carries an lbk_ key that is unknown or revoked (401) |
-| `This API key may not call panel.checkin.` | 403 | http | the key does not name the route's action (403) |
-| `The request body exceeds 64 KiB.` | 413 | http | a POST body is larger (413) |
-| `The request body must be a JSON object.` | 400 | http | a POST body does not parse as JSON (400) |
-| `rate-limited` | 429 | http | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-#### Limits
-
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-- A route body of at most 64 KiB.
-
-### rooms.list
-
-A query declared anonymous.
-
-```sql
-SELECT id, name, seats FROM rooms ORDER BY name LIMIT 50
-```
-
-#### Input
-
-None. Send `{}`.
-
-#### Output
-
-An array of row objects.
-
-| Column | Type | Nullable | Reads |
-| --- | --- | --- | --- |
-| `id` | text | yes | rooms.id |
-| `name` | text | no | rooms.name |
-| `seats` | integer | no | rooms.seats |
-
-#### Callers
-
-Runtime endpoint: visitor (none; a public Deployment only; actor none); person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
-
-#### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-#### Limits
-
-- LIMIT 50 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-### staff.me
-
-A query declared authenticated. It binds the caller's ID, so a caller without one is refused.
-
-```sql
-SELECT display FROM staff WHERE user_id = ?1 LIMIT 1
-```
-
-#### Input
-
-None. Send `{}`.
-
-#### Output
-
-An array of row objects.
-
-| Column | Type | Nullable | Reads |
-| --- | --- | --- | --- |
-| `display` | text | no | staff.display |
-
-#### Callers
-
-Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
-
-#### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `Query result exceeds 2 MiB or 1000 rows.` |  | runtime | a query produces more than 1000 rows or more than 2 MiB of JSON |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-#### Limits
-
-- LIMIT 1 at the top of the statement; at most 1000 rows and 2 MiB of JSON in any case.
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-### staff.name
-
-A mutation declared authenticated. It binds the caller's ID, so a caller without one is refused.
-
-```sql
-INSERT INTO staff (user_id, display) VALUES (?1, ?2) ON CONFLICT(user_id) DO UPDATE SET display = excluded.display
-```
-
-#### Input
-
-| Key | Type | Required | Limit |
-| --- | --- | --- | --- |
-| `display` | string | yes | 60 UTF-16 code units |
-
-#### Output
-
-`{ changes, lastInsertId }`, both integers.
-
-#### Callers
-
-Runtime endpoint: person (the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>; actor user id).
-
-#### Errors
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `authentication-required` |  | runtime | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to /_konae/login |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session |
-| `Unexpected action input: <key>` |  | runtime | input has a key no input binding declares |
-| `Missing action input: display` |  | runtime | a required input is omitted |
-| `display must be a non-empty string.` |  | runtime | a string input is not a string, or is empty or only whitespace |
-| `display is too long.` |  | runtime | a string input is longer than its maxLength in UTF-16 code units |
-| `rate-limited` |  | runtime | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user |
-
-#### Limits
-
-- 2 seconds per statement.
-- 30 calls per 10 seconds for a visitor, per client address and Deployment.
-- 120 calls per 10 seconds for a signed-in person or API key, each.
-
-### Any action
-
-| Message | Status | Seen on | When |
-| --- | --- | --- | --- |
-| `Server action not declared.` |  | runtime | actions.json declares no action with that name |
-| `Sign in to use Konae MCP.` |  | runtime | the Deployment is private and the caller has no session, whatever the action's name |
-| `Arguments must be an object.` |  | runtime | input is not an object, e.g. null |
-| `No route accepts POST on this path.` | 405 | http | a POST reaches a path no action binds (405) |
-
-</details>

@@ -1,48 +1,56 @@
 # Invite people
 
-Set a signup policy for the Deployment, then send an invitation to each email that should get an account.
+Set the Deployment's signup policy, then send an invitation to each email that should get an app account.
 
 ## How it works
 
-The signup policy decides who may create an app account. It is one of Open (anyone), Invitation only (only through an invitation), Closed (nobody signs up, and an invitation the owner sends can still be accepted) or Allowlist (exact emails or `@domain` entries, an advanced option). Public Deployments start Open and Private Deployments start Closed. A first release may name another policy. A republish never changes it afterwards, except to close an Open app made private.
+The signup policy decides who may create an app account. It is Open (anyone), Invitation only (only through an invitation), Closed (nobody signs up, though an invitation the owner sends can still be accepted) or Allowlist (exact emails or `@domain` entries, an advanced option). A public Deployment starts Open and a private one Closed, and a first release may name another policy. A later publish keeps the policy, except that it turns Open into Closed when it makes the app private.
 
-An invitation is the owner's offer of an account on one Deployment to one email. It is a link valid for seven days. Accepting it sets the password and activates the account.
+An invitation is the owner's offer of an account in one app to one email, sent as a link that works for seven days. Accepting it sets the password and activates the account.
 
-## Steps in the editor
+## In the editor
 
-1. Open the project and go to Auth > Users. After a first deploy of a Private app with the Invitation only policy, the published state also offers **Invite people**.
-2. Check the signup policy. Change it here if you need to. The change keeps existing accounts working.
-3. Invite each person by email. Only invite people the owner asked for, because this sends email.
-4. Resend or revoke an invitation from the same view. You can also suspend and resume an app account. Suspension ends its sessions and keeps its rows.
+1. Open the project and go to Auth > Users. After a deploy with the Invitation only policy, the deploy dialog also offers Invite people.
+2. Check the signup policy under "Who can create an app account" and change it if the app needs another one. Existing accounts keep working.
+3. Under Invite people, enter the email addresses and send. Invite only the people the owner asked for, because this sends email.
+4. Resend or revoke an invitation from the list of invitations below it. Under App accounts you can also suspend and resume an account. Suspension ends its sessions and keeps its rows.
 
-## Steps over MCP
+## Over MCP
 
-1. Log in with the `manage_users` permission. `signup_policy_read` needs only `read`.
+A project published from a folder with the CLI shows on the project list under "Apps without editor files" and cannot open in the editor. Its owner invites people over MCP.
+
+1. Log in with the `manage_users` permission. Every `app_` tool needs it, and `signup_policy_read` needs only `read`.
 
     ```sh
     KONAE_EMAIL=you@example.com KONAE_PASSWORD=... \
-    bun run konae -- login --dir /tmp/my-app --url http://localhost:4173 --manage-users
+    bun run konae -- login --dir <folder> --url http://localhost:4173 --manage-users
     ```
 
-2. Set the policy if the app needs another one. Use `signup_policy_set` with `deploymentId` and `mode` of `open`, `invitation`, `closed` or `allowlist`, plus allowlist entries.
-3. Call `mail_status`. Inviting needs `sending` true. Without a mail transport, `app_invitations_create` refuses and creates nothing.
-4. Call `app_invitations_create` with `deploymentId`, `emails` and `idempotencyKey`. It emails each address a link to `/_konae/invitation#invitation=<token>` on the app's host. Call it only when the owner asked for those invitations.
-5. The person opens the link and chooses a password. The page posts it to `/_konae/auth/accept` and signs them in.
-6. Use `app_invitation_resend` to send a new link, which replaces the earlier one. Use `app_invitation_revoke` to end one. Revoking removes the pending account it created, if nobody used it.
+    The token lands in `<folder>/.konae/credentials.json` for an MCP client to use. Decide what it may call from `session_inspect`'s `can` map. A tool the credential lacks names the permission it needs.
+2. Set the policy if the app needs another one. Call `signup_policy_set` with `deploymentId` and a `mode` of `open`, `invitation`, `closed` or `allowlist`, plus the allowlist entries for `allowlist`. The Deployment's ID is the `id` in `konae.json`.
+3. Call `mail_status` and look for `sending: true`. Without a mail transport, `app_invitations_create` refuses and creates nothing.
+4. Call `app_invitations_create` with `deploymentId`, `emails` and an `idempotencyKey`. It emails each address a link to `/_konae/invitation#invitation=<token>` on the app's host. Call it only when the owner asked for those invitations.
+5. The person opens the link and chooses a password, and the page signs them in.
+6. `app_invitation_resend` sends a new link that replaces the earlier one. `app_invitation_revoke` ends an invitation and removes the pending account it created, if nobody used it.
+
+## Where the email lands while you try it
+
+- On `bun run dev:local`, every account and invitation email lands in `data/kernel-local/mailbox.jsonl` and goes to no provider.
+- On `bun run konae -- dev --dir <folder>`, it lands in `<folder>/.konae/kernel/mailbox.jsonl`. When the policy is not Open, `dev` prints a `kernel invite <email> --app <id>` command that invites a test account. `bun run konae -- events --dir <folder>` lists each email with its link.
+
+The editor preview sends no email, so try invitations on one of these or on a Deployment.
 
 ## Your own app account
 
-Your own app account is an app account like any other. Sign up or accept an invitation with your email. When the app keeps roles, name yourself its owner with SQL in Data, using the account ID that Auth > Users shows.
+Your owner account does not sign you in to the app. Sign up, or accept an invitation, with your email like anyone else. When the app keeps roles in its own table, give yourself one with SQL, using the account ID that Auth > Users or `app_users_list` shows. Run the SQL in the editor's Data panel, or with `bun run konae -- sql --dir <folder> --prod "<statement>"` for an app published with the CLI.
 
 ## Check it worked
 
-- After `signup_policy_set`, the read-back is `signup_policy_read`.
-- After `app_invitations_create`, `app_invitation_resend` or `app_invitation_revoke`, the read-back is `app_invitations_list`. It shows each invitation's status.
-- After `app_user_suspend` or `app_user_resume`, the read-back is `app_users_list`.
-- On `konae dev`, the invitation email lands in `<folder>/.konae/kernel/mailbox.jsonl`, and `konae events` lists it with its link.
-- Decide whether you may call these tools from `session_inspect`'s `can` map. A tool your credential may not call answers `Unknown tool or insufficient permission.` and names the permission.
+- After `signup_policy_set`, read the policy back with `signup_policy_read`.
+- After `app_invitations_create`, `app_invitation_resend` or `app_invitation_revoke`, read each invitation's state with `app_invitations_list`.
+- After `app_user_suspend` or `app_user_resume`, read the account back with `app_users_list`.
 
-The editor preview sends no email, so test invitations on `konae dev` or on a Deployment. A package keeps the invitation as history without its link, and the owner resends it.
+An export carries each invitation as history without its link, so the owner resends it after an import.
 
 ## Read next
 

@@ -4,9 +4,9 @@ Declare an action of `"kind": "call"` and the Kernel sends the request from its 
 
 ## How it works
 
-A call action runs no SQL. The page invokes it with `miniapp.actions.call`, and it answers `{ callId, queued: true }`. The Kernel then sends the request, never the browser, so no secret reaches the page. This is the outbound door. For a service that calls your app, see the guide on webhooks.
+A call action runs no SQL. The page invokes it with `miniapp.actions.call`, and it answers `{ callId, queued: true }`. The Kernel then sends the request from its own process, so no secret reaches the page. This is the outbound door. For a service that calls your app, see [Receive a webhook](./receive-a-webhook.md).
 
-A URL is https, or http to an app of this installation. It is never a private address, the editor, or a path under `/_konae`, `/oauth`, `/.well-known` or `/mcp`.
+The URL is https, or http to an app of this installation. It never names a private address, the editor's host, or a path under `/_konae`, `/oauth`, `/.well-known` or `/mcp`.
 
 ## Steps
 
@@ -34,15 +34,15 @@ A URL is https, or http to an app of this installation. It is never a private ad
     }
     ```
 
-    For an outside service, use an `https://` URL. `http://` works only for an app of this installation.
+    For an outside service, use an `https://` URL. `http://` reaches only an app of this installation, such as `inbox.localhost` on a local one.
 2. Choose `auth`. `{ "secret": "<name>", "header": "X-Inbox-Signature" }` signs the request with a signing secret, in `X-Konae-Signature` unless `header` names another. `{ "key": "<name>" }` sends the API key a secret holds as `Authorization: Bearer`.
-3. Set the secret before you publish, with `secret_set` and `"use": "call"`. Without `"use": "call"` the Kernel refuses a value that another of your projects already holds as a route secret. A call secret verifies no route of its own app, so it may repeat the receiving app's route secret.
+3. Set the secret with `secret_set` and `"use": "call"`. A release whose call names an unset secret is refused, and the refusal names it. Without `"use": "call"` the Kernel refuses a value that another of your projects already holds as a route secret. A call secret verifies no route of its own app, so it may repeat the receiving app's route secret.
 
     ```json
     { "projectId": "<id>", "name": "inbox_events", "value": "<the receiving app's route secret>", "use": "call" }
     ```
 
-4. Declare the `then` mutation. It runs once when the call ends, delivered or failed, with no actor. It must be a mutation with no HTTP route and no `actor` binding. Its inputs are read by JSON pointer from `/ok`, `/status`, `/error`, `/body` and `/input`. This one records the answer.
+4. Declare the `then` mutation. The Kernel runs it once when the call ends, delivered or failed, with no actor. It must be a mutation with no HTTP route and no `actor` binding, and nothing else may call it. Each of its inputs is a JSON pointer into `/ok`, `/status`, `/error`, `/body` or `/input`. This one records the answer.
 
     ```json
     "status.escalated": {
@@ -69,21 +69,20 @@ A URL is https, or http to an app of this installation. It is never a private ad
     });
     ```
 
-
 ## Limits
 
 - 20 calls queued per app in any 60 seconds, unless the installation sets `KONAE_CALLS_PER_MINUTE`.
 - 10 seconds per attempt and 64 KiB per answer.
 - 5 attempts for a network failure, a timeout, 408, 425, 429 or a 5xx, waiting 30 seconds, then 1, 2 and 4 minutes. Any other answer is final. A redirect is not followed.
-- A paused app sends no call until its pause ends.
+- A Deployment in maintenance sends no call until it leaves maintenance.
 
 ## Check it worked
 
-- Read the outbox with `calls_read` and the Deployment's `deploymentId`. It lists calls newest first with status (`pending`, `delivered` or `failed`), attempts, URL, error kind and what the `then` mutation did.
+- Read the outbox with `calls_read` and the Deployment's `deploymentId`. It lists calls newest first with their status (`pending`, `delivered` or `failed`), attempts, URL, error kind and what the `then` mutation did. On `konae dev`, `bun run konae -- events --dir <folder>` lists the same calls.
 - Query the table the `then` mutation wrote. In the starter app, that is `status.escalations`.
-- After `secret_set`, the read-back is `secrets_list`. After a release, the read-back for `release_apply` is `project_inspect`.
+- After `secret_set`, read the names back with `secrets_list`. After `release_apply`, read the Deployment back with `project_inspect`.
 
-The editor preview answers `{ callId, queued: true }` and sends nothing, and it has no call outbox. Run calls on `konae dev` or on a published Deployment. Pending calls stay on the installation and do not travel in a package.
+The editor preview answers `{ callId, queued: true }`, sends nothing and has no outbox. Try calls on `konae dev` or on a published Deployment. The outbox stays on the installation, so an export does not carry pending calls.
 
 ## Read next
 
