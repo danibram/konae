@@ -1,16 +1,16 @@
 # MCP tools and guide topics
 
-An agent operates Konae over authenticated MCP. The editor calls the same tools with the owner's session, so a person and an agent meet the same checks.
+An agent operates Konae through the owner's MCP on `/mcp`. The editor calls the same tools with the owner's browser session, so a person and an agent meet the same checks.
 
 ## Connect
 
-Configure the endpoint `<editor origin>/mcp` in an MCP client. The editor origin is `http://localhost:4173` under `bun run dev:local`, `http://app.localhost:8080` under Compose, and `https://app.<domain>` on an installation with `KONAE_DOMAIN` set. A client with OAuth discovers the server and opens a consent screen in the browser. The flow uses PKCE S256, and the token lasts one hour with no refresh token. A client that supports headers can send a delegated token.
+Configure the endpoint `<editor origin>/mcp` in an MCP client. The editor origin is `http://localhost:4173` under `bun run dev:local`, `http://app.localhost:8080` under Compose, and `https://app.<domain>` on an installation with `KONAE_DOMAIN` set. A client with OAuth discovers the server and opens a consent screen in the browser. The flow uses PKCE S256, and the token lasts one hour with no refresh token. A client that supports headers can send a delegated token from `konae login`, from the owner sign-in page at `/platform-access`, or from `token_create`.
 
 ```text
 Authorization: Bearer YOUR_TOKEN
 ```
 
-OAuth offers `read`, `write`, `publish` and `manage_users`. It does not offer `export_data`. After connecting, call `platform_describe` and `projects_list`.
+OAuth offers `read`, `write`, `publish` and `manage_users`. It does not offer `export_data`. After connecting, call `session_inspect` and `platform_guide` with topic `rules`.
 
 ## platform_guide topics
 
@@ -20,13 +20,13 @@ OAuth offers `read`, `write`, `publish` and `manage_users`. It does not offer `e
 | --- | --- |
 | `rules` | The yardstick, the first run, the read-back after every write, and the named divergences between preview and published app. |
 | `pieces` | Which Capsule declaration to use for a need. See [Pick the smallest piece](./pieces.md). |
-| `credentials` | Login, flags, OAuth, what each permission allows, and the refusal a missing permission gives. |
-| `development` | The CLI cycle with `dev`, `contract` and `conform`. |
+| `credentials` | `konae login` and its flags, OAuth, what each permission allows, and the refusal a missing permission gives. |
+| `development` | The CLI cycle: `init`, `dev`, `pull`, `sql`, `events`, `contract` and `conform`. |
 | `actions` | The `actions.json` format and its rules. |
 | `sdk` | The `window.miniapp` modules, rendered from `src/sdk/contract.ts`. |
-| `publishing` | The release steps as MCP calls, access, import, and custom domain. |
-| `users` | Signup policy, invitations, accounts, and roles inside an app. |
-| `portability` | Export and import. |
+| `publishing` | The release steps as MCP calls, the schema change, the first Signup Policy, custom domain, path address and maintenance. |
+| `users` | Signup Policy, Google sign-in, invitations, app accounts, entering as a user, and roles inside an app. |
+| `portability` | Export, running the folder on a `kernel` binary without Konae, and import into a new or an existing app. |
 | `refusals` | Every code a refused Capsule answers, with who fixes it and a one-line remedy. |
 
 ## Permissions
@@ -35,13 +35,17 @@ The catalog of tools depends on the credential. A call to a tool the credential 
 
 | Permission | Tools |
 | --- | --- |
-| `read` | `projects_list`, `project_inspect`, `signup_policy_read`, `sign_in_methods_read`, `domain_read`, `path_read`, `maintenance_read`, `contact_email_read`, `secrets_list`, `api_keys_list`, `usage_read`, `signals_read`, `calls_read`, `notices_read` |
-| `write` | `project_create`, `project_sources_save`, `project_delete` and `database_execute` changes |
+| None | `platform_describe`, `platform_guide`, `session_inspect` and `mail_status` |
+| `read` | `projects_list`, `project_inspect`, `project_sources_read`, `storage_test`, `signup_policy_read`, `sign_in_methods_read`, `domain_read`, `path_read`, `maintenance_read`, `contact_email_read`, `secrets_list`, `api_keys_list`, `usage_read`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read`, `notices_read`, and `database_execute` reads |
+| `write` | `project_create`, `project_sources_save`, `project_delete` and `database_execute` writes |
 | `publish` | `release_plan`, `release_apply`, `secret_set`, `secret_delete`, `api_keys_create`, `api_keys_revoke`, `domain_set`, `domain_clear`, `path_set`, `path_clear`, `maintenance_set`, `contact_email_set`, `project_import`, and `initialSignupPolicy` on a first release |
 | `manage_users` | `signup_policy_set`, `sign_in_methods_set`, `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter` from the owner's browser session, and the `app_invitations` tools |
-| `export_data` | `project_export` |
+| `export_data` | `project_export` and reading its downloads |
+| The owner's browser session | `tokens_list`, `token_create`, `token_revoke` and `app_user_enter` |
 
-A delegated token cannot create tokens or add permissions to itself. Run `login` again with the flag.
+The transfer tools follow what they move. `transfer_begin`, `transfer_write` and `transfer_complete` need `write` or `publish`, `transfer_read` and `transfer_status` need `read`, or `export_data` for an export's downloads, and `transfer_cancel` takes any permission.
+
+A delegated token cannot create tokens or add permissions to itself. Run `konae login` again with the flag.
 
 ## Tools by group
 
@@ -68,9 +72,9 @@ A delegated token cannot create tokens or add permissions to itself. Run `login`
 | App runtime, with an app session | `auth_session`, `auth_logout`, `actions_invoke`, `files_list`, `files_upload`, `files_read`, `files_update`, `files_delete` |
 | App accounts, before sign-in | `auth_signup`, `auth_verify`, `auth_recover`, `auth_reset` |
 
-[The MCP guide](./mcp.md) describes each tool's arguments, answers and refusals, and [the walkthrough](./mcp-walkthrough.md) runs them in order on one app.
+The app runtime and app account tools run on an app's runtime endpoint, `/_konae/mcp` on the app's host, with an app session. Called on `/mcp`, they answer where they run.
 
-The app runtime tools run on an app's runtime endpoint, `/_konae/mcp` on the app's host, with an app session.
+[The MCP guide](./mcp.md) gives each tool's arguments, answers and refusals, and [the walkthrough](./mcp-walkthrough.md) runs them in order on one app.
 
 ## Read back after every write
 

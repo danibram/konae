@@ -1,14 +1,14 @@
 # Walkthrough: from a credential to an import over MCP
 
-This page takes one app through every operation an external agent performs on Konae: get an Agent Credential, create a project, run it on this machine, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, publish it with a signup policy, invite a member, check it against its Action Contract, read its Usage and Signals, export it and import it on a second Kernel.
+This page takes one app through every operation an outside agent performs on Konae: get an Agent Credential, create a project, run it on this machine, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, publish it with a Signup Policy, invite an app user, check it against its Action Contract, read its Usage and Signals, export it and import it on a second installation.
 
-Every command and every answer below was recorded from real Kernels by `tests/mcp-walkthrough.integration.test.ts`, which fails when this page differs from what the Kernel answers. Values that change on every run appear as placeholders in angle brackets, such as `<project id>`. Kernel A answers on `http://localhost:4173`, Kernel B on `http://localhost:4174`, and `dev` on `http://localhost:8796`. An app's host is `<slug>-<suffix>.localhost` on its Kernel's port.
+`tests/mcp-walkthrough.integration.test.ts` recorded every command and every answer below from two running installations of the `konae` binary, and it fails when this page differs from what they answer. Values that change on every run appear as placeholders in angle brackets, such as `<project id>`. The first installation answers on `http://localhost:4173`, the second on `http://localhost:4174`, and `dev` on `http://localhost:8796`. An app's host is `<slug>-<suffix>.localhost` on its installation's port. The commands call that address the `<Kernel URL>`.
 
-A tool call is shown as the `params` of a JSON-RPC `tools/call` request to `<Kernel URL>/mcp` with `Authorization: Bearer <token>`, followed by its answer. The answer is the tool's `structuredContent` as `{ "result": ... }`, a tool error as `{ "refused": "<text>" }`, or a JSON-RPC error as `{ "error": "<message>" }`. Some long answers show only the fields the step needs. [Develop with authenticated MCP](mcp.md) explains every tool, and [the miniapp SDK](sdk.md) every call an app makes.
+A tool call is shown as the `params` of a JSON-RPC `tools/call` request to `<Kernel URL>/mcp` with `Authorization: Bearer <token>`, followed by its answer. The answer is the tool's `structuredContent` as `{ "result": ... }`, a tool error as `{ "refused": "<text>" }`, or a JSON-RPC error as `{ "error": "<message>" }`. Some long answers show only the fields the step needs. [The MCP guide](mcp.md) explains every tool, and [the miniapp SDK](sdk.md) every call an app makes.
 
 ## 1. Get an Agent Credential with an invitation code
 
-A new creator needs an invitation code from the installation's operator. The operator issues one on the server, where `KONAE_DATA_DIR` names the Kernel's data:
+A new owner needs an invitation code from the installation's operator. The operator issues one on the server, where `KONAE_DATA_DIR` names the installation's data directory:
 
 <!-- walkthrough:operator -->
 ```sh
@@ -35,7 +35,7 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
 ```
 <!-- /walkthrough:login -->
 
-`session_inspect` shows what the token holds. The token is in `/tmp/orders/.konae/credentials.json`; `init`, `publish` and `export` read it from there, and `KONAE_MCP_TOKEN` overrides it.
+`session_inspect` shows what the token holds, and its `can` map is what to decide from. The token is in `/tmp/orders/.konae/credentials.json`, with the installation's address. `publish`, `pull`, `export --with-data`, and `sql` and `events` with `--prod` read it from there, and `KONAE_MCP_TOKEN` overrides it.
 
 <!-- walkthrough:session -->
 ```json
@@ -202,7 +202,7 @@ location: /_konae/owner/login?returnTo=%2Foauth%2Fauthorize%3F<the same paramete
 Allow access for 127.0.0.1:9999?
 Approving sends an access token to 127.0.0.1:9999. Only continue if you started this sign-in from an app you trust at that address.
 The client calls itself "Walkthrough agent". Clients register themselves, so Konae has not verified this name.
-The token grants read write publish manage_users access to all of your projects for one hour. You can revoke it from Platform access.
+The token grants read write publish manage_users access to all of your projects for one hour. You can revoke it on your owner account page in the editor.
 ```
 
 ```sh
@@ -279,7 +279,7 @@ content-type: application/json
 
 ## 4. Create the project
 
-`init` writes a template and `konae.json` into an empty folder. It makes the project ID itself and calls no Kernel, so it needs no credential. The first `publish` registers the project. Dotfiles, such as the `.konae` folder `login` wrote, do not count. The project starts private, and its `signupPolicy` admits only people the owner invites.
+`init` writes an app folder, with a template in `app/` and `konae.json`, into an empty folder. It makes the project ID itself and calls no installation, so it needs no credential. The first `publish` registers the project on the installation. Dotfiles, such as the `.konae` folder `login` wrote, do not count. The project starts private, and its `signupPolicy` admits only people the owner invites.
 
 <!-- walkthrough:init -->
 ```sh
@@ -338,7 +338,7 @@ styles.css
 
 ## 5. Run it on this machine
 
-`dev` builds `dist/` and runs the `kernel` binary on the folder, with the folder's `data/`. It prints the app's URL and starts the Kernel again when a file in `app/` changes. Stop it with Ctrl-C.
+`dev` builds `dist/` and runs the `kernel` binary on the folder, with the folder's `data/` and no owner. It prints the app's URL, and on an app that is not Open the `kernel` binary's `invite` command for a test account. It starts the Kernel again when a file in `app/` changes. Stop it with Ctrl-C.
 
 <!-- walkthrough:dev -->
 ```sh
@@ -361,7 +361,7 @@ content-type: text/html; charset=utf-8
 
 ## 6. Write the app
 
-The app keeps orders that a shop posts to a signed webhook. Members sign in, see the orders and claim one; claiming an order twice is refused by the guard. An accounting program reads the orders with an API key. `pages/about.html` is the second page and answers at `/about`.
+The app keeps orders that a shop posts to a signed webhook. App users sign in, see the orders and claim one, and the guard refuses a second claim of the same order. An accounting program reads the orders with an API key. `pages/about.html` is the second page and answers at `/about`.
 
 <!-- walkthrough:files -->
 ```sh
@@ -528,7 +528,7 @@ cat /tmp/orders/app/actions.json
 ```
 <!-- /walkthrough:files -->
 
-`contract` writes the Action Contract beside `konae.json`: `action-contract.json`, its JSON Schema, and `action-contract.md` to read.
+`contract` writes the Action Contract beside `konae.json`: `action-contract.json`, its JSON Schema, `action-contract.md` to read, and `actions.d.ts`, which types `miniapp.actions.call`.
 
 <!-- walkthrough:contract -->
 ```sh
@@ -554,7 +554,7 @@ Action orders.receive signs with the secret orders_webhook, which is not set for
 ```
 <!-- /walkthrough:publish-refused -->
 
-A signing secret belongs to the project, never leaves the Kernel and is not part of the folder. Set it with `secret_set`:
+A signing secret belongs to the project. The Kernel keeps it in the app folder's `data/secrets.sqlite`, never returns its value, and leaves it out of every export. Set it with `secret_set`:
 
 <!-- walkthrough:secret -->
 ```json
@@ -621,7 +621,7 @@ content-type: text/html; charset=utf-8
 ```
 <!-- /walkthrough:publish -->
 
-## 8. Invite a member
+## 8. Invite an app user
 
 Inviting needs `manage_users`. A token from `login` without `--manage-users` is refused with the permission and the flag:
 
@@ -706,7 +706,7 @@ Check that the installation sends email, then invite. Call `app_invitations_crea
 ```
 <!-- /walkthrough:invite -->
 
-The member opens the link from the email. This Kernel uses the development mailbox, which writes each message to `mailbox.jsonl` in its data folder. The page the link opens reads the invitation, then posts the chosen password, which creates the account and signs the member in:
+The invited person opens the link from the email. This installation uses the development mailbox, which writes each message to `mailbox.jsonl` in its data directory. The page the link opens reads the invitation, then posts the chosen password, which creates the account and signs the new app user in. `auth_session` answers `role: "member"` for every signed-in account; the Kernel keeps no other role.
 
 <!-- walkthrough:accept -->
 ```sh
@@ -744,9 +744,9 @@ set-cookie: konae_app_session=<app session>; ...
 ```
 <!-- /walkthrough:accept -->
 
-## 9. Use the app as the member
+## 9. Use the app as the app user
 
-The member's calls go to the app's runtime endpoint, `/_konae/mcp` on the app's host, with the app session cookie. `miniapp.auth.session()` and `miniapp.actions.call()` in `app.js` make these calls. The second page answers at `/about`, and a path the artifact does not hold answers 404:
+The app user's calls go to the app's runtime endpoint, `/_konae/mcp` on the app's host, with the app session cookie. `miniapp.auth.session()` and `miniapp.actions.call()` in `app.js` make these calls. The second page answers at `/about`, and a path the artifact does not hold answers 404:
 
 <!-- walkthrough:runtime -->
 ```json
@@ -837,7 +837,7 @@ content-type: application/json
 ```
 <!-- /walkthrough:signed-route -->
 
-The member claims order 1. The second claim changes no row, so the Kernel answers the guard instead of `{ changes: 0 }`:
+The app user claims order 1. The second claim changes no row, so the Kernel answers the guard instead of `{ changes: 0 }`:
 
 <!-- walkthrough:guard -->
 ```json
@@ -880,7 +880,7 @@ The member claims order 1. The second claim changes no row, so the Kernel answer
 ```
 <!-- /walkthrough:guard -->
 
-An upload is a transfer of at most the installation's per-file limit, 2 MiB by default, then `files_upload`. The file is private to the member who uploaded it. `miniapp.files.url(fileId)` returns its path, `/_konae/files/<id>`, which the member reads with the session cookie; a visitor of a private app gets 401 before any file is looked up.
+An upload is a transfer of at most the installation's per-file limit, 2 MiB by default, then `files_upload`. The file is private to the app user who uploaded it. `miniapp.files.url(fileId)` returns its path, `/_konae/files/<id>`, which that app user reads with the session cookie; a visitor of a private app gets 401 before any file is looked up.
 
 <!-- walkthrough:file -->
 ```json
@@ -1170,7 +1170,7 @@ PASS routes: refuses a POST to a path no action binds. Answered 405 "No route ac
 ```
 <!-- /walkthrough:usage -->
 
-`signals_read` returns the Signals the actions recorded, newest first. `order.claimed` lists `actor`, so it holds the member's ID:
+`signals_read` returns the Signals the actions recorded, newest first. `order.claimed` lists `actor`, so it holds the app user's ID:
 
 <!-- walkthrough:signals -->
 ```json
@@ -1217,7 +1217,7 @@ PASS routes: refuses a POST to a path no action binds. Answered 405 "No route ac
 
 ## 13. Export the app
 
-Exporting needs `export_data`, which OAuth does not grant:
+Exporting needs `export_data`, which OAuth does not grant, so the OAuth token from step 3 is refused:
 
 <!-- walkthrough:export-refused -->
 ```json
@@ -1366,7 +1366,7 @@ Exporting needs `export_data`, which OAuth does not grant:
 
 ## 14. Import on a second Kernel
 
-The destination needs its own credential, the project under the same ID, and the signing secret, which does not travel. Without it, `release_plan` refuses the release as in step 7.
+The second installation needs its own owner and credential, the project under the same ID, and the signing secret, which an export leaves out. Without the secret, `release_plan` refuses the release as in step 7.
 
 <!-- walkthrough:second-kernel -->
 ```sh
@@ -1491,7 +1491,7 @@ Upload each component with `transfer_begin` and its `component` name, so the upl
 ```
 <!-- /walkthrough:import-upload -->
 
-Build the folder, then upload a release payload: the project, its visibility, the built files of `dist/`, and `initialPackage` with the manifest and the component uploads. `release_plan` checks every component before anything is created, and `release_apply` installs them. The signup policy comes from the manifest.
+Build the folder, then upload a release payload: the project, its visibility, the built files of `dist/`, and `initialPackage` with the manifest and the component uploads. `release_plan` checks every component before anything is created, and `release_apply` installs them. The Signup Policy comes from the export's manifest.
 
 <!-- walkthrough:import-release -->
 ```sh
@@ -1579,7 +1579,7 @@ Built /tmp/orders/dist
 ```
 <!-- /walkthrough:import-release -->
 
-Sessions and email links stay behind, so the member signs in again with the same password and finds the same rows. The API key arrives revoked, with its name and scope, so the owner knows which program needs a new one.
+Sessions and email links stay behind, so the app user signs in again with the same password and finds the same rows. The API key arrives revoked, with its name and scope, so the owner knows which program needs a new one.
 
 <!-- walkthrough:import-check -->
 ```sh
