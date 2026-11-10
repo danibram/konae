@@ -27,7 +27,7 @@ Who is using the app. The Kernel owns accounts and sessions; the app only reads 
 Visibility decides who may open the app shell. It never grants data access on its own.
 An app account has no role the Kernel keeps. An app that needs an administrator keeps roles in its own table, keyed by the account ID that actor.id binds, and its owner names the first one with SQL in the editor's Data panel.
 The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_konae/invitation.
-The owner may add Continue with Google to the sign-in page in the editor's Users view or with sign_in_methods_set, once the app's own Google client ID and secret are set. A Google sign-in reaches the app account that holds the same email, with the same actor.id as the password, and the Signup Policy decides whether an email without an account gets one. Google proves only Gmail addresses and addresses of a Google Workspace domain; any other address signs in with email and password. Password sign-in stays on.
+The owner may add Continue with Google to the sign-in page in the editor's Auth > Users view or with sign_in_methods_set, once the app's own Google client ID and secret are set. A Google sign-in reaches the app account that holds the same email, with the same actor.id as the password, and the Signup Policy decides whether an email without an account gets one. Google proves only Gmail addresses and addresses of a Google Workspace domain; any other address signs in with email and password. Password sign-in stays on.
 
 miniapp.auth.session(): Read the signed-in Runtime Actor, or the anonymous state so the app can show a sign-in button. Returns { userId, name, role }. Signed in, name is the account email and role is "member". Signed out, { userId: "anonymous", name: "Anonymous", role: "anonymous" }.
 Editor preview: Returns Alice or Bob, the preview's test accounts, with role "member", or the anonymous state.
@@ -71,7 +71,7 @@ Limits:
 - a mutation that changed no row records no Signal
 - the Kernel keeps the newest 50,000 Signals per Deployment and drops the oldest
 
-Declared with "guard" in actions.json: "guard": "<message>" on a mutation. When its statement changes no row, the Kernel refuses the call with that message instead of answering { changes: 0, lastInsertId: 0 }: a tool error for miniapp.actions.call, 403 on an HTTP route. Usage counts the call under refused, and no Signal is recorded. Write the app's rule into the statement's WHERE, such as "the caller is an organizer" or "the slot is free", and the guard is what the person sees when the rule says no. Without a guard a mutation answers { changes: 0 } as before. The Validation Gate and the Kernel refuse the same declarations with the same messages.
+Declared with "guard" in actions.json: "guard": "<message>" on a mutation. When its statement changes no row, the Kernel refuses the call with that message instead of answering { changes: 0, lastInsertId: 0 }: a tool error for miniapp.actions.call, 403 on an HTTP route. Usage counts the call under refused, and no Signal is recorded. Write the app's rule into the statement's WHERE, such as "the caller is an organizer" or "the slot is free", and the guard is what the person sees when the rule says no. Without a guard, a mutation that changes no row answers { changes: 0, lastInsertId: 0 }. The Validation Gate and the Kernel refuse the same declarations with the same messages.
 Limits:
 - a guard is 1 to 200 characters on one line
 
@@ -79,7 +79,7 @@ Declared with "notify" in actions.json: "notify": { "to": "owner" or "actor" or 
 Limits:
 - a subject template is 1 to 120 characters on one line; a body template is 1 to 2000 characters
 - a placeholder's value keeps 200 characters on one line; a rendered subject keeps 200 characters and a body 5,000
-- notices count apart from account email: 200 a day per app, 500 a day per creator and 50 a day per recipient from one app, and every email counts toward the installation's 1,000 a day
+- notices count apart from account email: 200 a day per app, 500 a day per owner and 50 a day per recipient from one app, and every email counts toward the installation's 1,000 a day
 - nothing is sent while the installation's sender preflight is not ready; the notice is recorded as failed with sender-not-ready
 - a notice not sent within a day fails as notice-expired
 - changes names 1 to 8 columns; {changes} lists at most 50 rows per notice
@@ -200,7 +200,7 @@ Calls from this app to another app or an outside service, made by the Kernel fro
 The Kernel resolves an outside host once per attempt and refuses it when any address it resolves to is loopback, private, link-local (where cloud metadata answers), shared, documentation, benchmarking, multicast, reserved, unspecified, unique-local, or an IPv4 address carried in IPv6. It then connects to the address it checked, so a second DNS answer cannot redirect the request.
 http is allowed only to an app of this installation, which the Kernel reaches in its own process. Every other URL must be https.
 Each attempt of a signed call signs again with a new nonce, so a retry is never refused as a replay.
-A paused app sends no call and runs no then mutation until its pause ends.
+An app in maintenance sends no call and runs no then mutation until maintenance ends.
 Usage counts each queued call under call, by action. The then mutation counts as an action, or under refused when its guard refuses, and records its Signal with actor null.
 The editor preview answers { callId, queued: true } and sends nothing. Run calls on konae dev, or on a Deployment.
 
@@ -227,7 +227,7 @@ A signed route reads the declared header as t=<unix seconds>,n=<nonce>,v1=<hex H
 A provider's scheme. hmac-body: the header carries the prefix, if declared, then the HMAC of the raw body with the declared algorithm, in hex or base64 (GitHub: X-Hub-Signature-256, sha256, hex, prefix sha256=; Shopify: X-Shopify-Hmac-Sha256, sha256, base64). timestamped: the header carries comma-separated fields, the timestamp after prefix and the hex HMAC-SHA256 of <t>.<body> after tag (Stripe: Stripe-Signature, t=, v1=, window 300). svix: svix-id, svix-timestamp and svix-signature, the base64 HMAC-SHA256 of <id>.<t>.<body> keyed with the base64 after whsec_ (Resend, Svix). A provider's delivery is accepted once; one whose action fails is forgotten, so the provider's retry runs. A long form with several wrong keys is refused once, with one sentence per key in the order the parse checks them: keys the scheme does not take, the header, the secret, then the scheme's settings.
 A provider's preset. { "provider": "github" | "shopify" | "stripe" | "svix", "secret": "<name>" } stands for that provider's long form: github for hmac-body over X-Hub-Signature-256 with sha256, hex and prefix sha256=; shopify for hmac-body over X-Shopify-Hmac-Sha256 with sha256 and base64; stripe for timestamped over Stripe-Signature with t=, v1= and window 300; svix for svix, which Resend also uses. A preset takes no other key, so a route has one spelling. Both doors read the table from kernel-rs/kernel/src/signature-presets.json, and each row verifies a published or provider-form vector. Any other sender uses the long form.
 fields maps an input key to a JSON path into the POST body, such as { "id": "$.data.object.id" }. Each input fields does not name is read from the body's key of that name, and every other key of the body is left out, so a provider's payload needs no adapter. A path that is missing leaves its input out: a required one is refused as missing, a nullable one binds NULL.
-The owner sets the secret with the secret_set admin tool before publishing. It never appears in actions.json, the Build Artifact or an export.
+The owner sets the secret with the secret_set owner tool before publishing. It never appears in actions.json, the Build Artifact or an export.
 GET /_konae/files/<id>, the path miniapp.files.url returns under the page's base path, answers a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it. A visitor without a session on a private app gets 401 authentication-required before any file is looked up; every other caller who may not read the file gets 404 File not found, the same as for a missing or deleted one.
 The editor preview serves no routes. Run them on konae dev, or on a Deployment.
 

@@ -1,56 +1,50 @@
-# Hosted creator access
+# Owner sign-in with Clerk
 
-This integration is an optional adapter. Creator accounts are a Kernel concern with email, password, verification and operator-issued invitation codes, so signing in and running an installation never require this provider. The rest of this document describes the adapter as implemented.
+Konae can let owners sign in through Clerk with Google instead of with an email and a password. It is optional. Without it, owners sign in with the accounts, verification and invitation codes [Operate an installation](./operate.md#creator-admission) describes. `kernel-rs/konae/src/clerk.rs` holds the code. The `kernel` binary has no owners and reads none of this.
 
-Clerk proves the identity of a hosted creator. The Kernel maps the configured issuer and Clerk subject to an internal owner ID, then issues its own administrative session. The mapping never reads an email address. App users keep their own accounts, passwords and sessions in each deployment.
+Setting any `KONAE_CLERK_*` variable turns Clerk sign-in on for the whole installation. Konae then refuses owner sign-in and signup with a password, and the owner sign-in page shows Clerk's sign-in instead. A missing or invalid required setting stops sign-in with a configuration error and never falls back to passwords. App users keep their own accounts in each app.
 
-## Configure the operator account
+## Configure it
 
-Create a Clerk application and enable Google as its only sign-in and signup method. Disable other authentication methods in Clerk. The standard session JWT does not identify the social provider, so the Kernel cannot prove from that JWT that a person used Google.
+Create a Clerk application with Google as its only sign-in and signup method. Clerk's session token does not say which provider a person used, so Konae cannot check that from the token.
 
-Copy the instance's JWKS from its fixed Frontend API URL with `/.well-known/jwks.json` appended. Store the JSON in a file that only the operator can change. The Kernel reads that configured file. It never follows a URL supplied by a JWT or fetches a key based on an untrusted issuer.
-
-Set these environment variables on the Kernel process.
+Copy the instance's JWKS from its Frontend API URL with `/.well-known/jwks.json` appended, and store the JSON in a file only the operator can change. Konae reads that file and never fetches a key from a URL a token names.
 
 | Variable | Value |
 | --- | --- |
-| `KONAE_CLERK_ISSUER` | Exact HTTPS instance origin, without a trailing slash |
-| `KONAE_CLERK_JWKS_FILE` | Absolute path to the operator-managed JWKS JSON file |
-| `KONAE_CLERK_AUTHORIZED_ORIGINS` | JSON array of exact editor origins, such as `["https://app.example.com"]` |
-| `KONAE_CLERK_BETA_SUBJECTS` | JSON array of admitted Clerk user IDs, such as `["user_example"]` |
-| `KONAE_CLERK_PUBLISHABLE_KEY` | Clerk publishable key for the hosted sign-in page |
+| `KONAE_CLERK_ISSUER` | The instance's exact HTTPS origin, without a trailing slash |
+| `KONAE_CLERK_JWKS_FILE` | Path to the JWKS file, at most 64 KiB, with one to sixteen RS256 signing keys |
+| `KONAE_CLERK_AUTHORIZED_ORIGINS` | JSON array of the editor's exact origins, such as `["https://app.example.com"]`. Exact `http://localhost`, `127.0.0.1` and `[::1]` origins are accepted for local development |
+| `KONAE_CLERK_BETA_SUBJECTS` | JSON array of admitted Clerk user IDs, such as `["user_example"]`. An empty array admits nobody |
+| `KONAE_CLERK_PUBLISHABLE_KEY` | Optional. The `pk_test_` or `pk_live_` key the sign-in page loads Clerk with |
 
-Subject admission is an operator decision. A new person first creates their Clerk account with Google. The Kernel denies the exchange until the operator finds that account in the Clerk dashboard and adds its user subject to the beta list. The person then retries sign-in. This delivery does not send beta invitations or automate their acceptance. The pending screen should explain that access awaits operator approval and show the Clerk subject so the person can identify their request. An empty subject array denies everyone. An absent or invalid required setting produces a configuration error. Any Clerk variable enables hosted mode, so a partial configuration must never fall back to password authentication.
+The operator decides who gets in. A new person signs in to Clerk with Google, and Konae refuses the exchange with "Sign-in failed or this account has not been admitted to the beta." The operator finds that person's user ID in the Clerk dashboard, adds it to `KONAE_CLERK_BETA_SUBJECTS`, restarts Konae, and the person signs in again.
 
-For local development, the authorized-origin list also accepts exact HTTP loopback origins. It rejects wildcard origins, paths, credentials and nonlocal HTTP. Self-hosted installations leave all Clerk variables unset and retain the local owner account protected by the installation setup secret.
+## What Konae checks
 
-## Verification and sessions
+The browser posts Clerk's session token to `/_konae/owner/clerk`. Konae accepts it only with an RS256 signature from a key in the file with the same key ID, the configured issuer, an authorized party equal to the request's origin, a lifetime of at most five minutes, valid expiry and not-before times, a `user_` subject and a `sess_` session ID, and a session that is not pending. It refuses unknown keys and critical header extensions.
 
-The exchange requires an RS256 signature from a configured RSA signing key and its exact key ID. The Kernel checks issuer, authorized party, request origin, expiration, not-before time and issuance time. Tokens must have a Clerk user subject and session ID, must not identify a pending session, and must expire within five minutes of issuance. Unknown keys, critical JWT extensions and malformed encodings fail closed.
+The first exchange maps the issuer and subject to a new owner ID in `owners.sqlite`. The mapping never reads an email, so two Clerk instances with the same subject never share an owner. Konae then sets its own owner session cookie for one hour and stores only the hash of its token.
 
-Successful exchange creates the identity once under a unique provider and subject constraint. The provider includes the issuer, so identical subjects from different Clerk instances never become the same account. The Kernel stores only the SHA-256 hash of its random session token and gives the browser an administrative cookie. The administrative session expires after one hour. A Clerk JWT is never an app-user session.
+With Clerk on, every agent credential lasts at most one hour, and Konae checks admission on every owner request and when it redeems an OAuth authorization code. Removing a subject from `KONAE_CLERK_BETA_SUBJECTS` or suspending the owner stops both at once. Signing out deletes the current session only.
 
-Removing a subject from the beta list or suspending its identity blocks administrative sessions and delegated MCP credentials when the integration checks `owner_allowed`. `clerk::suspend` also deletes every Kernel browser session for that identity. It does not delete projects, deployments or app-user accounts. Logout deletes the current Kernel session; it does not revoke other browser sessions or delegated MCP credentials.
+Deleting or suspending the account in Clerk revokes nothing in Konae, because Konae has no Clerk webhook. The session ends within an hour, and a credential issued near its end can last another hour. To stop access at once, remove the subject or suspend the owner.
 
-The operator can suspend a creator on the server using the same Kernel executable and data directory.
+## Suspend an owner
 
 ```sh
 KONAE_DATA_DIR=/data KONAE_CLERK_ISSUER=https://example.clerk.accounts.dev \
   konae creator-suspend user_example
 ```
 
-This command locates the owner by issuer and subject, suspends the identity and deletes its Kernel sessions in one transaction. It then deletes the owner's MCP credentials and pending OAuth codes. It does not start a server. If MCP cleanup fails, suspension remains in force because each administrative request checks the identity. There is no command to reverse suspension in this delivery. The operator must investigate the account before changing its stored status.
+The command suspends the owner that issuer and subject map to and deletes their sessions in one transaction, then deletes their agent credentials and open OAuth codes in `mcp.sqlite`. Projects and app accounts stay. If the second step fails, the suspension still holds, because every owner request checks it. No command reverses it.
 
-## Clerk deletion and key rotation
+## Rotate keys
 
-This delivery has no Clerk webhook or Backend API revocation lookup. Deleting or suspending an account in Clerk therefore does not immediately revoke a previously issued Kernel session. The one-hour administrative lifetime bounds that session. A delegated credential issued near its end can last another hour, so complete expiration can take up to two hours. Suspend the internal owner or remove beta admission when access must stop immediately. The hosted integration must cap all delegated credentials at one hour and must check admission when redeeming an OAuth authorization code.
+When Clerk rotates its signing keys, replace the JWKS file. Keep both keys in it during the rotation and remove the old one afterwards. Konae reads the file on every sign-in and owner request, so the new file applies at once. A token signed with a key the file lacks fails with "Unknown Clerk signing key."
 
-The operator replaces the JWKS file when Clerk rotates keys. Include both active signing keys during rotation and remove retired keys when appropriate. Unknown key IDs fail closed with `Unknown Clerk signing key.` until the file contains the current public key. The configuration loader rereads that file for each authentication operation. The Kernel does not cache successful identities independently of session expiry.
+## Test it
 
-## Local verification
+`cargo test --manifest-path kernel-rs/Cargo.toml -p konae clerk::tests` signs tokens with the test key in `kernel-rs/test-fixtures/clerk/` and checks signatures, claims, origins, the mapping, session expiry, admission, suspension and the cleanup of credentials. Never configure that key on a real instance. The tests use no Clerk account, so Google consent, redirect URLs, live claims and key rotation need a real Clerk instance to check.
 
-`cargo test clerk::tests` verifies locally signed RSA tokens, tampered signatures, issuer and origin mismatches, expired and premature tokens, missing claims, algorithm substitution, unknown keys, pending sessions and beta denial. It also verifies stable internal identities, separate identities with the same email, session expiry, logout revocation, suspension and removal from the beta list. The checked-in private key under `kernel-rs/test-fixtures/clerk/` is an isolated test key. Never configure it as a deployed Clerk signing key.
-
-A real Clerk instance is still required to check Google consent, allowed redirect URLs, live token claims, sign-in page loading, actual signing-key rotation and account closure behavior. Local tests use no Clerk account, production connection or secret.
-
-The verification follows Clerk's [manual JWT verification](https://clerk.com/docs/guides/sessions/manual-jwt-verification) and [session-token claims](https://clerk.com/docs/guides/sessions/session-tokens). Clerk documents `azp` as the origin of the original Frontend API request. The Kernel requires that claim to equal the admitted origin of the exchange request.
+The checks follow Clerk's [manual JWT verification](https://clerk.com/docs/guides/sessions/manual-jwt-verification) and [session token claims](https://clerk.com/docs/guides/sessions/session-tokens).

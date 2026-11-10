@@ -34,10 +34,10 @@ Bindings fill `?1`, `?2` and so on, in order. A binding takes its value from one
 | Source | Fields | Value |
 | --- | --- | --- |
 | `input` | `key`, `type`, `maxLength`, `nullable` | What the caller sent. `nullable: true` binds an omitted value or an explicit null as SQL NULL. |
-| `actor` | `field` of `id` or `role` | The caller's ID, or the app user's role. See [Accounts and access](./accounts-and-access.md). |
+| `actor` | `field` of `id` | The app user's ID or the API key's ID, and null for a visitor or a schedule's run. Roles live in the app's own tables. See [Accounts and access](./accounts-and-access.md). |
 | `kernel` | `field` of `now` | The time of the call. |
 
-A fourth form, `{ "source": "literal", "value": ... }`, binds a constant string, number or null (see `src/kernel/actions.ts`).
+A fourth form, `{ "source": "literal", "value": ... }`, binds a constant string, number or null.
 
 ## Kinds
 
@@ -104,7 +104,7 @@ A mutation may queue one email when its statement changes a row.
 }
 ```
 
-`to` is `owner`, `actor` or `{ "column": "<name>" }`. The Kernel never sends to an address from the input. Templates take `{input.<key>}`, `{actor.id}`, `{kernel.now}`, `{changes.count}` and, in the body, `{changes}`. The mutation's answer never depends on the notice.
+`to` is `owner`, `actor` or `{ "column": "<name>" }`. The Kernel never sends to an address from the input. Templates take `{input.<key>}`, `{actor.id}`, `{kernel.now}`, `{changes.count}` and, in the body, `{changes}`, which lists the columns a `changes` list names. The mutation's answer never depends on the notice.
 
 ## schedule
 
@@ -136,7 +136,7 @@ A mutation may record a named occurrence for the owner when it changes a row. An
 }
 ```
 
-Properties are input keys or `actor`. Only the Project Owner reads Signals, with `signals_read`.
+Properties are input keys or `actor`. Only the owner reads Signals, with `signals_read`.
 
 ## http
 
@@ -187,7 +187,7 @@ A call action queues one HTTP request that the Kernel sends from its own process
 }
 ```
 
-This is an excerpt of `examples/showcase/starter/actions.json`. Each `body` entry is the name of an input or `{ "value": constant }`. `auth` is `{ secret, header? }` or `{ key }`. `then` names a mutation that runs with the answer. A URL is https, or http to an app of this installation, and never a private address. The owner reads the outbox with `calls_read`.
+This is a shortened form of `status.escalate` in `examples/showcase/starter/actions.json`, which also passes the component and its time through to the `then` mutation. Each `body` entry is the name of an input or `{ "value": constant }`. `auth` is `{ secret, header? }` or `{ key }`. `then` names a mutation that runs with the answer. A URL is https, or http to an app of this installation, and never a private address. The owner reads the outbox with `calls_read`.
 
 ## Limits in short
 
