@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
     // Apply the verification mode to creator accounts before serving, so a
     // switch to required revokes unverified sessions at startup.
     owners::creator_store(&konae)?;
-    kernel::listen(&startup, running.state.clone(), owner_routes(konae), "Konae Rust Kernel").await
+    kernel::listen(&startup, running.state.clone(), owner_routes(konae), "Konae").await
 }
 
 /// Konae's routes: the owner's MCP, OAuth and owner sign-in.

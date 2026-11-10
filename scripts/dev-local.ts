@@ -56,6 +56,7 @@ const kernelEnv = {
   KONAE_DATA_DIR: dataRoot,
   KONAE_PUBLIC_ORIGIN: process.env.KONAE_PUBLIC_ORIGIN ?? `http://localhost:${kernelPort}`,
   KONAE_HOST_SUFFIX: process.env.KONAE_HOST_SUFFIX ?? "localhost",
+  KONAE_MAIL_TRANSPORT: process.env.KONAE_MAIL_TRANSPORT ?? "development",
 };
 delete kernelEnv.KONAE_S3_ENDPOINT;
 delete kernelEnv.KONAE_S3_ACCESS_KEY;

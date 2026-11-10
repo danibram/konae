@@ -185,7 +185,7 @@ export async function writeSite(site: Site) {
 async function seed(site: Site, folder: string) {
   const missing = () => { throw Error(`The docs are not published from ${folder} yet. examples/docs-site/README.md has the commands.`); };
   // konae publish saves the Deployment it wrote, and database_execute names a Deployment.
-  const deployment = JSON.parse(await readFile(path.join(folder, ".konae/deployment.json"), "utf8").catch(missing));
+  const deployment = JSON.parse(await readFile(path.join(folder, ".konae/published.json"), "utf8").catch(missing));
   const saved = JSON.parse(await readFile(path.join(folder, ".konae/credentials.json"), "utf8").catch(missing)) as { url: string; token: string };
   const token = process.env.KONAE_MCP_TOKEN ?? saved.token;
   const client = new McpClient(`${saved.url.replace(/\/$/, "")}/mcp`, { token });
