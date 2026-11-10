@@ -6,22 +6,22 @@ Describe an app in plain words, apply the change the Validation Gate lets throug
 
 The editor runs at `http://localhost:4173` after `bun run dev:local`, at `http://app.localhost:8080` under Docker Compose, and at `https://app.<domain>` on an installation with `KONAE_DOMAIN` set. The steps are the same in each.
 
-You need to be signed in as the owner. Open **Platform access** in the editor to create an owner account or sign in. The editor shows **Sign in to deploy** on the deploy dialog until you do, and brings you back to the app afterwards.
+The editor opens on the owner sign-in page. Sign in, or press **Create owner account**. The first owner of an installation gives the setup key, which a local install fills in, and every later owner gives an invitation code from the operator. A deploy dialog opened while signed out shows **Sign in to deploy** and brings you back to the app afterwards.
 
 ## Steps
 
 1. On the project list, create a project. The dialog is titled **Name this app**. Give it a name and pick a starting point under **Start with**. Each starting point runs as it is.
 2. In the conversation panel, press **Connect a model** and paste an Anthropic, OpenAI or OpenRouter key. The key stays in this browser. Then describe the app in one sentence. The prompt box reads "Describe the app."
 3. Read the proposed change. The files stay as they are until you press **Apply**.
-4. Press **Apply**. The Validation Gate, the editor's check, reads the change before it reaches the project. A refusal names what to change. The Gate refuses the change when:
+4. Read the line above **Apply**. The Validation Gate, the editor's check, has read the change before it can reach the project, and shows "Validated. Schema, preview rows and actions hold." when it passes. A refusal names what to change instead. The Gate refuses the change when:
    - the schema is not valid;
    - a Server Action's SQL does not run against the schema;
    - a query reads rows without a LIMIT.
-5. Try the app in the preview. Ask for changes in the same panel and apply each one.
+5. Press **Apply**, then try the app in the preview. Ask for changes in the same panel and apply each one.
 6. Press **Deploy**. The dialog is headed **Deploy** followed by the app's name. It shows "Every query names its LIMIT. It can leave." when nothing blocks the release.
-7. Choose who can open the app, **Public** (anyone can open it) or **Private** (people with an app account). Then choose who can create an app account. The dialog preselects Open for a public app and Invitation only for a private one.
+7. Choose who can open the app, **Public** (anyone can open it) or **Private** (people with an app account). Then choose who can create an app account. The dialog preselects Open for a public app and Invitation only for a private one, and you change it later in Auth > Users.
 8. Confirm with the button that names your choice, **Deploy public** or **Deploy private**. The dialog then shows **Published publicly** or **Published privately** with the Deployment URL. When a republish removes a table or a column from the published database, or changes a column's type, a dialog titled **This publish deletes data** lists what goes first. **Keep the data** publishes nothing, and **Publish and delete** applies it.
-9. Open the Deployment URL and use the app once. That calls a Server Action on the Kernel.
+9. Open the Deployment URL and use the app once. That calls a Server Action on the Kernel. A private app asks for an app account first. Press **Invite people** on the dialog, or open Auth > Users, and invite yourself. On `bun run dev:local` the invitation lands in `data/kernel-local/mailbox.jsonl`.
 
 ## Check it worked
 
@@ -42,6 +42,10 @@ The Auth panel lets you try the app as Guest, Alice and Bob in the preview. A pu
 The editor preview is not a Deployment. It applies no Content Security Policy, so inline handlers and fetches to other origins still run there, and a published app refuses them. It has no HTTP routes, no schedule timer, no notice email, no Usage store and no call outbox. Try those on `konae dev` or on the published Deployment.
 
 The Gate checks the schema and `actions.json`. A page that names a missing file fails at build or release, not at the Gate, so check every path you write.
+
+## Take it with you
+
+**Export** in the editor's header downloads the app folder as a tar, with the published app's database, accounts and files. [Take the app elsewhere](./take-the-app-elsewhere.md) runs it on another machine. App settings, under **More**, holds the app's addresses, its contact email, maintenance and an import of an exported folder.
 
 ## Read next
 

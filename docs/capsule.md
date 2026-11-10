@@ -1,11 +1,11 @@
 # The Capsule
 
-A Capsule is the editable source of one Project, taken as one unit. The editor, the agent and the CLI all read and write this shape.
+A Capsule is the app's editable sources, the `app/` folder of its [app folder](./architecture.md#the-app-folder). The editor, the build agent and the CLI all read and write this shape.
 
 ## Layout
 
 ```text
-mini-app/
+app/
 ├── index.html
 ├── about.html        # every .html at the root is a page
 ├── 404.html          # answers an unknown path under the default routing
@@ -20,7 +20,7 @@ mini-app/
 └── actions.json
 ```
 
-A folder that the CLI publishes also keeps `konae.json`, which names its project on one Kernel and its manifest: visibility, signup policy and routing.
+`konae.json` sits beside `app/` in the app folder. It holds the app's ID, name, visibility, Signup Policy, sign-in methods, contact email and its manifest, which sets the routing.
 
 ## What each file does
 
@@ -29,7 +29,7 @@ A folder that the CLI publishes also keeps `konae.json`, which names its project
 | `app.js` or `src/main.ts` | The entrypoint. The build bundles its relative imports and the npm packages it imports by name. |
 | `index.html`, other `.html` | Pages. Every `.html` at the root and under `pages/` is a page. Pages under `pages/` publish without the prefix. |
 | `styles.css` | Styles the pages load. |
-| `schema.sql` | The only model of the database. It states what the database should be. It may only create tables and indexes, and it must be safe to run twice, because the editor preview runs it again each time it opens. At publish the Kernel compares it with the published database and derives the change. A new table, column or index applies. A dropped table, a dropped column or a changed column type shows the owner what it deletes and applies only once the owner confirms. |
+| `schema.sql` | The only model of the database. It states what the database should be. It may only create tables and indexes, and it must be safe to run twice, because the editor preview runs it again each time it opens. At publish, at import and when the `kernel` binary starts the folder, the Kernel compares it with the live database and derives the schema change. A new table, column or index applies. A dropped table, a dropped column or a changed column type shows the owner what it deletes and applies only once the owner confirms. |
 | `package.json` | The npm packages the app imports, under `dependencies` with exact versions. A version range is refused. The editor's build reads them from esm.sh, and `konae build` reads them from `node_modules`. The published app holds their code and loads nothing from another origin. |
 | `actions.json` | The Server Action declarations. See [Server Actions](./server-actions.md). |
 | `404.html` | The page answered for a path the Deployment does not hold, under the default routing mode. |
@@ -54,7 +54,7 @@ A published app runs under the Kernel's Content Security Policy. Its own inline 
 
 ## Where the sources live
 
-Every project is one kind. The editor saves its sources in Konae, and a change there passes the Validation Gate before it is saved. `konae init` writes the same files into a folder, and `konae publish` sends them to the same project. A publish from a folder does not change the sources the editor opens.
+The editor saves its sources into the app folder's `app/` on the installation, and a change there passes the Validation Gate before it is saved. `konae init` writes the same files into a folder on your machine, and `konae publish` sends them to the installation. A publish from a folder does not change the sources the editor opens, and an app first published from a folder shows on the project list under **Apps without editor files**.
 
 ## Read next
 

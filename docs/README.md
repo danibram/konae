@@ -2,15 +2,16 @@
 
 Konae lets a person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.
 
-You describe an app in the editor, or write its files. The editor checks it before it runs, and the server checks it again with the same words wherever the app moves.
+You describe an app in the editor, or write its files in a folder. The editor checks it before it runs, and the Kernel checks it again with the same words wherever the app moves.
 
 ## What Konae is made of
 
-- The editor runs in the browser. It holds a project's files, a live preview and a build agent that proposes changes.
-- A [Capsule](./capsule.md) is the source of one app: its pages, an entrypoint, `schema.sql` and `actions.json`.
-- [Server Actions](./server-actions.md) are the app's only way to its database. Each one is a named SQL statement with typed inputs and a declared audience.
-- The Kernel is the server. It checks a Capsule again at release and serves the result as a Deployment, with its own SQLite database, accounts and files.
-- The `konae` [CLI](./cli.md) and [authenticated MCP](./mcp-tools.md) do from a folder or an agent what the editor does from the browser.
+- Konae is the platform: the editor, the build agent, owner accounts, the owner's MCP on `/mcp` and the project list.
+- The Kernel runs apps. It is a library inside Konae and the `kernel` binary, which serves app folders on its own.
+- An [app folder](./architecture.md#the-app-folder) is the app: `konae.json`, the sources in `app/`, the built pages in `dist/` and its database, accounts and files in `data/`. It looks the same on a laptop, inside the Kernel and in an export.
+- The [Capsule](./capsule.md) is the part you edit, `app/`: pages, scripts, `schema.sql` and `actions.json`.
+- [Server Actions](./server-actions.md) are the page's only way to the database. Each one is a named SQL statement with typed inputs and a declared audience.
+- The `konae` [CLI](./cli.md) and the [owner's MCP](./mcp-tools.md) do from a folder or an agent what the editor does from the browser.
 
 ## The five jobs
 
@@ -26,7 +27,7 @@ The editor runs at `http://localhost:4173` after `bun run dev:local`, at `http:/
 
 ### 1. Sign in
 
-The first owner of an installation signs up in **Platform access** with the setup key. On a local install that key is `local-development-key`. Every later creator needs an invitation code, which the operator issues with `konae creator-code-create` (see [Creator admission](./operate.md#creator-admission)). From the CLI, `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD`, plus `KONAE_SETUP_KEY` for the first owner or `KONAE_INVITATION_CODE` for a later one.
+The editor opens on the owner sign-in page. The first owner of an installation presses **Create owner account** and gives the setup key, which a local install fills in. Every later owner needs an invitation code, which the operator issues with `konae creator-code-create` (see [Creator admission](./operate.md#creator-admission)). From the CLI, `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD`, plus `KONAE_SETUP_KEY` for the first owner or `KONAE_INVITATION_CODE` for a later one.
 
 ### 2. Make an app in the editor
 
@@ -34,15 +35,16 @@ If you do not write code, stay in the editor. Create a project, press **Connect 
 
 ### 3. Or work from a folder with the CLI
 
-Run the commands from the Konae repository root.
+Run the commands from the Konae repository.
 
 ```sh
-bun run konae -- login --dir ./my-app --url http://localhost:4173
 bun run konae -- init --dir ./my-app --name 'My app'
 bun run konae -- dev --dir ./my-app
+bun run konae -- login --dir ./my-app --url http://localhost:4173
+bun run konae -- publish --dir ./my-app
 ```
 
-`login` saves a 24-hour token with `read`, `write` and `publish` in `./my-app/.konae/credentials.json`. `init` writes the app folder: `konae.json`, the template in `app/`, `AGENTS.md`, `action-contract.md` and a `package.json` whose `npm run build` writes `dist/`. The first publish registers the project. `dev` runs the app on this machine with the `kernel` binary and starts it again when the files change. To publish to the Kernel the credential names, run `bun run konae -- publish --dir ./my-app`. The [CLI reference](./cli.md) lists the other variables and flags.
+`init` writes the app folder. `dev` runs it on this machine with the `kernel` binary and starts it again when the files change. `login` saves a 24-hour credential with `read`, `write` and `publish` in `./my-app/.konae/credentials.json`, and the first `publish` registers the project on that installation. The [CLI guide](./guides/edit-files-with-the-cli.md) explains each step.
 
 ### 4. Prove it
 
@@ -52,6 +54,10 @@ bun run konae -- dev --dir ./my-app
 - When you are checking a contract, run `conform` against `action-contract.json`.
 
 After any write through MCP or the editor, observe the effect through the same door before you retry or tell the owner it worked. The `rules` topic of `platform_guide` lists the read-back for each write tool.
+
+### 5. Take it elsewhere
+
+Export the app folder with its data, and run it on the `kernel` binary or import it into another Konae. [Take the app elsewhere](./guides/take-the-app-elsewhere.md) shows both.
 
 ## For agents
 
@@ -63,4 +69,4 @@ An agent that connects over MCP calls `platform_describe` and `projects_list` fi
 - [The Capsule](./capsule.md), the files of an app
 - [Pick the smallest piece](./pieces.md), which declaration fits a need
 - [Example apps](./examples.md)
-- [Operate an installation](./operate.md), for whoever operates a Kernel
+- [Operate an installation](./operate.md), for whoever runs a Kernel

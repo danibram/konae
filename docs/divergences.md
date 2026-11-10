@@ -17,6 +17,10 @@ Attach listeners in JavaScript, and keep scripts and fetches on the app's own or
 
 The preview has no HTTP routes, schedule timer, notice email, Usage store or call outbox. Try those on `konae dev` or on a published Deployment.
 
+## Email on konae dev
+
+`konae dev` sends no email. Account email and notices land in `.konae/kernel/mailbox.jsonl` of the folder, and `konae events` lists them.
+
 ## File size
 
 The editor preview refuses a file over 2 MiB. A Kernel refuses at its own `KONAE_FILE_MAX_BYTES`, 2 MiB unless the operator raised it, and names the number.
@@ -27,7 +31,7 @@ The editor preview has no Google sign-in, and `miniapp.auth.signInWithGoogle()` 
 
 ## npm packages
 
-The editor's build reads npm packages from esm.sh. `konae build` and the export kit read them from `node_modules`. Both use the exact versions in `package.json`, but the two bundles are not byte-identical.
+The editor's build reads npm packages from esm.sh. `konae build` and an app folder's `npm run build` read them from `node_modules`. Both use the exact versions in `package.json`, but the two bundles are not byte-identical.
 
 ## Preview database and schema.sql
 

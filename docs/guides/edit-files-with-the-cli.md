@@ -8,19 +8,19 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
 
 ## Steps
 
-1. Create the app folder. `init` needs an empty folder and no credential. It writes the template into `app/`, a `konae.json` with a project ID it makes itself, `AGENTS.md` for a coding agent, `action-contract.md`, `compose.yaml`, `.env.example` and a `package.json` whose `npm run build` writes `dist/`. It writes the app private, with signup policy Invitation only.
+1. Create the app folder. `init` needs an empty folder and no credential. It writes the template into `app/`, a `konae.json` with a project ID it makes itself, `AGENTS.md` for a coding agent, `action-contract.md`, `actions.d.ts`, `compose.yaml`, `.env.example` and a `package.json` whose `npm run build` writes `dist/`. The Signup Policy is Invitation only. The app is private unless its template is made for visitors, as `tasks`, `form` and `gallery` are.
 
     ```sh
     bun run konae -- init --dir /tmp/my-app --name 'My app'
     ```
 
-2. Run it locally. `dev` builds `dist/` and runs the `kernel` binary on the folder, with the folder's `data/`, and starts it again each time you save a file in `app/`. It never proxies production. The default port is 8796.
+2. Run it locally. `dev` builds `dist/` and runs the `kernel` binary on the folder, with the folder's `data/`, and starts it again each time you save a file in `app/`. It never proxies production. It prints the app's address, `http://<slug>.localhost:8796` by default, the `kernel invite` command that creates a test account, and a page of what the app did on the next port.
 
     ```sh
     bun run konae -- dev --dir /tmp/my-app
     ```
 
-3. Edit the Capsule files in `app/`. Open the URL `dev` prints and reload after each change. Email, notices included, goes to `.konae/kernel/mailbox.jsonl`.
+3. Edit the Capsule files in `app/`. Open the URL `dev` prints and reload after each change. Email, invitations and notices included, goes to `.konae/kernel/mailbox.jsonl`, and `bun run konae -- events --dir /tmp/my-app` lists it.
 4. Optional. Write the Action Contract and, against a test Deployment, check every action's answers.
 
     ```sh
@@ -36,7 +36,7 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
     bun run konae -- login --dir /tmp/my-app --url http://localhost:4173
     ```
 
-6. Publish. This builds the folder and publishes it with the credential from `login`, to the installation `login` saved. The first publish registers the project there. It prints the Deployment URL.
+6. Publish. This builds the folder and publishes it with the credential from `login`, to the installation `login` saved. The first publish registers the project there. It prints the Deployment URL. The project appears on the editor's project list under **Apps without editor files**, because its files live in this folder.
 
     ```sh
     bun run konae -- publish --dir /tmp/my-app
@@ -46,7 +46,7 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
 
 ## Visibility and signup
 
-`publish` deploys the app as private unless `konae.json` sets `visibility` to `"public"`. `signupPolicy` in the same file names who may create an app account on the first release. A later publish that names another policy warns and changes nothing. Change it in the editor's Auth > Users view or with `signup_policy_set`.
+`publish` deploys the app as private unless `konae.json` sets `visibility` to `"public"`. `signupPolicy` in the same file names who may create an app account on the first release. A later publish that names another policy warns and changes nothing. Change it with `signup_policy_set`, and invite app users to the published app with `app_invitations_create`. Both are owner tools that need `manage_users`, so log in with `--manage-users` first.
 
 ## Check it worked
 
@@ -59,7 +59,7 @@ Do not treat the URL `publish` printed as proof. Read the Deployment back throug
 
 ## What differs from the editor preview
 
-`dev` runs the same Rust Kernel as a Deployment, so HTTP routes, the schedule timer, notice email, Usage and the call outbox all work there. The editor preview has none of them. The Validation Gate checks the schema and `actions.json` only, so a page that names a missing file fails at build or publish.
+`dev` runs the same Kernel as a Deployment, so HTTP routes, the schedule timer, notice email, Usage and the call outbox all work there. The editor preview has none of them. The Validation Gate checks the schema and `actions.json` only, so a page that names a missing file fails at build or publish.
 
 ## Read next
 

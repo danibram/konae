@@ -1,85 +1,106 @@
 # Concepts
 
-The words an app author meets, in the order the app meets them. They are the terms of `CONTEXT.md` at the root of the repository, and the editor and the Kernel use the same words in their messages.
+The words an app author meets, in the order the app meets them. `CONTEXT.md` at the root of the repository holds each one with the words to avoid, and the editor and the Kernel use the same words in their messages.
 
-Product terms are capitalized. Declaration keys stay lowercase: guard, notice, schedule, package and invitation.
+Product terms keep their capitals in a heading. In a sentence these are lowercase: app folder, app user, guard, notice, schedule, invitation, signing secret, API key, callers, call action, outbox, custom domain, path address, contact email, file store, schema change and maintenance. Usage, Signal and Action Contract keep their capitals.
 
-## Before the app runs
+## The two halves
 
-**Project.** The source lineage, schema, capability configuration and deployment history owned by a workspace member. Its sources open in the editor, and the CLI publishes them from a folder.
+**Konae.** The platform: the editor, the build agent, owner accounts, the owner's MCP on `/mcp` and the project list. An app is made and managed there.
 
-**Capsule.** The editable source of a Project taken as one unit. It is a nested source tree with an entrypoint, `app.js` or `src/main.ts`, plus optional `index.html` and `styles.css`, the schema in `schema.sql`, the only model of the database, which the Validation Gate and the Kernel check and run, and the Server Action declarations in `actions.json`. See [The Capsule](./capsule.md).
+**Kernel.** The server that runs apps: Server Actions, app accounts, files, schedules, notices, routes, calls and Usage. Konae contains one, and the `kernel` binary serves app folders with no Konae around it. It never opens an owner's records.
 
-**Server Action.** A named, deployed operation that authorizes a Runtime Actor before running SQL or recording a Signal. It is the deployed app's only database interface. It runs one SQL statement. See [Server Actions](./server-actions.md).
+**Owner.** A person with a Konae account who makes and manages apps, in the editor or through the owner's MCP. An app folder carries no owner, so an export leaves its owner behind.
 
-**Validation Gate.** The check every agent-proposed change must pass before it is applied to a Project. The Gate and the Kernel refuse the same Capsule with the same words. See [The Gate and the Kernel](./gate-and-kernel.md).
+**App user.** A person with an account in one app. The Kernel keeps the account in the app's `data/identity.sqlite` and gives it no role. An app that needs an administrator keeps roles in its own table and checks them in SQL.
 
-**Build Artifact.** The validated, immutable static output of a Project revision that a Deployment serves. It holds no source authority, runtime database access or administrative capability. Under the Kernel's Content Security Policy its own inline scripts and same-origin files load, and inline event handler attributes and other origins do not.
+**Runtime Actor.** Whoever calls a Deployment: a visitor without a session, an app user, or a program holding an API key.
 
-**Deployment.** The published, addressable instance of a Project with its own hostname, an optional custom domain, visibility, signup policy and database. Everything it is lives in one folder on the Kernel volume. Republishing replaces its Build Artifact and keeps its hostname and data.
+## The app and its files
 
-**Public Deployment.** A Deployment whose application shell may be opened without signing in. A signed-out visitor may call Server Actions declared `anonymous`. Public visibility grants no database access and no access to private files.
+**Project.** An app as Konae's project list knows it: its ID, its name, its owner and the sources the editor saves. Its ID names its app folder and its Deployment.
 
-**Private Deployment.** A Deployment whose application shell and runtime require a signed-in Runtime Actor before anything loads or runs. The HTTP route of an `anonymous` action still answers its callers.
+**App folder.** Everything an app is, in one layout that is the same on a laptop, inside the Kernel and in an export: `konae.json`, `app/`, `dist/`, `data/`, `actions.d.ts`, `action-contract.md`, `AGENTS.md`, `compose.yaml` and `.env.example`. `konae init` writes it, `konae dev` serves it, and the Kernel keeps each app in one under `apps/<id>/`. [The architecture](./architecture.md#the-app-folder) shows every path.
 
-**Project Owner.** An authenticated workspace member allowed to edit a Project and administer its data, schema, files, Usage and deployments.
+**Capsule.** The app's editable sources, `app/` of the app folder: its pages, styles and scripts, `schema.sql`, `actions.json` and an optional `package.json`. See [The Capsule](./capsule.md).
 
-**Runtime Actor.** Whoever calls a Deployment at runtime. It is an anonymous visitor, a signed-in app user, or a service holding an API key. Its permissions are evaluated by server-side actions and never imply Project ownership.
+**Server Action.** A named operation in `actions.json` and the only way a page reaches the database. The Kernel authorizes the Runtime Actor from the action's access and bindings, then runs its one SQL statement, records its Signal or queues its call. See [Server Actions](./server-actions.md).
 
-**Signup Policy.** The per-Deployment rule for who may create a Runtime Actor account. It is Open, Invitation only, Closed or Allowlist. See [Accounts and access](./accounts-and-access.md).
+**Validation Gate.** The editor's check of `schema.sql` and `actions.json` that a change must pass before Apply. It and the Kernel refuse with the same code and sentence. See [The Gate and the Kernel](./gate-and-kernel.md).
 
-**Agent Credential.** A Project Owner's revocable delegation that lets an external agent perform selected operations on selected Projects for a limited time. It grants no Runtime Actor identity.
+**Refusal.** What either door answers when the app's files break a rule: `{ code, message, hint }`, where `hint.fix` says whether the Capsule, the owner or the operator clears it.
+
+**Schema change.** The change the Kernel derives from `schema.sql` to a live database, at publish, at import and when the `kernel` binary starts an app folder. A new table, column or index applies. A dropped table, a dropped column or a retyped column applies only with the confirmation the plan names.
+
+**Build Artifact.** The static files in `dist/` with a manifest of their paths and hashes. The Kernel checks it and serves it under its Content Security Policy.
+
+## The published app
+
+**Deployment.** The published app on one installation: its generated hostname, optional custom domain and path address, visibility, Signup Policy and database. A publish replaces its Build Artifact and keeps its hostname and data.
+
+**Public Deployment.** A Deployment a visitor may open without a session. A visitor may call actions declared `anonymous` and read files uploaded as public. Visibility grants no access to private rows or files.
+
+**Private Deployment.** A Deployment whose pages and runtime need an app session. An HTTP route still answers the callers it declares.
+
+**Signup Policy.** Who may create an app account: Open, Allowlist, Invitation only or Closed. See [Accounts and access](./accounts-and-access.md).
+
+**Sign-in methods.** Password always, and Google once the owner sets the app's own Google client and turns it on.
+
+**Agent Credential.** An owner's delegated token for an agent, with an expiry, a set of projects and the permissions `read`, `write`, `publish`, `manage_users` and `export_data`.
 
 ## As the app grows
 
-**Guard.** A mutation's declared refusal, `"guard": "<message>"`. The Kernel answers it instead of `{ changes: 0 }` when the statement changes no row because the app's own rule in its `WHERE` said no.
+**Guard.** A mutation's `"guard": "<message>"`, which the Kernel answers as a refusal when the statement changes no row.
 
-**Notice.** The email a mutation declares with `notify`, queued as an email job when its statement changes a row. It never goes to an address from the input.
+**Notice.** The email a mutation declares with `notify`, queued when its statement changes a row. It goes to the app's contact email, to the calling account, or to the accounts a changed row names, and never to an address from the input.
 
-**Schedule.** A mutation's declaration that the Kernel's own timer runs it, for work that must happen when nobody asks. The mutation takes no input.
+**Contact email.** The address in `konae.json` where notices to `"owner"` go. The owner sets it in App settings or with `contact_email_set`.
 
-**Signal.** A named occurrence the Capsule declares on a Server Action. The Kernel records it when the action succeeds, next to Usage and apart from application rows. Only the Project Owner reads Signals.
+**Schedule.** A mutation's `"schedule"`, `{ "every": "15m" }` or `{ "daily": "02:00" }` in UTC, that only the Kernel's timer runs. The mutation takes no input.
 
-**Usage.** The Kernel-owned daily totals for one Deployment's authorized Runtime Interface operations. Only the Project Owner reads it.
+**Signal.** A named occurrence a Server Action declares, recorded next to Usage when the action succeeds. Only the owner reads Signals.
 
-**Invitation.** The Project Owner's offer of an account on one Deployment to one email, sent as a seven-day Challenge.
+**Usage.** The Kernel's daily totals for one Deployment, kept in `data/usage.sqlite`. Only the owner reads it.
 
-**Callers.** The kinds of caller an HTTP route takes, any of `signature`, `key` and `session`.
+**Invitation.** The owner's offer of an account in one app to one email, sent as a link that works once within seven days.
 
-**Signature Scheme.** How a route's signature is computed and where it travels. `konae` is the default. `hmac-body`, `timestamped` and `svix` follow the providers that send them.
+**Callers.** The kinds of caller an HTTP route takes: `signature`, `key` and `session`.
 
-**Signing Secret.** A value the Project Owner sets through the Admin Interface. It never appears in `actions.json`, a Build Artifact or an export.
+**Signature scheme.** How a route's signature is computed and where it travels: `konae` by default, or a provider's `hmac-body`, `timestamped` or `svix`.
 
-**API Key.** A secret the Project Owner issues for one Deployment so a program can call it as a Runtime Actor of kind service. It is sent as `Authorization: Bearer`. The Kernel stores its hash only.
+**Signing secret.** A value the owner sets with `secret_set` or `kernel secret set`, for a route, a call or the Google client. It never travels in `actions.json`, a Build Artifact or an export.
 
-**Call Action.** A Server Action of `"kind": "call"` that declares one HTTP request to another app or an outside service. The Kernel sends it from its own process, never from the browser.
+**API key.** A token the owner issues for one Deployment so a program can call its routes and read its files. The Kernel keeps only its hash, and an import revokes it.
 
-**Outbox.** The calls a Deployment's call actions queued, kept in `calls.sqlite` with their attempts and status. The Project Owner reads it with `calls_read`.
+**Call action.** A Server Action of `"kind": "call"` that declares one HTTP request, which the Kernel queues and sends from its own process.
 
-**SDK Module.** A namespace on `window.miniapp`, such as `auth`, `actions` or `files`, with a contract of calls, arguments, return values, refusals and limits. [The SDK reference](./sdk.md) is rendered from it.
+**Outbox.** The calls a Deployment queued, which the owner reads with `calls_read`.
 
-**Action Contract.** The generated description of a Capsule's Server Actions, `action-contract.json`. It is written from `actions.json` and `schema.sql`, never edited, and travels in the export. `konae conform` checks a backend against it.
+**SDK module.** A namespace on `window.miniapp`, such as `auth`, `actions` or `files`. [The SDK reference](./sdk.md) is rendered from its contract.
 
-**Custom Domain.** A hostname its owner controls on which one Deployment answers next to its generated hostname. The owner proves control with a TXT record.
+**Action Contract.** The generated description of a Capsule's Server Actions, `action-contract.json` and `action-contract.md`. `konae conform` checks a backend against it.
 
-**Package.** The export of one Deployment's state, which is its database, its accounts without sessions or email links, its API keys revoked at import, its files, and its Usage and Signals when it has any. A versioned manifest lists each component with its size and SHA-256.
+**Custom domain.** A hostname the owner proves with a TXT record, on which one Deployment answers as its own origin.
 
-**Maintenance.** The state of a Deployment that takes no writes. Its host shows a maintenance page, and its email waits.
+**Path address.** `<domain>/p/<id>`, or `<domain>/p/<name>` once named, on which one Deployment answers on an origin it shares with every other path address.
+
+## Taking the app elsewhere
+
+**Export.** The app folder handed over, with its database, accounts, files and Usage. It carries no owner, credential, signing secret, session or `.konae/`, and its API keys arrive revoked. The editor's Export, `konae export`, `konae pull` and `project_export` are the one export.
+
+**Import.** An export taken in: into a new app with its first release, into an existing app with `project_import` or `kernel import`, after a backup and never merging rows. `konae dev --reset` imports what `konae pull` exported.
+
+**Maintenance.** The state of a Deployment that takes no writes. Its host shows a maintenance page, and its email, calls and schedule wait. An owner moves an app with no lost write by maintenance, export and import.
 
 ## Words for running an installation
 
-These matter only to whoever operates a Kernel. `CONTEXT.md` defines each of them, and [Operate an installation](./operate.md) uses them.
+These matter only to whoever runs a Kernel or a Konae installation. `CONTEXT.md` defines each, and [Operate an installation](./operate.md) uses them: installation, operator, Kernel commands, runtime endpoint, owner's MCP, scratch copy, project list, installation home, account state, challenge, verification mode, setup key, invitation code, email job, sender preflight, copy and revocation record.
 
-- Konae Kernel, Runtime Interface, Admin Interface
-- Agent Workspace, Account, Account State, Workspace, Workspace Home
-- setup key, invitation code, Challenge, Verification Mode
-- email job, sender preflight, copy, revocation record
-
-A copy moves an installation. A package moves one app.
+A copy moves an installation. An export moves one app.
 
 ## npm packages
 
-An npm package is imported by name once the Capsule's `package.json` lists it with an exact version. The editor's build fetches it from esm.sh, `konae build` reads it from `node_modules`, and either way it goes into the app's bundle.
+A Capsule imports an npm package by name once its `package.json` lists it with an exact version. The editor's build fetches it from esm.sh, `konae build` reads it from `node_modules`, and either way it goes into the app's bundle.
 
 ## Read next
 

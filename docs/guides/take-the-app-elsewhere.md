@@ -47,7 +47,22 @@ my-app/
 
 ## Run it without Konae
 
-The `kernel` binary serves an exported folder as it is, with its `data/`. At startup it checks the folder as Konae checks a release, writes its own record into the folder's `.konae/`, and prints the app's address. People sign in with the passwords they have.
+The `kernel` binary serves an exported folder as it is, with its `data/`. At startup it checks the folder as Konae checks a release, applies the schema change `app/schema.sql` asks, writes its own record into the folder's `.konae/`, and prints the app's address. People sign in with the passwords they have.
+
+### On this machine
+
+Put the folder at `apps/<id>/` of a data directory, where `<id>` is the `id` in its `konae.json`, and start the binary from a Konae checkout:
+
+```sh
+cargo build --manifest-path kernel-rs/Cargo.toml --bin kernel
+mkdir -p /tmp/kernel-data/apps
+cp -R /tmp/my-app-export "/tmp/kernel-data/apps/$(bun -e 'console.log(require("/tmp/my-app-export/konae.json").id)')"
+KONAE_DATA_DIR=/tmp/kernel-data KONAE_PUBLIC_ORIGIN=http://localhost:8787 kernel-rs/target/debug/kernel
+```
+
+It prints `Serving <name> at http://<slug>.localhost:8787` and `Kernel listening on 8787`. `KONAE_KERNEL_PORT` changes the port. `bun run konae -- dev --dir /tmp/my-app-export` runs the same binary on the folder in place and restarts it when `app/` changes.
+
+### In a container
 
 1. Build the image from a Konae checkout, and push it to a registry the server can pull from.
 
@@ -63,9 +78,9 @@ The `kernel` binary serves an exported folder as it is, with its `data/`. At sta
     docker compose logs kernel
     ```
 
-    With the example settings the app answers at `http://<slug>.localhost:8787`.
+    With the example settings the app answers at `http://<slug>.localhost:8787`. `KONAE_PORT` and `KONAE_PUBLIC_ORIGIN` in `.env` change the port.
 
-The Kernel runs as the person who owns the folder, so the files it writes into it stay theirs. Without Docker, `bun run konae -- dev --dir /tmp/my-app-export` from a Konae checkout runs the same binary on the folder.
+The Kernel runs as the person who owns the folder, so the files it writes into it stay theirs.
 
 The Kernel refuses a folder whose routes sign with a secret it does not hold, because secrets never travel. Set each one, then restart:
 
@@ -76,7 +91,7 @@ docker compose restart kernel
 
 ### Manage the app from the machine
 
-Outside Konae, the `kernel` binary's commands do what Konae's editor does for app users, keys and secrets. Each one calls the function the editor's tool calls, refuses with the same words, and prints the answer as JSON. They work while the Kernel serves, and the Kernel reads the Signup Policy from `konae.json` again when a command changes it.
+Outside Konae, the `kernel` binary's commands do what Konae's editor does for app users, keys and secrets. Each one calls the function the editor's tool calls, refuses with the same words, and prints the answer as JSON. They work while the Kernel serves, and the Kernel reads the Signup Policy from `konae.json` again when a command changes it. Under Compose, run each as `docker compose exec kernel kernel <command>`. On this machine, run the binary with the same `KONAE_DATA_DIR`, such as `KONAE_DATA_DIR=/tmp/kernel-data kernel-rs/target/debug/kernel users`.
 
 ```sh
 docker compose exec kernel kernel users
@@ -102,6 +117,10 @@ The page and its Server Actions answer from the same host. The SDK calls `/_kona
 An export carries the custom hostname without its verification token, so the destination issues a new token and the name verifies again there.
 
 ## Import on the destination
+
+Into an app that already exists on another Konae, open App settings under **More** in the editor and choose the exported tar under **Import**. It backs up what it replaces first, never merges rows, and keeps the app's Signup Policy, address, secrets, sessions and API keys. Over MCP, `project_import` does the same with `replace` set to `sources`, `data` or `both`. On a bare `kernel`, stop it and run `kernel import <folder>`.
+
+Into a new app over MCP:
 
 1. Run `project_create` with the same `projectId`. Then run `secret_set` for every secret the app's routes sign with. A release that signs with an unset secret is refused.
 2. For each part of the data the manifest lists, call `transfer_begin` with `size`, `sha256`, `projectId` and its name as `component`. Call `transfer_write` for each block, then `transfer_complete`.
