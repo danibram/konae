@@ -302,20 +302,25 @@ async fn authorize_page(
             })
         })
         .unwrap_or_default();
+    // Post to this origin by absolute URL, and name it in form-action. Cursor's
+    // OAuth webview can leave 'self' not matching app.konae.es, which blocked
+    // Allow access with form-action 'self' alone.
+    let pub_origin = origin(&state, &headers);
     let body = format!(
-        "<!doctype html><html lang=en><meta charset=utf-8><title>Authorize Konae access</title><main><h1>Allow access for {destination}?</h1><p>Approving sends an access token to <strong>{destination}</strong>. Only continue if you started this sign-in from an app you trust at that address.</p><p>The client calls itself \"{}\". Clients register themselves, so Konae has not verified this name.</p><p>The token grants {} access to <strong>all of your projects</strong> for one hour. You can revoke it on your owner account page in the editor.</p><form method=post action=/oauth/authorize>{fields}<input type=hidden name=csrf value=\"{csrf}\"><button>Allow access</button></form><a href=/_konae/owner/login>Cancel</a></main></html>",
+        "<!doctype html><html lang=en><meta charset=utf-8><title>Authorize Konae access</title><main><h1>Allow access for {destination}?</h1><p>Approving sends an access token to <strong>{destination}</strong>. Only continue if you started this sign-in from an app you trust at that address.</p><p>The client calls itself \"{}\". Clients register themselves, so Konae has not verified this name.</p><p>The token grants {} access to <strong>all of your projects</strong> for one hour. You can revoke it on your owner account page in the editor.</p><form method=post action=\"{authorize}\">{fields}<input type=hidden name=csrf value=\"{csrf}\"><button>Allow access</button></form><a href=/_konae/owner/login>Cancel</a></main></html>",
         escape(client["client_name"].as_str().unwrap()),
         escape(a.get("scope").unwrap()),
         destination = escape(&destination),
+        authorize = escape(&format!("{pub_origin}/oauth/authorize")),
+    );
+    let csp = format!(
+        "default-src 'none'; form-action 'self' {pub_origin}; frame-ancestors 'none'; base-uri 'none'"
     );
     (
         [
-            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-store"),
-            (
-                header::CONTENT_SECURITY_POLICY,
-                "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-            ),
+            (header::CONTENT_TYPE, "text/html; charset=utf-8".into()),
+            (header::CACHE_CONTROL, "no-store".into()),
+            (header::CONTENT_SECURITY_POLICY, csp),
         ],
         body,
     )
