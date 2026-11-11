@@ -123,7 +123,7 @@ The documentation is markdown under [`docs/`](./docs/README.md). The docs site i
 | Do one task | The guides in [`docs/guides/`](./docs/guides/) |
 | Drive it from an agent or a script | [MCP tools](./docs/mcp-tools.md), [the MCP guide](./docs/mcp.md), [the walkthrough](./docs/mcp-walkthrough.md), [the CLI](./docs/cli.md) |
 | Know the numbers and the gaps | [Limits](./docs/limits.md), [Named divergences](./docs/divergences.md) |
-| Operate a server | [Operate an installation](./docs/operate.md), [the architecture](./docs/architecture.md) |
+| Operate a server | [Operate an installation](./docs/operate.md), [Releasing](./docs/releasing.md), [the architecture](./docs/architecture.md) |
 | See why it is built this way | [The decision records](./docs/adr/README.md) |
 
 `CONTEXT.md` holds the project's language, and `AGENTS.md` the rules for agents that work on this repository.
@@ -152,11 +152,11 @@ Some integration tests copy to an S3 store. They read `KONAE_TEST_S3_ENDPOINT`, 
 
 ## Status
 
-Konae runs as a self-hosted installation and has no tagged release yet. These are missing:
+Konae runs as a self-hosted installation. Version tags publish `ghcr.io/danibram/konae` and `ghcr.io/danibram/konae-kernel`; [Releasing](./docs/releasing.md) is the cut process, and [CHANGELOG.md](./CHANGELOG.md) holds the history. These are still missing:
 
 - A production recipe. The repository ships a local stack, and [Operate an installation](./docs/operate.md#before-a-kernel-is-reachable) lists what an operator sets, but TLS and the proxy are the operator's own.
 - Teams. A project has one owner.
-- Release history. A publish replaces the app's built files, with no rollback.
+- App release history. A publish replaces the app's built files, with no rollback.
 - Quotas shown to owners, alerts and account closing.
 - `"access": "granted"` on an action. Both doors refuse it until the Kernel supports deployment grants.
 

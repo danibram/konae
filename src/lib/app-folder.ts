@@ -95,7 +95,7 @@ node_modules/
 `;
 
 const envExample = `# The Kernel's settings for compose.yaml. Copy to .env, which stays on this machine.
-# The image to run. Set it to where you published the image Dockerfile.kernel builds.
+# The image to run. A release publishes ghcr.io/danibram/konae-kernel:<version>.
 KONAE_KERNEL_IMAGE=
 KONAE_PORT=8787
 KONAE_PUBLIC_ORIGIN=http://localhost:8787
@@ -110,7 +110,7 @@ KONAE_MAIL_TRANSPORT=
 function composeFile(settings: AppSettings) {
   return `# Runs the Kernel on this folder. The Kernel opens it as apps/${settings.id}
 # of its data directory, checks it as a release, and serves it. Set
-# KONAE_KERNEL_IMAGE in .env to the image Dockerfile.kernel builds.
+# KONAE_KERNEL_IMAGE in .env to a published or local Kernel image.
 services:
   kernel:
     image: \${KONAE_KERNEL_IMAGE:?Set KONAE_KERNEL_IMAGE in .env to the Kernel image.}

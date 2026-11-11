@@ -32,6 +32,7 @@
     ] },
     { "section": "Operate", "pages": [
       "operate.md",
+      "releasing.md",
       { "page": "architecture.md", "label": "Architecture" },
       "clerk-creator-access.md",
       { "page": "adr/README.md", "label": "Decision records" }

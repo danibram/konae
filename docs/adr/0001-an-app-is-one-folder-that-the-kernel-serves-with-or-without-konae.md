@@ -59,5 +59,5 @@ Secrets live in `data/secrets.sqlite`, because each secret has a use (`route`, `
 
 - No app ran on any installation when this shape was adopted, so no older format is kept alive.
 - An app built outside the editor arrives with its own `dist/`. When the editor's browser build can build `app/`, the app is edited in the web. When it cannot, Konae serves the `dist/` that came with it and the editor says the app is built on its owner's machine.
-- The Kernel image is built locally with `Dockerfile.kernel` and is not published. Publishing it needs a registry, a name, builds for more than one architecture and a version tag.
+- The Kernel image is built with `Dockerfile.kernel`. Releases publish it as `ghcr.io/danibram/konae-kernel:<version>` for `linux/amd64` and `linux/arm64`; see [Releasing](../releasing.md).
 - This record leaves open an MCP endpoint per app for a user's agent, a plain HTTP runtime endpoint, and merging Konae's two databases.

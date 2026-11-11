@@ -1,0 +1,130 @@
+# Builds and pushes the two install images when a version tag lands.
+# See docs/releasing.md.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: danibram
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Read version from tag
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "Tag must look like vX.Y.Z, got ${tag}" >&2
+              exit 1
+              ;;
+          esac
+          version="${tag#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          major="${version%%.*}"
+          rest="${version#*.}"
+          minor="${rest%%.*}"
+          echo "major_minor=${major}.${minor}" >> "$GITHUB_OUTPUT"
+
+      - name: Check versions match the tag
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          pkg="$(node -p "require('./package.json').version")"
+          cargo="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p;}' kernel-rs/Cargo.toml | head -1)"
+          if [ "$pkg" != "$version" ] || [ "$cargo" != "$version" ]; then
+            echo "Tag v${version} does not match package.json (${pkg}) or kernel-rs/Cargo.toml (${cargo})." >&2
+            exit 1
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract changelog section
+        id: notes
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          outfile="${RUNNER_TEMP}/release-notes.md"
+          awk -v ver="$version" '
+            $0 ~ "^## \\[" ver "\\]" { grab=1; next }
+            grab && $0 ~ /^## \[/ { exit }
+            grab { print }
+          ' CHANGELOG.md > "$outfile"
+          if [ ! -s "$outfile" ]; then
+            echo "No ## [${version}] section in CHANGELOG.md." >&2
+            exit 1
+          fi
+          echo "path=${outfile}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push konae
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.konae
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/konae:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/konae:${{ steps.version.outputs.major_minor }}
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/konae:latest
+          labels: |
+            org.opencontainers.image.title=konae
+            org.opencontainers.image.description=Konae: Kernel with owner accounts, MCP and the project list
+            org.opencontainers.image.source=https://github.com/danibram/konae
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=konae
+          cache-to: type=gha,mode=max,scope=konae
+
+      - name: Build and push konae-kernel
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.kernel
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/konae-kernel:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/konae-kernel:${{ steps.version.outputs.major_minor }}
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/konae-kernel:latest
+          labels: |
+            org.opencontainers.image.title=konae-kernel
+            org.opencontainers.image.description=Kernel alone: serves app folders without Konae
+            org.opencontainers.image.source=https://github.com/danibram/konae
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=konae-kernel
+          cache-to: type=gha,mode=max,scope=konae-kernel
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: false
