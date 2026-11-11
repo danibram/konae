@@ -6,11 +6,15 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-11
+
+### Added
+
+- First published release images: `ghcr.io/danibram/konae:0.1.0` and `ghcr.io/danibram/konae-kernel:0.1.0` for `linux/amd64`.
+- Release workflow and Changelog process. Builds `linux/amd64` only; arm64 under QEMU was too slow for a tagged release.
+
 ## [0.0.1] - 2026-11-11
 
 ### Added
 
-- Interim `linux/amd64` images for an early deploy: `ghcr.io/danibram/konae:0.0.1` and `ghcr.io/danibram/konae-kernel:0.0.1`.
-- Release workflow that builds `linux/amd64` only. Emulating arm64 under QEMU made the first tagged build too slow to wait on.
-
-`0.1.0` is next: same images under that tag once this interim is out.
+- Interim `linux/amd64` images used to deploy before this release: `ghcr.io/danibram/konae:0.0.1` and `ghcr.io/danibram/konae-kernel:0.0.1`.
