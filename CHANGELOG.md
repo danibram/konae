@@ -6,6 +6,12 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-12
+
+### Fixed
+
+- OAuth consent Allow works in Cursor's OAuth webview: the form posts to the public origin and CSP `form-action` names that origin, so `form-action 'self'` alone no longer blocks the POST.
+
 ## [0.1.0] - 2026-11-11
 
 ### Added
