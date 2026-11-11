@@ -67,10 +67,10 @@ It prints `Serving <name> at http://<slug>.localhost:8787` and `Kernel listening
 1. Pick a Kernel image. A release publishes `ghcr.io/danibram/konae-kernel:<version>`. To build from a checkout instead:
 
     ```sh
-    docker build -f Dockerfile.kernel -t ghcr.io/danibram/konae-kernel:0.1.0 .
+    docker build -f Dockerfile.kernel -t ghcr.io/danibram/konae-kernel:0.0.1 .
     ```
 
-2. In the exported folder, copy `.env.example` to `.env`. Set `KONAE_KERNEL_IMAGE` to that image (for example `ghcr.io/danibram/konae-kernel:0.1.0`), and a mail transport if the app sends invitations or password resets. The Kernel seals queued email links with a key it writes to `mail-key` in its volume on the first start.
+2. In the exported folder, copy `.env.example` to `.env`. Set `KONAE_KERNEL_IMAGE` to that image (for example `ghcr.io/danibram/konae-kernel:0.0.1`), and a mail transport if the app sends invitations or password resets. The Kernel seals queued email links with a key it writes to `mail-key` in its volume on the first start.
 3. Start it, and read the address it prints.
 
     ```sh

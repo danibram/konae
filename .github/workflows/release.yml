@@ -18,7 +18,7 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -52,9 +52,6 @@ jobs:
             exit 1
           fi
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -81,12 +78,14 @@ jobs:
           fi
           echo "path=${outfile}" >> "$GITHUB_OUTPUT"
 
+      # linux/amd64 only for now. Emulating arm64 under QEMU made the first
+      # release take longer than a deploy wait. Add arm64 with a native runner later.
       - name: Build and push konae
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.konae
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.OWNER }}/konae:${{ steps.version.outputs.version }}
@@ -106,7 +105,7 @@ jobs:
         with:
           context: .
           file: Dockerfile.kernel
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.OWNER }}/konae-kernel:${{ steps.version.outputs.version }}

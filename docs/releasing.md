@@ -9,7 +9,7 @@ A release is a git tag `vX.Y.Z` whose version matches `package.json` and the Car
 | Konae (Kernel + owners, MCP, project list) | `Dockerfile.konae` | `ghcr.io/danibram/konae:X.Y.Z` |
 | Kernel alone (exported app folders) | `Dockerfile.kernel` | `ghcr.io/danibram/konae-kernel:X.Y.Z` |
 
-Each push also tags `X.Y` and `latest`. Architectures are `linux/amd64` and `linux/arm64`. The editor image in `Dockerfile` stays local to Compose and is not published.
+Each push also tags `X.Y` and `latest`. The published architecture is `linux/amd64`. The editor image in `Dockerfile` stays local to Compose and is not published.
 
 After the first release, set each package's visibility to Public under the repository's Packages settings, or GHCR keeps them private to the account.
 

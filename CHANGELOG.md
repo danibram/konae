@@ -6,9 +6,11 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-11-11
+## [0.0.1] - 2026-11-11
 
 ### Added
 
-- First tagged release of Konae and the Kernel.
-- GitHub Actions release that publishes `ghcr.io/danibram/konae` and `ghcr.io/danibram/konae-kernel` for each `vX.Y.Z` tag (`linux/amd64`, `linux/arm64`).
+- Interim `linux/amd64` images for an early deploy: `ghcr.io/danibram/konae:0.0.1` and `ghcr.io/danibram/konae-kernel:0.0.1`.
+- Release workflow that builds `linux/amd64` only. Emulating arm64 under QEMU made the first tagged build too slow to wait on.
+
+`0.1.0` is next: same images under that tag once this interim is out.
