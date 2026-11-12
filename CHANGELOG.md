@@ -6,6 +6,12 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-12
+
+### Fixed
+
+- OAuth consent Allow completes in Chrome/Cursor: CSP `form-action` also names the validated client `redirect_uri` origin, so the post-consent 303 is not blocked. Chrome's console still blames the authorize URL, which made the earlier public-origin-only fix look sufficient.
+
 ## [0.1.1] - 2026-11-12
 
 ### Fixed
