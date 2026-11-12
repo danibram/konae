@@ -6,6 +6,14 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-12
+
+### Added
+
+- `manifest.fileAccess: "app-users"` shares every uploaded file with signed-in users of that app, including earlier uploads, without rewriting the index. Lists, `GET /_konae/files/<id>` and visibility changes follow the policy; API keys cannot read those files; the uploader still deletes. The Validation Gate, editor Users panel, preview host and SDK refuse any other visibility while the policy is on. Removing it restores each file's stored visibility.
+- Path addresses treat `fileAccess: "app-users"` as an app with accounts, so `path_set` needs `acceptSharedOrigin` the same way as private apps or non-anonymous actions.
+- Example apps `examples/politica-de-privacidad` and `examples/terminos-y-condiciones` for the installation's legal pages at `/p/politica-de-privacidad/` and `/p/terminos-y-condiciones/`.
+
 ## [0.1.2] - 2026-11-12
 
 ### Fixed
