@@ -293,9 +293,8 @@ async fn authorize_page(
         })
         .collect::<String>();
     // authorization() already matched redirect_uri against the registration.
-    let redirect = url::Url::parse(a.get("redirect_uri").map(String::as_str).unwrap_or("")).ok();
-    let destination = redirect
-        .as_ref()
+    let destination = url::Url::parse(a.get("redirect_uri").map(String::as_str).unwrap_or(""))
+        .ok()
         .and_then(|url| {
             url.host_str().map(|host| match url.port() {
                 Some(port) => format!("{host}:{port}"),
@@ -303,22 +302,11 @@ async fn authorize_page(
             })
         })
         .unwrap_or_default();
-    // Chrome applies form-action to every hop after the consent POST, including
-    // the 303 to the client's redirect_uri. Its console still names this page's
-    // action URL, which is why the violation looks like a same-origin block.
-    // Name the public origin (Cursor webviews can leave 'self' unmatched) and
-    // the already-validated redirect origin.
+    // Chromium applies form-action to the whole redirect chain after Allow.
+    // Cursor's registered callback returns a 308 to another origin, which an
+    // origin-specific policy blocks. default-src 'none' keeps scripts out;
+    // the POST target and redirect_uri stay server-chosen.
     let pub_origin = origin(&state, &headers);
-    let redirect_origin = redirect
-        .as_ref()
-        .and_then(csp_form_origin)
-        .filter(|value| value != &pub_origin)
-        .unwrap_or_default();
-    let form_action = if redirect_origin.is_empty() {
-        format!("'self' {pub_origin}")
-    } else {
-        format!("'self' {pub_origin} {redirect_origin}")
-    };
     let body = format!(
         "<!doctype html><html lang=en><meta charset=utf-8><title>Authorize Konae access</title><main><h1>Allow access for {destination}?</h1><p>Approving sends an access token to <strong>{destination}</strong>. Only continue if you started this sign-in from an app you trust at that address.</p><p>The client calls itself \"{}\". Clients register themselves, so Konae has not verified this name.</p><p>The token grants {} access to <strong>all of your projects</strong> for one hour. You can revoke it on your owner account page in the editor.</p><form method=post action=\"{authorize}\">{fields}<input type=hidden name=csrf value=\"{csrf}\"><button>Allow access</button></form><a href=/_konae/owner/login>Cancel</a></main></html>",
         escape(client["client_name"].as_str().unwrap()),
@@ -326,9 +314,7 @@ async fn authorize_page(
         destination = escape(&destination),
         authorize = escape(&format!("{pub_origin}/oauth/authorize")),
     );
-    let csp = format!(
-        "default-src 'none'; form-action {form_action}; frame-ancestors 'none'; base-uri 'none'"
-    );
+    let csp = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
     (
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8".into()),
@@ -492,20 +478,6 @@ fn oauth_error(kind: &str, description: &str) -> Response {
         .into_response()
 }
 
-/// Scheme + host (+ port) for a CSP `form-action` host-source. Only emits
-/// origins that `valid_redirect` already accepts, so the value cannot break
-/// out of the directive.
-fn csp_form_origin(url: &url::Url) -> Option<String> {
-    if !valid_redirect(url.as_str()) {
-        return None;
-    }
-    let host = url.host_str()?;
-    Some(match url.port() {
-        Some(port) => format!("{}://{host}:{port}", url.scheme()),
-        None => format!("{}://{host}", url.scheme()),
-    })
-}
-
 fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -518,20 +490,66 @@ fn escape(s: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn csp_form_origin_keeps_scheme_host_and_port() {
-        assert_eq!(
-            csp_form_origin(&url::Url::parse("https://www.cursor.com/agents/mcp/oauth/callback").unwrap()).as_deref(),
-            Some("https://www.cursor.com")
+    #[tokio::test]
+    async fn consent_allows_cursor_redirect_without_form_action() {
+        use super::super::accounts::tests::{cookie_of, fixture, request, PASSWORD};
+        use tower::ServiceExt;
+
+        let fixture = fixture(auth::Verification::Local, false);
+        let state = Konae::for_test(fixture.state.clone());
+        let signup = mcp::owner_signup(
+            State(state.clone()),
+            request("POST", "localhost", "/_konae/owner/signup", json!({
+                "email": "owner@example.test", "password": PASSWORD, "setupKey": "test-admin"
+            })),
+        ).await;
+        assert_eq!(signup.status(), StatusCode::OK);
+        let cookie = cookie_of(&signup).unwrap();
+        // The registered www callback returns a 308 to the cursor.com origin.
+        let callback = "https://www.cursor.com/agents/mcp/oauth/callback";
+        let client = json!({"client_name":"Cursor", "redirect_uris":[callback]});
+        mcp::store(&state).unwrap().execute(
+            "INSERT INTO oauth_clients(id,body,created) VALUES (?1,?2,?3)",
+            params!["cursor", client.to_string(), now_ms()],
+        ).unwrap();
+        let args = [
+            ("client_id", "cursor"), ("redirect_uri", callback), ("response_type", "code"),
+            ("code_challenge_method", "S256"),
+            ("code_challenge", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            ("scope", "read"), ("resource", "http://localhost/mcp"), ("state", "cursor-state"),
+        ];
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(args).finish();
+        let router = routes().with_state(state);
+        let get = Request::builder().uri(format!("/oauth/authorize?{query}"))
+            .header(header::HOST, "localhost").header(header::COOKIE, &cookie)
+            .body(Body::empty()).unwrap();
+        let consent = router.clone().oneshot(get).await.unwrap();
+        assert_eq!(consent.status(), StatusCode::OK);
+        let csp = consent.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+        assert!(!csp.contains("form-action"));
+        for directive in ["default-src 'none'", "frame-ancestors 'none'", "base-uri 'none'"] {
+            assert!(csp.contains(directive));
+        }
+        let html = String::from_utf8(
+            axum::body::to_bytes(consent.into_body(), usize::MAX).await.unwrap().to_vec(),
+        ).unwrap();
+        let csrf = html.split("name=csrf value=\"").nth(1).unwrap().split('"').next().unwrap();
+        let form = format!("{query}&csrf={csrf}");
+        let changed_form = form.replace(
+            "www.cursor.com%2Fagents", "cursor.com%2Fagents",
         );
-        assert_eq!(
-            csp_form_origin(&url::Url::parse("http://127.0.0.1:9999/callback").unwrap()).as_deref(),
-            Some("http://127.0.0.1:9999")
-        );
-        assert_eq!(
-            csp_form_origin(&url::Url::parse("http://evil.example/callback").unwrap()),
-            None
-        );
+        let post = |body: String| Request::builder().method("POST").uri("/oauth/authorize")
+            .header(header::HOST, "localhost").header(header::COOKIE, &cookie)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(body)).unwrap();
+        assert_eq!(router.clone().oneshot(post(changed_form)).await.unwrap().status(), StatusCode::BAD_REQUEST);
+        let response = router.oneshot(post(form)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = url::Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+        assert_eq!(format!("{}{}", location.origin().ascii_serialization(), location.path()), callback);
+        assert!(location.query_pairs().any(|(key, value)| key == "state" && value == "cursor-state"));
+        assert!(location.query_pairs().any(|(key, value)| key == "code" && !value.is_empty()));
     }
 
     #[test]
