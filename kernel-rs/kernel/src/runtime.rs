@@ -794,6 +794,10 @@ pub async fn runtime_call(
 }
 
 
+/// True when the request Host is one this installation answers on: the public
+/// origin, an own origin, a generated app hostname under `host_suffix`, or a
+/// local development name. Custom domains and the path host are checked beside
+/// this at the runtime door.
 pub fn valid_host(state: &AppState, headers: &HeaderMap) -> bool {
     let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
         return false;
@@ -801,21 +805,26 @@ pub fn valid_host(state: &AppState, headers: &HeaderMap) -> bool {
     let Ok(url) = url::Url::parse(&format!("http://{host}")) else {
         return false;
     };
-    let Some(host) = url.host_str() else {
+    let Some(host) = url.host_str().map(str::to_ascii_lowercase) else {
         return false;
     };
     let public = url::Url::parse(&state.public_origin).ok();
     let configured: Vec<url::Url> = state.own_origins.iter().filter_map(|s| url::Url::parse(s).ok()).collect();
-    ["localhost", "127.0.0.1", "[::1]", "app.localhost"].contains(&host)
+    let suffix = state.host_suffix.trim_start_matches('.').to_ascii_lowercase();
+    ["localhost", "127.0.0.1", "[::1]", "app.localhost"].contains(&host.as_str())
         || host.ends_with(".localhost")
-        || public.as_ref().is_some_and(|u| u.host_str() == Some(host))
+        || public.as_ref().is_some_and(|u| u.host_str().is_some_and(|h| h.eq_ignore_ascii_case(&host)))
         || configured
             .iter()
-            .any(|u| u.host_str() == Some(host))
+            .any(|u| u.host_str().is_some_and(|h| h.eq_ignore_ascii_case(&host)))
         || public
             .as_ref()
             .and_then(|u| u.host_str())
-            .is_some_and(|suffix| host.ends_with(&format!(".{suffix}")))
+            .is_some_and(|pub_host| host.ends_with(&format!(".{}", pub_host.to_ascii_lowercase())))
+        // With KONAE_DOMAIN, apps answer on <slug>.<domain> while the editor is
+        // on app.<domain>. The public-origin rule above only covers the editor
+        // host tree; generated hostnames need the suffix.
+        || (!suffix.is_empty() && host.ends_with(&format!(".{suffix}")))
 }
 
 
@@ -838,6 +847,8 @@ pub fn origin(state: &AppState, headers: &HeaderMap) -> String {
 
 #[cfg(test)]
 mod tests {
+    use axum::http::{header, HeaderMap};
+
     /// Every tool the instructions name is one the runtime endpoint serves.
     #[test]
     fn the_instructions_name_only_runtime_tools() {
@@ -850,5 +861,26 @@ mod tests {
         for word in named {
             assert!(served.iter().any(|name| name == word), "{word} is not a runtime tool");
         }
+    }
+
+    fn headers(host: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, host.parse().unwrap());
+        headers
+    }
+
+    /// With KONAE_DOMAIN the editor is on app.<domain> and apps are on
+    /// <slug>.<domain>. The runtime must accept both Host trees.
+    #[test]
+    fn valid_host_accepts_a_generated_app_hostname() {
+        let root = std::env::temp_dir().join(format!("konae-valid-host-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut state = crate::AppState::for_test(&root);
+        state.public_origin = "https://app.konae.es".into();
+        state.host_suffix = "konae.es".into();
+        assert!(super::valid_host(&state, &headers("kamynando2.konae.es")));
+        assert!(super::valid_host(&state, &headers("app.konae.es")));
+        assert!(!super::valid_host(&state, &headers("evil.example")));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -275,25 +275,72 @@ async function readCapsuleFile(root: string, relative: string): Promise<string |
 
 async function bundleModule(root: string, entry: string) {
   // absWorkingDir names each bundled module by its Capsule path, which the build then drops.
-  const result = await build({ entryPoints: [path.join(appDir(root), entry)], absWorkingDir: path.resolve(appDir(root)), bundle: true, write: false, platform: "browser", format: "esm", target: "es2022", outdir: "out" });
+  const result = await build({ entryPoints: [path.join(appDir(root), entry)], absWorkingDir: path.resolve(appDir(root)), bundle: true, write: false, platform: "browser", format: "esm", target: "es2022", outdir: "out", jsx: "automatic" });
   const script = result.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
   if (script === undefined) throw Error("The local builder produced no JavaScript.");
   return { script, styles: result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? "" };
 }
 
+/** True when the app folder's package.json names a build script that writes dist/. */
+async function hasPackageBuild(root: string) {
+  try {
+    const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as { scripts?: Record<string, string> };
+    return typeof manifest.scripts?.build === "string";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/** Packs an existing dist/ into the artifact shape a release uploads. */
+async function artifactFromDist(root: string, prefix = ""): Promise<{ files: Record<string, string>; encodings: Record<string, string> }> {
+  const files: Record<string, string> = {};
+  const encodings: Record<string, string> = {};
+  const dist = path.join(root, DIST_FOLDER);
+  for (const entry of await readdir(path.join(dist, prefix), { withFileTypes: true })) {
+    if (entry.name.startsWith(".")) continue;
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      const nested = await artifactFromDist(root, relative);
+      Object.assign(files, nested.files);
+      Object.assign(encodings, nested.encodings);
+      continue;
+    }
+    const bytes = new Uint8Array(await readFile(path.join(dist, relative)));
+    try {
+      files[relative] = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      files[relative] = Buffer.from(bytes).toString("base64");
+      encodings[relative] = "base64";
+    }
+  }
+  return { files, encodings };
+}
+
 /**
  * Builds `app/` into `dist/` by the static publishing contract in
  * src/lib/static-artifact.js, the rules the editor's build runs too.
+ * When the folder has package.json with a build script (from init), that
+ * script writes dist/ and this packs it; otherwise the built-in bundler runs.
  */
 export async function buildLocal(root: string) {
   const files = await sources(root);
+  if (await hasPackageBuild(root)) {
+    const build = Bun.spawn(["npm", "run", "build"], { cwd: root, stdout: "inherit", stderr: "inherit" });
+    if ((await build.exited) !== 0) throw Error("npm run build failed.");
+    const packed = await artifactFromDist(root);
+    if (!packed.files["index.html"]) throw Error("npm run build wrote no dist/index.html.");
+    const artifact = { version: 1 as const, entrypoint: "index.html", files: packed.files, encodings: Object.keys(packed.encodings).length ? packed.encodings : undefined };
+    return { artifact, files };
+  }
   const settings = await readSettings(root).catch(() => undefined);
   const sdk = await readFile(path.join(toolRoot, "src/mcp/runtime.js"), "utf8");
+  const entry = files["src/main.tsx"] !== undefined ? "src/main.tsx" : files["src/main.ts"] !== undefined ? "src/main.ts" : "app.js";
   const artifact = await assembleStaticArtifact({
     paths: await capsulePaths(root),
     read: (relative) => readCapsuleFile(root, relative),
     compile: async () => {
-      const { script, styles } = await bundleModule(root, files["src/main.ts"] !== undefined ? "src/main.ts" : "app.js");
+      const { script, styles } = await bundleModule(root, entry);
       return { script, styles: [files["styles.css"] ?? "", styles].join("\n") };
     },
     bundle: (relative) => bundleModule(root, relative),

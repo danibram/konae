@@ -6,6 +6,13 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-11-12
+
+### Fixed
+
+- The app runtime MCP door accepts generated hostnames under `KONAE_HOST_SUFFIX` (for example `kamynando2.konae.es` when the editor is on `app.konae.es`). Without that, every published app got `Cross-origin or unrecognized-host MCP request rejected.` on `/_konae/mcp` after sign-in.
+- `konae build` and `konae publish` run the folder's `npm run build` when `package.json` names one, and accept `src/main.tsx` as the entry for the built-in bundler.
+
 ## [0.1.5] - 2026-11-12
 
 ### Changed
