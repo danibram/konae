@@ -9,8 +9,8 @@ await miniapp.auth.signOut();                                    // revoke this 
 const rows = await miniapp.actions.call("tasks.list");           // array of row objects
 await miniapp.actions.call("tasks.create", { title });           // { changes, lastInsertId }
 await miniapp.actions.call("lesson.finish", { lesson });         // a signal action: { recorded: true }
-const files = await miniapp.files.list();                        // that user's private files, plus public files
-const stored = await miniapp.files.upload(file);                 // private to the signed-in user
+const files = await miniapp.files.list();                        // files visible to the current visitor or app user
+const stored = await miniapp.files.upload(file);                 // uses the app's file policy
 const shared = await miniapp.files.upload(file, { visibility: "public" });
 image.src = await miniapp.files.url(photo.file_id);              // "/_konae/files/<id>", with the base path in front on a path address
 const text = await (await fetch(await miniapp.files.url(note.id))).text();
@@ -124,13 +124,15 @@ Editor preview: Ignores the Deployment's visibility and rate limits, and keeps i
 
 ## miniapp.files
 
-Small files stored by the Kernel for one Deployment. A file is private to the user who uploaded it unless the upload asked for public.
-Only the uploader can list or read a private file.
+Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.
+By default, only the uploader can list or read a private file.
 On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.
 files.list and files.upload download over MCP, check the SHA-256 and return a Blob URL. The page's policy allows connect-src 'self' only, so fetch cannot read a Blob URL again. To fetch a file, or to show one without downloading every file, use files.url. It returns the file's path GET /_konae/files/<id>, under the page's base path, on the app's own origin, which img, fetch and a link all reach.
 The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the Deployment's file quota and its ID answers File not found from then on, through every door.
 The operator of the installation sets the per-file limit and the Deployment's file quota. The defaults are 2 MiB per file and 20 MiB per Deployment, and a refusal names the limits in force. Do not promise the defaults in an app's text.
 A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.
+
+Declared with "fileAccess" in manifest: Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights.
 
 miniapp.files.list(): List and download every file the current actor may read. Returns an array of { id, name, type, size, visibility, createdAt, ownerId, url }. ownerId is present only on files the caller uploaded. url is a Blob URL; it keeps the type for image/png, image/jpeg, image/gif, image/webp and image/avif and is application/octet-stream otherwise.
 Refusals:
@@ -149,7 +151,8 @@ miniapp.files.upload(file, options): Store a File or Blob for the signed-in user
 Needs a signed-in user.
 Refusals:
 - "authentication-required" when no one is signed in
-- "File visibility must be private or public." when visibility is anything other than "private" or "public"; the SDK refuses before it sends anything
+- "File visibility must be private or public." when the visibility is unknown, or app-users was requested in an app without that policy
+- "File visibility is fixed to app-users by this app." when the app requires app-users and the caller specifies private or public
 - "Files must be between 1 byte and <limit>." when the file is empty or larger than the installation's per-file limit, which the message names
 - "This deployment has reached its <limit> file quota." when the Deployment's files would exceed the installation's file quota together, which the message names
 - "File not found." when the file was removed or the actor may not read it
@@ -165,7 +168,7 @@ Limits:
 - the name is cut to 180 characters with / and \\ replaced by -; a type of 128 characters or more, or with a character other than a letter, a digit or one of !#$&^_.+-/, becomes application/octet-stream
 Editor preview: Stores the file in browser storage as a data URL.
 
-miniapp.files.url(fileId): The address of a stored file on the app's own origin, for an img src, a link or a fetch. Returns a Promise of the path "<base>/_konae/files/<id>", where <base> is the page's base path: empty, or /p/<id-or-name> on a path address. Reading it answers the file's bytes with its own type when the caller may read it, 404 File not found when the file is missing, deleted or not theirs, and 401 authentication-required to a visitor of a private Deployment.
+miniapp.files.url(fileId): The address of a stored file on the app's own origin, for an img src, a link or a fetch. Returns a Promise of the path "<base>/_konae/files/<id>", where <base> is the page's base path: empty, or /p/<id-or-name> on a path address. Reading it answers the file's bytes with its own type when the caller may read it, 404 File not found when the file is missing, deleted or access is denied, and 401 authentication-required to a visitor of a private Deployment.
 Refusals:
 - "A file ID is required." when fileId is not a non-empty string
 - "File not found." when reading the path, when the file does not exist, was deleted, or the caller may not read it (404)
@@ -180,7 +183,8 @@ Needs a signed-in user.
 Refusals:
 - "authentication-required" when no one is signed in
 - "A file ID is required." when fileId is not a non-empty string
-- "File visibility must be private or public." when visibility is anything other than "private" or "public"; the SDK refuses before it sends anything
+- "File visibility must be private or public." when the visibility is unknown, or app-users was requested in an app without that policy
+- "File visibility is fixed to app-users by this app." when the app requires app-users and the caller specifies private or public
 - "File not found." when the file does not exist, was deleted, or the caller may not read it
 - "Only the person who uploaded this file may change or delete it." when the caller may read the file but did not upload it
 

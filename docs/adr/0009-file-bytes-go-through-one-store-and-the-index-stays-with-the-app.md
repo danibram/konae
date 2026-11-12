@@ -8,7 +8,8 @@ Apps take uploads: photos, attachments, avatars. Who may read a file is the app'
 
 ### A file belongs to its uploader and has a visibility
 
-- `miniapp.files.upload` stores a file for a signed-in app user. A file is private to its uploader unless the upload makes it public. A visitor on a public app may list and read public files.
+- `miniapp.files.upload` stores a file for a signed-in app user. By default a file is private to its uploader unless the upload makes it public. A visitor on a public app may list and read public files.
+- An app can declare `manifest.fileAccess: "app-users"` to share all files with its signed-in users. The policy takes effect on existing IDs as well as new uploads. The Kernel applies it to lists, byte reads and visibility changes. File API keys cannot read these files.
 - The uploader alone may change a file's visibility or delete it, with `files_update` and `files_delete`. A deleted file frees its share of the quota, and its ID answers `File not found.` through every door.
 - A caller who may not read a file gets 404, as for a missing one. A visitor without a session on a private app gets 401 before any lookup.
 - `miniapp.files.url` returns `/_konae/files/<id>`, which a page reads over its own origin with the session cookie. An API key may use the same path. It reads what a visitor reads, plus the visibilities it names (ADR-0013). There is no unauthenticated object URL.

@@ -36,6 +36,13 @@ async function exportDatabase(schema: string): Promise<Uint8Array> {
 }
 
 describe("validation gate", () => {
+  test("refuses invalid manifest file access", async () => {
+    for (const fileAccess of [null, "private", "", 1]) {
+      const result = await validator.validate(capsule(), { state: "absent" }, { fileAccess });
+      expect(result.errors[0].message).toBe('manifest.fileAccess must be "app-users" when set.');
+    }
+    expect((await validator.validate(capsule(), { state: "absent" }, { fileAccess: "app-users" })).ok).toBe(true);
+  });
   test("passes the starter capsule", async () => {
     const result = await validator.validate(capsule());
     expect(result.errors).toEqual([]);

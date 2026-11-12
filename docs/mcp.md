@@ -172,7 +172,9 @@ On a public app a visitor may call actions declared `anonymous` and read files u
 
 A signed-out visitor may call `actions_invoke` 30 times per 10 seconds per client address and Deployment, and each app user 120 times per 10 seconds. Past that the call answers `rate-limited` with `Retry-After`. The Kernel counts the socket's peer address and reads `X-Forwarded-For` only from peers in `KONAE_TRUSTED_PROXIES`.
 
-A file is private to the app user who uploaded it unless the upload set `visibility` to `public`. `files_update { fileId, visibility }` and `files_delete { fileId }` work only for the uploader. A user who may not read the file gets `File not found.`, as for a missing one, and a user who reads it but did not upload it gets `Only the person who uploaded this file may change or delete it.` A deleted file stops counting against the quota. A row that still names it keeps the ID, and the app removes that row with its own action.
+Set `manifest.fileAccess` to `"app-users"` to require an app session for every file, including existing uploads. The uploader keeps deletion rights. Removing the policy restores each original file visibility. Files uploaded under the policy then become private to the uploader.
+
+By default, a file is private to the app user who uploaded it unless the upload set `visibility` to `public`. `files_update { fileId, visibility }` and `files_delete { fileId }` work only for the uploader. A user who may not read the file gets `File not found.`, as for a missing one, and a user who reads it but did not upload it gets `Only the person who uploaded this file may change or delete it.` A deleted file stops counting against the quota. A row that still names it keeps the ID, and the app removes that row with its own action.
 
 ### Statement rules
 
@@ -387,7 +389,7 @@ An export carries each key's name, actions, file visibilities and hash, and an i
 
 `GET /_konae/files/<id>` on the Deployment host returns a stored file with its content type, except that a JavaScript, HTML, XML or SVG type is sent as `application/octet-stream`. It sends `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy: same-origin` and `Cache-Control: private, no-store`. PNG, JPEG, GIF, WebP and AVIF answer `inline`, every other type `attachment`. `miniapp.files.url(fileId)` returns this path, so an `img` or a `fetch` on the app's own origin reads it.
 
-A person reads by the file rules above. A key reads the visibilities it names, and on a public Deployment also public files. A visitor with no session or key on a private Deployment gets 401 `authentication-required` before any file is looked up. Every other caller who may not read the file gets 404 `File not found.`, the same as for a missing file. There is no listing at `/_konae/files/`, and nothing is served from the bucket.
+A person reads by the file rules above. With `fileAccess: "app-users"`, only a session for that app grants access. Otherwise a key reads the visibilities it names, and on a public Deployment also public files. A visitor with no session or key on a private Deployment gets 401 `authentication-required` before any file is looked up. Every other caller who may not read the file gets 404 `File not found.`, the same as for a missing file. There is no listing at `/_konae/files/`, and nothing is served from the bucket.
 
 ## Calls between apps
 
@@ -784,7 +786,7 @@ An export carries the hostname without its token. The import creates a pending c
 A Deployment can answer at `<domain>/p/<id>`, and at `<domain>/p/<name>` once named, with no DNS of its own. `KONAE_DOMAIN` names the domain.
 
 1. `path_set { deploymentId, enabled: true, name?, acceptSharedOrigin? }` turns the path on and needs `publish`. A name is 3 to 40 letters, digits and hyphens, does not start or end with a hyphen, is not a word Konae uses such as `app` or `mcp`, and does not look like an ID. No other Deployment may hold it while its path is on.
-2. An app with accounts needs `acceptSharedOrigin: true`, or the call refuses with `path.shared-origin`. An app has accounts when it is private, when its signup is not Closed, or when an action is not `anonymous`. Every path address shares the origin `<domain>`, so any other app there can use the sessions of this app's users.
+2. An app with accounts needs `acceptSharedOrigin: true`, or the call refuses with `path.shared-origin`. An app has accounts when it is private, when its signup is not Closed, when it declares `fileAccess: "app-users"`, or when an action is not `anonymous`. Every path address shares the origin `<domain>`, so any other app there can use the sessions of this app's users.
 3. `path_read { deploymentId }` returns `enabled`, `name`, `acceptSharedOrigin` and the `addresses`. Read it back after each change.
 4. `path_set` with `enabled: false` turns the path off and frees the name. `path_clear` also removes the name and the acceptance.
 

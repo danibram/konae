@@ -405,6 +405,7 @@ fn validate_sources(source: &Value, id: &str) -> Result<()> {
     let directories = source["directories"].as_array().ok_or_else(|| anyhow::anyhow!("Invalid project directories."))?;
     anyhow::ensure!(directories.len() <= 1_000 && directories.iter().all(|entry| entry.as_str().is_some_and(path)), "Invalid project directories.");
     let manifest = &source["manifest"];
+    artifact::check_file_access(manifest).map_err(anyhow::Error::msg)?;
     let actions = manifest["runtime"]["database"]["actions"].as_array();
     anyhow::ensure!(manifest["version"] == 1 && ["public", "private"].contains(&manifest["visibility"].as_str().unwrap_or(""))
         && manifest["runtime"]["database"]["mode"] == "declared-actions"
@@ -1151,6 +1152,7 @@ async fn admin_call(
                 .unwrap_or_else(|| format!("app_{}", Uuid::new_v4()));
             owner.require("write", Some(&id))?;
             anyhow::ensure!(valid_app_id(&id), "Invalid project ID. Use lowercase letters, digits, \"_\" and \"-\".");
+            artifact::check_file_access(&a["manifest"]).map_err(anyhow::Error::msg)?;
             let initial_sources = if let Some(transfer_id) = a["sourcesTransferId"].as_str() {
                 let upload = transfer(state, principal, &json!({"transferId":transfer_id}))?;
                 anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload"
@@ -2378,6 +2380,7 @@ mod tests {
         let base = json!({"id":"app_a","name":"A","slug":"a","files":{"index.html":"<main></main>"},"directories":[],"manifest":manifest,"updatedAt":1});
         assert!(validate_sources(&base, "app_a").is_ok());
         let refusal = |change: &dyn Fn(&mut Value)| { let mut source = base.clone(); change(&mut source); validate_sources(&source, "app_a").unwrap_err().to_string() };
+        assert_eq!(refusal(&|s| s["manifest"]["fileAccess"] = json!("public")), artifact::FILE_ACCESS_MESSAGE);
         assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("directories"); }).starts_with("Invalid project directories."));
         assert!(refusal(&|s| s["manifest"] = json!({"version":1,"visibility":"private"})).starts_with("Invalid project manifest. Send { version: 1, visibility, runtime: { database: { mode: \"declared-actions\""));
         assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("updatedAt"); }).starts_with("Invalid project metadata. Send { id, name, slug, files, directories, manifest, updatedAt }"));

@@ -339,7 +339,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     ? { root: stack(workbenchPanels, workbenchPanels.indexOf(compactPanel)), closed: [], focused: compactPanel }
     : layout;
   const [previewFrame, setPreviewFrame] = useState<HTMLIFrameElement | null>(null);
-  const hostRef = useRuntimeBridge(previewFrame, project.id, previewProject.files["schema.sql"], previewProject.files["actions.json"]);
+  const hostRef = useRuntimeBridge(previewFrame, project.id, previewProject.files["schema.sql"], previewProject.files["actions.json"], previewProject.manifest.fileAccess);
   const previewProblems = usePreviewProblems(hostRef, project.id);
 
   const previewDocument = useMemo(() => createPreviewDocument(previewProject), [previewProject]);
@@ -590,7 +590,12 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             // The other half of the gate: what the running preview actually threw.
             previewErrors: () => hostRef.current.previewErrors(),
             // What release_plan reads, as the Deploy dialog reads it: secret names and the installation's hosts.
-            releaseFacts: () => readReleaseFacts(projectRef.current.id, deploymentsRef.current[projectRef.current.id]?.id),
+            releaseFacts: async () => {
+              const current = projectRef.current;
+              const deploymentId = deploymentsRef.current[current.id]?.id;
+              const facts = await readReleaseFacts(current.id, deploymentId);
+              return { ...facts, ...(Object.hasOwn(current.manifest, "fileAccess") ? { fileAccess: current.manifest.fileAccess } : {}) };
+            },
             // ADR-0007: the owner's own MCP session, pinned to the open project.
             platform: {
               listTools: (signal) => platformMcp.listTools(signal),
@@ -924,6 +929,13 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setPreviewProject(next);
   };
 
+  const setFileAccess = (shared: boolean) => {
+    const { fileAccess: _fileAccess, ...manifest } = project.manifest;
+    const next = { ...project, manifest: { ...manifest, ...(shared ? { fileAccess: "app-users" as const } : {}) }, updatedAt: Date.now() };
+    setProject(next);
+    setPreviewProject(next);
+  };
+
   if (route.screen === "not-found") return <NotFound what={route.what} path={route.path} />;
 
   if (screen === "projects") {
@@ -1137,6 +1149,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           onSetAccess={setActionAccess}
           visibility={project.manifest.visibility}
           onSetVisibility={setVisibility}
+          fileAccess={project.manifest.fileAccess}
+          onSetFileAccess={setFileAccess}
           projectId={project.id}
           deployment={activeDeployment ? { id: activeDeployment.id, url: activeDeployment.url } : undefined}
           authView={authView}

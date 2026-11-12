@@ -41,6 +41,8 @@ type Props = {
   onSetAccess?: (name: string, access: "anonymous" | "authenticated") => void;
   visibility?: "public" | "private";
   onSetVisibility?: (visibility: "public" | "private") => void;
+  fileAccess?: "app-users";
+  onSetFileAccess?: (shared: boolean) => void;
   projectId?: string;
   /** The published app, when there is one. Users and API keys need it. */
   deployment?: { id: string; url: string };
@@ -122,7 +124,7 @@ function AuthPanel(props: Props) {
         <button type="button" className={view === "users" ? "active" : ""} aria-current={view === "users" || undefined} onClick={() => show("users")}><Users size={13} /> Users</button>
         <button type="button" className={view === "integrations" ? "active" : ""} aria-current={view === "integrations" || undefined} onClick={() => show("integrations")}><Plug size={13} /> Integrations</button>
       </nav>
-      {view === "users" && <AppUsersView projectId={props.projectId} deploymentId={props.deployment?.id} visibility={props.visibility ?? "private"} onSetVisibility={props.onSetVisibility} />}
+      {view === "users" && <AppUsersView projectId={props.projectId} deploymentId={props.deployment?.id} visibility={props.visibility ?? "private"} onSetVisibility={props.onSetVisibility} fileAccess={props.fileAccess} onSetFileAccess={props.onSetFileAccess} />}
       {view === "integrations" && props.projectId && <IntegrationsView projectId={props.projectId} deploymentId={props.deployment?.id} deploymentUrl={props.deployment?.url} actionsSource={props.actionsSource} />}
       {view === "rules" && <RulesView {...props} />}
     </section>

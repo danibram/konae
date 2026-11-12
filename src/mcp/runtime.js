@@ -79,12 +79,12 @@
   }
 
   function visibility(value) {
-    if (value !== 'private' && value !== 'public') throw Error('File visibility must be private or public.');
+    if (value !== 'private' && value !== 'public' && value !== 'app-users') throw Error('File visibility must be private or public.');
     return value;
   }
 
   async function upload(file, options) {
-    const chosen = options && options.visibility !== undefined ? visibility(options.visibility) : 'private';
+    const chosen = options?.visibility === undefined ? undefined : visibility(options.visibility);
     const bytes = new Uint8Array(await file.arrayBuffer());
     const transfer = await call('transfer_begin', { size: bytes.length, sha256: await checksum(bytes) });
     try {

@@ -284,7 +284,8 @@ pub async fn forget(state: &AppState, id: &str) -> Result<()> {
 /// one of its actions is not anonymous. An actions file the Kernel cannot read
 /// counts as having accounts.
 pub fn has_accounts(deployment: &Deployment) -> bool {
-    is_private(deployment) || deployment.signup_policy.mode != SignupMode::Closed || actions_need_accounts(&deployment.actions)
+    is_private(deployment) || crate::app_user_files(deployment)
+        || deployment.signup_policy.mode != SignupMode::Closed || actions_need_accounts(&deployment.actions)
 }
 
 fn actions_need_accounts(actions: &str) -> bool {
@@ -307,7 +308,7 @@ fn shared_origin(domain: &str) -> Refusal {
     refuse(
         "path.shared-origin",
         format!(
-            "This app has accounts or is private, so a path address on {domain} shares its origin with the home and every other app there. Any other app on {domain}, including other owners' apps, can use the sessions of this app's users. The app's own hostname keeps its sessions on its own origin. Set acceptSharedOrigin to true to accept this, or close signup and keep every action anonymous so the app has no sessions to share."
+            "This app has accounts or is private, so a path address on {domain} shares its origin with the home and every other app there. Any other app on {domain}, including other owners' apps, can use the sessions of this app's users. The app's own hostname keeps its sessions on its own origin. Set acceptSharedOrigin to true to accept this, or close signup, keep every action anonymous and use per-file visibility so the app has no sessions to share."
         ),
     )
 }
@@ -548,6 +549,10 @@ mod tests {
         closed.manifest["visibility"] = json!("public");
         closed.signup_policy.mode = SignupMode::Closed;
         assert!(!has_accounts(&closed), "public, signup Closed and only anonymous actions");
+
+        let mut shared_files = closed.clone();
+        shared_files.manifest["fileAccess"] = json!("app-users");
+        assert!(has_accounts(&shared_files));
 
         let mut invitation = closed.clone();
         invitation.signup_policy.mode = SignupMode::Invitation;

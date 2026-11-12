@@ -28,6 +28,7 @@ use super::*;
 pub const MAX_FILES: usize = 10_000;
 pub const TOO_MANY_FILES: &str = "This deployment has reached its limit of 10,000 files. Delete files before uploading more.";
 pub const NOT_UPLOADER: &str = "Only the person who uploaded this file may change or delete it.";
+pub const FIXED_VISIBILITY: &str = "File visibility is fixed to app-users by this app.";
 const BAD_VISIBILITY: &str = "File visibility must be private or public.";
 
 enum Change<'a> {
@@ -39,7 +40,7 @@ enum Change<'a> {
 /// `files_list` shows it to the uploader.
 pub async fn update_file(state: &AppState, headers: &HeaderMap, id: &str, visibility: Option<&str>) -> Response {
     match visibility {
-        Some(value @ ("private" | "public")) => change(state, headers, id, Change::Visibility(value)).await,
+        Some(value @ ("private" | "public" | "app-users")) => change(state, headers, id, Change::Visibility(value)).await,
         _ => error(StatusCode::BAD_REQUEST, BAD_VISIBILITY),
     }
 }
@@ -77,16 +78,27 @@ async fn change(state: &AppState, headers: &HeaderMap, id: &str, change: Change<
     let Some(position) = files.iter().position(|file| file["id"].as_str() == Some(id)) else {
         return not_found();
     };
-    if !file_readable(&files[position], Some(actor_id), is_private(&deployment)) {
+    if !file_readable(&deployment, &files[position], Some(actor_id)) {
         return not_found();
     }
     if file_owner(&files[position]) != Some(actor_id) {
         return error(StatusCode::FORBIDDEN, NOT_UPLOADER);
     }
+    if let Change::Visibility(visibility) = change {
+        if app_user_files(&deployment) {
+            if visibility != "app-users" {
+                return error(StatusCode::BAD_REQUEST, FIXED_VISIBILITY);
+            }
+            return Json(json!({"result": file_view(&deployment, &files[position], Some(actor_id))})).into_response();
+        }
+        if visibility == "app-users" {
+            return error(StatusCode::BAD_REQUEST, BAD_VISIBILITY);
+        }
+    }
     let result = match change {
         Change::Visibility(visibility) => {
             files[position]["visibility"] = json!(visibility);
-            file_view(&files[position], Some(actor_id))
+            file_view(&deployment, &files[position], Some(actor_id))
         }
         Change::Delete => {
             files.remove(position);
@@ -157,6 +169,100 @@ mod tests {
             state.files.store = Arc::new(file_store::tests::test_s3_store().await);
         }
         (state, visitor)
+    }
+
+    #[tokio::test]
+    async fn app_users_policy_covers_existing_and_new_files() {
+        let root = std::env::temp_dir().join(format!("konae-file-policy-{}", Uuid::new_v4()));
+        let (state, visitor) = login_on(&root, "public", false).await;
+        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
+        let (bob, _) = signed_in(&state, &deployment.id, &visitor, "bob@example.test");
+        let old_private = upload(&state, &alice, 2, None).await;
+        let old_public = upload(&state, &alice, 2, Some("public")).await;
+        let mut updated = deployment.clone();
+        updated.manifest["fileAccess"] = json!("app-users");
+        state.deployments.write().await.insert(updated.hostname.clone(), updated);
+        for id in [&old_private, &old_public] {
+            assert_eq!(serve_file(State(state.clone()), AxumPath(id.clone()), visitor.clone()).await.status(), StatusCode::NOT_FOUND);
+            assert_eq!(serve_file(State(state.clone()), AxumPath(id.clone()), bob.clone()).await.status(), StatusCode::OK);
+        }
+        let listed = response_json(list_files(State(state.clone()), bob.clone()).await).await;
+        assert_eq!(listed["result"].as_array().unwrap().len(), 2);
+        assert!(listed["result"].as_array().unwrap().iter().all(|f| f["visibility"] == "app-users"));
+        assert_eq!(response_json(list_files(State(state.clone()), visitor.clone()).await).await["result"], json!([]));
+        assert_eq!(status_and_error(update_file(&state, &bob, &old_private, Some("public")).await).await, (StatusCode::FORBIDDEN, json!(NOT_UPLOADER)));
+        assert_eq!(status_and_error(update_file(&state, &alice, &old_private, Some("public")).await).await, (StatusCode::BAD_REQUEST, json!(FIXED_VISIBILITY)));
+        assert_eq!(response_json(update_file(&state, &alice, &old_private, Some("app-users")).await).await["result"]["visibility"], "app-users");
+        let created = response_json(upload_file(State(state.clone()), alice.clone(), upload_body(2, None)).await).await;
+        assert_eq!(created["result"]["visibility"], "app-users");
+        assert_eq!(status_and_error(upload_file(State(state.clone()), alice.clone(), upload_body(2, Some("public"))).await).await, (StatusCode::BAD_REQUEST, json!(FIXED_VISIBILITY)));
+        assert_eq!(response_json(upload_file(State(state.clone()), alice.clone(), upload_body(2, Some("app-users"))).await).await["result"]["visibility"], "app-users");
+        assert_eq!(status_and_error(upload_file(State(state.clone()), visitor.clone(), upload_body(2, None)).await).await.0, StatusCode::UNAUTHORIZED);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn published_policy_protects_existing_file_routes() {
+        use tower::ServiceExt;
+        let root = std::env::temp_dir().join(format!("konae-file-publish-{}", Uuid::new_v4()));
+        let state = AppState::for_test(&root);
+        let release = |project: &str, shared: bool| json!({
+            "project": {"id": project, "name": project, "slug": project, "manifest": if shared { json!({"fileAccess":"app-users"}) } else { json!({}) },
+                "files": {"actions.json": json!({"version":1,"actions":{"items.count":{"kind":"query","access":"anonymous","statement":"SELECT 1 AS n LIMIT 1","bindings":[]}}}).to_string(), "schema.sql":""}},
+            "visibility":"public", "artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<main>attachments</main>"}}
+        });
+        assert_eq!(deploy(&state, release("attachments", false).to_string().as_bytes()).await.status(), StatusCode::OK);
+        let app = state.deployments.read().await.values().find(|d| d.project_id == "attachments").unwrap().clone();
+        let mut visitor = HeaderMap::new();
+        visitor.insert(header::HOST, app.hostname.parse().unwrap());
+        visitor.insert("sec-fetch-site", HeaderValue::from_static("same-origin"));
+        let (alice, alice_id) = signed_in(&state, &app.id, &visitor, "alice@example.test");
+        let (bob, _) = signed_in(&state, &app.id, &visitor, "bob@example.test");
+        let mut stored = Vec::new();
+        for (name, ty, bytes, visibility) in [("photo.png", "image/png", &b"synthetic png"[..], "public"), ("document.pdf", "application/pdf", &b"%PDF-1.4 synthetic"[..], "private")] {
+            let body = json!({"name":name,"type":ty,"dataUrl":encode_base64(bytes),"visibility":visibility});
+            let request = Request::builder().body(Body::from(body.to_string())).unwrap();
+            let saved = response_json(upload_file(State(state.clone()), alice.clone(), request).await).await;
+            assert_eq!(saved["result"]["ownerId"], alice_id);
+            stored.push((saved["result"]["id"].as_str().unwrap().to_owned(), ty, bytes));
+        }
+        let request = |headers: HeaderMap, id: &str| {
+            let mut request = Request::builder().method("GET").uri(format!("/_konae/files/{id}")).body(Body::empty()).unwrap();
+            *request.headers_mut() = headers;
+            request
+        };
+        let read = |headers: HeaderMap, id: &str| crate::stack(state.clone(), Router::new()).oneshot(request(headers, id));
+        assert_eq!(read(visitor.clone(), &stored[0].0).await.unwrap().status(), StatusCode::OK);
+        assert_eq!(deploy(&state, release("attachments", true).to_string().as_bytes()).await.status(), StatusCode::OK);
+        let updated = state.deployments.read().await.values().find(|d| d.project_id == "attachments").unwrap().clone();
+        assert_eq!(updated.id, app.id);
+        assert_eq!(updated.manifest["fileAccess"], "app-users");
+        assert_eq!(deploy(&state, release("other", true).to_string().as_bytes()).await.status(), StatusCode::OK);
+        let other = state.deployments.read().await.values().find(|d| d.project_id == "other").unwrap().clone();
+        let (foreign, _) = signed_in(&state, &other.id, &visitor, "foreign@example.test");
+        let listed = response_json(list_files(State(state.clone()), alice.clone()).await).await;
+        assert_eq!(listed["result"].as_array().unwrap().len(), 2);
+        for (id, ty, bytes) in &stored {
+            let row = listed["result"].as_array().unwrap().iter().find(|f| f["id"] == *id).unwrap();
+            assert_eq!(row["ownerId"], alice_id);
+            assert_eq!(row["visibility"], "app-users");
+            for headers in [&alice, &bob] {
+                let response = read(headers.clone(), id).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                assert_eq!(response.headers()[header::CONTENT_TYPE], *ty);
+                assert_eq!(&axum::body::to_bytes(response.into_body(), 1024).await.unwrap()[..], *bytes);
+            }
+            assert_eq!(read(visitor.clone(), id).await.unwrap().status(), StatusCode::NOT_FOUND);
+            assert_ne!(read(foreign.clone(), id).await.unwrap().status(), StatusCode::OK);
+            assert_eq!(status_and_error(update_file(&state, &alice, id, Some("public")).await).await, (StatusCode::BAD_REQUEST, json!(FIXED_VISIBILITY)));
+            assert_eq!(status_and_error(delete_file(&state, &bob, id).await).await, (StatusCode::FORBIDDEN, json!(NOT_UPLOADER)));
+            assert_eq!(read(visitor.clone(), id).await.unwrap().status(), StatusCode::NOT_FOUND);
+        }
+        AuthService::open(crate::layout::identity(&root, &app.id)).unwrap().suspend("bob@example.test").unwrap();
+        assert_ne!(read(bob, &stored[0].0).await.unwrap().status(), StatusCode::OK);
+        assert_eq!(read(alice, &stored[0].0).await.unwrap().status(), StatusCode::OK);
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[test]

@@ -33,7 +33,7 @@ A path address is a short link on the installation's domain, for when DNS is not
 1. Call `path_set` with `enabled: true` and, if you want one, a `name` of 3 to 40 letters, digits and hyphens. The app then answers at `<domain>/p/<id>` and at `<domain>/p/<name>`.
 2. Read it back with `path_read`, which lists the addresses.
 
-The app whose path holds the name `konae-home` also answers `<domain>/`. Every path and the installation's home share one origin. Any other app on that domain, including other owners' apps, can use the sessions of this app's users. An app with accounts therefore needs `acceptSharedOrigin: true` before its path turns on, and without it the call refuses with `path.shared-origin`. An app has accounts when it is private, when its signup is not Closed, or when one of its actions has an access other than `anonymous`. For an app with private data, prefer its own hostname.
+The app whose path holds the name `konae-home` also answers `<domain>/`. Every path and the installation's home share one origin. Any other app on that domain, including other owners' apps, can use the sessions of this app's users. An app with accounts therefore needs `acceptSharedOrigin: true` before its path turns on, and without it the call refuses with `path.shared-origin`. An app has accounts when it is private, when its signup is not Closed, when it declares `fileAccess: "app-users"`, or when one of its actions has an access other than `anonymous`. For an app with private data, prefer its own hostname.
 
 Write the app's links and file references as relative paths, such as `about.html` and not `/about.html`. A root-relative URL leaves the `/p/<name>` prefix, and the build warns about each one.
 

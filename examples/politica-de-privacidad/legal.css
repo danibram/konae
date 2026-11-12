@@ -1,0 +1,9 @@
+/* Rules for this legal page, on the design system's tokens. */
+body { font-family: var(--ds-font); overflow-x: hidden; }
+main:focus { outline: none; }
+.legal { max-width: 48rem; padding: 40px 0 80px; }
+.legal h1 { margin: 0 0 8px; font-size: clamp(32px, 5vw, 48px); text-wrap: balance; }
+.legal .updated { margin: 0 0 32px; color: var(--ds-muted); font: 500 14px/1.5 var(--ds-font); }
+.legal h2 { margin: 32px 0 12px; font-size: 22px; }
+.legal p { margin: 0 0 14px; color: var(--ds-text); font: 400 16px/1.65 var(--ds-font); }
+.legal a { color: var(--ds-text); }

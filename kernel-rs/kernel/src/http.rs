@@ -1229,7 +1229,7 @@ fn key_reads(key: &ApiKey, visibility: &str, private_deployment: bool) -> bool {
 
 async fn read_file_as_key(state: &AppState, deployment: &Deployment, key: &ApiKey, id: &str, headers: &HeaderMap) -> Response {
     let not_found = || error(StatusCode::NOT_FOUND, "File not found.");
-    if !valid_file_id(id) {
+    if app_user_files(deployment) || !valid_file_id(id) {
         return not_found();
     }
     let directory = crate::layout::files(&state.data_root, &deployment.id);

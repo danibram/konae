@@ -102,8 +102,8 @@ export const runtimeClient = String.raw`
     files: {
       list: () => request('files.list'),
       upload: (file, options) => new Promise((resolve, reject) => {
-        const visibility = options && options.visibility !== undefined ? options.visibility : 'private';
-        if (visibility !== 'private' && visibility !== 'public') throw new Error('File visibility must be private or public.');
+        const visibility = options && options.visibility;
+        if (visibility !== undefined && visibility !== 'private' && visibility !== 'public' && visibility !== 'app-users') throw new Error('File visibility must be private or public.');
         const reader = new FileReader();
         reader.onerror = () => reject(reader.error);
         reader.onload = () => request('files.upload', {
@@ -111,7 +111,7 @@ export const runtimeClient = String.raw`
           type: file.type,
           size: file.size,
           dataUrl: reader.result,
-          visibility
+          ...(visibility === undefined ? {} : { visibility })
         }).then(resolve, reject);
         reader.readAsDataURL(file);
       }),

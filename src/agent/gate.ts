@@ -5,6 +5,7 @@ import { contractFromProgram } from "../lib/action-contract";
 import { rootRelativeWarnings } from "../lib/static-artifact.js";
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
+import { checkFileAccess } from "../deployments/manifest";
 import type {
   CapsuleFiles,
   CapsuleValidator,
@@ -78,6 +79,11 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     let clone: Database | undefined;
 
     try {
+      try {
+        checkFileAccess(facts);
+      } catch (error) {
+        return failure({ stage: "actions", message: describe(error) });
+      }
       // Read before running: sql.js lacks some refused functions, and "no such
       // function" would hide the reason the Kernel gives.
       const refused = refusedStatements(files["schema.sql"]);

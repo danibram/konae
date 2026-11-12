@@ -143,6 +143,7 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
         }
         Err(_) => return unauthorized(&state, &headers),
     }
+    let fixed_file_access = app_user_files(&deployment);
     let app = deployment.id;
     let call = match read_call(request).await {
         Ok(call) => call,
@@ -208,7 +209,9 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
                     return response;
                 }
             }
-            let result = if name.starts_with("transfer_") {
+            let result = if name == "transfer_read" && anonymous && fixed_file_access {
+                Err(anyhow::anyhow!("File not found."))
+            } else if name.starts_with("transfer_") {
                 transfer_call(&state, &principal, name, &arguments, true).await
             } else if account_tools().iter().any(|t| t["name"] == name) {
                 let client = state.guards.client_ip(peer, &headers);
@@ -313,7 +316,7 @@ pub fn runtime_tools() -> Vec<Value> {
         ),
         tool(
             "files_list",
-            "List files visible to the current actor. Private files belong to the uploader. Public files are visible to signed-in users, and to visitors on a public deployment.",
+            "List files visible to the current actor. The app-users policy shares all files with users signed in to this app.",
             json!({}),
             &[],
             true,
@@ -327,15 +330,15 @@ pub fn runtime_tools() -> Vec<Value> {
         ),
         tool(
             "files_upload",
-            "Save a completed file transfer. The file is private to the signed-in uploader unless visibility is public.",
-            json!({"transferId":{"type":"string"},"name":{"type":"string"},"type":{"type":"string"},"visibility":{"type":"string","enum":["private","public"]}}),
+            "Save a completed file transfer. Omit visibility to use the app policy, which defaults to private to the uploader.",
+            json!({"transferId":{"type":"string"},"name":{"type":"string"},"type":{"type":"string"},"visibility":{"type":"string","enum":["private","public","app-users"]}}),
             &["transferId", "name"],
             false,
         ),
         tool(
             "files_update",
-            "Make a file you uploaded public or private. Only its uploader may change it.",
-            json!({"fileId":{"type":"string"},"visibility":{"type":"string","enum":["private","public"]}}),
+            "Set the visibility of a file you uploaded. An app with the app-users policy requires that visibility.",
+            json!({"fileId":{"type":"string"},"visibility":{"type":"string","enum":["private","public","app-users"]}}),
             &["fileId", "visibility"],
             false,
         ),
@@ -616,6 +619,7 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
         );
     }
     super::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
+    super::artifact::check_file_access(&input.project.manifest).map_err(anyhow::Error::msg)?;
     super::calls::check_connects(&input.project.manifest)?;
     // The limit counts the bytes the Kernel stores, after base64 is decoded.
     let total: usize = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?.values().map(Vec::len).sum();
@@ -737,11 +741,6 @@ pub async fn runtime_call(
             result
         }
         "files_upload" => {
-            let visibility = match a.get("visibility").and_then(Value::as_str) {
-                None | Some("private") => "private",
-                Some("public") => "public",
-                Some(_) => anyhow::bail!("File visibility must be private or public."),
-            };
             let id = a["transferId"].as_str().unwrap();
             // Validate before locking: the lock name comes from the caller.
             transfer_path(state, id)?;
@@ -760,7 +759,7 @@ pub async fn runtime_call(
             let upload = super::Upload {
                 name: a["name"].as_str(),
                 content_type: a.get("type").and_then(Value::as_str),
-                visibility: Some(visibility),
+                visibility: a.get("visibility").and_then(Value::as_str),
             };
             let source = transfer_path(state, id)?;
             let mut result =

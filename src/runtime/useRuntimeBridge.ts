@@ -14,13 +14,16 @@ export function useRuntimeBridge(
   appId: string,
   schema: string,
   actions: string,
+  fileAccess?: "app-users",
 ) {
   const hostRef = useRef<MiniAppRuntimeHost>(null!);
   const appIdRef = useRef(appId);
   if (!hostRef.current || appIdRef.current !== appId) {
-    hostRef.current = new MiniAppRuntimeHost(appId, schema, actions);
+    hostRef.current = new MiniAppRuntimeHost(appId, schema, actions, fileAccess);
     appIdRef.current = appId;
   }
+
+  hostRef.current.setFileAccess(fileAccess);
 
   useEffect(() => {
     void hostRef.current.setSchema(schema);

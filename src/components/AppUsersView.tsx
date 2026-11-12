@@ -23,6 +23,8 @@ type Props = {
   deploymentId?: string;
   visibility: DeploymentVisibility;
   onSetVisibility?: (visibility: DeploymentVisibility) => void;
+  fileAccess?: "app-users";
+  onSetFileAccess?: (shared: boolean) => void;
 };
 
 const PAGE = 25;
@@ -31,7 +33,7 @@ const PAGE = 25;
 const SIGNED_OUT = <p className="access-note">Sign in with <a href="/_konae/owner/login">owner sign-in</a> to manage this app's accounts.</p>;
 
 /** App accounts, invitations and who may join, for the published app. Owners only. */
-export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibility }: Props) {
+export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibility, fileAccess, onSetFileAccess }: Props) {
   const [mail, setMail] = useState<MailStatus | null>(null);
   const [mailError, setMailError] = useState("");
   const [changed, setChanged] = useState(0);
@@ -60,6 +62,12 @@ export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibil
           <Select value={visibility} onChange={(event) => onSetVisibility?.(event.target.value === "private" ? "private" : "public")}>
             <option value="public">Anyone with the link</option>
             <option value="private">People with an app account</option>
+          </Select>
+        </Field>
+        <Field label="Who can read uploaded files" help="Deploy to apply this to existing and new files. Choosing per-file access restores earlier visibility settings. Only the uploader can delete a file.">
+          <Select value={fileAccess ?? "per-file"} onChange={(event) => onSetFileAccess?.(event.target.value === "app-users")}>
+            <option value="per-file">Each file's visibility</option>
+            <option value="app-users">All signed-in app users</option>
           </Select>
         </Field>
         {deploymentId

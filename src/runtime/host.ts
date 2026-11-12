@@ -18,7 +18,7 @@ export type StoredFile = {
   size: number;
   url: string;
   createdAt: number;
-  visibility?: "private" | "public";
+  visibility?: "private" | "public" | "app-users";
   ownerId?: string;
 };
 
@@ -148,10 +148,14 @@ export class MiniAppRuntimeHost {
    * throw there would take the whole editor down with it, on every reload. A
    * broken actions.json or schema.sql is reported through `diagnostics()`.
    */
-  constructor(private readonly appId: string, schema: string, actions: string) {
+  constructor(private readonly appId: string, schema: string, actions: string, private fileAccess?: "app-users") {
     this.requestedSchema = schema;
     this.setActions(actions);
     this.dbPromise = this.openDatabase();
+  }
+
+  setFileAccess(fileAccess?: "app-users") {
+    this.fileAccess = fileAccess;
   }
 
   /** Resolves once the schema has run or its failure is recorded. Never rejects. */
@@ -707,8 +711,7 @@ export class MiniAppRuntimeHost {
     const url = String(candidate.dataUrl ?? "");
     const size = Number(candidate.size ?? 0);
     if (!url.startsWith("data:")) throw new Error("Only local data URLs are supported in this prototype.");
-    const visibility = candidate.visibility ?? "private";
-    if (visibility !== "private" && visibility !== "public") throw new Error(badFileVisibility);
+    const visibility = this.checkFileVisibility(candidate.visibility, true);
     // The words a Kernel with the default per-file limit refuses with.
     if (!(size >= 1 && size <= 2 * 1024 * 1024)) throw new Error("Files must be between 1 byte and 2 MiB.");
     const file: StoredFile = {
@@ -731,8 +734,9 @@ export class MiniAppRuntimeHost {
     const session = this.getRuntimeSession();
     const actor = session.role === "anonymous" ? null : session.userId;
     return this.readFiles().flatMap((file) => {
-      const visibility = file.visibility === "public" ? "public" : "private";
-      const readable = visibility === "public" || (actor !== null && file.ownerId === actor);
+      let visibility: "private" | "public" | "app-users" = file.visibility === "public" ? "public" : "private";
+      if (this.fileAccess === "app-users") visibility = "app-users";
+      const readable = visibility === "public" || (actor !== null && (visibility === "app-users" || file.ownerId === actor));
       if (!readable) return [];
       if (file.ownerId !== actor) {
         const rest = { ...file };
@@ -764,13 +768,29 @@ export class MiniAppRuntimeHost {
 
   private updateFile(payload: unknown) {
     const visibility = (payload as { visibility?: unknown } | null)?.visibility;
-    if (visibility !== "private" && visibility !== "public") throw new Error(badFileVisibility);
+    if (visibility !== "private" && visibility !== "public" && visibility !== "app-users") throw new Error(badFileVisibility);
     const { files, index } = this.ownedFile(payload);
+    this.checkFileVisibility(visibility, false);
+    if (this.fileAccess === "app-users") {
+      const { url: _url, ...file } = files[index];
+      return { ...file, visibility: "app-users" };
+    }
     files[index] = { ...files[index], visibility };
     localStorage.setItem(this.filesKey, JSON.stringify(files));
     this.notifyFiles();
     const { url: _url, ...file } = files[index];
     return file;
+  }
+
+  private checkFileVisibility(value: unknown, upload: boolean): "private" | "public" | "app-users" {
+    if (this.fileAccess === "app-users") {
+      if (value !== undefined && value !== "app-users") throw new Error("File visibility is fixed to app-users by this app.");
+      if (!upload && value === undefined) throw new Error(badFileVisibility);
+      return "app-users";
+    }
+    const visibility = upload && value === undefined ? "private" : value;
+    if (visibility !== "private" && visibility !== "public") throw new Error(badFileVisibility);
+    return visibility;
   }
 
   private deleteFile(payload: unknown) {

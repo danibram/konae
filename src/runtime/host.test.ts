@@ -227,6 +227,29 @@ describe("runtime host", () => {
     expect(host.getFiles()).toEqual([]);
   });
 
+  test("app-user file policy applies to existing files and rejects conflicting visibility", async () => {
+    const host = new MiniAppRuntimeHost("files-app-users", schema, actions);
+    const payload = { name: "note.txt", type: "text/plain", size: 2, dataUrl: "data:text/plain,hi" };
+    host.setPreviewActor("alice");
+    const existing = await host.handle("files.upload", payload) as { id: string };
+    const formerlyPublic = await host.handle("files.upload", { ...payload, visibility: "public" }) as { id: string };
+    host.setFileAccess("app-users");
+    const shared = await host.handle("files.upload", payload) as { id: string; visibility: string };
+    expect(shared.visibility).toBe("app-users");
+    await expect(host.handle("files.upload", { ...payload, visibility: "public" })).rejects.toThrow("File visibility is fixed to app-users by this app.");
+    await expect(host.handle("files.update", { fileId: existing.id, visibility: "private" })).rejects.toThrow("File visibility is fixed to app-users by this app.");
+    expect(await host.handle("files.update", { fileId: formerlyPublic.id, visibility: "app-users" })).toMatchObject({ visibility: "app-users" });
+    host.setPreviewActor("bob");
+    await expect(host.handle("files.update", { fileId: existing.id, visibility: "private" })).rejects.toThrow("Only the person who uploaded this file may change or delete it.");
+    expect(await host.handle("files.url", { fileId: existing.id })).toBe(payload.dataUrl);
+    expect(await host.handle("files.list")).toEqual(expect.arrayContaining([expect.objectContaining({ id: existing.id, visibility: "app-users" })]));
+    host.setPreviewActor("guest");
+    expect(await host.handle("files.list")).toEqual([]);
+    await expect(host.handle("files.url", { fileId: shared.id })).rejects.toThrow("File not found.");
+    host.setFileAccess(undefined);
+    expect(await host.handle("files.url", { fileId: formerlyPublic.id })).toBe(payload.dataUrl);
+  });
+
   test("the uploader publishes, hides and deletes a preview file, and files.url answers its data URL", async () => {
     const host = new MiniAppRuntimeHost("files-lifecycle", schema, actions);
     const payload = { name: "note.txt", type: "text/plain", size: 2, dataUrl: "data:text/plain,hi" };

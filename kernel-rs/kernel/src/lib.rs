@@ -210,7 +210,9 @@ impl Settings {
     }
 
     pub fn read(root: &Path, id: &str) -> Result<Self> {
-        Ok(serde_json::from_slice(&std::fs::read(layout::settings(root, id))?)?)
+        let settings: Self = serde_json::from_slice(&std::fs::read(layout::settings(root, id))?)?;
+        artifact::check_file_access(&settings.manifest).map_err(anyhow::Error::msg)?;
+        Ok(settings)
     }
 
     pub async fn write(&self, root: &Path) -> Result<()> {
@@ -1573,7 +1575,6 @@ pub async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Re
         return error(StatusCode::UNAUTHORIZED, "authentication-required");
     }
     let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
-    let private_deployment = is_private(&deployment);
     let path = crate::layout::files(&state
         .data_root, &deployment.id)
         .join("index.json");
@@ -1582,8 +1583,8 @@ pub async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Re
             Ok(Value::Array(files)) => {
                 let visible = files
                     .iter()
-                    .filter(|file| file_readable(file, actor_id, private_deployment))
-                    .map(|file| file_view(file, actor_id))
+                    .filter(|file| file_readable(&deployment, file, actor_id))
+                    .map(|file| file_view(&deployment, file, actor_id))
                     .collect::<Vec<_>>();
                 Json(json!({"result": visible})).into_response()
             }
@@ -1718,10 +1719,13 @@ pub async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upl
         Ok(actor) => actor,
         Err(response) => return response,
     };
-    let visibility = match upload.visibility {
-        None | Some("private") => "private",
-        Some("public") => "public",
-        Some(_) => {
+    let visibility = match (app_user_files(&deployment), upload.visibility) {
+        // The manifest grants shared reads. If it is removed, new files revert to uploader-only.
+        (true, None | Some("app-users")) => "private",
+        (true, Some("private" | "public")) => return error(StatusCode::BAD_REQUEST, files::FIXED_VISIBILITY),
+        (false, None | Some("private")) => "private",
+        (false, Some("public")) => "public",
+        (_, Some(_)) => {
             return error(
                 StatusCode::BAD_REQUEST,
                 "File visibility must be private or public.",
@@ -1795,7 +1799,7 @@ pub async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upl
     }
     .await;
     match indexed {
-        Ok(()) => Json(json!({"result": metadata})).into_response(),
+        Ok(()) => Json(json!({"result": file_view(&deployment, &metadata, Some(&actor.user_id))})).into_response(),
         Err(response) => {
             // No index names the bytes, so nothing can read them.
             if let Err(e) = state.files.store.delete(&deployment.id, &id).await {
@@ -1837,7 +1841,7 @@ pub async fn serve_file(
     else {
         return error(StatusCode::NOT_FOUND, "File not found.");
     };
-    if !file_readable(metadata, actor_id, private_deployment) {
+    if !file_readable(&deployment, metadata, actor_id) {
         return error(StatusCode::NOT_FOUND, "File not found.");
     }
     file_response(&state, &deployment.id, metadata, &headers).await
@@ -3183,20 +3187,28 @@ pub fn accepted_owner_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
-/// Private files belong to the uploader. Public files are readable by any
-/// signed-in user of the deployment, and by a visitor when the deployment
-/// itself is public. A stored file with no owner stays unreadable.
-pub fn file_readable(file: &Value, actor_id: Option<&str>, private_deployment: bool) -> bool {
+/// A manifest policy applies to earlier uploads without rewriting the index.
+pub fn app_user_files(deployment: &Deployment) -> bool {
+    deployment.manifest.get("fileAccess").and_then(Value::as_str) == Some("app-users")
+}
+
+pub fn file_readable(deployment: &Deployment, file: &Value, actor_id: Option<&str>) -> bool {
+    if app_user_files(deployment) {
+        return actor_id.is_some();
+    }
     if file_visibility(file) == "public" {
-        return !private_deployment || actor_id.is_some();
+        return !is_private(deployment) || actor_id.is_some();
     }
     actor_id.is_some() && file_owner(file) == actor_id
 }
 
-pub fn file_view(file: &Value, actor_id: Option<&str>) -> Value {
+pub fn file_view(deployment: &Deployment, file: &Value, actor_id: Option<&str>) -> Value {
     let mut view = file.clone();
     if let Some(object) = view.as_object_mut() {
         object.remove("url");
+        if app_user_files(deployment) {
+            object.insert("visibility".into(), json!("app-users"));
+        }
         if file_owner(file) != actor_id {
             object.remove("ownerId");
         }

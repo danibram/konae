@@ -263,6 +263,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn folder_preserves_file_access_and_refuses_an_invalid_policy() {
+        let root = scratch();
+        let state = AppState::for_test(&root);
+        write_folder(&root, "notes_app", "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);");
+        let path = layout::settings(&root, "notes_app");
+        let mut settings: Settings = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        settings.manifest["fileAccess"] = serde_json::json!("app-users");
+        std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
+        let deployment = open(&state, "notes_app", None).await.unwrap();
+        assert_eq!(deployment.manifest["fileAccess"], "app-users");
+        assert_eq!(Settings::of(&deployment).manifest["fileAccess"], "app-users");
+        settings.manifest["fileAccess"] = serde_json::json!("other");
+        std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
+        reload(&state, deployment.clone()).await;
+        assert_eq!(state.deployments.read().await[&deployment.hostname].manifest["fileAccess"], "app-users");
+        assert!(refused(open(&state, "notes_app", None).await).contains(crate::artifact::FILE_ACCESS_MESSAGE));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn a_change_that_loses_data_waits_for_its_confirmation() {
         let root = scratch();
         let state = AppState::for_test(&root);
