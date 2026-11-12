@@ -6,6 +6,10 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+### Changed
+
+- A first publish takes `<slug>.<host-suffix>` when that hostname is free, the same rule a bare Kernel folder already used. The random `<slug>-<code>` form remains only when another Deployment already holds the slug.
+
 ## [0.1.4] - 2026-11-12
 
 ### Fixed

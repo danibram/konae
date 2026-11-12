@@ -137,7 +137,10 @@ fn plan(state: &AppState, database: &Path, schema: &str, program: &crate::Action
     result
 }
 
-async fn free_hostname(state: &AppState, slug: &str) -> String {
+/// Hostname for a first publish or a bare-folder open: `<slug>.<suffix>` when
+/// free, otherwise `<slug>-<code>.<suffix>`. A republish keeps the address it
+/// already has; this only runs when none is stored yet.
+pub async fn free_hostname(state: &AppState, slug: &str) -> String {
     let slug = Some(safe_slug(slug)).filter(|slug| !slug.is_empty()).unwrap_or_else(|| "app".into());
     let wanted = format!("{slug}.{}", state.host_suffix);
     if !state.deployments.read().await.contains_key(&wanted) {
@@ -259,6 +262,26 @@ mod tests {
         assert_eq!((again.hostname.as_str(), again.artifact_version.as_str()), (first.hostname.as_str(), first.artifact_version.as_str()));
         let kept: String = Connection::open(layout::database(&root, "notes_app")).unwrap().query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
         assert_eq!(kept, "kept");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_taken_slug_hostname_gets_a_code_suffix() {
+        let root = scratch();
+        let state = AppState::for_test(&root);
+        write_folder(&root, "notes_app", "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);");
+        let first = open(&state, "notes_app", None).await.unwrap();
+        assert_eq!(first.hostname, "notes.localhost");
+        write_folder(&root, "notes_other", "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);");
+        // Same slug "notes" from konae.json name Notes → safe_slug notes; first host is taken.
+        let path = layout::settings(&root, "notes_other");
+        let mut settings: Settings = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        settings.slug = "notes".into();
+        std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
+        let second = open(&state, "notes_other", None).await.unwrap();
+        assert!(second.hostname.starts_with("notes-"), "{}", second.hostname);
+        assert!(second.hostname.ends_with(".localhost"), "{}", second.hostname);
+        assert_ne!(second.hostname, first.hostname);
         std::fs::remove_dir_all(root).unwrap();
     }
 

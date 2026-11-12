@@ -809,19 +809,11 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
     };
     // The app keeps one ID: its folder, its project and its Deployment share it.
     let id = input.project.id.clone();
-    let hostname = existing
-        .as_ref()
-        .map(|item| item.hostname.clone())
-        .unwrap_or_else(|| {
-            // Random, so no project ID can be chosen to land on another app's address.
-            let short_id = Uuid::new_v4().simple().to_string().chars().take(6).collect::<String>();
-            format!(
-                "{}-{}.{}",
-                safe_slug(&input.project.slug),
-                short_id,
-                state.host_suffix
-            )
-        });
+    let hostname = match existing.as_ref() {
+        Some(item) => item.hostname.clone(),
+        // Same rule as a bare Kernel folder: the slug is the address when free.
+        None => folder::free_hostname(state, &input.project.slug).await,
+    };
     let url = existing
         .as_ref()
         .map(|item| item.url.clone())
@@ -4512,6 +4504,35 @@ pub mod tests {
         let bytes = axum::body::to_bytes(response.into_body(), 1_000_000).await.unwrap();
         assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&bytes));
         serde_json::from_slice::<Value>(&bytes).unwrap()["result"].clone()
+    }
+
+    #[tokio::test]
+    async fn a_first_release_takes_the_slug_hostname_when_free() {
+        let root = std::env::temp_dir().join(format!("konae-slug-host-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root);
+        let first = deploy_files(&state, json!({"index.html": "<p>one</p>"})).await;
+        assert_eq!(first["hostname"], "republish.localhost");
+        assert_eq!(first["url"], "http://republish.localhost");
+        let again = deploy_files(&state, json!({"index.html": "<p>two</p>"})).await;
+        assert_eq!(again["hostname"], "republish.localhost");
+        let body = json!({
+            "project": {
+                "id": "app_other", "name": "Other", "slug": "republish", "manifest": {},
+                "files": {"actions.json": "{\"version\":1,\"actions\":{}}", "schema.sql": ""}
+            },
+            "visibility": "public",
+            "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>other</p>"}}
+        });
+        let response = deploy(&state, body.to_string().as_bytes()).await;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1_000_000).await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&bytes));
+        let other = serde_json::from_slice::<Value>(&bytes).unwrap()["result"].clone();
+        let host = other["hostname"].as_str().unwrap();
+        assert!(host.starts_with("republish-"), "{host}");
+        assert!(host.ends_with(".localhost"), "{host}");
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]

@@ -6,7 +6,7 @@ A Deployment always answers on the hostname the Kernel generated for it. It can 
 
 | Address | Looks like | Needs |
 | --- | --- | --- |
-| Generated hostname | `notes-1a2b3c.apps.example.com` | Nothing. Every Deployment has one, and republishing keeps it. |
+| Generated hostname | `notes.apps.example.com` (or `notes-1a2b3c.…` if that slug is taken) | Nothing. Every Deployment has one, and republishing keeps it. |
 | Custom domain | `notes.example.org` | DNS you control, and a proxy that terminates TLS for the name. |
 | Path address | `example.com/p/notes` | An installation with `KONAE_DOMAIN` set. No DNS of your own. |
 

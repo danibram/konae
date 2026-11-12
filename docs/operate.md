@@ -17,7 +17,7 @@ The complete stack, with an Nginx gateway and an S3 store, runs under Compose:
 docker compose up --build
 ```
 
-Open [http://app.localhost:8080](http://app.localhost:8080). Published apps get addresses such as `http://tiny-tasks-a1b2c3.localhost:8080`, and `*.localhost` resolves to this machine in current browsers without editing `/etc/hosts`.
+Open [http://app.localhost:8080](http://app.localhost:8080). Published apps get addresses such as `http://tiny-tasks.localhost:8080` (or `http://tiny-tasks-a1b2c3.localhost:8080` when that slug is already taken), and `*.localhost` resolves to this machine in current browsers without editing `/etc/hosts`.
 
 Compose publishes the gateway and the S3 API on `127.0.0.1` only. The Konae container binds `0.0.0.0` inside the Compose network with the development setup key, so the Compose file sets `KONAE_ALLOW_DEFAULT_KEY=1`. Do not copy that setting to a reachable installation.
 
@@ -94,7 +94,7 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_SCHEME` | `http` for `localhost`, `https` otherwise | Scheme of the derived origins, `http` or `https`. Read only with `KONAE_DOMAIN`. Any other value stops the Kernel. |
 | `KONAE_PUBLIC_PORT` | unset | Port appended to the derived origins, such as `8080`. Read only with `KONAE_DOMAIN`. A value that is not a port number stops the Kernel. |
 | `KONAE_PUBLIC_ORIGIN` | `http://localhost:8080`, or `<scheme>://app.<domain>` with `KONAE_DOMAIN` | Origin used to build app addresses. Its scheme and port are copied onto each app hostname, and an `https://` origin makes OAuth metadata use HTTPS. `bun run dev:local` and `konae dev` set `http://localhost:<port>`. |
-| `KONAE_HOST_SUFFIX` | `localhost`, or `<domain>` with `KONAE_DOMAIN` | Domain appended to new app hostnames, as in `<slug>-a1b2c3.localhost`. |
+| `KONAE_HOST_SUFFIX` | `localhost`, or `<domain>` with `KONAE_DOMAIN` | Domain appended to new app hostnames, as in `<slug>.localhost`, or `<slug>-a1b2c3.localhost` when the slug is taken. |
 | `KONAE_MCP_ORIGIN` | unset, or the public origin with `KONAE_DOMAIN` | `konae` only. Public origin of the owner's MCP, without a path, when it differs from the hosting origin. OAuth discovery advertises it. |
 | `KONAE_DNS_RESOLVER` | the first `nameserver` in `/etc/resolv.conf` | The resolver, as an IP address with an optional port, that the Kernel asks for a custom domain's TXT record `_konae.<hostname>` (ADR-0014). |
 | `KONAE_S3_ENDPOINT` | unset | S3 endpoint URL. The Kernel always serves artifacts from its data directory. With this set it also uploads each artifact to `KONAE_ARTIFACT_BUCKET` and can send copies to `KONAE_DATA_BUCKET`. Unset, the Kernel ignores the other `KONAE_S3_*` variables. |
