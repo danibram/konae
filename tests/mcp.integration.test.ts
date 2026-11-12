@@ -813,6 +813,10 @@ describe("authenticated MCP", () => {
     const args = { client_id: registration.client_id, redirect_uri: registration.redirect_uris[0], response_type: "code", code_challenge_method: "S256", code_challenge: challenge, scope: "read", resource: `${url}/mcp`, state: "test-state" };
     const consent = await fetch(`${url}/oauth/authorize?${new URLSearchParams(args)}`, { headers: { cookie: aliceCookie } });
     const html = await consent.text();
+    // Chrome applies form-action to the post-consent redirect; the client's
+    // origin must be named or Allow looks like a no-op in Chromium webviews.
+    expect(consent.headers.get("content-security-policy")).toContain("form-action");
+    expect(consent.headers.get("content-security-policy")).toContain("http://127.0.0.1:9999");
     const csrf = html.match(/name=csrf value="([^"]+)"/)![1];
     const approved = await fetch(`${url}/oauth/authorize`, { method: "POST", headers: { cookie: aliceCookie, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ ...args, csrf }), redirect: "manual" });
     expect(approved.status).toBe(303);

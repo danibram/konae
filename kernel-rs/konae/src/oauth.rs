@@ -293,8 +293,9 @@ async fn authorize_page(
         })
         .collect::<String>();
     // authorization() already matched redirect_uri against the registration.
-    let destination = url::Url::parse(a.get("redirect_uri").map(String::as_str).unwrap_or(""))
-        .ok()
+    let redirect = url::Url::parse(a.get("redirect_uri").map(String::as_str).unwrap_or("")).ok();
+    let destination = redirect
+        .as_ref()
         .and_then(|url| {
             url.host_str().map(|host| match url.port() {
                 Some(port) => format!("{host}:{port}"),
@@ -302,10 +303,22 @@ async fn authorize_page(
             })
         })
         .unwrap_or_default();
-    // Post to this origin by absolute URL, and name it in form-action. Cursor's
-    // OAuth webview can leave 'self' not matching app.konae.es, which blocked
-    // Allow access with form-action 'self' alone.
+    // Chrome applies form-action to every hop after the consent POST, including
+    // the 303 to the client's redirect_uri. Its console still names this page's
+    // action URL, which is why the violation looks like a same-origin block.
+    // Name the public origin (Cursor webviews can leave 'self' unmatched) and
+    // the already-validated redirect origin.
     let pub_origin = origin(&state, &headers);
+    let redirect_origin = redirect
+        .as_ref()
+        .and_then(csp_form_origin)
+        .filter(|value| value != &pub_origin)
+        .unwrap_or_default();
+    let form_action = if redirect_origin.is_empty() {
+        format!("'self' {pub_origin}")
+    } else {
+        format!("'self' {pub_origin} {redirect_origin}")
+    };
     let body = format!(
         "<!doctype html><html lang=en><meta charset=utf-8><title>Authorize Konae access</title><main><h1>Allow access for {destination}?</h1><p>Approving sends an access token to <strong>{destination}</strong>. Only continue if you started this sign-in from an app you trust at that address.</p><p>The client calls itself \"{}\". Clients register themselves, so Konae has not verified this name.</p><p>The token grants {} access to <strong>all of your projects</strong> for one hour. You can revoke it on your owner account page in the editor.</p><form method=post action=\"{authorize}\">{fields}<input type=hidden name=csrf value=\"{csrf}\"><button>Allow access</button></form><a href=/_konae/owner/login>Cancel</a></main></html>",
         escape(client["client_name"].as_str().unwrap()),
@@ -314,7 +327,7 @@ async fn authorize_page(
         authorize = escape(&format!("{pub_origin}/oauth/authorize")),
     );
     let csp = format!(
-        "default-src 'none'; form-action 'self' {pub_origin}; frame-ancestors 'none'; base-uri 'none'"
+        "default-src 'none'; form-action {form_action}; frame-ancestors 'none'; base-uri 'none'"
     );
     (
         [
@@ -479,6 +492,20 @@ fn oauth_error(kind: &str, description: &str) -> Response {
         .into_response()
 }
 
+/// Scheme + host (+ port) for a CSP `form-action` host-source. Only emits
+/// origins that `valid_redirect` already accepts, so the value cannot break
+/// out of the directive.
+fn csp_form_origin(url: &url::Url) -> Option<String> {
+    if !valid_redirect(url.as_str()) {
+        return None;
+    }
+    let host = url.host_str()?;
+    Some(match url.port() {
+        Some(port) => format!("{}://{host}:{port}", url.scheme()),
+        None => format!("{}://{host}", url.scheme()),
+    })
+}
+
 fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -490,6 +517,22 @@ fn escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn csp_form_origin_keeps_scheme_host_and_port() {
+        assert_eq!(
+            csp_form_origin(&url::Url::parse("https://www.cursor.com/agents/mcp/oauth/callback").unwrap()).as_deref(),
+            Some("https://www.cursor.com")
+        );
+        assert_eq!(
+            csp_form_origin(&url::Url::parse("http://127.0.0.1:9999/callback").unwrap()).as_deref(),
+            Some("http://127.0.0.1:9999")
+        );
+        assert_eq!(
+            csp_form_origin(&url::Url::parse("http://evil.example/callback").unwrap()),
+            None
+        );
+    }
 
     #[test]
     fn unused_clients_expire_so_registration_never_locks_out() {
