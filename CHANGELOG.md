@@ -6,6 +6,12 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-12
+
+### Fixed
+
+- MCP OAuth consent allows Cursor's registered callback at `www.cursor.com` to redirect to `cursor.com` after approval in Chromium. The consent page omits CSP `form-action`; Chromium applies that directive to the whole post-Allow redirect chain and blocked the hop even when both origins were listed.
+
 ## [0.1.3] - 2026-11-12
 
 ### Added
