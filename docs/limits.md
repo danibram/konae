@@ -30,10 +30,11 @@ A Capsule and a Deployment run into these numbers. The Validation Gate and the K
 | Limit | Value |
 | --- | --- |
 | Rows | A top-level `LIMIT`, or one row, and a 1000-row cap |
-| Response size | 2 MiB |
+| Response size | 2 MiB, counted as each column is read, a blob as its hex. The Kernel stops reading the row at the column that passes it. The limit also covers table browsing and notice rows; an oversized notice result rolls back its mutation |
 | Statement time | 2 seconds, checked between SQLite steps |
 | `LIKE` or `GLOB` pattern | 500 bytes |
 | One value | 2 MiB |
+| SQLite memory, all apps together | Half of available memory, including Linux cgroup limits; 256 MiB when unknown, or `KONAE_SQLITE_HEAP_BYTES`. A statement past it fails with SQLite's out-of-memory error |
 | App database | 256 MiB |
 | Accounts database, `identity.sqlite` | 64 MiB |
 | Usage store, `usage.sqlite` | 128 MiB |
@@ -46,6 +47,7 @@ A Capsule and a Deployment run into these numbers. The Validation Gate and the K
 | Route request body | 64 KiB |
 | Actions and routes without a session or key | 30 per 10 seconds per client address and Deployment |
 | Actions and routes with a session or key | 120 per 10 seconds per app user or key |
+| Action statements running at once | 4 per Deployment, queries and mutations together. A call that gets no slot within 2 seconds answers `rate-limited` with `Retry-After`, as a call over its address limit does. Scheduled runs and the mutations a call's answer triggers are not counted |
 | Unknown or revoked API keys | 10 per minute per client address and Deployment |
 | Signature clock window | 300 seconds |
 | Replay window for one signature | 600 seconds |

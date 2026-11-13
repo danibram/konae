@@ -170,7 +170,7 @@ The SDK calls `/_konae/mcp` on the app's host with the app session. [The miniapp
 
 On a public app a visitor may call actions declared `anonymous` and read files uploaded as `public`. Uploads, private files and `authenticated` actions need a session. On a private app nothing loads or runs without one.
 
-A signed-out visitor may call `actions_invoke` 30 times per 10 seconds per client address and Deployment, and each app user 120 times per 10 seconds. Past that the call answers `rate-limited` with `Retry-After`. The Kernel counts the socket's peer address and reads `X-Forwarded-For` only from peers in `KONAE_TRUSTED_PROXIES`.
+A signed-out visitor may call `actions_invoke` 30 times per 10 seconds per client address and Deployment, and each app user 120 times per 10 seconds. Past that the call answers `rate-limited` with `Retry-After`, and so does a call that finds four statements of its Deployment already running and no slot free within 2 seconds. The Kernel counts the socket's peer address and reads `X-Forwarded-For` only from peers in `KONAE_TRUSTED_PROXIES`.
 
 Set `manifest.fileAccess` to `"app-users"` to require an app session for every file, including existing uploads. The uploader keeps deletion rights. Removing the policy restores each original file visibility. Files uploaded under the policy then become private to the uploader.
 
@@ -788,7 +788,7 @@ An export carries the hostname without its token. The import creates a pending c
 
 ## Generated hostname
 
-The first publish names a Deployment `<slug>.<suffix>`, or `<slug>-<code>.<suffix>` when another app holds the slug, and later releases keep that name. `hostname_set { deploymentId, name }` moves it to another name under the same suffix and needs `publish`. `name` is one label, such as `notes`, or the whole hostname.
+The first publish names a Deployment `<slug>.<suffix>`, or `<slug>-<code>.<suffix>` when another app holds the slug or the name is one of the installation's own hosts, such as `app.<domain>`, and later releases keep that name. `hostname_set { deploymentId, name }` moves it to another name under the same suffix and needs `publish`. `name` is one label, such as `notes`, or the whole hostname.
 
 ```json
 { "deploymentId": "…", "hostname": "notes.apps.example.com", "url": "https://notes.apps.example.com", "changed": true,
@@ -911,6 +911,8 @@ To import into a new app on another installation, create the project there with 
 | A component over its limit | `Transfer size is outside the limit of 67108864 bytes for the identity component.` |
 | Not enough disk at `transfer_begin`, `project_export` or `release_plan` | `Not enough free space on the Kernel volume to import this app: 340 MiB needed, 120 MiB free.` |
 | A database that holds a trigger or a view | `The database holds CREATE TRIGGER <name>, and Konae runs no triggers or views. Drop it before importing.` |
+| An accounts or usage component that holds a trigger or a view | `The accounts component holds CREATE TRIGGER <name>, and Konae runs no triggers or views. Drop it before importing.` |
+| An accounts component with a password hash this Kernel did not write | `The accounts component holds a password hash this Kernel did not write.` |
 
 ### Import into an existing app
 

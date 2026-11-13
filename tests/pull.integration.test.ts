@@ -5,6 +5,7 @@ import path from "node:path";
 import { McpClient } from "../src/mcp/client";
 import { INIT_TEMPLATES, buildLocal, configOf, initLocal, localKernel, publishLocal, readSettings, resetData, setDevSecrets } from "../scripts/konae";
 import { pullLocal, readPulled } from "../scripts/pull";
+import { provideLocalAppDependencies } from "./local-app-deps";
 
 // init, publish, pull and dev --reset: `origin` is a Konae installation an
 // app is published to, and each folder runs locally on the kernel binary, as
@@ -101,6 +102,7 @@ describe("every template init offers", () => {
     test(`${template} runs on the kernel binary with no data and serves its page`, async () => {
       const folder = path.join(root, `template-${template}`);
       await initLocal(folder, { name: `Template ${template}`, template });
+      await provideLocalAppDependencies(folder);
       const { url, set, kernel, local } = await serveLocally(folder);
       // Only the webhook receiver signs, and a second run finds its secret held.
       expect(set).toHaveLength(template === "webhook" ? 1 : 0);
@@ -117,12 +119,14 @@ describe("a project starts the same through MCP and through init", () => {
     const read = async (folder: string) => Object.fromEntries(await Promise.all(["actions.json", "app.js", "index.html", "schema.sql", "styles.css"].map(async (name) => [name, await readFile(path.join(folder, "app", name), "utf8")])));
     const notes = path.join(root, "mcp-notes");
     configOf(await initLocal(notes));
+    await provideLocalAppDependencies(notes);
     const created = await origin.owner.call<{ files: Record<string, string>; manifest: { visibility: string } }>("project_create", { name: "From MCP" });
     expect(created.files).toEqual(await read(notes));
     expect(created).toMatchObject({ manifest: { visibility: "private" } });
 
     const tasks = path.join(root, "mcp-tasks");
     const config = configOf(await initLocal(tasks, { template: "tasks" }));
+    await provideLocalAppDependencies(tasks);
     const shared = await origin.owner.call<{ files: Record<string, string>; manifest: { visibility: string } }>("project_create", { name: "Shared from MCP", template: "tasks" });
     expect(shared.files).toEqual(await read(tasks));
     expect(shared.manifest.visibility).toBe(config.project.manifest.visibility);
@@ -138,6 +142,7 @@ describe("init, publish, pull, dev --reset", () => {
   test("a project init wrote without a Kernel publishes, and its rows and accounts arrive in data/", async () => {
     app = path.join(root, "app");
     config = configOf(await initLocal(app, { name: "Pulled notes" }));
+    await provideLocalAppDependencies(app);
     expect(config.url).toBeUndefined();
 
     const published = await publishLocal(app, { ...config, url: origin.url }, origin.token);
@@ -183,6 +188,7 @@ describe("init, publish, pull, dev --reset", () => {
   test("a folder whose schema.sql is ahead of the exported data runs on it, and the Kernel adds the column with every row kept", async () => {
     const next = path.join(root, "next");
     const born = configOf(await initLocal(next, { name: "Next version" }));
+    await provideLocalAppDependencies(next);
     const published = await publishLocal(next, { ...born, url: origin.url }, origin.token);
     await origin.owner.call("signup_policy_set", { deploymentId: published.id, mode: "open" });
     await (await member(origin, hostOf(published), "signup")).call("actions_invoke", { name: "notes.create", input: { title: "Before the column" } });

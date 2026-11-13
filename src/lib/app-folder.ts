@@ -160,6 +160,10 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 - \`schema.sql\` is the model. Add tables and columns there; the Kernel applies an added table, column or index on the next publish or start, and a change that drops or retypes one only with the confirmation it names.
 - A page loads no script from another origin and uses no inline event handler.
 
+## Rules nothing checks
+
+- Text from a row, an upload or a user is written into the page with \`textContent\` or the template's \`escapeHtml\`, in attributes too, and is never concatenated into HTML unescaped.
+
 ## Run it
 
 1. \`npm install\`, then \`npm run build\` to write \`dist/\`.

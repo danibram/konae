@@ -437,7 +437,11 @@ pub struct ApiKey {
 /// owner revoked has no reason.
 pub const REVOKED_AT_IMPORT: &str = "import";
 
-fn keys_table(db: &Connection) -> rusqlite::Result<()> {
+/// The columns of `api_keys`, as `keys_table` and `add_revoked_reason` write
+/// them. An import copies only these names, so none from a file reaches SQL.
+pub(crate) const API_KEY_COLUMNS: [&str; 8] = ["id", "token_hash", "name", "actions", "files", "created_at", "revoked_at", "revoked_reason"];
+
+pub(crate) fn keys_table(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS api_keys(
            id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
@@ -653,7 +657,7 @@ fn resolve_caller(state: &AppState, deployment: &Deployment, headers: &HeaderMap
     }
 }
 
-fn rate_limited(wait: std::time::Duration) -> Response {
+pub(crate) fn rate_limited(wait: std::time::Duration) -> Response {
     let mut response = refusal(StatusCode::TOO_MANY_REQUESTS, "rate-limited");
     response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(wait.as_secs().max(1)));
     response
@@ -1136,7 +1140,10 @@ async fn run_verified(
     };
     let db_path = database_path(state, &deployment.id);
     let _guard = action_lock(state, &deployment.id, &action.kind).await;
-    let result = run_action(db_path, action, params).await;
+    let result = match state.guards.statement_permit(&deployment.id).await {
+        Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
+        Err(wait) => return rate_limited(wait),
+    };
     // A notice below writes mail.sqlite; the app's other calls need not wait for it.
     drop(_guard);
     // Usage and Signals do not count what someone who entered as an account does.

@@ -1,6 +1,6 @@
 import type { MiniAppProject } from "./types";
 import { createDefaultManifest } from "../deployments/manifest";
-import { appStyles } from "./templates/shared";
+import { appStyles, escapeHtmlSource } from "./templates/shared";
 
 /** The design system, then nothing: the starter needs no rules of its own. */
 const starterStyles = appStyles();
@@ -57,9 +57,9 @@ async function loadTasks() {
   count.textContent = tasks.length + (tasks.length === 1 ? ' item' : ' items');
   list.innerHTML = tasks.length ? tasks.map(task =>
     '<article class="ui-list-item task ' + (task.done ? 'done' : '') + '"' + (task.done ? ' data-done' : '') + '>' +
-      '<span class="ui-list-lead"><button class="ui-tick" data-id="' + task.id + '" aria-label="Toggle task" aria-pressed="' + (task.done ? 'true' : 'false') + '"></button></span>' +
+      '<span class="ui-list-lead"><button class="ui-tick" data-id="' + escapeHtml(task.id) + '" aria-label="Toggle task" aria-pressed="' + (task.done ? 'true' : 'false') + '"></button></span>' +
       '<div class="ui-list-main"><p>' + escapeHtml(task.title) + '</p></div>' +
-      '<div class="ui-list-end">#' + task.id + '</div>' +
+      '<div class="ui-list-end">#' + escapeHtml(task.id) + '</div>' +
     '</article>'
   ).join('') : '<p class="ui-list-empty">Nothing here yet. Anyone with this link sees the same list.</p>';
 }
@@ -69,17 +69,13 @@ async function loadFiles() {
   fileShelf.innerHTML = files.map(file =>
     '<figure class="ui-tile" title="' + escapeHtml(file.name) + '">' +
     (file.type.startsWith('image/')
-      ? '<img src="' + file.url + '" alt="' + escapeHtml(file.name) + '">'
+      ? '<img src="' + escapeHtml(file.url) + '" alt="' + escapeHtml(file.name) + '">'
       : '<div class="ui-tile-media">' + escapeHtml(file.name) + '</div>') +
     '</figure>'
   ).join('');
 }
 
-function escapeHtml(value) {
-  const node = document.createElement('span');
-  node.textContent = value;
-  return node.innerHTML;
-}
+${escapeHtmlSource}
 
 async function addTask() {
   const title = input.value.trim();

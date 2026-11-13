@@ -50,5 +50,5 @@ The Gate is TypeScript and the Kernel is Rust, held together by the case files. 
 
 - Adding a rule means adding a code to the table and a case to a case file first.
 - The owner's SQL in the Data panel is not a Server Action, so the `LIMIT` rule does not apply there. The runtime cap does.
-- `instr` and `replace` stay unbounded inside one call, short of a lower value cap.
+- `instr` and `replace` stay unbounded inside one call, short of a lower value cap. One Deployment runs at most four action statements at once, so one app's slow calls tie up four blocking threads, not the pool.
 - An expression in a select list without `AS` gets a key only SQLite would print. The Gate warns and the Kernel does not refuse it.

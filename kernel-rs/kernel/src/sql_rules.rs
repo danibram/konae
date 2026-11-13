@@ -199,15 +199,17 @@ fn is_trigger(tokens: &[SqlTok]) -> bool {
     words.first().is_some_and(|word| word.is_word("CREATE")) && words.iter().skip(1).take(3).any(|word| word.is_word("TRIGGER"))
 }
 
-/// The refusal for an app database that arrives holding a trigger or a view,
-/// in an import, an initial database or a package. schema.sql cannot create
-/// either, so one in a file came from somewhere the Gate never read.
-pub fn stored_trigger_or_view(db: &rusqlite::Connection) -> rusqlite::Result<Option<String>> {
+/// The refusal for a database file that arrives holding a trigger or a view,
+/// in an import, an initial database or a package. `what` names the file in
+/// the sentence. schema.sql cannot create either, so one in a file came from
+/// somewhere the Gate never read. SQLite reads `type` without regard to case,
+/// so the match does the same.
+pub fn stored_trigger_or_view(db: &rusqlite::Connection, what: &str) -> rusqlite::Result<Option<String>> {
     use rusqlite::OptionalExtension;
     db.query_row(
-        "SELECT upper(type), name FROM sqlite_master WHERE type IN ('trigger', 'view') ORDER BY type, name LIMIT 1",
+        "SELECT upper(type), name FROM sqlite_master WHERE lower(type) IN ('trigger', 'view') ORDER BY lower(type), name LIMIT 1",
         [],
-        |row| Ok(format!("The database holds CREATE {} {}, and Konae runs no triggers or views. Drop it before importing.", row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        |row| Ok(format!("The {what} holds CREATE {} {}, and Konae runs no triggers or views. Drop it before importing.", row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
     )
     .optional()
 }

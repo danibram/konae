@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient, encodeBase64, type Transfer } from "../src/mcp/client";
 import { signRoute } from "../src/lib/route-signature";
+import { provideLocalAppDependencies } from "./local-app-deps";
 import { Recorder, callTool, cli, renderDocument, startKernel, type KernelProcess, type ToolAnswer } from "./mcp-walkthrough";
 
 // Follows docs/mcp-walkthrough.md step by step on two Kernels and fails when
@@ -113,7 +114,10 @@ function shownCommand(args: string[], env: Record<string, string> = {}) {
 async function run(args: string[], env: Record<string, string> = {}, shownEnv = env) {
   const result = await cli(args, env);
   r.add("sh", shownCommand(args, shownEnv));
-  r.add("text", result.output || "(no output)");
+  const output = ["build", "publish"].includes(args[0])
+    ? result.output.trim().split(/\r?\n/).filter((line) => line.trim()).at(-1)
+    : result.output || "(no output)";
+  r.add("text", output || "(no output)");
   return result;
 }
 
@@ -268,7 +272,8 @@ describe("the MCP walkthrough", () => {
     r.add("sh", "cat /tmp/orders/konae.json");
     r.add("json", JSON.stringify(await config(), null, 2));
     r.add("sh", "ls /tmp/orders /tmp/orders/app");
-    r.add("text", [...(await readdir(app())).filter((name) => !name.startsWith(".")).sort(), "", ...(await readdir(path.join(app(), "app"))).sort()].join("\n"));
+    r.add("text", [...(await readdir(app())).filter((name) => !name.startsWith(".") && name !== "node_modules").sort(), "", ...(await readdir(path.join(app(), "app"))).sort()].join("\n"));
+    await provideLocalAppDependencies(app());
   }, 60_000);
 
   test("5. dev", async () => {
@@ -311,9 +316,12 @@ describe("the MCP walkthrough", () => {
 
   test("7. a signing secret, then publish with the policy konae.json names", async () => {
     r.step("publish-refused");
-    const refused = await run(["publish", "--dir", app()]);
+    const refused = await cli(["publish", "--dir", app()]);
     expect(refused.code).toBe(1);
-    expect(refused.output).toBe("Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing.");
+    const refusal = "Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing.";
+    expect(refused.output.split(/\r?\n/).at(-1)).toBe(refusal);
+    r.add("sh", shownCommand(["publish", "--dir", app()]));
+    r.add("text", refusal);
 
     r.step("secret");
     await tool("secret_set", { projectId: s.projectId, name: "orders_webhook", value: secret });
@@ -322,7 +330,7 @@ describe("the MCP walkthrough", () => {
     expect((await run(["publish", "--dir", app()])).code).toBe(0);
     const receipt = JSON.parse(await readFile(path.join(app(), ".konae/published.json"), "utf8"));
     Object.assign(s, { deploymentId: receipt.id, hostname: receipt.hostname });
-    r.name(receipt.hostname.split(".")[0], "orders-<suffix>");
+    expect(receipt.hostname).toBe("orders.localhost");
     const policy = await tool("signup_policy_read", { deploymentId: s.deploymentId });
     expect((policy.result as any).mode).toBe("invitation");
     await http("GET", a, "/about", { host: s.hostname });
@@ -501,7 +509,7 @@ describe("the MCP walkthrough", () => {
     r.name((plan.result as any).planId, "<plan id>");
     const applied = await tool("release_apply", { planId: (plan.result as any).planId }, { token: s.tokenB, kernel: b, pick: (value) => ({ id: value.id, hostname: value.hostname, url: value.url, signupPolicy: value.signupPolicy }) });
     Object.assign(s, { deploymentB: (applied.result as any).id, hostnameB: (applied.result as any).hostname });
-    r.name(s.hostnameB.split(".")[0], "orders-<destination suffix>");
+    expect(s.hostnameB).toBe("orders.localhost");
     for (const id of [...Object.values(uploads), release.transferId]) await client.cancel(id).catch(() => {});
 
     r.step("import-check");

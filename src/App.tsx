@@ -64,7 +64,7 @@ import { parseServerActionSource } from "./kernel/actions";
 import { applyLocalAgentEdit } from "./lib/agent";
 import { parseRoute, pushRoute } from "./lib/routing";
 import { PublishedAppView } from "./components/PublishedAppView";
-import { applyTemplate, type TemplateId } from "./lib/templates";
+import { applyTemplate, defaultTemplate, type TemplateId } from "./lib/templates";
 import { cloneStarter } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
 import { createDirectory, createFile, directoriesForFiles, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
@@ -843,7 +843,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     openEditorRoute(next.id);
   };
 
-  const createProject = (name: string, template: TemplateId | "scratch" = "tasks") => {
+  const createProject = (name: string, template: TemplateId | "scratch" = defaultTemplate) => {
     arrival.current = template === "scratch" ? "agent" : "preview";
     const base = createWorkspaceProject(name, projects);
     // A project described from scratch keeps the private default; only a template made for visitors starts public.

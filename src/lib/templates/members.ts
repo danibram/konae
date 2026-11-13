@@ -127,7 +127,7 @@ async function loadPosts() {
   const staff = me.role !== 'member';
   $('#posts').innerHTML = posts.length ? posts.map(post =>
     '<article class="ui-list-item"><div class="ui-list-main"><p>' + escapeHtml(post.body) + '</p><small>' + escapeHtml(post.author ?? 'Someone') + ' · ' + when(post.created_at) + '</small></div>' +
-    (staff || post.author_id === me.user_id ? '<button class="ui-button ui-button-danger ui-button-sm" data-remove="' + post.id + '">Remove</button>' : '') +
+    (staff || post.author_id === me.user_id ? '<button class="ui-button ui-button-danger ui-button-sm" data-remove="' + escapeHtml(post.id) + '">Remove</button>' : '') +
     '</article>'
   ).join('') : '<p class="ui-list-empty">No posts yet.</p>';
 }
@@ -136,7 +136,7 @@ async function loadMembers() {
   const members = await miniapp.actions.call('members.list');
   const owner = me.role === 'owner';
   $('#members').innerHTML = members.map(member =>
-    '<article class="ui-list-item"><div class="ui-list-main"><p>' + escapeHtml(member.display_name) + '</p><small>' + member.role + '</small></div>' +
+    '<article class="ui-list-item"><div class="ui-list-main"><p>' + escapeHtml(member.display_name) + '</p><small>' + escapeHtml(member.role) + '</small></div>' +
     (owner && member.role === 'member' ? '<button class="ui-button ui-button-sm" data-promote="' + escapeHtml(member.user_id) + '">Make admin</button>'
       : owner && member.role === 'admin' ? '<button class="ui-button ui-button-sm" data-demote="' + escapeHtml(member.user_id) + '">Make member</button>' : '') +
     '</article>'

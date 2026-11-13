@@ -39,6 +39,7 @@ pub mod files;
 pub mod folder;
 pub mod google;
 pub mod guard;
+pub mod heap;
 pub mod hostname;
 pub mod hosts;
 pub mod import;
@@ -564,6 +565,10 @@ pub async fn start(
     let schedule_clock = schedule::Clock::from_env(&startup.bind)?;
     let (state, copy_config) = state_from_env(startup, installation, mail_key, own_origins, audit).await?;
     path::load(&state);
+    let own_hosts = domain::Rules::of(&state).installation_hosts;
+    for deployment in state.deployments.read().await.values().filter(|deployment| own_hosts.contains(&deployment.hostname)) {
+        eprintln!("Not serving apps/{}: {} is this installation's own host. Move the app with hostname_set.", deployment.id, deployment.hostname);
+    }
     if let Some(config) = copy_config {
         copies::spawn_schedule(state.clone(), config);
     }
@@ -585,6 +590,8 @@ pub async fn state_from_env(
     own_origins: Vec<String>,
     audit: Option<runtime::AuditSink>,
 ) -> Result<(AppState, Option<copies::CopyConfig>)> {
+    // Before any connection opens, so no statement runs without the ceiling.
+    heap::limit_from_env()?;
     let data_root = startup.data_root.clone();
     let public_origin = startup.hosts.public_origin.clone();
     tokio::fs::create_dir_all(crate::layout::apps(&data_root)).await?;
@@ -1308,7 +1315,10 @@ pub async fn invoke_action(
         Ok(Ran { answer: json!({"recorded": true}), rows: Vec::new() })
     } else {
         let _guard = action_lock(&state, &deployment.id, &action.kind).await;
-        run_action(db_path, action, params).await
+        match state.guards.statement_permit(&deployment.id).await {
+            Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
+            Err(wait) => return http::rate_limited(wait),
+        }
     };
     let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
     // Usage and Signals do not count what someone who entered as this account does.
@@ -2483,16 +2493,33 @@ pub fn browse_table(path: &Path, body: &Value) -> Result<Value> {
         .iter()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
+    let mut budget = ResultBudget::default();
+    let metadata_bytes = columns.iter().fold(128usize, |bytes, column| {
+        bytes.saturating_add(browse_column_json_cost(column))
+    });
+    anyhow::ensure!(budget.reserve(metadata_bytes), "{QUERY_RESULT_TOO_LARGE}");
     let rows = bounded_rows(statement
         .query_map([page_size, page.saturating_mul(page_size)], |row| {
             let mut values = serde_json::Map::new();
             let mut row_id = Value::Null;
+            let mut first_value = true;
+            if !budget.begin_row(22) {
+                return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(ResultTooLarge)));
+            }
             for (i, name) in col_names.iter().enumerate() {
-                let value = sql_json(row.get_ref(i)?);
                 if name == "__konae_rowid" {
-                    row_id = value;
+                    let value = row.get_ref(i)?;
+                    if !budget.spend_value(value) {
+                        return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(ResultTooLarge)));
+                    }
+                    row_id = sql_json(value);
                 } else {
-                    values.insert(name.clone(), value);
+                    let value = row.get_ref(i)?;
+                    if !budget.spend_column(name, value, first_value) {
+                        return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(ResultTooLarge)));
+                    }
+                    first_value = false;
+                    values.insert(name.clone(), sql_json(value));
                 }
             }
             Ok(json!({"rowId": row_id, "values": values}))
@@ -2530,12 +2557,12 @@ pub fn run_admin_sql(path: &Path, sql: &str) -> Result<Value> {
         let mut rows = statement.query([])?;
         let mut values = Vec::new();
         let mut result_bytes = 0;
+        let mut budget = ResultBudget::default();
         while let Some(row) = rows.next()? {
-            let mut record = serde_json::Map::new();
-            for (index, name) in names.iter().enumerate() {
-                record.insert(name.clone(), sql_json(row.get_ref(index)?));
-            }
-            values.push(Value::Object(record));
+            let Some(record) = bounded_row(row, &names, &mut budget)? else {
+                anyhow::bail!("SQL result exceeds 2 MiB.");
+            };
+            values.push(record);
             result_bytes += serde_json::to_vec(values.last().unwrap())?.len();
             if result_bytes > 2 * 1024 * 1024 {
                 anyhow::bail!("SQL result exceeds 2 MiB.");
@@ -2766,8 +2793,21 @@ impl Ran {
 }
 
 pub async fn run_action(path: PathBuf, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Ran> {
+    run_action_holding(path, action, params, None).await
+}
+
+/// Like `run_action`, for a statement that holds one of the Deployment's
+/// slots (`Guards::statement_permit`). The permit moves into the blocking
+/// thread, so the slot stays held until the statement ends, whether or not
+/// the caller still waits for it.
+pub async fn run_action_in_slot(path: PathBuf, action: &ActionDefinition, params: Vec<SqlValue>, permit: tokio::sync::OwnedSemaphorePermit) -> Result<Ran> {
+    run_action_holding(path, action, params, Some(permit)).await
+}
+
+async fn run_action_holding(path: PathBuf, action: &ActionDefinition, params: Vec<SqlValue>, permit: Option<tokio::sync::OwnedSemaphorePermit>) -> Result<Ran> {
     let action = action.clone();
     tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         if action.kind == "query" {
             run_query(&path, &action, params).map(|rows| Ran { answer: Value::from(rows), rows: Vec::new() })
         } else {
@@ -2786,13 +2826,11 @@ pub fn run_query(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) 
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    let mut budget = ResultBudget::default();
     let rows = bounded_rows(statement
         .query_map(params_from_iter(params), |row| {
-            let mut object = serde_json::Map::new();
-            for (index, name) in names.iter().enumerate() {
-                object.insert(name.clone(), sql_json(row.get_ref(index)?));
-            }
-            Ok(Value::Object(object))
+            bounded_row(row, &names, &mut budget)?
+                .ok_or_else(|| rusqlite::Error::ToSqlConversionFailure(Box::new(ResultTooLarge)))
         })?)?;
     if rows.len() > 1000 {
         anyhow::bail!("Action returned more than 1000 rows.");
@@ -2807,18 +2845,33 @@ pub fn run_mutation(path: &Path, action: &ActionDefinition, params: Vec<SqlValue
     // clause the Kernel appends; the author's statement cannot hold one.
     let columns = action.notify.as_ref().map(|_| notify::returning("", action)).unwrap_or_default();
     let mut rows = Vec::new();
+    let mut budget = ResultBudget::default();
     let changes = if columns.is_empty() {
         transaction.prepare_cached(&action.statement)?.execute(params_from_iter(params))? as u64
     } else {
         let mut statement = transaction.prepare_cached(&notify::with_returning(&action.statement, &columns))?;
         let mut cursor = statement.query(params_from_iter(params))?;
+        let mut serialized_bytes = 2usize;
         // SQLite makes every change on the first step, so the rows past the
         // cap are skipped, not left unchanged.
         while let Some(row) = cursor.next()? {
             if rows.len() < notify::MAX_RETURNED_ROWS {
                 let mut object = serde_json::Map::new();
+                if !budget.begin_row(2) {
+                    anyhow::bail!("{QUERY_RESULT_TOO_LARGE}");
+                }
                 for (index, column) in columns.iter().enumerate() {
-                    object.insert(column.clone(), sql_json(row.get_ref(index)?));
+                    let value = row.get_ref(index)?;
+                    if !budget.spend_column(column, value, index == 0) {
+                        anyhow::bail!("{QUERY_RESULT_TOO_LARGE}");
+                    }
+                    object.insert(column.clone(), sql_json(value));
+                }
+                serialized_bytes = serialized_bytes
+                    .saturating_add(usize::from(!rows.is_empty()))
+                    .saturating_add(serde_json::to_vec(&object)?.len());
+                if serialized_bytes > 2 * 1024 * 1024 {
+                    anyhow::bail!("{QUERY_RESULT_TOO_LARGE}");
                 }
                 rows.push(object);
             }
@@ -3389,7 +3442,9 @@ pub async fn deployment_for(state: &AppState, headers: &HeaderMap) -> Option<Dep
     deployment_by_id(state, id).await
 }
 
-/// The Deployment for a generated hostname or a verified alias.
+/// The Deployment for a generated hostname or a verified alias. The
+/// installation's own hosts answer as no app, whatever the map holds, so a
+/// stored record on one of them cannot take the owner door.
 pub async fn deployment_for_host(state: &AppState, headers: &HeaderMap) -> Option<Deployment> {
     let host = headers
         .get(header::HOST)?
@@ -3397,6 +3452,9 @@ pub async fn deployment_for_host(state: &AppState, headers: &HeaderMap) -> Optio
         .ok()?
         .split(':')
         .next()?;
+    if domain::Rules::of(state).installation_hosts.iter().any(|own| own.eq_ignore_ascii_case(host.trim_end_matches('.'))) {
+        return None;
+    }
     let deployments = state.deployments.read().await;
     if let Some(deployment) = deployments.get(host) {
         return Some(deployment.clone());
@@ -3600,13 +3658,153 @@ pub fn arm_deadline(db: &Connection) {
     db.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
 }
 
+const QUERY_RESULT_TOO_LARGE: &str = "Query result exceeds 2 MiB or 1000 rows.";
+
+/// What an oversized action result answers when a column is read.
+#[derive(Debug)]
+struct ResultTooLarge;
+
+impl std::fmt::Display for ResultTooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(QUERY_RESULT_TOO_LARGE)
+    }
+}
+
+impl std::error::Error for ResultTooLarge {}
+
+/// What a result has cost as JSON so far, counted as its columns are read.
+pub struct ResultBudget {
+    bytes: usize,
+    rows: usize,
+}
+
+impl ResultBudget {
+    fn reserve(&mut self, bytes: usize) -> bool {
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.within_limit()
+    }
+
+    fn begin_row(&mut self, row_overhead: usize) -> bool {
+        self.bytes = self.bytes
+            .saturating_add(usize::from(self.rows > 0))
+            .saturating_add(row_overhead);
+        self.rows = self.rows.saturating_add(1);
+        self.within_limit()
+    }
+
+    fn spend_column(&mut self, name: &str, value: rusqlite::types::ValueRef<'_>, first: bool) -> bool {
+        self.bytes = self.bytes
+            .saturating_add(usize::from(!first))
+            .saturating_add(json_string_cost(name.as_bytes()))
+            .saturating_add(1)
+            .saturating_add(sql_json_cost(value));
+        self.within_limit()
+    }
+
+    fn spend_value(&mut self, value: rusqlite::types::ValueRef<'_>) -> bool {
+        self.bytes = self.bytes.saturating_add(sql_json_cost(value));
+        self.within_limit()
+    }
+
+    fn within_limit(&self) -> bool {
+        self.bytes <= 2 * 1024 * 1024
+    }
+
+    /// Adds the serialized cost of a value without an object key.
+    pub fn spend(&mut self, value: rusqlite::types::ValueRef<'_>) -> bool {
+        self.spend_value(value)
+    }
+}
+
+fn json_string_cost(bytes: &[u8]) -> usize {
+    let mut cost = 2usize;
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        match std::str::from_utf8(remaining) {
+            Ok(valid) => {
+                cost = cost.saturating_add(valid.chars().map(json_char_cost).sum::<usize>());
+                break;
+            }
+            Err(error_value) => {
+                let valid = &remaining[..error_value.valid_up_to()];
+                cost = cost.saturating_add(
+                    std::str::from_utf8(valid)
+                        .expect("Utf8Error marks the prefix as valid")
+                        .chars()
+                        .map(json_char_cost)
+                        .sum::<usize>(),
+                );
+                remaining = &remaining[error_value.valid_up_to()..];
+                let invalid_bytes = error_value.error_len().unwrap_or(remaining.len()).max(1);
+                cost = cost.saturating_add(invalid_bytes.saturating_mul(3));
+                remaining = &remaining[invalid_bytes..];
+            }
+        }
+    }
+    cost
+}
+
+fn json_char_cost(character: char) -> usize {
+    match character {
+        '"' | '\\' | '\u{8}' | '\u{c}' | '\n' | '\r' | '\t' => 2,
+        '\u{0}'..='\u{1f}' => 6,
+        _ => character.len_utf8(),
+    }
+}
+
+fn sql_json_cost(value: rusqlite::types::ValueRef<'_>) -> usize {
+    use rusqlite::types::ValueRef;
+    match value {
+        ValueRef::Null => 4,
+        ValueRef::Integer(value) => value.to_string().len(),
+        ValueRef::Real(value) => serde_json::Number::from_f64(value)
+            .map(|number| number.to_string().len())
+            .unwrap_or(4),
+        ValueRef::Text(text) => json_string_cost(text),
+        ValueRef::Blob(blob) => blob.len().saturating_mul(2).saturating_add(2),
+    }
+}
+
+fn browse_column_json_cost(column: &Value) -> usize {
+    let name = column["name"].as_str().unwrap_or_default();
+    let column_type = column["type"].as_str().unwrap_or_default();
+    json_string_cost(name.as_bytes())
+        .saturating_add(json_string_cost(column_type.as_bytes()))
+        .saturating_add(column["defaultValue"].as_str().map(|value| json_string_cost(value.as_bytes())).unwrap_or(4))
+        .saturating_add(69)
+}
+
+/// A row as a JSON object, or `None` once `budget` is spent. The columns
+/// after the one that spent it are not read: SQLite expands a `zeroblob`
+/// only when its column is read.
+pub fn bounded_row(row: &rusqlite::Row<'_>, names: &[String], budget: &mut ResultBudget) -> rusqlite::Result<Option<Value>> {
+    let mut object = serde_json::Map::new();
+    if !budget.begin_row(2) {
+        return Ok(None);
+    }
+    for (index, name) in names.iter().enumerate() {
+        let value = row.get_ref(index)?;
+        if !budget.spend_column(name, value, index == 0) {
+            return Ok(None);
+        }
+        object.insert(name.clone(), sql_json(value));
+    }
+    Ok(Some(Value::Object(object)))
+}
+
+impl Default for ResultBudget {
+    fn default() -> Self {
+        Self { bytes: 2, rows: 0 }
+    }
+}
+
 pub fn bounded_rows(rows: impl Iterator<Item = rusqlite::Result<Value>>) -> Result<Vec<Value>> {
     let mut values = Vec::new();
     let mut bytes = 0;
     for row in rows.take(1001) {
         let row = row?;
         bytes += serde_json::to_vec(&row)?.len();
-        anyhow::ensure!(bytes <= 2 * 1024 * 1024 && values.len() < 1000, "Query result exceeds 2 MiB or 1000 rows.");
+        anyhow::ensure!(bytes <= 2 * 1024 * 1024 && values.len() < 1000, "{QUERY_RESULT_TOO_LARGE}");
         values.push(row);
     }
     Ok(values)
@@ -3648,7 +3846,16 @@ pub fn json_sql(value: &Value) -> std::result::Result<SqlValue, String> {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
+thread_local! {
+    /// Columns this thread has turned into JSON, so a test can see where a
+    /// result stopped being read.
+    pub static COLUMNS_CONVERTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub fn sql_json(value: rusqlite::types::ValueRef<'_>) -> Value {
+    #[cfg(any(test, feature = "testing"))]
+    COLUMNS_CONVERTED.with(|count| count.set(count.get() + 1));
     match value {
         rusqlite::types::ValueRef::Null => Value::Null,
         rusqlite::types::ValueRef::Integer(value) => json!(value),
@@ -3803,6 +4010,30 @@ pub mod tests {
         })).unwrap();
 
         assert_eq!(input.initial_signup_policy.unwrap().mode, SignupMode::Closed);
+    }
+
+    #[tokio::test]
+    async fn a_stored_deployment_on_the_editor_host_does_not_capture_the_owner_door() {
+        let root = std::env::temp_dir().join(format!("konae-editor-host-{}", Uuid::new_v4()));
+        let (state, _) = login_test_state(&root, "public").await;
+        let mut deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        deployment.hostname = "app.apps.example.com".into();
+        let state = AppState {
+            public_origin: "http://app.apps.example.com".into(),
+            host_suffix: "apps.example.com".into(),
+            deployments: Arc::new(RwLock::new(HashMap::from([(deployment.hostname.clone(), deployment)]))),
+            ..state
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("app.apps.example.com"));
+        assert!(deployment_for_host(&state, &headers).await.is_none());
+        assert!(deployment_for(&state, &headers).await.is_none());
+        headers.insert(header::HOST, HeaderValue::from_static("app.apps.example.com:8080"));
+        assert!(deployment_for_host(&state, &headers).await.is_none());
+        // A page on the editor host is not an app origin either.
+        headers.insert(header::ORIGIN, HeaderValue::from_static("http://app.apps.example.com"));
+        assert!(!security::from_app_origin(&state, &headers).await);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     pub async fn login_test_state(root: &Path, visibility: &str) -> (AppState, HeaderMap) {
@@ -5086,6 +5317,232 @@ pub mod tests {
         let (member, _) = signed_in(&private_state, &private_deployment.id, &private_headers, "member@example.test");
         assert_eq!(list_files(State(private_state), member).await.status(), StatusCode::OK);
 
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    fn query_definition(statement: &str) -> ActionDefinition {
+        let program: ActionProgram = serde_json::from_value(json!({"version": 1, "actions": {
+            "rows.read": {"kind": "query", "access": "anonymous", "statement": statement, "bindings": []}
+        }})).unwrap();
+        program.actions["rows.read"].clone()
+    }
+
+    fn converted_after<T>(work: impl FnOnce() -> T) -> (T, usize) {
+        COLUMNS_CONVERTED.with(|count| count.set(0));
+        let value = work();
+        (value, COLUMNS_CONVERTED.with(|count| count.get()))
+    }
+
+    /// K-03. Three 700,000 byte blobs cost 4.2 MB as hex. The result is
+    /// refused when the second column passes 2 MiB, and the third is not read.
+    const THREE_BLOBS: &str = "SELECT zeroblob(700000) a, zeroblob(700000) b, zeroblob(700000) c";
+
+    #[test]
+    fn an_action_result_stops_being_read_once_it_passes_2_mib() {
+        let root = std::env::temp_dir().join(format!("konae-row-cap-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap();
+        let (outcome, converted) = converted_after(|| run_query(&path, &query_definition(THREE_BLOBS), Vec::new()));
+        assert_eq!(outcome.unwrap_err().to_string(), "Query result exceeds 2 MiB or 1000 rows.");
+        assert_eq!(converted, 1, "the column that passes the cap is the last one read");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn browse_refuses_an_oversized_row_before_converting_its_values() {
+        let root = std::env::temp_dir().join(format!("konae-browse-row-cap-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap().execute_batch(
+            "CREATE TABLE items(payload BLOB); INSERT INTO items VALUES (zeroblob(1100000));",
+        ).unwrap();
+        let (outcome, converted) = converted_after(|| browse_table(&path, &json!({"tableName": "items"})));
+        assert_eq!(outcome.err().unwrap().to_string(), QUERY_RESULT_TOO_LARGE);
+        assert_eq!(converted, 1, "the row id is accounted before the oversized payload is read");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn browse_keeps_its_row_shape_for_ordinary_values() {
+        let root = std::env::temp_dir().join(format!("konae-browse-row-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap().execute_batch(
+            "CREATE TABLE items(name TEXT, done INTEGER); INSERT INTO items VALUES ('task', 1);",
+        ).unwrap();
+        let (outcome, _) = converted_after(|| browse_table(&path, &json!({"tableName": "items"})));
+        let result = outcome.unwrap();
+        assert_eq!(result["totalRows"], 1);
+        assert_eq!(result["rows"], json!([{"rowId": 1, "values": {"name": "task", "done": 1}}]));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn action_result_budget_counts_column_names_before_converting_values() {
+        let root = std::env::temp_dir().join(format!("konae-column-name-cap-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap();
+        let alias = "a".repeat(16_000);
+        let statement = format!("WITH RECURSIVE rows(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM rows WHERE n < 140) SELECT NULL AS \"{alias}\" FROM rows");
+        let (outcome, converted) = converted_after(|| run_query(&path, &query_definition(&statement), Vec::new()));
+        assert_eq!(outcome.err().unwrap().to_string(), QUERY_RESULT_TOO_LARGE);
+        assert_eq!(converted, 130, "the oversized repeated column name is refused before value conversion");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn action_result_budget_counts_controls_in_lossy_text_before_conversion() {
+        let root = std::env::temp_dir().join(format!("konae-invalid-text-cap-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap();
+        let statement = "SELECT CAST(zeroblob(350000) || x'ff' AS TEXT) AS payload";
+        let (outcome, converted) = converted_after(|| run_query(&path, &query_definition(statement), Vec::new()));
+        assert_eq!(outcome.err().unwrap().to_string(), QUERY_RESULT_TOO_LARGE);
+        assert_eq!(converted, 0, "the NUL escapes pass the byte cap before lossy text conversion");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn notify_refuses_an_oversized_returning_row_and_rolls_back() {
+        let root = std::env::temp_dir().join(format!("konae-notify-row-cap-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap().execute_batch("CREATE TABLE items(payload BLOB);").unwrap();
+        let definition: ActionDefinition = serde_json::from_value(json!({
+            "kind": "mutation", "access": "anonymous",
+            "statement": "INSERT INTO items(payload) VALUES (zeroblob(1100000))",
+            "bindings": [],
+            "notify": {"to": "owner", "changes": ["payload"], "subject": "Changed", "body": "{changes}"}
+        })).unwrap();
+        let (outcome, converted) = converted_after(|| run_mutation(&path, &definition, Vec::new()));
+        assert_eq!(outcome.err().unwrap().to_string(), QUERY_RESULT_TOO_LARGE);
+        assert_eq!(converted, 0, "the oversized returned payload is rejected before conversion");
+        let count: i64 = Connection::open(&path).unwrap().query_row("SELECT count(*) FROM items", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 0, "the mutation rolls back when its notice result exceeds the budget");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn owner_sql_stops_reading_a_result_once_it_passes_2_mib() {
+        let root = std::env::temp_dir().join(format!("konae-admin-row-cap-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap();
+        let (outcome, converted) = converted_after(|| run_admin_sql(&path, THREE_BLOBS));
+        assert_eq!(outcome.unwrap_err().to_string(), "SQL result exceeds 2 MiB.");
+        assert_eq!(converted, 1, "the column that passes the cap is the last one read");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_result_under_the_cap_comes_back_unchanged() {
+        let root = std::env::temp_dir().join(format!("konae-row-small-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap();
+        let sql = "SELECT x'00ff10' AS b, 'héllo \"q\"' AS t, 7 AS n, 1.5 AS r, NULL AS z";
+        let expected = json!({"b": "00ff10", "t": "héllo \"q\"", "n": 7, "r": 1.5, "z": null});
+        assert_eq!(run_query(&path, &query_definition(sql), Vec::new()).unwrap(), vec![expected.clone()]);
+        assert_eq!(run_admin_sql(&path, sql).unwrap()["rows"], json!([expected]));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// K-04. One Deployment may run four statements at once; the others wait
+    /// two seconds and are refused as a client over its rate limit is.
+    async fn statement_cap_state(root: &Path) -> (AppState, HeaderMap, String) {
+        let (mut state, headers) = login_test_state(root, "public").await;
+        let program = json!({"version": 1, "actions": {
+            "items.count": {"kind": "query", "access": "anonymous", "statement": "SELECT 1 AS n", "bindings": []},
+            "items.broken": {"kind": "query", "access": "anonymous", "statement": "SELECT * FROM missing_table", "bindings": []},
+            "items.route": {"kind": "query", "access": "anonymous", "statement": "SELECT 1 AS n LIMIT 1", "bindings": [], "http": {"method": "GET", "path": "/api/count"}}
+        }});
+        let mut id = String::new();
+        for deployment in state.deployments.write().await.values_mut() {
+            deployment.actions = program.to_string();
+            deployment.manifest = json!({"visibility": "public"});
+            initialize_database(&database_path(&state, &deployment.id)).unwrap();
+            id = deployment.id.clone();
+        }
+        state.guards = Arc::new(Guards::new(Vec::new()).with_statement_wait(std::time::Duration::from_millis(60)));
+        (state, headers, id)
+    }
+
+    async fn hold_statements(state: &AppState, id: &str, count: usize) -> Vec<tokio::sync::OwnedSemaphorePermit> {
+        let mut held = Vec::new();
+        for _ in 0..count {
+            held.push(state.guards.statement_permit(id).await.unwrap());
+        }
+        held
+    }
+
+    async fn call_action(state: &AppState, headers: &HeaderMap, name: &str) -> Response {
+        invoke_action(State(state.clone()), AxumPath(name.into()), headers.clone(), Json(json!({}))).await
+    }
+
+    #[tokio::test]
+    async fn a_fifth_action_statement_on_one_deployment_is_refused_while_another_is_served() {
+        let root = std::env::temp_dir().join(format!("konae-statement-cap-{}", Uuid::new_v4()));
+        let (state, headers, id) = statement_cap_state(&root).await;
+        let _elsewhere = hold_statements(&state, "another-deployment", 4).await;
+        assert_eq!(call_action(&state, &headers, "items.count").await.status(), StatusCode::OK, "another Deployment's slots do not count");
+        let mut held = hold_statements(&state, &id, 4).await;
+        let refused = call_action(&state, &headers, "items.count").await;
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(refused.headers().contains_key(header::RETRY_AFTER));
+        let body = axum::body::to_bytes(refused.into_body(), 4096).await.unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["error"], "rate-limited");
+        held.pop();
+        assert_eq!(call_action(&state, &headers, "items.count").await.status(), StatusCode::OK, "a freed slot lets the next call run");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn an_action_statement_that_errors_releases_its_permit() {
+        let root = std::env::temp_dir().join(format!("konae-statement-error-{}", Uuid::new_v4()));
+        let (state, headers, id) = statement_cap_state(&root).await;
+        let _held = hold_statements(&state, &id, 3).await;
+        for _ in 0..5 {
+            assert_eq!(call_action(&state, &headers, "items.broken").await.status(), StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(call_action(&state, &headers, "items.count").await.status(), StatusCode::OK);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn the_runtime_endpoint_answers_a_refused_statement_with_the_rate_limited_tool_error() {
+        let root = std::env::temp_dir().join(format!("konae-statement-runtime-{}", Uuid::new_v4()));
+        let (state, _, id) = statement_cap_state(&root).await;
+        let _held = hold_statements(&state, &id, 4).await;
+        let request = Request::builder()
+            .method("POST")
+            .uri("/_konae/mcp")
+            .header(header::HOST, "login-test.localhost")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "actions_invoke", "arguments": {"name": "items.count"}}}).to_string()))
+            .unwrap();
+        let response = runtime::runtime(State(state.clone()), request).await;
+        assert!(response.headers().contains_key(header::RETRY_AFTER));
+        let body: Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 1 << 16).await.unwrap()).unwrap();
+        assert_eq!(body["result"]["isError"], true);
+        assert_eq!(body["result"]["content"][0]["text"], "rate-limited");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn an_http_route_answers_a_refused_statement_with_the_rate_limited_response() {
+        let root = std::env::temp_dir().join(format!("konae-statement-route-{}", Uuid::new_v4()));
+        let (state, headers, id) = statement_cap_state(&root).await;
+        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        let client: std::net::IpAddr = "192.0.2.1".parse().unwrap();
+        let _held = hold_statements(&state, &id, 4).await;
+        let refused = http::call_route(&state, &deployment, "GET", "/api/count", "", b"", &headers, client).await;
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(refused.headers().contains_key(header::RETRY_AFTER));
+        let body = axum::body::to_bytes(refused.into_body(), 4096).await.unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["error"], "rate-limited");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 }
